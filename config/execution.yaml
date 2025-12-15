@@ -1,0 +1,8 @@
+execution:
+  snapshot_interval_s: 1.0
+  reconciliation:
+    heartbeat_threshold_ms: 1000
+    polling_limited: true # API limit 25 call/5s
+  
+  broker:
+    account_id: "sim-account-01"

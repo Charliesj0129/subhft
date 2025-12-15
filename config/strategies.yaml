@@ -1,0 +1,8 @@
+
+strategy:
+  id: "MM_ALPHA_V1"
+  module: "hft_platform.strategies.simple_mm"
+  class: "SimpleMarketMaker"
+  params:
+    subscribe_symbols: ["2330", "2357"] # Major liquid names
+    risk_aversion: 0.1

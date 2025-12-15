@@ -1,0 +1,118 @@
+
+name: HFT Platform Deployment
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/hft_platform
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    
+    steps:
+    - name: Deploy to Azure VM via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        USERNAME: ${{ github.actor }}
+      with:
+        host: ${{ secrets.AZURE_VM_HOST }}
+        username: ${{ secrets.AZURE_VM_USER }}
+        key: ${{ secrets.AZURE_VM_SSH_KEY }}
+        port: 22
+        envs: GH_TOKEN,USERNAME
+        script: |
+          # 1. Login to GHCR on remote VM
+          echo $GH_TOKEN | docker login ghcr.io -u $USERNAME --password-stdin
+          
+          # 2. Navigate to deployment dir
+          cd ~/hft_platform/deployment
+          
+          # 3. Pull latest image
+          # Ensure docker-compose.yml uses the GHCR image name!
+          # We might need to override the image name in compose or export it.
+          # For simplicity, we just pull manually and compose restart.
+          
+          # Assuming docker-compose.yml builds locally currently.
+          # We need to switch it to use the image OR force pull.
+          # Strategy: We will execute a localized override or just pull the image and retag it?
+          # Better: Update docker-compose.yml on server to use the image from registry?
+          # OR: Just pull the image and let compose build use cache? No.
+          
+          # ROBUST STRATEGY:
+          # Pull the specific image we just built
+          IMAGE="ghcr.io/${{ github.repository }}/hft_platform:latest"
+          # Lowercase the image name because GitHub Repo might be mixed case but CR is lowercase
+          IMAGE=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')
+          
+          docker pull $IMAGE
+          
+          # Re-tag it as 'deployment-hft_platform' so existing compose works?
+          # Or create a docker-compose.override.yml?
+          
+          # Simplest: Just use the pulled image directly in a one-off run? No, need Compose services.
+          
+          # Let's effectively "Upgrade" the local deployment.
+          # We will PATCH the docker-compose.yml to use the image instead of build?
+          # Or better, we set IMAGE_NAME env var in .env.prod?
+          
+          echo "Deploying $IMAGE..."
+          
+          # Stop current
+          # docker compose down # Optional, for zero downtime try rolling update if swarm, but here simple restart
+          
+          # Update the service to use the pulled image
+          # We can run services using the specific image:
+          docker compose down
+          
+          # Create a temporary override file to use the image
+          echo "services:
+            hft_platform:
+              image: $IMAGE
+              build: {}" > docker-compose.override.yml
+              
+          docker compose up -d
+          
+          # Verify
+          docker compose ps

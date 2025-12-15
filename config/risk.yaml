@@ -1,0 +1,3 @@
+daily_loss_limit: 10000
+kill_switch_enabled: true
+max_position_lots: 10

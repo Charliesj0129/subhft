@@ -1,0 +1,40 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+env/
+
+# Data & Consistency
+.wal/
+data/
+logs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Deployment Secrets
+deployment/.env
+deployment/.env.*
+# Exclude the temporary script we made? No, keep scripts.
+# But exclude key files if any...
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+
+# Project Specific
+reports/
+ops/docker/.env
+*.log
+notebooks/.ipynb_checkpoints
+.gemini/
+.antigravity/

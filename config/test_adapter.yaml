@@ -1,0 +1,3 @@
+rate_limits:
+  shioaji_hard_cap: 10
+  shioaji_soft_cap: 5

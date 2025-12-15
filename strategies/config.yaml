@@ -1,0 +1,10 @@
+# Strategy Configuration
+strategies:
+  # Strategy ID
+  DemoStrategy:
+    class: DemoStrategy
+    # Symbols to subscribe
+    symbols: ["2330", "2317"]
+    params:
+      # Custom params accessible via self.config['threshold']
+      threshold: 1.5

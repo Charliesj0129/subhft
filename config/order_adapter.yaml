@@ -1,0 +1,22 @@
+# Order Adapter Configuration
+# Controls batching, rate limiting, and timeouts
+
+rate_limits:
+  shioaji_soft_cap: 180 # actions / 10s
+  shioaji_hard_cap: 250 # actions / 10s
+  sliding_window_s: 10
+
+coalescing:
+  amend_window_ms: 5    # Collapse updates within 5ms
+  max_batch_size: 50    # Though Shioaji is mostly singular, internal batch handling
+
+timeouts:
+  ack_timeout_ms: 1000   # Timeout for broker ACK
+  cancel_retry_limit: 1  # Try cancel once more if timeout
+
+circuit_breaker:
+  failure_threshold: 5   # 5 consecutive failures
+  reset_timeout_s: 60    # Wait 60s before half-open
+
+execution:
+  default_account: "sim-account-01"

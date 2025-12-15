@@ -1,0 +1,25 @@
+# Strategy Risk Limits
+# Applied by Risk Engine
+
+global_defaults:
+  max_notional: 10_000_000  # 10M TWD per symbol
+  price_band_ticks: 20      # +/- 20 ticks from reference
+  max_order_rate: 180       # actions per 10s (soft limit)
+  storm_guard_pnl: -500_000 # Stop at -500k loss
+  
+strategies:
+  STRAT_001:
+    max_notional: 5_000_000
+    price_band_ticks: 10
+    storm_guard_pnl: -100_000
+  
+  STRAT_002: # High frequency, smaller size
+    max_notional: 1_000_000
+    price_band_ticks: 5
+    max_order_rate: 100
+
+storm_guard:
+  # Drawdown thresholds for state transitions
+  warm_threshold: -200_000
+  storm_threshold: -500_000
+  halt_threshold: -1_000_000

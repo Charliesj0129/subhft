@@ -1,0 +1,17 @@
+recorder:
+  wal_dir: ".wal"
+  tables:
+    market_data:
+      flush_rows: 5000
+      flush_ms: 1000
+      buffer_size: 100000
+    orders_log:
+      flush_rows: 100 
+      flush_ms: 200
+    risk_log:
+      flush_rows: 100
+      flush_ms: 200
+clickhouse:
+  host: "localhost"
+  port: 8123
+  database: "default"

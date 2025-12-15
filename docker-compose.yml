@@ -1,0 +1,69 @@
+services:
+  hft-engine:
+    build: .
+    image: hft-platform:latest
+    container_name: hft-engine
+    restart: always
+    environment:
+      - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
+      - SHIOAJI_PASSWORD=${SHIOAJI_PASSWORD}
+      - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT}
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./.wal:/app/.wal
+      - ./data:/app/data
+      - ./config:/app/config
+    ports:
+      - "9090:9090" # Prometheus Metrics
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2G
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9090/ || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ch_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  wal-loader:
+    build: .
+    container_name: wal-loader
+    command: [ "python", "-m", "hft_platform.recorder.loader" ]
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+    volumes:
+      - ./.wal:/app/.wal
+    depends_on:
+      - clickhouse
+
+  jupyter:
+    image: jupyter/scipy-notebook:latest
+    container_name: jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/notebooks
+      - ./src:/home/jovyan/src # For importing hft_platform code
+    environment:
+      - JUPYTER_TOKEN=hft
+    depends_on:
+      - clickhouse
+
+# Optional: Add Prometheus/Grafana services here for full stack
+
+volumes:
+  ch_data:

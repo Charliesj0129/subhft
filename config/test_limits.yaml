@@ -1,0 +1,7 @@
+global_defaults:
+  price_band_ticks: 10
+storm_guard:
+  halt_threshold: -100
+strategies:
+  TEST_STRAT:
+    max_notional: 1000

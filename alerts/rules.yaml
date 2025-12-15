@@ -1,0 +1,50 @@
+groups:
+- name: HFT_Critical
+  rules:
+  # Feed Health
+  - alert: FeedGapCritical
+    expr: rate(feed_events_total[30s]) == 0
+    for: 5s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Market Data Gap Detected"
+        description: "No feed events for >5s during uptime."
+
+  - alert: BusOverflowCritical
+    expr: increase(bus_overflow_total[1m]) > 0
+    for: 1s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Event Bus Overflow"
+        description: "Events dropped due to full ring buffer."
+
+  # Risk
+  - alert: StormGuardHalt
+    expr: stormguard_mode == 3
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "StormGuard HALT Triggered"
+        description: "Strategy {{ $labels.strategy }} hit HALT threshold."
+
+  - alert: HighRejectRate
+    expr: rate(order_reject_total[1m]) / (rate(order_actions_total[1m]) + 1) > 0.1
+    for: 1m
+    labels:
+        severity: warning
+    annotations:
+        summary: "High Order Reject Rate"
+        description: "Reject rate > 10%."
+
+  # Infra
+  - alert: RecorderFailure
+    expr: increase(recorder_failures_total[5m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Recorder Write Failed"
+        description: "ClickHouse ingestion failing."

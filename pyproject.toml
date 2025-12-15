@@ -1,0 +1,38 @@
+[project]
+name = "hft-platform"
+version = "0.1.0"
+description = "High Frequency Trading Platform"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "pandas",
+    "clickhouse-connect",
+    "structlog",
+    "msgspec",
+    "uvloop",
+    "hftbacktest",
+    "shioaji",
+    "prometheus_client",
+    "psutil",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "maturin", # Kept for future
+    "notebook",
+    "pytest-asyncio>=1.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hft_platform"]
+
+# [tool.maturin]
+# features = ["pyo3/extension-module"]
+# module-name = "hft_platform.rust_core"
+# python-source = "src"
+# manifest-path = "rust_core/Cargo.toml"
