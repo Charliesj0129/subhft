@@ -21,7 +21,7 @@ class StrategyConfig:
 
 
 class StrategyRegistry:
-    def __init__(self, config_path: str = "config/strategies.yaml"):
+    def __init__(self, config_path: str = "config/base/strategies.yaml"):
         self.config_path = config_path
         self.configs: List[StrategyConfig] = []
         self.load()

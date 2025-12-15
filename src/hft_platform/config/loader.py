@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import yaml
 from copy import deepcopy
 from typing import Any, Dict, Tuple
 
@@ -18,9 +19,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "params": {"subscribe_symbols": ["2330"]},
     },
     "paths": {
-        "symbols": "config/symbols.yaml",
-        "strategy_limits": "config/strategy_limits.yaml",
-        "order_adapter": "config/order_adapter.yaml",
+        "symbols": "config/base/symbols.yaml",
+        "strategy_limits": "config/base/strategy_limits.yaml",
+        "order_adapter": "config/base/order_adapter.yaml",
     },
     "prometheus_port": 9090,
     "replay": {
@@ -48,17 +49,6 @@ def _load_settings_py(path: str) -> Dict[str, Any]:
             logger.error("settings.py#get_settings failed", path=path, error=str(exc))
             return {}
     return {k: getattr(module, k) for k in dir(module) if k.isupper()}
-
-
-def _load_settings_json(path: str) -> Dict[str, Any]:
-    try:
-        with open(path, "r") as f:
-            return json.load(f) or {}
-    except FileNotFoundError:
-        return {}
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error("Failed to load settings.json", path=path, error=str(exc))
-        return {}
 
 
 def _merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -89,24 +79,56 @@ def detect_live_credentials() -> bool:
     return bool(os.getenv("SHIOAJI_PERSON_ID") and os.getenv("SHIOAJI_PASSWORD"))
 
 
+DEFAULT_YAML_PATH = "config/base/main.yaml"
+
+def _load_yaml(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, "r") as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.error("Failed to load yaml", path=path, error=str(exc))
+        return {}
+
 def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Return (settings, applied_defaults) after applying priority chain."""
+    """Return (settings, applied_defaults) after applying priority chain:
+       Base YAML -> Env YAML -> Settings.py -> Env Vars -> CLI
+    """
     cli_overrides = cli_overrides or {}
-    applied_defaults: Dict[str, Any] = {}
+    
+    # 1. Base Settings
+    settings = _load_yaml(DEFAULT_YAML_PATH)
+    if not settings:
+        # Fallback if file missing (e.g. initial setup)
+        settings = deepcopy(DEFAULT_SETTINGS)
+    
+    # applied_defaults represents the 'base' state before runtime overrides
+    applied_defaults = deepcopy(settings)
 
-    settings = deepcopy(DEFAULT_SETTINGS)
-    applied_defaults = deepcopy(DEFAULT_SETTINGS)
+    # 2. Env Specific Settings (sim/live)
+    # Determine mode from Base -> Env Var
+    mode = os.getenv("HFT_MODE", settings.get("mode", "sim"))
+    
+    env_yaml_path = f"config/env/{mode}/main.yaml"
+    if os.path.exists(env_yaml_path):
+        env_settings = _load_yaml(env_yaml_path)
+        settings = _merge(settings, env_settings)
 
-    settings_json = _load_settings_json("config/settings.json")
-    settings = _merge(settings, settings_json)
-
+    # 3. Local Developer Overrides (settings.py - Python power)
     settings_py = _load_settings_py("config/settings.py")
     settings = _merge(settings, settings_py)
 
-    env = _env_overrides()
-    settings = _merge(settings, env)
+    # 4. Environment Variables
+    env_vars = _env_overrides()
+    settings = _merge(settings, env_vars)
 
+    # 5. CLI Overrides
     settings = _merge(settings, cli_overrides)
+    
+    # Ensure mode is synced if overridden
+    if "mode" in settings:
+        settings["mode"] = mode if os.getenv("HFT_MODE") else settings["mode"]
 
     return settings, applied_defaults
 

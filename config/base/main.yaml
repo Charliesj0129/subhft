@@ -1,0 +1,22 @@
+mode: sim
+symbols:
+  - "2330"
+
+strategy:
+  id: simple_mm_demo
+  module: hft_platform.strategies.simple_mm
+  class: SimpleMarketMaker
+  params:
+    subscribe_symbols:
+      - "2330"
+
+paths:
+  symbols: config/base/symbols.yaml
+  strategy_limits: config/base/strategy_limits.yaml
+  order_adapter: config/base/order_adapter.yaml
+
+prometheus_port: 9090
+
+replay:
+  start_date: null
+  end_date: null

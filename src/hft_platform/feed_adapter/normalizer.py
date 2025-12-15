@@ -22,7 +22,7 @@ class SymbolMetadata:
 
     DEFAULT_SCALE = 10_000
 
-    def __init__(self, config_path: str = "config/symbols.yaml"):
+    def __init__(self, config_path: str = "config/base/symbols.yaml"):
         self.config_path = config_path
         self.meta: Dict[str, Dict[str, Any]] = {}
         self._load()
@@ -63,7 +63,7 @@ class SymbolMetadata:
 
 
 class MarketDataNormalizer:
-    def __init__(self, config_path: str = "config/symbols.yaml"):
+    def __init__(self, config_path: str = "config/base/symbols.yaml"):
         self._seq = 0
         self._lock = Lock()
         self.metadata = SymbolMetadata(config_path)

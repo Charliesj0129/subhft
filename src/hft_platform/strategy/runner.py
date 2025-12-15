@@ -20,7 +20,7 @@ class StrategyRunner:
         risk_queue: asyncio.Queue,
         lob_engine=None,
         position_store=None,
-        config_path: str = "config/strategies.yaml",
+        config_path: str = "config/base/strategies.yaml",
     ):
         self.bus = bus
         self.risk_queue = risk_queue
