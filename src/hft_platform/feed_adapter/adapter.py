@@ -156,10 +156,6 @@ class FeedAdapter:
                 self.loop.call_soon_threadsafe(self.raw_queue.put_nowait, msg)
                 
             self.last_event_ts = time.time()
-        except Exception as e:
-            logger.error("Connection sequence failed", error=str(e))
-            self._set_state(FeedState.DISCONNECTED)
-            # Monitor loop will pick this up
 
     def _on_shioaji_event(self, exchange, item):
         """
