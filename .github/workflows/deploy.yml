@@ -55,7 +55,7 @@ jobs:
             . .venv/bin/activate
             # Ensure shioaji and other deps are installed
             pip install -r requirements.txt
-          pip install -e .
+            pip install -e .
             
             # Run subscription script (generates config/symbols.yaml or similar if implemented, 
             # or just subscribes if it can communicate with a running service, 
