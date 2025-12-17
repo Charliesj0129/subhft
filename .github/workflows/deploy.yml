@@ -1,7 +1,8 @@
 name: Deploy HFT Platform
 on:
   push:
-    branches: [main]
+    branches: [main, temp_reset_branch]
+  workflow_dispatch:
 
 jobs:
   build-test-deploy:
