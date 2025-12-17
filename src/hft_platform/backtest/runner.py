@@ -9,7 +9,7 @@ from structlog import get_logger
 
 logger = get_logger("backtest")
 
-class HftBacktestRunner:
+
 from dataclasses import dataclass, field
 
 @dataclass
