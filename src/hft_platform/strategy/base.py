@@ -1,4 +1,4 @@
-from typing import List, Optional, Callable
+from typing import List, Optional, Callable, Dict
 from abc import ABC, abstractmethod
 from structlog import get_logger
 
@@ -8,37 +8,44 @@ logger = get_logger("strategy")
 
 class StrategyContext:
     """Read-only context passed to strategy."""
+
     __slots__ = (
-        "lob",
         "positions",
         "storm_guard_state",
         "features",
         "strategy_id",
         "_intent_factory",
         "_price_scaler",
+        "_lob_source",
     )
 
     def __init__(
         self,
-        lob,
         positions,
         storm_guard_state,
         strategy_id: str,
         intent_factory: Callable[..., OrderIntent],
         price_scaler: Callable[[str, float], int],
+        lob_source: Callable[[str], Optional[Dict]] = None,
         features=None,
     ):
-        self.lob = lob
         self.positions = positions
         self.storm_guard_state = storm_guard_state
         self.features = features or {}
         self.strategy_id = strategy_id
         self._intent_factory = intent_factory
         self._price_scaler = price_scaler
+        self._lob_source = lob_source
 
     def get_features(self, symbol: str) -> dict:
         """Access derived market features (mid, spread, imbalance)."""
         return self.features.get(symbol, {})
+        
+    def get_l1(self, symbol: str) -> Optional[Dict]:
+        """Get Best Bid/Ask snapshot."""
+        if self._lob_source:
+            return self._lob_source(symbol)
+        return None
 
     def scale_price(self, symbol: str, price: float) -> int:
         return self._price_scaler(symbol, price)

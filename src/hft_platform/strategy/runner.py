@@ -87,6 +87,24 @@ class StrategyRunner:
             timestamp_ns=time.time_ns(),
         )
 
+    def _descale_features(self, symbol: str, feats: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a copy of features with prices de-scaled to floats."""
+        scale = float(self.symbol_metadata.price_scale(symbol) or 1)
+        out = dict(feats or {})
+        for key in ("mid_price", "spread", "best_bid", "best_ask", "last_price"):
+            if key in out:
+                out[key] = float(out[key]) / scale
+        return out
+
+    def _descale_event(self, symbol: str, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Copy event dict and de-scale common price fields for strategy consumption."""
+        scale = float(self.symbol_metadata.price_scale(symbol) or 1)
+        ev = dict(event)
+        for key in ("mid_price", "spread", "price", "best_bid", "best_ask", "last_price"):
+            if key in ev:
+                ev[key] = float(ev[key]) / scale
+        return ev
+
     async def process_event(self, event: Any):
         if isinstance(event, dict):
             symbol = event.get("symbol")
@@ -136,56 +154,56 @@ class StrategyRunner:
                     elif ":" not in k: # Legacy/Simple keys
                         strat_positions[k] = v
 
+            # Strategy-facing features/events use de-scaled prices for easier strategy math
+            strat_features = {}
+            if symbol and symbol in features:
+                strat_features[symbol] = self._descale_features(symbol, features[symbol])
+
+            strat_event = event
+            if isinstance(event, dict) and symbol:
+                strat_event = self._descale_event(symbol, event)
+
             ctx = StrategyContext(
-                lob=self.lob_engine, # Pass full engine to allow .get_l1()
                 positions=strat_positions,
                 storm_guard_state=0,
                 strategy_id=strategy.strategy_id,
                 intent_factory=self._intent_factory,
                 price_scaler=self._scale_price,
-                features=features,
+                lob_source=self.lob_engine.get_book_snapshot,
+                features=strat_features,
             )
 
             start = time.perf_counter_ns()
             try:
-            try:
                 # Dispatch based on Event Type
-                topic = event.get("topic") if isinstance(event, dict) else getattr(event, "topic", None)
+                # Strict routing: Dict -> on_book, FillEvent -> on_fill, OrderEvent -> on_order
                 
-                # Market Data (Dict)
-                if isinstance(event, dict) and topic in ["market_data", "Tick", "BidAsk", "Snapshot"]:
-                    intents = strategy.on_book(ctx, event)
+                # 1. Market Data (Dict)
+                if isinstance(strat_event, dict):
+                    # Allow topic check or assume all dicts are market data/signals
+                    # User request: "Market events use dict"
+                    intents = strategy.on_book(ctx, strat_event)
                 
-                # Timer
-                elif isinstance(event, dict) and event.get("type") == "TimerTick":
-                    # Assuming strategies support on_timer or on_book handles it
-                    # BaseStrategy might not have on_timer, so we pass to on_book or skip
-                    # For now, pass to on_book as generic event
-                    intents = strategy.on_book(ctx, event)
-                
-                # Execution Events (Dataclasses or Dicts with topic=deal/order)
+                # 2. Execution Events (Dataclasses)
+                # We check class name string to avoid strict imports if prefer decoupling, 
+                # but better to check type if we imported them. 
+                # For now using safe duck-typing/string check or just 'isinstance' if imported.
+                # Assuming standard contract objects.
+                elif hasattr(event, "fill_id"): # FillEvent
+                     if hasattr(strategy, "on_fill"):
+                         intents = strategy.on_fill(ctx, event)
+                     else:
+                         intents = []
+                elif hasattr(event, "order_id") and hasattr(event, "status"): # OrderEvent
+                     if hasattr(strategy, "on_order"):
+                         intents = strategy.on_order(ctx, event)
+                     else:
+                         intents = []
                 else:
-                    # Try to detect execution types
-                    # If event is FillEvent or topic=="deal"
-                    if topic == "deal" or getattr(event, "__class__", "").endswith("FillEvent"):
-                         if hasattr(strategy, "on_fill"):
-                             intents = strategy.on_fill(ctx, event)
-                         else:
-                             intents = []
-                    elif topic == "order" or getattr(event, "__class__", "").endswith("OrderEvent"):
-                         if hasattr(strategy, "on_order"):
-                             intents = strategy.on_order(ctx, event)
-                         else:
-                             intents = []
-                    else:
-                        # Fallback for unknown events - pass to on_book if it's robust? 
-                        # Or skip to avoid crashing
-                        # User says on_book crashes on non-dict.
-                        # So we only pass dicts to on_book.
-                        if isinstance(event, dict):
-                             intents = strategy.on_book(ctx, event)
-                        else:
-                             intents = []
+                    # Unknown Event Type - Log warning or ignore?
+                    # "Event model to converge... strict types"
+                    # We simply ignore unknown types to prevent crashes.
+                    intents = []
 
             except Exception as exc:
                 logger.error("Strategy failed", id=strategy.strategy_id, error=str(exc))

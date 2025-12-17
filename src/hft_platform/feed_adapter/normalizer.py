@@ -41,18 +41,9 @@ class SymbolMetadata:
 
     def price_scale(self, symbol: str) -> int:
         entry = self.meta.get(symbol, {})
+        # Enforce global scale x10000 unless strictly overridden
         if "price_scale" in entry:
             return int(entry["price_scale"])
-        if "decimals" in entry:
-            return 10 ** int(entry["decimals"])
-        # tick_size = entry.get("tick_size")
-        # if tick_size:
-        #     # Deriving scale from tick_size (e.g. 0.01 -> 100) conflicts with system-wide FixedPoint (x10000)
-        #     # We disable this derivation to enforce x10000 unless "decimals" or "price_scale" is set.
-        #     try:
-        #         pass
-        #     except (ValueError, ZeroDivisionError):
-        #         pass
         return self.DEFAULT_SCALE
 
     def lot_size(self, symbol: str) -> int:

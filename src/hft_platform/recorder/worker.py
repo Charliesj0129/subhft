@@ -18,7 +18,7 @@ class RecorderService:
         self.batchers = {
             "market_data": Batcher("market_data", writer=self.writer),
             "orders": Batcher("orders", writer=self.writer),         # Adjusted table name per schema
-            "risk_decisions": Batcher("risk_log", writer=self.writer),
+            "risk_log": Batcher("risk_log", writer=self.writer),
             "fills": Batcher("fills", writer=self.writer),
             # Add backtest routing if needed, or separate service
             "backtest_runs": Batcher("backtest_runs", writer=self.writer),

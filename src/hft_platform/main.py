@@ -236,34 +236,57 @@ class HFTSystem:
         # Bridge Bus -> Recorder Queue
         async def bus_to_recorder():
              import time
-             from enum import Enum
-             
-             def serialize(obj):
-                 if hasattr(obj, "to_dict"): return obj.to_dict()
-                 if isinstance(obj, dict): return {k: serialize(v) for k, v in obj.items()}
-                 if isinstance(obj, (list, tuple)): return [serialize(x) for x in obj]
-                 if isinstance(obj, Enum): return obj.value
-                 if hasattr(obj, "__dict__"): return {k: serialize(v) for k, v in obj.__dict__.items()}
-                 return obj
+             from hft_platform.utils.serialization import serialize
 
              async for event in self.bus.consume():
                  try:
-                     # 1. Handle Dicts
-                     if isinstance(event, dict) and "topic" in event:
-                         await self.recorder_queue.put(serialize(event))
-                     
-                     # 2. Handle Objects
-                     elif hasattr(event, "__dict__"):
-                         topic = getattr(event, "topic", None)
-                         if not topic:
-                             topic = event.__class__.__name__.lower() # Fallback
+                     # Unified Schema: {topic: str, data: dict, ts: int}
+                     topic = "unknown"
+                     data_obj = event
+                     ts = time.time_ns()
+
+                     # 1. Determine Topic & Payload
+                     if isinstance(event, dict):
+                         # Market Data
+                         etype = event.get("type")
+                         if etype in ["Tick", "BidAsk", "Snapshot"]:
+                             topic = "market_data"
+                         elif "topic" in event:
+                             topic = event["topic"]
                          
-                         payload = {
-                             "topic": topic,
-                             "data": serialize(event),
-                             "timestamp": getattr(event, "timestamp_ns", time.time_ns())
-                         }
-                         await self.recorder_queue.put(payload)
+                         data_obj = event
+                     else:
+                         # Objects
+                         cname = event.__class__.__name__
+                         if cname == "FillEvent":
+                             topic = "fills"
+                         elif cname == "OrderEvent":
+                             topic = "orders"
+                         elif cname == "OrderIntent":
+                             topic = "risk_log" # Capture risk intents if published?
+                         elif hasattr(event, "topic"):
+                             topic = getattr(event, "topic")
+                         else:
+                             topic = cname.lower()
+                         
+                         if hasattr(event, "ingest_ts_ns"):
+                             ts = event.ingest_ts_ns
+                         elif hasattr(event, "timestamp_ns"):
+                             ts = event.timestamp_ns
+                         
+                         data_obj = event
+
+                     # 2. Serialize Payload
+                     serialized_data = serialize(data_obj)
+                     
+                     # 3. Construct Record
+                     record = {
+                         "topic": topic,
+                         "data": serialized_data,
+                         "ts": ts
+                     }
+                     
+                     await self.recorder_queue.put(record)
                  except Exception:
                      pass # robust
 

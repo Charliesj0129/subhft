@@ -16,7 +16,7 @@ class SimpleMarketMaker(BaseStrategy):
     def on_tick(self, symbol: str, mid_price: float, spread: float):
         # 1. Access State
         pos = self.position(symbol)
-        lob = self.ctx.lob.get_l1(symbol) # Assuming access to LOB snapshot via context helper or feature
+        lob = self.ctx.get_l1(symbol) # Accessed via helper
         
         # 2. Compute Micro Price (Alpha)
         # Using feature library
@@ -35,7 +35,7 @@ class SimpleMarketMaker(BaseStrategy):
         # Shift price against inventory to encourage mean reversion
         # Skew = - (Position * RiskAversion * Volatility)
         # Simplified: 1 tick per 5 lots
-        tick_size = 0.5 # Example for high priced stock
+        tick_size = 5000 # 0.5 * 10000 (Global Scale)
         skew = - (pos / 5) * tick_size
         
         fair_value = micro_price + skew
@@ -72,10 +72,10 @@ class SimpleMarketMaker(BaseStrategy):
         qty = 1
         
         if pos < MAX_POS:
-            self.buy(symbol, bid_price, qty)
+            self.buy(symbol, int(bid_price), qty)
             
         if pos > -MAX_POS:
-            self.sell(symbol, ask_price, qty)
+            self.sell(symbol, int(ask_price), qty)
             
         # Logging (Observability)
         # logger.info("MM Quote", symbol=symbol, bid=bid_price, ask=ask_price, skew=skew, micro=micro_price)

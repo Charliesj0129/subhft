@@ -20,25 +20,26 @@ class Batcher:
         self.lock = asyncio.Lock()
 
     async def add(self, row: Any):
-        # Normalize to dict
-        if hasattr(row, "__dict__"):
-            row = row.__dict__
-        elif hasattr(row, "to_dict"):
-             row = row.to_dict()
-        # msgspec or other structs could be handled here if needed
-        # Fallback if it is not a dict?
-        if not isinstance(row, dict):
-             # Try simple conversion or log warning
+        # Normalize to dict using shared utility
+        from hft_platform.utils.serialization import serialize
+        
+        row_dict = serialize(row)
+        
+        # Ensure it is a dict
+        if not isinstance(row_dict, dict):
+             # Try primitive conversion or wrap?
+             # If it's a list (bulk add?), Batcher.add usually takes single row
+             # If it's a list, maybe we should extend? 
+             # For now, valid row is dict.
+             # If serialize returned something else (e.g. enum val), it's not a row.
              try:
-                 row = dict(row)
-             except (ValueError, TypeError):
-                 # logger.warning("Invalid row type", type=type(row)) 
-                 # We might want to skip or wrap it? 
-                 # For now assuming it is convertible if not already dict
-                 pass
-
+                 row_dict = dict(row_dict)
+             except:
+                 # logger.warning("Invalid row", type=type(row))
+                 return # Skip invalid
+        
         async with self.lock:
-            self.buffer.append(row)
+            self.buffer.append(row_dict)
             
             if len(self.buffer) >= self.flush_limit:
                 await self._flush_locked()

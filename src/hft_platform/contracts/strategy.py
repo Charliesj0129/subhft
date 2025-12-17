@@ -10,6 +10,7 @@ class TIF(IntEnum):
     LIMIT = 0
     IOC = 1
     FOK = 2
+    ROD = 3
 
 class IntentType(IntEnum):
     NEW = 0

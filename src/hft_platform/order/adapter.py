@@ -139,8 +139,8 @@ class OrderAdapter:
                       c_field = ""
                       
                  # TIF Mapping (IntEnum -> Str)
-                 tif_map = {TIF.ROD: "ROD", TIF.IOC: "IOC", TIF.FOK: "FOK"}
-                 # Default to ROD if unknown
+                 # Limit -> ROD; IOC/FOK passthrough
+                 tif_map = {TIF.LIMIT: "ROD", TIF.IOC: "IOC", TIF.FOK: "FOK"}
                  tif_str = tif_map.get(intent.tif, "ROD")
 
                  trade = self.client.place_order(

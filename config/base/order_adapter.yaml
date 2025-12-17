@@ -1,0 +1,10 @@
+
+# Order Adapter Configuration
+rate_limits:
+  shioaji_soft_cap: 180
+  shioaji_hard_cap: 250
+  window_seconds: 10
+
+circuit_breaker:
+  threshold: 5
+  timeout_seconds: 60
