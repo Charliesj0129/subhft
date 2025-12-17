@@ -17,7 +17,10 @@ async def test_deterministic_replay():
     
     # Mock Runner? 
     # Use the actual BacktestRunner
-    runner = BacktestRunner("DemoStrategy", date)
+    from hft_platform.backtest.runner import HftBacktestConfig
+    config = HftBacktestConfig(data=["mock_data.npz"], symbols=[sym], report=True)
+    runner = BacktestRunner(config)
+    runner.strategy_name = "simple_mm"
     
     # Patch HftBacktestAdapter using unittest.mock
     from unittest.mock import MagicMock, patch

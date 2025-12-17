@@ -38,18 +38,12 @@ class HftBacktestRunner:
         logger.info("Initializing Backtest", symbol=self.symbol)
         
         # ... (rest of logic needs adaptation to use cfg.data etc)
-        # For this Visual Demo, we keep logic similar but map cfg to internal vars
-        self.strategy_name = "visual_demo"
-        
         # 1. Load Strategy Class
         # Similar logic to manage.py run_strategy
-        # strategy_path = f"strategies.{self.strategy_name}"
-        # We assume creating instance is safe
         try:
-             # Add CWD to path
-             sys.path.append(os.getcwd())
              import importlib
-             mod = importlib.import_module(f"strategies.{self.strategy_name}")
+             # Dynamically load from package
+             mod = importlib.import_module(f"hft_platform.strategies.{self.strategy_name}")
              # Find class
              # Naming convention: snake_case strategy file -> PascalCase class?
              # Or inspect module for BaseStrategy subclass
