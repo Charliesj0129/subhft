@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import MagicMock
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.contracts.strategy import Side, IntentType
-from hft_platform.strategies.simple_strategy import SimpleStrategy
+from hft_platform.strategies.simple_mm import SimpleMarketMaker as SimpleStrategy
 
 class TestStrategySDK(unittest.TestCase):
     def test_simple_strategy_logic(self):

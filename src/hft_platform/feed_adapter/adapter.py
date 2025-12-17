@@ -126,6 +126,10 @@ class FeedAdapter:
                 logger.info("Starting Synthetic Feed (No Credentials)")
                 asyncio.create_task(self._sim_feed_loop())
 
+        except Exception as e:
+            logger.error("Connection sequence failed", error=str(e))
+            self._set_state(FeedState.DISCONNECTED)
+
     async def _sim_feed_loop(self):
         """Generates random walk data for simulation."""
         import random

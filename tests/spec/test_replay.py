@@ -3,7 +3,7 @@ import pytest
 import os
 import shutil
 import json
-from hft_platform.backtest.runner import BacktestRunner
+from hft_platform.backtest.runner import HftBacktestRunner as BacktestRunner
 # Need to patch the runner to use local mock data easily or standard data interface
 
 @pytest.mark.asyncio
