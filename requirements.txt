@@ -1,0 +1,12 @@
+numpy
+pandas
+clickhouse-connect
+structlog
+msgspec
+uvloop
+hftbacktest
+shioaji
+prometheus_client
+psutil
+pytest
+pytest-asyncio
