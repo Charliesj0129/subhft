@@ -30,7 +30,6 @@ def main():
             client.login()
             
         if not client.api:
-        if not client.api:
              logger.error("No API initialized (Sim mode without lib?). Exiting.")
              return
     except Exception as e:
