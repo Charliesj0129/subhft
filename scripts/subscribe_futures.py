@@ -123,7 +123,42 @@ def main():
     # 3. Exit.
     # 4. Then `main.py` starts and reads `config/symbols.yaml`.
     
-    pass
+    import yaml
+
+    # Write config
+    if subscribed:
+        logger.info(f"Generating config/symbols.yaml with {len(subscribed)} symbols...")
+        config_data = {"symbols": []}
+        for code in subscribed:
+            # We need metadata like exchange, tick_size
+            # For futures (TXF), exchange is usually Futures? 
+            # tick_size depends on symbol (TXF=1.0, MXF=1.0/0.2?)
+            # querying contract details
+            from_contract = None
+            for c in api.Contracts.Futures:
+                if c.code == code:
+                    from_contract = c
+                    break
+            
+            # Default values (refined by contract lookup ideally)
+            entry = {
+                "code": code,
+                "name": from_contract.name if from_contract else code,
+                "exchange": "Futures",
+                "tick_size": 1.0, 
+                "contract_size": 1.0, 
+                "price_scale": 10000 
+            }
+            config_data["symbols"].append(entry)
+        
+        # Ensure directory exists
+        os.makedirs("config", exist_ok=True)
+        with open("config/symbols.yaml", "w") as f:
+            yaml.dump(config_data, f, default_flow_style=False)
+        
+        logger.info("Config generated successfully.")
+    else:
+        logger.warning("No contracts subscribed. Config file NOT generated/updated.")
 
 if __name__ == "__main__":
     main()

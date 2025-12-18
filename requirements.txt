@@ -10,3 +10,4 @@ prometheus_client
 psutil
 pytest
 pytest-asyncio
+PyYAML

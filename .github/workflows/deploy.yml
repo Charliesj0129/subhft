@@ -73,11 +73,15 @@ jobs:
             # For this MVP, we will stick to the plan: Run main, then run subscription script.
             # (Assuming the user might have logic in main to handle dynamic subs or the script does something useful).
             
-            # Start Platform
+            # Run subscription discovery FIRST to generate config/symbols.yaml
+            echo "Discovering contracts..."
+            python -m hft_platform.scripts.subscribe_futures
+            
+            # Start Platform (reads config/symbols.yaml on startup)
+            echo "Starting Platform..."
+            mkdir -p logs
             nohup python -m hft_platform.main > logs/run.log 2>&1 &
             
-            # Wait for startup
+            # Wait for startup and check logs
             sleep 5
-            
-            # Run subscription script
-            python -m hft_platform.scripts.subscribe_futures
+            tail -n 20 logs/run.log
