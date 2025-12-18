@@ -48,7 +48,7 @@ jobs:
           envs: SHIOAJI_API_KEY,SHIOAJI_SECRET_KEY,GITHUB_REF_NAME,SHIOAJI_PERSON_ID,SHIOAJI_PASSWORD
           script: |
             # Export Envs for the script
-            set -e
+            set -ex # Enable debug tracing
             export SHIOAJI_API_KEY=$SHIOAJI_API_KEY
             export SHIOAJI_SECRET_KEY=$SHIOAJI_SECRET_KEY
             export SHIOAJI_PERSON_ID=$SHIOAJI_API_KEY
@@ -70,6 +70,12 @@ jobs:
             # Ensure shioaji and other deps are installed
             pip install -r requirements.txt
             pip install -e .
+            
+            # DIAGNOSTIC: Check imports and env
+            echo "Checking shioaji import..."
+            python -c "import shioaji; print('Shioaji imported successfully')"
+            echo "Checking shioaji_client import..."
+            python -c "from hft_platform.feed_adapter.shioaji_client import ShioajiClient; print('Client module imported')"
             
             # Run subscription discovery FIRST to generate config/symbols.yaml
             echo "Discovering contracts..."
