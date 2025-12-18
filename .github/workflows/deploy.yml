@@ -41,14 +41,21 @@ jobs:
           host: ${{ secrets.VM_HOST || secrets.VM_PUBLIC_IP }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          envs: SHIOAJI_API_KEY,SHIOAJI_SECRET_KEY,GITHUB_REF_NAME
           script: |
+            # Export Envs for the script
+            export SHIOAJI_API_KEY=$SHIOAJI_API_KEY
+            export SHIOAJI_SECRET_KEY=$SHIOAJI_SECRET_KEY
+            
             # Kill existing service if running
             pkill -f hft_platform.main || true
             
             # Setup deployment directory
             cd ~/hft_platform || git clone https://github.com/Charliesj0129/subhft.git ~/hft_platform && cd ~/hft_platform
             git fetch origin
-            git reset --hard origin/main
+            # Use the branch that triggered the workflow
+            CURRENT_BRANCH=${GITHUB_REF_NAME:-main}
+            git reset --hard origin/$CURRENT_BRANCH
             
             # Install dependencies
             python3 -m venv .venv
