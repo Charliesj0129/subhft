@@ -46,6 +46,8 @@ jobs:
             # Export Envs for the script
             export SHIOAJI_API_KEY=$SHIOAJI_API_KEY
             export SHIOAJI_SECRET_KEY=$SHIOAJI_SECRET_KEY
+            export SHIOAJI_PERSON_ID=$SHIOAJI_API_KEY
+            export SHIOAJI_PASSWORD=$SHIOAJI_SECRET_KEY
             
             # Kill existing service if running
             pkill -f hft_platform.main || true

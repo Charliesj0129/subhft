@@ -6,21 +6,30 @@ import datetime
 import shioaji as sj
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
-# Simple logging
+# Simple logging to STDOUT for CI visibility
 import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', filename='logs/subscribe_futures.log')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
 def main():
     logger.info("Starting futures subscription script...")
     
     # Initialize Client
-    # We rely on ShioajiClient to handle Login via Env Vars (set in deployment)
     client = ShioajiClient()
     
-    # Login explicitly if needed, but client.login() tries Env vars
+    # Login explicitly
     try:
-        client.login()
+        # Fallback for API Key env vars if client doesn't find PERSON_ID
+        api_key = os.getenv("SHIOAJI_API_KEY")
+        secret_key = os.getenv("SHIOAJI_SECRET_KEY")
+        
+        if api_key and secret_key:
+            logger.info("Using SHIOAJI_API_KEY from environment.")
+            client.login(person_id=api_key, password=secret_key)
+        else:
+            client.login()
+            
+        if not client.api:
         if not client.api:
              logger.error("No API initialized (Sim mode without lib?). Exiting.")
              return
