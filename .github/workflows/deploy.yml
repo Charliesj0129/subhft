@@ -48,14 +48,17 @@ jobs:
           envs: SHIOAJI_API_KEY,SHIOAJI_SECRET_KEY,GITHUB_REF_NAME,SHIOAJI_PERSON_ID,SHIOAJI_PASSWORD
           script: |
             # Export Envs for the script
-            set -ex # Enable debug tracing
+            set -ex
             export SHIOAJI_API_KEY=$SHIOAJI_API_KEY
             export SHIOAJI_SECRET_KEY=$SHIOAJI_SECRET_KEY
             export SHIOAJI_PERSON_ID=$SHIOAJI_API_KEY
             export SHIOAJI_PASSWORD=$SHIOAJI_SECRET_KEY
             
-            # Kill existing service if running
-            pkill -f hft_platform.main || true
+            # Kill existing service safely using PID file
+            if [ -f hft.pid ]; then
+              kill $(cat hft.pid) || true
+              rm hft.pid
+            fi
             
             # Setup deployment directory
             cd ~/hft_platform || git clone https://github.com/Charliesj0129/subhft.git ~/hft_platform && cd ~/hft_platform
@@ -71,12 +74,6 @@ jobs:
             pip install -r requirements.txt
             pip install -e .
             
-            # DIAGNOSTIC: Check imports and env
-            echo "Checking shioaji import..."
-            python -c "import shioaji; print('Shioaji imported successfully')"
-            echo "Checking shioaji_client import..."
-            python -c "from hft_platform.feed_adapter.shioaji_client import ShioajiClient; print('Client module imported')"
-            
             # Run subscription discovery FIRST to generate config/symbols.yaml
             echo "Discovering contracts..."
             # Fix: Run as script directly, use unbuffered output
@@ -86,6 +83,7 @@ jobs:
             echo "Starting Platform..."
             mkdir -p logs
             nohup python -m hft_platform.main > logs/run.log 2>&1 &
+            echo $! > hft.pid
             
             # Wait for startup and check logs
             sleep 5
