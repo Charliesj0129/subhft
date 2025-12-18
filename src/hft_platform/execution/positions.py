@@ -117,7 +117,7 @@ class PositionStore:
             symbol=pos.symbol,
             net_qty=pos.net_qty,
             avg_price=int(pos.avg_price * scale),
-            realized_pnl=int(pos.realized_pnl), # PnL usually in currency units (dollars), not scaled points
+            realized_pnl=int(pos.realized_pnl * scale), # Re-scale PnL to system scale
             unrealized_pnl=0, 
             delta_source="FILL"
         )

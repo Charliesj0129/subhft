@@ -41,8 +41,9 @@ async def test_simple_mm_logic():
     # Run Runner in background
     task = asyncio.create_task(runner.run())
     
-    # 2. Publish Tick
-    tick = {"symbol": "2330", "mid_price": 100.0, "spread": 1.0}
+    # 2. Publish Tick (Scaled x10000)
+    # mid=100.0 -> 1,000,000; spread=1.0 -> 10,000
+    tick = {"symbol": "2330", "mid_price": 1000000, "spread": 10000}
     await bus.publish(tick)
     
     # 3. Wait for Order Intents

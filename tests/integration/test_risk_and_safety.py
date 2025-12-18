@@ -47,13 +47,22 @@ async def test_storm_guard():
     
     # 1. Setup Mismatch
     # Local says 0, Remote says 50
-    system.position_store.update("2330", 0)
+    from hft_platform.execution.positions import Position
+    system.position_store.positions["test:test:2330"] = Position("test", "test", "2330", net_qty=0)
     
     # Mock remote fetch
-    system.reconciler.fetch_remote_positions = MagicMock(return_value={"2330": 50})
+    # ReconciliationService.sync_portfolio calls self.client.get_positions
+    system.reconciler.client = MagicMock()
+    # Return list of objects or dicts? Code expects checks getattr or get.
+    # Let's return dict-like objects
+    pos_remote = MagicMock()
+    pos_remote.code = "2330"
+    pos_remote.quantity = 50
+    pos_remote.direction = "Action.Buy"
+    system.reconciler.client.get_positions.return_value = [pos_remote]
     
     # 2. Run Sync Cycle manually
-    await system.reconciler.sync()
+    await system.reconciler.sync_portfolio()
     
     # 3. Assert Storm Guard logic
     # Reconciliation logs error. If implemented, should trigger cancel_all or alert.
