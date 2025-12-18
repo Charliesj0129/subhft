@@ -169,7 +169,7 @@ class StrategyRunner:
                 strategy_id=strategy.strategy_id,
                 intent_factory=self._intent_factory,
                 price_scaler=self._scale_price,
-                lob_source=self.lob_engine.get_book_snapshot,
+                lob_source=self.lob_engine.get_book_snapshot if self.lob_engine else None,
                 features=strat_features,
             )
 

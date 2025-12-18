@@ -35,7 +35,7 @@ class SimpleMarketMaker(BaseStrategy):
         # Shift price against inventory to encourage mean reversion
         # Skew = - (Position * RiskAversion * Volatility)
         # Simplified: 1 tick per 5 lots
-        tick_size = 5000 # 0.5 * 10000 (Global Scale)
+        tick_size = 0.5 # 5000 points scaled down
         skew = - (pos / 5) * tick_size
         
         fair_value = micro_price + skew

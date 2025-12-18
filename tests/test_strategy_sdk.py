@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import MagicMock
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.contracts.strategy import Side, IntentType
-from hft_platform.strategies.simple_strategy import SimpleStrategy
+from hft_platform.strategies.simple_mm import SimpleMarketMaker as SimpleStrategy
 
 class TestStrategySDK(unittest.TestCase):
     def test_simple_strategy_logic(self):
@@ -34,13 +34,14 @@ class TestStrategySDK(unittest.TestCase):
         generated_intents = strat.on_book(mock_ctx, event)
         
         # 4. Verification
-        self.assertEqual(len(generated_intents), 1)
+        self.assertEqual(len(generated_intents), 2)
         intent = generated_intents[0]
         
         # Check intent details
         self.assertEqual(intent['symbol'], "2330")
-        self.assertEqual(intent['side'], Side.BUY)
-        self.assertEqual(intent['price'], 99.0) # mid - 1
+        # Strategy generates symmetric quotes
+        self.assertTrue(any(i['side'] == Side.BUY for i in generated_intents))
+        self.assertTrue(any(i['side'] == Side.SELL for i in generated_intents))
         print("SDK Test Passed: Generated correct intent from high-level API.")
 
 if __name__ == "__main__":

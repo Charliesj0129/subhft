@@ -3,7 +3,7 @@ import pytest
 import os
 import shutil
 import json
-from hft_platform.backtest.runner import BacktestRunner
+from hft_platform.backtest.runner import HftBacktestRunner as BacktestRunner
 # Need to patch the runner to use local mock data easily or standard data interface
 
 @pytest.mark.asyncio
@@ -17,7 +17,10 @@ async def test_deterministic_replay():
     
     # Mock Runner? 
     # Use the actual BacktestRunner
-    runner = BacktestRunner("DemoStrategy", date)
+    from hft_platform.backtest.runner import HftBacktestConfig
+    config = HftBacktestConfig(data=["mock_data.npz"], symbols=[sym], report=True)
+    runner = BacktestRunner(config)
+    runner.strategy_name = "simple_mm"
     
     # Patch HftBacktestAdapter using unittest.mock
     from unittest.mock import MagicMock, patch

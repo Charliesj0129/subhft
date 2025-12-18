@@ -28,7 +28,7 @@ async def test_recorder_pipeline():
     # 1. Test WAL Writer
     writer = WALWriter(wal_dir)
     test_data = [{"k": "v"}]
-    writer.write("test_table", test_data)
+    await writer.write("test_table", test_data)
     
     files = os.listdir(wal_dir)
     assert len(files) == 1

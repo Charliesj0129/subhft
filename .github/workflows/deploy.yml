@@ -1,7 +1,8 @@
 name: Deploy HFT Platform
 on:
   push:
-    branches: [main]
+    branches: [main, temp_reset_branch]
+  workflow_dispatch:
 
 jobs:
   build-test-deploy:
@@ -13,13 +14,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
           python -m venv .venv
           . .venv/bin/activate
           pip install -r requirements.txt
+          pip install -e .
 
       - name: Run tests
         run: |
@@ -35,46 +37,60 @@ jobs:
 
       - name: Deploy to VM via SSH
         uses: appleboy/ssh-action@v0.1.10
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          SHIOAJI_API_KEY: ${{ secrets.SHIOAJI_API_KEY }}
+          SHIOAJI_SECRET_KEY: ${{ secrets.SHIOAJI_SECRET_KEY }}
         with:
           host: ${{ secrets.VM_HOST || secrets.VM_PUBLIC_IP }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          envs: SHIOAJI_API_KEY,SHIOAJI_SECRET_KEY,GITHUB_REF_NAME,SHIOAJI_PERSON_ID,SHIOAJI_PASSWORD
           script: |
-            # Kill existing service if running
-            pkill -f hft_platform.main || true
+            # Export Envs for the script
+            set -ex
+            export SHIOAJI_API_KEY=$SHIOAJI_API_KEY
+            export SHIOAJI_SECRET_KEY=$SHIOAJI_SECRET_KEY
+            export SHIOAJI_PERSON_ID=$SHIOAJI_API_KEY
+            export SHIOAJI_PASSWORD=$SHIOAJI_SECRET_KEY
+            
+            # Kill existing service safely using PID file
+            if [ -f hft.pid ]; then
+              kill $(cat hft.pid) || true
+              rm hft.pid
+            fi
+            
+            # Setup dependencies
+            # Ensure python3-venv is installed (missing on minimal Ubuntu images)
+            sudo apt-get update
+            # DEBIAN_FRONTEND=noninteractive to avoid prompts
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv python3-pip
             
             # Setup deployment directory
             cd ~/hft_platform || git clone https://github.com/Charliesj0129/subhft.git ~/hft_platform && cd ~/hft_platform
             git fetch origin
-            git reset --hard origin/main
+            # Use the branch that triggered the workflow
+            CURRENT_BRANCH=${GITHUB_REF_NAME:-main}
+            git reset --hard origin/$CURRENT_BRANCH
             
             # Install dependencies
             python3 -m venv .venv
             . .venv/bin/activate
             # Ensure shioaji and other deps are installed
             pip install -r requirements.txt
+            pip install -e .
             
-            # Run subscription script (generates config/symbols.yaml or similar if implemented, 
-            # or just subscribes if it can communicate with a running service, 
-            # BUT here we are running it BEFORE main loop or AFTER?)
+            # Run subscription discovery FIRST to generate config/symbols.yaml
+            echo "Discovering contracts..."
+            # Fix: Run as script directly, use unbuffered output
+            python -u scripts/subscribe_futures.py
             
-            # Strategy: As per plan, run platform then subscribe.
-            # But the subscribe script needs to know what to subscribe to?
-            # Our script logic (see previous step) fetches open contracts.
-            # If main.py reads config on start, we should generate config FIRST.
-            
-            # Let's run subscribe script to generate/update config if needed?
-            # Or if it's a "live" subscriber, run it after.
-            # The current script logic just prints "Subscribed...". 
-            # It doesn't write to config yet.
-            # For this MVP, we will stick to the plan: Run main, then run subscription script.
-            # (Assuming the user might have logic in main to handle dynamic subs or the script does something useful).
-            
-            # Start Platform
+            # Start Platform (reads config/symbols.yaml on startup)
+            echo "Starting Platform..."
+            mkdir -p logs
             nohup python -m hft_platform.main > logs/run.log 2>&1 &
+            echo $! > hft.pid
             
-            # Wait for startup
+            # Wait for startup and check logs
             sleep 5
-            
-            # Run subscription script
-            python -m hft_platform.scripts.subscribe_futures
+            tail -n 20 logs/run.log

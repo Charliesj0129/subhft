@@ -6,21 +6,29 @@ import datetime
 import shioaji as sj
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
-# Simple logging
+# Simple logging to STDOUT for CI visibility
 import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', filename='logs/subscribe_futures.log')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
 def main():
     logger.info("Starting futures subscription script...")
     
     # Initialize Client
-    # We rely on ShioajiClient to handle Login via Env Vars (set in deployment)
     client = ShioajiClient()
     
-    # Login explicitly if needed, but client.login() tries Env vars
+    # Login explicitly
     try:
-        client.login()
+        # Fallback for API Key env vars if client doesn't find PERSON_ID
+        api_key = os.getenv("SHIOAJI_API_KEY")
+        secret_key = os.getenv("SHIOAJI_SECRET_KEY")
+        
+        if api_key and secret_key:
+            logger.info("Using SHIOAJI_API_KEY from environment.")
+            client.login(person_id=api_key, password=secret_key)
+        else:
+            client.login()
+            
         if not client.api:
              logger.error("No API initialized (Sim mode without lib?). Exiting.")
              return
@@ -40,37 +48,37 @@ def main():
     
     logger.info("Fetching contracts...")
     
-    targets = ["TXF", "MXF"]
-    subscribed = []
+    # Check if Contracts are available (requires login)
+    if not hasattr(api, 'Contracts'):
+        logger.warning("api.Contracts not found (Login failed?). Generating empty config.")
+        subscribed = []
+    else:
+        targets = ["TXF", "MXF"]
+        subscribed = []
+        
+        for category in [api.Contracts.Futures.TXF, api.Contracts.Futures.MXF]:
+            if not category:
+                continue
+                
+            # Category is typically an object with contract attributes
+            # We want to iterate available contracts in this category? 
+            # Shioaji structure: api.Contracts.Futures.TXF.TXF202312 etc.
+            # But easier to iterate api.Contracts.Futures and filter
+            pass
     
-    for category in [api.Contracts.Futures.TXF, api.Contracts.Futures.MXF]:
-        if not category:
-            continue
-            
-        # Category is typically an object with contract attributes
-        # We want to iterate available contracts in this category? 
-        # Shioaji structure: api.Contracts.Futures.TXF.TXF202312 etc.
-        # But easier to iterate api.Contracts.Futures and filter
-        pass
-
-    # Better approach: Iterate all futures and filter by code prefix
-    for contract in api.Contracts.Futures:
-        if contract.code[:3] in targets:
-             # Check if it is a near month? 
-             # contract.delivery_month is usually YYYYMM
-             # We just subscribe to all active ones for now, or limits?
-             
-             # User asked for "Currently Open". 
-             # We can check simple time rule or just subscribe.
-             # Quotes are free, subscription limits apply (200?).
-             
-             try:
-                 logger.info(f"Subscribing to {contract.code} ({contract.name})")
-                 api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Quote)
-                 api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
-                 subscribed.append(contract.code)
-             except Exception as e:
-                 logger.error(f"Failed to subscribe {contract.code}: {e}")
+        # Better approach: Iterate all futures and filter by code prefix
+        try:
+            for contract in api.Contracts.Futures:
+                if contract.code[:3] in targets:
+                     try:
+                         logger.info(f"Subscribing to {contract.code} ({contract.name})")
+                         api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Quote)
+                         api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
+                         subscribed.append(contract.code)
+                     except Exception as e:
+                         logger.error(f"Failed to subscribe {contract.code}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to iterate contracts: {e}")
                  
     logger.info(f"Subscribed to {len(subscribed)} contracts: {subscribed}")
     
@@ -123,7 +131,44 @@ def main():
     # 3. Exit.
     # 4. Then `main.py` starts and reads `config/symbols.yaml`.
     
-    pass
+    import yaml
+
+    # Write config
+    if subscribed:
+        logger.info(f"Generating config/symbols.yaml with {len(subscribed)} symbols...")
+        config_data = {"symbols": []}
+        for code in subscribed:
+            # We need metadata like exchange, tick_size
+            # For futures (TXF), exchange is usually Futures? 
+            # tick_size depends on symbol (TXF=1.0, MXF=1.0/0.2?)
+            # querying contract details
+            from_contract = None
+            for c in api.Contracts.Futures:
+                if c.code == code:
+                    from_contract = c
+                    break
+            
+            # Default values (refined by contract lookup ideally)
+            entry = {
+                "code": code,
+                "name": from_contract.name if from_contract else code,
+                "exchange": "Futures",
+                "tick_size": 1.0, 
+                "contract_size": 1.0, 
+                "price_scale": 10000 
+            }
+            config_data["symbols"].append(entry)
+        
+        # Ensure directory exists
+        os.makedirs("config", exist_ok=True)
+        with open("config/symbols.yaml", "w") as f:
+            yaml.dump(config_data, f, default_flow_style=False)
+        
+    logger.info("Config generated successfully.")
+    
+    # Force exit to kill any lingering Shioaji threads
+    logger.info("Script complete. Forcing exit.")
+    os._exit(0)
 
 if __name__ == "__main__":
     main()
