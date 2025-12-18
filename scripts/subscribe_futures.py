@@ -156,9 +156,11 @@ def main():
         with open("config/symbols.yaml", "w") as f:
             yaml.dump(config_data, f, default_flow_style=False)
         
-        logger.info("Config generated successfully.")
-    else:
-        logger.warning("No contracts subscribed. Config file NOT generated/updated.")
+    logger.info("Config generated successfully.")
+    
+    # Force exit to kill any lingering Shioaji threads
+    logger.info("Script complete. Forcing exit.")
+    os._exit(0)
 
 if __name__ == "__main__":
     main()
