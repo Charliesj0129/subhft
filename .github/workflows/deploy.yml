@@ -37,11 +37,15 @@ jobs:
 
       - name: Deploy to VM via SSH
         uses: appleboy/ssh-action@v0.1.10
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          SHIOAJI_API_KEY: ${{ secrets.SHIOAJI_API_KEY }}
+          SHIOAJI_SECRET_KEY: ${{ secrets.SHIOAJI_SECRET_KEY }}
         with:
           host: ${{ secrets.VM_HOST || secrets.VM_PUBLIC_IP }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
-          envs: SHIOAJI_API_KEY,SHIOAJI_SECRET_KEY,GITHUB_REF_NAME
+          envs: SHIOAJI_API_KEY,SHIOAJI_SECRET_KEY,GITHUB_REF_NAME,SHIOAJI_PERSON_ID,SHIOAJI_PASSWORD
           script: |
             # Export Envs for the script
             export SHIOAJI_API_KEY=$SHIOAJI_API_KEY
