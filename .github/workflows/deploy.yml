@@ -60,6 +60,12 @@ jobs:
               rm hft.pid
             fi
             
+            # Setup dependencies
+            # Ensure python3-venv is installed (missing on minimal Ubuntu images)
+            sudo apt-get update
+            # DEBIAN_FRONTEND=noninteractive to avoid prompts
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv python3-pip
+            
             # Setup deployment directory
             cd ~/hft_platform || git clone https://github.com/Charliesj0129/subhft.git ~/hft_platform && cd ~/hft_platform
             git fetch origin
