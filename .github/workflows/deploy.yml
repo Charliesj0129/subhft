@@ -48,6 +48,7 @@ jobs:
           envs: SHIOAJI_API_KEY,SHIOAJI_SECRET_KEY,GITHUB_REF_NAME,SHIOAJI_PERSON_ID,SHIOAJI_PASSWORD
           script: |
             # Export Envs for the script
+            set -e
             export SHIOAJI_API_KEY=$SHIOAJI_API_KEY
             export SHIOAJI_SECRET_KEY=$SHIOAJI_SECRET_KEY
             export SHIOAJI_PERSON_ID=$SHIOAJI_API_KEY
@@ -70,25 +71,10 @@ jobs:
             pip install -r requirements.txt
             pip install -e .
             
-            # Run subscription script (generates config/symbols.yaml or similar if implemented, 
-            # or just subscribes if it can communicate with a running service, 
-            # BUT here we are running it BEFORE main loop or AFTER?)
-            
-            # Strategy: As per plan, run platform then subscribe.
-            # But the subscribe script needs to know what to subscribe to?
-            # Our script logic (see previous step) fetches open contracts.
-            # If main.py reads config on start, we should generate config FIRST.
-            
-            # Let's run subscribe script to generate/update config if needed?
-            # Or if it's a "live" subscriber, run it after.
-            # The current script logic just prints "Subscribed...". 
-            # It doesn't write to config yet.
-            # For this MVP, we will stick to the plan: Run main, then run subscription script.
-            # (Assuming the user might have logic in main to handle dynamic subs or the script does something useful).
-            
             # Run subscription discovery FIRST to generate config/symbols.yaml
             echo "Discovering contracts..."
-            python -m hft_platform.scripts.subscribe_futures
+            # Fix: Run as script directly, use unbuffered output
+            python -u scripts/subscribe_futures.py
             
             # Start Platform (reads config/symbols.yaml on startup)
             echo "Starting Platform..."
