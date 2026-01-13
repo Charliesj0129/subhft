@@ -1,96 +1,87 @@
-name: Deploy HFT Platform
+name: Deploy HFT Platform (GHCR + Compose)
 on:
   push:
-    branches: [main, temp_reset_branch]
+    branches: [main]
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/hft-platform
+  WAL_IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/hft-platform-wal-loader
+
 jobs:
-  build-test-deploy:
+  build-push-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      deployments: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
-          python-version: '3.12'
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install dependencies
-        run: |
-          python -m venv .venv
-          . .venv/bin/activate
-          pip install -r requirements.txt
-          pip install -e .
+      - name: Build and push hft-platform
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}:latest
 
-      - name: Run tests
-        run: |
-          . .venv/bin/activate
-          pytest -q
+      - name: Build and push wal-loader
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.WAL_IMAGE_BASE }}:${{ github.sha }}
+            ${{ env.WAL_IMAGE_BASE }}:latest
+          build-args: |
+            TARGET=wal-loader
 
-
-      - name: Debug Secrets
-        run: |
-          echo "Checking Secrets availability..."
-          if [ -z "${{ secrets.VM_HOST }}" ]; then echo "VM_HOST is empty"; else echo "VM_HOST is set"; fi
-          if [ -z "${{ secrets.VM_PUBLIC_IP }}" ]; then echo "VM_PUBLIC_IP is empty"; else echo "VM_PUBLIC_IP is set"; fi
-
-      - name: Deploy to VM via SSH
+      - name: Deploy via SSH with compose pull/up (low-latency overrides)
+        if: ${{ secrets.VM_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.10
         env:
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-          SHIOAJI_API_KEY: ${{ secrets.SHIOAJI_API_KEY }}
-          SHIOAJI_SECRET_KEY: ${{ secrets.SHIOAJI_SECRET_KEY }}
+          GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          IMAGE: ${{ env.IMAGE_BASE }}:${{ github.sha }}
+          WAL_IMAGE: ${{ env.WAL_IMAGE_BASE }}:${{ github.sha }}
         with:
           host: ${{ secrets.VM_HOST || secrets.VM_PUBLIC_IP }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
-          envs: SHIOAJI_API_KEY,SHIOAJI_SECRET_KEY,GITHUB_REF_NAME,SHIOAJI_PERSON_ID,SHIOAJI_PASSWORD
+          envs: GHCR_USER,GHCR_TOKEN,IMAGE,WAL_IMAGE
           script: |
-            # Export Envs for the script
-            set -ex
-            export SHIOAJI_API_KEY=$SHIOAJI_API_KEY
-            export SHIOAJI_SECRET_KEY=$SHIOAJI_SECRET_KEY
-            export SHIOAJI_PERSON_ID=$SHIOAJI_API_KEY
-            export SHIOAJI_PASSWORD=$SHIOAJI_SECRET_KEY
-            
-            # Kill existing service safely using PID file
-            if [ -f hft.pid ]; then
-              kill $(cat hft.pid) || true
-              rm hft.pid
+            set -e
+            if [ -n "$GHCR_TOKEN" ]; then
+              echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            else
+              echo "GHCR_TOKEN not provided; pull may fail if images are private."
             fi
-            
-            # Setup dependencies
-            # Ensure python3-venv is installed (missing on minimal Ubuntu images)
-            sudo apt-get update
-            # DEBIAN_FRONTEND=noninteractive to avoid prompts
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv python3-pip
-            
-            # Setup deployment directory
-            cd ~/hft_platform || git clone https://github.com/Charliesj0129/subhft.git ~/hft_platform && cd ~/hft_platform
-            git fetch origin
-            # Use the branch that triggered the workflow
-            CURRENT_BRANCH=${GITHUB_REF_NAME:-main}
-            git reset --hard origin/$CURRENT_BRANCH
-            
-            # Install dependencies
-            python3 -m venv .venv
-            . .venv/bin/activate
-            # Ensure shioaji and other deps are installed
-            pip install -r requirements.txt
-            pip install -e .
-            
-            # Run subscription discovery FIRST to generate config/symbols.yaml
-            echo "Discovering contracts..."
-            # Fix: Run as script directly, use unbuffered output
-            python -u scripts/subscribe_futures.py
-            
-            # Start Platform (reads config/symbols.yaml on startup)
-            echo "Starting Platform..."
-            mkdir -p logs
-            nohup python -m hft_platform.main > logs/run.log 2>&1 &
-            echo $! > hft.pid
-            
-            # Wait for startup and check logs
-            sleep 5
-            tail -n 20 logs/run.log
+            cd ~/hft_platform
+            export HFT_IMAGE="$IMAGE"
+            export HFT_WAL_IMAGE="$WAL_IMAGE"
+            export HFT_USE_STRESS=1
+            export HFT_LOW_LATENCY=1
+            export HFT_CH_DATA_ROOT="/mnt/data/clickhouse"
+            export HFT_REMOTE_IMAGES=1
+            export COMPOSE_FILE="docker-compose.yml:docker-compose.stress.yml:docker-compose.lowlatency.yml:docker-compose.chdata.yml"
+            docker compose pull
+            docker compose up -d
+            docker compose ps

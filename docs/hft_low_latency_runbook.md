@@ -32,6 +32,7 @@ docker compose stop wal-loader
 mv .wal/archive/*.jsonl .wal/
 docker compose start wal-loader
 ```
+- 清理本機舊備份：確認雲端/遠端已備份後，刪除不再需要的 `backups/` 部分檔案以釋出空間。
 
 ## 5) Monitoring quick checks
 - ClickHouse lag window:
