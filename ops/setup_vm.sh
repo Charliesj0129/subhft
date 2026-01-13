@@ -45,6 +45,17 @@ mkdir -p ~/hft_platform/data ~/hft_platform/.wal ~/hft_platform/config
 
 cd ~/hft_platform
 
+# Low-latency host tuning (opt-out via HFT_SKIP_TUNING=1)
+if [ "${HFT_LOW_LATENCY:-0}" = "1" ] && [ "${HFT_SKIP_TUNING:-0}" != "1" ]; then
+    echo "Applying host tuning for low latency..."
+    sudo bash ops/host_tuning.sh || echo "Host tuning encountered issues; please review output."
+fi
+
+# Warn if data root not mounted to a data disk
+if [ -n "${CH_DATA_ROOT:-}" ] && ! mountpoint -q "$(dirname "$CH_DATA_ROOT")"; then
+    echo "WARNING: $(dirname "$CH_DATA_ROOT") is not a mountpoint. Mount your data disk to avoid using the OS disk."
+fi
+
 # Check for .env
 if [ ! -f .env ]; then
     echo "WARNING: .env file missing! Creating empty one if not exists."
