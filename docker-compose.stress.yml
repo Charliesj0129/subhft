@@ -1,0 +1,62 @@
+services:
+  # Base Worker 0 (reusing hft-engine but renamed/aliased for clarity or just adding more)
+  # Actually, we can reuse 'hft-engine' as worker-0 and add 4 more.
+  # But for clean logs, let's define 5 explicit workers.
+
+  hft-worker-0:
+    extends:
+      file: docker-compose.yml
+      service: hft-base
+    container_name: hft-worker-0
+    environment:
+      - SYMBOLS_CONFIG=config/stress/shard_0.yaml
+      - WORKER_ID=0
+      - CONTAINER_ID=0
+    # Map metrics to unique host ports
+    ports:
+      - "9090:9090"
+
+  hft-worker-1:
+    extends:
+      file: docker-compose.yml
+      service: hft-base
+    container_name: hft-worker-1
+    environment:
+      - SYMBOLS_CONFIG=config/stress/shard_1.yaml
+      - WORKER_ID=1
+    ports:
+      - "9091:9090"
+
+  hft-worker-2:
+    extends:
+      file: docker-compose.yml
+      service: hft-base
+    container_name: hft-worker-2
+    environment:
+      - SYMBOLS_CONFIG=config/stress/shard_2.yaml
+      - WORKER_ID=2
+    ports:
+      - "9092:9090"
+
+  hft-worker-3:
+    extends:
+      file: docker-compose.yml
+      service: hft-base
+    container_name: hft-worker-3
+    environment:
+      - SYMBOLS_CONFIG=config/stress/shard_3.yaml
+      - WORKER_ID=3
+    ports:
+      - "9093:9090"
+
+  hft-worker-4:
+    extends:
+      file: docker-compose.yml
+      service: hft-base
+    container_name: hft-worker-4
+    environment:
+      - SYMBOLS_CONFIG=config/stress/shard_4.yaml
+      - WORKER_ID=4
+    ports:
+      - "9094:9090"
+  # Ensure Clickhouse is available to all (handled by default network)

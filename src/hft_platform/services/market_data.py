@@ -65,7 +65,7 @@ class MarketDataService:
                 self.metrics["count"] += 1
 
                 # logger.debug(f"MD Raw Type: {type(raw)}")
-                logger.info("MD Raw Recv", type=str(type(raw)), val=str(raw)[:200]) # Log first 200 chars
+                logger.info("MD Raw Recv", type=str(type(raw)), val=str(raw)[:200])  # Log first 200 chars
 
                 # Normalize
                 event = None
@@ -76,11 +76,7 @@ class MarketDataService:
                         or "bid_price" in str(raw)
                         or (isinstance(raw, dict) and "bid_price" in raw)
                     )
-                    is_tick = (
-                        hasattr(raw, "close")
-                        or "close" in str(raw)
-                        or (isinstance(raw, dict) and "close" in raw)
-                    )
+                    is_tick = hasattr(raw, "close") or "close" in str(raw) or (isinstance(raw, dict) and "close" in raw)
 
                     if is_bid:
                         event = self.normalizer.normalize_bidask(raw)
@@ -130,20 +126,17 @@ class MarketDataService:
             # For now, let's assume partial implementation or skip if critical.
             # But snapshots are needed for initial state.
 
-            # Fix: Using normalize_bidask for snapshot fallback as indicated in my TODO
-            # cnt = 0
             for snap in snapshots:
-                # Convert to dict
-                # Convert to dict
-                # payload = snap.to_dict() if hasattr(snap, "to_dict") else dict(snap)
+                event = self.normalizer.normalize_snapshot(snap)
+                if not event:
+                    continue
 
-                # Use normalize_bidask logic? Snapshot payloads have bids/asks lists usually.
-                # normalize_bidask expects 'bid_price', 'bid_volume' parsing logic.
-                # Snapshot payload might be 'bids': [{'price':...}]
-                # I might need to adapt payload or fix normalizer.
-                # For this refactoring step, I'll log and skip if format mismatch,
-                # but effectively I should implement snapshot parsing.
-                pass
+                stats = self.lob.process_event(event)
+
+                if self.publish_full_events:
+                    await self._publish(event)
+                if stats:
+                    await self._publish(stats)
 
             self.client.subscribe_basket(self._on_shioaji_event)
             self._set_state(FeedState.CONNECTED)
@@ -169,24 +162,24 @@ class MarketDataService:
                 p0 = args[0]
                 p1 = args[1]
                 msg = p1
-                if hasattr(p0, 'name') or isinstance(p0, str):
-                     exchange = p0
+                if hasattr(p0, "name") or isinstance(p0, str):
+                    exchange = p0
 
             # Enqueue as tuple (exchange, msg) to match consumer
             if hasattr(self, "loop"):
                 if msg:
-                     self.loop.call_soon_threadsafe(self.raw_queue.put_nowait, (exchange, msg))
+                    self.loop.call_soon_threadsafe(self.raw_queue.put_nowait, (exchange, msg))
                 else:
-                     pass # logger.warning(f"Could not parse msg from {args}")
+                    pass  # logger.warning(f"Could not parse msg from {args}")
             else:
-                 logger.error("Callback loop missing")
+                logger.error("Callback loop missing")
 
         except Exception as e:
             logger.error(f"Error in Shioaji callback: {e}")
 
     async def _monitor_loop(self):
         while self.running:
-            await asyncio.sleep(5.0) # 5s interval
+            await asyncio.sleep(5.0)  # 5s interval
 
             # 1. Throughput
             now = time.time()

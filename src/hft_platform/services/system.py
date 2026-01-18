@@ -3,17 +3,9 @@ from typing import Any, Dict, Optional
 
 from structlog import get_logger
 
-from hft_platform.engine.event_bus import RingBufferBus
-from hft_platform.execution.positions import PositionStore
-from hft_platform.execution.reconciliation import ReconciliationService
-from hft_platform.feed_adapter.shioaji_client import ShioajiClient
-from hft_platform.order.adapter import OrderAdapter
-from hft_platform.recorder.worker import RecorderService
-from hft_platform.risk.engine import RiskEngine
-from hft_platform.risk.storm_guard import StormGuard, StormGuardState
-from hft_platform.services.execution import ExecutionService
-from hft_platform.services.market_data import MarketDataService
-from hft_platform.strategy.runner import StrategyRunner
+from hft_platform.core.pricing import PriceCodec
+from hft_platform.risk.storm_guard import StormGuardState
+from hft_platform.services.bootstrap import SystemBootstrapper
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
@@ -25,55 +17,31 @@ class HFTSystem:
         self.settings = settings or {}
         self.running = False
 
-        # 1. Infrastructure
-        self.bus = RingBufferBus()
-        self.raw_queue = asyncio.Queue()
-        self.raw_exec_queue = asyncio.Queue()
-        self.risk_queue = asyncio.Queue()
-        self.order_queue = asyncio.Queue()
+        self.registry = SystemBootstrapper(self.settings).build()
 
-        # 2. Shared State
-        self.position_store = PositionStore()
-        self.order_id_map: Dict[str, str] = {}
-        self.storm_guard = StormGuard()
+        self.bus = self.registry.bus
+        self.raw_queue = self.registry.raw_queue
+        self.raw_exec_queue = self.registry.raw_exec_queue
+        self.risk_queue = self.registry.risk_queue
+        self.order_queue = self.registry.order_queue
+        self.recorder_queue = self.registry.recorder_queue
 
-        # 3. Config Paths
-        import os
-        paths = self.settings.get("paths", {})
-        symbols_path = os.getenv("SYMBOLS_CONFIG", paths.get("symbols", "config/symbols.yaml"))
-        risk_path = paths.get("strategy_limits", "config/base/strategy_limits.yaml")
-        adapter_path = paths.get("order_adapter", "config/base/order_adapter.yaml")
+        self.position_store = self.registry.position_store
+        self.order_id_map = self.registry.order_id_map
+        self.storm_guard = self.registry.storm_guard
+        self.client = self.registry.client
+        self.symbol_metadata = self.registry.symbol_metadata
+        self.price_scale_provider = self.registry.price_scale_provider
 
-        # Inject StormGuard into Client? Or just System manages access?
-        # Ideally components check StormGuard via shared state or singleton?
-        # For now, System pushes state or components access generic registry.
+        self.md_service = self.registry.md_service
+        self.order_adapter = self.registry.order_adapter
+        self.exec_service = self.registry.exec_service
+        self.risk_engine = self.registry.risk_engine
+        self.recon_service = self.registry.recon_service
+        self.strategy_runner = self.registry.strategy_runner
+        self.recorder = self.registry.recorder
 
-        self.client = ShioajiClient(symbols_path)
-
-        # 4. Services
-        self.md_service = MarketDataService(self.bus, self.raw_queue, self.client)
-
-        # Pass OrderAdapter logic (Legacy component)
-        self.order_adapter = OrderAdapter(adapter_path, self.order_queue, self.client, self.order_id_map)
-        # Inject StormGuard reference to Adapter if possible, or Adapter uses System global?
-        # Better: We'll modify Adapter later to accept it. For now, leave as is.
-
-        self.exec_service = ExecutionService(
-            self.bus, self.raw_exec_queue, self.order_id_map, self.position_store, self.order_adapter
-        )
-
-        self.risk_engine = RiskEngine(risk_path, self.risk_queue, self.order_queue)
-
-        self.recon_service = ReconciliationService(self.client, self.position_store, self.settings)
-
-        # LOB is owned by MD Service, pass it to Runner
-        self.strategy_runner = StrategyRunner(self.bus, self.risk_queue, self.md_service.lob, self.position_store)
-
-        # 5. Recorder
-        self.recorder_queue = asyncio.Queue()
-        self.recorder = RecorderService(self.recorder_queue)
-
-        self.tasks: Dict[str, asyncio.Task] = {}
+        self.tasks: Dict[str, asyncio.Task[Any]] = {}
 
     async def run(self):
         self.running = True
@@ -115,10 +83,11 @@ class HFTSystem:
         2. Monitors Service Health (Crashes).
         """
         from hft_platform.observability.metrics import MetricsRegistry
+
         metrics = MetricsRegistry.get()
 
         while self.running:
-            await asyncio.sleep(1.0) # 1Hz Tick
+            await asyncio.sleep(1.0)  # 1Hz Tick
 
             # A. Update StormGuard
             # usages = self.client.get_usage() # API Call
@@ -158,7 +127,6 @@ class HFTSystem:
                 logger.warning("Restarting OrderAdapter...")
                 self._start_service("order", self.order_adapter.run())
 
-
             # Update Metrics
             metrics.update_system_metrics()
             logger.info(
@@ -170,9 +138,8 @@ class HFTSystem:
 
             # Check StormGuard State
             if self.storm_guard.state == StormGuardState.HALT:
-                 logger.error("System HALTED by StormGuard.")
-                 # potentially self.stop() or just block orders?
-
+                logger.error("System HALTED by StormGuard.")
+                # potentially self.stop() or just block orders?
 
     def stop(self):
         self.running = False
@@ -181,7 +148,7 @@ class HFTSystem:
         self.risk_engine.running = False
         self.recon_service.running = False
         self.strategy_runner.running = False
-        self.order_adapter.running = False # Clean shutdown
+        self.order_adapter.running = False  # Clean shutdown
 
     async def _on_exec(self, topic, data):
         # This callback runs in Shioaji thread.
@@ -190,6 +157,7 @@ class HFTSystem:
             import time
 
             from hft_platform.execution.normalizer import RawExecEvent
+
             event = RawExecEvent(topic, data, time.time_ns())
             self.loop.call_soon_threadsafe(self.raw_exec_queue.put_nowait, event)
 
@@ -197,22 +165,16 @@ class HFTSystem:
         """Bridge all Bus events to Recorder."""
         # Start from -1 to capture first event
         consumer = self.bus.consume(start_cursor=-1)
+        from hft_platform.recorder.mapper import map_event_to_record
+
+        metadata = self.symbol_metadata
+        price_codec = PriceCodec(self.price_scale_provider)
         try:
             async for event in consumer:
-                # Log sampling
-                if "Tick" in str(type(event)):
-                     logger.info(f"Bridge received Tick: {event}")
-
-                 # Naive dump of everything to market_data table?
-                # Ideally we check event type.
-                # But for now, dump all after converting to dict
-                # Assuming event is Pydantic model
-                payload = event
-                if hasattr(event, "dict"):
-                    payload = event.dict()
-                elif hasattr(event, "model_dump"):
-                    payload = event.model_dump()
-
-                await self.recorder_queue.put({"topic": "market_data", "data": payload})
+                mapped = map_event_to_record(event, metadata, price_codec)
+                if not mapped:
+                    continue
+                topic, payload = mapped
+                await self.recorder_queue.put({"topic": topic, "data": payload})
         except asyncio.CancelledError:
             pass

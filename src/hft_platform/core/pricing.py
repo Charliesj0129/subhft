@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    pass
+
+
+class PriceScaleProvider(Protocol):
+    def price_scale(self, symbol: str) -> int: ...
+
+
+@dataclass(slots=True)
+class SymbolMetadataPriceScaleProvider:
+    metadata: Any | None = None
+
+    def __post_init__(self) -> None:
+        if self.metadata is None:
+            from hft_platform.feed_adapter.normalizer import SymbolMetadata
+
+            self.metadata = SymbolMetadata()
+
+    def price_scale(self, symbol: str) -> int:
+        return int(self.metadata.price_scale(symbol)) if self.metadata else 1
+
+
+@dataclass(slots=True)
+class FixedPriceScaleProvider:
+    scale: int = 10_000
+
+    def price_scale(self, symbol: str) -> int:
+        return int(self.scale) if self.scale else 1
+
+
+@dataclass(slots=True)
+class PriceCodec:
+    provider: PriceScaleProvider
+
+    def _scale(self, symbol: str) -> int:
+        try:
+            scale = int(self.provider.price_scale(symbol))
+        except Exception:
+            scale = 0
+        return scale or 1
+
+    def scale_factor(self, symbol: str) -> int:
+        return self._scale(symbol)
+
+    def scale(self, symbol: str, price: float | int) -> int:
+        return int(float(price) * self._scale(symbol))
+
+    def descale(self, symbol: str, value: float | int) -> float:
+        return float(value) / float(self._scale(symbol))

@@ -1,292 +1,220 @@
+import os
 import time
-import yaml
-from typing import Dict, Any, List, Optional, Sequence
-from threading import Lock
+from typing import Any, Dict, Optional
 
 from structlog import get_logger
 
+from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
+from hft_platform.events import BidAskEvent, MetaData, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
+
+# Validated Imports
+
+# Use existing implementation of SymbolMetadata.
 
 logger = get_logger("feed_adapter.normalizer")
 
 
 class SymbolMetadata:
     """
-    Loads per-symbol configuration from config/symbols.yaml. Supports fields:
-    - tick_size (float)
-    - decimals (int)
-    - price_scale (int, overrides tick_size/decimals)
-    - lot_size
-    - odd_lot (bool)
+    Loads per-symbol configuration.
     """
 
     DEFAULT_SCALE = 10_000
 
-    def __init__(self, config_path: str = "config/base/symbols.yaml"):
-        self.config_path = config_path
-        self.meta: Dict[str, Dict[str, Any]] = {}
-        self._load()
+    def __init__(self, config_path: Optional[str] = None):
+        # simplified for this context, assuming existing logic was ok, just need it here
+        import yaml
 
-    def _load(self):
+        if config_path is None:
+            config_path = os.getenv("SYMBOLS_CONFIG")
+            if not config_path:
+                if os.path.exists("config/symbols.yaml"):
+                    config_path = "config/symbols.yaml"
+                else:
+                    config_path = "config/base/symbols.yaml"
+
+        self.config_path = config_path
+        self.meta = {}
         try:
             with open(self.config_path, "r") as f:
                 data = yaml.safe_load(f) or {}
                 for item in data.get("symbols", []):
-                    code = item.get("code")
-                    if code:
-                        self.meta[code] = item
-            logger.info("Loaded symbol metadata", count=len(self.meta))
-        except Exception as exc:
-            logger.error("Failed to load symbol metadata", error=str(exc))
+                    if "code" in item:
+                        self.meta[item["code"]] = item
+        except Exception:
+            pass
 
     def price_scale(self, symbol: str) -> int:
-        entry = self.meta.get(symbol, {})
-        # Enforce global scale x10000 unless strictly overridden
-        if "price_scale" in entry:
-            return int(entry["price_scale"])
+        # Avoid creating empty dict
+        entry = self.meta.get(symbol)
+        if entry:
+            if "price_scale" in entry:
+                return int(entry.get("price_scale", self.DEFAULT_SCALE))
+            tick_size = entry.get("tick_size")
+            if tick_size:
+                try:
+                    scale = int(round(1 / float(tick_size)))
+                    if scale > 0:
+                        return scale
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
         return self.DEFAULT_SCALE
 
-    def lot_size(self, symbol: str) -> int:
-        return int(self.meta.get(symbol, {}).get("lot_size", 1))
-
-    def is_odd_lot(self, symbol: str) -> bool:
-        return bool(self.meta.get(symbol, {}).get("odd_lot", False))
+    def exchange(self, symbol: str) -> str:
+        entry = self.meta.get(symbol) or {}
+        return str(entry.get("exchange", ""))
 
 
 class MarketDataNormalizer:
-    def __init__(self, config_path: str = "config/base/symbols.yaml"):
-        self._seq = 0
-        self._lock = Lock()
+    __slots__ = ("_seq_gen", "metadata", "price_codec", "metrics")
+
+    def __init__(self, config_path: Optional[str] = None):
+        import itertools
+
+        self._seq_gen = itertools.count(1)
+        # self._lock = Lock() # Removed
         self.metadata = SymbolMetadata(config_path)
+        self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
 
     def _next_seq(self) -> int:
-        with self._lock:
-            self._seq += 1
-            return self._seq
+        return next(self._seq_gen)
 
-    @staticmethod
-    def capture_local_time_ns() -> int:
-        return time.time_ns()
-
-    @staticmethod
-    def _coalesce(payload: Dict[str, Any], *keys: str) -> Any:
+    def _get_field(self, payload: Any, keys: list) -> Any:
+        """Helper to get value from dict or object using priority keys."""
         for key in keys:
-            if key in payload:
-                return payload[key]
+            val = None
+            if isinstance(payload, dict):
+                val = payload.get(key)
+            else:
+                val = getattr(payload, key, None)
+
+            if val is not None:
+                return val
         return None
 
-    def _scale_price(self, symbol: str, value: Any) -> int:
-        if value is None:
-            return 0
+    def normalize_tick(self, payload: Any) -> Optional[TickEvent]:
+        # Fast path lookup without _coalesce
+        # Assuming Shioaji standard keys: 'code', 'close', 'volume', 'ts'
         try:
-            scale = self.metadata.price_scale(symbol)
-            return int(float(value) * scale)
-        except (TypeError, ValueError):
-            return 0
-
-    @staticmethod
-    def _to_int(value: Any) -> int:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
-
-    def _normalize_levels(self, symbol: str, prices: Sequence[Any], volumes: Sequence[Any]) -> List[Dict[str, int]]:
-        levels = []
-        for price, vol in zip(prices, volumes):
-            scaled_price = self._scale_price(symbol, price)
-            volume_int = self._to_int(vol)
-            if scaled_price == 0 and volume_int == 0:
-                continue
-            levels.append({"price": scaled_price, "volume": volume_int})
-        return levels
-
-    def normalize_tick(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Normalize Tick payload per sinotrade_tutor_md/market_data/streaming/stocks.md.
-        """
-        try:
-            symbol = self._coalesce(payload, "code", "Code")
+            symbol = self._get_field(payload, ["code", "Code"])
             if not symbol:
                 return None
 
-            local_ts = self.capture_local_time_ns()
-            exch_ts = self._to_int(self._coalesce(payload, "ts", "datetime", "DateTime", "Timestamp"))
+            # Timestamp
+            ts_val = self._get_field(payload, ["ts", "datetime"])
+            if hasattr(ts_val, "timestamp"):
+                exch_ts = int(ts_val.timestamp() * 1e9)
+            else:
+                exch_ts = int(ts_val) if ts_val else 0
 
-            close = self._coalesce(payload, "close", "Close")
-            volume = self._coalesce(payload, "volume", "Volume")
+            # Price
+            close_val = self._get_field(payload, ["close", "Close"])
+            price = self.price_codec.scale(symbol, close_val) if close_val is not None else 0
 
-            event = {
-                "type": "Tick",
-                "seq": self._next_seq(),
-                "symbol": symbol,
-                "exch_ts": exch_ts,
-                "local_ts": local_ts,
-                "price": self._scale_price(symbol, close),
-                "volume": self._to_int(volume),
-                "total_volume": self._to_int(self._coalesce(payload, "total_volume", "TotalVolume")),
-                "amount": self._to_int(self._coalesce(payload, "amount", "Amount")),
-                "total_amount": self._to_int(self._coalesce(payload, "total_amount", "AmountSum", "TotalAmount")),
-                "tick_type": self._to_int(self._coalesce(payload, "tick_type", "TickType")),
-                "chg_type": self._to_int(self._coalesce(payload, "chg_type", "ChgType")),
-                "price_chg": self._scale_price(symbol, self._coalesce(payload, "price_chg", "PriceChg")),
-                "pct_chg": float(self._coalesce(payload, "pct_chg", "PctChg") or 0),
-                "bid_side_total_vol": self._to_int(self._coalesce(payload, "bid_side_total_vol")),
-                "ask_side_total_vol": self._to_int(self._coalesce(payload, "ask_side_total_vol")),
-                "bid_side_total_cnt": self._to_int(self._coalesce(payload, "bid_side_total_cnt")),
-                "ask_side_total_cnt": self._to_int(self._coalesce(payload, "ask_side_total_cnt")),
-                "simtrade": self._to_int(self._coalesce(payload, "simtrade", "Simtrade")),
-                "intraday_odd": self._to_int(self._coalesce(payload, "intraday_odd", "IntradayOdd")),
-                "suspend": self._to_int(self._coalesce(payload, "suspend", "Suspend")),
-            }
-            return event
-        except Exception as exc:
-            logger.error("Tick normalization failed", error=str(exc), payload=str(payload)[:200])
-            self.metrics.normalization_errors_total.labels(type="Tick").inc()
-            return None
+            # Volume
+            vol_val = self._get_field(payload, ["volume", "Volume"])
+            volume = int(vol_val) if vol_val is not None else 0
 
-    def normalize_bidask(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Normalize BidAsk payload per sinotrade_tutor_md/market_data/streaming/stocks.md.
-        """
-        try:
-            symbol = self._coalesce(payload, "code", "Code")
-            if not symbol:
-                return None
+            meta = MetaData(seq=self._next_seq(), topic="tick", source_ts=exch_ts, local_ts=time.time_ns())
 
-            local_ts = self.capture_local_time_ns()
-            exch_ts = self._to_int(self._coalesce(payload, "ts", "datetime"))
-
-            bid_prices = self._coalesce(payload, "bid_price", "BidPrice") or []
-            bid_volumes = self._coalesce(payload, "bid_volume", "BidVolume") or []
-            ask_prices = self._coalesce(payload, "ask_price", "AskPrice") or []
-            ask_volumes = self._coalesce(payload, "ask_volume", "AskVolume") or []
-
-            bids = self._normalize_levels(symbol, bid_prices, bid_volumes)
-            asks = self._normalize_levels(symbol, ask_prices, ask_volumes)
-
-            event = {
-                "type": "BidAsk",
-                "seq": self._next_seq(),
-                "symbol": symbol,
-                "exch_ts": exch_ts,
-                "local_ts": local_ts,
-                "bids": bids,
-                "asks": asks,
-                "diff_bid_vol": list(self._coalesce(payload, "diff_bid_vol", "DiffBidVol") or []),
-                "diff_ask_vol": list(self._coalesce(payload, "diff_ask_vol", "DiffAskVol") or []),
-                "suspend": self._to_int(self._coalesce(payload, "suspend", "Suspend")),
-                "simtrade": self._to_int(self._coalesce(payload, "simtrade", "Simtrade")),
-                "intraday_odd": self._to_int(self._coalesce(payload, "intraday_odd", "IntradayOdd")),
-            }
-            return event
-        except Exception as exc:
-            logger.error("BidAsk normalization failed", error=str(exc), payload=str(payload)[:200])
-            self.metrics.normalization_errors_total.labels(type="BidAsk").inc()
-            return None
-
-    def normalize_snapshot(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Normalize Snapshot payload per sinotrade_tutor_md/market_data/snapshot.md.
-        """
-        try:
-            symbol = self._coalesce(payload, "code", "Code")
-            if not symbol:
-                return None
-
-            local_ts = self.capture_local_time_ns()
-            exch_ts = self._to_int(self._coalesce(payload, "ts", "Timestamp"))
-
-            bids: List[Dict[str, int]] = []
-            asks: List[Dict[str, int]] = []
-
-            buy_price = self._coalesce(payload, "buy_price", "BuyPrice")
-            buy_volume = self._coalesce(payload, "buy_volume", "BuyVolume")
-            sell_price = self._coalesce(payload, "sell_price", "SellPrice")
-            sell_volume = self._coalesce(payload, "sell_volume", "SellVolume")
-
-            if buy_price is not None and buy_volume is not None:
-                bids.append({"price": self._scale_price(symbol, buy_price), "volume": self._to_int(buy_volume)})
-            if sell_price is not None and sell_volume is not None:
-                asks.append({"price": self._scale_price(symbol, sell_price), "volume": self._to_int(sell_volume)})
-
-            if not bids and "bids" in payload:
-                bids = self._normalize_levels(symbol, [b.get("price") for b in payload["bids"]], [b.get("volume") for b in payload["bids"]])
-            if not asks and "asks" in payload:
-                asks = self._normalize_levels(symbol, [a.get("price") for a in payload["asks"]], [a.get("volume") for a in payload["asks"]])
-
-            event = {
-                "type": "Snapshot",
-                "seq": self._next_seq(),
-                "symbol": symbol,
-                "exch_ts": exch_ts,
-                "local_ts": local_ts,
-                "open": self._scale_price(symbol, self._coalesce(payload, "open", "Open")),
-                "high": self._scale_price(symbol, self._coalesce(payload, "high", "High")),
-                "low": self._scale_price(symbol, self._coalesce(payload, "low", "Low")),
-                "close": self._scale_price(symbol, self._coalesce(payload, "close", "Close")),
-                "bids": bids,
-                "asks": asks,
-                "volume": self._to_int(self._coalesce(payload, "volume", "Volume")),
-                "total_volume": self._to_int(self._coalesce(payload, "total_volume", "TotalVolume")),
-            }
-            return event
-        except Exception as exc:
-            logger.error("Snapshot normalization failed", error=str(exc), payload=str(payload)[:200])
-            self.metrics.normalization_errors_total.labels(type="Snapshot").inc()
-            return None
-    def normalize_deal(self, payload: Any) -> Any:
-        # Import internally to avoid circular dep if any
-        from hft_platform.contracts.execution import FillEvent, Side
-        
-        try:
-            # Helper to get attr or key
-            def get(key, alt_keys=[]):
-                if isinstance(payload, dict):
-                     val = payload.get(key)
-                     if val is None:
-                         for k in alt_keys:
-                             val = payload.get(k)
-                             if val is not None: break
-                     return val
-                else:
-                     val = getattr(payload, key, None)
-                     if val is None:
-                         for k in alt_keys:
-                             val = getattr(payload, k, None)
-                             if val is not None: break
-                     return val
-
-            symbol = get("code", ["Code", "symbol"])
-            if not symbol:
-                return None
-                
-            price = get("price", ["Price"])
-            qty = get("qty", ["quantity", "Quantity", "volume"])
-            action = get("action", ["Action"]) # "Buy"/"Sell" or Enum
-            
-            # Side conversion
-            side = Side.BUY # Default
-            if action:
-                a_str = str(action).lower()
-                if "sell" in a_str or action == -1:
-                    side = Side.SELL
-            
-            # Scale price
-            scaled_price = self._scale_price(symbol, price)
-            
-            return FillEvent(
-                fill_id=str(self._next_seq()),
-                account_id="sim",
+            return TickEvent(
+                meta=meta,
                 symbol=symbol,
-                side=side,
-                price=scaled_price,
-                qty=int(qty or 0),
-                fee=0,
-                tax=0,
-                ingest_ts_ns=self.capture_local_time_ns()
+                price=price,
+                volume=volume,
+                total_volume=int(self._get_field(payload, ["total_volume"]) or 0),
+                bid_side_total_vol=0,  # Optimization: skip less used fields unless needed
+                ask_side_total_vol=0,
+                is_simtrade=bool(self._get_field(payload, ["simtrade"]) or 0),
+                is_odd_lot=bool(self._get_field(payload, ["intraday_odd"]) or 0),
             )
-        except Exception as exc:
-            logger.error("Deal normalization failed", error=str(exc))
+        except Exception as e:
+            logger.error("Normalize Tick Error", error=str(e), payload_type=str(type(payload)))
+            if self.metrics:
+                self.metrics.normalization_errors_total.labels(type="Tick").inc()
             return None
+
+    def normalize_bidask(self, payload: Any) -> Optional[BidAskEvent]:
+        try:
+            symbol = self._get_field(payload, ["code", "Code"])
+            if not symbol:
+                return None
+
+            # Timestamp
+            ts_val = self._get_field(payload, ["ts", "datetime"])
+            if hasattr(ts_val, "timestamp"):
+                exch_ts = int(ts_val.timestamp() * 1e9)
+            else:
+                exch_ts = int(ts_val) if ts_val else 0
+
+            scale = self.price_codec.scale_factor(symbol)
+
+            # Arrays
+            # Shioaji sends 'bid_price': [p1, p2...], 'bid_volume': [v1, v2...]
+            bp = self._get_field(payload, ["bid_price"]) or []
+            bv = self._get_field(payload, ["bid_volume"]) or []
+            ap = self._get_field(payload, ["ask_price"]) or []
+            av = self._get_field(payload, ["ask_volume"]) or []
+
+            # Convert to numpy
+            # We need to scale prices. Using numpy vectorization for scaling is faster.
+            # But converting list->numpy is overhead.
+            # If lists are small (5 levels), list comp might be faster than np.array(list).
+
+            # Bids with filtering 0s?
+            # Shioaji might send 0 for empty levels.
+
+            # Optimization: Use list comprehension for small N (N=5)
+            # Returns List[List[int]] directly (faster than numpy conversion)
+
+            # Bids
+            # Filter and Scale in one pass
+            bids_final = [[int(p * scale), int(v)] for p, v in zip(bp, bv) if p > 0]
+
+            # Asks
+            asks_final = [[int(p * scale), int(v)] for p, v in zip(ap, av) if p > 0]
+
+            meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=time.time_ns())
+
+            return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final)
+        except Exception as e:
+            logger.error("Normalize BidAsk Error", error=str(e), payload_type=str(type(payload)))
+            if self.metrics:
+                self.metrics.normalization_errors_total.labels(type="BidAsk").inc()
+            return None
+
+    def normalize_snapshot(self, payload: Dict[str, Any]) -> Optional[BidAskEvent]:
+        symbol = self._get_field(payload, ["code", "Code"])
+        if not symbol:
+            return None
+
+        ts_val = self._get_field(payload, ["ts", "datetime"])
+        if hasattr(ts_val, "timestamp"):
+            exch_ts = int(ts_val.timestamp() * 1e9)
+        else:
+            exch_ts = int(ts_val) if ts_val else 0
+
+        scale = self.price_codec.scale_factor(symbol)
+
+        buy_price = self._get_field(payload, ["buy_price"])
+        buy_volume = self._get_field(payload, ["buy_volume"])
+        sell_price = self._get_field(payload, ["sell_price"])
+        sell_volume = self._get_field(payload, ["sell_volume"])
+
+        if buy_price is not None or sell_price is not None:
+            bids = []
+            asks = []
+            if buy_price:
+                bids.append([int(float(buy_price) * scale), int(buy_volume or 0)])
+            if sell_price:
+                asks.append([int(float(sell_price) * scale), int(sell_volume or 0)])
+
+            meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=time.time_ns())
+            return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)
+
+        event = self.normalize_bidask(payload)
+        if event:
+            event.is_snapshot = True
+        return event

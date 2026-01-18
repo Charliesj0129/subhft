@@ -1,48 +1,81 @@
-
 import unittest
-from unittest.mock import MagicMock
+
+from hft_platform.contracts.strategy import OrderIntent, Side
+from hft_platform.events import LOBStatsEvent
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
-from hft_platform.contracts.strategy import Side, IntentType
-from hft_platform.strategies.simple_mm import SimpleMarketMaker as SimpleStrategy
+
+
+# Mock Strategy implementation specifically for test
+class MockStrategy(BaseStrategy):
+    def on_stats(self, event: LOBStatsEvent):
+        # Logic: If spread > 1, place Buy/Sell
+        if event.spread > 1.0:
+            self.buy(event.symbol, event.mid_price - 1, 1)
+            self.sell(event.symbol, event.mid_price + 1, 1)
+
 
 class TestStrategySDK(unittest.TestCase):
     def test_simple_strategy_logic(self):
         # 1. Setup
-        strat = SimpleStrategy("test-strat")
-        
+        strat = MockStrategy("test-strat", symbols=["2330"])
+
         # Mock Context
-        mock_ctx = MagicMock(spec=StrategyContext)
-        mock_ctx.positions = {"2330": 0}
-        mock_ctx.get_features.return_value = {"mid_price": 100.0, "spread": 2.0}
-        
-        # Mock place_order factory behavior
-        def mock_place(**kwargs):
-            # Return dict or mock object acting as Intent
-            return kwargs
-        mock_ctx.place_order.side_effect = mock_place
-        
-        # 2. Simulate Event (Book Update)
-        # LOBEngine likely emits dicts like {"symbol": "2330", "mid_price": 100.0, ...}
-        event = {
-            "symbol": "2330", 
-            "mid_price": 100.0, 
-            "spread": 2.0,
-            "type": "snapshot"
-        }
-        
+        # We need a fully functional context because BaseStrategy uses it to create intents
+        # But constructing intents requires the factory.
+
+        # Real Intent Factory logic for testing
+        def mock_intent_factory(strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None):
+            return OrderIntent(
+                intent_id=1,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                side=side,
+                price=price,
+                qty=qty,
+                tif=tif,
+                intent_type=intent_type,
+                target_order_id=target_order_id,
+                timestamp_ns=0,
+            )
+
+        ctx = StrategyContext(
+            positions={"2330": 0},
+            strategy_id="test-strat",
+            intent_factory=mock_intent_factory,
+            price_scaler=lambda sym, p: int(p),  # No scale for test
+            lob_source=None,
+        )
+
+        # 2. Simulate Event (LOB Stats)
+        event = LOBStatsEvent(
+            symbol="2330",
+            ts=1000,
+            mid_price=100.0,
+            spread=2.0,
+            imbalance=0.0,
+            best_bid=99,
+            best_ask=101,
+            bid_depth=10,
+            ask_depth=10,
+        )
+
         # 3. Execution
-        generated_intents = strat.on_book(mock_ctx, event)
-        
+        generated_intents = strat.handle_event(ctx, event)
+
         # 4. Verification
         self.assertEqual(len(generated_intents), 2)
-        intent = generated_intents[0]
-        
-        # Check intent details
-        self.assertEqual(intent['symbol'], "2330")
-        # Strategy generates symmetric quotes
-        self.assertTrue(any(i['side'] == Side.BUY for i in generated_intents))
-        self.assertTrue(any(i['side'] == Side.SELL for i in generated_intents))
+
+        # Check Buy
+        buy_intent = next(i for i in generated_intents if i.side == Side.BUY)
+        self.assertEqual(buy_intent.symbol, "2330")
+        self.assertEqual(buy_intent.price, 99.0)  # 100.0 - 1
+
+        # Check Sell
+        sell_intent = next(i for i in generated_intents if i.side == Side.SELL)
+        self.assertEqual(sell_intent.price, 101.0)  # 100.0 + 1
+
         print("SDK Test Passed: Generated correct intent from high-level API.")
+
 
 if __name__ == "__main__":
     unittest.main()

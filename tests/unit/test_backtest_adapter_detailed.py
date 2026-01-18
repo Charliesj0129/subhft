@@ -7,9 +7,11 @@ import numpy as np
 try:
     from hft_platform.backtest.adapter import StubContext
     from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+
     NO_DEPS = False
 except ImportError:
     NO_DEPS = True
+
 
 class TestBacktestAdapterDetailed(unittest.TestCase):
     def setUp(self):
@@ -33,6 +35,7 @@ class TestBacktestAdapterDetailed(unittest.TestCase):
             import importlib
 
             import hft_platform.backtest.adapter
+
             importlib.reload(hft_platform.backtest.adapter)
 
             from hft_platform.backtest.adapter import HftBacktestAdapter
@@ -59,12 +62,14 @@ class TestBacktestAdapterDetailed(unittest.TestCase):
         """Verify Intent -> HBT Order mapping."""
         # Clean way: Mock sys.modules logic for hftbacktest
         import sys
+
         mock_hbt_mod = MagicMock()
 
         with patch.dict(sys.modules, {"hftbacktest": mock_hbt_mod, "hftbacktest.order": MagicMock()}):
             import importlib
 
             import hft_platform.backtest.adapter
+
             importlib.reload(hft_platform.backtest.adapter)
             from hft_platform.backtest.adapter import HftBacktestAdapter
 
@@ -72,10 +77,7 @@ class TestBacktestAdapterDetailed(unittest.TestCase):
                 adapter = HftBacktestAdapter(self.strat, "2330", "data.npz")
 
                 # Buy Limit
-                intent = OrderIntent(
-                    1, "strat", "2330", IntentType.NEW, Side.BUY,
-                    100.0, 1, TIF.LIMIT, None
-                )
+                intent = OrderIntent(1, "strat", "2330", IntentType.NEW, Side.BUY, 100.0, 1, TIF.LIMIT, None)
 
                 adapter.execute_intent(intent)
 

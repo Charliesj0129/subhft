@@ -11,7 +11,7 @@ dependencies = [
     "msgspec",
     "uvloop",
     "hftbacktest",
-    "shioaji",
+    "shioaji[speed]",
     "prometheus_client",
     "psutil",
     "PyYAML",
@@ -23,6 +23,10 @@ dev = [
     "maturin", # Kept for future
     "notebook",
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.10",
+    "mypy>=1.10.0",
+    "hypothesis>=6.148.7",
 ]
 
 [build-system]
@@ -32,8 +36,62 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/hft_platform"]
 
+[tool.pytest.ini_options]
+addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing"
+markers = [
+    "blackbox: black-box CLI/system interface tests",
+    "regression: regression tests for fixed defects",
+    "stress: stress and load tests",
+    "system: docker-compose backed system tests",
+    "acceptance: end-to-end acceptance tests",
+]
+
 # [tool.maturin]
 # features = ["pyo3/extension-module"]
 # module-name = "hft_platform.rust_core"
 # python-source = "src"
 # manifest-path = "rust_core/Cargo.toml"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"] # pycodestyle, pyflakes, isort
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["E501", "E402", "F841", "E722", "E701"]
+"scripts/**/*.py" = ["E501", "E402"]
+"src/hft_platform/research/**/*.py" = ["E501", "E402", "F841", "E722"]
+"src/hft_platform/feed_adapter/shioaji_client.py" = ["E501"]
+"src/hft_platform/observability/metrics.py" = ["F401"]
+"src/hft_platform/features/**/*.py" = ["E501"]
+"src/hft_platform/config/wizard.py" = ["E501"]
+"src/hft_platform/cli.py" = ["F841", "F401", "E501"]
+"src/hft_platform/backtest/reporting.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
+no_implicit_optional = true
+pretty = true
+disable_error_code = ["import-untyped"]
+files = [
+    "src/hft_platform/contracts",
+    "src/hft_platform/events.py",
+    "src/hft_platform/execution",
+    "src/hft_platform/order",
+    "src/hft_platform/strategy",
+    "src/hft_platform/services",
+    "src/hft_platform/engine",
+    "src/hft_platform/feed_adapter/normalizer.py",
+    "src/hft_platform/feed_adapter/lob_engine.py",
+    "src/hft_platform/risk",
+    "src/hft_platform/utils/metrics.py",
+    "src/hft_platform/config/loader.py",
+]
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = ["src"]

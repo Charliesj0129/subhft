@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 import yaml
 from structlog import get_logger
@@ -14,7 +14,8 @@ logger = get_logger("feed_adapter")
 
 # --- Global Callback Registry & Dispatcher ---
 # Using a global list to hold strong references to clients and avoid GC issues with bound methods
-CLIENT_REGISTRY = []
+CLIENT_REGISTRY: List[Any] = []
+
 
 def dispatch_tick_cb(exchange, msg):
     """
@@ -24,19 +25,28 @@ def dispatch_tick_cb(exchange, msg):
     try:
         # logger.debug("Global Dispatch Hit", registry_size=len(CLIENT_REGISTRY))
         for client in CLIENT_REGISTRY:
-             if hasattr(client, '_process_tick'):
-                 client._process_tick(exchange, msg)
+            if hasattr(client, "_process_tick"):
+                client._process_tick(exchange, msg)
     except Exception as e:
         logger.error("Global Dispatch Error", error=str(e))
+
+
 # ---------------------------------------------
 
 
-
 class ShioajiClient:
-    def __init__(self, config_path: str = "config/base/symbols.yaml"):
+    def __init__(self, config_path: str | None = None):
         self.MAX_SUBSCRIPTIONS = 200
 
         import os
+
+        if config_path is None:
+            config_path = os.getenv("SYMBOLS_CONFIG")
+            if not config_path:
+                if os.path.exists("config/symbols.yaml"):
+                    config_path = "config/symbols.yaml"
+                else:
+                    config_path = "config/base/symbols.yaml"
 
         is_sim = os.getenv("HFT_MODE", "real") == "sim"
         if sj:
@@ -74,7 +84,7 @@ class ShioajiClient:
         # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols}
 
-    def login(self, person_id: str = None, password: str = None, contracts_cb=None):
+    def login(self, person_id: str | None = None, password: str | None = None, contracts_cb=None):
         logger.info("Logging in to Shioaji...")
         # Resolve credentials: Arg > Env > Config (not stored there for security)
         import os
@@ -92,7 +102,6 @@ class ShioajiClient:
             self.api.login(api_key=api_key, secret_key=secret_key, contracts_cb=contracts_cb, fetch_contract=True)
             logger.info("Login successful (API Key) - Contract Fetch ENABLED")
 
-
             self.logged_in = True
             return
 
@@ -108,18 +117,16 @@ class ShioajiClient:
             # Fallback to Person ID (CA/Trading)
             self.api.login(person_id=pid, passwd=pwd, contracts_cb=contracts_cb)
 
-
             logger.info("Login successful")
             logger.info("Login successful - Contract Fetch DISABLED")
             # Skipping fetch_contracts for resilience
-
 
             self.logged_in = True
         except Exception as e:
             logger.error("Login failed", error=str(e))
             raise
 
-    def set_execution_callbacks(self, on_order: callable, on_deal: callable):
+    def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]):
         """
         Register low-latency callbacks.
         Note: These run on Shioaji threads.
@@ -139,7 +146,7 @@ class ShioajiClient:
         except AttributeError:
             logger.warning("api.set_deal_callback not found, relying on order callback")
 
-    def subscribe_basket(self, cb: callable):
+    def subscribe_basket(self, cb: Callable[..., Any]):
         if not self.api:
             # If API is missing entirely (no library), skip
             logger.info("Shioaji lib missing: skipping real subscription")
@@ -216,11 +223,11 @@ class ShioajiClient:
     def _wrapped_tick_cb(self, exchange, msg):
         """Persistent callback wrapper"""
         try:
-           # Delegate to the registered callback map or fixed callback?
-           # Since subscribe_basket takes 'cb', we need to store 'cb' or pass it?
-           # We can store it in self.tick_callback
-           if hasattr(self, 'tick_callback') and self.tick_callback:
-               self.tick_callback(exchange, msg)
+            # Delegate to the registered callback map or fixed callback?
+            # Since subscribe_basket takes 'cb', we need to store 'cb' or pass it?
+            # We can store it in self.tick_callback
+            if hasattr(self, "tick_callback") and self.tick_callback:
+                self.tick_callback(exchange, msg)
         except Exception as e:
             logger.error(f"Callback error: {e}")
 
@@ -258,7 +265,7 @@ class ShioajiClient:
                 all_cats = set(known_categories + found_attrs)
 
                 for attr_name in all_cats:
-                    if attr_name.startswith('_'):
+                    if attr_name.startswith("_"):
                         continue
 
                     try:
@@ -268,12 +275,12 @@ class ShioajiClient:
                             continue
 
                         # Check if it looks like a category (iterable)
-                        if not hasattr(cat, '__iter__'):
+                        if not hasattr(cat, "__iter__"):
                             continue
 
                         for c in cat:
                             # Check CODE or SYMBOL (e.g. key=TXFA6, symbol=TXF202601)
-                            if hasattr(c, 'code') and (c.code == code or getattr(c, 'symbol', '') == code):
+                            if hasattr(c, "code") and (c.code == code or getattr(c, "symbol", "") == code):
                                 logger.info(f"Resolved {code} in category {attr_name} (Match: {c.code}/{c.symbol})")
                                 return c
                     except Exception:
@@ -307,12 +314,22 @@ class ShioajiClient:
                 # If generated config used "FUT", we map to TAIFEX?
                 # Wait, TXF is on TAIFEX (Futures Exchange).
 
-                exch_obj = sj.constant.Exchange.TAIFEX if exchange in ["FUT", "Futures", "TAIFEX"] else sj.constant.Exchange.TSE
-                sec_type = sj.constant.SecurityType.Future if exchange in ["FUT", "Futures", "TAIFEX"] else sj.constant.SecurityType.Stock
-                cat = code[:3] if len(code) >= 3 else code # Approximate category
+                exch_obj = (
+                    sj.constant.Exchange.TAIFEX
+                    if exchange in ["FUT", "Futures", "TAIFEX"]
+                    else sj.constant.Exchange.TSE
+                )
+                sec_type = (
+                    sj.constant.SecurityType.Future
+                    if exchange in ["FUT", "Futures", "TAIFEX"]
+                    else sj.constant.SecurityType.Stock
+                )
+                cat = code[:3] if len(code) >= 3 else code  # Approximate category
 
                 # Construct
-                c = sj.contracts.Contract(code=code, symbol=code, name=code, category=cat, exchange=exch_obj, security_type=sec_type)
+                c = sj.contracts.Contract(
+                    code=code, symbol=code, name=code, category=cat, exchange=exch_obj, security_type=sec_type
+                )
                 logger.info(f"Constructed Synthetic Contract for {code}")
                 return c
             except Exception as e:
@@ -320,7 +337,7 @@ class ShioajiClient:
 
         return None
 
-    def get_exchange(self, code: str) -> str:
+    def get_exchange(self, code: str) -> str | None:
         """Resolve exchange for a code."""
         # Try map first
         if code in self.code_exchange_map:
@@ -393,7 +410,7 @@ class ShioajiClient:
         qty: int,
         order_type: str,
         tif: str,
-        custom_field: str = None,
+        custom_field: str | None = None,
     ):
         """
         Wrapper for placing order.
@@ -431,7 +448,7 @@ class ShioajiClient:
             return
         self.api.update_status(self.api.OrderState.Cancel, trade=trade)
 
-    def update_order(self, trade, price: float = None, qty: int = None):
+    def update_order(self, trade, price: float | None = None, qty: int | None = None):
         if not self.api:
             logger.warning("Shioaji SDK missing; mock update_order invoked.")
             return

@@ -5,6 +5,7 @@ from typing import Any, List
 from structlog import get_logger
 
 from hft_platform.contracts.strategy import OrderIntent
+from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
@@ -29,10 +30,11 @@ class StrategyRunner:
         self.registry = StrategyRegistry(config_path)
         self.strategies: List[BaseStrategy] = []
         # Cache of (strategy, latency_metric, intents_metric)
-        self._strat_executors = []
+        self._strat_executors: list[tuple[BaseStrategy, Any, Any]] = []
 
         self.metrics = MetricsRegistry.get()
         self.symbol_metadata = SymbolMetadata()
+        self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.symbol_metadata))
         self._intent_seq = 0
 
         # Load initial
@@ -86,12 +88,42 @@ class StrategyRunner:
         )
 
     def _scale_price(self, symbol: str, price: float) -> int:
-        scale = self.symbol_metadata.price_scale(symbol)
-        return int(float(price) * scale)
+        return self.price_codec.scale(symbol, price)
+
+    def _build_positions_by_strategy(self):
+        if not self.position_store:
+            return {}
+        raw = getattr(self.position_store, "positions", None)
+        if not isinstance(raw, dict):
+            return {}
+
+        positions_by_strategy = {}
+        fallback = {}
+
+        for key, value in raw.items():
+            if hasattr(value, "strategy_id") and hasattr(value, "symbol") and hasattr(value, "net_qty"):
+                positions_by_strategy.setdefault(value.strategy_id, {})[value.symbol] = value.net_qty
+                continue
+
+            if isinstance(key, str) and ":" in key:
+                parts = key.split(":")
+                if len(parts) >= 3:
+                    strat_id = parts[1]
+                    symbol = parts[2]
+                    net_qty = value.net_qty if hasattr(value, "net_qty") else value
+                    positions_by_strategy.setdefault(strat_id, {})[symbol] = net_qty
+                    continue
+
+            fallback[key] = value.net_qty if hasattr(value, "net_qty") else value
+
+        if fallback:
+            positions_by_strategy["*"] = fallback
+
+        return positions_by_strategy
 
     async def process_event(self, event: Any):
         # Positions snapshot
-        positions = self.position_store.positions.copy() if self.position_store else {}
+        positions_by_strategy = self._build_positions_by_strategy()
 
         target_strat_id = getattr(event, "strategy_id", None)
 
@@ -106,6 +138,8 @@ class StrategyRunner:
 
             if target_strat_id and strategy.strategy_id != target_strat_id:
                 continue
+
+            positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
 
             ctx = StrategyContext(
                 positions=positions,

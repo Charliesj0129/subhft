@@ -1,10 +1,9 @@
 import importlib.util
-import json
 import os
-import yaml
 from copy import deepcopy
 from typing import Any, Dict, Tuple
 
+import yaml
 from structlog import get_logger
 
 logger = get_logger("config.loader")
@@ -19,7 +18,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "params": {"subscribe_symbols": ["2330"]},
     },
     "paths": {
-        "symbols": "config/base/symbols.yaml",
+        "symbols": "config/symbols.yaml",
         "strategy_limits": "config/base/strategy_limits.yaml",
         "order_adapter": "config/base/order_adapter.yaml",
     },
@@ -29,6 +28,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "end_date": None,
     },
 }
+
 
 def _load_settings_py(path: str) -> Dict[str, Any]:
     spec = importlib.util.spec_from_file_location("hft_settings", path)
@@ -62,14 +62,17 @@ def _merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _env_overrides() -> Dict[str, Any]:
-    env = {}
-    if os.getenv("HFT_MODE"):
-        env["mode"] = os.getenv("HFT_MODE")
-    if os.getenv("HFT_SYMBOLS"):
-        env["symbols"] = os.getenv("HFT_SYMBOLS").split(",")
-    if os.getenv("HFT_PROM_PORT"):
+    env: Dict[str, Any] = {}
+    mode = os.getenv("HFT_MODE")
+    if mode:
+        env["mode"] = mode
+    symbols = os.getenv("HFT_SYMBOLS")
+    if symbols:
+        env["symbols"] = symbols.split(",")
+    prom_port = os.getenv("HFT_PROM_PORT")
+    if prom_port:
         try:
-            env["prometheus_port"] = int(os.getenv("HFT_PROM_PORT"))
+            env["prometheus_port"] = int(prom_port)
         except ValueError:
             pass
     return env
@@ -81,6 +84,7 @@ def detect_live_credentials() -> bool:
 
 DEFAULT_YAML_PATH = "config/base/main.yaml"
 
+
 def _load_yaml(path: str) -> Dict[str, Any]:
     try:
         with open(path, "r") as f:
@@ -91,25 +95,26 @@ def _load_yaml(path: str) -> Dict[str, Any]:
         logger.error("Failed to load yaml", path=path, error=str(exc))
         return {}
 
+
 def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Return (settings, applied_defaults) after applying priority chain:
-       Base YAML -> Env YAML -> Settings.py -> Env Vars -> CLI
+    Base YAML -> Env YAML -> Settings.py -> Env Vars -> CLI
     """
     cli_overrides = cli_overrides or {}
-    
+
     # 1. Base Settings
     settings = _load_yaml(DEFAULT_YAML_PATH)
     if not settings:
         # Fallback if file missing (e.g. initial setup)
         settings = deepcopy(DEFAULT_SETTINGS)
-    
+
     # applied_defaults represents the 'base' state before runtime overrides
     applied_defaults = deepcopy(settings)
 
     # 2. Env Specific Settings (sim/live)
     # Determine mode from Base -> Env Var
     mode = os.getenv("HFT_MODE", settings.get("mode", "sim"))
-    
+
     env_yaml_path = f"config/env/{mode}/main.yaml"
     if os.path.exists(env_yaml_path):
         env_settings = _load_yaml(env_yaml_path)
@@ -125,7 +130,7 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
 
     # 5. CLI Overrides
     settings = _merge(settings, cli_overrides)
-    
+
     # Ensure mode is synced if overridden
     if "mode" in settings:
         settings["mode"] = mode if os.getenv("HFT_MODE") else settings["mode"]
