@@ -120,7 +120,7 @@ python -m hft_platform run live
 
 ## 9. 回測
 ```bash
-python -m hft_platform backtest run --data data.npz --symbol 2330 --report
+python -m hft_platform backtest run --data data/sample_feed.npz --symbol 2330 --report
 ```
 
 若你有 JSONL 事件檔，可先轉換：

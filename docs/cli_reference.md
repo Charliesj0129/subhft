@@ -68,7 +68,7 @@ python -m hft_platform backtest convert \
 ## 9. backtest run
 ```bash
 python -m hft_platform backtest run \
-  --data data.npz \
+  --data data/sample_feed.npz \
   --symbol 2330 \
   --report
 ```
@@ -76,7 +76,7 @@ python -m hft_platform backtest run \
 策略模式（Strategy Adapter）：
 ```bash
 python -m hft_platform backtest run \
-  --data data.npz \
+  --data data/sample_feed.npz \
   --strategy-module hft_platform.strategies.simple_mm \
   --strategy-class SimpleMarketMaker \
   --strategy-id demo \

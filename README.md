@@ -37,12 +37,13 @@ make run-sim
 ### 3. Run Strategy (Live/Mock)
 Modify `src/hft_platform/strategies/simple_mm.py` or create your own:
 ```python
+from hft_platform.events import LOBStatsEvent
+from hft_platform.strategy.base import BaseStrategy
+
 class MyStrategy(BaseStrategy):
-    def on_book(self, ctx: StrategyContext, event: Union[BidAskEvent, TickEvent]):
-        feats = ctx.get_features(event.symbol)
-        if feats.get("spread", 0) > 5:
-             # Logic here...
-             pass
+    def on_stats(self, event: LOBStatsEvent) -> None:
+        if event.spread > 5:
+            self.buy(event.symbol, event.best_bid, 1)
 ```
 
 ## 🏗 Architecture
@@ -61,13 +62,13 @@ class MyStrategy(BaseStrategy):
 | `make run-prod` | Run platform in Production mode (Requires `.env`) |
 
 ## 📦 Project Map
-*   `src/hft_platform/`: src/ layout package root.
-*   `src/hft_platform/services/`: Core micro-kernel services.
-*   `src/hft_platform/strategies/`: Strategies (e.g. `simple_mm.py`).
-*   `src/hft_platform/events.py`: Typed event definitions.
-*   `config/`: Symbol and risk configurations.
-*   `.env.example`: Environment variables template (credentials, modes).
-*   `logs/`: Application logs.
+See `docs/project_layout.md` for the full layout. Key paths:
+*   `src/hft_platform/`: Core package (services, strategy, risk, execution, recorder).
+*   `config/`: Base configs and env overrides.
+*   `docs/`: Documentation (start at `docs/README.md`).
+*   `tests/`: Test suites and fixtures.
+*   `examples/` and `notebooks/`: Samples and research.
+*   `ops/` and `scripts/`: Deployment and tooling.
 
 ## 🧪 Testing
 We enforce high test coverage.
@@ -78,9 +79,12 @@ make coverage
 **Target**: 95%
 
 ## 📚 Docs
+*   `docs/README.md` — 文件入口與閱讀順序
+*   `docs/project_layout.md` — 專案結構與擴充點
 *   `docs/quickstart.md` — 快速上手
 *   `docs/getting_started.md` — 詳細上手指南
 *   `docs/feature_guide.md` — 功能手冊（各模組詳解）
+*   `docs/strategy-guide.md` — 策略開發指南
 *   `docs/config_reference.md` — 設定參考
 *   `docs/cli_reference.md` — CLI 使用說明
 *   `docs/troubleshooting.md` — 常見問題排查

@@ -17,7 +17,7 @@ Offline backtesting pipeline built on `hftbacktest`, with utilities for data con
 ## CLI Examples
 ```bash
 python -m hft_platform backtest convert --input events.jsonl --output data.npz --scale 10000
-python -m hft_platform backtest run --data data.npz --symbol 2330 --report
+python -m hft_platform backtest run --data data/sample_feed.npz --symbol 2330 --report
 ```
 
 ## Inputs and Outputs

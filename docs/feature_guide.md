@@ -21,7 +21,7 @@ Broker fills -> Execution Normalizer -> Position/Reconciliation
 
 **關鍵設定**
 - `config/symbols.yaml` 或 `SYMBOLS_CONFIG`：交易/訂閱標的。
-- `config/strategies.yaml`：策略與參數。
+- `config/base/strategies.yaml`：策略與參數（預設模板）；需要本地覆蓋可用 `config/strategies.yaml`。
 - `config/risk.yaml`, `config/strategy_limits.yaml`：風控規則。
 - `config/execution.yaml`, `config/order_adapter.yaml`：執行/下單參數。
 - `config/base/*`：預設模板，可作為環境與策略的基準。
@@ -75,7 +75,7 @@ Broker fills -> Execution Normalizer -> Position/Reconciliation
 
 **輸入/輸出**
 - 輸入：LOB / Tick。
-- 輸出：指標 dict（由 StrategyContext 存取）。
+- 輸出：指標 dict（由策略自行計算或封裝於 factors）。
 
 ## 6. Strategy SDK 與執行
 **目的**：提供策略基底、路由與上下文，將策略輸出轉為意圖。
@@ -91,8 +91,8 @@ Broker fills -> Execution Normalizer -> Position/Reconciliation
 - 輸出：`OrderIntent`（下單意圖）。
 
 **使用方式**
-- 繼承 `BaseStrategy`，實作 `on_tick` / `on_book`。
-- 透過 `ctx.buy()` / `ctx.sell()` 送出意圖。
+- 繼承 `BaseStrategy`，實作 `on_tick` / `on_book_update`。
+- 透過 `self.buy()` / `self.sell()` 送出意圖。
 
 ## 7. Risk Engine（風控）
 **目的**：策略意圖在進入執行前做風控檢查。
@@ -154,7 +154,12 @@ Broker fills -> Execution Normalizer -> Position/Reconciliation
 
 **執行方式**
 ```bash
-python -m hft_platform backtest run --strategy simple_mm --symbol 2330 --date 2024-01-01
+python -m hft_platform backtest run \
+  --data data/sample_feed.npz \
+  --strategy-module hft_platform.strategies.simple_mm \
+  --strategy-class SimpleMarketMaker \
+  --strategy-id demo \
+  --symbol 2330
 ```
 
 ## 11. Observability（可觀測性）
@@ -190,17 +195,17 @@ python -m hft_platform backtest run --strategy simple_mm --symbol 2330 --date 20
 
 ### 14.1 新增策略
 1) 在 `src/hft_platform/strategies/` 建立策略檔。
-2) 繼承 `BaseStrategy`，實作 `on_tick` 或 `on_book`。
-3) 在 `config/strategies.yaml` 設定啟用與參數。
+2) 繼承 `BaseStrategy`，實作 `on_tick` 或 `on_book_update`。
+3) 在 `config/base/strategies.yaml` 設定預設策略；需要本地覆蓋可建立 `config/strategies.yaml`。
 
 ```python
-from hft_platform.strategy.base import BaseStrategy, StrategyContext
+from hft_platform.strategy.base import BaseStrategy
 from hft_platform.events import TickEvent
 
 class MyStrategy(BaseStrategy):
-    def on_tick(self, ctx: StrategyContext, event: TickEvent):
+    def on_tick(self, event: TickEvent):
         if event.price > 0:
-            ctx.buy(event.symbol, event.price, 1)
+            self.buy(event.symbol, event.price, 1)
 ```
 
 ### 14.2 新增風控規則

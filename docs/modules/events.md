@@ -11,4 +11,4 @@ Internal event definitions for market data and LOB stats.
 - Consumed by strategies and recorder.
 
 ## Notes
-- These are separate from execution events in `contracts/execution.py`.
+- These are separate from execution events in `src/hft_platform/contracts/execution.py`.

@@ -56,7 +56,9 @@ Each symbol has a `BookState` object containing:
     - `bid_depth_total` / `ask_depth_total`: Sum of volumes in top 5 levels.
 
 ### Strategy Access
-Strategies access the LOB via `StrategyContext.get_features(symbol)`, which returns a dictionary snapshot of the derived stats. This access is thread-safe.
+Strategies consume LOB data through events:
+- `BidAskEvent` for book updates.
+- `LOBStatsEvent` for derived stats (mid/spread/imbalance).
 
 ### Observability
 - `lob_updates_total`: Counter by type (BidAsk/Tick).
@@ -87,4 +89,3 @@ The normalizer converts raw payloads into consistent events.
 }
 ```
 All prices are scaled by `10000`.
-
