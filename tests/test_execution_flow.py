@@ -8,8 +8,16 @@ from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 
 
+@pytest.fixture
+def symbols_cfg(tmp_path, monkeypatch):
+    cfg = tmp_path / "symbols.yaml"
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(cfg))
+    return cfg
+
+
 @pytest.mark.asyncio
-async def test_normalizer_flow():
+async def test_normalizer_flow(symbols_cfg):
     q = asyncio.Queue()
     norm = ExecutionNormalizer(q)
 
@@ -47,7 +55,7 @@ async def test_normalizer_flow():
     assert fill.price == 5000000
 
 
-def test_normalizer_strategy_id_from_order_key():
+def test_normalizer_strategy_id_from_order_key(symbols_cfg):
     norm = ExecutionNormalizer(order_id_map={"O123": "stratA:7"})
 
     raw_order = RawExecEvent(

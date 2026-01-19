@@ -1,5 +1,8 @@
 import asyncio
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from hft_platform.engine.event_bus import RingBufferBus
@@ -9,10 +12,23 @@ from hft_platform.services.market_data import MarketDataService
 
 class TestMarketDataService(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self._old_symbols_config = os.environ.get("SYMBOLS_CONFIG")
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        cfg_path = Path(self._tmp_dir.name) / "symbols.yaml"
+        cfg_path.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
+        os.environ["SYMBOLS_CONFIG"] = str(cfg_path)
+
         self.bus = MagicMock(spec=RingBufferBus)
         self.raw_queue = asyncio.Queue()
         self.client = MagicMock()
         self.service = MarketDataService(self.bus, self.raw_queue, self.client)
+
+    async def asyncTearDown(self):
+        if self._old_symbols_config is None:
+            os.environ.pop("SYMBOLS_CONFIG", None)
+        else:
+            os.environ["SYMBOLS_CONFIG"] = self._old_symbols_config
+        self._tmp_dir.cleanup()
 
     async def test_start_stop(self):
         """Verify startup and shutdown lifecycle."""

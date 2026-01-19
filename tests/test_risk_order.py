@@ -25,6 +25,12 @@ class MockClient:
     pass
 
 
+def _symbols_cfg(tmp_path):
+    cfg = tmp_path / "symbols.yaml"
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
+    return cfg
+
+
 @pytest.mark.asyncio
 async def test_risk_validators():
     # 1. Price Band
@@ -54,9 +60,10 @@ async def test_storm_guard_transition():
 
 
 @pytest.mark.asyncio
-async def test_risk_engine_pipeline(tmp_path):
+async def test_risk_engine_pipeline(tmp_path, monkeypatch):
     i_q = asyncio.Queue()
     o_q = asyncio.Queue()
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
     config_path = tmp_path / "test_limits.yaml"
     config_path.write_text(yaml.safe_dump(MOCK_CONFIG))
 
