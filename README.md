@@ -82,6 +82,7 @@ make coverage
 *   `docs/README.md` — 文件入口與閱讀順序
 *   `docs/project_layout.md` — 專案結構與擴充點
 *   `docs/quickstart.md` — 快速上手
+*   `docs/getting_started.md` — 詳細上手指南
 *   `docs/feature_guide.md` — 功能手冊（各模組詳解）
 *   `docs/strategy-guide.md` — 策略開發指南
 *   `docs/config_reference.md` — 設定參考
@@ -89,3 +90,4 @@ make coverage
 *   `docs/troubleshooting.md` — 常見問題排查
 *   `docs/deployment_guide.md` — 部署指南
 *   `docs/ARCHITECTURE.md` — 系統架構
+*   `docs/modules/README.md` — 模組索引（每個模組詳細說明）
