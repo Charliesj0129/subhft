@@ -79,6 +79,10 @@ make coverage
 
 ## 📚 Docs
 *   `docs/quickstart.md` — 快速上手
+*   `docs/getting_started.md` — 詳細上手指南
 *   `docs/feature_guide.md` — 功能手冊（各模組詳解）
+*   `docs/config_reference.md` — 設定參考
+*   `docs/cli_reference.md` — CLI 使用說明
+*   `docs/troubleshooting.md` — 常見問題排查
 *   `docs/deployment_guide.md` — 部署指南
 *   `docs/ARCHITECTURE.md` — 系統架構

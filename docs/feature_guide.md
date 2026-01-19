@@ -15,7 +15,7 @@ Broker fills -> Execution Normalizer -> Position/Reconciliation
 **目的**：統一讀取 config 與環境變數，組裝系統執行參數。
 
 **核心模組**
-- `src/hft_platform/config/loader.py`: 讀取 `config/*.yaml` / `settings.json`，並允許 `HFT_*` 環境覆蓋。
+- `src/hft_platform/config/loader.py`: 讀取 YAML 設定與可選 `config/settings.py`，並允許 `HFT_*` 環境覆蓋。
 - `src/hft_platform/services/bootstrap.py`: 設定 `SYMBOLS_CONFIG` 預設值並建立服務實例。
 - `src/hft_platform/main.py`, `src/hft_platform/cli.py`: 入口與 CLI 指令分派。
 
