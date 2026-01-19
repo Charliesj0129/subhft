@@ -184,3 +184,59 @@ python -m hft_platform backtest run --strategy simple_mm --symbol 2330 --date 20
 - `docs/ARCHITECTURE.md`: 系統架構總覽
 - `docs/specs/`: 事件與流程規格
 - `docs/references/`: 外部 API 參考與案例
+
+## 14. 擴充指南（How to Extend）
+本節提供常見擴充點的最小步驟，讓你快速新增功能而不破壞現有流程。
+
+### 14.1 新增策略
+1) 在 `src/hft_platform/strategies/` 建立策略檔。
+2) 繼承 `BaseStrategy`，實作 `on_tick` 或 `on_book`。
+3) 在 `config/strategies.yaml` 設定啟用與參數。
+
+```python
+from hft_platform.strategy.base import BaseStrategy, StrategyContext
+from hft_platform.events import TickEvent
+
+class MyStrategy(BaseStrategy):
+    def on_tick(self, ctx: StrategyContext, event: TickEvent):
+        if event.price > 0:
+            ctx.buy(event.symbol, event.price, 1)
+```
+
+### 14.2 新增風控規則
+1) 在 `src/hft_platform/risk/validators.py` 新增 validator。
+2) 在 `RiskEngine` 註冊 validator。
+3) 需要參數時，新增至 `config/risk.yaml` 或 `config/strategy_limits.yaml`。
+
+```python
+class MaxQtyValidator(RiskValidator):
+    def check(self, intent: OrderIntent):
+        max_qty = self.defaults.get("max_qty", 100)
+        if intent.qty > max_qty:
+            return False, "MAX_QTY_EXCEEDED"
+        return True, "OK"
+```
+
+### 14.3 新增資料來源（行情）
+1) 擴充 `ShioajiClient` 或新增新的 client 類別。
+2) 實作對應的 normalizer，把 payload 轉成 `TickEvent` / `BidAskEvent`。
+3) 在 `MarketDataService` 接入新的 event 流。
+
+### 14.4 新增執行路由或 Broker
+1) 在 `src/hft_platform/order/adapter.py` 內增加 broker 呼叫分支。
+2) 請維持 `OrderCommand` 的資料結構與 deadline 行為。
+3) 擴充 `OrderIdResolver` 以支援新 broker id。
+
+### 14.5 新增 Recorder 目的地
+1) 在 `src/hft_platform/recorder/writer.py` 實作新的 writer。
+2) 在 `recorder/worker.py` 中註冊並初始化。
+3) 加上配置與 env（如 `HFT_*`）做切換。
+
+### 14.6 新增 CLI 指令
+1) 在 `src/hft_platform/cli.py` 新增子命令。
+2) 提供對應的 handler 函數。
+3) 若需要測試，新增 `tests/blackbox/` 或 `tests/unit/`。
+
+### 14.7 新增 Metrics
+1) 在 `src/hft_platform/observability/metrics.py` 註冊指標。
+2) 在服務或模組中呼叫 `metrics.xxx` 更新。
