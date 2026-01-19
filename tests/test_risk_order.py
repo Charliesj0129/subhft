@@ -1,24 +1,35 @@
-import pytest
 import asyncio
-import yaml
+import contextlib
 import time
-from hft_platform.contracts.strategy import OrderIntent, IntentType, Side, StormGuardState
-from hft_platform.risk.validators import PriceBandValidator, StormGuardFSM
+
+import pytest
+import yaml
+
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState
+from hft_platform.order.adapter import OrderAdapter, OrderCommand
 from hft_platform.risk.engine import RiskEngine
-from hft_platform.order.adapter import OrderCommand, OrderAdapter
+from hft_platform.risk.validators import PriceBandValidator, StormGuardFSM
 
 # Mock Config
 MOCK_CONFIG = {
     "global_defaults": {"price_band_ticks": 10},
     "strategies": {"TEST_STRAT": {"max_notional": 1000}},
-    "storm_guard": {"halt_threshold": -100}
+    "storm_guard": {"halt_threshold": -100},
 }
 MOCK_ADAPTER_CONFIG = {
     "rate_limits": {"shioaji_soft_cap": 5, "shioaji_hard_cap": 10},
 }
 
+
 class MockClient:
     pass
+
+
+def _symbols_cfg(tmp_path):
+    cfg = tmp_path / "symbols.yaml"
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
+    return cfg
+
 
 @pytest.mark.asyncio
 async def test_risk_validators():
@@ -29,90 +40,92 @@ async def test_risk_validators():
     assert not ok
     assert "PRICE_ZERO" in reason
 
+
 @pytest.mark.asyncio
 async def test_storm_guard_transition():
     fsm = StormGuardFSM(MOCK_CONFIG)
     assert fsm.state == StormGuardState.NORMAL
-    
+
     # Simulate Drawdown
     fsm.update_pnl(-50)
     assert fsm.state == StormGuardState.NORMAL
-    
-    fsm.update_pnl(-150) # Below -100 halt
+
+    fsm.update_pnl(-150)  # Below -100 halt
     assert fsm.state == StormGuardState.HALT
-    
+
     intent = OrderIntent(2, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, 1000, 1, timestamp_ns=0)
     ok, reason = fsm.validate(intent)
     assert not ok
     assert "HALT" in reason
 
+
 @pytest.mark.asyncio
-async def test_risk_engine_pipeline():
+async def test_risk_engine_pipeline(tmp_path, monkeypatch):
     i_q = asyncio.Queue()
     o_q = asyncio.Queue()
-    # Write temp config
-    import yaml
-    with open("config/test_limits.yaml", "w") as f:
-        yaml.dump(MOCK_CONFIG, f)
-        
-    engine = RiskEngine("config/test_limits.yaml", i_q, o_q)
-    
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    config_path = tmp_path / "test_limits.yaml"
+    config_path.write_text(yaml.safe_dump(MOCK_CONFIG))
+
+    engine = RiskEngine(str(config_path), i_q, o_q)
+    task = asyncio.create_task(engine.run())
+
     # Reject Case
     bad_intent = OrderIntent(3, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, -1, 1, timestamp_ns=0)
     await i_q.put(bad_intent)
-    
-    # Run engine briefly
-    task = asyncio.create_task(engine.run())
-    await asyncio.sleep(0.1)
-    
-    assert o_q.empty() # Should be dropped/rejected
-    
+    await asyncio.wait_for(i_q.join(), timeout=1.0)
+    assert o_q.empty()  # Should be dropped/rejected
+
     # Approve Case
     good_intent = OrderIntent(4, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, 5000000, 1, timestamp_ns=0)
     # 5000000/10000 * 1 = 500 notional < 1000 limit
     await i_q.put(good_intent)
-    await asyncio.sleep(0.1)
-    
-    cmd = await o_q.get()
+    cmd = await asyncio.wait_for(o_q.get(), timeout=1.0)
     assert cmd.intent.intent_id == 4
-    
+
     engine.running = False
     task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
+
 
 @pytest.mark.asyncio
-async def test_circuit_breaker():
+async def test_circuit_breaker(tmp_path):
     # Setup
     q = asyncio.Queue()
-    with open("config/test_adapter.yaml", "w") as f:
-        yaml.dump(MOCK_ADAPTER_CONFIG, f)
-        
-    adapter = OrderAdapter("config/test_adapter.yaml", q, MockClient())
-    adapter.circuit_threshold = 2
-    adapter.circuit_timeout = 1
-    
+    config_path = tmp_path / "test_adapter.yaml"
+    config_path.write_text(yaml.safe_dump(MOCK_ADAPTER_CONFIG))
+
+    adapter = OrderAdapter(str(config_path), q, MockClient())
+    adapter.circuit_breaker.threshold = 2
+    adapter.circuit_breaker.timeout_s = 1
+
     # Run
     task = asyncio.create_task(adapter.run())
-    
+
     # Inject failures
-    deadline = time.time_ns() + 10_000_000_000 # +10s
+    deadline = time.time_ns() + 10_000_000_000  # +10s
     cmd = OrderCommand(1, OrderIntent(1, "S", "C", 0, 0, 0, 0, target_order_id="1"), deadline, 0)
-    
+
     # We need to mock execute to raise exception, but execute checks limits first.
     # We can patch client to raise
     class BalClient:
-         pass
-    adapter.client = BalClient() # No api object -> AttributeError -> caught as "Broker Error"
-    
+        pass
+
+    adapter.client = BalClient()  # No api object -> AttributeError -> caught as "Broker Error"
+
     await q.put(cmd)
-    await q.put(cmd) # 2 failures
-    await asyncio.sleep(0.1)
-    
-    assert adapter.failure_count >= 2
-    assert adapter.circuit_open_until > 0
-    
+    await q.put(cmd)  # 2 failures
+    await asyncio.wait_for(q.join(), timeout=1.0)
+
+    assert adapter.circuit_breaker.failure_count >= 2
+    assert adapter.circuit_breaker.open_until > 0
+
     # 3rd should be rejected by CB immediately
     await q.put(cmd)
-    await asyncio.sleep(0.1)
-    
+    await asyncio.wait_for(q.join(), timeout=1.0)
+
     adapter.running = False
     task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)

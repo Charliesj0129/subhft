@@ -1,0 +1,12 @@
+services:
+  clickhouse:
+    volumes:
+      - ch_data:/var/lib/clickhouse
+
+volumes:
+  ch_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CH_DATA_ROOT:-/mnt/data/clickhouse}

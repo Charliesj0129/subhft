@@ -1,17 +1,17 @@
 # HFT Platform Quickstart
 
 ## 1. Installation
-The project uses `uv` for dependency management, or standard `pip`.
+The project uses `uv` for dependency management.
 
 ```bash
 # Clone
 git clone <repo>
 cd hft_platform
 
-# Install dependencies
-uv sync
-# OR
-pip install -r requirements.txt
+# Install dependencies (dev)
+uv sync --dev
+# Or runtime only
+uv sync --no-dev
 ```
 
 ## 2. Configuration

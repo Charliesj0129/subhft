@@ -1,0 +1,645 @@
+build-test-deploy	Set up job	﻿2025-12-17T11:14:30.8542317Z Current runner version: '2.330.0'
+build-test-deploy	Set up job	2025-12-17T11:14:30.8577143Z ##[group]Runner Image Provisioner
+build-test-deploy	Set up job	2025-12-17T11:14:30.8579034Z Hosted Compute Agent
+build-test-deploy	Set up job	2025-12-17T11:14:30.8580567Z Version: 20251202.455
+build-test-deploy	Set up job	2025-12-17T11:14:30.8582219Z Commit: 6c10caca4910e198df60de23adf20ad317c474e3
+build-test-deploy	Set up job	2025-12-17T11:14:30.8584145Z Build Date: 2025-12-02T15:56:59Z
+build-test-deploy	Set up job	2025-12-17T11:14:30.8586055Z Worker ID: {d9ad8f53-1707-4648-b973-cfd4487debdf}
+build-test-deploy	Set up job	2025-12-17T11:14:30.8588058Z ##[endgroup]
+build-test-deploy	Set up job	2025-12-17T11:14:30.8589598Z ##[group]Operating System
+build-test-deploy	Set up job	2025-12-17T11:14:30.8591087Z Ubuntu
+build-test-deploy	Set up job	2025-12-17T11:14:30.8592489Z 24.04.3
+build-test-deploy	Set up job	2025-12-17T11:14:30.8593782Z LTS
+build-test-deploy	Set up job	2025-12-17T11:14:30.8595419Z ##[endgroup]
+build-test-deploy	Set up job	2025-12-17T11:14:30.8596928Z ##[group]Runner Image
+build-test-deploy	Set up job	2025-12-17T11:14:30.8598472Z Image: ubuntu-24.04
+build-test-deploy	Set up job	2025-12-17T11:14:30.8600064Z Version: 20251208.163.1
+build-test-deploy	Set up job	2025-12-17T11:14:30.8602387Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20251208.163/images/ubuntu/Ubuntu2404-Readme.md
+build-test-deploy	Set up job	2025-12-17T11:14:30.8606020Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20251208.163
+build-test-deploy	Set up job	2025-12-17T11:14:30.8608669Z ##[endgroup]
+build-test-deploy	Set up job	2025-12-17T11:14:30.8611598Z ##[group]GITHUB_TOKEN Permissions
+build-test-deploy	Set up job	2025-12-17T11:14:30.8615140Z Contents: read
+build-test-deploy	Set up job	2025-12-17T11:14:30.8616506Z Metadata: read
+build-test-deploy	Set up job	2025-12-17T11:14:30.8617991Z Packages: read
+build-test-deploy	Set up job	2025-12-17T11:14:30.8619653Z ##[endgroup]
+build-test-deploy	Set up job	2025-12-17T11:14:30.8622896Z Secret source: Actions
+build-test-deploy	Set up job	2025-12-17T11:14:30.8625604Z Prepare workflow directory
+build-test-deploy	Set up job	2025-12-17T11:14:30.9076801Z Prepare all required actions
+build-test-deploy	Set up job	2025-12-17T11:14:30.9132813Z Getting action download info
+build-test-deploy	Set up job	2025-12-17T11:14:31.2223759Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+build-test-deploy	Set up job	2025-12-17T11:14:31.3367007Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+build-test-deploy	Set up job	2025-12-17T11:14:31.4285640Z Download action repository 'appleboy/ssh-action@v0.1.10' (SHA:334f9259f2f8eb3376d33fa4c684fff373f2c2a6)
+build-test-deploy	Set up job	2025-12-17T11:14:31.7318406Z Complete job name: build-test-deploy
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	﻿2025-12-17T11:14:31.7798572Z ##[group]Build container for action use: '/home/runner/work/_actions/appleboy/ssh-action/v0.1.10/Dockerfile'.
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:31.7850898Z ##[command]/usr/bin/docker build -t e96b39:4a53ec39f67741b997d30b92c3d8acc2 -f "/home/runner/work/_actions/appleboy/ssh-action/v0.1.10/Dockerfile" "/home/runner/work/_actions/appleboy/ssh-action/v0.1.10"
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.3330364Z #0 building with "default" instance using docker driver
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.3331791Z 
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.3332479Z #1 [internal] load build definition from Dockerfile
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.3333774Z #1 transferring dockerfile: 171B done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.3334910Z #1 DONE 0.0s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.3335707Z 
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.3336372Z #2 [internal] load metadata for ghcr.io/appleboy/drone-ssh:1.6.13
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.4867351Z #2 DONE 0.3s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6045275Z 
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6046404Z #3 [internal] load .dockerignore
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6048089Z #3 transferring context: 2B done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6051889Z #3 DONE 0.0s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6054439Z 
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6055459Z #4 [internal] load build context
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6058661Z #4 transferring context: 108B done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6060339Z #4 DONE 0.0s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6061087Z 
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6064438Z #5 [1/3] FROM ghcr.io/appleboy/drone-ssh:1.6.13@sha256:32deffb4c38aaa433065aad5178575fa7651be6e13c757eb57f73d88aec7591d
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6069982Z #5 resolve ghcr.io/appleboy/drone-ssh:1.6.13@sha256:32deffb4c38aaa433065aad5178575fa7651be6e13c757eb57f73d88aec7591d done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6075233Z #5 extracting sha256:f56be85fc22e46face30e2c3de3f7fe7c15f8fd7c4e5add29d7f64b87abdaa09
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6080224Z #5 sha256:1e003c3cb21c59fdb129456560df9187a39b46132321539002e2540330f20a3e 3.34kB / 3.34kB done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6085664Z #5 sha256:f56be85fc22e46face30e2c3de3f7fe7c15f8fd7c4e5add29d7f64b87abdaa09 3.37MB / 3.37MB 0.1s done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6091354Z #5 sha256:e1c1ae1efe86967d4421951ec02c13d6a5061e7dc3e653c2d6b6781d6f166d1b 284.75kB / 284.75kB 0.1s done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6097685Z #5 sha256:18402fbc4c4d8ab313c49cf9467678b17eac62b6d12a9481e5e81acd14c87fd9 1.05MB / 2.42MB 0.1s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6103443Z #5 sha256:32deffb4c38aaa433065aad5178575fa7651be6e13c757eb57f73d88aec7591d 2.38kB / 2.38kB done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.6108594Z #5 sha256:7c01b1df78e6aa527f41bc1cb005c2fe21df6580c2d2ecb1d776b1b1548a192b 864B / 864B done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.7047365Z #5 extracting sha256:f56be85fc22e46face30e2c3de3f7fe7c15f8fd7c4e5add29d7f64b87abdaa09 0.1s done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.7053825Z #5 sha256:18402fbc4c4d8ab313c49cf9467678b17eac62b6d12a9481e5e81acd14c87fd9 2.42MB / 2.42MB 0.1s done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.7060094Z #5 extracting sha256:e1c1ae1efe86967d4421951ec02c13d6a5061e7dc3e653c2d6b6781d6f166d1b
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:32.8704556Z #5 extracting sha256:e1c1ae1efe86967d4421951ec02c13d6a5061e7dc3e653c2d6b6781d6f166d1b 0.0s done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:33.8485999Z #5 extracting sha256:18402fbc4c4d8ab313c49cf9467678b17eac62b6d12a9481e5e81acd14c87fd9
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.0636993Z #5 extracting sha256:18402fbc4c4d8ab313c49cf9467678b17eac62b6d12a9481e5e81acd14c87fd9 0.0s done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.0638658Z #5 DONE 1.4s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.0639712Z 
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.0647674Z #6 [2/3] COPY entrypoint.sh /entrypoint.sh
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.0648338Z #6 DONE 0.0s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.0648596Z 
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.0648824Z #7 [3/3] RUN chmod +x /entrypoint.sh
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.0649336Z #7 DONE 0.1s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.2164600Z 
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.2165210Z #8 exporting to image
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:34.2165658Z #8 exporting layers
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:35.0088658Z #8 exporting layers 0.9s done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:35.0319390Z #8 writing image sha256:dd9ee85884f0b27374ac78cd93be943731c0529edcd7517fbc840210d8e4389b done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:35.0320561Z #8 naming to docker.io/library/e96b39:4a53ec39f67741b997d30b92c3d8acc2 done
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:35.0321284Z #8 DONE 1.0s
+build-test-deploy	Build appleboy/ssh-action@v0.1.10	2025-12-17T11:14:35.0379138Z ##[endgroup]
+build-test-deploy	Checkout code	﻿2025-12-17T11:14:35.0723849Z ##[group]Run actions/checkout@v4
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0724487Z with:
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0724798Z   repository: Charliesj0129/subhft
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0725589Z   token: ***
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0725860Z   ssh-strict: true
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0726129Z   ssh-user: git
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0726403Z   persist-credentials: true
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0726700Z   clean: true
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0726982Z   sparse-checkout-cone-mode: true
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0727298Z   fetch-depth: 1
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0727559Z   fetch-tags: false
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0727843Z   show-progress: true
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0728141Z   lfs: false
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0728389Z   submodules: false
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0728657Z   set-safe-directory: true
+build-test-deploy	Checkout code	2025-12-17T11:14:35.0729201Z ##[endgroup]
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1785500Z Syncing repository: Charliesj0129/subhft
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1787157Z ##[group]Getting Git version info
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1787611Z Working directory is '/home/runner/work/subhft/subhft'
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1788261Z [command]/usr/bin/git version
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1792071Z git version 2.52.0
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1817903Z ##[endgroup]
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1833464Z Temporarily overriding HOME='/home/runner/work/_temp/e5b9afda-fe8c-402d-b468-bf4254acda8b' before making global git config changes
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1835279Z Adding repository directory to the temporary git global config as a safe directory
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1847204Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/subhft/subhft
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1888079Z Deleting the contents of '/home/runner/work/subhft/subhft'
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1892252Z ##[group]Initializing the repository
+build-test-deploy	Checkout code	2025-12-17T11:14:35.1896923Z [command]/usr/bin/git init /home/runner/work/subhft/subhft
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2007048Z hint: Using 'master' as the name for the initial branch. This default branch name
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2008117Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2008756Z hint: to use in all of your new repositories, which will suppress this warning,
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2009534Z hint: call:
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2009887Z hint:
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2010510Z hint: 	git config --global init.defaultBranch <name>
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2011139Z hint:
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2011547Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2012394Z hint: 'development'. The just-created branch can be renamed via this command:
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2013261Z hint:
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2013784Z hint: 	git branch -m <name>
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2014341Z hint:
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2015309Z hint: Disable this message with "git config set advice.defaultBranchName false"
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2016512Z Initialized empty Git repository in /home/runner/work/subhft/subhft/.git/
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2023805Z [command]/usr/bin/git remote add origin https://github.com/Charliesj0129/subhft
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2056823Z ##[endgroup]
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2057696Z ##[group]Disabling automatic garbage collection
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2061777Z [command]/usr/bin/git config --local gc.auto 0
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2089654Z ##[endgroup]
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2090535Z ##[group]Setting up auth
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2097110Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2126936Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2472193Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2500352Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2717676Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2747371Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+build-test-deploy	Checkout code	2025-12-17T11:14:35.2976871Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+build-test-deploy	Checkout code	2025-12-17T11:14:35.3009939Z ##[endgroup]
+build-test-deploy	Checkout code	2025-12-17T11:14:35.3010646Z ##[group]Fetching the repository
+build-test-deploy	Checkout code	2025-12-17T11:14:35.3018249Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +261a470b810e4e5628c44ec28dec9d8abd437453:refs/remotes/origin/temp_reset_branch
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6095298Z From https://github.com/Charliesj0129/subhft
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6099234Z  * [new ref]         261a470b810e4e5628c44ec28dec9d8abd437453 -> origin/temp_reset_branch
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6128373Z ##[endgroup]
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6128920Z ##[group]Determining the checkout info
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6130899Z ##[endgroup]
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6136458Z [command]/usr/bin/git sparse-checkout disable
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6175717Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6199591Z ##[group]Checking out the ref
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6203402Z [command]/usr/bin/git checkout --progress --force -B temp_reset_branch refs/remotes/origin/temp_reset_branch
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6949663Z Switched to a new branch 'temp_reset_branch'
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6950917Z branch 'temp_reset_branch' set up to track 'origin/temp_reset_branch'.
+build-test-deploy	Checkout code	2025-12-17T11:14:35.6961668Z ##[endgroup]
+build-test-deploy	Checkout code	2025-12-17T11:14:35.7000327Z [command]/usr/bin/git log -1 --format=%H
+build-test-deploy	Checkout code	2025-12-17T11:14:35.7023232Z 261a470b810e4e5628c44ec28dec9d8abd437453
+build-test-deploy	Set up Python	﻿2025-12-17T11:14:35.7240694Z ##[group]Run actions/setup-python@v5
+build-test-deploy	Set up Python	2025-12-17T11:14:35.7241086Z with:
+build-test-deploy	Set up Python	2025-12-17T11:14:35.7241360Z   python-version: 3.11
+build-test-deploy	Set up Python	2025-12-17T11:14:35.7241659Z   check-latest: false
+build-test-deploy	Set up Python	2025-12-17T11:14:35.7242076Z   token: ***
+build-test-deploy	Set up Python	2025-12-17T11:14:35.7242360Z   update-environment: true
+build-test-deploy	Set up Python	2025-12-17T11:14:35.7242680Z   allow-prereleases: false
+build-test-deploy	Set up Python	2025-12-17T11:14:35.7242967Z   freethreaded: false
+build-test-deploy	Set up Python	2025-12-17T11:14:35.7243242Z ##[endgroup]
+build-test-deploy	Set up Python	2025-12-17T11:14:35.8894346Z ##[group]Installed versions
+build-test-deploy	Set up Python	2025-12-17T11:14:35.8998852Z Successfully set up CPython (3.11.14)
+build-test-deploy	Set up Python	2025-12-17T11:14:35.9000062Z ##[endgroup]
+build-test-deploy	Install dependencies	﻿2025-12-17T11:14:35.9110473Z ##[group]Run python -m venv .venv
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9110931Z [36;1mpython -m venv .venv[0m
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9111256Z [36;1m. .venv/bin/activate[0m
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9111602Z [36;1mpip install -r requirements.txt[0m
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9158774Z shell: /usr/bin/bash -e {0}
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9159117Z env:
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9159453Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9159983Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9160496Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9160951Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9161398Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9161846Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+build-test-deploy	Install dependencies	2025-12-17T11:14:35.9162258Z ##[endgroup]
+build-test-deploy	Install dependencies	2025-12-17T11:14:40.5341811Z Collecting numpy (from -r requirements.txt (line 1))
+build-test-deploy	Install dependencies	2025-12-17T11:14:40.5776221Z   Downloading numpy-2.3.5-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (62 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:40.5920282Z      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 62.1/62.1 kB 4.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:40.7437557Z Collecting pandas (from -r requirements.txt (line 2))
+build-test-deploy	Install dependencies	2025-12-17T11:14:40.7525368Z   Downloading pandas-2.3.3-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (91 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:40.7592562Z      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 91.2/91.2 kB 16.8 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.2716612Z Collecting clickhouse-connect (from -r requirements.txt (line 3))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.2803830Z   Downloading clickhouse_connect-0.10.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (4.2 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.3081165Z Collecting structlog (from -r requirements.txt (line 4))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.3156475Z   Downloading structlog-25.5.0-py3-none-any.whl.metadata (9.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.3894576Z Collecting msgspec (from -r requirements.txt (line 5))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.3972471Z   Downloading msgspec-0.20.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (5.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.4493475Z Collecting uvloop (from -r requirements.txt (line 6))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.4569420Z   Downloading uvloop-0.22.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (4.9 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.5101995Z Collecting hftbacktest (from -r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.5186342Z   Downloading hftbacktest-2.4.4-cp311-cp311-manylinux_2_28_x86_64.whl.metadata (15 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.6543919Z Collecting shioaji (from -r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.6638256Z   Downloading shioaji-1.2.9-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (7.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.6922377Z Collecting prometheus_client (from -r requirements.txt (line 9))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.6994592Z   Downloading prometheus_client-0.23.1-py3-none-any.whl.metadata (1.9 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.7930158Z Collecting psutil (from -r requirements.txt (line 10))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.8006628Z   Downloading psutil-7.1.3-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl.metadata (23 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.8687288Z Collecting pytest (from -r requirements.txt (line 11))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.8758684Z   Downloading pytest-9.0.2-py3-none-any.whl.metadata (7.6 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.9113356Z Collecting pytest-asyncio (from -r requirements.txt (line 12))
+build-test-deploy	Install dependencies	2025-12-17T11:14:41.9187736Z   Downloading pytest_asyncio-1.3.0-py3-none-any.whl.metadata (4.1 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.0058595Z Collecting python-dateutil>=2.8.2 (from pandas->-r requirements.txt (line 2))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.0131743Z   Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.0698237Z Collecting pytz>=2020.1 (from pandas->-r requirements.txt (line 2))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.0771441Z   Downloading pytz-2025.2-py2.py3-none-any.whl.metadata (22 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.1046712Z Collecting tzdata>=2022.7 (from pandas->-r requirements.txt (line 2))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.1118986Z   Downloading tzdata-2025.3-py2.py3-none-any.whl.metadata (1.4 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.1531527Z Collecting certifi (from clickhouse-connect->-r requirements.txt (line 3))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.1604318Z   Downloading certifi-2025.11.12-py3-none-any.whl.metadata (2.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.2103400Z Collecting urllib3>=1.26 (from clickhouse-connect->-r requirements.txt (line 3))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.2176624Z   Downloading urllib3-2.6.2-py3-none-any.whl.metadata (6.6 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.3448600Z Collecting zstandard (from clickhouse-connect->-r requirements.txt (line 3))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.3542315Z   Downloading zstandard-0.25.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (3.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.4444173Z Collecting lz4 (from clickhouse-connect->-r requirements.txt (line 3))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.4538758Z   Downloading lz4-4.4.5-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (3.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.4842229Z Collecting numpy (from -r requirements.txt (line 1))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.4916190Z   Downloading numpy-2.2.6-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (62 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.4961803Z      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 62.0/62.0 kB 18.9 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.6185291Z Collecting numba~=0.61 (from hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.6260020Z   Downloading numba-0.63.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.9 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.8184702Z Collecting polars (from hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:42.8261198Z   Downloading polars-1.36.1-py3-none-any.whl.metadata (10 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.0407742Z Collecting matplotlib (from hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.0484003Z   Downloading matplotlib-3.10.8-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (52 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.0526462Z      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 52.8/52.8 kB 18.2 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.1184066Z Collecting holoviews (from hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.1262684Z   Downloading holoviews-1.22.1-py3-none-any.whl.metadata (10 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.1587764Z Collecting base58 (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.1669239Z   Downloading base58-2.1.1-py3-none-any.whl.metadata (3.1 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.2039395Z Collecting filelock<4.0.0,>=3.4.1 (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.2113678Z   Downloading filelock-3.20.1-py3-none-any.whl.metadata (2.1 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.2700743Z Collecting importlib-metadata (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.2774853Z   Downloading importlib_metadata-8.7.0-py3-none-any.whl.metadata (4.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.3032382Z Collecting loguru<=0.7.3,>=0.6.0 (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.3106680Z   Downloading loguru-0.7.3-py3-none-any.whl.metadata (22 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.4714660Z Collecting pydantic<=2.12.3,>=1.0.0 (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.4788064Z   Downloading pydantic-2.12.3-py3-none-any.whl.metadata (87 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.4835317Z      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 87.7/87.7 kB 27.6 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.5160663Z Collecting pynacl>=1.3.0 (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.5234774Z   Downloading pynacl-1.6.1-cp38-abi3-manylinux_2_34_x86_64.whl.metadata (9.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.5463917Z Collecting pyrsca (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.5548460Z   Downloading pyrsca-0.3.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (5.1 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.6110646Z Collecting pysolace>=0.9.53 (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.6330289Z   Downloading pysolace-0.9.53-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (6.2 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.6740574Z Collecting requests (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.6815359Z   Downloading requests-2.32.5-py3-none-any.whl.metadata (4.9 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.7609022Z Collecting sentry-sdk>=1.5.12 (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.7686422Z   Downloading sentry_sdk-2.48.0-py2.py3-none-any.whl.metadata (10 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.7992486Z Collecting typing-extensions (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.8066320Z   Downloading typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.9790950Z Collecting xxhash (from shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:43.9870841Z   Downloading xxhash-3.6.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (13 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.0459230Z Collecting iniconfig>=1.0.1 (from pytest->-r requirements.txt (line 11))
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.0531340Z   Downloading iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.0842260Z Collecting packaging>=22 (from pytest->-r requirements.txt (line 11))
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.0919566Z   Downloading packaging-25.0-py3-none-any.whl.metadata (3.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.1178487Z Collecting pluggy<2,>=1.5 (from pytest->-r requirements.txt (line 11))
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.1250351Z   Downloading pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.1649754Z Collecting pygments>=2.7.2 (from pytest->-r requirements.txt (line 11))
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.1722638Z   Downloading pygments-2.19.2-py3-none-any.whl.metadata (2.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.3157643Z Collecting llvmlite<0.47,>=0.46.0dev0 (from numba~=0.61->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.3233736Z   Downloading llvmlite-0.46.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (5.0 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.3683992Z Collecting annotated-types>=0.6.0 (from pydantic<=2.12.3,>=1.0.0->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:44.3757651Z   Downloading annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.2147701Z Collecting pydantic-core==2.41.4 (from pydantic<=2.12.3,>=1.0.0->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.2229335Z   Downloading pydantic_core-2.41.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (7.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.2463588Z Collecting typing-inspection>=0.4.2 (from pydantic<=2.12.3,>=1.0.0->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.2537027Z   Downloading typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.3904180Z Collecting cffi>=2.0.0 (from pynacl>=1.3.0->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.3980229Z   Downloading cffi-2.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.6 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.4839906Z Collecting msgpack>=1.0.3 (from pysolace>=0.9.53->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.4920449Z   Downloading msgpack-1.1.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (8.1 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.9075791Z Collecting orjson>=3.3.1 (from pysolace>=0.9.53->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.9150892Z   Downloading orjson-3.11.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (41 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.9194838Z      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 41.6/41.6 kB 12.9 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.9582821Z Collecting typer>=0.10.0 (from pysolace>=0.9.53->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.9657365Z   Downloading typer-0.20.0-py3-none-any.whl.metadata (16 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:45.9942365Z Collecting six>=1.5 (from python-dateutil>=2.8.2->pandas->-r requirements.txt (line 2))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.0019062Z   Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.1451325Z Collecting bokeh>=3.1 (from holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.1528047Z   Downloading bokeh-3.8.1-py3-none-any.whl.metadata (10 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.1779219Z Collecting colorcet (from holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.1854443Z   Downloading colorcet-3.1.0-py3-none-any.whl.metadata (6.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.2617513Z Collecting narwhals>=2 (from holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.2691798Z   Downloading narwhals-2.14.0-py3-none-any.whl.metadata (13 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.4132697Z Collecting panel>=1.0 (from holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.4222266Z   Downloading panel-1.8.4-py3-none-any.whl.metadata (15 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.4678437Z Collecting param<3.0,>=2.0 (from holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.4754230Z   Downloading param-2.3.1-py3-none-any.whl.metadata (22 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.5021233Z Collecting pyviz-comms>=2.1 (from holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.5095824Z   Downloading pyviz_comms-3.0.6-py3-none-any.whl.metadata (7.7 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.5607693Z Collecting zipp>=3.20 (from importlib-metadata->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.5681240Z   Downloading zipp-3.23.0-py3-none-any.whl.metadata (3.6 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.6721143Z Collecting contourpy>=1.0.1 (from matplotlib->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.6796115Z   Downloading contourpy-1.3.3-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (5.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.6999949Z Collecting cycler>=0.10 (from matplotlib->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.7075703Z   Downloading cycler-0.12.1-py3-none-any.whl.metadata (3.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.9079526Z Collecting fonttools>=4.22.0 (from matplotlib->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.9159260Z   Downloading fonttools-4.61.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (114 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.9212241Z      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 114.2/114.2 kB 32.6 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:46.9997948Z Collecting kiwisolver>=1.3.1 (from matplotlib->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.0073164Z   Downloading kiwisolver-1.4.9-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (6.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.2249007Z Collecting pillow>=8 (from matplotlib->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.2324446Z   Downloading pillow-12.0.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (8.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.2753944Z Collecting pyparsing>=3 (from matplotlib->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.2828785Z   Downloading pyparsing-3.2.5-py3-none-any.whl.metadata (5.0 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.3333902Z Collecting polars-runtime-32==1.36.1 (from polars->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.3407928Z   Downloading polars_runtime_32-1.36.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (1.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.6108220Z Collecting charset_normalizer<4,>=2 (from requests->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.6189929Z   Downloading charset_normalizer-3.4.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (37 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.6473814Z Collecting idna<4,>=2.5 (from requests->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.6547684Z   Downloading idna-3.11-py3-none-any.whl.metadata (8.4 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.7279024Z Collecting Jinja2>=2.9 (from bokeh>=3.1->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.7353506Z   Downloading jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.8271981Z Collecting PyYAML>=3.10 (from bokeh>=3.1->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.8346894Z   Downloading pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.8856589Z Collecting tornado>=6.2 (from bokeh>=3.1->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.8933156Z   Downloading tornado-6.5.4-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (2.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.9187598Z Collecting xyzservices>=2021.09.1 (from bokeh>=3.1->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.9265303Z   Downloading xyzservices-2025.11.0-py3-none-any.whl.metadata (4.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.9548691Z Collecting pycparser (from cffi>=2.0.0->pynacl>=1.3.0->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:47.9621738Z   Downloading pycparser-2.23-py3-none-any.whl.metadata (993 bytes)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.1308984Z Collecting bleach (from panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.1383277Z   Downloading bleach-6.3.0-py3-none-any.whl.metadata (31 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.1712879Z Collecting linkify-it-py (from panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.1784793Z   Downloading linkify_it_py-2.0.3-py3-none-any.whl.metadata (8.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.2082844Z Collecting markdown (from panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.2155440Z   Downloading markdown-3.10-py3-none-any.whl.metadata (5.1 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.2437783Z Collecting markdown-it-py (from panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.2510384Z   Downloading markdown_it_py-4.0.0-py3-none-any.whl.metadata (7.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.2742570Z Collecting mdit-py-plugins (from panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.2885147Z   Downloading mdit_py_plugins-0.5.0-py3-none-any.whl.metadata (2.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.3546082Z Collecting tqdm (from panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.3619656Z   Downloading tqdm-4.67.1-py3-none-any.whl.metadata (57 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.3660006Z      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 57.7/57.7 kB 21.9 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.4931142Z Collecting click>=8.0.0 (from typer>=0.10.0->pysolace>=0.9.53->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.5003653Z   Downloading click-8.3.1-py3-none-any.whl.metadata (2.6 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.5314002Z Collecting shellingham>=1.3.0 (from typer>=0.10.0->pysolace>=0.9.53->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.5387371Z   Downloading shellingham-1.5.4-py2.py3-none-any.whl.metadata (3.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.6143293Z Collecting rich>=10.11.0 (from typer>=0.10.0->pysolace>=0.9.53->shioaji->-r requirements.txt (line 8))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.6248954Z   Downloading rich-14.2.0-py3-none-any.whl.metadata (18 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.7544191Z Collecting MarkupSafe>=2.0 (from Jinja2>=2.9->bokeh>=3.1->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.7624350Z   Downloading markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.7 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.8302033Z Collecting mdurl~=0.1 (from markdown-it-py->panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.8374673Z   Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.8914357Z Collecting webencodings (from bleach->panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.8988254Z   Downloading webencodings-0.5.1-py2.py3-none-any.whl.metadata (2.1 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.9335974Z Collecting uc-micro-py (from linkify-it-py->panel>=1.0->holoviews->hftbacktest->-r requirements.txt (line 7))
+build-test-deploy	Install dependencies	2025-12-17T11:14:48.9411459Z   Downloading uc_micro_py-1.0.3-py3-none-any.whl.metadata (2.0 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.0496896Z Downloading pandas-2.3.3-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (12.8 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.1329973Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.8/12.8 MB 163.8 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.1412037Z Downloading clickhouse_connect-0.10.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.1 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.1514204Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 135.8 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.1585954Z Downloading structlog-25.5.0-py3-none-any.whl (72 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.1625611Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 72.5/72.5 kB 27.7 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.1714661Z Downloading msgspec-0.20.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (219 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.1761748Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 219.9/219.9 kB 67.9 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.1853243Z Downloading uvloop-0.22.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.8 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.2098148Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.8/3.8 MB 167.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.2179639Z Downloading hftbacktest-2.4.4-cp311-cp311-manylinux_2_28_x86_64.whl (5.5 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.2537788Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.5/5.5 MB 161.3 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.2611868Z Downloading numpy-2.2.6-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (16.8 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.3573910Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.8/16.8 MB 154.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.3657129Z Downloading shioaji-1.2.9-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (789 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.3763854Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 789.9/789.9 kB 101.6 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.3836743Z Downloading prometheus_client-0.23.1-py3-none-any.whl (61 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.3876521Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 61.1/61.1 kB 21.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.3949431Z Downloading psutil-7.1.3-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl (263 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4000363Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 263.3/263.3 kB 73.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4108727Z Downloading pytest-9.0.2-py3-none-any.whl (374 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4169556Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 374.8/374.8 kB 82.6 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4243791Z Downloading pytest_asyncio-1.3.0-py3-none-any.whl (15 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4335528Z Downloading filelock-3.20.1-py3-none-any.whl (16 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4427863Z Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4519579Z Downloading loguru-0.7.3-py3-none-any.whl (61 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4556469Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 61.6/61.6 kB 25.0 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4654387Z Downloading numba-0.63.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (3.7 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4903072Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.7/3.7 MB 162.7 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.4980071Z Downloading packaging-25.0-py3-none-any.whl (66 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5021264Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 66.5/66.5 kB 24.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5094610Z Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5202763Z Downloading pydantic-2.12.3-py3-none-any.whl (462 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5270803Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 462.4/462.4 kB 89.7 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5372403Z Downloading pydantic_core-2.41.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5531499Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 148.5 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5605805Z Downloading pygments-2.19.2-py3-none-any.whl (1.2 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5711353Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 138.5 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5783491Z Downloading pynacl-1.6.1-cp38-abi3-manylinux_2_34_x86_64.whl (1.4 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5898641Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 141.9 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.5981539Z Downloading pysolace-0.9.53-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (2.9 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6265307Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.9/2.9 MB 107.3 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6336993Z Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6385502Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 229.9/229.9 kB 68.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6457169Z Downloading pytz-2025.2-py2.py3-none-any.whl (509 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6526412Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 509.2/509.2 kB 97.8 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6599495Z Downloading sentry_sdk-2.48.0-py2.py3-none-any.whl (414 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6660415Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 414.6/414.6 kB 93.2 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6734514Z Downloading typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6770497Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 44.6/44.6 kB 18.3 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6844097Z Downloading tzdata-2025.3-py2.py3-none-any.whl (348 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6902689Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 348.5/348.5 kB 84.6 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.6974524Z Downloading urllib3-2.6.2-py3-none-any.whl (131 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7017094Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 131.2/131.2 kB 47.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7089808Z Downloading base58-2.1.1-py3-none-any.whl (5.6 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7182643Z Downloading certifi-2025.11.12-py3-none-any.whl (159 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7226042Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 159.4/159.4 kB 55.5 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7331774Z Downloading holoviews-1.22.1-py3-none-any.whl (5.9 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7702505Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.9/5.9 MB 168.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7775570Z Downloading importlib_metadata-8.7.0-py3-none-any.whl (27 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7869713Z Downloading lz4-4.4.5-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.4 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.7983318Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 141.0 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.8083997Z Downloading matplotlib-3.10.8-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (8.7 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.8612152Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.7/8.7 MB 170.9 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.8706829Z Downloading polars-1.36.1-py3-none-any.whl (802 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.8791751Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 802.4/802.4 kB 118.8 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:49.8884780Z Downloading polars_runtime_32-1.36.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (44.5 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.1301818Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 44.5/44.5 MB 106.5 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.1381377Z Downloading pyrsca-0.3.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.2 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.1487405Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 141.6 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.1558715Z Downloading requests-2.32.5-py3-none-any.whl (64 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.1598876Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 64.7/64.7 kB 23.2 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.1672245Z Downloading xxhash-3.6.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (193 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.1719781Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 193.9/193.9 kB 60.2 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.1792056Z Downloading zstandard-0.25.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (5.6 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.2129881Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.6/5.6 MB 174.6 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.2202692Z Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.2313624Z Downloading bokeh-3.8.1-py3-none-any.whl (7.2 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.2759275Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.2/7.2 MB 168.5 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.2831544Z Downloading cffi-2.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (215 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.2884059Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 215.6/215.6 kB 58.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.2959112Z Downloading charset_normalizer-3.4.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (151 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3026741Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 151.6/151.6 kB 37.9 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3098012Z Downloading contourpy-1.3.3-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (355 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3154813Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 355.2/355.2 kB 88.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3227112Z Downloading cycler-0.12.1-py3-none-any.whl (8.3 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3318367Z Downloading fonttools-4.61.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (5.0 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3626757Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.0/5.0 MB 173.8 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3698757Z Downloading idna-3.11-py3-none-any.whl (71 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3740177Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 71.0/71.0 kB 25.8 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3810538Z Downloading kiwisolver-1.4.9-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (1.4 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.3925851Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 146.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.4022432Z Downloading llvmlite-0.46.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (56.3 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.6950862Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 56.3/56.3 MB 92.7 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.7029088Z Downloading msgpack-1.1.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (426 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.7093802Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 426.2/426.2 kB 89.3 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.7167191Z Downloading narwhals-2.14.0-py3-none-any.whl (430 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.7227278Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 430.8/430.8 kB 98.6 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.7303041Z Downloading orjson-3.11.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (138 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.7349077Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 138.8/138.8 kB 45.0 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.7457879Z Downloading panel-1.8.4-py3-none-any.whl (30.2 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.9427333Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 30.2/30.2 MB 118.8 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.9515273Z Downloading param-2.3.1-py3-none-any.whl (139 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.9561388Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 139.8/139.8 kB 46.0 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:50.9636037Z Downloading pillow-12.0.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (7.0 MB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0116308Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.0/7.0 MB 152.7 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0190742Z Downloading pyparsing-3.2.5-py3-none-any.whl (113 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0232411Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 113.9/113.9 kB 42.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0307867Z Downloading pyviz_comms-3.0.6-py3-none-any.whl (84 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0348599Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 84.3/84.3 kB 30.7 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0422378Z Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0515529Z Downloading typer-0.20.0-py3-none-any.whl (47 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0552353Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 47.0/47.0 kB 18.3 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0623213Z Downloading typing_inspection-0.4.2-py3-none-any.whl (14 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0715843Z Downloading zipp-3.23.0-py3-none-any.whl (10 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0824345Z Downloading colorcet-3.1.0-py3-none-any.whl (260 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0877072Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 260.3/260.3 kB 71.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0950351Z Downloading click-8.3.1-py3-none-any.whl (108 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.0994407Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 108.3/108.3 kB 37.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1066195Z Downloading jinja2-3.1.6-py3-none-any.whl (134 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1112227Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 134.9/134.9 kB 42.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1188414Z Downloading pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (806 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1276887Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 806.6/806.6 kB 117.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1350592Z Downloading rich-14.2.0-py3-none-any.whl (243 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1401449Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 243.4/243.4 kB 70.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1473162Z Downloading markdown_it_py-4.0.0-py3-none-any.whl (87 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1514533Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 87.3/87.3 kB 31.3 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1585878Z Downloading shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1683285Z Downloading tornado-6.5.4-cp39-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl (445 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1749606Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 445.3/445.3 kB 92.3 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1824228Z Downloading xyzservices-2025.11.0-py3-none-any.whl (93 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1864525Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 93.9/93.9 kB 35.7 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.1935691Z Downloading bleach-6.3.0-py3-none-any.whl (164 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2006819Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 164.4/164.4 kB 28.4 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2078369Z Downloading linkify_it_py-2.0.3-py3-none-any.whl (19 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2173541Z Downloading markdown-3.10-py3-none-any.whl (107 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2217814Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 107.7/107.7 kB 35.1 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2291007Z Downloading mdit_py_plugins-0.5.0-py3-none-any.whl (57 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2329324Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 57.2/57.2 kB 21.2 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2400712Z Downloading pycparser-2.23-py3-none-any.whl (118 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2443703Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 118.1/118.1 kB 40.2 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2514472Z Downloading tqdm-4.67.1-py3-none-any.whl (78 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2558421Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 78.5/78.5 kB 25.2 MB/s eta 0:00:00
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2629779Z Downloading markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (22 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2718370Z Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2808321Z Downloading uc_micro_py-1.0.3-py3-none-any.whl (6.2 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:51.2898834Z Downloading webencodings-0.5.1-py2.py3-none-any.whl (11 kB)
+build-test-deploy	Install dependencies	2025-12-17T11:14:52.1740797Z Installing collected packages: webencodings, pytz, zstandard, zipp, xyzservices, xxhash, uvloop, urllib3, uc-micro-py, tzdata, typing-extensions, tqdm, tornado, structlog, six, shellingham, PyYAML, pyrsca, pyparsing, pygments, pycparser, psutil, prometheus_client, polars-runtime-32, pluggy, pillow, param, packaging, orjson, numpy, narwhals, msgspec, msgpack, mdurl, MarkupSafe, markdown, lz4, loguru, llvmlite, kiwisolver, iniconfig, idna, fonttools, filelock, cycler, colorcet, click, charset_normalizer, certifi, bleach, base58, annotated-types, typing-inspection, sentry-sdk, requests, pyviz-comms, python-dateutil, pytest, pydantic-core, polars, numba, markdown-it-py, linkify-it-py, Jinja2, importlib-metadata, contourpy, clickhouse-connect, cffi, rich, pytest-asyncio, pynacl, pydantic, pandas, mdit-py-plugins, matplotlib, typer, bokeh, pysolace, panel, shioaji, holoviews, hftbacktest
+build-test-deploy	Install dependencies	2025-12-17T11:15:13.5174741Z Successfully installed Jinja2-3.1.6 MarkupSafe-3.0.3 PyYAML-6.0.3 annotated-types-0.7.0 base58-2.1.1 bleach-6.3.0 bokeh-3.8.1 certifi-2025.11.12 cffi-2.0.0 charset_normalizer-3.4.4 click-8.3.1 clickhouse-connect-0.10.0 colorcet-3.1.0 contourpy-1.3.3 cycler-0.12.1 filelock-3.20.1 fonttools-4.61.1 hftbacktest-2.4.4 holoviews-1.22.1 idna-3.11 importlib-metadata-8.7.0 iniconfig-2.3.0 kiwisolver-1.4.9 linkify-it-py-2.0.3 llvmlite-0.46.0 loguru-0.7.3 lz4-4.4.5 markdown-3.10 markdown-it-py-4.0.0 matplotlib-3.10.8 mdit-py-plugins-0.5.0 mdurl-0.1.2 msgpack-1.1.2 msgspec-0.20.0 narwhals-2.14.0 numba-0.63.1 numpy-2.2.6 orjson-3.11.5 packaging-25.0 pandas-2.3.3 panel-1.8.4 param-2.3.1 pillow-12.0.0 pluggy-1.6.0 polars-1.36.1 polars-runtime-32-1.36.1 prometheus_client-0.23.1 psutil-7.1.3 pycparser-2.23 pydantic-2.12.3 pydantic-core-2.41.4 pygments-2.19.2 pynacl-1.6.1 pyparsing-3.2.5 pyrsca-0.3.0 pysolace-0.9.53 pytest-9.0.2 pytest-asyncio-1.3.0 python-dateutil-2.9.0.post0 pytz-2025.2 pyviz-comms-3.0.6 requests-2.32.5 rich-14.2.0 sentry-sdk-2.48.0 shellingham-1.5.4 shioaji-1.2.9 six-1.17.0 structlog-25.5.0 tornado-6.5.4 tqdm-4.67.1 typer-0.20.0 typing-extensions-4.15.0 typing-inspection-0.4.2 tzdata-2025.3 uc-micro-py-1.0.3 urllib3-2.6.2 uvloop-0.22.1 webencodings-0.5.1 xxhash-3.6.0 xyzservices-2025.11.0 zipp-3.23.0 zstandard-0.25.0
+build-test-deploy	Install dependencies	2025-12-17T11:15:13.7438721Z 
+build-test-deploy	Install dependencies	2025-12-17T11:15:13.7439289Z [notice] A new release of pip is available: 24.0 -> 25.3
+build-test-deploy	Install dependencies	2025-12-17T11:15:13.7439985Z [notice] To update, run: pip install --upgrade pip
+build-test-deploy	Run tests	﻿2025-12-17T11:15:15.0281753Z ##[group]Run . .venv/bin/activate
+build-test-deploy	Run tests	2025-12-17T11:15:15.0282156Z [36;1m. .venv/bin/activate[0m
+build-test-deploy	Run tests	2025-12-17T11:15:15.0282458Z [36;1mpytest -q[0m
+build-test-deploy	Run tests	2025-12-17T11:15:15.0315313Z shell: /usr/bin/bash -e {0}
+build-test-deploy	Run tests	2025-12-17T11:15:15.0315621Z env:
+build-test-deploy	Run tests	2025-12-17T11:15:15.0315948Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+build-test-deploy	Run tests	2025-12-17T11:15:15.0316447Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+build-test-deploy	Run tests	2025-12-17T11:15:15.0316935Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+build-test-deploy	Run tests	2025-12-17T11:15:15.0317369Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+build-test-deploy	Run tests	2025-12-17T11:15:15.0317840Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+build-test-deploy	Run tests	2025-12-17T11:15:15.0318277Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+build-test-deploy	Run tests	2025-12-17T11:15:15.0318660Z ##[endgroup]
+build-test-deploy	Run tests	2025-12-17T11:15:17.0382487Z 
+build-test-deploy	Run tests	2025-12-17T11:15:17.0383511Z ==================================== ERRORS ====================================
+build-test-deploy	Run tests	2025-12-17T11:15:17.0384890Z _______________ ERROR collecting tests/benchmark/latency_test.py _______________
+build-test-deploy	Run tests	2025-12-17T11:15:17.0386878Z ImportError while importing test module '/home/runner/work/subhft/subhft/tests/benchmark/latency_test.py'.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0388369Z Hint: make sure your test modules/packages have valid Python names.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0389233Z Traceback:
+build-test-deploy	Run tests	2025-12-17T11:15:17.0390302Z /opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0406724Z     return _bootstrap._gcd_import(name[level:], package, level)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0407477Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0408608Z tests/benchmark/latency_test.py:6: in <module>
+build-test-deploy	Run tests	2025-12-17T11:15:17.0409319Z     from hft_platform.engine.event_bus import RingBufferBus
+build-test-deploy	Run tests	2025-12-17T11:15:17.0410005Z E   ModuleNotFoundError: No module named 'hft_platform'
+build-test-deploy	Run tests	2025-12-17T11:15:17.0410820Z ____________ ERROR collecting tests/integration/test_full_cycle.py _____________
+build-test-deploy	Run tests	2025-12-17T11:15:17.0411976Z ImportError while importing test module '/home/runner/work/subhft/subhft/tests/integration/test_full_cycle.py'.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0413004Z Hint: make sure your test modules/packages have valid Python names.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0413630Z Traceback:
+build-test-deploy	Run tests	2025-12-17T11:15:17.0414372Z /opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0415488Z     return _bootstrap._gcd_import(name[level:], package, level)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0416095Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0416939Z tests/integration/test_full_cycle.py:6: in <module>
+build-test-deploy	Run tests	2025-12-17T11:15:17.0417532Z     from hft_platform.main import HFTSystem
+build-test-deploy	Run tests	2025-12-17T11:15:17.0418136Z E   ModuleNotFoundError: No module named 'hft_platform'
+build-test-deploy	Run tests	2025-12-17T11:15:17.0418889Z ____________ ERROR collecting tests/integration/test_persistence.py ____________
+build-test-deploy	Run tests	2025-12-17T11:15:17.0419954Z ImportError while importing test module '/home/runner/work/subhft/subhft/tests/integration/test_persistence.py'.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0420987Z Hint: make sure your test modules/packages have valid Python names.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0421602Z Traceback:
+build-test-deploy	Run tests	2025-12-17T11:15:17.0422304Z /opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0423196Z     return _bootstrap._gcd_import(name[level:], package, level)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0423788Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0424355Z tests/integration/test_persistence.py:8: in <module>
+build-test-deploy	Run tests	2025-12-17T11:15:17.0425192Z     from hft_platform.recorder.wal import WALWriter
+build-test-deploy	Run tests	2025-12-17T11:15:17.0425818Z E   ModuleNotFoundError: No module named 'hft_platform'
+build-test-deploy	Run tests	2025-12-17T11:15:17.0426542Z __________ ERROR collecting tests/integration/test_risk_and_safety.py __________
+build-test-deploy	Run tests	2025-12-17T11:15:17.0427631Z ImportError while importing test module '/home/runner/work/subhft/subhft/tests/integration/test_risk_and_safety.py'.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0428659Z Hint: make sure your test modules/packages have valid Python names.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0429613Z Traceback:
+build-test-deploy	Run tests	2025-12-17T11:15:17.0430312Z /opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0431198Z     return _bootstrap._gcd_import(name[level:], package, level)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0431786Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0432384Z tests/integration/test_risk_and_safety.py:5: in <module>
+build-test-deploy	Run tests	2025-12-17T11:15:17.0433051Z     from hft_platform.main import HFTSystem
+build-test-deploy	Run tests	2025-12-17T11:15:17.0433665Z E   ModuleNotFoundError: No module named 'hft_platform'
+build-test-deploy	Run tests	2025-12-17T11:15:17.0434404Z __________ ERROR collecting tests/integration/test_strategy_logic.py ___________
+build-test-deploy	Run tests	2025-12-17T11:15:17.0435624Z ImportError while importing test module '/home/runner/work/subhft/subhft/tests/integration/test_strategy_logic.py'.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0436644Z Hint: make sure your test modules/packages have valid Python names.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0437251Z Traceback:
+build-test-deploy	Run tests	2025-12-17T11:15:17.0437934Z /opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0438817Z     return _bootstrap._gcd_import(name[level:], package, level)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0439408Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0439982Z tests/integration/test_strategy_logic.py:5: in <module>
+build-test-deploy	Run tests	2025-12-17T11:15:17.0440634Z     from hft_platform.strategy.runner import StrategyRunner
+build-test-deploy	Run tests	2025-12-17T11:15:17.0441278Z E   ModuleNotFoundError: No module named 'hft_platform'
+build-test-deploy	Run tests	2025-12-17T11:15:17.0442236Z __________________ ERROR collecting tests/spec/test_replay.py __________________
+build-test-deploy	Run tests	2025-12-17T11:15:17.0443076Z .venv/lib/python3.11/site-packages/_pytest/python.py:507: in importtestmodule
+build-test-deploy	Run tests	2025-12-17T11:15:17.0443739Z     mod = import_path(
+build-test-deploy	Run tests	2025-12-17T11:15:17.0444327Z .venv/lib/python3.11/site-packages/_pytest/pathlib.py:587: in import_path
+build-test-deploy	Run tests	2025-12-17T11:15:17.0445197Z     importlib.import_module(module_name)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0446023Z /opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0446919Z     return _bootstrap._gcd_import(name[level:], package, level)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0447520Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0448079Z <frozen importlib._bootstrap>:1204: in _gcd_import
+build-test-deploy	Run tests	2025-12-17T11:15:17.0448594Z     ???
+build-test-deploy	Run tests	2025-12-17T11:15:17.0449033Z <frozen importlib._bootstrap>:1176: in _find_and_load
+build-test-deploy	Run tests	2025-12-17T11:15:17.0449546Z     ???
+build-test-deploy	Run tests	2025-12-17T11:15:17.0450020Z <frozen importlib._bootstrap>:1147: in _find_and_load_unlocked
+build-test-deploy	Run tests	2025-12-17T11:15:17.0450581Z     ???
+build-test-deploy	Run tests	2025-12-17T11:15:17.0451138Z <frozen importlib._bootstrap>:690: in _load_unlocked
+build-test-deploy	Run tests	2025-12-17T11:15:17.0451673Z     ???
+build-test-deploy	Run tests	2025-12-17T11:15:17.0452249Z .venv/lib/python3.11/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0452967Z     exec(co, module.__dict__)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0453440Z tests/spec/test_replay.py:6: in <module>
+build-test-deploy	Run tests	2025-12-17T11:15:17.0454032Z     from hft_platform.backtest.runner import BacktestRunner
+build-test-deploy	Run tests	2025-12-17T11:15:17.0454859Z E     File "/home/runner/work/subhft/subhft/src/hft_platform/backtest/runner.py", line 13
+build-test-deploy	Run tests	2025-12-17T11:15:17.0455803Z E       from dataclasses import dataclass, field
+build-test-deploy	Run tests	2025-12-17T11:15:17.0456327Z E       ^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0456921Z E   IndentationError: expected an indented block after class definition on line 12
+build-test-deploy	Run tests	2025-12-17T11:15:17.0457753Z _____________________ ERROR collecting tests/test_core.py ______________________
+build-test-deploy	Run tests	2025-12-17T11:15:17.0458667Z ImportError while importing test module '/home/runner/work/subhft/subhft/tests/test_core.py'.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0459561Z Hint: make sure your test modules/packages have valid Python names.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0460152Z Traceback:
+build-test-deploy	Run tests	2025-12-17T11:15:17.0460839Z /opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0461742Z     return _bootstrap._gcd_import(name[level:], package, level)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0462585Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0463099Z tests/test_core.py:2: in <module>
+build-test-deploy	Run tests	2025-12-17T11:15:17.0463616Z     from hft_platform.rust_core import EventBus
+build-test-deploy	Run tests	2025-12-17T11:15:17.0464271Z E   ModuleNotFoundError: No module named 'hft_platform.rust_core'
+build-test-deploy	Run tests	2025-12-17T11:15:17.0465275Z _________________ ERROR collecting tests/test_strategy_sdk.py __________________
+build-test-deploy	Run tests	2025-12-17T11:15:17.0466243Z ImportError while importing test module '/home/runner/work/subhft/subhft/tests/test_strategy_sdk.py'.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0467186Z Hint: make sure your test modules/packages have valid Python names.
+build-test-deploy	Run tests	2025-12-17T11:15:17.0467787Z Traceback:
+build-test-deploy	Run tests	2025-12-17T11:15:17.0468477Z /opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+build-test-deploy	Run tests	2025-12-17T11:15:17.0469373Z     return _bootstrap._gcd_import(name[level:], package, level)
+build-test-deploy	Run tests	2025-12-17T11:15:17.0469973Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+build-test-deploy	Run tests	2025-12-17T11:15:17.0470518Z tests/test_strategy_sdk.py:6: in <module>
+build-test-deploy	Run tests	2025-12-17T11:15:17.0471163Z     from hft_platform.strategies.simple_strategy import SimpleStrategy
+build-test-deploy	Run tests	2025-12-17T11:15:17.0472011Z E   ModuleNotFoundError: No module named 'hft_platform.strategies.simple_strategy'
+build-test-deploy	Run tests	2025-12-17T11:15:17.0472775Z =============================== warnings summary ===============================
+build-test-deploy	Run tests	2025-12-17T11:15:17.0473447Z .venv/lib/python3.11/site-packages/shioaji/contracts.py:343
+build-test-deploy	Run tests	2025-12-17T11:15:17.0475655Z   /home/runner/work/subhft/subhft/.venv/lib/python3.11/site-packages/shioaji/contracts.py:343: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+build-test-deploy	Run tests	2025-12-17T11:15:17.0477886Z     class Contracts(BaseModel, BaseIterContracts):
+build-test-deploy	Run tests	2025-12-17T11:15:17.0478258Z 
+build-test-deploy	Run tests	2025-12-17T11:15:17.0478599Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+build-test-deploy	Run tests	2025-12-17T11:15:17.0479335Z =========================== short test summary info ============================
+build-test-deploy	Run tests	2025-12-17T11:15:17.0479919Z ERROR tests/benchmark/latency_test.py
+build-test-deploy	Run tests	2025-12-17T11:15:17.0480441Z ERROR tests/integration/test_full_cycle.py
+build-test-deploy	Run tests	2025-12-17T11:15:17.0480996Z ERROR tests/integration/test_persistence.py
+build-test-deploy	Run tests	2025-12-17T11:15:17.0481558Z ERROR tests/integration/test_risk_and_safety.py
+build-test-deploy	Run tests	2025-12-17T11:15:17.0482142Z ERROR tests/integration/test_strategy_logic.py
+build-test-deploy	Run tests	2025-12-17T11:15:17.0482682Z ERROR tests/spec/test_replay.py
+build-test-deploy	Run tests	2025-12-17T11:15:17.0483159Z ERROR tests/test_core.py
+build-test-deploy	Run tests	2025-12-17T11:15:17.0483601Z ERROR tests/test_strategy_sdk.py
+build-test-deploy	Run tests	2025-12-17T11:15:17.0484173Z !!!!!!!!!!!!!!!!!!! Interrupted: 8 errors during collection !!!!!!!!!!!!!!!!!!!!
+build-test-deploy	Run tests	2025-12-17T11:15:17.0484788Z 1 warning, 8 errors in 1.45s
+build-test-deploy	Run tests	2025-12-17T11:15:17.1959265Z ##[error]Process completed with exit code 2.
+build-test-deploy	Post Checkout code	﻿2025-12-17T11:15:17.2072104Z Post job cleanup.
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3011205Z [command]/usr/bin/git version
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3047984Z git version 2.52.0
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3091911Z Temporarily overriding HOME='/home/runner/work/_temp/63596466-49c4-4f6d-a601-f42553aed711' before making global git config changes
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3093169Z Adding repository directory to the temporary git global config as a safe directory
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3105554Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/subhft/subhft
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3139975Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3172242Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3404251Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3425457Z http.https://github.com/.extraheader
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3438383Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3469546Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3691696Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+build-test-deploy	Post Checkout code	2025-12-17T11:15:17.3721817Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+build-test-deploy	Complete job	﻿2025-12-17T11:15:17.4047856Z Cleaning up orphan processes

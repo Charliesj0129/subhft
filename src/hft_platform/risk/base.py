@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+
 class RiskManager(ABC):
     @abstractmethod
     def check_order(self, order: Any) -> bool:
@@ -11,6 +12,7 @@ class RiskManager(ABC):
     def on_fill(self, fill: Any):
         """Update risk state on fill."""
         pass
+
 
 class StormGuard:
     def __init__(self):

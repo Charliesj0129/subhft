@@ -1,7 +1,9 @@
 
-# Deploying HFT Platform to Azure (Student Optimized)
+# Deploying HFT Platform to Azure (HFT Optimized)
 
-This guide walks you through deploying the HFT Platform to an **Azure Virtual Machine** using Docker, with a focus on **Cost Optimization** for students (Budget: <$15/mo).
+本指南包含兩條路徑：
+1. **學生/研究版**（成本優先）。
+2. **HFT 低延遲版**（延遲/抖動優先，符合行動清單要求）。
 
 ## Prerequisites
 
@@ -10,10 +12,11 @@ This guide walks you through deploying the HFT Platform to an **Azure Virtual Ma
 
 ## Step 1: Create Resource Group & VM
 
-**Region Strategy**: We use **Japan East** or **East Asia (Hong Kong)** for low latency to Taiwan.
-**VM Strategy**:
-*   **Recording/Research**: `Standard_B2s` (2 vCPU, 4GB RAM) - ~$30/mo (before shutdown savings).
-*   **Live Trading**: `Standard_F4s_v2` (Compute Optimized) - ~$170/mo.
+**區域**：日本東 / 東亞（香港）。
+
+### 1A) 學生/研究版（成本優先）
+* VM：`Standard_B2s`。
+* 磁碟：OS 30GB + Standard SSD。
 
 ```bash
 # 1. Login
@@ -22,8 +25,7 @@ az login
 # 2. Create Resource Group in Japan East
 az group create --name hft-rg --location japaneast
 
-# 3. Create VM (Student Budget Choice: B2s)
-# Uses Standard SSD (LRS) to save cost vs Premium SSD
+# 3. Create VM (B2s)
 az vm create \
   --resource-group hft-rg \
   --name hft-vm \
@@ -33,6 +35,31 @@ az vm create \
   --generate-ssh-keys \
   --public-ip-sku Standard \
   --storage-sku Standard_LRS
+```
+
+### 1B) HFT 低延遲版（延遲/抖動優先）
+* VM：`F4s_v2` 做資料收集/回測；盤中建議 `Epngsv3/Dp_v5/Hp/Dpds_v5/LSv3` 視區域供應，務必支援 **Accelerated Networking**。
+* PPG：若有多台（行情/交易/DB）請加入 **Proximity Placement Group**。
+* NIC：開 **Accelerated Networking**、併後續調 **multiqueue + RSS/RPS**。
+* 磁碟：OS >=64GB，資料碟 Premium/Ultra SSD 掛 `/mnt/data`，ClickHouse/WAL 只放資料碟。
+
+```bash
+# Create PPG (可選)
+az ppg create -g hft-rg -n hft-ppg --type Standard
+
+# Create VM with Accelerated Networking + larger data disk
+az vm create \
+  --resource-group hft-rg \
+  --name hft-lowlat-vm \
+  --image Ubuntu2204 \
+  --size Standard_F4s_v2 \
+  --accelerated-networking true \
+  --admin-username hftadmin \
+  --generate-ssh-keys \
+  --public-ip-sku Standard \
+  --storage-sku Premium_LRS \
+  --data-disk-sizes-gb 256 \
+  --ppg hft-ppg
 ```
 
 ## Step 2: Configure Cost Control (Auto-Shutdown) CRITICAL! 💰
@@ -94,26 +121,37 @@ sudo usermod -aG docker $USER
 newgrp docker
 ```
 
+### 4B) 低延遲主機調優
+```bash
+# CPU governor / irqbalance / sysctl
+cd ~/hft_platform
+sudo bash ops/host_tuning.sh
+
+# 確認資料碟掛載 (範例)
+sudo mkdir -p /mnt/data
+sudo mount /dev/disk/azure/scsi1/lun0 /mnt/data
+sudo chown $USER:$USER /mnt/data
+```
+
 ## Step 5: Deploy the Platform
 
 Clone your code and start the stack.
 
 ```bash
-# 1. Clone (or simple copy if private)
+# 1. Clone
 git clone https://github.com/your-user/hft_platform.git
-cd hft_platform/deployment
+cd hft_platform
 
-# 2. Create Env File
-cat <<EOF > .env.prod
-SHIOAJI_PERSON_ID=YOUR_ID
-SHIOAJI_PASSWORD=YOUR_PASS
-HFT_MODE=live
-CLICKHOUSE_HOST=clickhouse
-EOF
+# 2. (建議) 用 GHCR 映像 + host 網路 + 資料碟
+# HFT_LOW_LATENCY=1 會載入 docker-compose.lowlatency.yml (host network/cpuset/oom_score_adj)
+# HFT_CH_DATA_ROOT 讓 ClickHouse/WAL 固定在 /mnt/data
+HFT_LOW_LATENCY=1 HFT_CH_DATA_ROOT=/mnt/data/clickhouse ./ops/setup_vm.sh
 
-# 3. Start Stack
-docker compose up -d --build
+# 3. 若需自建資料檢查/回放
+docker compose -f docker-compose.lowlatency.yml up -d
 ```
+
+> GHCR 部署（CI/CD）：`.github/workflows/deploy-ghcr.yml` 會 Build & Push GHCR，SSH 到 VM 後 `docker compose pull && up`（使用 lowlatency/chdata overrides），避免 pip + nohup 模式。
 
 ## Step 6: Verification
 

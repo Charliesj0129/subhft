@@ -1,8 +1,8 @@
 import json
-import numpy as np
 from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Any
+
+import numpy as np
+
 
 class HTMLReporter:
     def __init__(self, output_path: str):
@@ -17,30 +17,30 @@ class HTMLReporter:
         # For HFT, we might check minute-by-minute
         returns = np.diff(equity_v) / equity_v[:-1]
         returns = np.nan_to_num(returns)
-        
+
         total_ret = (equity_v[-1] - equity_v[0]) / equity_v[0] if len(equity_v) > 0 else 0
-        
+
         # Sharpe (simplified, annualized assuming 1 sec samples * 252*6.5*3600? No, this is raw)
         sharpe = np.mean(returns) / np.std(returns) * np.sqrt(len(returns)) if np.std(returns) > 0 else 0
-        
+
         # Drawdown
         peak = np.maximum.accumulate(equity_v)
         dd = (equity_v - peak) / peak
         max_dd = np.min(dd)
-        
+
         self.metrics = {
-            "Total Return": f"{total_ret*100:.2f}%",
+            "Total Return": f"{total_ret * 100:.2f}%",
             "Sharpe Ratio": f"{sharpe:.2f}",
-            "Max Drawdown": f"{max_dd*100:.2f}%",
+            "Max Drawdown": f"{max_dd * 100:.2f}%",
             "Final Equity": f"{equity_v[-1]:.2f}",
-            "Total Trades": len(self.trades)
+            "Total Trades": len(self.trades),
         }
-        
+
         # Downsample for charting if too big (> 2000 points)
         step = max(1, len(equity_t) // 2000)
         self.equity_curve = {
-            "time": [str(datetime.fromtimestamp(t/1e9)) for t in equity_t[::step]],
-            "value": equity_v[::step].tolist()
+            "time": [str(datetime.fromtimestamp(t / 1e9)) for t in equity_t[::step]],
+            "value": equity_v[::step].tolist(),
         }
 
     def generate(self):
@@ -63,7 +63,7 @@ class HTMLReporter:
             <div class="container">
                 <h1>Strategy Performance Report 🚀</h1>
                 <div class="metrics">
-                    {''.join([f'<div class="metric-card"><div class="metric-val">{v}</div><div class="metric-label">{k}</div></div>' for k,v in self.metrics.items()])}
+                    {"".join([f'<div class="metric-card"><div class="metric-val">{v}</div><div class="metric-label">{k}</div></div>' for k, v in self.metrics.items()])}
                 </div>
                 <canvas id="equityChart"></canvas>
             </div>
@@ -72,10 +72,10 @@ class HTMLReporter:
                 new Chart(ctx, {{
                     type: 'line',
                     data: {{
-                        labels: {json.dumps(self.equity_curve['time'])},
+                        labels: {json.dumps(self.equity_curve["time"])},
                         datasets: [{{
                             label: 'Equity Curve',
-                            data: {json.dumps(self.equity_curve['value'])},
+                            data: {json.dumps(self.equity_curve["value"])},
                             borderColor: '#1a73e8',
                             backgroundColor: 'rgba(26, 115, 232, 0.1)',
                             fill: true,
@@ -93,8 +93,7 @@ class HTMLReporter:
         </body>
         </html>
         """
-        
+
         with open(self.output_path, "w") as f:
             f.write(template)
         print(f"Report generated: {self.output_path}")
-

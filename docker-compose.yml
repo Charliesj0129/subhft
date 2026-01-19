@@ -1,34 +1,54 @@
 services:
-  hft-engine:
+  hft-base:
     build: .
-    image: hft-platform:latest
-    container_name: hft-engine
+    image: ${HFT_IMAGE:-hft-platform:latest}
+    # container_name: hft-base  # Abstract base, no container name needed if not run directly?
     restart: always
     environment:
+      - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
+      - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
       - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
       - SHIOAJI_PASSWORD=${SHIOAJI_PASSWORD}
       - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT}
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
+      - HFT_CLICKHOUSE_PASSWORD=
+      - HFT_CLICKHOUSE_ENABLED=1
+      - HFT_CLICKHOUSE_HOST=clickhouse
+      - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
+      - PYTHONDONTWRITEBYTECODE=1
     volumes:
       - ./.wal:/app/.wal
       - ./data:/app/data
       - ./config:/app/config
-    ports:
-      - "9090:9090" # Prometheus Metrics
+      - ./scripts:/app/scripts
+      - ./src:/app/src
     deploy:
       resources:
         limits:
-          cpus: '2.00'
-          memory: 2G
+          cpus: '0.50'
+          memory: 1500M
     healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://localhost:9090/ || exit 1" ]
+      test:
+        - "CMD-SHELL"
+        - python -c "import psutil,sys;sys.exit(0 if any((p.info.get('cmdline') and 'hft_platform.main' in ' '.join(p.info['cmdline'])) for p in psutil.process_iter(['cmdline'])) else 1)"
       interval: 30s
       timeout: 10s
       retries: 3
 
+  hft-engine:
+    extends:
+      service: hft-base
+    container_name: hft-engine
+    ports:
+      - "9090:9090"
+
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: clickhouse
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -41,6 +61,7 @@ services:
 
   wal-loader:
     build: .
+    image: ${HFT_WAL_IMAGE:-hft_platform-wal-loader:latest}
     container_name: wal-loader
     command: [ "python", "-m", "hft_platform.recorder.loader" ]
     environment:

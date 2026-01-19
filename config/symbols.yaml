@@ -1,0 +1,9 @@
+symbols:
+  - code: "2330"
+    name: "TSMC"
+    exchange: "TSE"
+    tick_size: 1.0
+  - code: "2317"
+    name: "Foxconn"
+    exchange: "TSE"
+    tick_size: 0.5

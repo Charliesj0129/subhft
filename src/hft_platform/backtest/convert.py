@@ -7,13 +7,13 @@ from structlog import get_logger
 
 try:
     from hftbacktest.types import (
-        event_dtype,
-        DEPTH_EVENT,
-        TRADE_EVENT,
         BUY_EVENT,
-        SELL_EVENT,
+        DEPTH_EVENT,
         EXCH_EVENT,
         LOCAL_EVENT,
+        SELL_EVENT,
+        TRADE_EVENT,
+        event_dtype,
     )
 except ImportError as exc:  # pragma: no cover - env guard
     event_dtype = None

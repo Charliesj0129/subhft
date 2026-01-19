@@ -1,8 +1,8 @@
 import importlib
-import yaml
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import yaml
 from structlog import get_logger
 
 logger = get_logger("strategy.registry")
@@ -17,7 +17,7 @@ class StrategyConfig:
     budget_us: int = 200
     symbols: Optional[List[str]] = None
     product_type: str = "STOCK"
-    params: Dict[str, Any] = None
+    params: Dict[str, Any] = field(default_factory=dict)
 
 
 class StrategyRegistry:

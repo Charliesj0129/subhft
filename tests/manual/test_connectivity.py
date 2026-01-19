@@ -1,7 +1,8 @@
 import os
-import time
 import sys
+import time
 from pathlib import Path
+
 
 # Manual .env loader
 def load_env():
@@ -9,7 +10,7 @@ def load_env():
     if not env_path.exists():
         print("❌ .env file not found!")
         return False
-    
+
     print("✅ .env found. Loading credentials...")
     with open(env_path, "r") as f:
         for line in f:
@@ -21,6 +22,7 @@ def load_env():
                 os.environ[k.strip()] = v.strip().strip('"').strip("'")
     return True
 
+
 # Add src to path
 sys.path.append(str(Path.cwd() / "src"))
 
@@ -30,21 +32,22 @@ except ImportError:
     print("❌ Shioaji not installed!")
     sys.exit(1)
 
+
 def run_connectivity_test():
     print("🚀 Starting Shioaji Connectivity Test...")
-    
+
     if not load_env():
         return
 
     pid = os.getenv("SHIOAJI_PERSON_ID")
     pwd = os.getenv("SHIOAJI_PASSWORD")
-    
+
     if not pid or not pwd:
         print("❌ Missing SHIOAJI_PERSON_ID or SHIOAJI_PASSWORD in .env")
         return
 
     api = sj.Shioaji()
-    
+
     print(f"🔑 Logging in as {pid[:3]}***...")
     try:
         api.login(pid, pwd)
@@ -67,11 +70,11 @@ def run_connectivity_test():
         return
 
     print("📡 Subscribing to Ticks & BidAsk...")
-    
+
     # Counter
     tick_count = 0
     bidask_count = 0
-    
+
     def on_tick(exchange, tick):
         nonlocal tick_count
         tick_count += 1
@@ -84,18 +87,18 @@ def run_connectivity_test():
 
     api.quote.set_on_tick_stk_v1_callback(on_tick)
     api.quote.set_on_bidask_stk_v1_callback(on_bidask)
-    
+
     api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick)
     api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
-    
+
     print("⏳ Waiting for data (10s)...")
     time.sleep(10)
-    
+
     print("-" * 30)
-    print(f"📊 Results:")
+    print("📊 Results:")
     print(f"   Ticks received: {tick_count}")
     print(f"   BidAsks received: {bidask_count}")
-    
+
     if tick_count > 0 or bidask_count > 0:
         print("✅ connectivity_verified: TRUE")
     else:
@@ -104,6 +107,7 @@ def run_connectivity_test():
 
     api.logout()
     print("👋 Logged out.")
+
 
 if __name__ == "__main__":
     run_connectivity_test()
