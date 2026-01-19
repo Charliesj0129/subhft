@@ -64,5 +64,5 @@ graph LR
 
 ## 4. Key Configurations
 *   `config/symbols.yaml`: Universe definition.
-*   `config/strategies.yaml`: Strategy parameterization.
+*   `config/base/strategies.yaml`: Strategy defaults (use `config/strategies.yaml` for local overrides).
 *   `metrics.py`: Prometheus instrumentation.

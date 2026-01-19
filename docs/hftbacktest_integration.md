@@ -28,8 +28,8 @@ def convert_wal_to_npz(wal_path, output_path):
 
 ### A. Hybrid Strategy Class
 Extend `BaseStrategy` to verify if a JIT-compiled kernel exists.
-*   **Python Path** (Live/Research): Uses `on_lob(dict)`.
-*   **Numba Path** (Backtest): Uses `on_lob_numba(float array)`.
+*   **Python Path** (Live/Research): Uses `on_book_update(BidAskEvent)`.
+*   **Numba Path** (Backtest): Uses `on_book_update_numba(float array)`.
 *   **Integration**: The Adapter detects `@jit` methods and passes raw NumPy views from `hftbacktest`'s internal HashMap, skipping Dict creation.
 
 ```python

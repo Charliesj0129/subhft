@@ -27,4 +27,4 @@ For the specific request of "How fast can we go with Shioaji API?":
 
 ## Recommendations
 1. **For Production**: The current Python stack is sufficient for strategies with holding periods > 1 second.
-2. **For HFT (< 10ms)**: Migrating the `on_book` logic to Rust/C++ (via the proposed `hftbacktest` integration or Cython) would reduce internal latency from 300µs -> 5µs.
+2. **For HFT (< 10ms)**: Migrating the `on_book_update` logic to Rust/C++ (via the proposed `hftbacktest` integration or Cython) would reduce internal latency from 300µs -> 5µs.

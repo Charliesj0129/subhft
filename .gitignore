@@ -17,6 +17,10 @@ env/
 data/
 logs/
 .pytest_cache/
+.mypy_cache/
+.hypothesis/
+.ruff_cache/
+.benchmarks/
 .coverage
 htmlcov/
 
@@ -36,6 +40,11 @@ deployment/.env.*
 reports/
 ops/docker/.env
 *.log
+coverage_output.txt
+coverage_report.txt
+full_coverage.txt
+profile.txt
+target/
 notebooks/.ipynb_checkpoints
 .gemini/
 .antigravity/
