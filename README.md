@@ -76,3 +76,9 @@ make coverage
 ```
 **Current Baseline**: ~71%
 **Target**: 95%
+
+## 📚 Docs
+*   `docs/quickstart.md` — 快速上手
+*   `docs/feature_guide.md` — 功能手冊（各模組詳解）
+*   `docs/deployment_guide.md` — 部署指南
+*   `docs/ARCHITECTURE.md` — 系統架構
