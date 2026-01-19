@@ -86,3 +86,4 @@ make coverage
 *   `docs/troubleshooting.md` — 常見問題排查
 *   `docs/deployment_guide.md` — 部署指南
 *   `docs/ARCHITECTURE.md` — 系統架構
+*   `docs/modules/README.md` — 模組索引（每個模組詳細說明）
