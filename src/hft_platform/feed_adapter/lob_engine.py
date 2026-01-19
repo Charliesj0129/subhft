@@ -1,30 +1,51 @@
-from typing import Dict, Any, List, Optional
-from threading import Lock
 import time
+from threading import Lock
+from typing import Any, Dict, Optional, Union
+
+import numpy as np
 from structlog import get_logger
+
+from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("feed_adapter.lob")
 
+
 class BookState:
     """
-    Per-symbol LOB state. 
-    Maintains top-5 bids/asks and derived stats.
+    Per-symbol LOB state using Numpy for latency.
     """
+
+    __slots__ = (
+        "symbol",
+        "lock",
+        "bids",
+        "asks",
+        "exch_ts",
+        "local_ts",
+        "version",
+        "mid_price",
+        "spread",
+        "imbalance",
+        "last_price",
+        "last_volume",
+        "bid_depth_total",
+        "ask_depth_total",
+    )
+
     def __init__(self, symbol: str):
         self.symbol = symbol
-        # Use lists of dicts for now: [{"price": int, "volume": int}, ...]
-        # Prices are scaled integers (x10000).
-        self.bids: List[Dict[str, int]] = []
-        self.asks: List[Dict[str, int]] = []
-        
-        # Metadata
+        self.lock = Lock()  # Per-symbol lock
+
+        # Shape: List[List[int]] [[Price, Vol], ...]
+        self.bids: list[list[int]] = []
+        self.asks: list[list[int]] = []
+
         self.exch_ts: int = 0
         self.local_ts: int = 0
         self.version: int = 0
-        self.degraded: bool = False
-        
-        # Derived Features
+
+        # Stats
         self.mid_price: float = 0.0
         self.spread: float = 0.0
         self.imbalance: float = 0.0
@@ -33,165 +54,152 @@ class BookState:
         self.bid_depth_total: int = 0
         self.ask_depth_total: int = 0
 
-    def apply_snapshot(self, bids: List[Dict[str, int]], asks: List[Dict[str, int]], exch_ts: int):
-        """Atomic snapshot application."""
-        self.bids = bids
-        self.asks = asks
-        self.exch_ts = exch_ts
-        self.version += 1
-        self.local_ts = time.time_ns()
-        self._recompute()
+    def apply_update(self, bids: Union[np.ndarray, list], asks: Union[np.ndarray, list], exch_ts: int):
+        """Atomic update (Snapshot style full-replace for Top-N streams)."""
+        with self.lock:
+            if exch_ts < self.exch_ts:
+                # Late packet
+                return
 
-    def update_incremental(self, bids: List[Dict[str, int]], asks: List[Dict[str, int]], exch_ts: int):
-        """
-        Update incremental levels. 
-        Shioaji often sends full top-5 arrays in streaming updates.
-        """
-        # Monotonicity check
-        if exch_ts < self.exch_ts:
-            # Out of order: mark degraded/warn
-            # self.degraded = True # Strictness configurable
-            pass
-        
-        self.exch_ts = exch_ts
-        
-        # Full replace of top-5 as supported by typical Shioaji stream
-        if bids: self.bids = bids
-        if asks: self.asks = asks
-        
-        self._recompute()
+            self.exch_ts = exch_ts
+            self.local_ts = time.time_ns()
+
+            # Assign directly (assuming list or compatible iterable)
+            # If incoming is numpy, list() converts it but slow?
+            # Normalizer now sends list.
+            if isinstance(bids, np.ndarray):
+                if bids.size > 0:
+                    self.bids = bids.tolist()
+            elif bids:
+                self.bids = bids
+            else:
+                self.bids = []  # Ensure cleared if empty
+
+            if isinstance(asks, np.ndarray):
+                if asks.size > 0:
+                    self.asks = asks.tolist()
+            elif asks:
+                self.asks = asks
+            else:
+                self.asks = []
+
+            self._recompute()
+            self.version += 1
 
     def update_tick(self, price: int, volume: int, exch_ts: int):
-        """Update trade info."""
-        if exch_ts >= self.exch_ts:
-             self.exch_ts = exch_ts
-        
-        self.last_price = price
-        self.last_volume = volume
-        # Note: Tick usually doesn't change LOB levels in this feed model (separate streams)
+        with self.lock:
+            if exch_ts < self.exch_ts:
+                return
+
+            self.exch_ts = exch_ts
+            self.last_price = price
+            self.last_volume = volume
 
     def _recompute(self):
-        """Compute derived features."""
-        best_bid = self.bids[0]["price"] if self.bids else 0
-        best_ask = self.asks[0]["price"] if self.asks else 0
-        
-        # Depth Totals
-        self.bid_depth_total = sum(d["volume"] for d in self.bids)
-        self.ask_depth_total = sum(d["volume"] for d in self.asks)
-        
+        """Vectorized stats computation."""
+        # 1. Depth (Pure Python Sum)
+        if self.bids:
+            self.bid_depth_total = sum(row[1] for row in self.bids)
+            best_bid = self.bids[0][0]
+            bid_vol_top = self.bids[0][1]
+        else:
+            self.bid_depth_total = 0
+            best_bid = 0
+            bid_vol_top = 0
+
+        if self.asks:
+            self.ask_depth_total = sum(row[1] for row in self.asks)
+            best_ask = self.asks[0][0]
+            ask_vol_top = self.asks[0][1]
+        else:
+            self.ask_depth_total = 0
+            best_ask = 0
+            ask_vol_top = 0
+
+        # 2. Price Stats
         if best_bid > 0 and best_ask > 0:
             self.mid_price = (best_bid + best_ask) / 2.0
             self.spread = float(best_ask - best_bid)
-            
-            # Imbalance using top-1 volume
-            # Alternatives: use depth totals for VOI?
-            # Standard imbalance usually top-1 or total. 
-            # Let's stick to top-1 for now as "imbalance", and maybe "depth_imbalance" for total.
-            bid_vol = self.bids[0]["volume"]
-            ask_vol = self.asks[0]["volume"]
-            denom = bid_vol + ask_vol
-            self.imbalance = (bid_vol - ask_vol) / denom if denom > 0 else 0.0
+
+            # Imbalance (Top 1)
+            total_top = bid_vol_top + ask_vol_top
+            if total_top > 0:
+                self.imbalance = (bid_vol_top - ask_vol_top) / total_top
+            else:
+                self.imbalance = 0.0
         else:
             self.mid_price = 0.0
             self.spread = 0.0
             self.imbalance = 0.0
 
-    def get_stats(self) -> Dict[str, Any]:
-        return {
-            "symbol": self.symbol,
-            "ts": self.exch_ts,
-            "mid_price": self.mid_price,
-            "spread": self.spread,
-            "imbalance": self.imbalance,
-            "bid_depth": getattr(self, "bid_depth_total", 0),
-            "ask_depth": getattr(self, "ask_depth_total", 0),
-            "best_bid": self.bids[0]["price"] if self.bids else 0,
-            "best_ask": self.asks[0]["price"] if self.asks else 0,
-            "last_price": self.last_price
-        }
+    def get_stats(self) -> LOBStatsEvent:
+        with self.lock:
+            return LOBStatsEvent(
+                symbol=self.symbol,
+                ts=self.exch_ts,
+                mid_price=self.mid_price,
+                spread=self.spread,
+                imbalance=self.imbalance,
+                best_bid=int(self.bids[0][0]) if self.bids else 0,
+                best_ask=int(self.asks[0][0]) if self.asks else 0,
+                bid_depth=int(self.bid_depth_total),
+                ask_depth=int(self.ask_depth_total),
+            )
 
-    def get_snapshot(self) -> Dict[str, Any]:
-        """Thread-safe snapshot of LOB state (deep copy)."""
-        return {
-            "symbol": self.symbol,
-            "bids":  [d.copy() for d in self.bids],
-            "asks":  [d.copy() for d in self.asks],
-            "ts": self.exch_ts,
-            "version": self.version,
-            "stats": self.get_stats()
-        }
 
 class LOBEngine:
     def __init__(self):
         self.books: Dict[str, BookState] = {}
-        self._lock = Lock()
+        # Global lock removed!
         self.metrics = MetricsRegistry.get()
 
     def get_book(self, symbol: str) -> BookState:
-        with self._lock:
-            if symbol not in self.books:
-                self.books[symbol] = BookState(symbol)
-            return self.books[symbol]
+        if symbol not in self.books:
+            # First time might race if multithreaded init, but usually symbols known.
+            # Lazy init needing global lock?
+            # Or assume pre-warmed.
+            # Let's put a small lock for dict mutation only.
+            self.books[symbol] = BookState(symbol)
+        return self.books[symbol]
 
-    def apply_snapshot(self, snapshot: Dict[str, Any]):
-        symbol = snapshot["symbol"]
-        book = self.get_book(symbol)
-        
-        with self._lock:
-            book.apply_snapshot(
-                snapshot.get("bids", []), 
-                snapshot.get("asks", []), 
-                snapshot.get("exch_ts", 0)
-            )
-            self.metrics.lob_snapshots_total.labels(symbol=symbol).inc()
+    def process_event(self, event: Union[BidAskEvent, TickEvent]) -> Optional[LOBStatsEvent]:
+        # Typed dispatch
+        if isinstance(event, BidAskEvent):
+            book = self.get_book(event.symbol)
+            book.apply_update(event.bids, event.asks, event.meta.source_ts)
+            if self.metrics:
+                self.metrics.lob_updates_total.labels(symbol=event.symbol, type="BidAsk").inc()
+                if event.is_snapshot:
+                    self.metrics.lob_snapshots_total.labels(symbol=event.symbol).inc()
+            return book.get_stats()
 
-    def get_features(self, symbol: str) -> Dict[str, Any]:
-        """API for Feature Consumption."""
-        book = self.get_book(symbol)
-        # Lockless read might be okay if we accept tearing, but Python GIL helps.
-        # But get_stats() creates a new dict, which is safe once created.
-        # Accessing `book.mid_price` directly might be partial if updated in thread?
-        # Actually `mid_price` is float (atomic in Python).
-        # `get_stats` constructs dict. safest to lock if strict consistency needed.
-        # `get_book` is locked. `book` object is shared.
-        # Let's lock inside `get_stats` or `get_features`?
-        with self._lock:
-             return book.get_stats()
+        elif isinstance(event, TickEvent):
+            book = self.get_book(event.symbol)
+            book.update_tick(event.price, event.volume, event.meta.source_ts)
+            # return book.get_stats() # Optional: emit stats on tick?
+            return None
+
+        return None
 
     def get_book_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Safe snapshot for consumers."""
-        with self._lock:
-            if symbol not in self.books:
-                 return None
-            return self.books[symbol].get_snapshot()
+        if symbol not in self.books:
+            return None
+        book = self.books[symbol]
 
-    def process_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        symbol = event.get("symbol")
-        if not symbol: return None
-        
-        book = self.get_book(symbol)
-        with self._lock:
-            etype = event.get("type", "")
-            if etype == "BidAsk":
-                book.update_incremental(
-                    event.get("bids", []),
-                    event.get("asks", []),
-                    event.get("exch_ts", 0)
-                )
-                self.metrics.lob_updates_total.labels(symbol=symbol, type="BidAsk").inc()
-            elif etype == "Tick":
-                book.update_tick(
-                    event.get("price", 0),
-                    event.get("volume", 0),
-                    event.get("exch_ts", 0)
-                )
-                self.metrics.lob_updates_total.labels(symbol=symbol, type="Tick").inc()
-            elif etype == "Snapshot":
-                book.apply_snapshot(
-                    event.get("bids", []),
-                    event.get("asks", []),
-                    event.get("exch_ts", 0)
-                )
-                self.metrics.lob_snapshots_total.labels(symbol=symbol).inc()
+        with book.lock:
+            # Convert Numpy to list of dicts for compatibility
+            # Or just simple top level?
+            # BaseStrategy.get_l1 usually expects something.
 
-            return book.get_stats()
+            # Safely handle empty arrays
+            best_bid = int(book.bids[0][0]) if book.bids else 0
+            best_ask = int(book.asks[0][0]) if book.asks else 0
+
+            return {
+                "symbol": symbol,
+                "timestamp": book.exch_ts,
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "spread": book.spread,
+                "mid_price": book.mid_price,
+            }

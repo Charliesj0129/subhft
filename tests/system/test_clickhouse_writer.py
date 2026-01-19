@@ -1,0 +1,60 @@
+import os
+import time
+
+import clickhouse_connect
+import pytest
+
+from hft_platform.recorder.writer import DataWriter
+
+
+def _wait_for_clickhouse(host: str, port: int, timeout_s: float = 20.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            client = clickhouse_connect.get_client(host=host, port=port)
+            client.command("SELECT 1")
+            return True
+        except Exception:
+            time.sleep(0.5)
+    return False
+
+
+@pytest.mark.system
+@pytest.mark.asyncio
+async def test_clickhouse_writer_roundtrip(tmp_path, monkeypatch):
+    host = os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
+    port = int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
+    if not _wait_for_clickhouse(host, port):
+        pytest.skip("ClickHouse not reachable")
+
+    monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "1")
+    monkeypatch.setenv("HFT_CLICKHOUSE_HOST", host)
+    monkeypatch.setenv("HFT_CLICKHOUSE_PORT", str(port))
+
+    writer = DataWriter(ch_host=host, ch_port=port, wal_dir=str(tmp_path))
+    writer.connect()
+
+    ingest_ts = int(time.time_ns())
+    row = {
+        "symbol": "CH_TEST",
+        "exchange": "TSE",
+        "type": "Tick",
+        "exch_ts": ingest_ts,
+        "ingest_ts": ingest_ts,
+        "price": 1.0,
+        "volume": 1.0,
+        "bids_price": [],
+        "bids_vol": [],
+        "asks_price": [],
+        "asks_vol": [],
+        "seq_no": 1,
+    }
+
+    await writer.write("hft.market_data", [row])
+
+    client = clickhouse_connect.get_client(host=host, port=port)
+    result = client.query(
+        "SELECT count() FROM hft.market_data WHERE symbol='CH_TEST' AND ingest_ts=%(ts)s",
+        parameters={"ts": ingest_ts},
+    )
+    assert result.result_rows[0][0] >= 1
