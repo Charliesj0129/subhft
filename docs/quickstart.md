@@ -17,7 +17,7 @@ uv sync --no-dev
 ## 2. Configuration
 Core configuration lives in `config/`.
 *   `symbols.yaml`: Define which instruments to trade/subscribe.
-*   `strategies.yaml`: Define active strategies and parameters.
+*   `config/base/strategies.yaml` (defaults) and `config/strategies.yaml` (local overrides): Active strategies and parameters.
 *   `strategy_limits.yaml`: Risk limits (Max Position, Max Order Size).
 
 **Example `symbols.yaml`**:
@@ -41,9 +41,13 @@ Check `logs/` for output.
 Backtest a strategy against historical (or mock) data.
 
 ```bash
-# Run backtest for 'AdvancedMarketMaker' (example)
-# Note: Ensure the strategy class is available in python path
-python -m hft_platform backtest run --strategy advanced_mm --symbol 2330 --date 2024-01-01
+# Run backtest with the strategy adapter (example)
+python -m hft_platform backtest run \
+  --data data/sample_feed.npz \
+  --strategy-module hft_platform.strategies.simple_mm \
+  --strategy-class SimpleMarketMaker \
+  --strategy-id demo \
+  --symbol 2330
 ```
 
 ## 5. Live Trading

@@ -7,10 +7,11 @@ WORKDIR /app
 RUN pip install uv
 
 # Copy dependency files
-COPY pyproject.toml uv.lock ./
+# Copy dependency files
+COPY pyproject.toml ./
 
-# Generate requirements.txt from uv.lock
-RUN uv export --format requirements-txt --no-hashes > requirements.txt
+# Generate requirements.txt from pyproject.toml (fresh resolve)
+RUN uv pip compile pyproject.toml -o requirements.txt
 
 # Runtime stage
 FROM python:3.12-slim-bookworm
@@ -20,8 +21,12 @@ WORKDIR /app
 # Create non-root user
 RUN groupadd -g 1000 hftuser && useradd -m -u 1000 -g hftuser hftuser
 
-# Install system dependencies (if any needed for Shioaji/contracts)
-# RUN apt-get update && apt-get install -y --no-install-recommends ...
+# Install system dependencies (including libfaketime for simulation date spoofing)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libfaketime \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy source code first (needed for -e . install)
 COPY pyproject.toml .

@@ -1,9 +1,13 @@
 symbols:
-  - code: "2330"
-    name: "TSMC"
-    exchange: "TSE"
+  - code: "TXF202501" # Assuming Front Month is Jan 2025 based on 'current' time Dec 2024?
+    name: "TXF Jan 2025"
+    exchange: "FUT"
     tick_size: 1.0
-  - code: "2317"
-    name: "Foxconn"
-    exchange: "TSE"
-    tick_size: 0.5
+  - code: "MXF202501"
+    name: "MXF Jan 2025"
+    exchange: "FUT"
+    tick_size: 1.0
+  - code: "TXF202412" # Or Dec 2024 if currently Dec
+    name: "TXF Dec 2024"
+    exchange: "FUT"
+    tick_size: 1.0
