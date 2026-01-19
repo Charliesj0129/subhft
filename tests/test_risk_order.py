@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import time
 
 import pytest
@@ -53,48 +54,42 @@ async def test_storm_guard_transition():
 
 
 @pytest.mark.asyncio
-async def test_risk_engine_pipeline():
+async def test_risk_engine_pipeline(tmp_path):
     i_q = asyncio.Queue()
     o_q = asyncio.Queue()
-    # Write temp config
-    import yaml
+    config_path = tmp_path / "test_limits.yaml"
+    config_path.write_text(yaml.safe_dump(MOCK_CONFIG))
 
-    with open("config/test_limits.yaml", "w") as f:
-        yaml.dump(MOCK_CONFIG, f)
-
-    engine = RiskEngine("config/test_limits.yaml", i_q, o_q)
+    engine = RiskEngine(str(config_path), i_q, o_q)
+    task = asyncio.create_task(engine.run())
 
     # Reject Case
     bad_intent = OrderIntent(3, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, -1, 1, timestamp_ns=0)
     await i_q.put(bad_intent)
-
-    # Run engine briefly
-    task = asyncio.create_task(engine.run())
-    await asyncio.sleep(0.1)
-
+    await asyncio.wait_for(i_q.join(), timeout=1.0)
     assert o_q.empty()  # Should be dropped/rejected
 
     # Approve Case
     good_intent = OrderIntent(4, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, 5000000, 1, timestamp_ns=0)
     # 5000000/10000 * 1 = 500 notional < 1000 limit
     await i_q.put(good_intent)
-    await asyncio.sleep(0.1)
-
-    cmd = await o_q.get()
+    cmd = await asyncio.wait_for(o_q.get(), timeout=1.0)
     assert cmd.intent.intent_id == 4
 
     engine.running = False
     task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker():
+async def test_circuit_breaker(tmp_path):
     # Setup
     q = asyncio.Queue()
-    with open("config/test_adapter.yaml", "w") as f:
-        yaml.dump(MOCK_ADAPTER_CONFIG, f)
+    config_path = tmp_path / "test_adapter.yaml"
+    config_path.write_text(yaml.safe_dump(MOCK_ADAPTER_CONFIG))
 
-    adapter = OrderAdapter("config/test_adapter.yaml", q, MockClient())
+    adapter = OrderAdapter(str(config_path), q, MockClient())
     adapter.circuit_breaker.threshold = 2
     adapter.circuit_breaker.timeout_s = 1
 
@@ -114,14 +109,16 @@ async def test_circuit_breaker():
 
     await q.put(cmd)
     await q.put(cmd)  # 2 failures
-    await asyncio.sleep(0.1)
+    await asyncio.wait_for(q.join(), timeout=1.0)
 
     assert adapter.circuit_breaker.failure_count >= 2
     assert adapter.circuit_breaker.open_until > 0
 
     # 3rd should be rejected by CB immediately
     await q.put(cmd)
-    await asyncio.sleep(0.1)
+    await asyncio.wait_for(q.join(), timeout=1.0)
 
     adapter.running = False
     task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
