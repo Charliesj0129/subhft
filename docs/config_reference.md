@@ -85,6 +85,40 @@ make sync-symbols
 
 Preset packs 在 `config/symbols.examples/`（minimal, futures/options demo, stress, TW50 等）。
 
+### Symbols Metrics (Optional)
+高階規則式選擇會依賴即時或批次的市場統計（例如 OI、IV、成交量、權重）。
+你可以準備一份 metrics 檔案並用 CLI 指定：
+
+```bash
+python -m hft_platform config preview --metrics config/metrics.json
+```
+
+也可以用環境變數：
+```
+HFT_SYMBOL_METRICS=config/metrics.json
+```
+
+範例格式：
+```json
+{
+  "metrics": {
+    "2330": {
+      "tradable": true,
+      "sector": "semis",
+      "avg_vol_20d": 120000,
+      "chg_pct": -0.8,
+      "weight": 0.9
+    },
+    "TXO18000R3": {
+      "oi": 8200,
+      "premium": 45.5,
+      "delta": 0.42,
+      "iv_rank": 72
+    }
+  }
+}
+```
+
 ## 6. Symbols List Format
 每行一個 entry：
 ```
@@ -101,6 +135,29 @@ OPT@TXO@near@ATM+/-3 exchange=OPT tags=options|near_month|atm
 Rule expansion (requires contract cache from `make sync-symbols`):
 - `TXF@front`, `MXF@next`
 - `OPT@TXO@near@ATM+/-3` or `OPT@TXO@near@OTM+/-3`
+
+### Rule Filters (Advanced)
+可追加以下規則（多數需 metrics 檔案或合約快取）：
+- `@tradable=true`
+- `@margin=low|mid|high`
+- `@oi>=5000` / `@oi=top20`
+- `@trades_per_min>=50`
+- `@price=20-200`
+- `@premium=5-50`
+- `@delta=0.25-0.55`
+- `@iv_rank>=70`
+- `@exclude_dte<=2`
+- `@roll@dte<=5` (期貨自動換月)
+- `@chg_pct=-2..2`
+- `@intraday_range>=1.5`
+- `@avg_vol_20d>=20000`
+- `@turnover_rank<=50`
+- `@sector=semis|fin|shipping`
+- `@weight>=0.5%`
+- `@month=near,next,far`
+- `@moneyness=0.95-1.05`
+- `@hedge_with=TXF`
+- `@exclude=anomaly`
 
 ## 7. Symbol Tags
 可用 `tags` 標記標的，策略可用 tag 訂閱：

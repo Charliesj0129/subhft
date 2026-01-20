@@ -93,12 +93,14 @@ python -m hft_platform config resolve 2330 2317 --output config/symbols.yaml
 從 `symbols.list` 產生 `symbols.yaml`。
 ```bash
 python -m hft_platform config build --list config/symbols.list --output config/symbols.yaml
+python -m hft_platform config build --metrics config/metrics.json
 ```
 
 ## 12. config preview
 預覽展開後的 symbols 數量與前幾筆。
 ```bash
 python -m hft_platform config preview
+python -m hft_platform config preview --metrics config/metrics.json
 ```
 
 ## 13. config validate
@@ -106,10 +108,12 @@ python -m hft_platform config preview
 ```bash
 python -m hft_platform config validate
 python -m hft_platform config validate --online
+python -m hft_platform config validate --metrics config/metrics.json
 ```
 
 ## 14. config sync
 從券商 API 拉合約快取，並重建 `symbols.yaml`。
 ```bash
 python -m hft_platform config sync
+python -m hft_platform config sync --metrics config/metrics.json
 ```

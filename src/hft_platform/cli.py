@@ -444,7 +444,7 @@ def cmd_symbols_build(args: argparse.Namespace):
         write_symbols_yaml,
     )
 
-    contract_index = None if args.no_contracts else load_contract_cache(args.contracts)
+    contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
     result = build_symbols(args.list_path, contract_index)
     validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
 
@@ -468,7 +468,7 @@ def cmd_symbols_build(args: argparse.Namespace):
 def cmd_symbols_preview(args: argparse.Namespace):
     from hft_platform.config.symbols import build_symbols, load_contract_cache, preview_lines, validate_symbols
 
-    contract_index = None if args.no_contracts else load_contract_cache(args.contracts)
+    contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
     result = build_symbols(args.list_path, contract_index)
     validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
 
@@ -489,6 +489,7 @@ def cmd_symbols_validate(args: argparse.Namespace):
         ContractIndex,
         build_symbols,
         fetch_contracts_from_broker,
+        load_metrics_cache,
         load_contract_cache,
         validate_symbols,
     )
@@ -496,9 +497,10 @@ def cmd_symbols_validate(args: argparse.Namespace):
     contract_index = None
     if args.online:
         contracts = fetch_contracts_from_broker()
-        contract_index = ContractIndex(contracts=contracts)
+        metrics = load_metrics_cache(args.metrics) if args.metrics else {}
+        contract_index = ContractIndex(contracts=contracts, metrics_by_code=metrics)
     elif not args.no_contracts:
-        contract_index = load_contract_cache(args.contracts)
+        contract_index = load_contract_cache(args.contracts, args.metrics)
 
     if args.symbols_path:
         import yaml
@@ -529,6 +531,7 @@ def cmd_symbols_sync(args: argparse.Namespace):
         ContractIndex,
         build_symbols,
         fetch_contracts_from_broker,
+        load_metrics_cache,
         preview_lines,
         validate_symbols,
         write_contract_cache,
@@ -537,7 +540,8 @@ def cmd_symbols_sync(args: argparse.Namespace):
 
     contracts = fetch_contracts_from_broker()
     write_contract_cache(contracts, args.contracts)
-    contract_index = ContractIndex(contracts=contracts)
+    metrics = load_metrics_cache(args.metrics) if args.metrics else {}
+    contract_index = ContractIndex(contracts=contracts, metrics_by_code=metrics)
 
     result = build_symbols(args.list_path, contract_index)
     validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
@@ -578,6 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--list", dest="list_path", default="config/symbols.list", help="Input symbols list")
     build.add_argument("--output", default="config/symbols.yaml", help="Output symbols YAML")
     build.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    build.add_argument("--metrics", default=None, help="Metrics cache path (optional)")
     build.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
     build.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
     build.add_argument("--preview", action="store_true", help="Show preview summary")
@@ -587,6 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     preview = config_sub.add_parser("preview", help="Preview expanded symbols list")
     preview.add_argument("--list", dest="list_path", default="config/symbols.list", help="Input symbols list")
     preview.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    preview.add_argument("--metrics", default=None, help="Metrics cache path (optional)")
     preview.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
     preview.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
     preview.add_argument("--sample", type=int, default=10, help="Preview sample size")
@@ -596,6 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--list", dest="list_path", default="config/symbols.list", help="Input symbols list")
     validate.add_argument("--symbols", dest="symbols_path", help="Validate an existing symbols.yaml")
     validate.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    validate.add_argument("--metrics", default=None, help="Metrics cache path (optional)")
     validate.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
     validate.add_argument("--online", action="store_true", help="Validate against broker contracts")
     validate.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
@@ -605,6 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--list", dest="list_path", default="config/symbols.list", help="Input symbols list")
     sync.add_argument("--output", default="config/symbols.yaml", help="Output symbols YAML")
     sync.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    sync.add_argument("--metrics", default=None, help="Metrics cache path (optional)")
     sync.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
     sync.add_argument("--preview", action="store_true", help="Show preview summary")
     sync.add_argument("--sample", type=int, default=10, help="Preview sample size")
