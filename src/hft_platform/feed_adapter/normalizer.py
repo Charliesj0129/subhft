@@ -1,6 +1,7 @@
 import os
+import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from structlog import get_logger
 
@@ -24,8 +25,6 @@ class SymbolMetadata:
 
     def __init__(self, config_path: Optional[str] = None):
         # simplified for this context, assuming existing logic was ok, just need it here
-        import yaml
-
         if config_path is None:
             config_path = os.getenv("SYMBOLS_CONFIG")
             if not config_path:
@@ -35,15 +34,66 @@ class SymbolMetadata:
                     config_path = "config/base/symbols.yaml"
 
         self.config_path = config_path
+        self.meta: Dict[str, Dict[str, Any]] = {}
+        self.tags_by_symbol: Dict[str, set[str]] = {}
+        self.symbols_by_tag: Dict[str, set[str]] = {}
+        self._mtime: float | None = None
+        self._load()
+
+    def _load(self) -> None:
+        import yaml
+
         self.meta = {}
+        self.tags_by_symbol = {}
+        self.symbols_by_tag = {}
+        try:
+            self._mtime = os.path.getmtime(self.config_path)
+        except OSError:
+            self._mtime = None
         try:
             with open(self.config_path, "r") as f:
                 data = yaml.safe_load(f) or {}
                 for item in data.get("symbols", []):
-                    if "code" in item:
-                        self.meta[item["code"]] = item
+                    code = item.get("code")
+                    if not code:
+                        continue
+                    self.meta[code] = item
+                    tags_raw = item.get("tags", [])
+                    if isinstance(tags_raw, str):
+                        tags = [t.strip() for t in re.split(r"[|,]", tags_raw) if t.strip()]
+                    elif isinstance(tags_raw, (list, tuple, set)):
+                        tags = [str(t).strip() for t in tags_raw if str(t).strip()]
+                    else:
+                        tags = []
+                    normalized = {t.lower() for t in tags}
+                    if normalized:
+                        self.tags_by_symbol[code] = normalized
+                        for tag in normalized:
+                            self.symbols_by_tag.setdefault(tag, set()).add(code)
         except Exception:
             pass
+
+    def reload(self) -> None:
+        self._load()
+
+    def reload_if_changed(self) -> bool:
+        try:
+            mtime = os.path.getmtime(self.config_path)
+        except OSError:
+            return False
+        if self._mtime is None or mtime > self._mtime:
+            self._load()
+            return True
+        return False
+
+    def symbols_for_tags(self, tags: Iterable[str]) -> set[str]:
+        resolved = set()
+        for tag in tags:
+            key = str(tag).strip().lower()
+            if not key:
+                continue
+            resolved.update(self.symbols_by_tag.get(key, set()))
+        return resolved
 
     def price_scale(self, symbol: str) -> int:
         # Avoid creating empty dict
@@ -65,16 +115,48 @@ class SymbolMetadata:
         entry = self.meta.get(symbol) or {}
         return str(entry.get("exchange", ""))
 
+    def product_type(self, symbol: str) -> str:
+        entry = self.meta.get(symbol) or {}
+        raw = (
+            entry.get("product_type")
+            or entry.get("security_type")
+            or entry.get("type")
+            or entry.get("asset_type")
+            or ""
+        )
+        raw = str(raw).strip().lower()
+        if raw:
+            return raw
+
+        exchange = self.exchange(symbol).upper()
+        if exchange in {"TSE", "OTC", "OES"}:
+            return "stock"
+        if exchange in {"FUT", "FUTURES", "TAIFEX"}:
+            return "future"
+        if exchange in {"OPT", "OPTIONS"}:
+            return "option"
+        if exchange in {"IDX", "INDEX"}:
+            return "index"
+        return ""
+
+    def order_params(self, symbol: str) -> Dict[str, Any]:
+        entry = self.meta.get(symbol) or {}
+        params: Dict[str, Any] = {}
+        for key in ("order_cond", "order_lot", "oc_type", "account"):
+            if key in entry and entry[key] is not None:
+                params[key] = entry[key]
+        return params
+
 
 class MarketDataNormalizer:
     __slots__ = ("_seq_gen", "metadata", "price_codec", "metrics")
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None, metadata: SymbolMetadata | None = None):
         import itertools
 
         self._seq_gen = itertools.count(1)
         # self._lock = Lock() # Removed
-        self.metadata = SymbolMetadata(config_path)
+        self.metadata = metadata or SymbolMetadata(config_path)
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
 

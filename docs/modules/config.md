@@ -1,17 +1,22 @@
 # config
 
 ## Purpose
-Configuration loading and runtime overrides.
+Configuration loading and environment/runtime overrides.
 
 ## Key Files
 - `src/hft_platform/config/loader.py`: Settings load and merge chain.
 - `src/hft_platform/config/wizard.py`: Interactive setup helper.
+- `config/base/`: Versioned defaults.
+- `config/env/<mode>/`: Environment overrides.
+- `config/symbols.list`: Single source for symbols.
+- `config/symbols.examples/`: Preset packs and demos.
+- `.env.example`: Environment variable template.
 
 ## Settings Priority
 1) `config/base/main.yaml`
 2) `config/env/<mode>/main.yaml` (optional)
 3) `config/settings.py` (optional)
-4) Environment variables (`HFT_*`)
+4) Environment variables (`HFT_*`, `SHIOAJI_*`)
 5) CLI overrides
 
 ## Common Config Files
@@ -21,9 +26,14 @@ Configuration loading and runtime overrides.
 - `config/execution.yaml`: Execution settings.
 - `config/recorder.yaml`: Recorder and ClickHouse settings.
 
-## Environment Variables
-See `docs/config_reference.md` for the full list.
+## Usage
+- Keep secrets in environment variables; use `.env.example` as a template and do not commit `.env`.
+- Use `config/base/` as defaults and only override when needed.
+- See `docs/config_reference.md` for the full reference.
 
-## Extension Points
-- Add new settings in YAML, then read via `loader.py`.
-- Expose overrides via CLI or `.env`.
+## Symbols Shortcuts
+- `make symbols` (build from `config/symbols.list`)
+- `python -m hft_platform config preview`
+- `python -m hft_platform config validate`
+- `make sync-symbols` (refresh contract cache + rebuild)
+- `python -m hft_platform wizard` (preset/manual/file import)

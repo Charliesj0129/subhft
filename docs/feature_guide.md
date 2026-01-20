@@ -20,7 +20,7 @@ Broker fills -> Execution Normalizer -> Position/Reconciliation
 - `src/hft_platform/main.py`, `src/hft_platform/cli.py`: 入口與 CLI 指令分派。
 
 **關鍵設定**
-- `config/symbols.yaml` 或 `SYMBOLS_CONFIG`：交易/訂閱標的。
+- `config/symbols.yaml` 或 `SYMBOLS_CONFIG`：交易/訂閱標的（由 `config/symbols.list` 生成）。
 - `config/base/strategies.yaml`：策略與參數（預設模板）；需要本地覆蓋可用 `config/strategies.yaml`。
 - `config/risk.yaml`, `config/strategy_limits.yaml`：風控規則。
 - `config/execution.yaml`, `config/order_adapter.yaml`：執行/下單參數。

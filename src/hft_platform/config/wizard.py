@@ -51,7 +51,7 @@ def configure_universe() -> List[Dict[str, Any]]:
     print("How would you like to select symbols?")
     print("1. Manual Entry (Comma separated)")
     print("2. Use Preset Group")
-    print("3. Import from File (Not implemented)")
+    print("3. Import from File (symbols list)")
 
     choice = get_input("Select option", "1", ["1", "2", "3"])
 
@@ -71,8 +71,26 @@ def configure_universe() -> List[Dict[str, Any]]:
         name, codes = PRESET_UNIVERSES[p_choice]
         print(f"Selected: {name}")
         symbols = [{"code": c, "exchange": "TSE"} for c in codes]
+    elif choice == "3":
+        path = get_input("Enter symbols list path", "config/symbols.list")
+        symbols = load_symbols_from_file(path)
+        if not symbols:
+            print("No symbols loaded. Expected lines like: CODE,EXCHANGE[,TICK_SIZE,PRICE_SCALE]")
 
     return symbols
+
+
+def load_symbols_from_file(path: str) -> List[Dict[str, Any]]:
+    from hft_platform.config.symbols import build_symbols, load_contract_cache
+
+    contract_index = load_contract_cache()
+    result = build_symbols(path, contract_index)
+    if result.errors:
+        print("Symbol list errors:")
+        for msg in result.errors:
+            print(f"- {msg}")
+        return []
+    return result.symbols
 
 
 def configure_risk() -> Dict[str, Any]:

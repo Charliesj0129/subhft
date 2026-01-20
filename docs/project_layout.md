@@ -8,6 +8,7 @@ Use this map to find where to add new code and where to look when debugging.
 ```
 src/hft_platform/       Core Python package (services, strategy, risk, execution, recorder)
 config/                 Config files (base defaults + env overrides)
+.env.example            Environment variable template
 docs/                   Documentation (start at docs/README.md)
 tests/                  Unit/integration/system tests
 examples/               Example strategies and scripts
@@ -24,6 +25,9 @@ hftbacktest/            Backtest integration and docs
 - `config/base/` holds default templates tracked in git.
 - `config/env/<mode>/` holds environment-specific overrides (sim/live).
 - `config/settings.json` / `config/settings.py` are optional local overrides.
+- `config/symbols.list` is the single source for `config/symbols.yaml`.
+- `config/symbols.examples/` contains preset packs and demo lists.
+- `config/contracts.json` caches broker contracts for rule expansion.
 
 ## Extension Points
 
@@ -38,5 +42,6 @@ hftbacktest/            Backtest integration and docs
 ## Generated / Local Artifacts (safe to ignore)
 
 - Virtualenv and caches: `.venv/`, `.mypy_cache/`, `.hypothesis/`, `.pytest_cache/`, `.ruff_cache/`
+- Local env file: `.env` (do not commit)
 - Runtime output: `logs/`, `.wal/`, `data/`, `reports/`
 - Build output: `target/`, `dist/`, `build/`

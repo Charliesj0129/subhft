@@ -9,7 +9,11 @@ It manages:
 - **Discipline**: Pinned consumer thread usage to minimize jitter.
 
 ## Configuration
-Configure symbols in `config/symbols.yaml`:
+Define symbols in `config/symbols.list` and generate `config/symbols.yaml`:
+
+```bash
+make symbols
+```
 
 ```yaml
 symbols:

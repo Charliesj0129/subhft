@@ -6,6 +6,14 @@ High-Performance Event-Driven Trading Platform with Shioaji integration and HftB
 **How**: Use `uv` for dependency management and `make` for common workflows; configure credentials via `.env`.
 **Status**: Alpha (active refactor + test coverage expansion).
 
+## ⚡ 3-Line Quick Start
+```bash
+git clone <repo> && cd hft_platform
+make start
+open http://localhost:9090/metrics
+```
+*(Use `xdg-open` on Linux or open the URL in your browser.)*
+
 ## 🚀 Quick Start ( < 30 Minutes )
 
 ### Prerequisites
@@ -14,21 +22,22 @@ High-Performance Event-Driven Trading Platform with Shioaji integration and HftB
 *   Make (optional)
 *   Docker (optional, for ops)
 
-### 1. Setup & Install
-One command to sync dependencies and configure environment.
+### 1. One-Command Start (Docker)
+Build the image, start ClickHouse, and run the engine with one command.
 ```bash
-make dev
+make start
 ```
-*(This command runs: `uv sync --dev`, and copies `.env.example` if missing.)*
+*(This command runs: `uv sync --dev`, copies `.env.example` if missing, builds `config/symbols.yaml`, then `docker compose up -d --build`.)*
 
 Optional: install git hooks for Ruff auto-fixes:
 ```bash
 make hooks
 ```
 
-### 2. Run Simulation
+### 2. Local Simulation (No Docker)
 Start the platform with mock data (no credentials required).
 ```bash
+make dev
 make run-sim
 ```
 *   **Web Dashboard**: http://localhost:8080 (if enabled)
@@ -51,6 +60,11 @@ class MyStrategy(BaseStrategy):
 *   **Events**: Typed `TickEvent`, `BidAskEvent`, `OrderEvent` (Zero-copy slots).
 *   **LOB**: Optimized (fast-path list based) with per-symbol locking.
 
+```
+Market Data -> Normalizer -> LOB -> Strategy -> Risk -> Order Adapter -> Broker
+                      \-> Recorder -> ClickHouse/WAL
+```
+
 ## 🛠 Commands
 | Command | Description |
 | :--- | :--- |
@@ -58,6 +72,8 @@ class MyStrategy(BaseStrategy):
 | `make hooks` | Install pre-commit hooks (Ruff auto-fix + format) |
 | `make test` | Run unit tests |
 | `make coverage` | Run coverage report |
+| `make symbols` | Build `config/symbols.yaml` from `config/symbols.list` |
+| `make sync-symbols` | Sync broker contracts + rebuild symbols |
 | `make run-sim` | Run platform in Simulation mode |
 | `make run-prod` | Run platform in Production mode (Requires `.env`) |
 

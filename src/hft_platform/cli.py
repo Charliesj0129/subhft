@@ -420,6 +420,146 @@ def cmd_resolve_symbols(args: argparse.Namespace):
         print(yaml.dump(output_data, sort_keys=False))
 
 
+def _print_issues(errors: list[str], warnings: list[str]):
+    if warnings:
+        print("Warnings:")
+        for msg in warnings[:20]:
+            print(f"- {msg}")
+        if len(warnings) > 20:
+            print(f"... {len(warnings) - 20} more warnings")
+    if errors:
+        print("Errors:")
+        for msg in errors[:20]:
+            print(f"- {msg}")
+        if len(errors) > 20:
+            print(f"... {len(errors) - 20} more errors")
+
+
+def cmd_symbols_build(args: argparse.Namespace):
+    from hft_platform.config.symbols import (
+        build_symbols,
+        load_contract_cache,
+        preview_lines,
+        validate_symbols,
+        write_symbols_yaml,
+    )
+
+    contract_index = None if args.no_contracts else load_contract_cache(args.contracts)
+    result = build_symbols(args.list_path, contract_index)
+    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
+
+    errors = result.errors + validation.errors
+    warnings = result.warnings + validation.warnings
+
+    if args.preview:
+        for line in preview_lines(result, sample=args.sample):
+            print(line)
+
+    if warnings or errors:
+        _print_issues(errors, warnings)
+
+    if errors:
+        sys.exit(1)
+
+    write_symbols_yaml(result.symbols, args.output)
+    print(f"Written {len(result.symbols)} symbols to {args.output}")
+
+
+def cmd_symbols_preview(args: argparse.Namespace):
+    from hft_platform.config.symbols import build_symbols, load_contract_cache, preview_lines, validate_symbols
+
+    contract_index = None if args.no_contracts else load_contract_cache(args.contracts)
+    result = build_symbols(args.list_path, contract_index)
+    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
+
+    for line in preview_lines(result, sample=args.sample):
+        print(line)
+
+    errors = result.errors + validation.errors
+    warnings = result.warnings + validation.warnings
+    if warnings or errors:
+        _print_issues(errors, warnings)
+
+    if errors:
+        sys.exit(1)
+
+
+def cmd_symbols_validate(args: argparse.Namespace):
+    from hft_platform.config.symbols import (
+        ContractIndex,
+        build_symbols,
+        fetch_contracts_from_broker,
+        load_contract_cache,
+        validate_symbols,
+    )
+
+    contract_index = None
+    if args.online:
+        contracts = fetch_contracts_from_broker()
+        contract_index = ContractIndex(contracts=contracts)
+    elif not args.no_contracts:
+        contract_index = load_contract_cache(args.contracts)
+
+    if args.symbols_path:
+        import yaml
+
+        with open(args.symbols_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        symbols = data.get("symbols", [])
+    else:
+        result = build_symbols(args.list_path, contract_index)
+        symbols = result.symbols
+        if result.errors:
+            _print_issues(result.errors, result.warnings)
+            sys.exit(1)
+
+    validation = validate_symbols(symbols, contract_index, max_subscriptions=args.max_subscriptions)
+
+    if validation.errors or validation.warnings:
+        _print_issues(validation.errors, validation.warnings)
+
+    if validation.errors:
+        sys.exit(1)
+
+    print("Configuration is valid.")
+
+
+def cmd_symbols_sync(args: argparse.Namespace):
+    from hft_platform.config.symbols import (
+        ContractIndex,
+        build_symbols,
+        fetch_contracts_from_broker,
+        preview_lines,
+        validate_symbols,
+        write_contract_cache,
+        write_symbols_yaml,
+    )
+
+    contracts = fetch_contracts_from_broker()
+    write_contract_cache(contracts, args.contracts)
+    contract_index = ContractIndex(contracts=contracts)
+
+    result = build_symbols(args.list_path, contract_index)
+    validation = validate_symbols(result.symbols, contract_index, max_subscriptions=args.max_subscriptions)
+
+    errors = result.errors + validation.errors
+    warnings = result.warnings + validation.warnings
+
+    if args.preview:
+        for line in preview_lines(result, sample=args.sample):
+            print(line)
+
+    if warnings or errors:
+        _print_issues(errors, warnings)
+
+    if errors:
+        sys.exit(1)
+
+    write_symbols_yaml(result.symbols, args.output)
+    print(f"Written {len(result.symbols)} symbols to {args.output}")
+    print(f"Contract cache saved to {args.contracts}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hft", description="HFT Platform CLI")
     sub = parser.add_subparsers(dest="command")
@@ -433,6 +573,42 @@ def build_parser() -> argparse.ArgumentParser:
     resolve.add_argument("symbols", nargs="+", help="List of stock codes")
     resolve.add_argument("--output", help="Output YAML file path")
     resolve.set_defaults(func=cmd_resolve_symbols)
+
+    build = config_sub.add_parser("build", help="Build symbols.yaml from symbols.list")
+    build.add_argument("--list", dest="list_path", default="config/symbols.list", help="Input symbols list")
+    build.add_argument("--output", default="config/symbols.yaml", help="Output symbols YAML")
+    build.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    build.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
+    build.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
+    build.add_argument("--preview", action="store_true", help="Show preview summary")
+    build.add_argument("--sample", type=int, default=10, help="Preview sample size")
+    build.set_defaults(func=cmd_symbols_build)
+
+    preview = config_sub.add_parser("preview", help="Preview expanded symbols list")
+    preview.add_argument("--list", dest="list_path", default="config/symbols.list", help="Input symbols list")
+    preview.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    preview.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
+    preview.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
+    preview.add_argument("--sample", type=int, default=10, help="Preview sample size")
+    preview.set_defaults(func=cmd_symbols_preview)
+
+    validate = config_sub.add_parser("validate", help="Validate symbols configuration")
+    validate.add_argument("--list", dest="list_path", default="config/symbols.list", help="Input symbols list")
+    validate.add_argument("--symbols", dest="symbols_path", help="Validate an existing symbols.yaml")
+    validate.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    validate.add_argument("--no-contracts", action="store_true", help="Skip contract cache lookup")
+    validate.add_argument("--online", action="store_true", help="Validate against broker contracts")
+    validate.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
+    validate.set_defaults(func=cmd_symbols_validate)
+
+    sync = config_sub.add_parser("sync", help="Sync broker contracts and build symbols.yaml")
+    sync.add_argument("--list", dest="list_path", default="config/symbols.list", help="Input symbols list")
+    sync.add_argument("--output", default="config/symbols.yaml", help="Output symbols YAML")
+    sync.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    sync.add_argument("--max-subscriptions", type=int, default=200, help="Subscription limit")
+    sync.add_argument("--preview", action="store_true", help="Show preview summary")
+    sync.add_argument("--sample", type=int, default=10, help="Preview sample size")
+    sync.set_defaults(func=cmd_symbols_sync)
 
     run = sub.add_parser("run", help="Run pipeline (sim|live|replay)")
     run.add_argument("mode", choices=["sim", "live", "replay"])

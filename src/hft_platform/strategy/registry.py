@@ -16,6 +16,7 @@ class StrategyConfig:
     enabled: bool = True
     budget_us: int = 200
     symbols: Optional[List[str]] = None
+    symbol_tags: Optional[List[str]] = None
     product_type: str = "STOCK"
     params: Dict[str, Any] = field(default_factory=dict)
 
@@ -39,6 +40,7 @@ class StrategyRegistry:
                     enabled=entry.get("enabled", True),
                     budget_us=int(entry.get("budget_us", 200)),
                     symbols=entry.get("symbols"),
+                    symbol_tags=entry.get("symbol_tags"),
                     product_type=entry.get("product_type", "STOCK"),
                     params=entry.get("params", {}) or {},
                 )
@@ -57,7 +59,9 @@ class StrategyRegistry:
                 cls = getattr(module, cfg.class_name)
                 strategy = cls(strategy_id=cfg.strategy_id, **(cfg.params or {}))
                 strategy.enabled = cfg.enabled
-                strategy.symbols = cfg.symbols
+                if cfg.symbols is not None:
+                    strategy.symbols = cfg.symbols
+                strategy.symbol_tags = cfg.symbol_tags
                 strategy.product_type = cfg.product_type
                 strategy.budget_us = cfg.budget_us
                 strategies.append(strategy)

@@ -1,4 +1,4 @@
-.PHONY: install dev test coverage lint format typecheck blackbox-tests regression-tests stress-tests system-tests acceptance-tests hooks clean run-sim run-prod backtest ops-up ops-down notebook
+.PHONY: install dev start symbols sync-symbols test coverage lint format typecheck blackbox-tests regression-tests stress-tests system-tests acceptance-tests hooks clean run-sim run-prod backtest ops-up ops-down notebook
 
 PYTHON := python3
 ifneq ("$(wildcard .venv/bin/python)","")
@@ -12,6 +12,17 @@ install:
 dev:
 	uv sync --dev
 	cp -n .env.example .env || true
+
+start:
+	$(MAKE) dev
+	$(MAKE) symbols
+	docker compose up -d --build
+
+symbols:
+	$(CLI) config build --list config/symbols.list --output config/symbols.yaml --contracts config/contracts.json
+
+sync-symbols:
+	$(CLI) config sync --list config/symbols.list --output config/symbols.yaml --contracts config/contracts.json
 
 test:
 	uv run pytest tests/ --ignore=tests/stress --ignore=tests/benchmark --ignore=tests/integration/test_persistence.py

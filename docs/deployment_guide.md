@@ -11,7 +11,22 @@
 | Ops 低延遲 | 低抖動部署 | `ops/docker/docker-compose.yml` | Linux host |
 | Azure VM | 雲端 VM | `docs/azure_deployment.md` | Azure |
 
-## 2. 必要環境變數
+## 2. 部署核心原則
+### 2.1 Infrastructure as Code (IaC)
+建議使用 Terraform/Ansible/Kubernetes YAML 來描述環境，避免人工操作造成環境漂移。
+
+### 2.2 Immutable Infrastructure 與容器化
+使用 Docker 建置映像檔，一次建好後在開發/測試/生產環境一致執行。
+
+### 2.3 Build / Release / Run 分離
+- **Build**：`docker build -t hft-platform:latest .`
+- **Release**：以 `.env` 或平台注入環境變數
+- **Run**：`docker compose up -d`
+
+### 2.4 藍綠部署 / 滾動更新
+部署新版本時，保留舊版本流量，確認健康後再切換，確保可快速回滾。
+
+## 3. 必要環境變數
 **認證**
 - `SHIOAJI_PERSON_ID`, `SHIOAJI_PASSWORD`：實盤登入。
 - `SHIOAJI_API_KEY`, `SHIOAJI_SECRET_KEY`：API key 登入（優先於 person_id）。
@@ -30,14 +45,14 @@
 
 參考：`.env.example`
 
-## 3. 本機開發 / 模擬
+## 4. 本機開發 / 模擬
 ```bash
 uv sync --dev
 cp .env.example .env
 make run-sim
 ```
 
-## 4. 本機實盤
+## 5. 本機實盤
 ```bash
 cp .env.example .env
 export SHIOAJI_PERSON_ID="YOUR_ID"
@@ -45,7 +60,7 @@ export SHIOAJI_PASSWORD="YOUR_PWD"
 make run-prod
 ```
 
-## 5. Docker Compose（含 ClickHouse）
+## 6. Docker Compose（含 ClickHouse）
 `docker-compose.yml` 提供開發與觀測堆疊：
 ```bash
 export SHIOAJI_PERSON_ID=...
@@ -62,7 +77,7 @@ docker compose up -d
 **資料與 WAL**
 - `./.wal`、`./data`、`./config` 會掛載至容器。
 
-## 6. Ops / 低延遲部署
+## 7. Ops / 低延遲部署
 `ops/docker/docker-compose.yml` 走 host network（Linux）以降低抖動：
 ```bash
 cd ops/docker
@@ -72,12 +87,12 @@ docker compose up -d
 
 若在 Windows/Mac，請移除 `network_mode: host` 並使用 ports。
 
-## 7. Azure VM
+## 8. Azure VM
 詳細步驟：
 - `docs/deploy_azure.md`（簡化 VM/Container）
 - `docs/azure_deployment.md`（低延遲版 + GHCR）
 
-## 8. CI/CD
+## 9. CI/CD
 **CI**
 - `.github/workflows/ci.yml`：lint/format/typecheck + tests。
 
@@ -86,7 +101,7 @@ docker compose up -d
 - `.github/workflows/deploy-ghcr.yml`
 > 需要設定 secrets 才能成功。
 
-## 9. 監控與驗證
+## 10. 監控與驗證
 **Prometheus**
 - `http://localhost:9090/metrics`
 
@@ -96,7 +111,7 @@ docker compose up -d
 **健康檢查**
 - Docker healthcheck 會確認主程序是否在運行。
 
-## 10. 測試環境（Docker）
+## 11. 測試環境（Docker）
 **System/Stress**
 - `docker-compose.test.yml`
 - `docker-compose.stress.yml`

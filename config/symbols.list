@@ -1,0 +1,21 @@
+# symbols.list is the single source of truth for config/symbols.yaml
+# Format:
+#   CODE [key=value ...]
+#   CODE,EXCHANGE[,TICK_SIZE[,PRICE_SCALE[,TAGS]]]
+#
+# Rules (expanded via contract cache from make sync-symbols):
+#   TXF@front
+#   MXF@next
+#   OPT@TXO@near@ATM+/-3
+#
+# Presets (uncomment to use):
+# @include config/symbols.examples/minimal.list
+# @include config/symbols.examples/tw50.list
+# @include config/symbols.examples/futures_front.list
+# @include config/symbols.examples/options_near_atm.list
+# @include config/symbols.examples/options_near_otm.list
+# @include config/symbols.examples/futures_options_demo.list
+# @include config/symbols.examples/stress.list
+
+2330 exchange=TSE tags=stocks
+2317 exchange=TSE tags=stocks

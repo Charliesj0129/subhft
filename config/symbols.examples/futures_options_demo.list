@@ -1,0 +1,3 @@
+# Futures + options demo pack
+@include config/symbols.examples/futures_front.list
+@include config/symbols.examples/options_near_atm.list

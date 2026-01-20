@@ -1,0 +1,2 @@
+# Near-month options around OTM (requires contract cache)
+OPT@TXO@near@OTM+/-3 exchange=OPT tags=options|near_month|otm
