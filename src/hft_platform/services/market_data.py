@@ -6,7 +6,7 @@ from structlog import get_logger
 
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.feed_adapter.lob_engine import LOBEngine
-from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
+from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
 logger = get_logger("service.market_data")
@@ -28,6 +28,7 @@ class MarketDataService:
         raw_queue: asyncio.Queue,
         client: ShioajiClient,
         publish_full_events: bool = True,
+        symbol_metadata: SymbolMetadata | None = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
@@ -35,7 +36,8 @@ class MarketDataService:
         self.publish_full_events = publish_full_events
 
         self.lob = LOBEngine()
-        self.normalizer = MarketDataNormalizer()
+        self.symbol_metadata = symbol_metadata or SymbolMetadata()
+        self.normalizer = MarketDataNormalizer(metadata=self.symbol_metadata)
 
         self.state = FeedState.INIT
         self.running = False
@@ -112,6 +114,7 @@ class MarketDataService:
         try:
             self._set_state(FeedState.CONNECTING)
             self.client.login()
+            self.client.validate_symbols()
 
             # Snapshots
             self._set_state(FeedState.SNAPSHOTTING)
@@ -202,6 +205,13 @@ class MarketDataService:
                     logger.warning("Heartbeat missing", gap=gap)
                     # trigger reconnect logic?
                     pass
+
+            if self.symbol_metadata.reload_if_changed():
+                logger.info("Symbols config reloaded", count=len(self.symbol_metadata.meta))
+                try:
+                    self.client.reload_symbols()
+                except Exception as exc:
+                    logger.error("Symbol reload failed", error=str(exc))
 
     async def _publish(self, event):
         """Publish to bus and handle both async and sync publishers."""

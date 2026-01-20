@@ -71,4 +71,4 @@ sudo systemctl enable --now hft.service
 ## 常見問題
 - 無 Shioaji 憑證：服務自動轉模擬並提示，可先 smoke 後再上 live。
 - ClickHouse 未啟：預設 WAL-only；設定 `HFT_CLICKHOUSE_ENABLED=1` 並確保 8123 可連。
-- 訂閱/合約：在 `config/symbols.yaml` 控制，總數勿超過 200。
+- 訂閱/合約：用 `config/symbols.list` + `make symbols` 控制，總數勿超過 200。

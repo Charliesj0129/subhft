@@ -5,3 +5,5 @@
 #   params:
 #     subscribe_symbols: ["2330", "2357"] # Major liquid names
 #     risk_aversion: 0.1
+#   # Or select by tags from symbols.yaml
+#   # symbol_tags: ["futures", "front_month"]

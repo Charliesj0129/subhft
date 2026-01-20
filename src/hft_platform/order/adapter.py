@@ -146,8 +146,11 @@ class OrderAdapter:
             if intent.intent_type == IntentType.NEW:
                 logger.info("Placing Order", symbol=intent.symbol, price=intent.price, qty=intent.qty, side=intent.side)
 
-                # Dynamic Exchange Lookup
-                exchange = self.client.get_exchange(intent.symbol) or "TSE"
+                # Dynamic Exchange Lookup (prefer config metadata)
+                meta_exchange = self.metadata.exchange(intent.symbol)
+                exchange = meta_exchange or self.client.get_exchange(intent.symbol) or "TSE"
+                product_type = self.metadata.product_type(intent.symbol) or None
+                order_params = self.metadata.order_params(intent.symbol)
 
                 # Convert Side IntEnum to String for ShioajiClient
                 action_str = "Buy" if intent.side == Side.BUY else "Sell"
@@ -173,9 +176,12 @@ class OrderAdapter:
                     action=action_str,
                     price=price_float,
                     qty=intent.qty,
-                    order_type="Limit",  # Simplified
+                    order_type=tif_str,
                     tif=tif_str,
                     custom_field=c_field,
+                    product_type=product_type,
+                    price_type="LMT",
+                    **order_params,
                 )
 
                 self.metrics.order_actions_total.labels(type="new").inc()

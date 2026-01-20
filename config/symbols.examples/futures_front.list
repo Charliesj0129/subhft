@@ -1,0 +1,3 @@
+# Front-month futures
+TXF@front exchange=FUT tags=futures|front_month
+MXF@front exchange=FUT tags=futures|front_month

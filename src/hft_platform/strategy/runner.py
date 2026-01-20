@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from typing import Any, List
 
@@ -22,6 +23,7 @@ class StrategyRunner:
         lob_engine=None,
         position_store=None,
         config_path: str = "config/base/strategies.yaml",
+        symbol_metadata: SymbolMetadata | None = None,
     ):
         self.bus = bus
         self.risk_queue = risk_queue
@@ -33,7 +35,7 @@ class StrategyRunner:
         self._strat_executors: list[tuple[BaseStrategy, Any, Any]] = []
 
         self.metrics = MetricsRegistry.get()
-        self.symbol_metadata = SymbolMetadata()
+        self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.symbol_metadata))
         self._intent_seq = 0
 
@@ -54,6 +56,7 @@ class StrategyRunner:
 
     def register(self, strategy: BaseStrategy):
         self.strategies.append(strategy)
+        self._resolve_strategy_symbols(strategy)
 
         # Cache metrics
         lat_m = self.metrics.strategy_latency_ns.labels(strategy=strategy.strategy_id) if self.metrics else None
@@ -61,6 +64,34 @@ class StrategyRunner:
 
         self._strat_executors.append((strategy, lat_m, int_m))
         logger.info("Registered strategy", id=strategy.strategy_id)
+
+    def _resolve_strategy_symbols(self, strategy: BaseStrategy) -> None:
+        resolved = set()
+        used_tag = False
+        raw_symbols = getattr(strategy, "symbols", None) or []
+        if isinstance(raw_symbols, (set, list, tuple)):
+            candidates = list(raw_symbols)
+        else:
+            candidates = [raw_symbols]
+
+        for item in candidates:
+            if not item:
+                continue
+            if isinstance(item, str) and item.lower().startswith("tag:"):
+                used_tag = True
+                tag_str = item[4:]
+                tags = [t for t in re.split(r"[|,]", tag_str) if t]
+                resolved.update(self.symbol_metadata.symbols_for_tags(tags))
+            else:
+                resolved.add(str(item))
+
+        raw_tags = getattr(strategy, "symbol_tags", None) or []
+        if raw_tags:
+            used_tag = True
+            resolved.update(self.symbol_metadata.symbols_for_tags(raw_tags))
+
+        if resolved or used_tag:
+            strategy.symbols = set(resolved)
 
     def _rebuild_executors(self):
         """Rebuild executor cache when strategies are replaced externally."""

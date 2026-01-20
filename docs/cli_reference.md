@@ -88,3 +88,28 @@ python -m hft_platform backtest run \
 ```bash
 python -m hft_platform config resolve 2330 2317 --output config/symbols.yaml
 ```
+
+## 11. config build
+從 `symbols.list` 產生 `symbols.yaml`。
+```bash
+python -m hft_platform config build --list config/symbols.list --output config/symbols.yaml
+```
+
+## 12. config preview
+預覽展開後的 symbols 數量與前幾筆。
+```bash
+python -m hft_platform config preview
+```
+
+## 13. config validate
+檢查 exchange/tick_size/price_scale、重複代碼、是否可訂閱。
+```bash
+python -m hft_platform config validate
+python -m hft_platform config validate --online
+```
+
+## 14. config sync
+從券商 API 拉合約快取，並重建 `symbols.yaml`。
+```bash
+python -m hft_platform config sync
+```

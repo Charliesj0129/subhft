@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any, Callable, Dict, List
 
@@ -37,8 +38,12 @@ def dispatch_tick_cb(exchange, msg):
 class ShioajiClient:
     def __init__(self, config_path: str | None = None):
         self.MAX_SUBSCRIPTIONS = 200
-
-        import os
+        self.contracts_timeout = int(os.getenv("SHIOAJI_CONTRACTS_TIMEOUT", "10000"))
+        self.fetch_contract = os.getenv("SHIOAJI_FETCH_CONTRACT", "1") != "0"
+        self.subscribe_trade = os.getenv("SHIOAJI_SUBSCRIBE_TRADE", "1") != "0"
+        self.allow_symbol_fallback = os.getenv("HFT_ALLOW_SYMBOL_FALLBACK") == "1"
+        self.allow_synthetic_contracts = os.getenv("HFT_ALLOW_SYNTHETIC_CONTRACTS") == "1"
+        self.index_exchange = os.getenv("HFT_INDEX_EXCHANGE", "TSE").upper()
 
         if config_path is None:
             config_path = os.getenv("SYMBOLS_CONFIG")
@@ -57,6 +62,9 @@ class ShioajiClient:
         self.symbols: List[Dict[str, Any]] = []
         self._load_config()
         self.subscribed_count = 0
+        self.subscribed_codes: set[str] = set()
+        self.tick_callback = None
+        self._callbacks_registered = False
         self.logged_in = False
         self.mode = "simulation" if (is_sim or self.api is None) else "real"
 
@@ -75,20 +83,25 @@ class ShioajiClient:
 
     def _load_config(self):
         with open(self.config_path, "r") as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f) or {}
             self.symbols = data.get("symbols", [])
             if len(self.symbols) > self.MAX_SUBSCRIPTIONS:
-                logger.warning("Symbol list exceeds limit", limit=self.MAX_SUBSCRIPTIONS, count=len(self.symbols))
-                self.symbols = self.symbols[: self.MAX_SUBSCRIPTIONS]
+                if os.getenv("HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS") == "1":
+                    logger.warning(
+                        "Symbol list exceeds limit",
+                        limit=self.MAX_SUBSCRIPTIONS,
+                        count=len(self.symbols),
+                    )
+                    self.symbols = self.symbols[: self.MAX_SUBSCRIPTIONS]
+                else:
+                    raise ValueError(f"Symbol list exceeds limit ({len(self.symbols)} > {self.MAX_SUBSCRIPTIONS}).")
 
         # Build map
-        self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols}
+        self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
 
     def login(self, person_id: str | None = None, password: str | None = None, contracts_cb=None):
         logger.info("Logging in to Shioaji...")
         # Resolve credentials: Arg > Env > Config (not stored there for security)
-        import os
-
         pid = person_id or os.getenv("SHIOAJI_PERSON_ID")
         pwd = password or os.getenv("SHIOAJI_PASSWORD")
 
@@ -98,10 +111,17 @@ class ShioajiClient:
 
         if api_key and secret_key:
             logger.info("Using API Key/Secret for login")
-            # ENABLE fetch_contract to get valid Contract objects (Crash resolved)
-            self.api.login(api_key=api_key, secret_key=secret_key, contracts_cb=contracts_cb, fetch_contract=True)
-            logger.info("Login successful (API Key) - Contract Fetch ENABLED")
-
+            self.api.login(
+                api_key=api_key,
+                secret_key=secret_key,
+                contracts_timeout=self.contracts_timeout,
+                contracts_cb=contracts_cb,
+                fetch_contract=self.fetch_contract,
+                subscribe_trade=self.subscribe_trade,
+            )
+            logger.info("Login successful (API Key)")
+            if not self.fetch_contract:
+                self._ensure_contracts()
             self.logged_in = True
             return
 
@@ -115,11 +135,18 @@ class ShioajiClient:
 
         try:
             # Fallback to Person ID (CA/Trading)
-            self.api.login(person_id=pid, passwd=pwd, contracts_cb=contracts_cb)
+            self.api.login(
+                person_id=pid,
+                passwd=pwd,
+                contracts_timeout=self.contracts_timeout,
+                contracts_cb=contracts_cb,
+                fetch_contract=self.fetch_contract,
+                subscribe_trade=self.subscribe_trade,
+            )
 
             logger.info("Login successful")
-            logger.info("Login successful - Contract Fetch DISABLED")
-            # Skipping fetch_contracts for resilience
+            if not self.fetch_contract:
+                self._ensure_contracts()
 
             self.logged_in = True
         except Exception as e:
@@ -146,6 +173,14 @@ class ShioajiClient:
         except AttributeError:
             logger.warning("api.set_deal_callback not found, relying on order callback")
 
+    def _ensure_contracts(self) -> None:
+        if not self.api or not hasattr(self.api, "fetch_contracts"):
+            return
+        try:
+            self.api.fetch_contracts(contract_download=True)
+        except Exception as exc:
+            logger.warning("Contract fetch failed", error=str(exc))
+
     def subscribe_basket(self, cb: Callable[..., Any]):
         if not self.api:
             # If API is missing entirely (no library), skip
@@ -159,66 +194,127 @@ class ShioajiClient:
 
         # Store callback permanently for binding (fix GC issues)
         self.tick_callback = cb
+        self._register_callbacks(cb)
 
-        # Register stock callbacks (v1) to route ticks to provided callback
+        for sym in self.symbols:
+            if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
+                logger.error("Subscription limit reached", limit=self.MAX_SUBSCRIPTIONS)
+                break
+            if self._subscribe_symbol(sym, cb):
+                code = sym.get("code")
+                if code:
+                    self.subscribed_codes.add(code)
+                self.subscribed_count = len(self.subscribed_codes)
+
+    def _register_callbacks(self, cb: Callable[..., Any]) -> None:
+        if not self.api or self._callbacks_registered:
+            return
         try:
             self.api.quote.set_on_tick_stk_v1_callback(cb)
             self.api.quote.set_on_bidask_stk_v1_callback(cb)
         except Exception as e:
             logger.error(f"Failed stock v1 callback registration: {e}")
 
-        # Wrap the callback to ensure Cython compatibility and logging
-        # (This local wrapper is unused if we use the instance method below,
-        # but kept for reference or removal. We will use self._wrapped_tick_cb)
+        try:
+            self.api.quote.set_event_callback(cb)
+        except Exception:
+            pass
 
-        for sym in self.symbols:
+        try:
+            self.api.quote.set_on_tick_fop_v1_callback(dispatch_tick_cb)
+            self.api.quote.set_on_bidask_fop_v1_callback(dispatch_tick_cb)
+        except Exception as e:
+            logger.error(f"Failed FOP v1 callback registration: {e}")
+
+        self._callbacks_registered = True
+
+    def _subscribe_symbol(self, sym: Dict[str, Any], cb: Callable[..., Any]) -> bool:
+        code = sym.get("code")
+        exchange = sym.get("exchange")
+        product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
+        if not code or not exchange:
+            logger.error("Invalid symbol entry", symbol=sym)
+            return False
+
+        contract = self._get_contract(
+            exchange,
+            code,
+            product_type=product_type,
+            allow_synthetic=self.allow_synthetic_contracts,
+        )
+        if not contract:
+            logger.error("Contract not found", code=code)
+            return False
+
+        try:
+            v = sj.constant.QuoteVersion.v1
+            self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
+            self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+            return True
+        except Exception as e:
+            logger.error(f"Subscription failed for {code}: {e}")
+            return False
+
+    def _unsubscribe_symbol(self, sym: Dict[str, Any]) -> None:
+        if not self.api or not sj:
+            return
+        code = sym.get("code")
+        exchange = sym.get("exchange")
+        product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
+        if not code or not exchange:
+            return
+        contract = self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False)
+        if not contract:
+            return
+        try:
+            v = sj.constant.QuoteVersion.v1
+            self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
+            self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+        except Exception as e:
+            logger.warning(f"Unsubscribe failed for {code}: {e}")
+
+    def reload_symbols(self) -> None:
+        old_map = {s.get("code"): s for s in self.symbols if s.get("code")}
+        self._load_config()
+        self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
+
+        new_map = {s.get("code"): s for s in self.symbols if s.get("code")}
+        removed = set(old_map) - set(new_map)
+        added = set(new_map) - set(old_map)
+
+        if not self.api or not self.logged_in or not self.tick_callback:
+            self.subscribed_codes = set(new_map)
+            self.subscribed_count = len(self.subscribed_codes)
+            return
+
+        for code in removed:
+            self._unsubscribe_symbol(old_map[code])
+            self.subscribed_codes.discard(code)
+
+        for code in added:
             if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
-                logger.error("Subscription limit reached", limit=self.MAX_SUBSCRIPTIONS)
-                break
+                raise ValueError("Subscription limit reached during reload")
+            sym = new_map[code]
+            if self._subscribe_symbol(sym, self.tick_callback):
+                self.subscribed_codes.add(code)
 
-            registered_count = 0
-            code = sym["code"]
-            exchange = sym["exchange"]
+        self.subscribed_count = len(self.subscribed_codes)
 
-            # Resolve contract object
-            contract = self._get_contract(exchange, code)
-            if not contract:
-                logger.error("Contract not found", code=code)
+    def validate_symbols(self) -> list[str]:
+        if not self.api or not self.logged_in:
+            return []
+        invalid = []
+        for sym in self.symbols:
+            code = sym.get("code")
+            exchange = sym.get("exchange")
+            product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
+            if not code or not exchange:
                 continue
-
-            # Strict Callback Registration (Sinotrade Spec)
-            try:
-                self.api.quote.set_event_callback(cb)
-                registered_count += 1
-            except Exception:
-                pass
-
-            # 2. Futures/Options (FOP) Callbacks - V1
-            try:
-                # Use Global Dispatcher
-                self.api.quote.set_on_tick_fop_v1_callback(dispatch_tick_cb)
-                self.api.quote.set_on_bidask_fop_v1_callback(dispatch_tick_cb)
-                registered_count += 2
-                logger.debug(f"Registered FOP v1 callbacks (Global Dispatch) for {code}")
-            except Exception as e:
-                logger.error(f"Failed FOP v1 registration for {code}: {e}")
-
-            if registered_count > 0:
-                pass
-            else:
-                logger.error(f"Failed to register strict callbacks for {code}")
-
-            # Subscribe
-            try:
-                # Use QuoteVersion.v1 for Futures
-                v = sj.constant.QuoteVersion.v1
-                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
-                # logger.info(f"Subscribed to {code}")
-            except Exception as e:
-                logger.error(f"Subscription failed for {code}: {e}")
-
-            self.subscribed_count += 1
+            if not self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False):
+                invalid.append(code)
+        if invalid:
+            logger.warning("Unsubscribable symbols detected", count=len(invalid), symbols=invalid[:10])
+        return invalid
 
     def _wrapped_tick_cb(self, exchange, msg):
         """Persistent callback wrapper"""
@@ -231,111 +327,135 @@ class ShioajiClient:
         except Exception as e:
             logger.error(f"Callback error: {e}")
 
-    def _get_contract(self, exchange: str, code: str):
-        # Helper to find contract
+    def _get_contract(
+        self,
+        exchange: str,
+        code: str,
+        product_type: str | None = None,
+        allow_synthetic: bool = False,
+    ):
         if not self.api:
             return None
-        try:
-            if exchange == "TSE":
-                return self.api.Contracts.Stocks.TSE[code]
-            elif exchange == "OTC":
-                return self.api.Contracts.Stocks.OTC[code]
-            elif exchange in ["FUT", "Futures"]:
-                # Try direct lookup first (sometimes works if flat)
-                try:
-                    return self.api.Contracts.Futures[code]
-                except Exception:
-                    pass
 
-                # Deep search in likely categories
-                # We can cache this map on init if slow, but for now just search.
-                # Common categories: TXF, MXF, GTF, etc. Or iterate all?
-                # Iterating all is safer.
-                # Deep search in likely categories
-                # logger.debug(f"Deep search for {code} in Futures...")
+        exch = str(exchange or "").upper()
+        prod = str(product_type or "").strip().lower()
 
-                # Deep search in likely categories
-                # shioaji.contracts.StreamFutureContracts might use __getattr__ so dir() misses categories.
-                # Explicitly check common ones.
-                known_categories = ["TXF", "MXF", "GTF", "XIF", "XJF", "XAF", "XBF", "XCF", "ZEF", "ZFF"]
-                found_attrs = dir(self.api.Contracts.Futures)
-                logger.warning(f"Futures attributes: {found_attrs}")
+        if prod in {"index", "idx"} or exch in {"IDX", "INDEX"}:
+            idx_exch = exch if exch in {"TSE", "OTC"} else self.index_exchange
+            idx_group = getattr(self.api.Contracts.Indexs, idx_exch, None)
+            return self._lookup_contract(idx_group, code, allow_symbol_fallback=self.allow_symbol_fallback, label="index")
 
-                # Merge known + found (dedupe)
-                all_cats = set(known_categories + found_attrs)
-
-                for attr_name in all_cats:
-                    if attr_name.startswith("_"):
-                        continue
-
-                    try:
-                        cat = getattr(self.api.Contracts.Futures, attr_name, None)
-                        if not cat:
-                            # logger.debug(f"Category {attr_name} is None/Missing")
-                            continue
-
-                        # Check if it looks like a category (iterable)
-                        if not hasattr(cat, "__iter__"):
-                            continue
-
-                        for c in cat:
-                            # Check CODE or SYMBOL (e.g. key=TXFA6, symbol=TXF202601)
-                            if hasattr(c, "code") and (c.code == code or getattr(c, "symbol", "") == code):
-                                logger.info(f"Resolved {code} in category {attr_name} (Match: {c.code}/{c.symbol})")
-                                return c
-                    except Exception:
-                        continue
-
-                # logger.warning(f"Contract {code} not found in Futures deep search")
-                pass
-
-        except Exception as e:
-            logger.error(f"get_contract lookup error for {code}: {e}")
-            # fall through
-
-        # Fallback: Manual Construction (For Stress Test / Sim / Day 1)
-        # Verify valid exchange enum
-        # We need to map string 'FUT' to strict enum if possible, or just pass string?
-        # Shioaji expects Exchange enum often.
-        # But Contract(exchange=...) accepts string or enum.
-        # We will try to use the library's Enum if available.
-        # But since we are in a method where we imported sj... wait, sj is module level.
-
-        if sj:
-            # Create synthetic
-            # Guess SecurityType.
-            # TXF -> FUT?
-            # We will just assume FUT for now if exchange is FUT.
-
-            try:
-                # Need to map string to Exchange Enum
-                # Exchange.TAIFEX is typical for FUT? Or is it Futures?
-                # Exchange.TSE / OTC...
-                # If generated config used "FUT", we map to TAIFEX?
-                # Wait, TXF is on TAIFEX (Futures Exchange).
-
-                exch_obj = (
-                    sj.constant.Exchange.TAIFEX
-                    if exchange in ["FUT", "Futures", "TAIFEX"]
-                    else sj.constant.Exchange.TSE
+        if prod in {"stock", "stk"} or exch in {"TSE", "OTC", "OES"}:
+            if exch == "TSE":
+                return self._lookup_contract(
+                    self.api.Contracts.Stocks.TSE,
+                    code,
+                    allow_symbol_fallback=self.allow_symbol_fallback,
+                    label="stock",
                 )
-                sec_type = (
-                    sj.constant.SecurityType.Future
-                    if exchange in ["FUT", "Futures", "TAIFEX"]
-                    else sj.constant.SecurityType.Stock
+            if exch == "OTC":
+                return self._lookup_contract(
+                    self.api.Contracts.Stocks.OTC,
+                    code,
+                    allow_symbol_fallback=self.allow_symbol_fallback,
+                    label="stock",
                 )
-                cat = code[:3] if len(code) >= 3 else code  # Approximate category
+            if exch == "OES":
+                return self._lookup_contract(
+                    self.api.Contracts.Stocks.OES,
+                    code,
+                    allow_symbol_fallback=self.allow_symbol_fallback,
+                    label="stock",
+                )
+            for group in (self.api.Contracts.Stocks.TSE, self.api.Contracts.Stocks.OTC, self.api.Contracts.Stocks.OES):
+                contract = self._lookup_contract(
+                    group,
+                    code,
+                    allow_symbol_fallback=self.allow_symbol_fallback,
+                    label="stock",
+                )
+                if contract:
+                    return contract
 
-                # Construct
-                c = sj.contracts.Contract(
-                    code=code, symbol=code, name=code, category=cat, exchange=exch_obj, security_type=sec_type
-                )
-                logger.info(f"Constructed Synthetic Contract for {code}")
-                return c
-            except Exception as e:
-                logger.error(f"Failed to construct synthetic contract: {e}")
+        if prod in {"future", "futures"} or exch in {"FUT", "FUTURES", "TAIFEX"}:
+            contract = self._lookup_contract(
+                self.api.Contracts.Futures,
+                code,
+                allow_symbol_fallback=self.allow_symbol_fallback,
+                label="future",
+            )
+            if contract:
+                return contract
+
+        if prod in {"option", "options"} or exch in {"OPT", "OPTIONS"}:
+            contract = self._lookup_contract(
+                self.api.Contracts.Options,
+                code,
+                allow_symbol_fallback=self.allow_symbol_fallback,
+                label="option",
+            )
+            if contract:
+                return contract
+
+        if allow_synthetic and sj:
+            return self._build_synthetic_contract(exch, code)
 
         return None
+
+    def _lookup_contract(self, container: Any, code: str, allow_symbol_fallback: bool, label: str) -> Any | None:
+        if not container:
+            return None
+
+        try:
+            return container[code]
+        except Exception:
+            pass
+
+        iterable = container.values() if isinstance(container, dict) else container
+        try:
+            for contract in iterable:
+                if getattr(contract, "code", None) == code:
+                    return contract
+        except Exception:
+            return None
+
+        if not allow_symbol_fallback:
+            return None
+
+        try:
+            for contract in iterable:
+                if getattr(contract, "symbol", None) == code:
+                    logger.warning("Symbol fallback used for contract", code=code, type=label)
+                    return contract
+        except Exception:
+            return None
+        return None
+
+    def _build_synthetic_contract(self, exchange: str, code: str) -> Any | None:
+        try:
+            exch_obj = (
+                sj.constant.Exchange.TAIFEX if exchange in {"FUT", "FUTURES", "TAIFEX"} else sj.constant.Exchange.TSE
+            )
+            sec_type = (
+                sj.constant.SecurityType.Future
+                if exchange in {"FUT", "FUTURES", "TAIFEX"}
+                else sj.constant.SecurityType.Stock
+            )
+            cat = code[:3] if len(code) >= 3 else code
+
+            contract = sj.contracts.Contract(
+                code=code,
+                symbol=code,
+                name=code,
+                category=cat,
+                exchange=exch_obj,
+                security_type=sec_type,
+            )
+            logger.info("Constructed synthetic contract", code=code, exchange=exchange)
+            return contract
+        except Exception as exc:
+            logger.error("Failed to construct synthetic contract", error=str(exc))
+            return None
 
     def get_exchange(self, code: str) -> str | None:
         """Resolve exchange for a code."""
@@ -346,11 +466,13 @@ class ShioajiClient:
         return None
 
     def get_usage(self):
-        """Mock usage stats since actual API might differ."""
-        return {
-            "subscribed": self.subscribed_count,
-            "bytes_used": 0,  # Placeholder
-        }
+        """Usage stats from Shioaji if available."""
+        if self.api and self.logged_in and hasattr(self.api, "usage"):
+            try:
+                return self.api.usage()
+            except Exception as exc:
+                logger.warning("Failed to fetch usage", error=str(exc))
+        return {"subscribed": self.subscribed_count, "bytes_used": 0}
 
     def get_positions(self) -> List[Any]:
         """Fetch current positions from Shioaji."""
@@ -368,32 +490,31 @@ class ShioajiClient:
         if not self.api or not self.logged_in:
             logger.info("Simulation mode: skipping snapshot fetch")
             return []
-        if not self.api:
-            logger.warning("Shioaji SDK missing; skip snapshot fetch (sim mode).")
-            return []
+
         contracts = []
         for sym in self.symbols:
-            c = self._get_contract(sym["exchange"], sym["code"])
-            if c:
-                contracts.append(c)
+            code = sym.get("code")
+            exchange = sym.get("exchange")
+            product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
+            if not code or not exchange:
+                continue
+            contract = self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False)
+            if contract:
+                contracts.append(contract)
 
         if not contracts:
             logger.warning("No contracts resolved for snapshots")
             return []
 
         snapshots = []
-        # Batching logic
         batch_size = 500
         for i in range(0, len(contracts), batch_size):
             batch = contracts[i : i + batch_size]
             logger.info("Requesting snapshots", batch_size=len(batch))
             try:
-                # Mocking api.snapshots call as it requires authentication
-                # results = self.api.snapshots(batch)
-                results = []  # Placeholder
-                snapshots.extend(results)
-                # Rate limit throttle: 50 requests per 5s => assume 100ms delay safe
-                time.sleep(0.1)
+                results = self.api.snapshots(batch)
+                snapshots.extend(results or [])
+                time.sleep(0.11)
             except Exception as e:
                 logger.error("Snapshot fetch failed", error=str(e))
 
@@ -411,6 +532,12 @@ class ShioajiClient:
         order_type: str,
         tif: str,
         custom_field: str | None = None,
+        product_type: str | None = None,
+        order_cond: str | None = None,
+        order_lot: str | None = None,
+        oc_type: str | None = None,
+        account: Any | None = None,
+        price_type: str | None = None,
     ):
         """
         Wrapper for placing order.
@@ -419,7 +546,7 @@ class ShioajiClient:
             logger.warning("Shioaji SDK missing; mock place_order invoked.")
             return {"seq_no": f"sim-{int(time.time() * 1000)}"}
 
-        contract = self._get_contract(exchange, contract_code)
+        contract = self._get_contract(exchange, contract_code, product_type=product_type, allow_synthetic=False)
         if not contract:
             raise ValueError(f"Contract {contract_code} not found")
 
@@ -427,9 +554,25 @@ class ShioajiClient:
         # Action: Buy/Sell
         act = sj.constant.Action.Buy if action == "Buy" else sj.constant.Action.Sell
 
-        # PriceType: Limit/Market
-        # OrderType: ROC/ROD/IOC (Shioaji treats these slightly differently, usually price_type=Limit/Market, order_type=ROD/IOC/FOK)
-        # Assuming HFT uses Limit + ROD/IOC usually.
+        if product_type:
+            return self._place_order_typed(
+                contract=contract,
+                action=act,
+                price=price,
+                qty=qty,
+                exchange=exchange,
+                product_type=product_type,
+                tif=tif,
+                order_type=order_type,
+                price_type=price_type,
+                order_cond=order_cond,
+                order_lot=order_lot,
+                oc_type=oc_type,
+                account=account,
+                custom_field=custom_field,
+            )
+
+        # Legacy fallback for tests/backward compatibility.
         pt = sj.constant.StockPriceType.LMT
         ot = sj.constant.OrderType.ROD
         if tif == "IOC":
@@ -438,24 +581,181 @@ class ShioajiClient:
             ot = sj.constant.OrderType.FOK
 
         order = sj.Order(price=price, quantity=qty, action=act, price_type=pt, order_type=ot, custom_field=custom_field)
+        return self.api.place_order(contract, order)
 
-        trade = self.api.place_order(contract, order)
-        return trade
+    def _place_order_typed(
+        self,
+        *,
+        contract: Any,
+        action: Any,
+        price: float,
+        qty: int,
+        exchange: str,
+        product_type: str,
+        tif: str,
+        order_type: str,
+        price_type: str | None,
+        order_cond: str | None,
+        order_lot: str | None,
+        oc_type: str | None,
+        account: Any | None,
+        custom_field: str | None,
+    ):
+        prod = str(product_type or "").strip().lower()
+        if not prod:
+            prod = "stock" if str(exchange).upper() in {"TSE", "OTC", "OES"} else "future"
+
+        resolved_account = self._resolve_account(prod, account)
+        order = None
+
+        if prod in {"stock", "stk"}:
+            pt = self._map_stock_price_type(price_type)
+            ot = self._map_stock_order_type(tif or order_type)
+            cond = self._map_stock_order_cond(order_cond)
+            lot = self._map_stock_order_lot(order_lot)
+            order_cls = getattr(getattr(sj, "order", None), "StockOrder", None) or getattr(sj, "Order", None)
+            order = order_cls(
+                price=price,
+                quantity=qty,
+                action=action,
+                price_type=pt,
+                order_type=ot,
+                order_cond=cond,
+                order_lot=lot,
+                account=resolved_account,
+                custom_field=custom_field,
+            )
+        else:
+            pt = self._map_futures_price_type(price_type)
+            ot = self._map_futures_order_type(tif or order_type)
+            oc = self._map_futures_oc_type(oc_type)
+            order_cls = getattr(getattr(sj, "order", None), "FuturesOrder", None) or getattr(sj, "Order", None)
+            order = order_cls(
+                price=price,
+                quantity=qty,
+                action=action,
+                price_type=pt,
+                order_type=ot,
+                octype=oc,
+                account=resolved_account,
+                custom_field=custom_field,
+            )
+
+        return self.api.place_order(contract, order)
+
+    def _resolve_account(self, product_type: str, account: Any | None) -> Any | None:
+        if account is not None:
+            if isinstance(account, str):
+                if account == "stock" and hasattr(self.api, "stock_account"):
+                    return self.api.stock_account
+                if account in {"futopt", "future", "option"} and hasattr(self.api, "futopt_account"):
+                    return self.api.futopt_account
+            return account
+        if not self.api:
+            return None
+        if product_type in {"stock", "stk"} and hasattr(self.api, "stock_account"):
+            return self.api.stock_account
+        if product_type in {"future", "futures", "option", "options"} and hasattr(self.api, "futopt_account"):
+            return self.api.futopt_account
+        return None
+
+    def _map_stock_price_type(self, price_type: str | None) -> Any:
+        if not sj:
+            return None
+        key = str(price_type or "LMT").upper()
+        return getattr(sj.constant.StockPriceType, key, sj.constant.StockPriceType.LMT)
+
+    def _map_stock_order_type(self, order_type: str | None) -> Any:
+        if not sj:
+            return None
+        key = str(order_type or "ROD").upper()
+        return getattr(sj.constant.OrderType, key, sj.constant.OrderType.ROD)
+
+    def _map_stock_order_cond(self, order_cond: str | None) -> Any:
+        if not sj:
+            return None
+        if not order_cond:
+            return sj.constant.StockOrderCond.Cash
+        key = str(order_cond).strip().lower().replace("_", "").replace("-", "")
+        mapping = {
+            "cash": "Cash",
+            "margin": "MarginTrading",
+            "margintrading": "MarginTrading",
+            "short": "ShortSelling",
+            "shortselling": "ShortSelling",
+        }
+        name = mapping.get(key, "Cash")
+        return getattr(sj.constant.StockOrderCond, name, sj.constant.StockOrderCond.Cash)
+
+    def _map_stock_order_lot(self, order_lot: str | None) -> Any:
+        if not sj:
+            return None
+        if not order_lot:
+            return sj.constant.StockOrderLot.Common
+        key = str(order_lot).strip().lower().replace("_", "").replace("-", "")
+        mapping = {
+            "common": "Common",
+            "fixing": "Fixing",
+            "odd": "Odd",
+            "intradayodd": "IntradayOdd",
+        }
+        name = mapping.get(key, "Common")
+        return getattr(sj.constant.StockOrderLot, name, sj.constant.StockOrderLot.Common)
+
+    def _map_futures_price_type(self, price_type: str | None) -> Any:
+        if not sj:
+            return None
+        key = str(price_type or "LMT").upper()
+        return getattr(sj.constant.FuturesPriceType, key, sj.constant.FuturesPriceType.LMT)
+
+    def _map_futures_order_type(self, order_type: str | None) -> Any:
+        if not sj:
+            return None
+        key = str(order_type or "ROD").upper()
+        fut_type = getattr(sj.constant, "FuturesOrderType", None)
+        if fut_type:
+            return getattr(fut_type, key, fut_type.ROD)
+        return getattr(sj.constant.OrderType, key, sj.constant.OrderType.ROD)
+
+    def _map_futures_oc_type(self, oc_type: str | None) -> Any:
+        if not sj:
+            return None
+        if not oc_type:
+            return sj.constant.FuturesOCType.Auto
+        key = str(oc_type).strip().lower().replace("_", "").replace("-", "")
+        mapping = {"auto": "Auto", "new": "New", "close": "Close"}
+        name = mapping.get(key, "Auto")
+        return getattr(sj.constant.FuturesOCType, name, sj.constant.FuturesOCType.Auto)
 
     def cancel_order(self, trade):
         if not self.api:
             logger.warning("Shioaji SDK missing; mock cancel_order invoked.")
             return
+        if hasattr(self.api, "cancel_order"):
+            try:
+                return self.api.cancel_order(trade)
+            except Exception as exc:
+                logger.warning("cancel_order failed; falling back to update_status", error=str(exc))
         self.api.update_status(self.api.OrderState.Cancel, trade=trade)
 
     def update_order(self, trade, price: float | None = None, qty: int | None = None):
         if not self.api:
             logger.warning("Shioaji SDK missing; mock update_order invoked.")
             return
-        if price:
-            self.api.update_status(self.api.OrderState.UpdatePrice, trade=trade, price=price)
-        elif qty:
-            self.api.update_status(self.api.OrderState.UpdateQty, trade=trade, quantity=qty)
+        if price is not None:
+            if hasattr(self.api, "update_price"):
+                try:
+                    return self.api.update_price(trade=trade, price=price)
+                except Exception as exc:
+                    logger.warning("update_price failed; falling back to update_status", error=str(exc))
+            return self.api.update_status(self.api.OrderState.UpdatePrice, trade=trade, price=price)
+        if qty is not None:
+            if hasattr(self.api, "update_qty"):
+                try:
+                    return self.api.update_qty(trade=trade, quantity=qty)
+                except Exception as exc:
+                    logger.warning("update_qty failed; falling back to update_status", error=str(exc))
+            return self.api.update_status(self.api.OrderState.UpdateQty, trade=trade, quantity=qty)
 
     def get_account_balance(self, account=None):
         return {}
