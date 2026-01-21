@@ -375,9 +375,7 @@ def load_metrics_cache(path: str = DEFAULT_METRICS_CACHE) -> dict[str, dict[str,
     return {}
 
 
-def load_contract_cache(
-    path: str = DEFAULT_CONTRACT_CACHE, metrics_path: str | None = None
-) -> ContractIndex | None:
+def load_contract_cache(path: str = DEFAULT_CONTRACT_CACHE, metrics_path: str | None = None) -> ContractIndex | None:
     if not path or not os.path.exists(path):
         return None
     try:
@@ -985,8 +983,7 @@ def _expand_futures(
     contracts = [
         c
         for c in contracts
-        if not str(c.get("code", "")).endswith(("R1", "R2"))
-        and not str(c.get("symbol", "")).endswith(("R1", "R2"))
+        if not str(c.get("code", "")).endswith(("R1", "R2")) and not str(c.get("symbol", "")).endswith(("R1", "R2"))
     ]
     if not contracts:
         result.errors.append(f"No futures contracts found for root {root} after filtering R1/R2")
