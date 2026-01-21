@@ -489,8 +489,8 @@ def cmd_symbols_validate(args: argparse.Namespace):
         ContractIndex,
         build_symbols,
         fetch_contracts_from_broker,
-        load_metrics_cache,
         load_contract_cache,
+        load_metrics_cache,
         validate_symbols,
     )
 

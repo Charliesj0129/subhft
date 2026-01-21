@@ -1187,7 +1187,14 @@ def _expand_options(
                 continue
             candidates.append(contract)
 
-        candidates = _apply_filters(candidates, filters, result, contract_index, context=f"{root}@{month}", reference=reference)
+        candidates = _apply_filters(
+            candidates,
+            filters,
+            result,
+            contract_index,
+            context=f"{root}@{month}",
+            reference=reference,
+        )
         for contract in candidates:
             entry = _build_entry(str(contract.get("code")), attrs, contract, result, extra_tags=tags)
             if entry:

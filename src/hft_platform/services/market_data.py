@@ -80,7 +80,11 @@ class MarketDataService:
                         raw_type = type(raw).__name__
                         sample = None
                         if isinstance(raw, dict):
-                            sample = {k: raw.get(k) for k in ("code", "close", "bid_price", "ask_price", "ts") if k in raw}
+                            sample = {
+                                k: raw.get(k)
+                                for k in ("code", "close", "bid_price", "ask_price", "ts")
+                                if k in raw
+                            }
                         else:
                             sample = getattr(raw, "code", None) or raw_type
                         logger.info("MD Raw Recv", type=raw_type, sample=str(sample)[:200])
