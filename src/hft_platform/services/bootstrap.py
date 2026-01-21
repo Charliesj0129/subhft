@@ -49,7 +49,7 @@ class SystemBootstrapper:
         symbol_metadata = SymbolMetadata(symbols_path)
         price_scale_provider = SymbolMetadataPriceScaleProvider(symbol_metadata)
 
-        client = ShioajiClient(symbols_path)
+        client = ShioajiClient(symbols_path, self.settings.get("shioaji", {}))
 
         # 4. Services
         md_service = MarketDataService(bus, raw_queue, client, symbol_metadata=symbol_metadata)

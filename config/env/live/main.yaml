@@ -1,0 +1,9 @@
+mode: live
+
+shioaji:
+  # Enable CA activation for live trading
+  activate_ca: true
+  # Path to Sinopac CA certificate (do not commit secrets)
+  ca_path: /path/to/Sinopac.pfx
+  # Read CA password from environment variable
+  ca_password_env: CA_PASSWORD

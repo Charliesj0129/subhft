@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 from enum import Enum
 
@@ -44,6 +45,12 @@ class MarketDataService:
         self.last_event_ts = time.time()
         self.heartbeat_threshold_s = 5.0
         self.metrics = {"count": 0, "start_ts": time.time()}
+        self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
+        self.log_raw_every = int(os.getenv("HFT_MD_LOG_EVERY", "1000"))
+        self._raw_log_counter = 0
+        self.log_normalized = os.getenv("HFT_MD_LOG_NORMALIZED", "0") == "1"
+        self.log_normalized_every = int(os.getenv("HFT_MD_LOG_NORMALIZED_EVERY", "1000"))
+        self._normalized_log_counter = 0
 
     async def run(self):
         self.running = True
@@ -67,18 +74,27 @@ class MarketDataService:
                 self.metrics["count"] += 1
 
                 # logger.debug(f"MD Raw Type: {type(raw)}")
-                logger.info("MD Raw Recv", type=str(type(raw)), val=str(raw)[:200])  # Log first 200 chars
+                if self.log_raw:
+                    self._raw_log_counter += 1
+                    if self._raw_log_counter % self.log_raw_every == 0:
+                        raw_type = type(raw).__name__
+                        sample = None
+                        if isinstance(raw, dict):
+                            sample = {k: raw.get(k) for k in ("code", "close", "bid_price", "ask_price", "ts") if k in raw}
+                        else:
+                            sample = getattr(raw, "code", None) or raw_type
+                        logger.info("MD Raw Recv", type=raw_type, sample=str(sample)[:200])
 
                 # Normalize
                 event = None
                 # Basic key check for dispatch
                 try:
-                    is_bid = (
-                        hasattr(raw, "bid_price")
-                        or "bid_price" in str(raw)
-                        or (isinstance(raw, dict) and "bid_price" in raw)
-                    )
-                    is_tick = hasattr(raw, "close") or "close" in str(raw) or (isinstance(raw, dict) and "close" in raw)
+                    if isinstance(raw, dict):
+                        is_bid = "bid_price" in raw or "bid_volume" in raw or "ask_price" in raw
+                        is_tick = "close" in raw or "price" in raw
+                    else:
+                        is_bid = hasattr(raw, "bid_price") or hasattr(raw, "bid_volume") or hasattr(raw, "ask_price")
+                        is_tick = hasattr(raw, "close") or hasattr(raw, "price")
 
                     if is_bid:
                         event = self.normalizer.normalize_bidask(raw)
@@ -88,9 +104,10 @@ class MarketDataService:
                     logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))
 
                 if event:
-                    # logger.info(f"MD Publishing: {type(event)}")
-                    # Use debug to avoid spam, but for now INFO to verify
-                    logger.info("MD Normalized", type=str(type(event)), symbol=event.symbol)
+                    if self.log_normalized:
+                        self._normalized_log_counter += 1
+                        if self._normalized_log_counter % self.log_normalized_every == 0:
+                            logger.info("MD Normalized", type=str(type(event)), symbol=event.symbol)
 
                     # Update LOB
                     stats = self.lob.process_event(event)  # Accepts Event object now
@@ -155,7 +172,8 @@ class MarketDataService:
         """
         try:
             # DEBUG: Log every callback to confirm flow
-            logger.info("Callback hit", args_len=len(args))
+            if self.log_raw:
+                logger.debug("Callback hit", args_len=len(args))
 
             exchange = None
             msg = None
