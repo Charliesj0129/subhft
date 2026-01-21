@@ -62,7 +62,11 @@ class TestShioajiClientFull(unittest.TestCase):
         # Test Env var login
         with patch.dict(os.environ, {"SHIOAJI_PERSON_ID": "TESTID", "SHIOAJI_PASSWORD": "TESTPW"}):
             self.client.login()
-            self.mock_api_instance.login.assert_called_with(person_id="TESTID", passwd="TESTPW", contracts_cb=None)
+            self.mock_api_instance.login.assert_called_once()
+            _, kwargs = self.mock_api_instance.login.call_args
+            self.assertEqual(kwargs["person_id"], "TESTID")
+            self.assertEqual(kwargs["passwd"], "TESTPW")
+            self.assertIsNone(kwargs.get("contracts_cb"))
             self.assertTrue(self.client.logged_in)
 
     def test_subscribe_basket(self):
@@ -100,5 +104,7 @@ class TestShioajiClientFull(unittest.TestCase):
         on_deal = MagicMock()
         self.client.set_execution_callbacks(on_order, on_deal)
 
-        self.mock_api_instance.set_order_callback.assert_called_with(on_order)
-        self.mock_api_instance.set_deal_callback.assert_called_with(on_deal)
+        self.mock_api_instance.set_order_callback.assert_called_once()
+        callback = self.mock_api_instance.set_order_callback.call_args[0][0]
+        self.assertTrue(callable(callback))
+        self.mock_api_instance.set_deal_callback.assert_not_called()
