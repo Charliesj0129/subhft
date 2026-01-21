@@ -147,10 +147,28 @@ class OrderAdapter:
                 logger.info("Placing Order", symbol=intent.symbol, price=intent.price, qty=intent.qty, side=intent.side)
 
                 # Dynamic Exchange Lookup (prefer config metadata)
-                meta_exchange = self.metadata.exchange(intent.symbol)
+                meta = self.metadata
+                meta_exchange = ""
+                if hasattr(meta, "exchange"):
+                    try:
+                        meta_exchange = meta.exchange(intent.symbol)
+                    except Exception:
+                        meta_exchange = ""
                 exchange = meta_exchange or self.client.get_exchange(intent.symbol) or "TSE"
-                product_type = self.metadata.product_type(intent.symbol) or None
-                order_params = self.metadata.order_params(intent.symbol)
+
+                product_type = None
+                if hasattr(meta, "product_type"):
+                    try:
+                        product_type = meta.product_type(intent.symbol) or None
+                    except Exception:
+                        product_type = None
+
+                order_params: Dict[str, Any] = {}
+                if hasattr(meta, "order_params"):
+                    try:
+                        order_params = meta.order_params(intent.symbol) or {}
+                    except Exception:
+                        order_params = {}
 
                 # Convert Side IntEnum to String for ShioajiClient
                 action_str = "Buy" if intent.side == Side.BUY else "Sell"

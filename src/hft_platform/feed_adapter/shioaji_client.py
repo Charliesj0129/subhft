@@ -681,38 +681,64 @@ class ShioajiClient:
         resolved_account = self._resolve_account(prod, account)
         order = None
 
+        fallback_cls = getattr(sj, "Order", None)
+
         if prod in {"stock", "stk"}:
             pt = self._map_stock_price_type(price_type)
             ot = self._map_stock_order_type(tif or order_type)
             cond = self._map_stock_order_cond(order_cond)
             lot = self._map_stock_order_lot(order_lot)
-            order_cls = getattr(getattr(sj, "order", None), "StockOrder", None) or getattr(sj, "Order", None)
-            order = order_cls(
-                price=price,
-                quantity=qty,
-                action=action,
-                price_type=pt,
-                order_type=ot,
-                order_cond=cond,
-                order_lot=lot,
-                account=resolved_account,
-                custom_field=custom_field,
-            )
+            order_cls = getattr(getattr(sj, "order", None), "StockOrder", None) or fallback_cls
+            if resolved_account is None and order_cls is not fallback_cls:
+                order_cls = fallback_cls
+            if order_cls is fallback_cls:
+                order = order_cls(
+                    price=price,
+                    quantity=qty,
+                    action=action,
+                    price_type=pt,
+                    order_type=ot,
+                    custom_field=custom_field,
+                )
+            else:
+                order = order_cls(
+                    price=price,
+                    quantity=qty,
+                    action=action,
+                    price_type=pt,
+                    order_type=ot,
+                    order_cond=cond,
+                    order_lot=lot,
+                    account=resolved_account,
+                    custom_field=custom_field,
+                )
         else:
             pt = self._map_futures_price_type(price_type)
             ot = self._map_futures_order_type(tif or order_type)
             oc = self._map_futures_oc_type(oc_type)
-            order_cls = getattr(getattr(sj, "order", None), "FuturesOrder", None) or getattr(sj, "Order", None)
-            order = order_cls(
-                price=price,
-                quantity=qty,
-                action=action,
-                price_type=pt,
-                order_type=ot,
-                octype=oc,
-                account=resolved_account,
-                custom_field=custom_field,
-            )
+            order_cls = getattr(getattr(sj, "order", None), "FuturesOrder", None) or fallback_cls
+            if resolved_account is None and order_cls is not fallback_cls:
+                order_cls = fallback_cls
+            if order_cls is fallback_cls:
+                order = order_cls(
+                    price=price,
+                    quantity=qty,
+                    action=action,
+                    price_type=pt,
+                    order_type=ot,
+                    custom_field=custom_field,
+                )
+            else:
+                order = order_cls(
+                    price=price,
+                    quantity=qty,
+                    action=action,
+                    price_type=pt,
+                    order_type=ot,
+                    octype=oc,
+                    account=resolved_account,
+                    custom_field=custom_field,
+                )
 
         return self.api.place_order(contract, order)
 

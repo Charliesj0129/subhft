@@ -64,6 +64,8 @@ async def test_full_order_lifecycle():
     # Mock Shioaji API via OrderAdapter's client
     mock_api = MagicMock()
     mock_api.place_order.return_value = {"seq_no": "test-seq-1", "order_id": "oid-1"}
+    mock_api.stock_account = None
+    mock_api.futopt_account = None
 
     # Mock Contract
     mock_contract = MagicMock()
