@@ -63,20 +63,8 @@ class ExecutionNormalizer:
         if not isinstance(d, dict):
             return None
         order = d.get("order", {}) if isinstance(d.get("order"), dict) else {}
-        ord_no = str(
-            order.get("ordno")
-            or order.get("ord_no")
-            or d.get("ordno")
-            or d.get("ord_no")
-            or ""
-        )
-        seq_no = str(
-            order.get("seqno")
-            or order.get("seq_no")
-            or d.get("seqno")
-            or d.get("seq_no")
-            or ""
-        )
+        ord_no = str(order.get("ordno") or order.get("ord_no") or d.get("ordno") or d.get("ord_no") or "")
+        seq_no = str(order.get("seqno") or order.get("seq_no") or d.get("seqno") or d.get("seq_no") or "")
         other_id = str(order.get("id") or d.get("order_id") or d.get("id") or "")
         resolved = self.order_id_resolver.resolve_strategy_id_from_candidates([ord_no, seq_no, other_id])
         return resolved if resolved != "UNKNOWN" else None

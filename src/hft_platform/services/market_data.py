@@ -81,9 +81,7 @@ class MarketDataService:
                         sample = None
                         if isinstance(raw, dict):
                             sample = {
-                                k: raw.get(k)
-                                for k in ("code", "close", "bid_price", "ask_price", "ts")
-                                if k in raw
+                                k: raw.get(k) for k in ("code", "close", "bid_price", "ask_price", "ts") if k in raw
                             }
                         else:
                             sample = getattr(raw, "code", None) or raw_type

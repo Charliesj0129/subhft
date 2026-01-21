@@ -51,12 +51,10 @@ class ShioajiClient:
             or os.getenv("SHIOAJI_ACTIVATE_CA", "0") == "1"
             or os.getenv("HFT_ACTIVATE_CA", "0") == "1"
         )
-        self.ca_path = (
-            self.shioaji_config.get("ca_path")
-            or os.getenv("SHIOAJI_CA_PATH")
-            or os.getenv("CA_CERT_PATH")
+        self.ca_path = self.shioaji_config.get("ca_path") or os.getenv("SHIOAJI_CA_PATH") or os.getenv("CA_CERT_PATH")
+        ca_password = (
+            self.shioaji_config.get("ca_password") or os.getenv("SHIOAJI_CA_PASSWORD") or os.getenv("CA_PASSWORD")
         )
-        ca_password = self.shioaji_config.get("ca_password") or os.getenv("SHIOAJI_CA_PASSWORD") or os.getenv("CA_PASSWORD")
         if not ca_password:
             env_key = self.shioaji_config.get("ca_password_env")
             if env_key:
@@ -412,7 +410,9 @@ class ShioajiClient:
         if prod in {"index", "idx"} or exch in {"IDX", "INDEX"}:
             idx_exch = exch if exch in {"TSE", "OTC"} else self.index_exchange
             idx_group = getattr(self.api.Contracts.Indexs, idx_exch, None)
-            return self._lookup_contract(idx_group, code, allow_symbol_fallback=self.allow_symbol_fallback, label="index")
+            return self._lookup_contract(
+                idx_group, code, allow_symbol_fallback=self.allow_symbol_fallback, label="index"
+            )
 
         if prod in {"stock", "stk"} or exch in {"TSE", "OTC", "OES"}:
             if exch == "TSE":
