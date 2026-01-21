@@ -16,6 +16,8 @@
 **交易/登入**
 - `SHIOAJI_PERSON_ID`, `SHIOAJI_PASSWORD`
 - `SHIOAJI_API_KEY`, `SHIOAJI_SECRET_KEY`
+- `CA_CERT_PATH`, `CA_PASSWORD` (CA 憑證啟用)
+- `SHIOAJI_ACTIVATE_CA=1` (自動啟用 CA)
 
 **模式與 symbols**
 - `HFT_MODE=sim|live|replay`
@@ -24,6 +26,13 @@
 
 **監控**
 - `HFT_PROM_PORT=9090`
+- `HFT_MD_LOG_RAW=1` (開啟 raw 行情採樣日誌)
+- `HFT_MD_LOG_EVERY=1000` (raw 日誌採樣頻率)
+- `HFT_MD_LOG_NORMALIZED=1` (開啟 normalized 行情採樣日誌)
+- `HFT_MD_LOG_NORMALIZED_EVERY=1000` (normalized 日誌採樣頻率)
+
+**行情重訂閱**
+- `HFT_RESUBSCRIBE_COOLDOWN=1.5` (重連後重訂閱節流秒數)
 
 **ClickHouse**
 - `HFT_CLICKHOUSE_ENABLED=0|1`
@@ -270,3 +279,13 @@ clickhouse:
 - 先改 `config/base/main.yaml` 與 `config/symbols.list`
 - 開發期間用 `config/settings.py` 做私有覆蓋
 - 正式環境透過 `.env` 與 CI 注入變數
+
+## 15. Shioaji Live 設定範例
+`config/env/live/main.yaml` 可以用來開啟 CA 自動啟用：
+```yaml
+mode: live
+shioaji:
+  activate_ca: true
+  ca_path: /path/to/Sinopac.pfx
+  ca_password_env: CA_PASSWORD
+```

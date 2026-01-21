@@ -37,6 +37,9 @@ class SymbolMetadata:
         self.meta: Dict[str, Dict[str, Any]] = {}
         self.tags_by_symbol: Dict[str, set[str]] = {}
         self.symbols_by_tag: Dict[str, set[str]] = {}
+        self._price_scale_cache: Dict[str, int] = {}
+        self._exchange_cache: Dict[str, str] = {}
+        self._product_type_cache: Dict[str, str] = {}
         self._mtime: float | None = None
         self._load()
 
@@ -46,6 +49,9 @@ class SymbolMetadata:
         self.meta = {}
         self.tags_by_symbol = {}
         self.symbols_by_tag = {}
+        self._price_scale_cache = {}
+        self._exchange_cache = {}
+        self._product_type_cache = {}
         try:
             self._mtime = os.path.getmtime(self.config_path)
         except OSError:
@@ -96,26 +102,41 @@ class SymbolMetadata:
         return resolved
 
     def price_scale(self, symbol: str) -> int:
+        cached = self._price_scale_cache.get(symbol)
+        if cached is not None:
+            return cached
         # Avoid creating empty dict
         entry = self.meta.get(symbol)
         if entry:
             if "price_scale" in entry:
-                return int(entry.get("price_scale", self.DEFAULT_SCALE))
+                scale = int(entry.get("price_scale", self.DEFAULT_SCALE))
+                self._price_scale_cache[symbol] = scale
+                return scale
             tick_size = entry.get("tick_size")
             if tick_size:
                 try:
                     scale = int(round(1 / float(tick_size)))
                     if scale > 0:
+                        self._price_scale_cache[symbol] = scale
                         return scale
                 except (TypeError, ValueError, ZeroDivisionError):
                     pass
+        self._price_scale_cache[symbol] = self.DEFAULT_SCALE
         return self.DEFAULT_SCALE
 
     def exchange(self, symbol: str) -> str:
+        cached = self._exchange_cache.get(symbol)
+        if cached is not None:
+            return cached
         entry = self.meta.get(symbol) or {}
-        return str(entry.get("exchange", ""))
+        value = str(entry.get("exchange", ""))
+        self._exchange_cache[symbol] = value
+        return value
 
     def product_type(self, symbol: str) -> str:
+        cached = self._product_type_cache.get(symbol)
+        if cached is not None:
+            return cached
         entry = self.meta.get(symbol) or {}
         raw = (
             entry.get("product_type")
@@ -126,17 +147,23 @@ class SymbolMetadata:
         )
         raw = str(raw).strip().lower()
         if raw:
+            self._product_type_cache[symbol] = raw
             return raw
 
         exchange = self.exchange(symbol).upper()
         if exchange in {"TSE", "OTC", "OES"}:
+            self._product_type_cache[symbol] = "stock"
             return "stock"
         if exchange in {"FUT", "FUTURES", "TAIFEX"}:
+            self._product_type_cache[symbol] = "future"
             return "future"
         if exchange in {"OPT", "OPTIONS"}:
+            self._product_type_cache[symbol] = "option"
             return "option"
         if exchange in {"IDX", "INDEX"}:
+            self._product_type_cache[symbol] = "index"
             return "index"
+        self._product_type_cache[symbol] = ""
         return ""
 
     def order_params(self, symbol: str) -> Dict[str, Any]:

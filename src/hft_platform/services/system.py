@@ -50,8 +50,8 @@ class HFTSystem:
 
         # Hooks for Shioaji
         self.client.set_execution_callbacks(
-            on_order=lambda s, o: self._on_exec("order", {"status": s, "order": o}),
-            on_deal=lambda d: self._on_exec("deal", d),
+            on_order=lambda state, payload: self._on_exec("order", {"state": state, "payload": payload}),
+            on_deal=lambda payload: self._on_exec("deal", {"payload": payload}),
         )
 
         try:
@@ -150,7 +150,7 @@ class HFTSystem:
         self.strategy_runner.running = False
         self.order_adapter.running = False  # Clean shutdown
 
-    async def _on_exec(self, topic, data):
+    def _on_exec(self, topic, data):
         # This callback runs in Shioaji thread.
         # We must schedule work on the main loop.
         if self.running and hasattr(self, "loop"):

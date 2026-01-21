@@ -145,6 +145,43 @@ def test_normalize_fill_fallback_to_seq_no_map(tmp_path, monkeypatch):
     assert event.strategy_id == "strat"
 
 
+def test_normalize_order_uses_exchange_ts_for_broker_ts(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer()
+    raw = RawExecEvent(
+        "order",
+        {
+            "ordno": "O1",
+            "status": {"status": "Submitted", "exchange_ts": 1.5},
+            "contract": {"code": "AAA"},
+            "order": {"action": "Buy", "price": 1.23, "quantity": 1},
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_order(raw)
+    assert event.broker_ts_ns == 1_500_000_000
+
+
+def test_normalize_fill_ts_seconds_to_ns(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer()
+    raw = RawExecEvent(
+        "deal",
+        {
+            "seqno": "F1",
+            "ordno": "O1",
+            "code": "AAA",
+            "action": "Buy",
+            "quantity": 1,
+            "price": 1.23,
+            "ts": 1700000000.25,
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_fill(raw)
+    assert event.match_ts_ns == 1_700_000_000_250_000_000
+
+
 @pytest.mark.parametrize(
     ("mapping", "expected"),
     [

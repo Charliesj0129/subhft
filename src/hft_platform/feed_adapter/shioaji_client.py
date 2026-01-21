@@ -36,7 +36,7 @@ def dispatch_tick_cb(exchange, msg):
 
 
 class ShioajiClient:
-    def __init__(self, config_path: str | None = None):
+    def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None):
         self.MAX_SUBSCRIPTIONS = 200
         self.contracts_timeout = int(os.getenv("SHIOAJI_CONTRACTS_TIMEOUT", "10000"))
         self.fetch_contract = os.getenv("SHIOAJI_FETCH_CONTRACT", "1") != "0"
@@ -44,6 +44,24 @@ class ShioajiClient:
         self.allow_symbol_fallback = os.getenv("HFT_ALLOW_SYMBOL_FALLBACK") == "1"
         self.allow_synthetic_contracts = os.getenv("HFT_ALLOW_SYNTHETIC_CONTRACTS") == "1"
         self.index_exchange = os.getenv("HFT_INDEX_EXCHANGE", "TSE").upper()
+        self.resubscribe_cooldown = float(os.getenv("HFT_RESUBSCRIBE_COOLDOWN", "1.5"))
+        self.shioaji_config = shioaji_config or {}
+        self.activate_ca = (
+            bool(self.shioaji_config.get("activate_ca"))
+            or os.getenv("SHIOAJI_ACTIVATE_CA", "0") == "1"
+            or os.getenv("HFT_ACTIVATE_CA", "0") == "1"
+        )
+        self.ca_path = (
+            self.shioaji_config.get("ca_path")
+            or os.getenv("SHIOAJI_CA_PATH")
+            or os.getenv("CA_CERT_PATH")
+        )
+        ca_password = self.shioaji_config.get("ca_password") or os.getenv("SHIOAJI_CA_PASSWORD") or os.getenv("CA_PASSWORD")
+        if not ca_password:
+            env_key = self.shioaji_config.get("ca_password_env")
+            if env_key:
+                ca_password = os.getenv(str(env_key))
+        self.ca_password = ca_password
 
         if config_path is None:
             config_path = os.getenv("SYMBOLS_CONFIG")
@@ -122,6 +140,7 @@ class ShioajiClient:
             logger.info("Login successful (API Key)")
             if not self.fetch_contract:
                 self._ensure_contracts()
+            self._maybe_activate_ca()
             self.logged_in = True
             return
 
@@ -147,6 +166,7 @@ class ShioajiClient:
             logger.info("Login successful")
             if not self.fetch_contract:
                 self._ensure_contracts()
+            self._maybe_activate_ca()
 
             self.logged_in = True
         except Exception as e:
@@ -161,17 +181,25 @@ class ShioajiClient:
         if not self.api:
             logger.warning("Shioaji SDK missing; execution callbacks not registered (sim mode).")
             return
-        self.api.set_order_callback(on_order)
-        # deal callback naming depends on version, check docs if avail, defaulting to likely name
-        # In some versions it is set_context(on_deal, on_order, ...)
-        # For now assuming set_order_callback handles order updates.
-        # Deal updates might come via update_status or separate stream.
-        # Check spec: "Register Shioaji callbacks (api.on_order, api.on_deal)"
-        # We will assume a wrapper or direct assignment if methods exist.
-        try:
-            self.api.set_deal_callback(on_deal)
-        except AttributeError:
-            logger.warning("api.set_deal_callback not found, relying on order callback")
+        order_state = getattr(sj.constant, "OrderState", None) if sj else None
+        deal_states = set()
+        if order_state:
+            for name in ("StockDeal", "FuturesDeal"):
+                state = getattr(order_state, name, None)
+                if state is not None:
+                    deal_states.add(state)
+
+        def _order_cb(stat, msg):
+            try:
+                if stat in deal_states:
+                    on_deal(msg)
+                else:
+                    on_order(stat, msg)
+            except Exception as exc:
+                logger.error("Execution callback failed", error=str(exc))
+
+        self._order_callback = _order_cb
+        self.api.set_order_callback(self._order_callback)
 
     def _ensure_contracts(self) -> None:
         if not self.api or not hasattr(self.api, "fetch_contracts"):
@@ -180,6 +208,20 @@ class ShioajiClient:
             self.api.fetch_contracts(contract_download=True)
         except Exception as exc:
             logger.warning("Contract fetch failed", error=str(exc))
+
+    def _maybe_activate_ca(self) -> None:
+        if not self.api or not self.activate_ca:
+            return
+        if self.mode == "simulation":
+            return
+        if not self.ca_path or not self.ca_password:
+            logger.warning("CA activation requested but missing ca_path/ca_password")
+            return
+        try:
+            self.api.activate_ca(ca_path=self.ca_path, ca_passwd=self.ca_password)
+            logger.info("CA activated")
+        except Exception as exc:
+            logger.error("CA activation failed", error=str(exc))
 
     def subscribe_basket(self, cb: Callable[..., Any]):
         if not self.api:
@@ -216,9 +258,9 @@ class ShioajiClient:
             logger.error(f"Failed stock v1 callback registration: {e}")
 
         try:
-            self.api.quote.set_event_callback(cb)
-        except Exception:
-            pass
+            self.api.quote.set_event_callback(self._on_quote_event)
+        except Exception as exc:
+            logger.warning("Failed quote event callback registration", error=str(exc))
 
         try:
             self.api.quote.set_on_tick_fop_v1_callback(dispatch_tick_cb)
@@ -227,6 +269,33 @@ class ShioajiClient:
             logger.error(f"Failed FOP v1 callback registration: {e}")
 
         self._callbacks_registered = True
+
+    def _on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
+        if event_code in (1, 2, 3, 4, 12, 13):
+            logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event=event)
+        if event_code in (4, 13):
+            self._resubscribe_all()
+
+    def _resubscribe_all(self) -> None:
+        if not self.api or not self.logged_in or not self.tick_callback:
+            return
+        now = time.time()
+        last = getattr(self, "_last_resubscribe_ts", 0.0)
+        cooldown = getattr(self, "resubscribe_cooldown", 1.5)
+        if now - last < cooldown:
+            return
+        self._last_resubscribe_ts = now
+        self.subscribed_codes = set()
+        self.subscribed_count = 0
+        for sym in self.symbols:
+            if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
+                logger.error("Subscription limit reached during resubscribe", limit=self.MAX_SUBSCRIPTIONS)
+                break
+            if self._subscribe_symbol(sym, self.tick_callback):
+                code = sym.get("code")
+                if code:
+                    self.subscribed_codes.add(code)
+                self.subscribed_count = len(self.subscribed_codes)
 
     def _subscribe_symbol(self, sym: Dict[str, Any], cb: Callable[..., Any]) -> bool:
         code = sym.get("code")
@@ -479,8 +548,12 @@ class ShioajiClient:
         if self.mode == "simulation":
             return []
         try:
-            # Default to stock account
-            return self.api.list_positions(self.api.stock_account)
+            positions: list[Any] = []
+            if hasattr(self.api, "stock_account") and self.api.stock_account is not None:
+                positions.extend(self.api.list_positions(self.api.stock_account))
+            if hasattr(self.api, "futopt_account") and self.api.futopt_account is not None:
+                positions.extend(self.api.list_positions(self.api.futopt_account))
+            return positions
         except Exception:
             logger.warning("Failed to fetch positions")
             return []
@@ -731,31 +804,46 @@ class ShioajiClient:
         if not self.api:
             logger.warning("Shioaji SDK missing; mock cancel_order invoked.")
             return
-        if hasattr(self.api, "cancel_order"):
-            try:
-                return self.api.cancel_order(trade)
-            except Exception as exc:
-                logger.warning("cancel_order failed; falling back to update_status", error=str(exc))
-        self.api.update_status(self.api.OrderState.Cancel, trade=trade)
+        if not hasattr(self.api, "cancel_order"):
+            raise RuntimeError("Shioaji API missing cancel_order")
+        try:
+            return self.api.cancel_order(trade)
+        except Exception as exc:
+            logger.error("cancel_order failed", error=str(exc))
+            raise
 
     def update_order(self, trade, price: float | None = None, qty: int | None = None):
         if not self.api:
             logger.warning("Shioaji SDK missing; mock update_order invoked.")
             return
         if price is not None:
+            if hasattr(self.api, "update_order"):
+                try:
+                    return self.api.update_order(trade=trade, price=price)
+                except Exception as exc:
+                    logger.error("update_order(price) failed", error=str(exc))
+                    raise
             if hasattr(self.api, "update_price"):
                 try:
                     return self.api.update_price(trade=trade, price=price)
                 except Exception as exc:
-                    logger.warning("update_price failed; falling back to update_status", error=str(exc))
-            return self.api.update_status(self.api.OrderState.UpdatePrice, trade=trade, price=price)
+                    logger.error("update_price failed", error=str(exc))
+                    raise
+            raise RuntimeError("Shioaji API missing update_order/update_price")
         if qty is not None:
+            if hasattr(self.api, "update_order"):
+                try:
+                    return self.api.update_order(trade=trade, qty=qty)
+                except Exception as exc:
+                    logger.error("update_order(qty) failed", error=str(exc))
+                    raise
             if hasattr(self.api, "update_qty"):
                 try:
                     return self.api.update_qty(trade=trade, quantity=qty)
                 except Exception as exc:
-                    logger.warning("update_qty failed; falling back to update_status", error=str(exc))
-            return self.api.update_status(self.api.OrderState.UpdateQty, trade=trade, quantity=qty)
+                    logger.error("update_qty failed", error=str(exc))
+                    raise
+            raise RuntimeError("Shioaji API missing update_order/update_qty")
 
     def get_account_balance(self, account=None):
         return {}
