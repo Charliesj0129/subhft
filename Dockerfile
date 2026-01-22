@@ -51,4 +51,4 @@ EXPOSE 9090
 ENV PYTHONPATH="${PYTHONPATH}:/app/src"
 
 # Entrypoint default (overridden by command)
-CMD ["python", "-m", "hft_platform.main"]
+CMD ["python", "-m", "hft_platform", "run"]

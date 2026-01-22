@@ -26,8 +26,9 @@ def _safe_write(path: str, content: str):
 
 
 def cmd_run(args: argparse.Namespace):
+    mode = args.mode or args.mode_flag or _resolve_default_mode()
     cli_overrides: Dict[str, Any] = {
-        "mode": args.mode,
+        "mode": mode,
         "symbols": args.symbols or None,
     }
     if args.strategy:
@@ -67,6 +68,15 @@ def cmd_run(args: argparse.Namespace):
         asyncio.run(system.run())
     except KeyboardInterrupt:
         print("Interrupted, shutting down...")
+
+
+def _resolve_default_mode() -> str:
+    raw = str(os.getenv("HFT_MODE", "sim")).strip().lower()
+    if raw == "real":
+        return "live"
+    if raw not in {"sim", "live", "replay"}:
+        return "sim"
+    return raw
 
 
 def cmd_init(args: argparse.Namespace):
@@ -619,7 +629,8 @@ def build_parser() -> argparse.ArgumentParser:
     sync.set_defaults(func=cmd_symbols_sync)
 
     run = sub.add_parser("run", help="Run pipeline (sim|live|replay)")
-    run.add_argument("mode", choices=["sim", "live", "replay"])
+    run.add_argument("mode", nargs="?", choices=["sim", "live", "replay"])
+    run.add_argument("--mode", dest="mode_flag", choices=["sim", "live", "replay"])
     run.add_argument("--strategy", help="Strategy id to run")
     run.add_argument("--strategy-module", help="Override strategy module")
     run.add_argument("--strategy-class", help="Override strategy class")

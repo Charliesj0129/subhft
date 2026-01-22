@@ -15,6 +15,7 @@ dependencies = [
     "prometheus_client",
     "psutil",
     "PyYAML",
+    "make>=0.1.6.post2",
 ]
 
 [dependency-groups]
