@@ -1313,9 +1313,18 @@ def fetch_contracts_from_broker() -> list[dict[str, Any]]:
     else:
         api.login(person_id=pid, passwd=pwd, contracts_timeout=60000)
 
+    if hasattr(api, "fetch_contracts"):
+        try:
+            api.fetch_contracts(contract_download=True)
+        except Exception as exc:  # pragma: no cover - broker dependent
+            logger.warning("Failed to refresh contracts", error=str(exc))
+
     contracts: list[dict[str, Any]] = []
 
     def normalize(contract: Any, exchange: str, kind: str) -> dict[str, Any]:
+        right = getattr(contract, "option_right", None) or getattr(contract, "right", None)
+        if right is not None:
+            right = getattr(right, "value", right)
         payload: dict[str, Any] = {
             "code": getattr(contract, "code", None),
             "symbol": getattr(contract, "symbol", None),
@@ -1328,7 +1337,7 @@ def fetch_contracts_from_broker() -> list[dict[str, Any]]:
             "contract_size": getattr(contract, "contract_size", None),
             "delivery_date": getattr(contract, "delivery_date", None),
             "strike": getattr(contract, "strike_price", None) or getattr(contract, "strike", None),
-            "right": getattr(contract, "option_right", None) or getattr(contract, "right", None),
+            "right": right,
             "reference": getattr(contract, "reference", None),
         }
         return {k: v for k, v in payload.items() if v is not None}
@@ -1346,14 +1355,24 @@ def fetch_contracts_from_broker() -> list[dict[str, Any]]:
         logger.warning("Failed to fetch OTC contracts", error=str(exc))
 
     try:
-        for contract in api.Contracts.Futures:
-            contracts.append(normalize(contract, "FUT", "future"))
+        for root in api.Contracts.Futures.keys():
+            try:
+                group = api.Contracts.Futures[root]
+                for contract in group:
+                    contracts.append(normalize(contract, "FUT", "future"))
+            except Exception as exc:
+                logger.warning("Failed to fetch Futures contracts", root=root, error=str(exc))
     except Exception as exc:
         logger.warning("Failed to fetch Futures contracts", error=str(exc))
 
     try:
-        for contract in api.Contracts.Options:
-            contracts.append(normalize(contract, "OPT", "option"))
+        for root in api.Contracts.Options.keys():
+            try:
+                group = api.Contracts.Options[root]
+                for contract in group:
+                    contracts.append(normalize(contract, "OPT", "option"))
+            except Exception as exc:
+                logger.warning("Failed to fetch Options contracts", root=root, error=str(exc))
     except Exception as exc:
         logger.warning("Failed to fetch Options contracts", error=str(exc))
 
