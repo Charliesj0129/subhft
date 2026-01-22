@@ -6,7 +6,7 @@
 # Rules (expanded via contract cache from make sync-symbols):
 #   TXF@front
 #   MXF@next
-#   OPT@TXO@near@ATM+/-3
+#   OPT@TXO@near@ATM+/-10
 #
 # Presets (uncomment to use):
 # @include config/symbols.examples/minimal.list
@@ -17,5 +17,14 @@
 # @include config/symbols.examples/futures_options_demo.list
 # @include config/symbols.examples/stress.list
 
-2330 exchange=TSE tags=stocks
-2317 exchange=TSE tags=stocks
+@include symbols.examples/tw50.list
+
+TXF@front exchange=FUT tags=futures|front_month|txf
+TXF@far exchange=FUT tags=futures|far_month|txf
+MXF@front exchange=FUT tags=futures|front_month|mxf
+MXF@far exchange=FUT tags=futures|far_month|mxf
+# Micro Taiwan Index Futures (TMF) may not be available on all brokers.
+TMF@front exchange=FUT tags=futures|front_month|tmf
+TMF@far exchange=FUT tags=futures|far_month|tmf
+
+OPT@TXO@near@ATM+/-10 exchange=OPT tags=options|near_month|atm

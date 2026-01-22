@@ -1,3 +1,289 @@
+# Default base symbols (stocks + futures).
+# Options are generated via config/symbols.list using make sync-symbols.
 symbols:
-- code: '2357'
-  exchange: TSE
+  - code: "1101"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "1102"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "1216"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "1301"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "1303"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "1326"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "1402"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2002"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2201"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2207"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2301"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2303"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2308"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2317"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2327"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2330"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2345"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2354"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2357"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2379"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2382"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2395"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2408"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2409"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2412"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2454"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2474"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2603"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2609"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2615"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2801"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2881"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2882"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2883"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2884"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2885"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2886"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2887"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2890"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2891"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2892"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "2912"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "3008"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "3034"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "3045"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "3711"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "4904"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "4938"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "5871"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "5880"
+    exchange: TSE
+    tags:
+      - stocks
+      - tw50
+  - code: "TXFC0"
+    exchange: FUT
+    tags:
+      - futures
+      - front_month
+      - txf
+  - code: "TXFC1"
+    exchange: FUT
+    tags:
+      - futures
+      - far_month
+      - txf
+  - code: "MXFC0"
+    exchange: FUT
+    tags:
+      - futures
+      - front_month
+      - mxf
+  - code: "MXFC1"
+    exchange: FUT
+    tags:
+      - futures
+      - far_month
+      - mxf
+  - code: "TMFC0"
+    exchange: FUT
+    tags:
+      - futures
+      - front_month
+      - tmf
+  - code: "TMFC1"
+    exchange: FUT
+    tags:
+      - futures
+      - far_month
+      - tmf
