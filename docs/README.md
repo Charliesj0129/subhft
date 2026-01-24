@@ -16,15 +16,20 @@
 ## Config and CLI
 - `docs/config_reference.md` - configuration fields and defaults
 - `docs/cli_reference.md` - CLI usage
+- `docs/naming_conventions.md` - naming standards
 
 ## Operations and Runbooks
 - `docs/deployment_guide.md` - deployment checklist
+- `docs/ops_change_control.md` - change approval and rollback
 - `docs/runbooks.md` - operational runbooks
+- `docs/observability_minimal.md` - required metrics/alerts
 - `docs/hft_low_latency_runbook.md` - low-latency tuning notes
 - `docs/troubleshooting.md` - common issues
 - `docs/azure_deployment.md` / `docs/deploy_azure.md` - Azure guidance
+- `docs/adr/README.md` - architecture decision records
 
 ## Research and Examples
 - `examples/strategies/` - strategy samples
 - `notebooks/README.md` - research notebooks
 - `docs/hftbacktest_integration.md` - backtest integration
+- `docs/outputs_and_artifacts.md` - output and artifact storage

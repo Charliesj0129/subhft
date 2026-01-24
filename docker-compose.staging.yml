@@ -1,0 +1,7 @@
+services:
+  hft-engine:
+    env_file:
+      - .env.staging
+  wal-loader:
+    env_file:
+      - .env.staging

@@ -1,4 +1,4 @@
-.PHONY: install dev start symbols sync-symbols test coverage lint format typecheck blackbox-tests regression-tests stress-tests system-tests acceptance-tests hooks clean run-sim run-prod backtest ops-up ops-down notebook
+.PHONY: install dev start start-dev start-staging symbols sync-symbols test coverage lint format typecheck blackbox-tests regression-tests stress-tests system-tests acceptance-tests hooks clean run-sim run-dev run-staging run-prod backtest ops-up ops-down notebook
 
 PYTHON := python3
 ifneq ("$(wildcard .venv/bin/python)","")
@@ -17,6 +17,16 @@ start:
 	$(MAKE) dev
 	$(MAKE) symbols
 	docker compose up -d --build
+
+start-dev:
+	$(MAKE) dev
+	$(MAKE) symbols
+	docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+start-staging:
+	$(MAKE) dev
+	$(MAKE) symbols
+	docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --build
 
 symbols:
 	$(CLI) config build --list config/symbols.list --output config/symbols.yaml --contracts config/contracts.json
@@ -66,8 +76,14 @@ clean:
 run-sim:
 	$(CLI) run --mode sim
 
+run-dev:
+	HFT_MODE=sim HFT_ENV=dev $(CLI) run --mode sim
+
+run-staging:
+	HFT_MODE=sim HFT_ENV=staging $(CLI) run --mode sim
+
 run-prod:
-	$(CLI) run --mode live
+	HFT_MODE=live HFT_ENV=prod $(CLI) run --mode live
 
 # Example: make backtest STRATEGY=simple_mm_demo DATE=2024-01-01
 backtest:

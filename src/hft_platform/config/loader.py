@@ -66,6 +66,9 @@ def _env_overrides() -> Dict[str, Any]:
     mode = os.getenv("HFT_MODE")
     if mode:
         env["mode"] = mode
+    env_name = os.getenv("HFT_ENV")
+    if env_name:
+        env["env"] = env_name
     symbols = os.getenv("HFT_SYMBOLS")
     if symbols:
         env["symbols"] = symbols.split(",")
@@ -120,6 +123,15 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
         env_settings = _load_yaml(env_yaml_path)
         settings = _merge(settings, env_settings)
 
+    # Optional env overlay (dev/staging/prod) without changing mode
+    env_name = os.getenv("HFT_ENV")
+    if env_name:
+        env_overlay_path = f"config/env/{env_name}/main.yaml"
+        if os.path.exists(env_overlay_path):
+            env_settings = _load_yaml(env_overlay_path)
+            settings = _merge(settings, env_settings)
+        settings["env"] = env_name
+
     # 3. Local Developer Overrides (settings.py - Python power)
     settings_py = _load_settings_py("config/settings.py")
     settings = _merge(settings, settings_py)
@@ -141,6 +153,8 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
 def summarize_settings(settings: Dict[str, Any], downgraded_mode: str | None = None) -> str:
     lines = []
     lines.append(f"mode={settings.get('mode')}{' (downgraded to sim)' if downgraded_mode else ''}")
+    if settings.get("env"):
+        lines.append(f"env={settings.get('env')}")
     lines.append(f"symbols={','.join(settings.get('symbols', []))}")
     strat = settings.get("strategy", {})
     lines.append(f"strategy={strat.get('id')} ({strat.get('module')}.{strat.get('class')})")

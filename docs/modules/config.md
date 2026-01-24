@@ -7,7 +7,8 @@ Configuration loading and environment/runtime overrides.
 - `src/hft_platform/config/loader.py`: Settings load and merge chain.
 - `src/hft_platform/config/wizard.py`: Interactive setup helper.
 - `config/base/`: Versioned defaults.
-- `config/env/<mode>/`: Environment overrides.
+- `config/env/<mode>/`: Environment overrides (sim/live).
+- `config/env/<env>/`: Environment overlays (dev/staging/prod via `HFT_ENV`).
 - `config/symbols.list`: Single source for symbols.
 - `config/symbols.examples/`: Preset packs and demos.
 - `.env.example`: Environment variable template.
@@ -15,6 +16,7 @@ Configuration loading and environment/runtime overrides.
 ## Settings Priority
 1) `config/base/main.yaml`
 2) `config/env/<mode>/main.yaml` (optional)
+2.5) `config/env/<env>/main.yaml` (optional)
 3) `config/settings.py` (optional)
 4) Environment variables (`HFT_*`, `SHIOAJI_*`)
 5) CLI overrides

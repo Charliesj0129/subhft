@@ -40,10 +40,13 @@ deployment/.env.*
 
 # Project Specific
 reports/
+artifacts/
+outputs/
 ops/docker/.env
 config/contracts.json
 docker-compose.override.yml
 .claude-sessions/
+external_repos/
 *.log
 coverage_output.txt
 coverage_report.txt

@@ -2,16 +2,14 @@ version: '3.8'
 
 services:
   hft_platform:
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    image: ${HFT_IMAGE:-hft-platform:latest}
     container_name: hft_platform
     env_file:
       - .env.prod
     volumes:
-      - ../config:/app/config
-      - ../data:/app/data
-      - ../logs:/app/logs
+      - hft_data:/app/data
+      - hft_logs:/app/logs
+      - hft_wal:/app/.wal
     network_mode: "host" # For lowest latency (bypass bridge) on Linux
     # If on Mac/Windows, remove network_mode: host and use ports:
     # ports:
@@ -22,6 +20,13 @@ services:
         limits:
           cpus: '0.8'
           memory: 2G
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - python -c "import psutil,sys;sys.exit(0 if any((p.info.get('cmdline') and 'hft_platform.main' in ' '.join(p.info['cmdline'])) for p in psutil.process_iter(['cmdline'])) else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   clickhouse:
     image: clickhouse/clickhouse-server
@@ -54,3 +59,6 @@ services:
 
 volumes:
   clickhouse_data:
+  hft_data:
+  hft_logs:
+  hft_wal:
