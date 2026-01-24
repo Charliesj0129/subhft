@@ -1,4 +1,3 @@
-
 import math
 import os
 
@@ -16,14 +15,13 @@ def main():
     # 2. Generate Synthetic Contracts
     # Categories: TXF (Large), MXF (Small), ZEF (Elect), ZFF (Fin)
     # Expiry: spot month, next month, next quarter...
-    # For stress test, valid format matters more than real data availability (simulation might not have all, but we test subscription overhead)
+    # For stress test, valid format matters more than real data availability.
+    # Simulation might not have all, but we test subscription overhead.
 
     # Expand to reach ~1000 symbols
     # Products: 5
     # Years: 10 (2026-2035) -> 5 * 12 * 10 = 600
     # Weeklies (TXF, MXF): 2 * 12 * 4 * 10 = 960
-    # Total ~1560
-
     # Total ~1560
 
     products = ["TXF", "MXF", "ZEF", "ZFF", "GTF"]
@@ -73,6 +71,7 @@ def main():
             yaml.dump(payload, f)
 
         print(f"Wrote {len(chunk)} symbols to {filename}")
+
 
 if __name__ == "__main__":
     main()

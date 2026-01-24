@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-import time
 import argparse
+import time
+
 from bcc import BPF
 
 # Ops Tool: eBPF Latency Monitor
@@ -46,12 +47,12 @@ int probe_entry(struct pt_regs *ctx) {
 int probe_return(struct pt_regs *ctx) {
     u64 *tsp, delta;
     u32 pid = bpf_get_current_pid_tgid();
-    
+
     tsp = start_map.lookup(&pid);
     if (tsp != 0) {
         delta = bpf_ktime_get_ns() - *tsp;
         start_map.delete(&pid);
-        
+
         if (delta > MIN_NS) {
             dist.increment(bpf_log2l(delta));
             // bpf_trace_printk("Lat: %d ns\\n", delta);

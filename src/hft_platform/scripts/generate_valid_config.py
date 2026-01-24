@@ -1,4 +1,3 @@
-
 import json
 import math
 import os
@@ -15,10 +14,12 @@ def main():
     # Format for config
     symbols = []
     for c in contracts:
-        symbols.append({
-            "code": c["code"],      # Use the REAL internal code (e.g. TXFA6)
-            "exchange": "FUT"       # c["exchange"] is 'FUT'
-        })
+        symbols.append(
+            {
+                "code": c["code"],  # Use the REAL internal code (e.g. TXFA6)
+                "exchange": "FUT",  # c["exchange"] is 'FUT'
+            }
+        )
 
     # Shard
     SHARD_SIZE = 200
@@ -41,6 +42,7 @@ def main():
             yaml.dump(payload, f)
 
         print(f"Wrote {len(chunk)} symbols to {filename}")
+
 
 if __name__ == "__main__":
     main()
