@@ -1,19 +1,14 @@
 import numpy as np
-from numba import njit, float64, int64, uint64
+from hftbacktest import GTX, LIMIT
+from numba import float64, int64, njit
 from numba.experimental import jitclass
-from hftbacktest import HashMapMarketDepthBacktest, GTX, LIMIT, BUY, SELL
 
 # --- Signal Trackers (Embedded for Standalone) ---
 
 K_PROPAGATOR = 3
 
-@jitclass([
-    ('mu', float64),
-    ('alpha', float64),
-    ('beta', float64),
-    ('intensity', float64),
-    ('last_ts', int64)
-])
+
+@jitclass([("mu", float64), ("alpha", float64), ("beta", float64), ("intensity", float64), ("last_ts", int64)])
 class HawkesTracker:
     def __init__(self, mu, alpha, beta):
         self.mu = mu
@@ -35,13 +30,16 @@ class HawkesTracker:
                 self.intensity += self.alpha
             self.last_ts = current_ts
 
-@jitclass([
-    ('weights', float64[:]),
-    ('betas', float64[:]),
-    ('components', float64[:]),
-    ('last_ts', int64),
-    ('total_impact', float64)
-])
+
+@jitclass(
+    [
+        ("weights", float64[:]),
+        ("betas", float64[:]),
+        ("components", float64[:]),
+        ("last_ts", int64),
+        ("total_impact", float64),
+    ]
+)
 class PropagatorTracker:
     def __init__(self):
         self.weights = np.array([0.5, 0.3, 0.2], dtype=np.float64)
@@ -74,7 +72,9 @@ class PropagatorTracker:
             s += self.components[k]
         self.total_impact = s
 
+
 # --- Market Maker Strategy ---
+
 
 @njit
 def strategy(hbt):
@@ -86,7 +86,7 @@ def strategy(hbt):
     propagator_skew_coeff = 0.5
     risk_aversion = 0.1
     order_qty = 1.0
-    requote_interval_ns = 100_000_000 # 100ms
+    requote_interval_ns = 100_000_000  # 100ms
 
     # --- State ---
     hawkes = HawkesTracker(1.0, 0.5, 10.0)
@@ -98,10 +98,10 @@ def strategy(hbt):
     ask_order_id = 0
 
     # --- Main Loop ---
-    while hbt.elapse(1_000_000) == 0: # 1ms
+    while hbt.elapse(1_000_000) == 0:  # 1ms
         current_ts = hbt.current_timestamp
         depth = hbt.depth(asset_no)
-        
+
         if depth.best_bid == 0.0 or depth.best_ask == 0.0:
             continue
 
@@ -113,7 +113,7 @@ def strategy(hbt):
         is_event = len(trades) > 0
         hawkes.update(current_ts, is_event)
         propagator.update(current_ts)
-        
+
         for i in range(len(trades)):
             trade = trades[i]
             sign = float(trade.ival)
@@ -129,7 +129,7 @@ def strategy(hbt):
         # Skew: adjust reservation price based on inventory and propagator
         inv_penalty = risk_aversion * inventory * tick_size
         prop_skew = propagator_skew_coeff * propagator.total_impact * tick_size
-        
+
         reservation_price = mid_price - inv_penalty + prop_skew
 
         bid_price = round((reservation_price - half_spread) / tick_size) * tick_size
@@ -143,7 +143,7 @@ def strategy(hbt):
                 hbt.cancel(asset_no, bid_order_id, False)
             if ask_order_id != 0:
                 hbt.cancel(asset_no, ask_order_id, False)
-            
+
             hbt.clear_inactive_orders(asset_no)
 
             # Place new quotes
@@ -154,7 +154,7 @@ def strategy(hbt):
             ask_order_id = next_order_id
             next_order_id += 1
             hbt.submit_sell_order(asset_no, ask_order_id, ask_price, order_qty, GTX, LIMIT, False)
-            
+
             last_quote_ts = current_ts
 
         # 4. Track Fills (Inventory Update) - Simplified
