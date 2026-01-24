@@ -2,19 +2,18 @@ services:
   hft-base:
     build: .
     image: ${HFT_IMAGE:-hft-platform:latest}
-    # container_name: hft-base  # Abstract base, no container name needed if not run directly?
     restart: always
+    # Common Environment for all HFT services
     environment:
       - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
       - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
       - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
       - SHIOAJI_PASSWORD=${SHIOAJI_PASSWORD}
       - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT}
-      - LOG_LEVEL=DEBUG
-      - HFT_CLICKHOUSE_PASSWORD=
-      - HFT_CLICKHOUSE_ENABLED=1
-      - HFT_CLICKHOUSE_HOST=clickhouse
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
+      - HFT_CLICKHOUSE_HOST=clickhouse
+      - HFT_CLICKHOUSE_ENABLED=1
       - PYTHONDONTWRITEBYTECODE=1
     volumes:
       - ./.wal:/app/.wal
@@ -22,25 +21,31 @@ services:
       - ./config:/app/config
       - ./scripts:/app/scripts
       - ./src:/app/src
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 1500M
+    ulimits:
+      memlock: -1
+      nofile: 65535
     healthcheck:
-      test:
-        - "CMD-SHELL"
-        - python -c "import psutil,sys;sys.exit(0 if any((p.info.get('cmdline') and 'hft_platform.main' in ' '.join(p.info['cmdline'])) for p in psutil.process_iter(['cmdline'])) else 1)"
+      test: ["CMD-SHELL", "python -c 'import psutil; exit(0)'"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   hft-engine:
-    extends:
-      service: hft-base
+    extends: hft-base
     container_name: hft-engine
+    command: ["python", "-m", "hft_platform.main"]
+    # Switch to 'host' mode for low latency (set HFT_NETWORK_MODE=host in .env or via ops.sh)
+    network_mode: ${HFT_NETWORK_MODE:-bridge}
     ports:
-      - "9090:9090"
+      - "${HFT_API_PORT:-9090}:9090"
+    volumes:
+      # Hugepages mount (only works if mapped on host)
+      - /dev/hugepages:/dev/hugepages
+    deploy:
+      resources:
+        limits:
+          cpus: '${HFT_CPU_LIMIT:-0.50}'
+          memory: ${HFT_MEM_LIMIT:-1500M}
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest
@@ -52,22 +57,21 @@ services:
     ports:
       - "8123:8123"
       - "9000:9000"
-    volumes:
-      - ch_data:/var/lib/clickhouse
     ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
+      nofile: 262144
+    volumes:
+      # Always inject storage config (it handles default paths gracefully)
+      - ./config/clickhouse_storage.xml:/etc/clickhouse-server/config.d/storage.xml
+      # Configurable Data Root (Tiered Storage)
+      - ${CH_DATA_ROOT:-ch_data_vol}/hot:/var/lib/clickhouse/data/hot
+      - ${CH_DATA_ROOT:-ch_data_vol}/cold:/var/lib/clickhouse/data/cold
+      # Metadata volume
+      - ch_metadata:/var/lib/clickhouse 
 
   wal-loader:
-    build: .
-    image: ${HFT_WAL_IMAGE:-hft_platform-wal-loader:latest}
+    extends: hft-base
     container_name: wal-loader
-    command: [ "python", "-m", "hft_platform.recorder.loader" ]
-    environment:
-      - CLICKHOUSE_HOST=clickhouse
-    volumes:
-      - ./.wal:/app/.wal
+    command: ["python", "-m", "hft_platform.recorder.loader"]
     depends_on:
       - clickhouse
 
@@ -78,13 +82,10 @@ services:
       - "8888:8888"
     volumes:
       - ./notebooks:/home/jovyan/notebooks
-      - ./src:/home/jovyan/src # For importing hft_platform code
+      - ./src:/home/jovyan/src
     environment:
       - JUPYTER_TOKEN=hft
-    depends_on:
-      - clickhouse
-
-# Optional: Add Prometheus/Grafana services here for full stack
 
 volumes:
-  ch_data:
+  ch_data_vol:
+  ch_metadata:
