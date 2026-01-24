@@ -2,8 +2,6 @@ import numpy as np
 from structlog import get_logger
 
 try:
-    from hftbacktest.order import IOC, ROD, Limit
-
     from hftbacktest import (
         BacktestAsset,
         ConstantLatency,
@@ -11,6 +9,7 @@ try:
         LinearAsset,
         PowerProbQueueModel,
     )
+    from hftbacktest.order import IOC, ROD, Limit
 
     HFTBACKTEST_AVAILABLE = True
 except ImportError:
