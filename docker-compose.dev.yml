@@ -1,7 +1,0 @@
-services:
-  hft-engine:
-    env_file:
-      - .env.dev
-  wal-loader:
-    env_file:
-      - .env.dev
