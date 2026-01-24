@@ -18,6 +18,9 @@ dependencies = [
     "make>=0.1.6.post2",
 ]
 
+[project.scripts]
+hft = "hft_platform.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest",
@@ -49,11 +52,11 @@ markers = [
     "acceptance: end-to-end acceptance tests",
 ]
 
-# [tool.maturin]
-# features = ["pyo3/extension-module"]
-# module-name = "hft_platform.rust_core"
-# python-source = "src"
-# manifest-path = "rust_core/Cargo.toml"
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "hft_platform.rust_core"
+python-source = "src"
+manifest-path = "rust_core/Cargo.toml"
 
 [tool.ruff]
 line-length = 120
