@@ -1,5 +1,3 @@
-
-
 # Simple logging to STDOUT for CI visibility
 import logging
 import os
@@ -8,8 +6,13 @@ import time
 
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
+
 
 def main():
     logger.info("Starting futures subscription script...")
@@ -30,8 +33,8 @@ def main():
             client.login()
 
         if not client.api:
-             logger.error("No API initialized (Sim mode without lib?). Exiting.")
-             return
+            logger.error("No API initialized (Sim mode without lib?). Exiting.")
+            return
     except Exception as e:
         logger.error(f"Login failed: {e}")
         return
@@ -49,7 +52,7 @@ def main():
     logger.info("Fetching contracts...")
 
     # Check if Contracts are available (requires login)
-    if not hasattr(api, 'Contracts'):
+    if not hasattr(api, "Contracts"):
         logger.warning("api.Contracts not found (Login failed?). Generating empty config.")
         subscribed = []
     else:
@@ -67,42 +70,43 @@ def main():
 
         # Debug Exploration
         try:
-           logger.info("DEBUG: Inspecting api.Contracts.Futures...")
-           futures = api.Contracts.Futures
-           logger.info(f"Futures type: {type(futures)}")
+            logger.info("DEBUG: Inspecting api.Contracts.Futures...")
+            futures = api.Contracts.Futures
+            logger.info(f"Futures type: {type(futures)}")
 
-           # Iterate directory of futures to see what categories exist
-           # dir(futures)
+            # Iterate directory of futures to see what categories exist
+            # dir(futures)
 
-           for cat_name in ["TXF", "MXF"]:
-               logger.info(f"Checking category: {cat_name}")
-               category = getattr(futures, cat_name, None)
-               if not category:
-                   logger.warning(f"Category {cat_name} is None/Missing")
-                   continue
+            for cat_name in ["TXF", "MXF"]:
+                logger.info(f"Checking category: {cat_name}")
+                category = getattr(futures, cat_name, None)
+                if not category:
+                    logger.warning(f"Category {cat_name} is None/Missing")
+                    continue
 
-               logger.info(f"Category {cat_name} found: {type(category)}")
+                logger.info(f"Category {cat_name} found: {type(category)}")
 
-               # Try to iterate
-               count = 0
-               try:
-                   for contract in category:
-                       count += 1
-                       if count > 5:
-                           break  # limit spam
-                       logger.info(f"Item Type: {type(contract)}")
-                       if hasattr(contract, 'code'):
-                           logger.info(f"Contract: {contract.code} {contract.name}")
-                           subscribed.append(contract.code)
-                       else:
-                           logger.warning(f"Item has no code: {contract}")
+                # Try to iterate
+                count = 0
+                try:
+                    for contract in category:
+                        count += 1
+                        if count > 5:
+                            break  # limit spam
+                        logger.info(f"Item Type: {type(contract)}")
+                        if hasattr(contract, "code"):
+                            logger.info(f"Contract: {contract.code} {contract.name}")
+                            subscribed.append(contract.code)
+                        else:
+                            logger.warning(f"Item has no code: {contract}")
 
-               except Exception as iter_err:
-                   logger.error(f"Error iterating category {cat_name}: {iter_err}")
+                except Exception as iter_err:
+                    logger.error(f"Error iterating category {cat_name}: {iter_err}")
 
         except Exception as e:
             logger.error(f"Top-level exploration failed: {e}")
             import traceback
+
             logger.error(traceback.format_exc())
 
     logger.info(f"Subscribed to {len(subscribed)} contracts: {subscribed}")
@@ -172,14 +176,14 @@ def main():
                 # Naive lookup
                 # Try to search in TXF/MXF
                 for category_name in ["TXF", "MXF"]:
-                     category = getattr(api.Contracts.Futures, category_name, None)
-                     if category:
-                         for c in category:
-                             if c.code == code:
-                                 from_contract = c
-                                 break
-                     if from_contract:
-                         break
+                    category = getattr(api.Contracts.Futures, category_name, None)
+                    if category:
+                        for c in category:
+                            if c.code == code:
+                                from_contract = c
+                                break
+                    if from_contract:
+                        break
             except Exception as lookup_err:
                 logger.warning(f"Contract lookup failed for {code}: {lookup_err}")
 
@@ -190,7 +194,7 @@ def main():
                 "exchange": "Futures",
                 "tick_size": 1.0,
                 "contract_size": 1.0,
-                "price_scale": 10000
+                "price_scale": 10000,
             }
             config_data["symbols"].append(entry)
 
@@ -204,6 +208,7 @@ def main():
     # Force exit to kill any lingering Shioaji threads
     logger.info("Script complete. Forcing exit.")
     os._exit(0)
+
 
 if __name__ == "__main__":
     main()
