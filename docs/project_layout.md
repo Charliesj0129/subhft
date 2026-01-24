@@ -13,6 +13,7 @@ docs/                   Documentation (start at docs/README.md)
 tests/                  Unit/integration/system tests
 examples/               Example strategies and scripts
 notebooks/              Research notebooks and walkthroughs
+research/               Research prototypes and experiment outputs
 scripts/                Local utilities and helpers
 ops/                    Deployment and ops scripts
 bin/                    Runtime scripts (startup, autostart)
@@ -20,10 +21,15 @@ rust_core/              Rust components (performance-critical pieces)
 hftbacktest/            Backtest integration and docs
 ```
 
+**Separation**
+- `research/` is experimental and not production-ready.
+- `src/` and `rust_core/` are production code paths.
+
 ## Config Layout
 
 - `config/base/` holds default templates tracked in git.
 - `config/env/<mode>/` holds environment-specific overrides (sim/live).
+- `config/env/<env>/` holds environment overlays (dev/staging/prod via `HFT_ENV`).
 - `config/settings.json` / `config/settings.py` are optional local overrides.
 - `config/symbols.list` is the single source for `config/symbols.yaml`.
 - `config/symbols.examples/` contains preset packs and demo lists.
@@ -44,4 +50,5 @@ hftbacktest/            Backtest integration and docs
 - Virtualenv and caches: `.venv/`, `.mypy_cache/`, `.hypothesis/`, `.pytest_cache/`, `.ruff_cache/`
 - Local env file: `.env` (do not commit)
 - Runtime output: `logs/`, `.wal/`, `data/`, `reports/`
+- Artifacts/outputs: `artifacts/`, `outputs/` (recommended)
 - Build output: `target/`, `dist/`, `build/`

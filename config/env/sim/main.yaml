@@ -1,0 +1,2 @@
+# Sim environment overrides (alias for dev/staging if HFT_ENV=sim)
+mode: sim

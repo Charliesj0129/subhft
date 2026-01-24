@@ -75,6 +75,8 @@ Market Data -> Normalizer -> LOB -> Strategy -> Risk -> Order Adapter -> Broker
 | `make symbols` | Build `config/symbols.yaml` from `config/symbols.list` |
 | `make sync-symbols` | Sync broker contracts + rebuild symbols |
 | `make run-sim` | Run platform in Simulation mode |
+| `make run-dev` | Run platform in dev overlay (sim) |
+| `make run-staging` | Run platform in staging overlay (sim) |
 | `make run-prod` | Run platform in Production mode (Requires `.env`) |
 
 ## 📦 Project Map

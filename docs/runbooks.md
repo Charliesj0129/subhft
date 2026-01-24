@@ -31,3 +31,29 @@
 - All changes to `config/*.yaml` must be committed to git.
 - **Hot Reload**: Send `SIGHUP` to the main process to reload strategy parameters without restart (if enabled).
 - **Audit**: Commit hash is logged on startup.
+
+## Time Sync
+- Check NTP/PTP status: `ops/time_sync_check.sh`
+- Alert if clock drift exceeds 50ms.
+
+## Disaster Drills (Fault Injection)
+Run these in dev/staging first.
+
+### Broker Disconnect
+1. Block broker network access for 60s.
+2. Verify reconnect count and gap metrics.
+3. Confirm recovery without process restart.
+
+### Market Data Stall
+1. Pause feed adapter callbacks for 30s.
+2. Verify `FeedGapCritical` triggers.
+3. Resume and confirm queue drains.
+
+### Disk Full (Recorder)
+1. Fill data volume to >95%.
+2. Verify recorder failure alert.
+3. Free space and confirm recovery.
+
+### Clock Drift
+1. Simulate clock skew on host (dev VM only).
+2. Verify timestamp sanity checks and alert.

@@ -18,6 +18,16 @@ strategies:
     price_band_ticks: 5
     max_order_rate: 100
 
+  ALPHA_OFI:
+    max_notional: 2_000_000
+    price_band_ticks: 10
+    max_order_rate: 500  # HFT
+
+  ALPHA_HAWKES:
+    max_notional: 2_000_000
+    price_band_ticks: 10
+    max_order_rate: 500
+
 storm_guard:
   # Drawdown thresholds for state transitions
   warm_threshold: -200_000

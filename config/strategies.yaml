@@ -1,0 +1,43 @@
+# Active HFT Strategies
+strategies:
+  - id: "ALPHA_OFI"
+    module: "strategies.alpha_ofi"
+    class: "AlphaOFI" # This maps to the jitclass, usually strategies need a Python wrapper if run by the main engine.
+    # Note: Our implementation alpha_ofi.py exposes 'strategy' function.
+    # The platform loader might expect a class or a function.
+    # Based on scripts/run_backtest.py: it expects a 'strategy(hbt)' function.
+    # But for the live engine, it might need a class.
+    # Assuming the 'strategy' function is the entry point for backtest/live.
+    entry_point: "strategy"
+    params:
+      targets: ["TXF@front"]
+
+  - id: "ALPHA_HAWKES"
+    module: "strategies.alpha_hawkes"
+    entry_point: "strategy"
+    params:
+      targets: ["TXF@front"]
+      mu: 1.0
+      alpha: 0.5
+      beta: 10.0
+
+  - id: "ALPHA_PROPAGATOR"
+    module: "strategies.alpha_propagator"
+    entry_point: "strategy"
+    params:
+      targets: ["TXF@front"]
+
+  - id: "ALPHA_DEEP_HAWKES"
+    module: "strategies.alpha_deep_hawkes"
+    entry_point: "strategy"
+    params:
+      targets: ["TXF@front"]
+      hidden_dim: 32
+
+  - id: "MM_HAWKES"
+    module: "strategies.mm_hawkes"
+    entry_point: "strategy"
+    params:
+      targets: ["TXF@front"]
+      base_spread: 2.0
+      risk_aversion: 0.1

@@ -1,12 +1,10 @@
 services:
   clickhouse:
     volumes:
-      - ch_data:/var/lib/clickhouse
-
-volumes:
-  ch_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${CH_DATA_ROOT:-/mnt/data/clickhouse}
+      # Inject specific storage config
+      - ./config/clickhouse_storage.xml:/etc/clickhouse-server/config.d/storage.xml
+      
+      # Mount Host Hot/Cold paths to container
+      # Note: We map host subdirs to the paths defined in XML
+      - ${CH_DATA_ROOT:-./data/clickhouse}/hot:/var/lib/clickhouse/data/hot
+      - ${CH_DATA_ROOT:-./data/clickhouse}/cold:/var/lib/clickhouse/data/cold

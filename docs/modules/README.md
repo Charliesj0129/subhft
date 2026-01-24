@@ -23,3 +23,10 @@ This directory contains per-module documentation for the code under `src/hft_pla
 - `docs/modules/strategies.md` - Built-in strategy implementations
 - `docs/modules/strategy.md` - Strategy SDK and routing
 - `docs/modules/utils.md` - Utilities and helpers
+
+## Template
+Use this outline for new module docs:
+- Purpose
+- Entry points
+- Inputs/outputs
+- Constraints

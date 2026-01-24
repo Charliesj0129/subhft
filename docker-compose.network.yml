@@ -1,0 +1,18 @@
+services:
+  hft-engine:
+    # Bypass Docker Network Bridge = Zero Overhead
+    network_mode: "host" 
+    
+    # Allow locking memory (for Hugepages / mlock)
+    ulimits:
+      memlock: -1
+      nofile: 65535
+    
+    # Mount hugepages
+    volumes:
+      - /dev/hugepages:/dev/hugepages
+
+  clickhouse:
+    # ClickHouse also benefits from open file limits
+    ulimits:
+      nofile: 65535:65535

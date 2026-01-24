@@ -6,6 +6,7 @@
 由低到高（後者覆蓋前者）：
 1) `config/base/main.yaml` (defaults)
 2) `config/env/<mode>/main.yaml` (environment overrides)
+2.5) `config/env/<env>/main.yaml` (dev/staging/prod overlays via `HFT_ENV`)
 3) `config/settings.py` (local developer overrides, optional)
 4) 環境變數 `HFT_*`, `SHIOAJI_*`
 5) CLI 參數
@@ -21,6 +22,7 @@
 
 **模式與 symbols**
 - `HFT_MODE=sim|live|replay`
+- `HFT_ENV=dev|staging|prod` (環境分層 overlay)
 - `HFT_SYMBOLS=2330,2317` (逗號分隔)
 - `SYMBOLS_CONFIG=config/symbols.yaml`
 
@@ -55,6 +57,7 @@
 
 可選覆蓋：
 - `config/env/<mode>/main.yaml` for `sim`/`live` 差異
+- `config/env/<env>/main.yaml` for `dev`/`staging`/`prod` overlays
 - `config/settings.py` for 個人或臨時調整
 
 ## 4. Base Settings (`config/base/main.yaml`)

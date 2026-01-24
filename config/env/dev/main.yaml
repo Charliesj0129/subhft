@@ -1,0 +1,2 @@
+# Dev environment overlay (HFT_ENV=dev, HFT_MODE=sim)
+mode: sim

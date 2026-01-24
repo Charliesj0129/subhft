@@ -12,3 +12,5 @@ Metrics and instrumentation for runtime monitoring.
 
 ## Notes
 - Port is controlled by `HFT_PROM_PORT` or settings.
+- Minimum required metrics are listed in `docs/observability_minimal.md`.
+- Sampling controls (optional): `HFT_MD_LOG_RAW`, `HFT_MD_LOG_EVERY`, `HFT_MD_LOG_NORMALIZED`, `HFT_MD_LOG_NORMALIZED_EVERY`.

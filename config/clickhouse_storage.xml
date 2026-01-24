@@ -1,0 +1,30 @@
+<clickhouse>
+    <storage_configuration>
+        <disks>
+            <!-- Hot Disk: Ideally NVMe or RAM Disk -->
+            <hot>
+                <path>/var/lib/clickhouse/data/hot/</path>
+                <keep_free_space_bytes>1073741824</keep_free_space_bytes> <!-- 1GB reserve -->
+            </hot>
+            <!-- Cold Disk: HDD or Network Storage -->
+            <cold>
+                <path>/var/lib/clickhouse/data/cold/</path>
+                <keep_free_space_bytes>1073741824</keep_free_space_bytes>
+            </cold>
+        </disks>
+
+        <policies>
+            <hot_cold_arch>
+                <volumes>
+                    <hot_vol>
+                        <disk>hot</disk>
+                    </hot_vol>
+                    <cold_vol>
+                        <disk>cold</disk>
+                    </cold_vol>
+                </volumes>
+                <move_factor>0.2</move_factor>
+            </hot_cold_arch>
+        </policies>
+    </storage_configuration>
+</clickhouse>

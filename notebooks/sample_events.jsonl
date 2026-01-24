@@ -1,2 +1,0 @@
-{"type": "BidAsk", "symbol": "2330", "exch_ts": 1000000, "bids": [{"price": 5000000, "volume": 10}], "asks": [{"price": 5005000, "volume": 8}]}
-{"type": "Tick", "symbol": "2330", "exch_ts": 1000100, "price": 5002000, "volume": 2}

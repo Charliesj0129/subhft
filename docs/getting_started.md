@@ -30,6 +30,7 @@ cp .env.example .env
 
 常用變數：
 - `HFT_MODE=sim`（預設）
+- `HFT_ENV=dev`（環境分層 overlay）
 - `SYMBOLS_CONFIG=config/symbols.yaml`
 - `SHIOAJI_*`（實盤才需要）
 

@@ -11,6 +11,19 @@
 | Ops 低延遲 | 低抖動部署 | `ops/docker/docker-compose.yml` | Linux host |
 | Azure VM | 雲端 VM | `docs/azure_deployment.md` | Azure |
 
+## 1.1 環境分層 (dev/staging/prod)
+本專案以 **HFT_MODE** 作為交易模式（sim/live），並以 **HFT_ENV** 作為環境分層：
+- dev -> sim
+- staging -> sim (預設)
+- prod -> live
+
+建議使用對應的 `.env.<env>` 檔案：
+```bash
+cp .env.dev.example .env.dev
+cp .env.staging.example .env.staging
+cp .env.prod.example .env.prod
+```
+
 ## 2. 部署核心原則
 ### 2.1 Infrastructure as Code (IaC)
 建議使用 Terraform/Ansible/Kubernetes YAML 來描述環境，避免人工操作造成環境漂移。
@@ -26,6 +39,10 @@
 ### 2.4 藍綠部署 / 滾動更新
 部署新版本時，保留舊版本流量，確認健康後再切換，確保可快速回滾。
 
+### 2.5 服務隔離
+- 交易與資料服務可用不同容器/帳號執行。
+- Ops 低延遲建議搭配 CPU 隔離腳本：`ops/setup_isolation.sh`。
+
 ## 3. 必要環境變數
 **認證**
 - `SHIOAJI_PERSON_ID`, `SHIOAJI_PASSWORD`：實盤登入。
@@ -33,6 +50,7 @@
 
 **模式**
 - `HFT_MODE=sim|live`：執行模式。
+- `HFT_ENV=dev|staging|prod`：環境分層（不改變模式）。
 - `SYMBOLS_CONFIG=path`：symbols yaml 位置。
 
 **監控**
@@ -50,6 +68,15 @@
 uv sync --dev
 cp .env.example .env
 make run-sim
+```
+
+## 4.1 本機 dev/staging（環境分層）
+```bash
+cp .env.dev.example .env.dev
+make start-dev
+
+cp .env.staging.example .env.staging
+make start-staging
 ```
 
 ## 5. 本機實盤
@@ -81,11 +108,15 @@ docker compose up -d
 `ops/docker/docker-compose.yml` 走 host network（Linux）以降低抖動：
 ```bash
 cd ops/docker
-# 準備 ops/docker/.env.prod（自行建立）
+# 準備 ops/docker/.env.prod（可從 .env.prod.example 複製）
 docker compose up -d
 ```
 
 若在 Windows/Mac，請移除 `network_mode: host` 並使用 ports。
+
+**Immutable Image**
+- `ops/docker/docker-compose.yml` 使用 `HFT_IMAGE` 指定不可變映像。
+- 若需更新 config，請重新 build image 並重新部署。
 
 ## 8. Azure VM
 詳細步驟：
