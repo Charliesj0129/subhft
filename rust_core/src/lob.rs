@@ -1,20 +1,28 @@
 use std::collections::BTreeMap;
 use serde::{Serialize, Deserialize};
+use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[pyclass]
 pub struct PriceLevel {
+    #[pyo3(get, set)]
     pub price: f64,
+    #[pyo3(get, set)]
     pub quantity: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[pyclass]
 pub struct LimitOrderBook {
+    #[pyo3(get)]
     pub symbol: String,
     pub bids: BTreeMap<u64, f64>, // Price(scaled) -> Qty
     pub asks: BTreeMap<u64, f64>,
 }
 
+#[pymethods]
 impl LimitOrderBook {
+    #[new]
     pub fn new(symbol: String) -> Self {
         Self {
             symbol,
