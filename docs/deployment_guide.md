@@ -55,6 +55,7 @@ cp .env.prod.example .env.prod
 
 **監控**
 - `HFT_PROM_PORT`：Prometheus port（預設 9090）。
+- `GRAFANA_ADMIN_PASSWORD`：Grafana admin 密碼（預設 admin）。
 
 **儲存**
 - `HFT_CLICKHOUSE_ENABLED=0|1`
@@ -88,7 +89,7 @@ make run-prod
 ```
 
 ## 6. Docker Compose（含 ClickHouse）
-`docker-compose.yml` 提供開發與觀測堆疊：
+`docker-compose.yml` 提供開發與觀測堆疊（Prometheus retention 7 天）：
 ```bash
 export SHIOAJI_PERSON_ID=...
 export SHIOAJI_PASSWORD=...
@@ -99,7 +100,11 @@ docker compose up -d
 - `hft-engine`：主程式（Prometheus `9090`）。
 - `clickhouse`：`8123/9000`。
 - `wal-loader`：WAL 回灌。
-- `jupyter`：`8888`。
+- `prometheus`：`9091`（Web UI）。
+- `alertmanager`：`9093`。
+- `grafana`：`3000`（預設 admin/admin）。
+
+Alertmanager 的預設 webhook 需要在 `config/monitoring/alerts/alertmanager.yml` 設定為你的實際端點。
 
 **資料與 WAL**
 - `./.wal`、`./data`、`./config` 會掛載至容器。
@@ -134,10 +139,14 @@ docker compose up -d
 
 ## 10. 監控與驗證
 **Prometheus**
-- `http://localhost:9090/metrics`
+- Metrics endpoint：`http://localhost:9090/metrics`
+- Prometheus UI：`http://localhost:9091`
+
+**Alertmanager**
+- `http://localhost:9093`
 
 **Grafana**
-- Ops 堆疊預設 `http://localhost:3000`
+- `http://localhost:3000`
 
 **健康檢查**
 - Docker healthcheck 會確認主程序是否在運行。
