@@ -75,17 +75,47 @@ services:
     depends_on:
       - clickhouse
 
-  jupyter:
-    image: jupyter/scipy-notebook:latest
-    container_name: jupyter
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
     ports:
-      - "8888:8888"
+      - "9091:9090"
     volumes:
-      - ./notebooks:/home/jovyan/notebooks
-      - ./src:/home/jovyan/src
+      - ./config/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/monitoring/alerts/rules.yaml:/etc/prometheus/alerts/rules.yaml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--storage.tsdb.path=/prometheus"
+    depends_on:
+      - hft-engine
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./config/monitoring/alerts/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
     environment:
-      - JUPYTER_TOKEN=hft
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./config/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./config/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./config/monitoring/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
 
 volumes:
   ch_data_vol:
   ch_metadata:
+  grafana_data:

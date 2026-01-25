@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS hft.market_data (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(toDateTime(ingest_ts / 1000000000))
 ORDER BY (symbol, exch_ts, ingest_ts)
-TTL toDateTime(ingest_ts / 1000000000) + INTERVAL 1 YEAR;
+TTL toDateTime(ingest_ts / 1000000000) + INTERVAL 6 MONTH;
 
 -- Orders
 CREATE TABLE IF NOT EXISTS hft.orders (
