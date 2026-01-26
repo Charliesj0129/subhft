@@ -59,22 +59,28 @@ jobs:
   deploy:
     needs: build-push
     runs-on: ubuntu-latest
-    if: ${{ secrets.VM_HOST != '' }}
     steps:
+      - name: Skip deploy when VM host is unset
+        if: ${{ secrets.VM_HOST == '' }}
+        run: echo "VM_HOST not set; skipping deploy."
       - name: Deploy via SSH with compose pull/up
+        if: ${{ secrets.VM_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.10
         env:
-          GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           IMAGE: ${{ env.IMAGE_BASE }}:${{ github.sha }}
           WAL_IMAGE: ${{ env.WAL_IMAGE_BASE }}:${{ github.sha }}
         with:
-          host: ${{ secrets.VM_HOST || secrets.VM_PUBLIC_IP }}
+          host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
           envs: GHCR_USER,GHCR_TOKEN,IMAGE,WAL_IMAGE
           script: |
             set -e
+            if [ -z "$GHCR_USER" ]; then
+              GHCR_USER="${GITHUB_ACTOR}"
+            fi
             if [ -n "$GHCR_TOKEN" ]; then
               echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             else
