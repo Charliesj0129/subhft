@@ -1309,6 +1309,59 @@ class InstitutionalOFI(FactorBase):
         return signal
 
 
+class CompositeAlpha(FactorBase):
+    """
+    Composite Alpha Factor (Batch 10)
+    Combines Reversion, Flow, and LOB State
+    Weights: 0.4 * Reversal + 0.3 * InstOFI + 0.3 * WOBI
+    """
+    
+    @property
+    def name(self) -> str:
+        return "CompositeAlpha"
+    
+    @property
+    def paper_id(self) -> str:
+        return "Batch 10 (Composite)"
+    
+    @property
+    def description(self) -> str:
+        return "Weighted Ensemble: Reversal(40%) + InstOFI(30%) + WOBI(30%)"
+    
+    def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
+        # 1. Compute Components
+        f_reversal = PriceReversalFactor()
+        f_flow = InstitutionalOFI()
+        f_state = WeightedOBIFactor()
+        
+        s_reversal = f_reversal.compute(data)
+        s_flow = f_flow.compute(data)
+        s_state = f_state.compute(data)
+        
+        # 2. Normalize (Robust Z-Score)
+        # We need to handle static data or initial zeros carefully
+        def robust_zscore(x):
+            med = np.median(x)
+            mad = np.median(np.abs(x - med))
+            if mad < 1e-8: return np.zeros_like(x)
+            return (x - med) / (1.4826 * mad)
+            
+        z_reversal = robust_zscore(s_reversal)
+        z_flow = robust_zscore(s_flow)
+        z_state = robust_zscore(s_state)
+        
+        # 3. Combine
+        # Note: Reversal is usually counter-trend, so sign is already handled in PriceReversalFactor?
+        # Let's check: PriceReversalFactor returns -(Mid - SMA) so it IS a directional alpha (buy when low).
+        # InstitutionalOFI is directional (buy when flow > 0).
+        # WOBI is directional (buy when Bids > Asks).
+        
+        final_signal = (0.4 * z_reversal) + (0.3 * z_flow) + (0.3 * z_state)
+        
+        return final_signal
+
+
+
 
 # =============================================================================
 # Batch 8: Deep Learning & Hawkes (T-KAN, HawkesOFI, Propagator)
@@ -1565,6 +1618,9 @@ class FactorRegistry:
         # Batch 9 (Strategic/Institutional Flow)
         "MeanRevertingOFI": MeanRevertingOFI,
         "InstitutionalOFI": InstitutionalOFI,
+        
+        # Batch 10 (Composite)
+        "CompositeAlpha": CompositeAlpha,
     }
 
     
