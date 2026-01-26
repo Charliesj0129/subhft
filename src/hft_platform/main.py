@@ -25,21 +25,21 @@ async def main():
     # For now, minimal.
     system = HFTSystem()
 
-    logger = get_logger("main")
+    main_logger = get_logger("main")
 
     # Setup signal handlers
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
 
     def signal_handler(sig):
-        logger.info("Signal received, stopping...", signal=sig)
+        main_logger.info("Signal received, stopping...", signal=sig)
         system.stop()
         stop_event.set()
 
     for s in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(s, lambda s=s: signal_handler(s))
 
-    logger.info("Launching HFT Platform...")
+    main_logger.info("Launching HFT Platform...")
 
     system_task = asyncio.create_task(system.run())
 
@@ -57,13 +57,13 @@ async def main():
                 raise exc
 
     except Exception as e:
-        logger.error("Launcher error", error=str(e))
+        main_logger.error("Launcher error", error=str(e))
     finally:
         system.stop()
         if not system_task.done():
             system_task.cancel()
         await asyncio.gather(system_task, return_exceptions=True)
-        logger.info("Shutdown complete")
+        main_logger.info("Shutdown complete")
 
 
 if __name__ == "__main__":
