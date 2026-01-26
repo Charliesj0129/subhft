@@ -1,0 +1,4 @@
+factor,median_all,median_high_vol,median_low_vol,note
+HawkesOFI,-0.7351,0.0000,-0.7351,❌ FAIL
+NonLinearImbalance,-0.6006,0.0000,-0.6006,❌ FAIL
+Propagator,-0.4728,0.0000,-0.4728,❌ FAIL

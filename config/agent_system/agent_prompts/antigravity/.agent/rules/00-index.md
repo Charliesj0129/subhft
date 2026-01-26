@@ -1,7 +1,7 @@
 # Antigravity Rules Index
 
 Agent definitions are loaded directly from:
-- .agent/rules/agents/
+- ../agents/
 
 Prompt docs live in this directory:
 - AI_MANUAL.md

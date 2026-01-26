@@ -15,15 +15,11 @@ Then edit `/etc/default/grub` with the suggested kernel flags and `update-grub &
 ## 3) Container layout (host network + pinning)
 - Use the low-latency override:
 ```bash
-HFT_USE_STRESS=1 \
-HFT_LOW_LATENCY=1 \
-HFT_CH_DATA_ROOT="/mnt/data/clickhouse" \
-HFT_CPUSET_WORKERS="0-1" \
-HFT_CPUSET_WAL="1" \
+CH_DATA_HOT="/mnt/data/clickhouse/hot" \
+CH_DATA_COLD="/mnt/data/clickhouse/cold" \
 docker compose --project-directory . up -d
 ```
-- Workers and wal-loader run on **host network** to avoid bridge/NAT. Ports mapping is disabled; metrics stay on the host ports 9090..9094.
-- Data path override: `docker-compose.chdata.yml` binds `ch_data` to `${CH_DATA_ROOT}` (default `/mnt/data/clickhouse`).
+- Data path override uses ClickHouse hot/cold mounts under `/mnt/data/clickhouse`.
 
 ## 4) Data pipeline hygiene
 - WAL loader clamps `ingest_ts >= exch_ts` and warns on missing book sides. To backfill historical WAL:

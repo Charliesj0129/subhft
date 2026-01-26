@@ -36,9 +36,12 @@ cmd_setup() {
     fi
     
     # 2. Config Directories
-    mkdir -p data/.wal config
+    mkdir -p .wal/archive config
     mkdir -p data/clickhouse/hot data/clickhouse/cold
     chown -R 101:101 data/clickhouse || true
+    if [ -n "${SUDO_USER:-}" ]; then
+        chown -R "$SUDO_USER:$SUDO_USER" .wal || true
+    fi
 
     # 3. Tuning (Optional)
     if [ "${HFT_SKIP_TUNING:-0}" != "1" ]; then
@@ -53,7 +56,14 @@ cmd_setup() {
     
     # Data Root Override
     if [ -n "${HFT_CH_DATA_ROOT:-}" ]; then
-        export CH_DATA_ROOT="$HFT_CH_DATA_ROOT"
+        export CH_DATA_HOT="$HFT_CH_DATA_ROOT/hot"
+        export CH_DATA_COLD="$HFT_CH_DATA_ROOT/cold"
+    fi
+    if [ -n "${HFT_CH_DATA_HOT:-}" ]; then
+        export CH_DATA_HOT="$HFT_CH_DATA_HOT"
+    fi
+    if [ -n "${HFT_CH_DATA_COLD:-}" ]; then
+        export CH_DATA_COLD="$HFT_CH_DATA_COLD"
     fi
     
     # Run

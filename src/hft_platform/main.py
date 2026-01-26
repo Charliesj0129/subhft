@@ -17,15 +17,15 @@ async def main():
         prom_port = int(prom_port_raw)
     except ValueError:
         prom_port = 9090
-    start_http_server(prom_port)
-    logger.info("Prometheus metrics started", port=prom_port)
+    prom_addr = os.getenv("HFT_PROM_ADDR", "0.0.0.0")
+    start_http_server(prom_port, addr=prom_addr)
+    logger.info("Prometheus metrics started", port=prom_port, addr=prom_addr)
 
     # Load settings from file or env?
     # For now, minimal.
     system = HFTSystem()
 
     logger = get_logger("main")
-    logger.info("HELLO FROM PATCHED MAIN - VERSION CHECK")
 
     # Setup signal handlers
     loop = asyncio.get_running_loop()
