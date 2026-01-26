@@ -58,6 +58,5 @@ notebooks/.ipynb_checkpoints
 .antigravity/
 
 # Agent prompts (local only)
-/AGENTS.md
 /.agent/
 /agent_prompts/

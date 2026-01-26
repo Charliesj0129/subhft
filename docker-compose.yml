@@ -14,6 +14,7 @@ services:
       - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
       - HFT_CLICKHOUSE_HOST=clickhouse
       - HFT_CLICKHOUSE_ENABLED=1
+      - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
       - PYTHONDONTWRITEBYTECODE=1
     volumes:
       - ./.wal:/app/.wal
@@ -37,7 +38,7 @@ services:
     # Switch to 'host' mode for low latency (set HFT_NETWORK_MODE=host in .env or via ops.sh)
     network_mode: ${HFT_NETWORK_MODE:-bridge}
     ports:
-      - "${HFT_API_PORT:-9090}:9090"
+      - "${HFT_PROM_PORT:-9090}:9090"
     volumes:
       # Hugepages mount (only works if mapped on host)
       - /dev/hugepages:/dev/hugepages
@@ -63,8 +64,8 @@ services:
       # Always inject storage config (it handles default paths gracefully)
       - ./config/clickhouse_storage.xml:/etc/clickhouse-server/config.d/storage.xml
       # Configurable Data Root (Tiered Storage)
-      - ${CH_DATA_ROOT:-ch_data_vol}/hot:/var/lib/clickhouse/data/hot
-      - ${CH_DATA_ROOT:-ch_data_vol}/cold:/var/lib/clickhouse/data/cold
+      - ${CH_DATA_HOT:-ch_data_hot}:/var/lib/clickhouse/data/hot
+      - ${CH_DATA_COLD:-ch_data_cold}:/var/lib/clickhouse/data/cold
       # Metadata volume
       - ch_metadata:/var/lib/clickhouse 
 
@@ -116,6 +117,7 @@ services:
       - grafana_data:/var/lib/grafana
 
 volumes:
-  ch_data_vol:
+  ch_data_hot:
+  ch_data_cold:
   ch_metadata:
   grafana_data:

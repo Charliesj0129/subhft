@@ -142,13 +142,12 @@ Clone your code and start the stack.
 git clone https://github.com/your-user/hft_platform.git
 cd hft_platform
 
-# 2. (建議) 用 GHCR 映像 + host 網路 + 資料碟
-# HFT_LOW_LATENCY=1 會載入 docker-compose.lowlatency.yml (host network/cpuset/oom_score_adj)
+# 2. (建議) 用資料碟
 # HFT_CH_DATA_ROOT 讓 ClickHouse/WAL 固定在 /mnt/data
-HFT_LOW_LATENCY=1 HFT_CH_DATA_ROOT=/mnt/data/clickhouse ./ops/setup_vm.sh
+sudo HFT_CH_DATA_ROOT=/mnt/data/clickhouse ./ops.sh setup
 
-# 3. 若需自建資料檢查/回放
-docker compose -f docker-compose.lowlatency.yml up -d
+# 3. 若需自行啟動服務
+docker compose up -d
 ```
 
 > GHCR 部署（CI/CD）：`.github/workflows/deploy-ghcr.yml` 會 Build & Push GHCR，SSH 到 VM 後 `docker compose pull && up`（使用 lowlatency/chdata overrides），避免 pip + nohup 模式。
