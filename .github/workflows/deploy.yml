@@ -1,0 +1,87 @@
+name: Deploy HFT Platform (GHCR + Compose)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/hft-platform
+  WAL_IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/hft-platform-wal-loader
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push hft-platform
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}:latest
+
+      - name: Build and push wal-loader
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.WAL_IMAGE_BASE }}:${{ github.sha }}
+            ${{ env.WAL_IMAGE_BASE }}:latest
+          build-args: |
+            TARGET=wal-loader
+
+      - name: Deploy via SSH with compose pull/up (low-latency overrides)
+        if: ${{ secrets.VM_HOST != '' }}
+        uses: appleboy/ssh-action@v0.1.10
+        env:
+          GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          IMAGE: ${{ env.IMAGE_BASE }}:${{ github.sha }}
+          WAL_IMAGE: ${{ env.WAL_IMAGE_BASE }}:${{ github.sha }}
+        with:
+          host: ${{ secrets.VM_HOST || secrets.VM_PUBLIC_IP }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          envs: GHCR_USER,GHCR_TOKEN,IMAGE,WAL_IMAGE
+          script: |
+            set -e
+            if [ -n "$GHCR_TOKEN" ]; then
+              echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            else
+              echo "GHCR_TOKEN not provided; pull may fail if images are private."
+            fi
+            cd ~/hft_platform
+            export HFT_IMAGE="$IMAGE"
+            export HFT_WAL_IMAGE="$WAL_IMAGE"
+            export HFT_USE_STRESS=1
+            export HFT_LOW_LATENCY=1
+            export HFT_CH_DATA_ROOT="/mnt/data/clickhouse"
+            export HFT_REMOTE_IMAGES=1
+            export COMPOSE_FILE="docker-compose.yml:docker-compose.stress.yml:docker-compose.lowlatency.yml:docker-compose.chdata.yml"
+            docker compose pull
+            docker compose up -d
+            docker compose ps

@@ -12,7 +12,8 @@ import os
 import glob
 import numpy as np
 from pathlib import Path
-from joblib import Parallel, delayed
+# from joblib import Parallel, delayed
+
 from collections import defaultdict
 import time
 
@@ -144,9 +145,11 @@ def run_parallel_backtest(data_dir: str, output_dir: str = None, n_jobs: int = -
     
     # 2. Execution with Joblib
     # Use n_jobs=-1 to use all cores
-    results = Parallel(n_jobs=n_jobs, verbose=5)(
-        delayed(process_single_file)(f, factors_to_test) for f in files
-    )
+    # Serial execution instead of Parallel
+    results = []
+    for i, f in enumerate(files):
+        print(f"[{i+1}/{len(files)}] Processing {f}...")
+        results.append(process_single_file(f, factors_to_test))
     
     # 3. Post-Processing & Regime Classification
     # Collect all volatilities to determine regime threshold
