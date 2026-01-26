@@ -1,7 +1,5 @@
 name: Deploy HFT Platform (GHCR + Compose)
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:
