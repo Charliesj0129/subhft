@@ -14,7 +14,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Type
 import numpy as np
-from numba import njit
+try:
+    from numba import njit
+except ImportError:
+    # Fallback if numba is missing
+    def njit(func):
+        return func
+
 
 
 @dataclass
