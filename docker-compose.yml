@@ -35,8 +35,9 @@ services:
     extends: hft-base
     container_name: hft-engine
     command: ["python", "-m", "hft_platform.main"]
-    # Switch to 'host' mode for low latency (set HFT_NETWORK_MODE=host in .env or via ops.sh)
-    network_mode: ${HFT_NETWORK_MODE:-bridge}
+    # Network mode handling
+    # Removed default network_mode: ${HFT_NETWORK_MODE:-bridge} to allow proper DNS resolution
+    # network_mode: ${HFT_NETWORK_MODE:-}
     ports:
       - "${HFT_PROM_PORT:-9090}:9090"
     volumes:
