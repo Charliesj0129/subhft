@@ -10,6 +10,8 @@ env:
 jobs:
   build-push-deploy:
     runs-on: ubuntu-latest
+    env:
+      VM_HOST: ${{ secrets.VM_HOST }}
     permissions:
       contents: read
       packages: write
@@ -53,7 +55,7 @@ jobs:
             TARGET=wal-loader
 
       - name: Deploy via SSH with compose pull/up (low-latency overrides)
-        if: ${{ secrets.VM_HOST != '' }}
+        if: ${{ env.VM_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.10
         env:
           GHCR_USER: ${{ secrets.GHCR_USER }}
@@ -61,7 +63,7 @@ jobs:
           IMAGE: ${{ env.IMAGE_BASE }}:${{ github.sha }}
           WAL_IMAGE: ${{ env.WAL_IMAGE_BASE }}:${{ github.sha }}
         with:
-          host: ${{ secrets.VM_HOST }}
+          host: ${{ env.VM_HOST }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
           envs: GHCR_USER,GHCR_TOKEN,IMAGE,WAL_IMAGE
