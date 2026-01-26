@@ -34,29 +34,45 @@ class DataWriter:
             logger.info("Running in WAL-only mode (ClickHouse disabled or driver missing)")
             return
 
-        try:
-            self.ch_client = clickhouse_connect.get_client(**self.ch_params)
-            self.connected = True
-            logger.info("Connected to ClickHouse")
+        import time
 
-            # Auto-Init Schema
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                schema_path = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
-                if os.path.exists(schema_path):
-                    with open(schema_path, "r") as f:
-                        sql_script = f.read()
-                        statements = sql_script.split(";")
-                        for stmt in statements:
-                            if stmt.strip():
-                                self.ch_client.command(stmt)
-                    logger.info("Schema initialized from SQL")
+                self.ch_client = clickhouse_connect.get_client(**self.ch_params)
+                self.connected = True
+                logger.info("Connected to ClickHouse")
+
+                # Auto-Init Schema
+                try:
+                    schema_path = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
+                    if os.path.exists(schema_path):
+                        with open(schema_path, "r") as f:
+                            sql_script = f.read()
+                            statements = sql_script.split(";")
+                            for stmt in statements:
+                                if stmt.strip():
+                                    self.ch_client.command(stmt)
+                        logger.info("Schema initialized from SQL")
+                    else:
+                        logger.warning("Schema file not found", path=schema_path)
+                except Exception as se:
+                    logger.error("Schema initialization failed", error=str(se))
+                
+                # If success, break loop
+                break
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        "ClickHouse connection failed, retrying...",
+                        error=str(e),
+                        attempt=attempt + 1,
+                    )
+                    time.sleep(2)
                 else:
-                    logger.warning("Schema file not found", path=schema_path)
-            except Exception as se:
-                logger.error("Schema initialization failed", error=str(se))
-        except Exception as e:
-            logger.warning("ClickHouse connection failed, falling back to WAL", error=str(e))
-            self.connected = False
+                    logger.warning("ClickHouse connection failed, falling back to WAL", error=str(e))
+                    self.connected = False
 
     async def write(self, table: str, data: list):
         """
