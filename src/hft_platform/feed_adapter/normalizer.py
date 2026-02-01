@@ -3,6 +3,7 @@ import re
 import time
 from typing import Any, Dict, Iterable, Optional
 
+
 from structlog import get_logger
 
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
@@ -14,6 +15,27 @@ from hft_platform.observability.metrics import MetricsRegistry
 # Use existing implementation of SymbolMetadata.
 
 logger = get_logger("feed_adapter.normalizer")
+
+_RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
+_RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
+_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "tuple").lower()
+_RETURN_TUPLE = _EVENT_MODE in {"tuple", "raw"}
+
+try:
+    try:
+        from hft_platform import rust_core as _rust_core
+    except Exception:
+        import rust_core as _rust_core
+
+    _RUST_SCALE_BOOK = _rust_core.scale_book
+    _RUST_SCALE_BOOK_SEQ = _rust_core.scale_book_seq
+    _RUST_SCALE_BOOK_PAIR = _rust_core.scale_book_pair
+    _RUST_GET_FIELD = _rust_core.get_field
+except Exception:
+    _RUST_SCALE_BOOK = None
+    _RUST_SCALE_BOOK_SEQ = None
+    _RUST_SCALE_BOOK_PAIR = None
+    _RUST_GET_FIELD = None
 
 
 class SymbolMetadata:
@@ -176,7 +198,7 @@ class SymbolMetadata:
 
 
 class MarketDataNormalizer:
-    __slots__ = ("_seq_gen", "metadata", "price_codec", "metrics")
+    __slots__ = ("_seq_gen", "metadata", "price_codec", "metrics", "_last_symbol", "_last_scale")
 
     def __init__(self, config_path: Optional[str] = None, metadata: SymbolMetadata | None = None):
         import itertools
@@ -186,45 +208,94 @@ class MarketDataNormalizer:
         self.metadata = metadata or SymbolMetadata(config_path)
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
+        self._last_symbol: str | None = None
+        self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
 
     def _next_seq(self) -> int:
         return next(self._seq_gen)
 
     def _get_field(self, payload: Any, keys: list) -> Any:
         """Helper to get value from dict or object using priority keys."""
-        for key in keys:
-            val = None
-            if isinstance(payload, dict):
-                val = payload.get(key)
-            else:
-                val = getattr(payload, key, None)
+        if _RUST_ENABLED and _RUST_GET_FIELD is not None:
+            try:
+                value = _RUST_GET_FIELD(payload, keys)
+                if value is not None:
+                    return value
+            except Exception:
+                pass
 
+        if isinstance(payload, dict):
+            get = payload.get
+            for key in keys:
+                val = get(key)
+                if val is not None:
+                    return val
+            return None
+
+        for key in keys:
+            val = getattr(payload, key, None)
             if val is not None:
                 return val
         return None
 
-    def normalize_tick(self, payload: Any) -> Optional[TickEvent]:
+    def _get_scale(self, symbol: str) -> int:
+        if symbol == self._last_symbol:
+            return self._last_scale
+        scale = int(self.metadata.price_scale(symbol))
+        if scale <= 0:
+            scale = 1
+        self._last_symbol = symbol
+        self._last_scale = scale
+        return scale
+
+    def normalize_tick(self, payload: Any) -> Optional[TickEvent | tuple]:
         # Fast path lookup without _coalesce
         # Assuming Shioaji standard keys: 'code', 'close', 'volume', 'ts'
         try:
-            symbol = self._get_field(payload, ["code", "Code"])
+            if isinstance(payload, dict):
+                symbol = payload.get("code") or payload.get("Code")
+                ts_val = payload.get("ts") or payload.get("datetime")
+                close_val = payload.get("close") or payload.get("Close")
+                vol_val = payload.get("volume") or payload.get("Volume")
+                total_volume = int(payload.get("total_volume") or 0)
+                is_simtrade = bool(payload.get("simtrade") or 0)
+                is_odd_lot = bool(payload.get("intraday_odd") or 0)
+            else:
+                symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
+                ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
+                close_val = getattr(payload, "close", None) or getattr(payload, "Close", None)
+                vol_val = getattr(payload, "volume", None) or getattr(payload, "Volume", None)
+                total_volume = int(getattr(payload, "total_volume", None) or 0)
+                is_simtrade = bool(getattr(payload, "simtrade", None) or 0)
+                is_odd_lot = bool(getattr(payload, "intraday_odd", None) or 0)
+
             if not symbol:
                 return None
 
-            # Timestamp
-            ts_val = self._get_field(payload, ["ts", "datetime"])
             if hasattr(ts_val, "timestamp"):
                 exch_ts = int(ts_val.timestamp() * 1e9)
             else:
                 exch_ts = int(ts_val) if ts_val else 0
 
-            # Price
-            close_val = self._get_field(payload, ["close", "Close"])
-            price = self.price_codec.scale(symbol, close_val) if close_val is not None else 0
+            if close_val is not None:
+                scale = self._get_scale(symbol)
+                price = int(float(close_val) * scale)
+            else:
+                price = 0
 
-            # Volume
-            vol_val = self._get_field(payload, ["volume", "Volume"])
             volume = int(vol_val) if vol_val is not None else 0
+
+            if _RETURN_TUPLE:
+                return (
+                    "tick",
+                    symbol,
+                    price,
+                    volume,
+                    total_volume,
+                    is_simtrade,
+                    is_odd_lot,
+                    exch_ts,
+                )
 
             meta = MetaData(seq=self._next_seq(), topic="tick", source_ts=exch_ts, local_ts=time.time_ns())
 
@@ -233,11 +304,11 @@ class MarketDataNormalizer:
                 symbol=symbol,
                 price=price,
                 volume=volume,
-                total_volume=int(self._get_field(payload, ["total_volume"]) or 0),
+                total_volume=total_volume,
                 bid_side_total_vol=0,  # Optimization: skip less used fields unless needed
                 ask_side_total_vol=0,
-                is_simtrade=bool(self._get_field(payload, ["simtrade"]) or 0),
-                is_odd_lot=bool(self._get_field(payload, ["intraday_odd"]) or 0),
+                is_simtrade=is_simtrade,
+                is_odd_lot=is_odd_lot,
             )
         except Exception as e:
             logger.error("Normalize Tick Error", error=str(e), payload_type=str(type(payload)))
@@ -245,27 +316,31 @@ class MarketDataNormalizer:
                 self.metrics.normalization_errors_total.labels(type="Tick").inc()
             return None
 
-    def normalize_bidask(self, payload: Any) -> Optional[BidAskEvent]:
+    def normalize_bidask(self, payload: Any) -> Optional[BidAskEvent | tuple]:
         try:
-            symbol = self._get_field(payload, ["code", "Code"])
+            if isinstance(payload, dict):
+                symbol = payload.get("code") or payload.get("Code")
+                ts_val = payload.get("ts") or payload.get("datetime")
+                bp = payload.get("bid_price") or []
+                bv = payload.get("bid_volume") or []
+                ap = payload.get("ask_price") or []
+                av = payload.get("ask_volume") or []
+            else:
+                symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
+                ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
+                bp = getattr(payload, "bid_price", None) or []
+                bv = getattr(payload, "bid_volume", None) or []
+                ap = getattr(payload, "ask_price", None) or []
+                av = getattr(payload, "ask_volume", None) or []
             if not symbol:
                 return None
 
-            # Timestamp
-            ts_val = self._get_field(payload, ["ts", "datetime"])
             if hasattr(ts_val, "timestamp"):
                 exch_ts = int(ts_val.timestamp() * 1e9)
             else:
                 exch_ts = int(ts_val) if ts_val else 0
 
-            scale = self.price_codec.scale_factor(symbol)
-
-            # Arrays
-            # Shioaji sends 'bid_price': [p1, p2...], 'bid_volume': [v1, v2...]
-            bp = self._get_field(payload, ["bid_price"]) or []
-            bv = self._get_field(payload, ["bid_volume"]) or []
-            ap = self._get_field(payload, ["ask_price"]) or []
-            av = self._get_field(payload, ["ask_volume"]) or []
+            scale = self._get_scale(symbol)
 
             # Convert to numpy
             # We need to scale prices. Using numpy vectorization for scaling is faster.
@@ -278,15 +353,48 @@ class MarketDataNormalizer:
             # Optimization: Use list comprehension for small N (N=5)
             # Returns List[List[int]] directly (faster than numpy conversion)
 
-            # Bids
-            # Filter and Scale in one pass
-            bids_final = [[int(p * scale), int(v)] for p, v in zip(bp, bv) if p > 0]
+            # Bids / Asks
+            # Rust path uses zero-copy NumPy views and returns int64 ndarray (N,2).
+            bids_final = None
+            asks_final = None
+            use_rust = _RUST_ENABLED and _RUST_MIN_LEVELS <= 0
+            if not use_rust and _RUST_ENABLED and _RUST_MIN_LEVELS > 0:
+                use_rust = (
+                    len(bp) >= _RUST_MIN_LEVELS
+                    and len(bv) >= _RUST_MIN_LEVELS
+                    and len(ap) >= _RUST_MIN_LEVELS
+                    and len(av) >= _RUST_MIN_LEVELS
+                )
 
-            # Asks
-            asks_final = [[int(p * scale), int(v)] for p, v in zip(ap, av) if p > 0]
+            if use_rust and _RUST_SCALE_BOOK_PAIR:
+                try:
+                    bids_final, asks_final = _RUST_SCALE_BOOK_PAIR(bp, bv, ap, av, scale)
+                except Exception:
+                    bids_final = None
+                    asks_final = None
+
+            if bids_final is None:
+                if use_rust and _RUST_SCALE_BOOK_SEQ:
+                    try:
+                        bids_final = _RUST_SCALE_BOOK_SEQ(bp, bv, scale)
+                    except Exception:
+                        bids_final = []
+                else:
+                    bids_final = []
+
+            if asks_final is None:
+                if use_rust and _RUST_SCALE_BOOK_SEQ:
+                    try:
+                        asks_final = _RUST_SCALE_BOOK_SEQ(ap, av, scale)
+                    except Exception:
+                        asks_final = []
+                else:
+                    asks_final = []
+
+            if _RETURN_TUPLE:
+                return ("bidask", symbol, bids_final, asks_final, exch_ts, False)
 
             meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=time.time_ns())
-
             return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final)
         except Exception as e:
             logger.error("Normalize BidAsk Error", error=str(e), payload_type=str(type(payload)))
@@ -294,23 +402,31 @@ class MarketDataNormalizer:
                 self.metrics.normalization_errors_total.labels(type="BidAsk").inc()
             return None
 
-    def normalize_snapshot(self, payload: Dict[str, Any]) -> Optional[BidAskEvent]:
-        symbol = self._get_field(payload, ["code", "Code"])
+    def normalize_snapshot(self, payload: Dict[str, Any]) -> Optional[BidAskEvent | tuple]:
+        if isinstance(payload, dict):
+            symbol = payload.get("code") or payload.get("Code")
+            ts_val = payload.get("ts") or payload.get("datetime")
+            buy_price = payload.get("buy_price")
+            buy_volume = payload.get("buy_volume")
+            sell_price = payload.get("sell_price")
+            sell_volume = payload.get("sell_volume")
+        else:
+            symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
+            ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
+            buy_price = getattr(payload, "buy_price", None)
+            buy_volume = getattr(payload, "buy_volume", None)
+            sell_price = getattr(payload, "sell_price", None)
+            sell_volume = getattr(payload, "sell_volume", None)
+
         if not symbol:
             return None
 
-        ts_val = self._get_field(payload, ["ts", "datetime"])
         if hasattr(ts_val, "timestamp"):
             exch_ts = int(ts_val.timestamp() * 1e9)
         else:
             exch_ts = int(ts_val) if ts_val else 0
 
-        scale = self.price_codec.scale_factor(symbol)
-
-        buy_price = self._get_field(payload, ["buy_price"])
-        buy_volume = self._get_field(payload, ["buy_volume"])
-        sell_price = self._get_field(payload, ["sell_price"])
-        sell_volume = self._get_field(payload, ["sell_volume"])
+        scale = self._get_scale(symbol)
 
         if buy_price is not None or sell_price is not None:
             bids = []
@@ -319,6 +435,9 @@ class MarketDataNormalizer:
                 bids.append([int(float(buy_price) * scale), int(buy_volume or 0)])
             if sell_price:
                 asks.append([int(float(sell_price) * scale), int(sell_volume or 0)])
+
+            if _RETURN_TUPLE:
+                return ("bidask", symbol, bids, asks, exch_ts, True)
 
             meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=time.time_ns())
             return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)

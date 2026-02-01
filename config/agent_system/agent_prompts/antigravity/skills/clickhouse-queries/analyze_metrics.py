@@ -22,43 +22,28 @@ def query_clickhouse(sql):
         return None, str(e)
 
 def analyze_latency(table="hft.market_data", minutes=10):
-    # Calculate latency statistics on ingestion (exchange_ts vs local_ts if available)
-    # Or just return stats on specific metric columns
-    
-    # Assuming we have a 'latency' column or we calculate (local_timer - exchange_ts)
-    # If not, we just count rows for now as a proxy for 'throughput'
-    
+    # Use ingest_ts/exch_ts delta (ns -> us) to avoid needing latency_us column.
     sql = f"""
     SELECT
         count() as count,
-        avg(latency_us) as avg_latency,
-        quantile(0.5)(latency_us) as p50,
-        quantile(0.9)(latency_us) as p90,
-        quantile(0.99)(latency_us) as p99,
-        max(latency_us) as max_latency
+        avg((ingest_ts - exch_ts) / 1000) as avg_latency_us,
+        quantile(0.5)((ingest_ts - exch_ts) / 1000) as p50,
+        quantile(0.9)((ingest_ts - exch_ts) / 1000) as p90,
+        quantile(0.99)((ingest_ts - exch_ts) / 1000) as p99,
+        max((ingest_ts - exch_ts) / 1000) as max_latency_us
     FROM {table}
-    WHERE timestamp >= now() - INTERVAL {minutes} MINUTE
+    WHERE ingest_ts > 0
+      AND exch_ts > 0
+      AND ingest_ts >= (toUnixTimestamp64Nano(toDateTime64(now(), 9)) - {minutes} * 60 * 1000000000)
     """
-    
-    # Note: If the table doesn't have 'latency_us', this will fail. 
-    # For robust 'Deep Analyzer', we should check schema first or allow custom query.
-    # For HFT context, let's assume 'latency_us' exists or use a simpler placeholder for this demo.
-    
-    # Fallback/Demo query if table not ready
-    sql_demo = f"""
-    SELECT
-        count() as throughput_count
-    FROM system.parts
-    """
-    
-    data, err = query_clickhouse(sql)
-    if err and "Unknown custom column" in err:
-         # Fallback to just counting metrics
-         data, err = query_clickhouse(sql_demo)
 
+    data, err = query_clickhouse(sql)
     if err:
         return {"status": "error", "error": err}
-    
+
+    if not isinstance(data, dict):
+        return {"status": "error", "error": "Unexpected response"}
+
     return {"status": "ok", "metrics": data.get("data", [])}
 
 def main():
