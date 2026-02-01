@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Any, List
 
 from structlog import get_logger
@@ -23,23 +24,41 @@ class RingBufferBus:
         self.size = size
         self.buffer: List[Any] = [None] * size
         self.cursor: int = -1  # Writing cursor
+        self.single_writer = os.getenv("HFT_BUS_SINGLE_WRITER", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
         self.write_lock = asyncio.Lock()
         self.metrics = MetricsRegistry.get()
         # Condition variable to notify readers of new data
         self.signal = asyncio.Condition()
+        self._notify_every = max(1, int(os.getenv("HFT_BUS_NOTIFY_EVERY", "1")))
+        self._notify_counter = 0
+
+    def _publish_unlocked(self, event: Any) -> None:
+        next_seq = self.cursor + 1
+        self.buffer[next_seq % self.size] = event
+        self.cursor = next_seq
+        self._notify_counter += 1
 
     async def publish(self, event: Any):
         """Publish event to shared buffer."""
+        if self.single_writer:
+            # Single-writer fast path: no lock
+            self._publish_unlocked(event)
+            if self._notify_counter % self._notify_every == 0:
+                async with self.signal:
+                    self.signal.notify_all()
+            return
+
         async with self.write_lock:
             # Check if we are overwriting unread data?
             # For simplicity in this non-blocking design, we overwrite.
             # Ideally we track min_reader_cursor to prevent overwrite if strict usage.
             # But for HFT, latest data > stalled consumer.
-
-            next_seq = self.cursor + 1
-            self.buffer[next_seq % self.size] = event
-            self.cursor = next_seq
-
+            self._publish_unlocked(event)
             async with self.signal:
                 self.signal.notify_all()
 

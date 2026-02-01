@@ -56,6 +56,7 @@ class MarketDataService:
         self.running = True
         self.loop = asyncio.get_running_loop()
         logger.info("MarketDataService started")
+        self.lob.start_metrics_worker(self.loop)
 
         # Start Monitor
         monitor_task = asyncio.create_task(self._monitor_loop())
