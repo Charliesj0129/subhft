@@ -3,7 +3,6 @@ import re
 import time
 from typing import Any, Dict, Iterable, Optional
 
-
 from structlog import get_logger
 
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
