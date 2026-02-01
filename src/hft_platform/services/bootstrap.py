@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, Dict, Optional
 
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
@@ -26,11 +27,25 @@ class SystemBootstrapper:
     def build(self) -> ServiceRegistry:
         # 1. Infrastructure
         bus = RingBufferBus()
-        raw_queue: asyncio.Queue[Any] = asyncio.Queue()
-        raw_exec_queue: asyncio.Queue[Any] = asyncio.Queue()
-        risk_queue: asyncio.Queue[Any] = asyncio.Queue()
-        order_queue: asyncio.Queue[Any] = asyncio.Queue()
-        recorder_queue: asyncio.Queue[Any] = asyncio.Queue()
+        raw_queue_size = int(os.getenv("HFT_RAW_QUEUE_SIZE", "0"))
+        raw_exec_queue_size = int(os.getenv("HFT_RAW_EXEC_QUEUE_SIZE", "0"))
+        risk_queue_size = int(os.getenv("HFT_RISK_QUEUE_SIZE", "0"))
+        order_queue_size = int(os.getenv("HFT_ORDER_QUEUE_SIZE", "0"))
+        recorder_queue_size = int(os.getenv("HFT_RECORDER_QUEUE_SIZE", "0"))
+
+        raw_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_queue_size) if raw_queue_size > 0 else asyncio.Queue()
+        raw_exec_queue: asyncio.Queue[Any] = (
+            asyncio.Queue(maxsize=raw_exec_queue_size) if raw_exec_queue_size > 0 else asyncio.Queue()
+        )
+        risk_queue: asyncio.Queue[Any] = (
+            asyncio.Queue(maxsize=risk_queue_size) if risk_queue_size > 0 else asyncio.Queue()
+        )
+        order_queue: asyncio.Queue[Any] = (
+            asyncio.Queue(maxsize=order_queue_size) if order_queue_size > 0 else asyncio.Queue()
+        )
+        recorder_queue: asyncio.Queue[Any] = (
+            asyncio.Queue(maxsize=recorder_queue_size) if recorder_queue_size > 0 else asyncio.Queue()
+        )
 
         # 2. Shared State
         position_store = PositionStore()
@@ -38,8 +53,6 @@ class SystemBootstrapper:
         storm_guard = StormGuard()
 
         # 3. Config Paths
-        import os
-
         paths = self.settings.get("paths", {})
         symbols_path = os.getenv("SYMBOLS_CONFIG", paths.get("symbols", "config/symbols.yaml"))
         os.environ.setdefault("SYMBOLS_CONFIG", symbols_path)
