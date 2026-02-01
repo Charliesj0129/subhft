@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 from threading import Lock
@@ -22,6 +23,7 @@ _READ_LOCKS_ENABLED = os.getenv("HFT_LOB_READ_LOCKS", "1").lower() not in {
 _LOCAL_TS_ENABLED = os.getenv("HFT_LOB_LOCAL_TS", "0").lower() not in {"0", "false", "no", "off"}
 _METRICS_ENABLED = os.getenv("HFT_METRICS_ENABLED", "0").lower() not in {"0", "false", "no", "off"}
 _METRICS_BATCH = max(1, int(os.getenv("HFT_METRICS_BATCH", "4096")))
+_METRICS_ASYNC = os.getenv("HFT_METRICS_ASYNC", "1").lower() not in {"0", "false", "no", "off"}
 _STATS_MODE = os.getenv("HFT_LOB_STATS_MODE", "event").lower()
 _STATS_TUPLE = _STATS_MODE in {"tuple", "raw"}
 _STATS_NONE = _STATS_MODE in {"none", "off", "disabled"}
@@ -256,6 +258,43 @@ class BookState:
                 int(self.ask_depth_total),
             )
 
+    def apply_update_with_stats(
+        self,
+        bids: Union[np.ndarray, list],
+        asks: Union[np.ndarray, list],
+        exch_ts: int,
+        stats: tuple[int, int, int, int, float, float, float],
+    ) -> None:
+        with self.lock:
+            if exch_ts < self.exch_ts:
+                return
+
+            self.exch_ts = exch_ts
+            if _LOCAL_TS_ENABLED:
+                self.local_ts = time.time_ns()
+
+            if isinstance(bids, np.ndarray):
+                self.bids = bids if bids.size > 0 else []
+            elif bids:
+                self.bids = bids
+            else:
+                self.bids = []
+
+            if isinstance(asks, np.ndarray):
+                self.asks = asks if asks.size > 0 else []
+            elif asks:
+                self.asks = asks
+            else:
+                self.asks = []
+
+            _best_bid, _best_ask, bid_depth, ask_depth, mid, spread, imbalance = stats
+            self.bid_depth_total = int(bid_depth)
+            self.ask_depth_total = int(ask_depth)
+            self.mid_price = float(mid)
+            self.spread = float(spread)
+            self.imbalance = float(imbalance)
+            self.version += 1
+
 
 class LOBEngine:
     def __init__(self):
@@ -267,6 +306,8 @@ class LOBEngine:
         self._metrics_pending_updates: Dict[tuple[str, str], int] = {}
         self._metrics_pending_snapshots: Dict[str, int] = {}
         self._metrics_pending_total = 0
+        self._metrics_flush_requested = False
+        self._metrics_task: asyncio.Task | None = None
         self._last_symbol: str | None = None
         self._last_book: BookState | None = None
 
@@ -276,6 +317,23 @@ class LOBEngine:
         if self.metrics is None:
             return False
         return not isinstance(self.metrics, MetricsRegistry)
+
+    def start_metrics_worker(self, loop: asyncio.AbstractEventLoop, interval_ms: int = 5) -> None:
+        if not _METRICS_ASYNC or self._metrics_task is not None:
+            return
+
+        async def _worker():
+            try:
+                while True:
+                    await asyncio.sleep(interval_ms / 1000.0)
+                    if self._metrics_pending_total <= 0 and not self._metrics_flush_requested:
+                        continue
+                    self._metrics_flush_requested = False
+                    self._flush_metrics()
+            except asyncio.CancelledError:
+                pass
+
+        self._metrics_task = loop.create_task(_worker())
 
     def _flush_metrics(self):
         if not self._is_metrics_enabled():
@@ -298,7 +356,12 @@ class LOBEngine:
         if is_snapshot:
             self._metrics_pending_snapshots[symbol] = self._metrics_pending_snapshots.get(symbol, 0) + 1
         self._metrics_pending_total += 1
-        if self._metrics_pending_total >= self._metrics_batch or not isinstance(self.metrics, MetricsRegistry):
+        if self._metrics_pending_total >= self._metrics_batch:
+            if _METRICS_ASYNC and isinstance(self.metrics, MetricsRegistry):
+                self._metrics_flush_requested = True
+            else:
+                self._flush_metrics()
+        elif not isinstance(self.metrics, MetricsRegistry):
             self._flush_metrics()
 
     def _emit_stats(self, book: BookState):
@@ -327,9 +390,37 @@ class LOBEngine:
         # Tuple fast-path (avoid event object creation)
         if isinstance(event, tuple) and event:
             if event[0] == "bidask":
-                _, symbol, bids, asks, exch_ts, is_snapshot = event
-                book = self.get_book(symbol)
-                book.apply_update(bids, asks, exch_ts)
+                if len(event) >= 13:
+                    (
+                        _,
+                        symbol,
+                        bids,
+                        asks,
+                        exch_ts,
+                        is_snapshot,
+                        best_bid,
+                        best_ask,
+                        bid_depth,
+                        ask_depth,
+                        mid_price,
+                        spread,
+                        imbalance,
+                    ) = event[:13]
+                    stats = (
+                        int(best_bid),
+                        int(best_ask),
+                        int(bid_depth),
+                        int(ask_depth),
+                        float(mid_price),
+                        float(spread),
+                        float(imbalance),
+                    )
+                    book = self.get_book(symbol)
+                    book.apply_update_with_stats(bids, asks, exch_ts, stats)
+                else:
+                    _, symbol, bids, asks, exch_ts, is_snapshot = event
+                    book = self.get_book(symbol)
+                    book.apply_update(bids, asks, exch_ts)
                 if metrics_enabled:
                     self._record_lob_metrics(symbol, bool(is_snapshot))
                 return self._emit_stats(book)

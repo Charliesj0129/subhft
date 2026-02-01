@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Any, Dict, Optional
 
 from structlog import get_logger
@@ -42,6 +43,12 @@ class HFTSystem:
         self.recorder = self.registry.recorder
 
         self.tasks: Dict[str, asyncio.Task[Any]] = {}
+        self._recorder_drop_on_full = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
 
     async def run(self):
         self.running = True
@@ -175,6 +182,12 @@ class HFTSystem:
                 if not mapped:
                     continue
                 topic, payload = mapped
-                await self.recorder_queue.put({"topic": topic, "data": payload})
+                if self._recorder_drop_on_full:
+                    try:
+                        self.recorder_queue.put_nowait({"topic": topic, "data": payload})
+                    except asyncio.QueueFull:
+                        pass
+                else:
+                    await self.recorder_queue.put({"topic": topic, "data": payload})
         except asyncio.CancelledError:
             pass
