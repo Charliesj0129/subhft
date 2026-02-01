@@ -384,9 +384,7 @@ class MarketDataNormalizer:
                         bids_final = None
                 if bids_final is None:
                     bids_final = [
-                        [int(float(price) * scale), int(volume)]
-                        for price, volume in zip(bp, bv)
-                        if price and volume
+                        [int(float(price) * scale), int(volume)] for price, volume in zip(bp, bv) if price and volume
                     ]
 
             if asks_final is None:
@@ -397,9 +395,7 @@ class MarketDataNormalizer:
                         asks_final = None
                 if asks_final is None:
                     asks_final = [
-                        [int(float(price) * scale), int(volume)]
-                        for price, volume in zip(ap, av)
-                        if price and volume
+                        [int(float(price) * scale), int(volume)] for price, volume in zip(ap, av) if price and volume
                     ]
 
             if _RETURN_TUPLE:
