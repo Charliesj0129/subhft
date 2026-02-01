@@ -18,10 +18,16 @@ logger = get_logger("feed_adapter.normalizer")
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
 _RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
-_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "event").lower()
+_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "tuple").lower()
 if "pytest" in sys.modules:
     _EVENT_MODE = "event"
 _RETURN_TUPLE = _EVENT_MODE in {"tuple", "raw"}
+_RUST_STATS_TUPLE = os.getenv("HFT_RUST_STATS_TUPLE", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 try:
     try:
@@ -32,11 +38,13 @@ try:
     _RUST_SCALE_BOOK = _rust_core.scale_book
     _RUST_SCALE_BOOK_SEQ = _rust_core.scale_book_seq
     _RUST_SCALE_BOOK_PAIR = _rust_core.scale_book_pair
+    _RUST_SCALE_BOOK_PAIR_STATS = getattr(_rust_core, "scale_book_pair_stats", None)
     _RUST_GET_FIELD = _rust_core.get_field
 except Exception:
     _RUST_SCALE_BOOK = None
     _RUST_SCALE_BOOK_SEQ = None
     _RUST_SCALE_BOOK_PAIR = None
+    _RUST_SCALE_BOOK_PAIR_STATS = None
     _RUST_GET_FIELD = None
 
 
@@ -369,7 +377,15 @@ class MarketDataNormalizer:
                     and len(av) >= _RUST_MIN_LEVELS
                 )
 
-            if use_rust and _RUST_SCALE_BOOK_PAIR:
+            stats = None
+            if use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
+                try:
+                    bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                except Exception:
+                    bids_final = None
+                    asks_final = None
+                    stats = None
+            if bids_final is None and use_rust and _RUST_SCALE_BOOK_PAIR:
                 try:
                     bids_final, asks_final = _RUST_SCALE_BOOK_PAIR(bp, bv, ap, av, scale)
                 except Exception:
@@ -399,6 +415,22 @@ class MarketDataNormalizer:
                     ]
 
             if _RETURN_TUPLE:
+                if stats is not None:
+                    return (
+                        "bidask",
+                        symbol,
+                        bids_final,
+                        asks_final,
+                        exch_ts,
+                        False,
+                        stats[0],
+                        stats[1],
+                        stats[2],
+                        stats[3],
+                        stats[4],
+                        stats[5],
+                        stats[6],
+                    )
                 return ("bidask", symbol, bids_final, asks_final, exch_ts, False)
 
             meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=time.time_ns())
@@ -451,6 +483,8 @@ class MarketDataNormalizer:
 
         event = self.normalize_bidask(payload)
         if isinstance(event, tuple):
+            if len(event) > 6:
+                return (event[0], event[1], event[2], event[3], event[4], True, *event[6:])
             return (event[0], event[1], event[2], event[3], event[4], True)
         if event:
             event.is_snapshot = True
