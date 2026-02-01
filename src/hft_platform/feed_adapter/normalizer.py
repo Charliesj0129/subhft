@@ -359,9 +359,10 @@ class MarketDataNormalizer:
             # Rust path uses zero-copy NumPy views and returns int64 ndarray (N,2).
             bids_final = None
             asks_final = None
-            use_rust = _RUST_ENABLED and _RUST_MIN_LEVELS <= 0
+            rust_available = bool(_RUST_SCALE_BOOK_PAIR or _RUST_SCALE_BOOK_SEQ)
+            use_rust = _RUST_ENABLED and rust_available and _RUST_MIN_LEVELS <= 0
             if not use_rust and _RUST_ENABLED and _RUST_MIN_LEVELS > 0:
-                use_rust = (
+                use_rust = rust_available and (
                     len(bp) >= _RUST_MIN_LEVELS
                     and len(bv) >= _RUST_MIN_LEVELS
                     and len(ap) >= _RUST_MIN_LEVELS
@@ -380,18 +381,26 @@ class MarketDataNormalizer:
                     try:
                         bids_final = _RUST_SCALE_BOOK_SEQ(bp, bv, scale)
                     except Exception:
-                        bids_final = []
-                else:
-                    bids_final = []
+                        bids_final = None
+                if bids_final is None:
+                    bids_final = [
+                        [int(float(price) * scale), int(volume)]
+                        for price, volume in zip(bp, bv)
+                        if price and volume
+                    ]
 
             if asks_final is None:
                 if use_rust and _RUST_SCALE_BOOK_SEQ:
                     try:
                         asks_final = _RUST_SCALE_BOOK_SEQ(ap, av, scale)
                     except Exception:
-                        asks_final = []
-                else:
-                    asks_final = []
+                        asks_final = None
+                if asks_final is None:
+                    asks_final = [
+                        [int(float(price) * scale), int(volume)]
+                        for price, volume in zip(ap, av)
+                        if price and volume
+                    ]
 
             if _RETURN_TUPLE:
                 return ("bidask", symbol, bids_final, asks_final, exch_ts, False)
