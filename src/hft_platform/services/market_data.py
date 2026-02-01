@@ -112,14 +112,15 @@ class MarketDataService:
                             logger.info("MD Normalized", type=str(type(event)), symbol=event.symbol)
 
                     # Update LOB
-                    stats = self.lob.process_event(event)  # Accepts Event object now
+                    # Hot path: update LOB
+                    stats = self.lob.process_event(event)
 
-                    # Publish to Strategy
+                    # Offload publishing to avoid blocking the event loop
                     if self.publish_full_events:
-                        await self._publish(event)
+                        asyncio.create_task(self._publish(event))
 
                     if stats:
-                        await self._publish(stats)
+                        asyncio.create_task(self._publish(stats))
 
                 self.raw_queue.task_done()
         except asyncio.CancelledError:
@@ -156,9 +157,9 @@ class MarketDataService:
                 stats = self.lob.process_event(event)
 
                 if self.publish_full_events:
-                    await self._publish(event)
+                    asyncio.create_task(self._publish(event))
                 if stats:
-                    await self._publish(stats)
+                    asyncio.create_task(self._publish(stats))
 
             self.client.subscribe_basket(self._on_shioaji_event)
             self._set_state(FeedState.CONNECTED)
