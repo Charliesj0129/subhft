@@ -28,7 +28,7 @@ _STATS_NONE = _STATS_MODE in {"none", "off", "disabled"}
 
 try:
     try:
-        from hft_platform import rust_core as _rust_core
+        from hft_platform import rust_core as _rust_core  # type: ignore[attr-defined]
     except Exception:
         import rust_core as _rust_core
 
