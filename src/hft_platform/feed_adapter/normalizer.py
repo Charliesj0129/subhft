@@ -22,7 +22,7 @@ _RETURN_TUPLE = _EVENT_MODE in {"tuple", "raw"}
 
 try:
     try:
-        from hft_platform import rust_core as _rust_core
+        from hft_platform import rust_core as _rust_core  # type: ignore[attr-defined]
     except Exception:
         import rust_core as _rust_core
 
@@ -271,8 +271,8 @@ class MarketDataNormalizer:
             if not symbol:
                 return None
 
-            if hasattr(ts_val, "timestamp"):
-                exch_ts = int(ts_val.timestamp() * 1e9)
+            if ts_val is not None and hasattr(ts_val, "timestamp"):
+                exch_ts = int(getattr(ts_val, "timestamp")() * 1e9)
             else:
                 exch_ts = int(ts_val) if ts_val else 0
 
@@ -334,8 +334,8 @@ class MarketDataNormalizer:
             if not symbol:
                 return None
 
-            if hasattr(ts_val, "timestamp"):
-                exch_ts = int(ts_val.timestamp() * 1e9)
+            if ts_val is not None and hasattr(ts_val, "timestamp"):
+                exch_ts = int(getattr(ts_val, "timestamp")() * 1e9)
             else:
                 exch_ts = int(ts_val) if ts_val else 0
 
@@ -420,8 +420,8 @@ class MarketDataNormalizer:
         if not symbol:
             return None
 
-        if hasattr(ts_val, "timestamp"):
-            exch_ts = int(ts_val.timestamp() * 1e9)
+        if ts_val is not None and hasattr(ts_val, "timestamp"):
+            exch_ts = int(getattr(ts_val, "timestamp")() * 1e9)
         else:
             exch_ts = int(ts_val) if ts_val else 0
 
@@ -442,6 +442,8 @@ class MarketDataNormalizer:
             return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)
 
         event = self.normalize_bidask(payload)
+        if isinstance(event, tuple):
+            return (event[0], event[1], event[2], event[3], event[4], True)
         if event:
             event.is_snapshot = True
         return event
