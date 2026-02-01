@@ -58,7 +58,7 @@ class DataWriter:
                         logger.warning("Schema file not found", path=schema_path)
                 except Exception as se:
                     logger.error("Schema initialization failed", error=str(se))
-                
+
                 # If success, break loop
                 break
 
