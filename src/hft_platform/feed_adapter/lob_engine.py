@@ -298,9 +298,7 @@ class LOBEngine:
         if is_snapshot:
             self._metrics_pending_snapshots[symbol] = self._metrics_pending_snapshots.get(symbol, 0) + 1
         self._metrics_pending_total += 1
-        if self._metrics_pending_total >= self._metrics_batch or not isinstance(
-            self.metrics, MetricsRegistry
-        ):
+        if self._metrics_pending_total >= self._metrics_batch or not isinstance(self.metrics, MetricsRegistry):
             self._flush_metrics()
 
     def _emit_stats(self, book: BookState):
