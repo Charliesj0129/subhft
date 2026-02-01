@@ -22,7 +22,7 @@ _READ_LOCKS_ENABLED = os.getenv("HFT_LOB_READ_LOCKS", "1").lower() not in {
 _LOCAL_TS_ENABLED = os.getenv("HFT_LOB_LOCAL_TS", "0").lower() not in {"0", "false", "no", "off"}
 _METRICS_ENABLED = os.getenv("HFT_METRICS_ENABLED", "0").lower() not in {"0", "false", "no", "off"}
 _METRICS_BATCH = max(1, int(os.getenv("HFT_METRICS_BATCH", "4096")))
-_STATS_MODE = os.getenv("HFT_LOB_STATS_MODE", "none").lower()
+_STATS_MODE = os.getenv("HFT_LOB_STATS_MODE", "event").lower()
 _STATS_TUPLE = _STATS_MODE in {"tuple", "raw"}
 _STATS_NONE = _STATS_MODE in {"none", "off", "disabled"}
 
@@ -270,8 +270,15 @@ class LOBEngine:
         self._last_symbol: str | None = None
         self._last_book: BookState | None = None
 
+    def _is_metrics_enabled(self) -> bool:
+        if self._metrics_enabled:
+            return True
+        if self.metrics is None:
+            return False
+        return not isinstance(self.metrics, MetricsRegistry)
+
     def _flush_metrics(self):
-        if not self._metrics_enabled:
+        if not self._is_metrics_enabled():
             return
 
         for (symbol, update_type), count in self._metrics_pending_updates.items():
@@ -285,13 +292,15 @@ class LOBEngine:
         self._metrics_pending_total = 0
 
     def _record_lob_metrics(self, symbol: str, is_snapshot: bool):
-        if not self._metrics_enabled:
+        if not self._is_metrics_enabled():
             return
         self._metrics_pending_updates[(symbol, "BidAsk")] = self._metrics_pending_updates.get((symbol, "BidAsk"), 0) + 1
         if is_snapshot:
             self._metrics_pending_snapshots[symbol] = self._metrics_pending_snapshots.get(symbol, 0) + 1
         self._metrics_pending_total += 1
-        if self._metrics_pending_total >= self._metrics_batch:
+        if self._metrics_pending_total >= self._metrics_batch or not isinstance(
+            self.metrics, MetricsRegistry
+        ):
             self._flush_metrics()
 
     def _emit_stats(self, book: BookState):
@@ -316,7 +325,7 @@ class LOBEngine:
         return book
 
     def process_event(self, event: Union[BidAskEvent, TickEvent, tuple]) -> Optional[LOBStatsEvent | tuple]:
-        metrics_enabled = self._metrics_enabled
+        metrics_enabled = self._is_metrics_enabled()
         # Tuple fast-path (avoid event object creation)
         if isinstance(event, tuple) and event:
             if event[0] == "bidask":
@@ -364,8 +373,15 @@ class LOBEngine:
             # BaseStrategy.get_l1 usually expects something.
 
             # Safely handle empty arrays
-            best_bid = int(book.bids[0][0]) if book.bids else 0
-            best_ask = int(book.asks[0][0]) if book.asks else 0
+            if isinstance(book.bids, np.ndarray):
+                best_bid = int(book.bids[0][0]) if book.bids.size > 0 else 0
+            else:
+                best_bid = int(book.bids[0][0]) if book.bids else 0
+
+            if isinstance(book.asks, np.ndarray):
+                best_ask = int(book.asks[0][0]) if book.asks.size > 0 else 0
+            else:
+                best_ask = int(book.asks[0][0]) if book.asks else 0
 
             return {
                 "symbol": symbol,
