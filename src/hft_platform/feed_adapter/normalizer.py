@@ -289,9 +289,10 @@ class MarketDataNormalizer:
 
         tick_size = None
         entry = self.metadata.meta.get(symbol) if self.metadata else None
-        if entry and entry.get("tick_size"):
+        raw_tick = entry.get("tick_size") if entry else None
+        if raw_tick is not None:
             try:
-                tick_size = float(entry.get("tick_size"))
+                tick_size = float(raw_tick)
             except (TypeError, ValueError):
                 tick_size = None
         if not tick_size and scale > 0:
@@ -302,7 +303,10 @@ class MarketDataNormalizer:
 
         def _best_price(levels: list | Any) -> int:
             if hasattr(levels, "size"):
-                return int(levels[0, 0]) if getattr(levels, "size", 0) > 0 else 0
+                from typing import cast, Any as _Any
+
+                levels_any = cast(_Any, levels)
+                return int(levels_any[0, 0]) if getattr(levels_any, "size", 0) > 0 else 0
             return int(levels[0][0]) if levels else 0
 
         synthesized = False
