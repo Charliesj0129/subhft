@@ -2,7 +2,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, cast
 
 from structlog import get_logger
 
@@ -303,9 +303,7 @@ class MarketDataNormalizer:
 
         def _best_price(levels: list | Any) -> int:
             if hasattr(levels, "size"):
-                from typing import cast, Any as _Any
-
-                levels_any = cast(_Any, levels)
+                levels_any = cast(Any, levels)
                 return int(levels_any[0, 0]) if getattr(levels_any, "size", 0) > 0 else 0
             return int(levels[0][0]) if levels else 0
 
