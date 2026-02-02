@@ -28,6 +28,13 @@ _RUST_STATS_TUPLE = os.getenv("HFT_RUST_STATS_TUPLE", "1").lower() not in {
     "no",
     "off",
 }
+_SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+_SYNTHETIC_TICKS = max(1, int(os.getenv("HFT_MD_SYNTHETIC_TICKS", "1")))
 
 try:
     try:
@@ -258,6 +265,60 @@ class MarketDataNormalizer:
         self._last_scale = scale
         return scale
 
+    def _maybe_synthesize_side(
+        self,
+        symbol: str,
+        bids: list | Any,
+        asks: list | Any,
+        scale: int,
+    ) -> tuple[list | Any, list | Any, bool]:
+        if not _SYNTHETIC_SIDE:
+            return bids, asks, False
+
+        def _has_levels(levels: list | Any) -> bool:
+            if levels is None:
+                return False
+            if hasattr(levels, "size"):
+                return getattr(levels, "size", 0) > 0
+            return bool(levels)
+
+        has_bids = _has_levels(bids)
+        has_asks = _has_levels(asks)
+        if has_bids and has_asks:
+            return bids, asks, False
+
+        tick_size = None
+        entry = self.metadata.meta.get(symbol) if self.metadata else None
+        if entry and entry.get("tick_size"):
+            try:
+                tick_size = float(entry.get("tick_size"))
+            except (TypeError, ValueError):
+                tick_size = None
+        if not tick_size and scale > 0:
+            tick_size = 1.0 / float(scale)
+        if not tick_size:
+            tick_size = 1.0
+        tick_int = max(1, int(round(tick_size * scale)))
+
+        def _best_price(levels: list | Any) -> int:
+            if hasattr(levels, "size"):
+                return int(levels[0, 0]) if getattr(levels, "size", 0) > 0 else 0
+            return int(levels[0][0]) if levels else 0
+
+        synthesized = False
+        if not has_bids and has_asks:
+            best_ask = _best_price(asks)
+            bid_price = max(best_ask - (tick_int * _SYNTHETIC_TICKS), 1)
+            bids = [[bid_price, 1]]
+            synthesized = True
+        elif not has_asks and has_bids:
+            best_bid = _best_price(bids)
+            ask_price = max(best_bid + (tick_int * _SYNTHETIC_TICKS), 1)
+            asks = [[ask_price, 1]]
+            synthesized = True
+
+        return bids, asks, synthesized
+
     def normalize_tick(self, payload: Any) -> Optional[TickEvent | tuple]:
         # Fast path lookup without _coalesce
         # Assuming Shioaji standard keys: 'code', 'close', 'volume', 'ts'
@@ -414,8 +475,10 @@ class MarketDataNormalizer:
                         [int(float(price) * scale), int(volume)] for price, volume in zip(ap, av) if price and volume
                     ]
 
+            bids_final, asks_final, synthesized = self._maybe_synthesize_side(symbol, bids_final, asks_final, scale)
+
             if _RETURN_TUPLE:
-                if stats is not None:
+                if stats is not None and not synthesized:
                     return (
                         "bidask",
                         symbol,
@@ -474,6 +537,7 @@ class MarketDataNormalizer:
                 bids.append([int(float(buy_price) * scale), int(buy_volume or 0)])
             if sell_price:
                 asks.append([int(float(sell_price) * scale), int(sell_volume or 0)])
+            bids, asks, _ = self._maybe_synthesize_side(symbol, bids, asks, scale)
 
             if _RETURN_TUPLE:
                 return ("bidask", symbol, bids, asks, exch_ts, True)
