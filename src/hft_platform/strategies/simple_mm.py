@@ -13,6 +13,8 @@ class SimpleMarketMaker(BaseStrategy):
         mid_price = event.mid_price
         spread = event.spread
         imbalance = event.imbalance
+        if mid_price <= 0 or spread <= 0 or event.best_bid <= 0 or event.best_ask <= 0:
+            return
 
         # 1. Access State
         pos = self.position(symbol)
