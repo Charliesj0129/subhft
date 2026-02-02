@@ -37,12 +37,17 @@ class MetricsRegistry:
         # Execution
         self.execution_events_total = Counter("execution_events_total", "Execution callbacks", ["type"])
         self.position_pnl_realized = Gauge("position_pnl_realized", "Realized PnL", ["strategy", "symbol"])
+        self.execution_router_alive = Gauge("execution_router_alive", "Execution router liveness")
+        self.execution_gateway_alive = Gauge("execution_gateway_alive", "Execution gateway liveness")
 
         # Infra
         self.recorder_failures_total = Counter("recorder_failures_total", "Recorder write failures")
         self.recorder_batches_flushed_total = Counter("recorder_batches_flushed_total", "Flushed batches", ["table"])
         self.recorder_rows_flushed_total = Counter("recorder_rows_flushed_total", "Flushed rows", ["table"])
         self.recorder_wal_writes_total = Counter("recorder_wal_writes_total", "WAL writes", ["table"])
+        self.queue_depth = Gauge("queue_depth", "Queue depth", ["queue"])
+        self.feed_resubscribe_total = Counter("feed_resubscribe_total", "Feed resubscribe attempts")
+        self.feed_reconnect_total = Counter("feed_reconnect_total", "Feed reconnect attempts")
 
         # System (v2)
         try:

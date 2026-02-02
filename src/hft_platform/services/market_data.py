@@ -9,6 +9,7 @@ from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("service.market_data")
 
@@ -45,6 +46,7 @@ class MarketDataService:
         self.last_event_ts = time.time()
         self.heartbeat_threshold_s = 5.0
         self.metrics = {"count": 0, "start_ts": time.time()}
+        self.metrics_registry = MetricsRegistry.get()
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
         self.log_raw_every = int(os.getenv("HFT_MD_LOG_EVERY", "1000"))
         self._raw_log_counter = 0
@@ -225,6 +227,8 @@ class MarketDataService:
                 gap = time.time() - self.last_event_ts
                 if gap > self.heartbeat_threshold_s:
                     logger.warning("Heartbeat missing", gap=gap)
+                    if self.metrics_registry:
+                        self.metrics_registry.feed_reconnect_total.inc()
                     # trigger reconnect logic?
                     pass
 

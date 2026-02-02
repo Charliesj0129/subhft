@@ -54,5 +54,13 @@ def test_bidask_normalization_filters_and_scales(bids, asks):
     expected_bids = [[int(float(p) * 100), int(v)] for p, v in zip(bid_price, bid_volume) if p > 0]
     expected_asks = [[int(float(p) * 100), int(v)] for p, v in zip(ask_price, ask_volume) if p > 0]
 
-    assert event.bids == expected_bids
-    assert event.asks == expected_asks
+    def _normalize_levels(levels):
+        if levels is None:
+            return []
+        to_list = getattr(levels, "tolist", None)
+        if callable(to_list):
+            return to_list()
+        return [list(level) for level in levels]
+
+    assert _normalize_levels(event.bids) == expected_bids
+    assert _normalize_levels(event.asks) == expected_asks

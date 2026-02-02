@@ -136,6 +136,16 @@ class HFTSystem:
 
             # Update Metrics
             metrics.update_system_metrics()
+            if metrics:
+                exec_task = self.tasks.get("exec")
+                order_task = self.tasks.get("order")
+                metrics.execution_router_alive.set(1 if exec_task and not exec_task.done() else 0)
+                metrics.execution_gateway_alive.set(1 if order_task and not order_task.done() else 0)
+                metrics.queue_depth.labels(queue="raw").set(self.raw_queue.qsize())
+                metrics.queue_depth.labels(queue="recorder").set(self.recorder_queue.qsize())
+                metrics.queue_depth.labels(queue="risk").set(self.risk_queue.qsize())
+                metrics.queue_depth.labels(queue="order").set(self.order_queue.qsize())
+                metrics.queue_depth.labels(queue="exec").set(self.raw_exec_queue.qsize())
             logger.info(
                 "Queues",
                 raw=self.raw_queue.qsize(),

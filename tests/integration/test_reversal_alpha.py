@@ -1,6 +1,6 @@
 import numpy as np
 
-from rust_core import AlphaRegimeReversal, LimitOrderBook
+from hft_platform.rust_core import AlphaRegimeReversal, LimitOrderBook
 
 
 def test_reversal_logic():
