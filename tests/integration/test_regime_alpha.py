@@ -1,4 +1,4 @@
-from rust_core import AlphaRegimePressure, LimitOrderBook
+from hft_platform.rust_core import AlphaRegimePressure, LimitOrderBook
 
 
 def test_regime_logic():

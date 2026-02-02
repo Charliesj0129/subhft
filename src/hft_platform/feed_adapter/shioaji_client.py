@@ -5,6 +5,8 @@ from typing import Any, Callable, Dict, List
 import yaml
 from structlog import get_logger
 
+from hft_platform.observability.metrics import MetricsRegistry
+
 try:
     import shioaji as sj
 except Exception:  # pragma: no cover - fallback when library absent
@@ -83,6 +85,7 @@ class ShioajiClient:
         self._callbacks_registered = False
         self.logged_in = False
         self.mode = "simulation" if (is_sim or self.api is None) else "real"
+        self.metrics = MetricsRegistry.get()
 
         # Register self globally
         if self not in CLIENT_REGISTRY:
@@ -283,6 +286,8 @@ class ShioajiClient:
         if now - last < cooldown:
             return
         self._last_resubscribe_ts = now
+        if self.metrics:
+            self.metrics.feed_resubscribe_total.inc()
         self.subscribed_codes = set()
         self.subscribed_count = 0
         for sym in self.symbols:

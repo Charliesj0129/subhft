@@ -14,12 +14,14 @@ class TestMainEntry(unittest.IsolatedAsyncioTestCase):
         # But if it was already imported, we might need to patch the object itself
         # or reload. The simplest robust way for this specific test:
 
-        with patch("hft_platform.main.HFTSystem") as MockSys:
-            mock_inst = MockSys.return_value
-            mock_inst.run = MagicMock(side_effect=lambda: asyncio.sleep(0))
+        with patch("hft_platform.main.start_http_server") as mock_start:
+            with patch("hft_platform.main.HFTSystem") as MockSys:
+                mock_inst = MockSys.return_value
+                mock_inst.run = MagicMock(side_effect=lambda: asyncio.sleep(0))
 
-            with patch.object(sys, "argv", ["prog"]):
-                await hft_platform.main.main()
+                with patch.object(sys, "argv", ["prog"]):
+                    await hft_platform.main.main()
 
-                # Verify
-                MockSys.assert_called_once()
+                    # Verify
+                    mock_start.assert_called_once()
+                    MockSys.assert_called_once()

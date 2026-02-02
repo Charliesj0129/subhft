@@ -1,6 +1,6 @@
 import time
 
-from rust_core import AlphaDepthSlope, LimitOrderBook
+from hft_platform.rust_core import AlphaDepthSlope, LimitOrderBook
 
 
 def test_rust_alpha_logic():
