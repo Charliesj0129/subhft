@@ -12,6 +12,7 @@ services:
       - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
+      - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
       - HFT_CLICKHOUSE_HOST=clickhouse
       - HFT_CLICKHOUSE_ENABLED=1
       - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
