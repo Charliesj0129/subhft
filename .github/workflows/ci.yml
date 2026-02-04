@@ -244,6 +244,9 @@ jobs:
           uv run pytest tests/benchmark \
             --benchmark-only \
             --benchmark-json=benchmark.json \
+            --benchmark-save=ci \
+            --benchmark-save-data \
+            --benchmark-min-rounds=5 \
             --benchmark-disable-gc \
             -v || echo "::warning::Benchmark tests failed or not found"
 
@@ -260,6 +263,7 @@ jobs:
         with:
           name: benchmark-results
           path: benchmark.json
+          retention-days: 90
           if-no-files-found: ignore
 
       - name: Benchmark Summary
