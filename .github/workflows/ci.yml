@@ -247,6 +247,13 @@ jobs:
             --benchmark-disable-gc \
             -v || echo "::warning::Benchmark tests failed or not found"
 
+      - name: Darwin Gate - Regression Check
+        if: always() && hashFiles('benchmark.json') != ''
+        run: |
+          uv run python scripts/benchmark_gate.py \
+            --baseline tests/benchmark/.benchmark_baseline.json \
+            --current benchmark.json --threshold 0.10
+
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         if: always()
