@@ -62,7 +62,7 @@ impl AlphaOFI {
                 ask_v[t] - ask_v[t - 1]
             };
 
-            ofi[t] = b_flow - a_flow;
+            ofi[t] = a_flow - b_flow;
         }
 
         // Convert to Python Object (Zero-Copy if possible, but here we transfer ownership of new array)
