@@ -1,0 +1,83 @@
+name: PR Review Checklist
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+
+jobs:
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect print() in production code
+        run: |
+          echo "Checking for print() statements in src/..."
+          FOUND=$(grep -rn 'print(' src/ --include='*.py' \
+            | grep -v '# noqa' \
+            | grep -v 'structlog' \
+            | grep -v '__main__' \
+            | grep -v 'cli.py' || true)
+          if [ -n "$FOUND" ]; then
+            echo "::warning::print() statements found in production code:"
+            echo "$FOUND"
+            echo ""
+            echo "Use structlog instead of print() in production code."
+          fi
+
+      - name: Detect float in financial paths
+        run: |
+          echo "Checking for float usage in financial code paths..."
+          FOUND=$(grep -rnE ':\s*float\b|float\(' \
+            src/hft_platform/order/ \
+            src/hft_platform/risk/ \
+            src/hft_platform/execution/ \
+            --include='*.py' \
+            | grep -v '# noqa' \
+            | grep -v 'timestamp' \
+            | grep -v 'latency' \
+            | grep -v '_seconds' \
+            | grep -v '_ratio' || true)
+          if [ -n "$FOUND" ]; then
+            echo "::error::float usage detected in financial code paths:"
+            echo "$FOUND"
+            echo ""
+            echo "Use Decimal or integer micros for prices/balances (see CLAUDE.md Precision Law)."
+            exit 1
+          fi
+
+      - name: Detect hardcoded secrets
+        run: |
+          echo "Checking for hardcoded secrets..."
+          FOUND=$(grep -rnEi '(api_key|password|secret|token)\s*=\s*["\x27][^"\x27]{8,}' \
+            src/ --include='*.py' \
+            | grep -v '# noqa' \
+            | grep -v 'os.environ' \
+            | grep -v 'os.getenv' \
+            | grep -v 'settings\.' \
+            | grep -v '_HEADER' \
+            | grep -v 'typing' || true)
+          if [ -n "$FOUND" ]; then
+            echo "::error::Potential hardcoded secrets detected:"
+            echo "$FOUND"
+            echo ""
+            echo "Use environment variables or config files for secrets."
+            exit 1
+          fi
+
+      - name: Check TODO/FIXME without ticket reference
+        run: |
+          echo "Checking for TODO/FIXME without ticket references..."
+          FOUND=$(grep -rnE '(TODO|FIXME|HACK|XXX)' src/ --include='*.py' \
+            | grep -v '#[0-9]' \
+            | grep -v 'TICKET' \
+            | grep -v 'ISSUE' || true)
+          if [ -n "$FOUND" ]; then
+            echo "::warning::TODO/FIXME without ticket reference:"
+            echo "$FOUND"
+            echo ""
+            echo "Consider linking TODOs to issue tracker tickets."
+          fi
