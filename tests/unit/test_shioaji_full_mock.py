@@ -60,12 +60,12 @@ class TestShioajiClientFull(unittest.TestCase):
 
     def test_login_flow(self):
         # Test Env var login
-        with patch.dict(os.environ, {"SHIOAJI_PERSON_ID": "TESTID", "SHIOAJI_PASSWORD": "TESTPW"}):
+        with patch.dict(os.environ, {"SHIOAJI_API_KEY": "TESTKEY", "SHIOAJI_SECRET_KEY": "TESTSECRET"}):
             self.client.login()
             self.mock_api_instance.login.assert_called_once()
             _, kwargs = self.mock_api_instance.login.call_args
-            self.assertEqual(kwargs["person_id"], "TESTID")
-            self.assertEqual(kwargs["passwd"], "TESTPW")
+            self.assertEqual(kwargs["api_key"], "TESTKEY")
+            self.assertEqual(kwargs["secret_key"], "TESTSECRET")
             self.assertIsNone(kwargs.get("contracts_cb"))
             self.assertTrue(self.client.logged_in)
 

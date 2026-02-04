@@ -40,6 +40,14 @@ class MetricsRegistry:
         self.execution_router_alive = Gauge("execution_router_alive", "Execution router liveness")
         self.execution_gateway_alive = Gauge("execution_gateway_alive", "Execution gateway liveness")
 
+        # Broker/API
+        self.shioaji_api_latency_ms = Histogram(
+            "shioaji_api_latency_ms",
+            "Shioaji API latency (ms)",
+            ["op", "result"],
+            buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000],
+        )
+
         # Infra
         self.recorder_failures_total = Counter("recorder_failures_total", "Recorder write failures")
         self.recorder_batches_flushed_total = Counter("recorder_batches_flushed_total", "Flushed batches", ["table"])
