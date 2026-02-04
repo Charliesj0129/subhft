@@ -1,3 +1,4 @@
+import importlib
 import os
 import re
 import sys
@@ -40,9 +41,9 @@ _TS_ASSUME_TZ = os.getenv("HFT_TS_ASSUME_TZ", "Asia/Taipei")
 
 try:
     try:
-        from hft_platform import rust_core as _rust_core  # type: ignore[attr-defined]
+        _rust_core = importlib.import_module("hft_platform.rust_core")
     except Exception:
-        import rust_core as _rust_core
+        _rust_core = importlib.import_module("rust_core")
 
     _RUST_SCALE_BOOK = _rust_core.scale_book
     _RUST_SCALE_BOOK_SEQ = _rust_core.scale_book_seq

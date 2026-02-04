@@ -1,5 +1,5 @@
-use pyo3::prelude::*;
 use memmap2::MmapMut;
+use pyo3::prelude::*;
 use std::fs::OpenOptions;
 
 const HEADER_SIZE: usize = 128; // 64B WriteCursor + 64B ReadCursor (padded)
@@ -20,7 +20,7 @@ impl ShmRingBuffer {
     #[new]
     pub fn new(name: String, capacity: usize, create: bool) -> PyResult<Self> {
         let size = HEADER_SIZE + (capacity * SLOT_SIZE);
-        
+
         let path = if name.starts_with('/') {
             name
         } else {
@@ -32,7 +32,7 @@ impl ShmRingBuffer {
             .write(true)
             .create(create)
             .open(&path)?;
-            
+
         if create {
             file.set_len(size as u64)?;
         }
@@ -42,7 +42,7 @@ impl ShmRingBuffer {
         // Pointers
         let header_ptr = mmap.as_mut_ptr() as *mut u64;
         let buffer_ptr = unsafe { mmap.as_mut_ptr().add(HEADER_SIZE) };
-        
+
         // Zero header if create
         if create {
             unsafe {
@@ -58,7 +58,7 @@ impl ShmRingBuffer {
             buffer_ptr,
         })
     }
-    
+
     pub fn write(&mut self, data: &[u8]) -> PyResult<bool> {
         unsafe {
             let write_cursor = std::ptr::read_volatile(self.header_ptr.add(0));
@@ -83,7 +83,10 @@ impl ShmRingBuffer {
         }
     }
 
-    pub fn read<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, pyo3::types::PyBytes>>> {
+    pub fn read<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Option<Bound<'py, pyo3::types::PyBytes>>> {
         unsafe {
             let write_cursor = std::ptr::read_volatile(self.header_ptr.add(0));
             let read_cursor = std::ptr::read_volatile(self.header_ptr.add(1));

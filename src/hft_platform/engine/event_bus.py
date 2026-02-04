@@ -1,6 +1,7 @@
 import asyncio
+import importlib
 import os
-from typing import Any, List
+from typing import Any, Callable, List, Optional
 
 from structlog import get_logger
 
@@ -16,13 +17,13 @@ _WAIT_MODE = os.getenv("HFT_BUS_WAIT_MODE", "event").lower()
 
 try:
     try:
-        from hft_platform import rust_core as _rust_core  # type: ignore[attr-defined]
+        _rust_core = importlib.import_module("hft_platform.rust_core")
     except Exception:
-        import rust_core as _rust_core
+        _rust_core = importlib.import_module("rust_core")
 
-    _RUST_RING = getattr(_rust_core, "FastRingBuffer", None)
+    _RUST_RING_FACTORY: Optional[Callable[[int], Any]] = getattr(_rust_core, "FastRingBuffer", None)
 except Exception:
-    _RUST_RING = None
+    _RUST_RING_FACTORY = None
 
 
 class RingBufferBus:
@@ -36,8 +37,9 @@ class RingBufferBus:
 
     def __init__(self, size: int = 65536):
         self.size = size
-        self._use_rust = _RUST_ENABLED and _USE_RUST_BUS and _RUST_RING is not None
-        self._ring = _RUST_RING(size) if self._use_rust else None
+        self._use_rust = _RUST_ENABLED and _USE_RUST_BUS and _RUST_RING_FACTORY is not None
+        ring_factory = _RUST_RING_FACTORY
+        self._ring = ring_factory(size) if self._use_rust and ring_factory is not None else None
         self.buffer: List[Any] | None = None if self._use_rust else [None] * size
         self.cursor: int = -1  # Writing cursor
         self.single_writer = os.getenv("HFT_BUS_SINGLE_WRITER", "1").lower() not in {
@@ -60,7 +62,11 @@ class RingBufferBus:
         if self._use_rust and self._ring is not None:
             self._ring.set(next_seq, event)
         else:
-            self.buffer[next_seq % self.size] = event
+            buffer = self.buffer
+            if buffer is None:
+                buffer = [None] * self.size
+                self.buffer = buffer
+            buffer[next_seq % self.size] = event
         self.cursor = next_seq
         self._notify_counter += 1
 
@@ -148,7 +154,11 @@ class RingBufferBus:
                 if self._use_rust and self._ring is not None:
                     event = self._ring.get(local_seq)
                 else:
-                    event = self.buffer[local_seq % self.size]
+                    buffer = self.buffer
+                    if buffer is None:
+                        buffer = [None] * self.size
+                        self.buffer = buffer
+                    event = buffer[local_seq % self.size]
                 if event is not None:
                     yield event
                 # yield to loop to allow other tasks to run if batch is huge
@@ -186,7 +196,11 @@ class RingBufferBus:
                 if self._use_rust and self._ring is not None:
                     event = self._ring.get(local_seq)
                 else:
-                    event = self.buffer[local_seq % self.size]
+                    buffer = self.buffer
+                    if buffer is None:
+                        buffer = [None] * self.size
+                        self.buffer = buffer
+                    event = buffer[local_seq % self.size]
                 if event is not None:
                     batch.append(event)
 

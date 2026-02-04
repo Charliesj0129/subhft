@@ -70,10 +70,7 @@ impl RustPositionTracker {
         tax: i64,
         match_ts: i64,
     ) -> (i64, i64, i64, i64) {
-        let pos = self
-            .positions
-            .entry(key)
-            .or_insert_with(PositionState::new);
+        let pos = self.positions.entry(key).or_insert_with(PositionState::new);
 
         let is_buy = side == 0; // Side.BUY == 0
         let signed_fill_qty: i64 = if is_buy { qty } else { -qty };
@@ -113,9 +110,7 @@ impl RustPositionTracker {
             pos.net_qty += signed_fill_qty;
 
             // If we flipped sides, the remainder starts at the new fill price
-            if (current_sign > 0 && pos.net_qty < 0)
-                || (current_sign < 0 && pos.net_qty > 0)
-            {
+            if (current_sign > 0 && pos.net_qty < 0) || (current_sign < 0 && pos.net_qty > 0) {
                 pos.avg_price_scaled = price_scaled;
             }
         } else {
@@ -126,8 +121,7 @@ impl RustPositionTracker {
             } else {
                 // Weighted average:
                 //   new_avg = (old_net * old_avg + signed_qty * fill_price) / new_net
-                let total_val =
-                    pos.net_qty * pos.avg_price_scaled + signed_fill_qty * price_scaled;
+                let total_val = pos.net_qty * pos.avg_price_scaled + signed_fill_qty * price_scaled;
                 pos.net_qty += signed_fill_qty;
                 if pos.net_qty != 0 {
                     pos.avg_price_scaled = total_val / pos.net_qty;

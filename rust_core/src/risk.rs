@@ -1,5 +1,5 @@
-use pyo3::prelude::*;
 use memmap2::MmapMut;
+use pyo3::prelude::*;
 use std::fs::OpenOptions;
 
 #[pyclass]
@@ -20,24 +20,24 @@ impl FastGate {
         } else {
             format!("/dev/shm/{}", kill_shm_name)
         };
-        
+
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true) // Auto create for ease
             .open(&path)?;
-            
+
         file.set_len(1)?;
-        
+
         let mmap = unsafe { MmapMut::map_mut(&file)? };
-        
+
         Ok(FastGate {
             mmap,
             max_price,
-            max_qty
+            max_qty,
         })
     }
-    
+
     pub fn check(&self, price: f64, qty: f64) -> (bool, u8) {
         unsafe {
             // 1. Zero-latency Kill Switch
@@ -47,15 +47,23 @@ impl FastGate {
                 return (false, 1);
             }
         }
-        
-        if price <= 0.0 { return (false, 2); }
-        if price > self.max_price { return (false, 3); }
-        if qty <= 0.0 { return (false, 5); }
-        if qty > self.max_qty { return (false, 4); }
-        
+
+        if price <= 0.0 {
+            return (false, 2);
+        }
+        if price > self.max_price {
+            return (false, 3);
+        }
+        if qty <= 0.0 {
+            return (false, 5);
+        }
+        if qty > self.max_qty {
+            return (false, 4);
+        }
+
         (true, 0)
     }
-    
+
     pub fn set_kill_switch(&mut self, active: bool) {
         self.mmap[0] = if active { 1 } else { 0 };
     }
