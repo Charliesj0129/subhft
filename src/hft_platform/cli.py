@@ -49,7 +49,7 @@ def cmd_run(args: argparse.Namespace):
     summary = summarize_settings(settings, downgraded_mode=downgraded)
     print(f"[hft run] {summary}")
     if downgraded:
-        print("Hint: set SHIOAJI_PERSON_ID / SHIOAJI_PASSWORD to enable live.")
+        print("Hint: set SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY to enable live.")
 
     if settings.get("mode") == "replay":
         print("Replay mode not yet wired; please use backtest runner directly.")
@@ -377,20 +377,17 @@ def cmd_resolve_symbols(args: argparse.Namespace):
             return {}, {}
 
     # Get credentials
-    pid = os.environ.get("SHIOAJI_PERSON_ID")
-    pwd = os.environ.get("SHIOAJI_PASSWORD")
+    api_key = os.environ.get("SHIOAJI_API_KEY")
+    secret_key = os.environ.get("SHIOAJI_SECRET_KEY")
 
-    if not pid or not pwd:
-        print("Error: SHIOAJI_PERSON_ID and SHIOAJI_PASSWORD env vars required.")
+    if not api_key or not secret_key:
+        print("Error: SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY env vars required.")
         sys.exit(1)
 
     print("Initializing Shioaji (Simulation mode)...")
     api = sj.Shioaji(simulation=True)
     try:
-        if len(pid) > 20:  # API Key heuristic
-            api.login(api_key=pid, secret_key=pwd, contracts_timeout=60000)
-        else:
-            api.login(person_id=pid, passwd=pwd, contracts_timeout=60000)
+        api.login(api_key=api_key, secret_key=secret_key, contracts_timeout=60000)
     except Exception as e:
         print(f"Login failed: {e}")
         sys.exit(1)

@@ -6,15 +6,16 @@ from typing import Any, Dict
 
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.execution.gateway import ExecutionGateway
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
+from hft_platform.execution.router import ExecutionRouter
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.storm_guard import StormGuard
-from hft_platform.services.execution import ExecutionService
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.runner import StrategyRunner
 
@@ -36,7 +37,8 @@ class ServiceRegistry:
     client: ShioajiClient
     md_service: MarketDataService
     order_adapter: OrderAdapter
-    exec_service: ExecutionService
+    execution_gateway: ExecutionGateway
+    exec_service: ExecutionRouter
     risk_engine: RiskEngine
     recon_service: ReconciliationService
     strategy_runner: StrategyRunner

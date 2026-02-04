@@ -13,8 +13,8 @@ make install  # 建立 venv 並安裝依賴
 
 # 準備環境變數（建議複製 .env.example）
 cp .env.example .env
-echo 'SHIOAJI_PERSON_ID=你的ID' >> .env
-echo 'SHIOAJI_PASSWORD=你的密碼' >> .env
+echo 'SHIOAJI_API_KEY=你的KEY' >> .env
+echo 'SHIOAJI_SECRET_KEY=你的SECRET' >> .env
 # 若不連 ClickHouse
 echo 'HFT_CLICKHOUSE_ENABLED=0' >> .env
 ```

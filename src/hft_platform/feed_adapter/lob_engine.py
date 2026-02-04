@@ -27,6 +27,7 @@ _METRICS_ASYNC = os.getenv("HFT_METRICS_ASYNC", "1").lower() not in {"0", "false
 _STATS_MODE = os.getenv("HFT_LOB_STATS_MODE", "event").lower()
 _STATS_TUPLE = _STATS_MODE in {"tuple", "raw"}
 _STATS_NONE = _STATS_MODE in {"none", "off", "disabled"}
+_FORCE_NUMPY = os.getenv("HFT_LOB_FORCE_NUMPY", "1").lower() not in {"0", "false", "no", "off"}
 
 try:
     try:
@@ -60,7 +61,7 @@ class BookState:
         "exch_ts",
         "local_ts",
         "version",
-        "mid_price",
+        "mid_price_x2",
         "spread",
         "imbalance",
         "last_price",
@@ -81,9 +82,9 @@ class BookState:
         self.local_ts: int = 0
         self.version: int = 0
 
-        # Stats
-        self.mid_price: float = 0.0
-        self.spread: float = 0.0
+        # Stats (mid_price_x2 = best_bid + best_ask, avoids division)
+        self.mid_price_x2: int = 0
+        self.spread: int = 0
         self.imbalance: float = 0.0
         self.last_price: int = 0
         self.last_volume: int = 0
@@ -96,6 +97,12 @@ class BookState:
             if exch_ts < self.exch_ts:
                 # Late packet
                 return
+
+            if _FORCE_NUMPY and _RUST_ENABLED:
+                if not isinstance(bids, np.ndarray) and bids:
+                    bids = np.asarray(bids, dtype=np.int64)
+                if not isinstance(asks, np.ndarray) and asks:
+                    asks = np.asarray(asks, dtype=np.int64)
 
             self.exch_ts = exch_ts
             if _LOCAL_TS_ENABLED:
@@ -150,8 +157,8 @@ class BookState:
                 ) = _RUST_COMPUTE_STATS(self.bids, self.asks)
                 self.bid_depth_total = int(bid_depth_total)
                 self.ask_depth_total = int(ask_depth_total)
-                self.mid_price = float(mid_price)
-                self.spread = float(spread)
+                self.mid_price_x2 = int(best_bid) + int(best_ask)
+                self.spread = int(best_ask) - int(best_bid)
                 self.imbalance = float(imbalance)
                 return
             except Exception:
@@ -196,8 +203,8 @@ class BookState:
 
         # 2. Price Stats
         if best_bid > 0 and best_ask > 0:
-            self.mid_price = (best_bid + best_ask) / 2.0
-            self.spread = float(best_ask - best_bid)
+            self.mid_price_x2 = best_bid + best_ask
+            self.spread = best_ask - best_bid
 
             # Imbalance (Top 1)
             total_top = bid_vol_top + ask_vol_top
@@ -206,8 +213,8 @@ class BookState:
             else:
                 self.imbalance = 0.0
         else:
-            self.mid_price = 0.0
-            self.spread = 0.0
+            self.mid_price_x2 = 0
+            self.spread = 0
             self.imbalance = 0.0
 
     def get_stats(self) -> LOBStatsEvent:
@@ -225,8 +232,8 @@ class BookState:
             return LOBStatsEvent(
                 symbol=self.symbol,
                 ts=self.exch_ts,
-                mid_price=self.mid_price,
-                spread=self.spread,
+                mid_price=self.mid_price_x2 / 2.0,
+                spread=float(self.spread),
                 imbalance=self.imbalance,
                 best_bid=best_bid,
                 best_ask=best_ask,
@@ -249,8 +256,8 @@ class BookState:
             return (
                 self.symbol,
                 self.exch_ts,
-                self.mid_price,
-                self.spread,
+                self.mid_price_x2 / 2.0,
+                float(self.spread),
                 self.imbalance,
                 best_bid,
                 best_ask,
@@ -268,6 +275,12 @@ class BookState:
         with self.lock:
             if exch_ts < self.exch_ts:
                 return
+
+            if _FORCE_NUMPY and _RUST_ENABLED:
+                if not isinstance(bids, np.ndarray) and bids:
+                    bids = np.asarray(bids, dtype=np.int64)
+                if not isinstance(asks, np.ndarray) and asks:
+                    asks = np.asarray(asks, dtype=np.int64)
 
             self.exch_ts = exch_ts
             if _LOCAL_TS_ENABLED:
@@ -287,11 +300,11 @@ class BookState:
             else:
                 self.asks = []
 
-            _best_bid, _best_ask, bid_depth, ask_depth, mid, spread, imbalance = stats
+            _best_bid, _best_ask, bid_depth, ask_depth, _mid, _spread, imbalance = stats
             self.bid_depth_total = int(bid_depth)
             self.ask_depth_total = int(ask_depth)
-            self.mid_price = float(mid)
-            self.spread = float(spread)
+            self.mid_price_x2 = int(_best_bid) + int(_best_ask)
+            self.spread = int(_best_ask) - int(_best_bid)
             self.imbalance = float(imbalance)
             self.version += 1
 
@@ -433,7 +446,10 @@ class LOBEngine:
         # Typed dispatch
         if isinstance(event, BidAskEvent):
             book = self.get_book(event.symbol)
-            book.apply_update(event.bids, event.asks, event.meta.source_ts)
+            if event.stats is not None:
+                book.apply_update_with_stats(event.bids, event.asks, event.meta.source_ts, event.stats)
+            else:
+                book.apply_update(event.bids, event.asks, event.meta.source_ts)
             if metrics_enabled:
                 self._record_lob_metrics(event.symbol, event.is_snapshot)
             return self._emit_stats(book)
@@ -477,6 +493,6 @@ class LOBEngine:
                 "timestamp": book.exch_ts,
                 "best_bid": best_bid,
                 "best_ask": best_ask,
-                "spread": book.spread,
-                "mid_price": book.mid_price,
+                "spread": float(book.spread),
+                "mid_price": book.mid_price_x2 / 2.0,
             }

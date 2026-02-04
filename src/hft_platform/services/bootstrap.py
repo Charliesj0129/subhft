@@ -6,15 +6,16 @@ from typing import Any, Dict, Optional
 
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.execution.gateway import ExecutionGateway
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
+from hft_platform.execution.router import ExecutionRouter
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.storm_guard import StormGuard
-from hft_platform.services.execution import ExecutionService
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.services.registry import ServiceRegistry
 from hft_platform.strategy.runner import StrategyRunner
@@ -67,7 +68,14 @@ class SystemBootstrapper:
         # 4. Services
         md_service = MarketDataService(bus, raw_queue, client, symbol_metadata=symbol_metadata)
         order_adapter = OrderAdapter(adapter_path, order_queue, client, order_id_map)
-        exec_service = ExecutionService(bus, raw_exec_queue, order_id_map, position_store, order_adapter)
+        execution_gateway = ExecutionGateway(order_adapter)
+        exec_service = ExecutionRouter(
+            bus,
+            raw_exec_queue,
+            order_id_map,
+            position_store,
+            execution_gateway.on_terminal_state,
+        )
         risk_engine = RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider)
         recon_service = ReconciliationService(client, position_store, self.settings)
         strategy_runner = StrategyRunner(
@@ -95,6 +103,7 @@ class SystemBootstrapper:
             client=client,
             md_service=md_service,
             order_adapter=order_adapter,
+            execution_gateway=execution_gateway,
             exec_service=exec_service,
             risk_engine=risk_engine,
             recon_service=recon_service,

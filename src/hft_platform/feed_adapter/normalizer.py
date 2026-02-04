@@ -28,6 +28,7 @@ _RUST_STATS_TUPLE = os.getenv("HFT_RUST_STATS_TUPLE", "1").lower() not in {
     "no",
     "off",
 }
+_RUST_FORCE = os.getenv("HFT_RUST_FORCE", "1").lower() not in {"0", "false", "no", "off"}
 _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
     "0",
     "false",
@@ -35,6 +36,7 @@ _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
     "off",
 }
 _SYNTHETIC_TICKS = max(1, int(os.getenv("HFT_MD_SYNTHETIC_TICKS", "1")))
+_TS_ASSUME_TZ = os.getenv("HFT_TS_ASSUME_TZ", "Asia/Taipei")
 
 try:
     try:
@@ -47,12 +49,20 @@ try:
     _RUST_SCALE_BOOK_PAIR = _rust_core.scale_book_pair
     _RUST_SCALE_BOOK_PAIR_STATS = getattr(_rust_core, "scale_book_pair_stats", None)
     _RUST_GET_FIELD = _rust_core.get_field
+    _RUST_NORMALIZE_TICK = getattr(_rust_core, "normalize_tick_tuple", None)
+    _RUST_NORMALIZE_BIDASK = getattr(_rust_core, "normalize_bidask_tuple", None)
+    _RUST_NORMALIZE_BIDASK_NP = getattr(_rust_core, "normalize_bidask_tuple_np", None)
+    _RUST_NORMALIZE_BIDASK_SYNTH = getattr(_rust_core, "normalize_bidask_tuple_with_synth", None)
 except Exception:
     _RUST_SCALE_BOOK = None
     _RUST_SCALE_BOOK_SEQ = None
     _RUST_SCALE_BOOK_PAIR = None
     _RUST_SCALE_BOOK_PAIR_STATS = None
     _RUST_GET_FIELD = None
+    _RUST_NORMALIZE_TICK = None
+    _RUST_NORMALIZE_BIDASK = None
+    _RUST_NORMALIZE_BIDASK_NP = None
+    _RUST_NORMALIZE_BIDASK_SYNTH = None
 
 
 class SymbolMetadata:
@@ -172,6 +182,29 @@ class SymbolMetadata:
         self._exchange_cache[symbol] = value
         return value
 
+
+def _extract_ts_ns(ts_val: Any) -> int:
+    if ts_val is None:
+        return 0
+    try:
+        if hasattr(ts_val, "timestamp"):
+            tzinfo = getattr(ts_val, "tzinfo", None)
+            if tzinfo is None:
+                try:
+                    from zoneinfo import ZoneInfo
+
+                    ts_val = ts_val.replace(tzinfo=ZoneInfo(_TS_ASSUME_TZ))
+                except Exception:
+                    pass
+            return int(ts_val.timestamp() * 1e9)
+        if isinstance(ts_val, (int, float)):
+            if abs(ts_val) < 1e12:
+                return int(float(ts_val) * 1e9)
+            return int(ts_val)
+    except Exception:
+        return 0
+    return 0
+
     def product_type(self, symbol: str) -> str:
         cached = self._product_type_cache.get(symbol)
         if cached is not None:
@@ -215,7 +248,7 @@ class SymbolMetadata:
 
 
 class MarketDataNormalizer:
-    __slots__ = ("_seq_gen", "metadata", "price_codec", "metrics", "_last_symbol", "_last_scale")
+    __slots__ = ("_seq_gen", "metadata", "price_codec", "metrics", "_last_symbol", "_last_scale", "_last_local_ts_ns")
 
     def __init__(self, config_path: Optional[str] = None, metadata: SymbolMetadata | None = None):
         import itertools
@@ -227,6 +260,7 @@ class MarketDataNormalizer:
         self.metrics = MetricsRegistry.get()
         self._last_symbol: str | None = None
         self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
+        self._last_local_ts_ns = {"tick": 0, "bidask": 0, "snapshot": 0}
 
     def _next_seq(self) -> int:
         return next(self._seq_gen)
@@ -345,13 +379,65 @@ class MarketDataNormalizer:
             if not symbol:
                 return None
 
-            if ts_val is not None and hasattr(ts_val, "timestamp"):
-                exch_ts = int(getattr(ts_val, "timestamp")() * 1e9)
-            else:
-                exch_ts = int(ts_val) if ts_val else 0
+            exch_ts = _extract_ts_ns(ts_val)
+            exch_ts_py = exch_ts
 
             if close_val is not None:
                 scale = self._get_scale(symbol)
+                if _RUST_ENABLED and _RUST_NORMALIZE_TICK is not None:
+                    try:
+                        rust_tuple = _RUST_NORMALIZE_TICK(payload, symbol, scale)
+                        if rust_tuple is not None:
+                            (
+                                _,
+                                _sym,
+                                price,
+                                volume,
+                                total_volume,
+                                is_simtrade,
+                                is_odd_lot,
+                                exch_ts,
+                            ) = rust_tuple
+                            # Rust extract::<f64> fails on str values; fall through to Python
+                            if price == 0 and close_val:
+                                raise ValueError("rust returned zero price for non-zero close")
+                            if exch_ts_py:
+                                exch_ts = exch_ts_py
+                            if _RETURN_TUPLE:
+                                return rust_tuple
+                            local_ts = time.time_ns()
+                            if exch_ts and local_ts < exch_ts:
+                                local_ts = exch_ts
+                            if self.metrics:
+                                if exch_ts:
+                                    lag_ns = local_ts - exch_ts
+                                    if lag_ns >= 0:
+                                        self.metrics.feed_latency_ns.observe(lag_ns)
+                                last = self._last_local_ts_ns.get("tick", 0)
+                                if last:
+                                    delta = local_ts - last
+                                    if delta >= 0:
+                                        self.metrics.feed_interarrival_ns.observe(delta)
+                                self._last_local_ts_ns["tick"] = local_ts
+                            meta = MetaData(
+                                seq=self._next_seq(),
+                                topic="tick",
+                                source_ts=exch_ts,
+                                local_ts=local_ts,
+                            )
+                            return TickEvent(
+                                meta=meta,
+                                symbol=_sym,
+                                price=int(price),
+                                volume=int(volume),
+                                total_volume=int(total_volume),
+                                bid_side_total_vol=0,
+                                ask_side_total_vol=0,
+                                is_simtrade=bool(is_simtrade),
+                                is_odd_lot=bool(is_odd_lot),
+                            )
+                    except Exception:
+                        pass
                 price = int(float(close_val) * scale)
             else:
                 price = 0
@@ -370,7 +456,21 @@ class MarketDataNormalizer:
                     exch_ts,
                 )
 
-            meta = MetaData(seq=self._next_seq(), topic="tick", source_ts=exch_ts, local_ts=time.time_ns())
+            local_ts = time.time_ns()
+            if exch_ts and local_ts < exch_ts:
+                local_ts = exch_ts
+            if self.metrics:
+                if exch_ts:
+                    lag_ns = local_ts - exch_ts
+                    if lag_ns >= 0:
+                        self.metrics.feed_latency_ns.observe(lag_ns)
+                last = self._last_local_ts_ns.get("tick", 0)
+                if last:
+                    delta = local_ts - last
+                    if delta >= 0:
+                        self.metrics.feed_interarrival_ns.observe(delta)
+                self._last_local_ts_ns["tick"] = local_ts
+            meta = MetaData(seq=self._next_seq(), topic="tick", source_ts=exch_ts, local_ts=local_ts)
 
             return TickEvent(
                 meta=meta,
@@ -408,10 +508,7 @@ class MarketDataNormalizer:
             if not symbol:
                 return None
 
-            if ts_val is not None and hasattr(ts_val, "timestamp"):
-                exch_ts = int(getattr(ts_val, "timestamp")() * 1e9)
-            else:
-                exch_ts = int(ts_val) if ts_val else 0
+            exch_ts = _extract_ts_ns(ts_val)
 
             scale = self._get_scale(symbol)
 
@@ -430,8 +527,8 @@ class MarketDataNormalizer:
             # Rust path uses zero-copy NumPy views and returns int64 ndarray (N,2).
             bids_final = None
             asks_final = None
-            rust_available = bool(_RUST_SCALE_BOOK_PAIR or _RUST_SCALE_BOOK_SEQ)
-            use_rust = _RUST_ENABLED and rust_available and _RUST_MIN_LEVELS <= 0
+            rust_available = bool(_RUST_SCALE_BOOK_PAIR or _RUST_SCALE_BOOK_SEQ or _RUST_NORMALIZE_BIDASK)
+            use_rust = _RUST_ENABLED and rust_available and (_RUST_FORCE or _RUST_MIN_LEVELS <= 0)
             if not use_rust and _RUST_ENABLED and _RUST_MIN_LEVELS > 0:
                 use_rust = rust_available and (
                     len(bp) >= _RUST_MIN_LEVELS
@@ -441,6 +538,157 @@ class MarketDataNormalizer:
                 )
 
             stats = None
+            synthesized = False
+            if use_rust and _SYNTHETIC_SIDE and _RUST_NORMALIZE_BIDASK_SYNTH is not None:
+                try:
+                    import numpy as np
+
+                    bid_prices_np = np.asarray(bp, dtype=np.float64)
+                    bid_vols_np = np.asarray(bv, dtype=np.int64)
+                    ask_prices_np = np.asarray(ap, dtype=np.float64)
+                    ask_vols_np = np.asarray(av, dtype=np.int64)
+
+                    tick_size = None
+                    entry = self.metadata.meta.get(symbol) if self.metadata else None
+                    raw_tick = entry.get("tick_size") if entry else None
+                    if raw_tick is not None:
+                        try:
+                            tick_size = float(raw_tick)
+                        except (TypeError, ValueError):
+                            tick_size = None
+                    if not tick_size and scale > 0:
+                        tick_size = 1.0 / float(scale)
+                    if not tick_size:
+                        tick_size = 1.0
+                    tick_int = max(1, int(round(tick_size * scale)))
+
+                    rust_tuple = _RUST_NORMALIZE_BIDASK_SYNTH(
+                        symbol,
+                        exch_ts,
+                        bid_prices_np,
+                        bid_vols_np,
+                        ask_prices_np,
+                        ask_vols_np,
+                        scale,
+                        tick_int,
+                        _SYNTHETIC_TICKS,
+                    )
+                    if rust_tuple is not None:
+                        (
+                            _,
+                            _sym,
+                            bids_final,
+                            asks_final,
+                            exch_ts,
+                            _is_snapshot,
+                            best_bid,
+                            best_ask,
+                            bid_depth,
+                            ask_depth,
+                            mid_price,
+                            spread,
+                            imbalance,
+                            synthesized,
+                        ) = rust_tuple
+                        stats = (
+                            int(best_bid),
+                            int(best_ask),
+                            int(bid_depth),
+                            int(ask_depth),
+                            float(mid_price),
+                            float(spread),
+                            float(imbalance),
+                        )
+                except Exception:
+                    bids_final = None
+                    asks_final = None
+                    stats = None
+                    synthesized = False
+
+            if stats is None and use_rust and _RUST_NORMALIZE_BIDASK_NP is not None:
+                try:
+                    import numpy as np
+
+                    bid_prices_np = np.asarray(bp, dtype=np.float64)
+                    bid_vols_np = np.asarray(bv, dtype=np.int64)
+                    ask_prices_np = np.asarray(ap, dtype=np.float64)
+                    ask_vols_np = np.asarray(av, dtype=np.int64)
+
+                    rust_tuple = _RUST_NORMALIZE_BIDASK_NP(
+                        symbol,
+                        exch_ts,
+                        bid_prices_np,
+                        bid_vols_np,
+                        ask_prices_np,
+                        ask_vols_np,
+                        scale,
+                    )
+                    if rust_tuple is not None:
+                        (
+                            _,
+                            _sym,
+                            bids_final,
+                            asks_final,
+                            exch_ts,
+                            _is_snapshot,
+                            best_bid,
+                            best_ask,
+                            bid_depth,
+                            ask_depth,
+                            mid_price,
+                            spread,
+                            imbalance,
+                        ) = rust_tuple
+                        stats = (
+                            int(best_bid),
+                            int(best_ask),
+                            int(bid_depth),
+                            int(ask_depth),
+                            float(mid_price),
+                            float(spread),
+                            float(imbalance),
+                        )
+                except Exception:
+                    bids_final = None
+                    asks_final = None
+                    stats = None
+
+            if stats is None and use_rust and _RUST_NORMALIZE_BIDASK is not None:
+                try:
+                    rust_tuple = _RUST_NORMALIZE_BIDASK(payload, symbol, scale)
+                    if rust_tuple is not None:
+                        (
+                            _,
+                            _sym,
+                            bids_final,
+                            asks_final,
+                            exch_ts,
+                            _is_snapshot,
+                            best_bid,
+                            best_ask,
+                            bid_depth,
+                            ask_depth,
+                            mid_price,
+                            spread,
+                            imbalance,
+                        ) = rust_tuple
+                        exch_ts_py = _extract_ts_ns(ts_val)
+                        if exch_ts_py:
+                            exch_ts = exch_ts_py
+                        stats = (
+                            int(best_bid),
+                            int(best_ask),
+                            int(bid_depth),
+                            int(ask_depth),
+                            float(mid_price),
+                            float(spread),
+                            float(imbalance),
+                        )
+                except Exception:
+                    bids_final = None
+                    asks_final = None
+                    stats = None
+
             if use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
                 try:
                     bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
@@ -477,7 +725,8 @@ class MarketDataNormalizer:
                         [int(float(price) * scale), int(volume)] for price, volume in zip(ap, av) if price and volume
                     ]
 
-            bids_final, asks_final, synthesized = self._maybe_synthesize_side(symbol, bids_final, asks_final, scale)
+            if not synthesized:
+                bids_final, asks_final, synthesized = self._maybe_synthesize_side(symbol, bids_final, asks_final, scale)
 
             if _RETURN_TUPLE:
                 if stats is not None and not synthesized:
@@ -498,8 +747,23 @@ class MarketDataNormalizer:
                     )
                 return ("bidask", symbol, bids_final, asks_final, exch_ts, False)
 
-            meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=time.time_ns())
-            return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final)
+            local_ts = time.time_ns()
+            if exch_ts and local_ts < exch_ts:
+                local_ts = exch_ts
+            if self.metrics:
+                if exch_ts:
+                    lag_ns = local_ts - exch_ts
+                    if lag_ns >= 0:
+                        self.metrics.feed_latency_ns.observe(lag_ns)
+                last = self._last_local_ts_ns.get("bidask", 0)
+                if last:
+                    delta = local_ts - last
+                    if delta >= 0:
+                        self.metrics.feed_interarrival_ns.observe(delta)
+                self._last_local_ts_ns["bidask"] = local_ts
+            meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
+            event_stats = stats if stats is not None and not synthesized else None
+            return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final, stats=event_stats)
         except Exception as e:
             logger.error("Normalize BidAsk Error", error=str(e), payload_type=str(type(payload)))
             if self.metrics:
@@ -525,10 +789,7 @@ class MarketDataNormalizer:
         if not symbol:
             return None
 
-        if ts_val is not None and hasattr(ts_val, "timestamp"):
-            exch_ts = int(getattr(ts_val, "timestamp")() * 1e9)
-        else:
-            exch_ts = int(ts_val) if ts_val else 0
+        exch_ts = _extract_ts_ns(ts_val)
 
         scale = self._get_scale(symbol)
 
@@ -544,7 +805,21 @@ class MarketDataNormalizer:
             if _RETURN_TUPLE:
                 return ("bidask", symbol, bids, asks, exch_ts, True)
 
-            meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=time.time_ns())
+            local_ts = time.time_ns()
+            if exch_ts and local_ts < exch_ts:
+                local_ts = exch_ts
+            if self.metrics:
+                if exch_ts:
+                    lag_ns = local_ts - exch_ts
+                    if lag_ns >= 0:
+                        self.metrics.feed_latency_ns.observe(lag_ns)
+                last = self._last_local_ts_ns.get("snapshot", 0)
+                if last:
+                    delta = local_ts - last
+                    if delta >= 0:
+                        self.metrics.feed_interarrival_ns.observe(delta)
+                self._last_local_ts_ns["snapshot"] = local_ts
+            meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=local_ts)
             return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)
 
         event = self.normalize_bidask(payload)

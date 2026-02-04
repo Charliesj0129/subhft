@@ -47,11 +47,11 @@ def test_cancel_and_amend_paths(mock_load):
     adapter.live_orders["strat:10"] = trade
 
     cancel_intent = _intent(IntentType.CANCEL, target_order_id=10)
-    asyncio.run(adapter.execute(_cmd(cancel_intent)))
+    asyncio.run(adapter._dispatch_to_api(_cmd(cancel_intent)))
     client.cancel_order.assert_called_with(trade)
 
     amend_intent = _intent(IntentType.AMEND, target_order_id=10, price=12300)
-    asyncio.run(adapter.execute(_cmd(amend_intent)))
+    asyncio.run(adapter._dispatch_to_api(_cmd(amend_intent)))
     client.update_order.assert_called_with(trade, price=123.0)
 
 
@@ -67,11 +67,11 @@ def test_cancel_and_amend_use_broker_id_map(mock_load):
     adapter.order_id_map["O10"] = "strat:10"
 
     cancel_intent = _intent(IntentType.CANCEL, target_order_id="O10")
-    asyncio.run(adapter.execute(_cmd(cancel_intent)))
+    asyncio.run(adapter._dispatch_to_api(_cmd(cancel_intent)))
     client.cancel_order.assert_called_with(trade)
 
     amend_intent = _intent(IntentType.AMEND, target_order_id="O10", price=12300)
-    asyncio.run(adapter.execute(_cmd(amend_intent)))
+    asyncio.run(adapter._dispatch_to_api(_cmd(amend_intent)))
     client.update_order.assert_called_with(trade, price=123.0)
 
 
@@ -102,8 +102,8 @@ def test_circuit_breaker_blocks(mock_load):
     adapter.metadata = _Meta(scale=100)
 
     intent = _intent(IntentType.NEW)
-    asyncio.run(adapter.execute(_cmd(intent)))
-    asyncio.run(adapter.execute(_cmd(intent)))
+    asyncio.run(adapter._dispatch_to_api(_cmd(intent)))
+    asyncio.run(adapter._dispatch_to_api(_cmd(intent)))
 
     assert adapter.circuit_breaker.open_until > time.time()
 

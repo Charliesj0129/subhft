@@ -124,8 +124,8 @@ export HFT_CLICKHOUSE_ENABLED=0
 ## 9. 實盤模式
 設定 .env 或 shell 環境：
 ```bash
-export SHIOAJI_PERSON_ID="YOUR_ID"
-export SHIOAJI_PASSWORD="YOUR_PWD"
+export SHIOAJI_API_KEY="YOUR_KEY"
+export SHIOAJI_SECRET_KEY="YOUR_SECRET"
 ```
 
 啟動：

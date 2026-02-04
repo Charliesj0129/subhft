@@ -39,6 +39,25 @@ groups:
         summary: "High Order Reject Rate"
         description: "Reject rate > 10%."
 
+  # Execution Health
+  - alert: ExecutionLagHigh
+    expr: histogram_quantile(0.99, sum(rate(execution_router_lag_ns_bucket[30s])) by (le)) > 1e7
+    for: 30s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Execution Lag High"
+        description: "P99 execution report lag > 10ms."
+
+  - alert: QueueDepthSpike
+    expr: max_over_time(queue_depth[30s]) > 1000
+    for: 30s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Queue Depth Spike"
+        description: "Queue depth exceeded 1000 in the last 30s."
+
   # Infra
   - alert: RecorderFailure
     expr: increase(recorder_failures_total[5m]) > 0

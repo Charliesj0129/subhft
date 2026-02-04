@@ -78,8 +78,8 @@ class TestMarketDataService(unittest.IsolatedAsyncioTestCase):
         # Let's check service logic...
         # Service: while running: msg = await queue.get(); events = normalizer.normalize(msg); for e in events: bus.publish(e)
 
-        self.bus.publish.assert_called()
-        call_args = self.bus.publish.call_args[0][0]
+        self.bus.publish_nowait.assert_called()
+        call_args = self.bus.publish_nowait.call_args[0][0]
         self.assertIsInstance(call_args, TickEvent)
         self.assertEqual(call_args.symbol, "2330")
 

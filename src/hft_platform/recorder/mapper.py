@@ -93,6 +93,9 @@ def map_event_to_record(
 
     if isinstance(event, OrderEvent):
         symbol = event.symbol
+        latency_us = 0.0
+        if event.broker_ts_ns and event.ingest_ts_ns:
+            latency_us = max(0.0, (event.ingest_ts_ns - event.broker_ts_ns) / 1000.0)
         return (
             "orders",
             {
@@ -104,7 +107,7 @@ def map_event_to_record(
                 "qty": int(event.submitted_qty),
                 "status": str(event.status.name if hasattr(event.status, "name") else event.status),
                 "ingest_ts": int(event.ingest_ts_ns),
-                "latency_us": 0.0,
+                "latency_us": float(latency_us),
             },
         )
 

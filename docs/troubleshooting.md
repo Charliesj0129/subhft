@@ -3,12 +3,12 @@
 常見問題與排查方向。
 
 ## 1. run live 時自動降級 sim
-**原因**：未設定 `SHIOAJI_PERSON_ID/SHIOAJI_PASSWORD` 或 API key。
+**原因**：未設定 `SHIOAJI_API_KEY/SHIOAJI_SECRET_KEY`。
 
 **解法**
 ```bash
-export SHIOAJI_PERSON_ID=...
-export SHIOAJI_PASSWORD=...
+export SHIOAJI_API_KEY=...
+export SHIOAJI_SECRET_KEY=...
 ```
 
 ## 2. 無行情事件 / LOB 空白

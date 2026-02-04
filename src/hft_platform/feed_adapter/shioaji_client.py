@@ -97,6 +97,7 @@ class ShioajiClient:
         self._api_cache_lock = threading.Lock()
         self._positions_cache_ttl_s = float(os.getenv("HFT_POSITIONS_CACHE_TTL_S", "1.5"))
         self._usage_cache_ttl_s = float(os.getenv("HFT_USAGE_CACHE_TTL_S", "5"))
+        self._api_last_latency_ms: dict[str, float] = {}
         self._api_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_API_SOFT_CAP", "20")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
@@ -114,6 +115,10 @@ class ShioajiClient:
         latency_ms = (time.perf_counter_ns() - start_ns) / 1e6
         result = "ok" if ok else "error"
         self.metrics.shioaji_api_latency_ms.labels(op=op, result=result).observe(latency_ms)
+        last = self._api_last_latency_ms.get(op)
+        if last is not None:
+            self.metrics.shioaji_api_jitter_ms.labels(op=op).set(abs(latency_ms - last))
+        self._api_last_latency_ms[op] = latency_ms
         if not ok:
             self.metrics.shioaji_api_errors_total.labels(op=op).inc()
 

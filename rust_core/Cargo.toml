@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 pyo3 = { version = "0.21", features = ["extension-module", "auto-initialize"] }
 numpy = "0.21"
+ndarray = "0.15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }

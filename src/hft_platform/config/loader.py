@@ -82,7 +82,7 @@ def _env_overrides() -> Dict[str, Any]:
 
 
 def detect_live_credentials() -> bool:
-    return bool(os.getenv("SHIOAJI_PERSON_ID") and os.getenv("SHIOAJI_PASSWORD"))
+    return bool(os.getenv("SHIOAJI_API_KEY") and os.getenv("SHIOAJI_SECRET_KEY"))
 
 
 DEFAULT_YAML_PATH = "config/base/main.yaml"

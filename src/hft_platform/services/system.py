@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from typing import Any, Dict, Optional
 
 from structlog import get_logger
@@ -36,6 +37,7 @@ class HFTSystem:
 
         self.md_service = self.registry.md_service
         self.order_adapter = self.registry.order_adapter
+        self.execution_gateway = self.registry.execution_gateway
         self.exec_service = self.registry.exec_service
         self.risk_engine = self.registry.risk_engine
         self.recon_service = self.registry.recon_service
@@ -64,9 +66,10 @@ class HFTSystem:
         try:
             # Start Services
             self._start_service("md", self.md_service.run())
-            self._start_service("exec", self.exec_service.run())
+            self._start_service("exec_router", self.exec_service.run())
             self._start_service("risk", self.risk_engine.run())
             self._start_service("order", self.order_adapter.run())
+            self._start_service("exec_gateway", self.execution_gateway.run())
             self._start_service("recon", self.recon_service.run())
             self._start_service("strat", self.strategy_runner.run())
             self._start_service("recorder", self.recorder.run())
@@ -93,8 +96,16 @@ class HFTSystem:
 
         metrics = MetricsRegistry.get()
 
+        loop = asyncio.get_running_loop()
+        interval_s = 1.0
+        last_tick = loop.time()
+
         while self.running:
-            await asyncio.sleep(1.0)  # 1Hz Tick
+            await asyncio.sleep(interval_s)  # 1Hz Tick
+            now_tick = loop.time()
+            lag_s = max(0.0, now_tick - last_tick - interval_s)
+            metrics.event_loop_lag_ms.set(lag_s * 1000.0)
+            last_tick = now_tick
 
             # A. Update StormGuard
             # usages = self.client.get_usage() # API Call
@@ -104,17 +115,18 @@ class HFTSystem:
             # But here we act as the heartbeat.
 
             # Check Health
-            # If OrderAdapter crashed
+            # If ExecutionGateway crashed
+            t_gateway = self.tasks.get("exec_gateway")
             t_order = self.tasks.get("order")
-            if t_order and t_order.done():
+            if t_gateway and t_gateway.done():
                 # Crash detected!
                 try:
-                    exc = t_order.exception()
-                    logger.critical("OrderAdapter Crashed!", error=str(exc))
+                    exc = t_gateway.exception()
+                    logger.critical("ExecutionGateway Crashed!", error=str(exc))
 
                     # Policy: Restart if not HALT?
                     # Trigger StormGuard HALT first for safety
-                    self.storm_guard.trigger_halt("Critical Component Crash: OrderAdapter")
+                    self.storm_guard.trigger_halt("Critical Component Crash: ExecutionGateway")
 
                     # If policy allows restart?
                     # For now, we just log.
@@ -131,16 +143,26 @@ class HFTSystem:
                     pass
 
                 # Restart logic
+                logger.warning("Restarting ExecutionGateway...")
+                self._start_service("exec_gateway", self.execution_gateway.run())
+
+            if t_order and t_order.done():
+                try:
+                    exc = t_order.exception()
+                    logger.critical("OrderAdapter Crashed!", error=str(exc))
+                    self.storm_guard.trigger_halt("Critical Component Crash: OrderAdapter")
+                except asyncio.CancelledError:
+                    pass
                 logger.warning("Restarting OrderAdapter...")
                 self._start_service("order", self.order_adapter.run())
 
             # Update Metrics
             metrics.update_system_metrics()
             if metrics:
-                exec_task = self.tasks.get("exec")
-                order_task = self.tasks.get("order")
+                exec_task = self.tasks.get("exec_router")
+                gateway_task = self.tasks.get("exec_gateway")
                 metrics.execution_router_alive.set(1 if exec_task and not exec_task.done() else 0)
-                metrics.execution_gateway_alive.set(1 if order_task and not order_task.done() else 0)
+                metrics.execution_gateway_alive.set(1 if gateway_task and not gateway_task.done() else 0)
                 metrics.queue_depth.labels(queue="raw").set(self.raw_queue.qsize())
                 metrics.queue_depth.labels(queue="recorder").set(self.recorder_queue.qsize())
                 metrics.queue_depth.labels(queue="risk").set(self.risk_queue.qsize())
@@ -152,6 +174,18 @@ class HFTSystem:
                 rec=self.recorder_queue.qsize(),
                 risk=self.risk_queue.qsize(),
             )
+            metrics.queue_depth.labels(queue="raw").set(self.raw_queue.qsize())
+            metrics.queue_depth.labels(queue="raw_exec").set(self.raw_exec_queue.qsize())
+            metrics.queue_depth.labels(queue="risk").set(self.risk_queue.qsize())
+            metrics.queue_depth.labels(queue="order").set(self.order_queue.qsize())
+            metrics.queue_depth.labels(queue="recorder").set(self.recorder_queue.qsize())
+
+            now = time.time()
+            t_router = self.tasks.get("exec_router")
+            if t_router and not t_router.done():
+                metrics.execution_router_heartbeat_ts.set(now)
+            if t_gateway and not t_gateway.done():
+                metrics.execution_gateway_heartbeat_ts.set(now)
 
             # Check StormGuard State
             if self.storm_guard.state == StormGuardState.HALT:
@@ -165,7 +199,7 @@ class HFTSystem:
         self.risk_engine.running = False
         self.recon_service.running = False
         self.strategy_runner.running = False
-        self.order_adapter.running = False  # Clean shutdown
+        self.execution_gateway.stop()  # Clean shutdown
 
     def _on_exec(self, topic, data):
         # This callback runs in Shioaji thread.
@@ -181,23 +215,30 @@ class HFTSystem:
     async def _recorder_bridge(self):
         """Bridge all Bus events to Recorder."""
         # Start from -1 to capture first event
-        consumer = self.bus.consume(start_cursor=-1)
+        batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
+        consumer = (
+            self.bus.consume_batch(batch_size, start_cursor=-1)
+            if batch_size > 1
+            else self.bus.consume(start_cursor=-1)
+        )
         from hft_platform.recorder.mapper import map_event_to_record
 
         metadata = self.symbol_metadata
         price_codec = PriceCodec(self.price_scale_provider)
         try:
-            async for event in consumer:
-                mapped = map_event_to_record(event, metadata, price_codec)
-                if not mapped:
-                    continue
-                topic, payload = mapped
-                if self._recorder_drop_on_full:
-                    try:
-                        self.recorder_queue.put_nowait({"topic": topic, "data": payload})
-                    except asyncio.QueueFull:
-                        pass
-                else:
-                    await self.recorder_queue.put({"topic": topic, "data": payload})
+            async for item in consumer:
+                batch = item if isinstance(item, list) else [item]
+                for event in batch:
+                    mapped = map_event_to_record(event, metadata, price_codec)
+                    if not mapped:
+                        continue
+                    topic, payload = mapped
+                    if self._recorder_drop_on_full:
+                        try:
+                            self.recorder_queue.put_nowait({"topic": topic, "data": payload})
+                        except asyncio.QueueFull:
+                            pass
+                    else:
+                        await self.recorder_queue.put({"topic": topic, "data": payload})
         except asyncio.CancelledError:
             pass

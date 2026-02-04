@@ -78,8 +78,8 @@ python -m hft_platform backtest run \
 **Prerequisite**: Shioaji Account (Sinopac).
 Set credentials via Env Vars:
 ```bash
-export SHIOAJI_PERSON_ID="YOUR_ID"
-export SHIOAJI_PASSWORD="YOUR_PWD"
+export SHIOAJI_API_KEY="YOUR_KEY"
+export SHIOAJI_SECRET_KEY="YOUR_SECRET"
 ```
 
 Run in LIVE mode:
