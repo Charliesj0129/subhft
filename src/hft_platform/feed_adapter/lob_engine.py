@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import os
 import time
 from threading import Lock
@@ -31,9 +32,9 @@ _FORCE_NUMPY = os.getenv("HFT_LOB_FORCE_NUMPY", "1").lower() not in {"0", "false
 
 try:
     try:
-        from hft_platform import rust_core as _rust_core  # type: ignore[attr-defined]
+        _rust_core = importlib.import_module("hft_platform.rust_core")
     except Exception:
-        import rust_core as _rust_core
+        _rust_core = importlib.import_module("rust_core")
 
     _RUST_COMPUTE_STATS = _rust_core.compute_book_stats
 except Exception:

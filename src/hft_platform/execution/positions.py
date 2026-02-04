@@ -1,6 +1,7 @@
+import importlib
 import os
 from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Dict
 
 from structlog import get_logger
 
@@ -20,13 +21,16 @@ _RUST_POSITIONS = os.getenv("HFT_RUST_POSITIONS", "1").lower() not in {
 
 _RustPositionTracker = None
 if _RUST_POSITIONS:
+    _rust_mod: Any = None
     try:
-        try:
-            from hft_platform.rust_core import RustPositionTracker as _RustPositionTracker  # type: ignore[attr-defined]
-        except Exception:
-            from rust_core import RustPositionTracker as _RustPositionTracker  # type: ignore[assignment]
+        _rust_mod = importlib.import_module("hft_platform.rust_core")
     except Exception:
-        _RustPositionTracker = None
+        try:
+            _rust_mod = importlib.import_module("rust_core")
+        except Exception:
+            _rust_mod = None
+    if _rust_mod is not None:
+        _RustPositionTracker = getattr(_rust_mod, "RustPositionTracker", None)
 
 
 @dataclass

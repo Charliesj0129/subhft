@@ -1,6 +1,6 @@
-use pyo3::prelude::*;
-use numpy::{PyArray1, PyReadonlyArray1, IntoPyArray};
 use numpy::ndarray::Array1;
+use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
+use pyo3::prelude::*;
 
 #[pyclass]
 pub struct AlphaMarkovTransition {
@@ -32,18 +32,18 @@ impl AlphaMarkovTransition {
     ) -> PyResult<Py<PyArray1<f64>>> {
         let returns = returns.as_array();
         let n = returns.len();
-        
+
         // Output array
         let mut signal = Array1::<f64>::zeros(n);
-        
+
         // Iterate through returns
         // note: signal[i] is prediction for returns[i+1] based on state at i
         // state[i] is based on returns[i]
-        
+
         for i in 0..(n - 1) {
             let r = returns[i];
-            let target = returns[i+1];
-            
+            let target = returns[i + 1];
+
             // Determine state
             // 1: Up, -1: Down, 0: Flat
             let prediction = if r > 0.0 {
@@ -53,9 +53,9 @@ impl AlphaMarkovTransition {
             } else {
                 self.est_flat
             };
-            
+
             signal[i] = prediction;
-            
+
             // Update expectation for the *current* state using the *target* (next return)
             if r > 0.0 {
                 self.est_up = self.est_up * (1.0 - self.alpha) + target * self.alpha;
@@ -65,7 +65,7 @@ impl AlphaMarkovTransition {
                 self.est_flat = self.est_flat * (1.0 - self.alpha) + target * self.alpha;
             }
         }
-        
+
         // Final Signal Logic from optimization:
         // "Inverted the MarkovTransition signal by returning +signal instead of -signal"
         // Wait, the Python code had: return -_compute_markov_numba(returns) INITIALLY
@@ -75,7 +75,7 @@ impl AlphaMarkovTransition {
         // So the raw signal from `_compute_markov_numba` was correct, but previously it was being negated.
         // My Rust code here implements `_compute_markov_numba`.
         // So I should return `signal` as is.
-        
+
         Ok(signal.into_pyarray_bound(py).unbind())
     }
 }

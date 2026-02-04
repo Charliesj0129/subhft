@@ -1,20 +1,20 @@
 use pyo3::prelude::*;
 
-mod lob;
-mod strategy; // New Strategy
 mod alpha;
+mod alpha_flow; // New module
+mod alpha_markov; // New module
+mod alpha_meta; // Meta Alpha module
+mod alpha_ofi;
 mod alpha_pressure;
 mod alpha_reversal;
-mod alpha_ofi;
 mod alpha_transient;
-mod alpha_markov; // New module
-mod alpha_flow; // New module
-mod alpha_meta; // Meta Alpha module
 mod bus;
 mod fast_lob;
 pub mod ipc;
+mod lob;
 mod positions;
 pub mod risk;
+mod strategy; // New Strategy
 
 /// The HFT Platform Rust Core Module
 #[pymodule]
@@ -42,7 +42,10 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_lob::normalize_tick_tuple, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::normalize_bidask_tuple, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::normalize_bidask_tuple_np, m)?)?;
-    m.add_function(wrap_pyfunction!(fast_lob::normalize_bidask_tuple_with_synth, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        fast_lob::normalize_bidask_tuple_with_synth,
+        m
+    )?)?;
     m.add_class::<strategy::AlphaStrategy>()?;
     m.add_class::<positions::RustPositionTracker>()?;
     Ok(())
