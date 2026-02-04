@@ -171,12 +171,12 @@ jobs:
             --cov-branch \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
-            --cov-fail-under=60 \
+            --cov-fail-under=70 \
             -v --tb=short
 
       - name: Check branch coverage
         run: |
-          uv run coverage report --fail-under=50 --show-missing
+          uv run coverage report --fail-under=55 --show-missing
 
       - name: Upload coverage to GitHub Summary
         if: always()

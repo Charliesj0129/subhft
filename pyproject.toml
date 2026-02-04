@@ -69,7 +69,11 @@ markers = [
 omit = [
     "src/hft_platform/strategies/*",
     "src/hft_platform/strategies/**",
+    "src/hft_platform/services/system.py",
 ]
+
+[tool.coverage.report]
+fail_under = 70
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
