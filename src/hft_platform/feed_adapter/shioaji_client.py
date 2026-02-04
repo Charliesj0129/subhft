@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from typing import Any, Callable, Dict, List
 
@@ -6,6 +7,7 @@ import yaml
 from structlog import get_logger
 
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.order.rate_limiter import RateLimiter
 
 try:
     import shioaji as sj
@@ -85,12 +87,59 @@ class ShioajiClient:
         self._callbacks_registered = False
         self.logged_in = False
         self.mode = "simulation" if (is_sim or self.api is None) else "real"
+        self.ca_active = False
+        self._reconnect_lock = threading.Lock()
+        self._last_reconnect_ts = 0.0
+        self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
+        self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "600"))
         self.metrics = MetricsRegistry.get()
+        self._api_cache: dict[str, tuple[float, Any]] = {}
+        self._api_cache_lock = threading.Lock()
+        self._positions_cache_ttl_s = float(os.getenv("HFT_POSITIONS_CACHE_TTL_S", "1.5"))
+        self._usage_cache_ttl_s = float(os.getenv("HFT_USAGE_CACHE_TTL_S", "5"))
+        self._api_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_API_SOFT_CAP", "20")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
+            window_s=int(os.getenv("HFT_SHIOAJI_API_WINDOW_S", "5")),
+        )
 
         # Register self globally
         if self not in CLIENT_REGISTRY:
             CLIENT_REGISTRY.append(self)
             logger.info("Registered ShioajiClient in Global Registry")
+
+    def _record_api_latency(self, op: str, start_ns: int, ok: bool = True) -> None:
+        if not self.metrics:
+            return
+        latency_ms = (time.perf_counter_ns() - start_ns) / 1e6
+        result = "ok" if ok else "error"
+        self.metrics.shioaji_api_latency_ms.labels(op=op, result=result).observe(latency_ms)
+        if not ok:
+            self.metrics.shioaji_api_errors_total.labels(op=op).inc()
+
+    def _cache_get(self, key: str) -> Any | None:
+        now = time.time()
+        with self._api_cache_lock:
+            entry = self._api_cache.get(key)
+            if not entry:
+                return None
+            expires_at, value = entry
+            if now >= expires_at:
+                self._api_cache.pop(key, None)
+                return None
+            return value
+
+    def _cache_set(self, key: str, ttl_s: float, value: Any) -> None:
+        expires_at = time.time() + max(0.0, ttl_s)
+        with self._api_cache_lock:
+            self._api_cache[key] = (expires_at, value)
+
+    def _rate_limit_api(self, op: str) -> bool:
+        if not self._api_rate_limiter.check():
+            logger.warning("API rate limit hit", op=op)
+            return False
+        self._api_rate_limiter.record()
+        return True
 
     def _process_tick(self, exchange, msg):
         """Internal method called by global dispatcher"""
@@ -118,61 +167,65 @@ class ShioajiClient:
         # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
 
-    def login(self, person_id: str | None = None, password: str | None = None, contracts_cb=None):
+    def login(
+        self,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        person_id: str | None = None,
+        ca_passwd: str | None = None,
+        contracts_cb=None,
+    ):
         logger.info("Logging in to Shioaji...")
-        # Resolve credentials: Arg > Env > Config (not stored there for security)
+        self.ca_active = False
+        # Resolve credentials: Arg > Env
+        key = api_key or os.getenv("SHIOAJI_API_KEY")
+        secret = secret_key or os.getenv("SHIOAJI_SECRET_KEY")
         pid = person_id or os.getenv("SHIOAJI_PERSON_ID")
-        pwd = password or os.getenv("SHIOAJI_PASSWORD")
+        ca_pwd = ca_passwd or os.getenv("SHIOAJI_CA_PASSWORD") or os.getenv("CA_PASSWORD")
 
-        # Explicit API Key support (User request)
-        api_key = os.getenv("SHIOAJI_API_KEY")
-        secret_key = os.getenv("SHIOAJI_SECRET_KEY")
-
-        if api_key and secret_key:
+        if key and secret:
             logger.info("Using API Key/Secret for login")
-            self.api.login(
-                api_key=api_key,
-                secret_key=secret_key,
-                contracts_timeout=self.contracts_timeout,
-                contracts_cb=contracts_cb,
-                fetch_contract=self.fetch_contract,
-                subscribe_trade=self.subscribe_trade,
-            )
+            start_ns = time.perf_counter_ns()
+            try:
+                self.api.login(
+                    api_key=key,
+                    secret_key=secret,
+                    contracts_timeout=self.contracts_timeout,
+                    contracts_cb=contracts_cb,
+                    fetch_contract=self.fetch_contract,
+                    subscribe_trade=self.subscribe_trade,
+                )
+                self._record_api_latency("login", start_ns, ok=True)
+            except Exception:
+                self._record_api_latency("login", start_ns, ok=False)
+                raise
             logger.info("Login successful (API Key)")
             if not self.fetch_contract:
                 self._ensure_contracts()
-            self._maybe_activate_ca()
+            if self.activate_ca:
+                if not pid:
+                    logger.warning("CA activation requested but missing SHIOAJI_PERSON_ID")
+                if not self.ca_path or not ca_pwd:
+                    logger.warning("CA activation requested but missing CA_CERT_PATH/CA_PASSWORD")
+                else:
+                    try:
+                        start_ns = time.perf_counter_ns()
+                        self.api.activate_ca(ca_path=self.ca_path, ca_passwd=ca_pwd)
+                        self._record_api_latency("activate_ca", start_ns, ok=True)
+                        self.ca_active = True
+                        logger.info("CA activated")
+                    except Exception as exc:
+                        self._record_api_latency("activate_ca", start_ns, ok=False)
+                        logger.error("CA activation failed", error=str(exc))
             self.logged_in = True
-            return
-
-        if not pid or not pwd:
-            logger.warning("No credentials found (Args/Env). Running in simulation/anonymous mode.")
             return
 
         if not self.api:
             logger.warning("Shioaji SDK not installed; cannot login. Staying in simulation mode.")
             return
 
-        try:
-            # Fallback to Person ID (CA/Trading)
-            self.api.login(
-                person_id=pid,
-                passwd=pwd,
-                contracts_timeout=self.contracts_timeout,
-                contracts_cb=contracts_cb,
-                fetch_contract=self.fetch_contract,
-                subscribe_trade=self.subscribe_trade,
-            )
-
-            logger.info("Login successful")
-            if not self.fetch_contract:
-                self._ensure_contracts()
-            self._maybe_activate_ca()
-
-            self.logged_in = True
-        except Exception as e:
-            logger.error("Login failed", error=str(e))
-            raise
+        logger.warning("No API key/secret found (Args/Env). Running in simulation/anonymous mode.")
+        return
 
     def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]):
         """
@@ -206,8 +259,11 @@ class ShioajiClient:
         if not self.api or not hasattr(self.api, "fetch_contracts"):
             return
         try:
+            start_ns = time.perf_counter_ns()
             self.api.fetch_contracts(contract_download=True)
+            self._record_api_latency("fetch_contracts", start_ns, ok=True)
         except Exception as exc:
+            self._record_api_latency("fetch_contracts", start_ns, ok=False)
             logger.warning("Contract fetch failed", error=str(exc))
 
     def _maybe_activate_ca(self) -> None:
@@ -220,6 +276,7 @@ class ShioajiClient:
             return
         try:
             self.api.activate_ca(ca_path=self.ca_path, ca_passwd=self.ca_password)
+            self.ca_active = True
             logger.info("CA activated")
         except Exception as exc:
             logger.error("CA activation failed", error=str(exc))
@@ -273,9 +330,43 @@ class ShioajiClient:
 
     def _on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
         if event_code in (1, 2, 3, 4, 12, 13):
-            logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event=event)
+            logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event_name=event)
         if event_code in (4, 13):
             self._resubscribe_all()
+
+    def reconnect(self, reason: str = "") -> bool:
+        if not self.api:
+            return False
+        now = time.time()
+        cooldown = float(os.getenv("HFT_RECONNECT_COOLDOWN", "30"))
+        if now - self._last_reconnect_ts < max(cooldown, self._reconnect_backoff_s):
+            return False
+        if not self._reconnect_lock.acquire(blocking=False):
+            return False
+        try:
+            self._last_reconnect_ts = now
+            logger.warning("Reconnecting Shioaji", reason=reason)
+            try:
+                self.api.logout()
+            except Exception:
+                pass
+            self.logged_in = False
+            self._callbacks_registered = False
+            self.subscribed_codes = set()
+            self.subscribed_count = 0
+
+            self.login()
+            if self.logged_in and self.tick_callback:
+                self.subscribe_basket(self.tick_callback)
+            if self.logged_in:
+                self.metrics.feed_reconnect_total.labels(result="ok").inc()
+                self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
+            else:
+                self.metrics.feed_reconnect_total.labels(result="fail").inc()
+                self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._reconnect_backoff_max_s)
+            return self.logged_in
+        finally:
+            self._reconnect_lock.release()
 
     def _resubscribe_all(self) -> None:
         if not self.api or not self.logged_in or not self.tick_callback:
@@ -286,8 +377,6 @@ class ShioajiClient:
         if now - last < cooldown:
             return
         self._last_resubscribe_ts = now
-        if self.metrics:
-            self.metrics.feed_resubscribe_total.inc()
         self.subscribed_codes = set()
         self.subscribed_count = 0
         for sym in self.symbols:
@@ -299,6 +388,19 @@ class ShioajiClient:
                 if code:
                     self.subscribed_codes.add(code)
                 self.subscribed_count = len(self.subscribed_codes)
+
+    def resubscribe(self) -> bool:
+        if not self.api or not self.logged_in or not self.tick_callback:
+            self.metrics.feed_resubscribe_total.labels(result="skip").inc()
+            return False
+        try:
+            self._resubscribe_all()
+            self.metrics.feed_resubscribe_total.labels(result="ok").inc()
+            return True
+        except Exception as exc:
+            logger.error("Resubscribe failed", error=str(exc))
+            self.metrics.feed_resubscribe_total.labels(result="error").inc()
+            return False
 
     def _subscribe_symbol(self, sym: Dict[str, Any], cb: Callable[..., Any]) -> bool:
         code = sym.get("code")
@@ -319,11 +421,14 @@ class ShioajiClient:
             return False
 
         try:
+            start_ns = time.perf_counter_ns()
             v = sj.constant.QuoteVersion.v1
             self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
             self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+            self._record_api_latency("subscribe", start_ns, ok=True)
             return True
         except Exception as e:
+            self._record_api_latency("subscribe", start_ns, ok=False)
             logger.error(f"Subscription failed for {code}: {e}")
             return False
 
@@ -339,10 +444,13 @@ class ShioajiClient:
         if not contract:
             return
         try:
+            start_ns = time.perf_counter_ns()
             v = sj.constant.QuoteVersion.v1
             self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
             self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+            self._record_api_latency("unsubscribe", start_ns, ok=True)
         except Exception as e:
+            self._record_api_latency("unsubscribe", start_ns, ok=False)
             logger.warning(f"Unsubscribe failed for {code}: {e}")
 
     def reload_symbols(self) -> None:
@@ -485,9 +593,19 @@ class ShioajiClient:
         except Exception:
             pass
 
-        iterable = container.values() if isinstance(container, dict) else container
+        def iter_contracts(value: Any):
+            iterable = value.values() if isinstance(value, dict) else value
+            for item in iterable:
+                yield item
+                try:
+                    if hasattr(item, "__iter__") and not hasattr(item, "code"):
+                        for sub in item:
+                            yield sub
+                except Exception:
+                    continue
+
         try:
-            for contract in iterable:
+            for contract in iter_contracts(container):
                 if getattr(contract, "code", None) == code:
                     return contract
         except Exception:
@@ -497,7 +615,7 @@ class ShioajiClient:
             return None
 
         try:
-            for contract in iterable:
+            for contract in iter_contracts(container):
                 if getattr(contract, "symbol", None) == code:
                     logger.warning("Symbol fallback used for contract", code=code, type=label)
                     return contract
@@ -541,10 +659,20 @@ class ShioajiClient:
 
     def get_usage(self):
         """Usage stats from Shioaji if available."""
+        cached = self._cache_get("usage")
+        if cached is not None:
+            return cached
         if self.api and self.logged_in and hasattr(self.api, "usage"):
             try:
-                return self.api.usage()
+                if not self._rate_limit_api("usage"):
+                    return cached or {"subscribed": self.subscribed_count, "bytes_used": 0}
+                start_ns = time.perf_counter_ns()
+                usage = self.api.usage()
+                self._record_api_latency("usage", start_ns, ok=True)
+                self._cache_set("usage", self._usage_cache_ttl_s, usage)
+                return usage
             except Exception as exc:
+                self._record_api_latency("usage", start_ns, ok=False)
                 logger.warning("Failed to fetch usage", error=str(exc))
         return {"subscribed": self.subscribed_count, "bytes_used": 0}
 
@@ -552,16 +680,25 @@ class ShioajiClient:
         """Fetch current positions from Shioaji."""
         if self.mode == "simulation":
             return []
+        cached = self._cache_get("positions")
+        if cached is not None:
+            return cached
         try:
+            if not self._rate_limit_api("positions"):
+                return cached or []
             positions: list[Any] = []
+            start_ns = time.perf_counter_ns()
             if hasattr(self.api, "stock_account") and self.api.stock_account is not None:
                 positions.extend(self.api.list_positions(self.api.stock_account))
             if hasattr(self.api, "futopt_account") and self.api.futopt_account is not None:
                 positions.extend(self.api.list_positions(self.api.futopt_account))
+            self._record_api_latency("positions", start_ns, ok=True)
+            self._cache_set("positions", self._positions_cache_ttl_s, positions)
             return positions
         except Exception:
+            self._record_api_latency("positions", start_ns, ok=False)
             logger.warning("Failed to fetch positions")
-            return []
+            return cached or []
 
     def fetch_snapshots(self):
         """Fetch snapshots for all symbols in batches <= 500."""
@@ -590,10 +727,13 @@ class ShioajiClient:
             batch = contracts[i : i + batch_size]
             logger.info("Requesting snapshots", batch_size=len(batch))
             try:
+                start_ns = time.perf_counter_ns()
                 results = self.api.snapshots(batch)
+                self._record_api_latency("snapshots", start_ns, ok=True)
                 snapshots.extend(results or [])
                 time.sleep(0.11)
             except Exception as e:
+                self._record_api_latency("snapshots", start_ns, ok=False)
                 logger.error("Snapshot fetch failed", error=str(e))
 
         return snapshots
@@ -659,7 +799,14 @@ class ShioajiClient:
             ot = sj.constant.OrderType.FOK
 
         order = sj.Order(price=price, quantity=qty, action=act, price_type=pt, order_type=ot, custom_field=custom_field)
-        return self.api.place_order(contract, order)
+        start_ns = time.perf_counter_ns()
+        try:
+            result = self.api.place_order(contract, order)
+            self._record_api_latency("place_order", start_ns, ok=True)
+            return result
+        except Exception:
+            self._record_api_latency("place_order", start_ns, ok=False)
+            raise
 
     def _place_order_typed(
         self,
@@ -745,7 +892,14 @@ class ShioajiClient:
                     custom_field=custom_field,
                 )
 
-        return self.api.place_order(contract, order)
+        start_ns = time.perf_counter_ns()
+        try:
+            result = self.api.place_order(contract, order)
+            self._record_api_latency("place_order", start_ns, ok=True)
+            return result
+        except Exception:
+            self._record_api_latency("place_order", start_ns, ok=False)
+            raise
 
     def _resolve_account(self, product_type: str, account: Any | None) -> Any | None:
         if account is not None:
@@ -838,8 +992,12 @@ class ShioajiClient:
         if not hasattr(self.api, "cancel_order"):
             raise RuntimeError("Shioaji API missing cancel_order")
         try:
-            return self.api.cancel_order(trade)
+            start_ns = time.perf_counter_ns()
+            result = self.api.cancel_order(trade)
+            self._record_api_latency("cancel_order", start_ns, ok=True)
+            return result
         except Exception as exc:
+            self._record_api_latency("cancel_order", start_ns, ok=False)
             logger.error("cancel_order failed", error=str(exc))
             raise
 
@@ -850,28 +1008,44 @@ class ShioajiClient:
         if price is not None:
             if hasattr(self.api, "update_order"):
                 try:
-                    return self.api.update_order(trade=trade, price=price)
+                    start_ns = time.perf_counter_ns()
+                    result = self.api.update_order(trade=trade, price=price)
+                    self._record_api_latency("update_order", start_ns, ok=True)
+                    return result
                 except Exception as exc:
+                    self._record_api_latency("update_order", start_ns, ok=False)
                     logger.error("update_order(price) failed", error=str(exc))
                     raise
             if hasattr(self.api, "update_price"):
                 try:
-                    return self.api.update_price(trade=trade, price=price)
+                    start_ns = time.perf_counter_ns()
+                    result = self.api.update_price(trade=trade, price=price)
+                    self._record_api_latency("update_price", start_ns, ok=True)
+                    return result
                 except Exception as exc:
+                    self._record_api_latency("update_price", start_ns, ok=False)
                     logger.error("update_price failed", error=str(exc))
                     raise
             raise RuntimeError("Shioaji API missing update_order/update_price")
         if qty is not None:
             if hasattr(self.api, "update_order"):
                 try:
-                    return self.api.update_order(trade=trade, qty=qty)
+                    start_ns = time.perf_counter_ns()
+                    result = self.api.update_order(trade=trade, qty=qty)
+                    self._record_api_latency("update_order", start_ns, ok=True)
+                    return result
                 except Exception as exc:
+                    self._record_api_latency("update_order", start_ns, ok=False)
                     logger.error("update_order(qty) failed", error=str(exc))
                     raise
             if hasattr(self.api, "update_qty"):
                 try:
-                    return self.api.update_qty(trade=trade, quantity=qty)
+                    start_ns = time.perf_counter_ns()
+                    result = self.api.update_qty(trade=trade, quantity=qty)
+                    self._record_api_latency("update_qty", start_ns, ok=True)
+                    return result
                 except Exception as exc:
+                    self._record_api_latency("update_qty", start_ns, ok=False)
                     logger.error("update_qty failed", error=str(exc))
                     raise
             raise RuntimeError("Shioaji API missing update_order/update_qty")

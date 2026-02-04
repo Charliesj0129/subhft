@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 from typing import Any, Dict
 
@@ -37,6 +38,15 @@ class OrderAdapter:
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
         self.circuit_breaker = CircuitBreaker(threshold=5, timeout_s=60)
         self.order_id_resolver = OrderIdResolver(self.order_id_map)
+        self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))
+        self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))
+        self._api_max_inflight = int(os.getenv("HFT_API_MAX_INFLIGHT", "16"))
+        self._api_semaphore = asyncio.Semaphore(self._api_max_inflight)
+        self._api_queue_max = int(os.getenv("HFT_API_QUEUE_MAX", "1024"))
+        self._api_queue: asyncio.Queue[OrderCommand] = asyncio.Queue(maxsize=self._api_queue_max)
+        self._api_coalesce_window_s = float(os.getenv("HFT_API_COALESCE_WINDOW_S", "0.005"))
+        self._api_pending: dict[tuple, OrderCommand] = {}
+        self._api_worker_task: asyncio.Task | None = None
 
         self.load_config()
 
@@ -67,6 +77,7 @@ class OrderAdapter:
     async def run(self):
         self.running = True
         logger.info("OrderAdapter started")
+        self._api_worker_task = asyncio.create_task(self._api_worker())
 
         while self.running:
             # Allow exceptions to crash the task (Supervisor will handle)
@@ -80,6 +91,8 @@ class OrderAdapter:
 
             await self.execute(cmd)
             self.order_queue.task_done()
+        if self._api_worker_task:
+            self._api_worker_task.cancel()
 
     def check_rate_limit(self) -> bool:
         """Sliding window check."""
@@ -127,8 +140,6 @@ class OrderAdapter:
             self.order_id_map[str(oid)] = order_key
 
     async def execute(self, cmd: OrderCommand):
-        intent = cmd.intent
-
         # Circuit Breaker Check
         if self.circuit_breaker.is_open():
             logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
@@ -138,9 +149,11 @@ class OrderAdapter:
             # Trigger circuit break? Or just drop?
             # Spec says: Cut off before 250.
             return
+        await self._enqueue_api(cmd)
 
+    async def _dispatch_to_api(self, cmd: OrderCommand):
+        intent = cmd.intent
         try:
-            # Strategy+Intent ID as key
             order_key = f"{intent.strategy_id}:{intent.intent_id}"
 
             if intent.intent_type == IntentType.NEW:
@@ -188,7 +201,32 @@ class OrderAdapter:
                 tif_map = {TIF.LIMIT: "ROD", TIF.IOC: "IOC", TIF.FOK: "FOK"}
                 tif_str = tif_map.get(intent.tif, "ROD")
 
-                trade = self.client.place_order(
+                # Shioaji: MKT/MKP must be IOC/FOK (not ROD)
+                price_type = str(order_params.get("price_type", "LMT")).upper()
+                if price_type in {"MKT", "MKP"} and tif_str == "ROD":
+                    logger.error(
+                        "Rejecting invalid order type",
+                        reason="MKT/MKP requires IOC/FOK",
+                        symbol=intent.symbol,
+                        price_type=price_type,
+                        tif=tif_str,
+                    )
+                    self.metrics.order_reject_total.inc()
+                    return
+
+                # Live safety: CA must be active when enabled
+                if getattr(self.client, "mode", "") != "simulation" and getattr(self.client, "activate_ca", False):
+                    if not getattr(self.client, "ca_active", False):
+                        logger.error(
+                            "Rejecting order: CA not active",
+                            symbol=intent.symbol,
+                        )
+                        self.metrics.order_reject_total.inc()
+                        return
+
+                trade = await self._call_api(
+                    "place_order",
+                    self.client.place_order,
                     contract_code=intent.symbol,
                     exchange=exchange,
                     action=action_str,
@@ -198,9 +236,11 @@ class OrderAdapter:
                     tif=tif_str,
                     custom_field=c_field,
                     product_type=product_type,
-                    price_type="LMT",
+                    price_type=price_type,
                     **order_params,
                 )
+                if trade is None:
+                    return
 
                 self.metrics.order_actions_total.labels(type="new").inc()
                 self.live_orders[order_key] = trade
@@ -227,7 +267,9 @@ class OrderAdapter:
 
                 if target_trade:
                     logger.info("Canceling Order", target=target_key)
-                    self.client.cancel_order(target_trade)
+                    result = await self._call_api("cancel_order", self.client.cancel_order, target_trade)
+                    if result is None:
+                        return
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
                 else:
@@ -244,7 +286,9 @@ class OrderAdapter:
                     price_f = self.price_codec.descale(intent.symbol, intent.price)
 
                     logger.info("Amending Order", target=target_key, new_price=price_f)
-                    self.client.update_order(target_trade, price=price_f)
+                    result = await self._call_api("update_order", self.client.update_order, target_trade, price=price_f)
+                    if result is None:
+                        return
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
                 else:
@@ -254,3 +298,80 @@ class OrderAdapter:
             logger.error("Broker Error", error=str(e))
             self.metrics.order_reject_total.inc()
             self.circuit_breaker.record_failure()
+
+    async def _enqueue_api(self, cmd: OrderCommand) -> None:
+        try:
+            self._api_queue.put_nowait(cmd)
+        except asyncio.QueueFull:
+            logger.warning("API queue full - dropping", cmd_id=cmd.cmd_id)
+
+    def _coalesce_key(self, cmd: OrderCommand) -> tuple:
+        intent = cmd.intent
+        if intent.intent_type == IntentType.NEW:
+            return ("new", intent.strategy_id, intent.symbol)
+        if intent.intent_type == IntentType.CANCEL:
+            return ("cancel", intent.strategy_id, intent.target_order_id)
+        if intent.intent_type == IntentType.AMEND:
+            return ("amend", intent.strategy_id, intent.target_order_id)
+        return ("other", intent.strategy_id, intent.intent_id)
+
+    def _store_pending(self, cmd: OrderCommand) -> None:
+        intent = cmd.intent
+        key = self._coalesce_key(cmd)
+        if intent.intent_type == IntentType.CANCEL:
+            amend_key = ("amend", intent.strategy_id, intent.target_order_id)
+            self._api_pending.pop(amend_key, None)
+            self._api_pending[key] = cmd
+            return
+        if intent.intent_type == IntentType.AMEND:
+            cancel_key = ("cancel", intent.strategy_id, intent.target_order_id)
+            if cancel_key in self._api_pending:
+                return
+        self._api_pending[key] = cmd
+
+    async def _api_worker(self) -> None:
+        while self.running:
+            try:
+                cmd = await self._api_queue.get()
+            except asyncio.CancelledError:
+                return
+            self._store_pending(cmd)
+
+            start = time.monotonic()
+            while True:
+                remaining = self._api_coalesce_window_s - (time.monotonic() - start)
+                if remaining <= 0:
+                    break
+                try:
+                    cmd = await asyncio.wait_for(self._api_queue.get(), timeout=remaining)
+                    self._store_pending(cmd)
+                except asyncio.TimeoutError:
+                    break
+
+            pending = list(self._api_pending.values())
+            self._api_pending.clear()
+            for item in pending:
+                await self._dispatch_to_api(item)
+
+    async def _call_api(self, op: str, fn, *args, **kwargs):
+        try:
+            await asyncio.wait_for(self._api_semaphore.acquire(), timeout=self._api_guard_timeout_s)
+        except asyncio.TimeoutError:
+            logger.warning("API guard tripped", op=op)
+            self.metrics.order_reject_total.inc()
+            return None
+
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(fn, *args, **kwargs),
+                timeout=self._api_timeout_s,
+            )
+            self.circuit_breaker.record_success()
+            return result
+        except Exception as exc:
+            logger.error("API call failed", op=op, error=str(exc))
+            self.metrics.order_reject_total.inc()
+            self.circuit_breaker.record_failure()
+            return None
+        finally:
+            self._api_semaphore.release()
