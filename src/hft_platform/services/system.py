@@ -217,9 +217,7 @@ class HFTSystem:
         # Start from -1 to capture first event
         batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
         consumer = (
-            self.bus.consume_batch(batch_size, start_cursor=-1)
-            if batch_size > 1
-            else self.bus.consume(start_cursor=-1)
+            self.bus.consume_batch(batch_size, start_cursor=-1) if batch_size > 1 else self.bus.consume(start_cursor=-1)
         )
         from hft_platform.recorder.mapper import map_event_to_record
 

@@ -159,9 +159,9 @@ class PositionStore:
             )
 
         if self.metrics:
-            self.metrics.position_pnl_realized.labels(
-                strategy=fill.strategy_id, symbol=fill.symbol
-            ).set(realized_pnl_scaled)
+            self.metrics.position_pnl_realized.labels(strategy=fill.strategy_id, symbol=fill.symbol).set(
+                realized_pnl_scaled
+            )
 
         return PositionDelta(
             account_id=fill.account_id,

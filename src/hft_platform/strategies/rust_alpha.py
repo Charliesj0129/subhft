@@ -1,5 +1,3 @@
-
-
 from structlog import get_logger
 
 from hft_platform.events import BidAskEvent, TickEvent
@@ -15,6 +13,7 @@ except ImportError:
 
 logger = get_logger("rust_alpha")
 
+
 class Strategy(BaseStrategy):
     """
     Production Adapter for Rust-Based Alpha Strategy.
@@ -25,7 +24,7 @@ class Strategy(BaseStrategy):
     """
 
     default_params = {
-        "depth_level": 3, # 0-indexed L4 (Level 3)
+        "depth_level": 3,  # 0-indexed L4 (Level 3)
         "hawkes_mu": 0.5,
         "hawkes_alpha": 1.0,
         "hawkes_beta": 20.0,
@@ -47,7 +46,7 @@ class Strategy(BaseStrategy):
             self.params["depth_level"],
             self.params["hawkes_mu"],
             self.params["hawkes_alpha"],
-            self.params["hawkes_beta"]
+            self.params["hawkes_beta"],
         )
 
         self.best_bid = 0.0
@@ -104,7 +103,7 @@ class Strategy(BaseStrategy):
             return
 
         # Infer direction
-        is_buyer_maker = False # Logic depends on Aggressor.
+        is_buyer_maker = False  # Logic depends on Aggressor.
         # If Price >= Ask, Aggressor is Buyer -> Maker is Seller.
         # If Price <= Bid, Aggressor is Seller -> Maker is Buyer.
         # Rust `on_trade` expects `is_buyer_maker` (boolean).
