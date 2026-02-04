@@ -7,6 +7,7 @@ const SLOT_SIZE: usize = 64;
 
 #[pyclass]
 pub struct ShmRingBuffer {
+    #[allow(dead_code)]
     mmap: MmapMut,
     capacity: usize,
     header_ptr: *mut u64,

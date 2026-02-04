@@ -54,6 +54,7 @@ pub struct AlphaStrategy {
     // Weights
     w_imb: f64,
     w_skew: f64,
+    #[allow(dead_code)]
     w_hawkes: f64, // Used for gating or scaling
 }
 
@@ -114,20 +115,16 @@ impl AlphaStrategy {
             0.0
         };
 
-        let signal = imb * self.w_imb + mom * self.w_skew;
-
-        signal
+        imb * self.w_imb + mom * self.w_skew
     }
 
     /// Process Trade
-    pub fn on_trade(&mut self, ts: i64, price: f64, qty: f64, is_buyer_maker: bool) -> f64 {
+    pub fn on_trade(&mut self, ts: i64, price: f64, _qty: f64, _is_buyer_maker: bool) -> f64 {
         self.last_trade_price = price;
 
         // Update Hawkes (Intensity of trading)
-        let intensity = self.hawkes.update(ts, true);
-
         // Return Intensity as feature
-        intensity
+        self.hawkes.update(ts, true)
     }
 
     /// Get current signal state

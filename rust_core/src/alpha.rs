@@ -3,7 +3,6 @@ use pyo3::prelude::*;
 
 #[pyclass]
 pub struct AlphaDepthSlope {
-    window_size: usize,
     alpha: f64,
     ewma_signal: f64,
     initialized: bool,
@@ -15,7 +14,6 @@ impl AlphaDepthSlope {
     pub fn new(window_size: usize) -> Self {
         let alpha = 2.0 / (window_size as f64 + 1.0);
         AlphaDepthSlope {
-            window_size,
             alpha,
             ewma_signal: 0.0,
             initialized: false,

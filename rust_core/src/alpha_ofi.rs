@@ -69,3 +69,9 @@ impl AlphaOFI {
         Ok(ofi.into_pyarray_bound(py).unbind())
     }
 }
+
+impl Default for AlphaOFI {
+    fn default() -> Self {
+        Self::new()
+    }
+}

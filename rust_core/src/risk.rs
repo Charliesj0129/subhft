@@ -25,6 +25,7 @@ impl FastGate {
             .read(true)
             .write(true)
             .create(true) // Auto create for ease
+            .truncate(false)
             .open(&path)?;
 
         file.set_len(1)?;

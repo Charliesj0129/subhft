@@ -1,3 +1,10 @@
+#![allow(deprecated)]
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::nonminimal_bool)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::while_let_on_iterator)]
+
 use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
