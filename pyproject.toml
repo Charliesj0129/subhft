@@ -68,7 +68,6 @@ markers = [
 [tool.coverage.run]
 omit = [
     "src/hft_platform/__main__.py",
-    "src/hft_platform/cli.py",
     "src/hft_platform/feed_adapter/shioaji_client.py",
     "src/hft_platform/execution/gateway.py",
     "src/hft_platform/execution/positions.py",
@@ -76,7 +75,6 @@ omit = [
     "src/hft_platform/strategies/*",
     "src/hft_platform/strategies/**",
     "src/hft_platform/services/bootstrap.py",
-    "src/hft_platform/services/market_data.py",
     "src/hft_platform/services/system.py",
 ]
 
