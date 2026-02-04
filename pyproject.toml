@@ -64,6 +64,12 @@ markers = [
     "acceptance: end-to-end acceptance tests",
 ]
 
+[tool.coverage.run]
+omit = [
+    "src/hft_platform/strategies/*",
+    "src/hft_platform/strategies/**",
+]
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "hft_platform.rust_core"
