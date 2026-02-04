@@ -24,6 +24,7 @@ logs/
 .ruff_cache/
 .benchmarks/
 .coverage
+coverage.xml
 htmlcov/
 
 # Deployment Secrets
@@ -49,6 +50,7 @@ docker-compose.override.yml
 .claude-sessions/
 external_repos/
 *.log
+.shioaji_contracts/
 coverage_output.txt
 coverage_report.txt
 full_coverage.txt
