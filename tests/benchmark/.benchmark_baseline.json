@@ -1,0 +1,6 @@
+{
+  "machine_info": {
+    "note": "Initial baseline — populate by running: pytest tests/benchmark --benchmark-only --benchmark-json=tests/benchmark/.benchmark_baseline.json"
+  },
+  "benchmarks": []
+}
