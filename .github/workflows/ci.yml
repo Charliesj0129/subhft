@@ -273,3 +273,41 @@ jobs:
           else
             echo "No benchmark results found." >> $GITHUB_STEP_SUMMARY
           fi
+
+  # ============================================================================
+  # Stage 5: PR Review Gate (PRs only)
+  # ============================================================================
+  pr-review-gate:
+    name: PR Design Review Gate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check HFT design review for feat/perf PRs
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Only enforce for feat: and perf: PRs
+          if echo "$PR_TITLE" | grep -qiE '^(feat|perf)(\(.+\))?:'; then
+            echo "feat/perf PR detected — checking design review sections..."
+            MISSING=0
+            for section in "Allocation Audit" "Latency Budget" "Threading Model" "Data Layout" "Failure Mode"; do
+              if echo "$PR_BODY" | grep -q "### $section"; then
+                echo "  [OK] $section"
+              else
+                echo "  [MISSING] $section"
+                MISSING=$((MISSING + 1))
+              fi
+            done
+            if [ "$MISSING" -gt 0 ]; then
+              echo ""
+              echo "::error::PR is missing $MISSING HFT design review section(s)."
+              echo "Please use the PR template and fill in all 5 review sections."
+              exit 1
+            fi
+            echo "All design review sections present."
+          else
+            echo "Not a feat/perf PR — skipping design review check."
+          fi
