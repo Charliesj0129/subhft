@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -108,3 +109,71 @@ class TestShioajiClientFull(unittest.TestCase):
         callback = self.mock_api_instance.set_order_callback.call_args[0][0]
         self.assertTrue(callable(callback))
         self.mock_api_instance.set_deal_callback.assert_not_called()
+
+    def test_usage_cache_and_rate_limit(self):
+        self.client.logged_in = True
+        self.mock_api_instance.usage.return_value = {"subscribed": 1, "bytes_used": 10}
+
+        # First call hits API and caches.
+        usage1 = self.client.get_usage()
+        # Second call should use cache.
+        usage2 = self.client.get_usage()
+
+        self.assertEqual(usage1, usage2)
+        self.assertEqual(self.mock_api_instance.usage.call_count, 1)
+
+    def test_positions_cache(self):
+        self.client.logged_in = True
+        self.client.mode = "real"
+        self.mock_api_instance.stock_account = object()
+        self.mock_api_instance.futopt_account = object()
+        self.mock_api_instance.list_positions.side_effect = [["S1"], ["F1"]]
+
+        positions1 = self.client.get_positions()
+        positions2 = self.client.get_positions()
+
+        self.assertEqual(positions1, positions2)
+        self.assertEqual(self.mock_api_instance.list_positions.call_count, 2)
+
+    def test_record_api_latency_error(self):
+        start_ns = time.perf_counter_ns()
+        # Ensure error path doesn't raise.
+        self.client._record_api_latency("place_order", start_ns, ok=False)
+
+    def test_usage_rate_limit_returns_cached(self):
+        self.client.logged_in = True
+        self.client._cache_set("usage", 10, {"subscribed": 2, "bytes_used": 20})
+        self.client._api_rate_limiter.check = MagicMock(return_value=False)
+
+        usage = self.client.get_usage()
+
+        self.assertEqual(usage["subscribed"], 2)
+        self.mock_api_instance.usage.assert_not_called()
+
+    def test_fetch_snapshots_batches(self):
+        self.client.logged_in = True
+        self.client.symbols = [{"code": "2330", "exchange": "TSE"}]
+        self.client.code_exchange_map = {"2330": "TSE"}
+        self.mock_api_instance.snapshots.return_value = [{"code": "2330"}]
+
+        results = self.client.fetch_snapshots()
+
+        self.assertEqual(results, [{"code": "2330"}])
+        self.mock_api_instance.snapshots.assert_called_once()
+
+    def test_resubscribe(self):
+        self.client.logged_in = True
+        self.client.tick_callback = MagicMock()
+        self.client.symbols = [{"code": "2330", "exchange": "TSE"}]
+        self.client.code_exchange_map = {"2330": "TSE"}
+        self.client._last_resubscribe_ts = 0.0
+
+        ok = self.client.resubscribe()
+
+        self.assertTrue(ok)
+        self.assertGreaterEqual(self.mock_api_instance.quote.subscribe.call_count, 1)
+
+    def test_cache_expiry(self):
+        self.client._cache_set("usage", -1, {"subscribed": 1})
+        value = self.client._cache_get("usage")
+        self.assertIsNone(value)

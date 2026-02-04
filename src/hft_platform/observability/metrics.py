@@ -47,6 +47,7 @@ class MetricsRegistry:
             ["op", "result"],
             buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000],
         )
+        self.shioaji_api_errors_total = Counter("shioaji_api_errors_total", "Shioaji API errors", ["op"])
 
         # Infra
         self.recorder_failures_total = Counter("recorder_failures_total", "Recorder write failures")
@@ -54,8 +55,8 @@ class MetricsRegistry:
         self.recorder_rows_flushed_total = Counter("recorder_rows_flushed_total", "Flushed rows", ["table"])
         self.recorder_wal_writes_total = Counter("recorder_wal_writes_total", "WAL writes", ["table"])
         self.queue_depth = Gauge("queue_depth", "Queue depth", ["queue"])
-        self.feed_resubscribe_total = Counter("feed_resubscribe_total", "Feed resubscribe attempts")
-        self.feed_reconnect_total = Counter("feed_reconnect_total", "Feed reconnect attempts")
+        self.feed_resubscribe_total = Counter("feed_resubscribe_total", "Feed resubscribe attempts", ["result"])
+        self.feed_reconnect_total = Counter("feed_reconnect_total", "Feed reconnect attempts", ["result"])
 
         # System (v2)
         try:
