@@ -45,6 +45,7 @@ dev = [
     "pre-commit>=3.7.0",
     "torch>=2.10.0",
     "scikit-learn>=1.7.2",
+    "pytest-benchmark>=4.0.0",
 ]
 
 [build-system]
@@ -68,7 +69,11 @@ markers = [
 omit = [
     "src/hft_platform/strategies/*",
     "src/hft_platform/strategies/**",
+    "src/hft_platform/services/system.py",
 ]
+
+[tool.coverage.report]
+fail_under = 70
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
