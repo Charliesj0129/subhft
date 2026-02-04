@@ -68,9 +68,9 @@ impl MatchedFilterTradeFlow {
         let capacity = self.sum_vol_slow / (self.slow_window as f64);
 
         if capacity > 1e-8 {
-            return self.sum_signed_flow_fast / capacity;
+            self.sum_signed_flow_fast / capacity
         } else {
-            return 0.0;
+            0.0
         }
     }
 }

@@ -81,9 +81,7 @@ impl AlphaRegimePressure {
         // But for trading, raw diff is fine if strategy scales it or uses sign.
         // Let's return raw diff.
 
-        let pressure = bid_v - ask_v;
-
-        pressure
+        bid_v - ask_v
     }
 
     #[getter]

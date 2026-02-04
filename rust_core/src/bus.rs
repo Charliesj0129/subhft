@@ -32,6 +32,12 @@ impl EventBus {
     }
 }
 
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[pyclass]
 pub struct FastRingBuffer {
     size: usize,
