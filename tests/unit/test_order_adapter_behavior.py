@@ -131,3 +131,31 @@ def test_terminal_cleanup_resolves_mapping_shapes(mock_load, mapping):
 
     adapter.on_terminal_state("strat", "O11")
     assert "strat:11" not in adapter.live_orders
+
+
+@pytest.mark.asyncio
+@patch("hft_platform.order.adapter.OrderAdapter.load_config")
+async def test_api_worker_coalesces_new(mock_load):
+    queue = asyncio.Queue()
+    client = MagicMock()
+    client.get_exchange.return_value = "TSE"
+    client.place_order.return_value = {"id": "T1"}
+
+    adapter = OrderAdapter("config/dummy.yaml", queue, client)
+    adapter.metadata = _Meta(scale=100)
+    adapter.running = True
+
+    worker = asyncio.create_task(adapter._api_worker())
+
+    intent1 = _intent(IntentType.NEW, intent_id=1, price=10000)
+    intent2 = _intent(IntentType.NEW, intent_id=2, price=11000)
+    await adapter._enqueue_api(_cmd(intent1))
+    await adapter._enqueue_api(_cmd(intent2))
+
+    await asyncio.sleep(adapter._api_coalesce_window_s + 0.01)
+    await asyncio.sleep(0.01)
+
+    adapter.running = False
+    worker.cancel()
+
+    assert client.place_order.call_count == 1

@@ -149,6 +149,9 @@ class OrderAdapter:
             # Trigger circuit break? Or just drop?
             # Spec says: Cut off before 250.
             return
+        if not self.running:
+            await self._dispatch_to_api(cmd)
+            return
         await self._enqueue_api(cmd)
 
     async def _dispatch_to_api(self, cmd: OrderCommand):
