@@ -45,12 +45,12 @@ class PriceBandValidator(RiskValidator):
         # or just simple sanity.
         # But if we assume this is a refinement for "Deep Defects", we should add at least a sanity check.
 
-        max_price = self.defaults.get("max_price_cap", 5000.0)  # Reasonable for TW stocks
+        max_price_raw = self.defaults.get("max_price_cap", 5000.0)
+        scale = self.price_codec.scale_factor(intent.symbol)
+        max_price_scaled = int(max_price_raw * scale)
 
-        price_float = self.price_codec.descale(intent.symbol, intent.price)
-
-        if price_float > max_price:
-            return False, f"PRICE_EXCEEDS_CAP: {price_float} > {max_price}"
+        if intent.price > max_price_scaled:
+            return False, f"PRICE_EXCEEDS_CAP: {intent.price} > {max_price_scaled}"
 
         # TODO: Compare with LOB mid_price +/- band_ticks * tick_size
         return True, "OK"
@@ -62,11 +62,13 @@ class MaxNotionalValidator(RiskValidator):
             return True, "OK"
 
         strat_cfg = self.strat_configs.get(intent.strategy_id, {})
-        max_notional = strat_cfg.get("max_notional", self.defaults.get("max_notional", 10_000_000))
+        max_notional_raw = strat_cfg.get("max_notional", self.defaults.get("max_notional", 10_000_000))
+        scale = self.price_codec.scale_factor(intent.symbol)
+        max_notional_scaled = int(max_notional_raw * scale)
 
-        notional = self.price_codec.descale(intent.symbol, intent.price) * intent.qty
-        if notional > max_notional:
-            return False, f"MAX_NOTIONAL_EXCEEDED: {notional} > {max_notional}"
+        notional_scaled = intent.price * intent.qty
+        if notional_scaled > max_notional_scaled:
+            return False, f"MAX_NOTIONAL_EXCEEDED: {notional_scaled} > {max_notional_scaled}"
 
         return True, "OK"
 
@@ -75,7 +77,7 @@ class StormGuardFSM:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.state = StormGuardState.NORMAL
-        self.pnl_drawdown = 0.0
+        self.pnl_drawdown: int = 0
         self.metrics = MetricsRegistry.get()
 
         sg_cfg = config.get("storm_guard", {})
@@ -83,7 +85,7 @@ class StormGuardFSM:
         self.storm = sg_cfg.get("storm_threshold", -500_000)
         self.halt = sg_cfg.get("halt_threshold", -1_000_000)
 
-    def update_pnl(self, pnl: float):
+    def update_pnl(self, pnl: int):
         self.pnl_drawdown = pnl
         self._transition()
 

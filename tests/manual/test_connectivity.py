@@ -39,18 +39,18 @@ def run_connectivity_test():
     if not load_env():
         return
 
-    pid = os.getenv("SHIOAJI_PERSON_ID")
-    pwd = os.getenv("SHIOAJI_PASSWORD")
+    api_key = os.getenv("SHIOAJI_API_KEY")
+    secret_key = os.getenv("SHIOAJI_SECRET_KEY")
 
-    if not pid or not pwd:
-        print("❌ Missing SHIOAJI_PERSON_ID or SHIOAJI_PASSWORD in .env")
+    if not api_key or not secret_key:
+        print("❌ Missing SHIOAJI_API_KEY or SHIOAJI_SECRET_KEY in .env")
         return
 
     api = sj.Shioaji()
 
-    print(f"🔑 Logging in as {pid[:3]}***...")
+    print("🔑 Logging in with API key...")
     try:
-        api.login(pid, pwd)
+        api.login(api_key=api_key, secret_key=secret_key)
         print("✅ Login Successful!")
     except Exception as e:
         print(f"❌ Login Failed: {e}")

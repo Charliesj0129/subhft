@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import os
+import random
 import socket
 import tempfile
 import time
@@ -91,7 +92,7 @@ def _write_symbols_yaml(symbol: str) -> str:
     return tmp.name
 
 
-def _write_strategies_yaml(symbol: str) -> str:
+def _write_strategies_yaml(symbol: str, enabled: bool) -> str:
     tmp = tempfile.NamedTemporaryFile(prefix="hft_strategies_", suffix=".yaml", delete=False, mode="w")
     data = {
         "strategies": [
@@ -99,7 +100,7 @@ def _write_strategies_yaml(symbol: str) -> str:
                 "id": "SIM_MM",
                 "module": "hft_platform.strategies.simple_mm",
                 "class": "SimpleMarketMaker",
-                "enabled": True,
+                "enabled": enabled,
                 "symbols": [symbol],
             }
         ]
@@ -146,6 +147,7 @@ async def main():
     os.environ["HFT_RECONNECT_BACKOFF_S"] = "1"
     os.environ["HFT_RECONNECT_BACKOFF_MAX_S"] = "4"
     os.environ["HFT_MD_SYNTHETIC_SIDE"] = "1"
+    os.environ["SHIOAJI_FETCH_CONTRACT"] = "1"
 
     api_key = os.getenv("SHIOAJI_API_KEY") or os.getenv("SHIOAJI_APIKEY")
     secret_key = os.getenv("SHIOAJI_SECRET_KEY") or os.getenv("SHIOAJI_SECRETKEY")
@@ -178,7 +180,8 @@ async def main():
         ref_price = 100.0
 
     symbols_path = _write_symbols_yaml(symbol)
-    strategies_path = _write_strategies_yaml(symbol)
+    enable_orders = os.getenv("SIM_ENABLE_ORDERS", "0") == "1"
+    strategies_path = _write_strategies_yaml(symbol, enabled=enable_orders)
     risk_path = _write_risk_yaml(max_price_cap=float(ref_price) * 2.0)
     temp_paths = [symbols_path, strategies_path, risk_path]
 
@@ -199,13 +202,20 @@ async def main():
 
     await asyncio.sleep(3)
 
-    for i in range(10):
+    sim_duration_s = float(os.getenv("SIM_DURATION_S", "300"))
+    lag_ms = float(os.getenv("SIM_EXCH_LAG_MS", "3.0"))
+    jitter_ms = float(os.getenv("SIM_EXCH_JITTER_MS", "1.0"))
+    start_ts = time.time()
+    i = 0
+    while time.time() - start_ts < sim_duration_s:
         base_price = float(ref_price)
         bid = max(base_price - 1.0, 1.0)
         ask = max(base_price + 1.0, bid + 1.0)
+        lag_sample_ms = max(0.0, random.gauss(lag_ms, jitter_ms))
+        lag_ns = int(lag_sample_ms * 1_000_000)
         payload = {
             "code": symbol,
-            "ts": time.time_ns(),
+            "ts": time.time_ns() - lag_ns,
             "bid_price": [bid],
             "bid_volume": [1],
             "ask_price": [ask],
@@ -213,6 +223,7 @@ async def main():
         }
         await system.raw_queue.put(payload)
         await asyncio.sleep(0.05)
+        i += 1
 
     await asyncio.sleep(0.5)
     # Validate LOB stats after synthetic side handling.

@@ -35,7 +35,7 @@ def test_broker_id_cleanup_and_strategy_resolution(mock_load):
         tif=TIF.LIMIT,
     )
     cmd = OrderCommand(1, intent, time.time_ns() + 1_000_000_000, 0)
-    asyncio.run(adapter.execute(cmd))
+    asyncio.run(adapter._dispatch_to_api(cmd))
 
     assert adapter.order_id_map["S1"] == "stratX:1"
     assert adapter.order_id_map["O1"] == "stratX:1"
@@ -146,7 +146,7 @@ def test_long_strategy_id_fallback(mock_load):
         tif=TIF.LIMIT,
     )
     cmd = OrderCommand(1, intent, time.time_ns() + 1_000_000_000, 0)
-    asyncio.run(adapter.execute(cmd))
+    asyncio.run(adapter._dispatch_to_api(cmd))
 
     assert client.place_order.call_args.kwargs["custom_field"] == ""
     assert adapter.order_id_map["S99"] == f"{strategy_id}:9"

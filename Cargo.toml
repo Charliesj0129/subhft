@@ -1,5 +1,6 @@
 [workspace]
-members = ["rust_core"]
+members = ["rust","rust_core"]
+resolver = "2"
 
 [profile.release]
 codegen-units = 1

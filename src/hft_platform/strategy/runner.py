@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 import time
 from typing import Any, List
@@ -29,7 +30,8 @@ class StrategyRunner:
         self.risk_queue = risk_queue
         self.lob_engine = lob_engine
         self.position_store = position_store
-        self.registry = StrategyRegistry(config_path)
+        cfg_path = os.getenv("HFT_STRATEGY_CONFIG") or config_path
+        self.registry = StrategyRegistry(cfg_path)
         self.strategies: List[BaseStrategy] = []
         # Cache of (strategy, latency_metric, intents_metric)
         self._strat_executors: list[tuple[BaseStrategy, Any, Any]] = []
@@ -38,6 +40,8 @@ class StrategyRunner:
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.symbol_metadata))
         self._intent_seq = 0
+        self._positions_cache: dict = {}
+        self._positions_dirty = True
 
         # Load initial
         for strat in self.registry.instantiate():
@@ -49,8 +53,14 @@ class StrategyRunner:
         self.running = True
         logger.info("StrategyRunner started")
         try:
-            async for event in self.bus.consume():
-                await self.process_event(event)
+            batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
+            if batch_size > 1:
+                async for batch in self.bus.consume_batch(batch_size):
+                    for event in batch:
+                        await self.process_event(event)
+            else:
+                async for event in self.bus.consume():
+                    await self.process_event(event)
         except asyncio.CancelledError:
             pass
 
@@ -152,9 +162,18 @@ class StrategyRunner:
 
         return positions_by_strategy
 
+    def invalidate_positions(self):
+        self._positions_dirty = True
+
     async def process_event(self, event: Any):
-        # Positions snapshot
-        positions_by_strategy = self._build_positions_by_strategy()
+        # Invalidate on position delta events
+        if hasattr(event, "delta_source"):
+            self._positions_dirty = True
+
+        if self._positions_dirty:
+            self._positions_cache = self._build_positions_by_strategy()
+            self._positions_dirty = False
+        positions_by_strategy = self._positions_cache
 
         target_strat_id = getattr(event, "strategy_id", None)
 

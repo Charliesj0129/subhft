@@ -3,7 +3,7 @@
 1) **準備環境變數**  
    ```bash
    cp .env.example .env
-   # 填入 SHIOAJI_PERSON_ID/SHIOAJI_PASSWORD；若先模擬可留空
+   # 填入 SHIOAJI_API_KEY/SHIOAJI_SECRET_KEY；若先模擬可留空
    ```
 
 2) **一鍵啟動（模擬）**  
@@ -35,7 +35,8 @@
    - 快速診斷：`python -m hft_platform feed status` / `python -m hft_platform diag`
 
 6) **升級到 live**  
-- 在 `.env` 或環境變數填 `SHIOAJI_PERSON_ID` / `SHIOAJI_PASSWORD`。  
+- 在 `.env` 或環境變數填 `SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY`。  
+- 若要啟用 CA，需加上 `SHIOAJI_PERSON_ID` 與 `CA_CERT_PATH`/`CA_PASSWORD`。  
 - `make run-live`（或直接 `python -m hft_platform run live ...`），若憑證缺失會自動降級並提示。
 
 常見陷阱：  

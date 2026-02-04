@@ -1,7 +1,9 @@
 import asyncio
+import datetime as dt
 import os
 import time
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
@@ -45,6 +47,20 @@ class MarketDataService:
         self.running = False
         self.last_event_ts = time.time()
         self.heartbeat_threshold_s = 5.0
+        self.resubscribe_gap_s = float(os.getenv("HFT_MD_RESUBSCRIBE_GAP_S", "15"))
+        self.reconnect_gap_s = float(os.getenv("HFT_MD_RECONNECT_GAP_S", "60"))
+        self.force_reconnect_gap_s = float(os.getenv("HFT_MD_FORCE_RECONNECT_GAP_S", "300"))
+        self.reconnect_cooldown_s = float(os.getenv("HFT_MD_RECONNECT_COOLDOWN_S", "60"))
+        self.reconnect_days = {
+            d.strip().lower()
+            for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",")
+            if d.strip()
+        }
+        self.reconnect_hours = os.getenv("HFT_RECONNECT_HOURS", "")
+        self.reconnect_hours_2 = os.getenv("HFT_RECONNECT_HOURS_2", "")
+        self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ", "Asia/Taipei")
+        self._last_reconnect_ts = 0.0
+        self._resubscribe_attempts = 0
         self.metrics = {"count": 0, "start_ts": time.time()}
         self.metrics_registry = MetricsRegistry.get()
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
@@ -74,6 +90,7 @@ class MarketDataService:
                 else:
                     raw = msg
                 self.last_event_ts = time.time()
+                self.metrics_registry.feed_last_event_ts.labels(source="market_data").set(self.last_event_ts)
                 self.metrics["count"] += 1
 
                 # logger.debug(f"MD Raw Type: {type(raw)}")
@@ -118,12 +135,13 @@ class MarketDataService:
                     # Hot path: update LOB
                     stats = self.lob.process_event(event)
 
-                    # Offload publishing to avoid blocking the event loop
                     if self.publish_full_events:
-                        asyncio.create_task(self._publish(event))
-
-                    if stats:
-                        asyncio.create_task(self._publish(stats))
+                        if stats:
+                            self._publish_many_nowait([event, stats])
+                        else:
+                            self._publish_nowait(event)
+                    elif stats:
+                        self._publish_nowait(stats)
 
                 self.raw_queue.task_done()
         except asyncio.CancelledError:
@@ -160,9 +178,12 @@ class MarketDataService:
                 stats = self.lob.process_event(event)
 
                 if self.publish_full_events:
-                    asyncio.create_task(self._publish(event))
-                if stats:
-                    asyncio.create_task(self._publish(stats))
+                    if stats:
+                        self._publish_many_nowait([event, stats])
+                    else:
+                        self._publish_nowait(event)
+                elif stats:
+                    self._publish_nowait(stats)
 
             self.client.subscribe_basket(self._on_shioaji_event)
             self._set_state(FeedState.CONNECTED)
@@ -228,9 +249,11 @@ class MarketDataService:
                 if gap > self.heartbeat_threshold_s:
                     logger.warning("Heartbeat missing", gap=gap)
                     if self.metrics_registry:
-                        self.metrics_registry.feed_reconnect_total.inc()
-                    # trigger reconnect logic?
-                    pass
+                        self.metrics_registry.feed_reconnect_total.labels(result="gap").inc()
+                if gap > self.resubscribe_gap_s:
+                    await self._attempt_resubscribe(gap)
+                if gap > self.force_reconnect_gap_s or (gap > self.reconnect_gap_s and self._resubscribe_attempts > 2):
+                    await self._trigger_reconnect(gap)
 
             if self.symbol_metadata.reload_if_changed():
                 logger.info("Symbols config reloaded", count=len(self.symbol_metadata.meta))
@@ -249,7 +272,76 @@ class MarketDataService:
         if asyncio.iscoroutine(result):
             await result
 
+    def _publish_nowait(self, event) -> None:
+        publish_nowait = getattr(self.bus, "publish_nowait", None)
+        if publish_nowait:
+            publish_nowait(event)
+            return
+        asyncio.create_task(self._publish(event))
+
+    def _publish_many_nowait(self, events) -> None:
+        publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
+        if publish_many_nowait:
+            publish_many_nowait(events)
+            return
+        for event in events:
+            self._publish_nowait(event)
+
     def _set_state(self, new_state):
         if self.state != new_state:
             logger.info("State change", old=self.state, new=new_state)
             self.state = new_state
+
+    async def _attempt_resubscribe(self, gap: float) -> None:
+        if not self._within_reconnect_window():
+            return
+        ok = await asyncio.to_thread(self.client.resubscribe)
+        if ok:
+            self._resubscribe_attempts = 0
+        else:
+            self._resubscribe_attempts += 1
+        logger.info("Resubscribe attempt", gap=gap, ok=ok, attempts=self._resubscribe_attempts)
+
+    async def _trigger_reconnect(self, gap: float) -> None:
+        now = time.time()
+        if now - self._last_reconnect_ts < self.reconnect_cooldown_s:
+            return
+        if not self._within_reconnect_window():
+            return
+        self._last_reconnect_ts = now
+        logger.warning("Triggering reconnect", gap=gap)
+        self._set_state(FeedState.RECOVERING)
+        ok = await asyncio.to_thread(self.client.reconnect, f"heartbeat_gap {gap:.1f}s")
+        if ok:
+            self._set_state(FeedState.CONNECTED)
+            self.last_event_ts = time.time()
+            self._resubscribe_attempts = 0
+        else:
+            self._set_state(FeedState.DISCONNECTED)
+
+    def _within_reconnect_window(self) -> bool:
+        if not self.reconnect_days and not self.reconnect_hours and not self.reconnect_hours_2:
+            return True
+        now = dt.datetime.now(tz=ZoneInfo(self.reconnect_tz))
+        weekday = now.strftime("%a").lower()
+        if self.reconnect_days and weekday not in self.reconnect_days:
+            return False
+
+        windows = [w for w in (self.reconnect_hours, self.reconnect_hours_2) if w]
+        if not windows:
+            return True
+        for window in windows:
+            try:
+                start_str, end_str = window.split("-", 1)
+                start = dt.time.fromisoformat(start_str)
+                end = dt.time.fromisoformat(end_str)
+                now_t = now.timetz().replace(tzinfo=None)
+                if start <= end:
+                    if start <= now_t <= end:
+                        return True
+                else:
+                    if now_t >= start or now_t <= end:
+                        return True
+            except Exception:
+                continue
+        return False

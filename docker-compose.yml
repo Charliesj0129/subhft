@@ -8,8 +8,10 @@ services:
       - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
       - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
       - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
-      - SHIOAJI_PASSWORD=${SHIOAJI_PASSWORD}
       - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT}
+      - HFT_MODE=${HFT_MODE:-sim}
+      - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
+      - HFT_SYMBOLS=${HFT_SYMBOLS:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
       - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
@@ -70,6 +72,13 @@ services:
       - ${CH_DATA_COLD:-ch_data_cold}:/var/lib/clickhouse/data/cold
       # Metadata volume
       - ch_metadata:/var/lib/clickhouse 
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: always
 
   wal-loader:
     extends: hft-base

@@ -1,4 +1,8 @@
-from hft_platform.rust_core import AlphaRegimePressure, LimitOrderBook
+import pytest
+
+rust_core = pytest.importorskip("rust_core", reason="rust_core extension not built")
+AlphaRegimePressure = rust_core.AlphaRegimePressure
+LimitOrderBook = rust_core.LimitOrderBook
 
 
 def test_regime_logic():

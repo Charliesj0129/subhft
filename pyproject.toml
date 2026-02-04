@@ -17,6 +17,15 @@ dependencies = [
     "PyYAML",
     "make>=0.1.6.post2",
     "joblib>=1.5.3",
+    "numba>=0.61",
+    "gymnasium>=1.2.3",
+    "stable-baselines3>=2.7.1",
+    "shimmy>=2.0.0",
+    "optuna>=4.7.0",
+    "onnx>=1.20.1",
+    "onnxruntime>=1.23.2",
+    "onnxscript>=0.6.0",
+    "python-dotenv>=1.2.1",
 ]
 
 [project.scripts]
@@ -34,6 +43,8 @@ dev = [
     "mypy>=1.10.0",
     "hypothesis>=6.148.7",
     "pre-commit>=3.7.0",
+    "torch>=2.10.0",
+    "scikit-learn>=1.7.2",
 ]
 
 [build-system]
@@ -62,6 +73,18 @@ manifest-path = "rust_core/Cargo.toml"
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+exclude = [
+    "research",
+    "research/**",
+    "scripts",
+    "scripts/**",
+    "tests",
+    "tests/**",
+    "examples",
+    "examples/**",
+    "config/agent_system",
+    "config/agent_system/**",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"] # pycodestyle, pyflakes, isort

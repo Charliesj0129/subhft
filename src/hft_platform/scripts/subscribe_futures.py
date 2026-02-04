@@ -28,7 +28,7 @@ def main():
 
         if api_key and secret_key:
             logger.info("Using SHIOAJI_API_KEY from environment.")
-            client.login(person_id=api_key, password=secret_key)
+            client.login(api_key=api_key, secret_key=secret_key)
         else:
             client.login()
 

@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 
 mod lob;
+mod strategy; // New Strategy
 mod alpha;
 mod alpha_pressure;
 mod alpha_reversal;
@@ -9,8 +10,10 @@ mod alpha_transient;
 mod alpha_markov; // New module
 mod alpha_flow; // New module
 mod alpha_meta; // Meta Alpha module
+mod bus;
 mod fast_lob;
 pub mod ipc;
+mod positions;
 pub mod risk;
 
 /// The HFT Platform Rust Core Module
@@ -25,13 +28,22 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<alpha_markov::AlphaMarkovTransition>()?;
     m.add_class::<alpha_flow::MatchedFilterTradeFlow>()?;
     m.add_class::<alpha_meta::MetaAlpha>()?;
+    m.add_class::<bus::EventBus>()?;
+    m.add_class::<bus::FastRingBuffer>()?;
     m.add_class::<ipc::ShmRingBuffer>()?;
     m.add_class::<risk::FastGate>()?;
     m.add_function(wrap_pyfunction!(fast_lob::scale_book, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::scale_book_seq, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::scale_book_pair, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::scale_book_pair_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_lob::scale_book_pair_stats_np, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::compute_book_stats, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::get_field, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_lob::normalize_tick_tuple, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_lob::normalize_bidask_tuple, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_lob::normalize_bidask_tuple_np, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_lob::normalize_bidask_tuple_with_synth, m)?)?;
+    m.add_class::<strategy::AlphaStrategy>()?;
+    m.add_class::<positions::RustPositionTracker>()?;
     Ok(())
 }

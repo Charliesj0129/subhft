@@ -20,7 +20,7 @@ def test_config_loading(client):
 
 
 def test_login_args(client):
-    client.login("P123", "Pwd")
+    client.login(api_key="K", secret_key="S")
     client.api.login.assert_called()
 
 

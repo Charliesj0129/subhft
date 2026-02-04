@@ -193,8 +193,8 @@ impl MetaAlpha {
         
         // Remove old (slow)
         if self.trade_vol_history.len() > self.slow_window {
-            let old_vol = self.trade_vol_history.pop_front().unwrap();
-            let _ = self.trade_side_history.pop_front().unwrap();
+            let old_vol = self.trade_vol_history.pop_front().unwrap_or(0.0);
+            let _ = self.trade_side_history.pop_front().unwrap_or(0.0);
             self.sum_vol_slow -= old_vol;
         }
         

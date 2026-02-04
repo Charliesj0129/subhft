@@ -45,8 +45,8 @@ cp .env.prod.example .env.prod
 
 ## 3. 必要環境變數
 **認證**
-- `SHIOAJI_PERSON_ID`, `SHIOAJI_PASSWORD`：實盤登入。
-- `SHIOAJI_API_KEY`, `SHIOAJI_SECRET_KEY`：API key 登入（優先於 person_id）。
+- `SHIOAJI_API_KEY`, `SHIOAJI_SECRET_KEY`：API key 登入。
+- `SHIOAJI_PERSON_ID`：CA 啟用必要。
 
 **模式**
 - `HFT_MODE=sim|live`：執行模式。
@@ -83,16 +83,16 @@ make start-staging
 ## 5. 本機實盤
 ```bash
 cp .env.example .env
-export SHIOAJI_PERSON_ID="YOUR_ID"
-export SHIOAJI_PASSWORD="YOUR_PWD"
+export SHIOAJI_API_KEY="YOUR_KEY"
+export SHIOAJI_SECRET_KEY="YOUR_SECRET"
 make run-prod
 ```
 
 ## 6. Docker Compose（含 ClickHouse）
 `docker-compose.yml` 提供開發與觀測堆疊（Prometheus retention 7 天）：
 ```bash
-export SHIOAJI_PERSON_ID=...
-export SHIOAJI_PASSWORD=...
+export SHIOAJI_API_KEY=...
+export SHIOAJI_SECRET_KEY=...
 docker compose up -d
 ```
 

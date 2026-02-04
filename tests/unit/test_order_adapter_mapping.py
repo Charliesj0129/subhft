@@ -26,7 +26,7 @@ def test_order_adapter_maps_broker_ids_and_clears(mock_load):
         tif=TIF.LIMIT,
     )
     cmd = OrderCommand(1, intent, time.time_ns() + 1_000_000_000, 0)
-    asyncio.run(adapter.execute(cmd))
+    asyncio.run(adapter._dispatch_to_api(cmd))
 
     order_key = "strat1:1"
     assert adapter.order_id_map["S1"] == order_key

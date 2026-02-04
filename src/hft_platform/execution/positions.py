@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from typing import Dict
 
@@ -9,6 +10,23 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("positions")
+
+_RUST_POSITIONS = os.getenv("HFT_RUST_POSITIONS", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
+_RustPositionTracker = None
+if _RUST_POSITIONS:
+    try:
+        try:
+            from hft_platform.rust_core import RustPositionTracker as _RustPositionTracker  # type: ignore[attr-defined]
+        except Exception:
+            from rust_core import RustPositionTracker as _RustPositionTracker  # type: ignore[assignment]
+    except Exception:
+        _RustPositionTracker = None
 
 
 @dataclass
@@ -97,16 +115,74 @@ class PositionStore:
         self.metrics = MetricsRegistry.get()
         self.metadata = SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
+        self._rust_tracker = _RustPositionTracker() if _RustPositionTracker is not None else None
+        self._log_fills = os.getenv("HFT_LOG_FILLS", "0") == "1"
 
     def on_fill(self, fill: FillEvent) -> PositionDelta:
         key = self._key(fill.account_id, fill.strategy_id, fill.symbol)
+
+        if self._rust_tracker is not None:
+            return self._on_fill_rust(fill, key)
+
+        return self._on_fill_python(fill, key)
+
+    def _on_fill_rust(self, fill: FillEvent, key: str) -> PositionDelta:
+        net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled = self._rust_tracker.update(
+            key,
+            int(fill.side),
+            fill.qty,
+            fill.price,
+            fill.fee,
+            fill.tax,
+            fill.match_ts_ns,
+        )
+
+        # Keep Python-visible cache in sync for tests/debugging/metrics parity.
+        pos = self.positions.get(key)
+        if pos is None:
+            pos = Position(fill.account_id, fill.strategy_id, fill.symbol)
+            self.positions[key] = pos
+        scale = self.price_codec.scale_factor(fill.symbol)
+        pos.net_qty = int(net_qty)
+        pos.avg_price = float(avg_price_scaled) / scale if scale else 0.0
+        pos.realized_pnl = float(realized_pnl_scaled) / scale if scale else 0.0
+        pos.fees = float(fees_scaled) / scale if scale else 0.0
+        pos.last_update_ts = fill.match_ts_ns
+
+        if self._log_fills:
+            logger.info(
+                "Fill processed",
+                key=key,
+                net_qty=net_qty,
+                pnl=realized_pnl_scaled,
+                rust=True,
+            )
+
+        if self.metrics:
+            self.metrics.position_pnl_realized.labels(
+                strategy=fill.strategy_id, symbol=fill.symbol
+            ).set(realized_pnl_scaled)
+
+        return PositionDelta(
+            account_id=fill.account_id,
+            strategy_id=fill.strategy_id,
+            symbol=fill.symbol,
+            net_qty=net_qty,
+            avg_price=avg_price_scaled,
+            realized_pnl=realized_pnl_scaled,
+            unrealized_pnl=0,
+            delta_source="FILL",
+        )
+
+    def _on_fill_python(self, fill: FillEvent, key: str) -> PositionDelta:
         if key not in self.positions:
             self.positions[key] = Position(fill.account_id, fill.strategy_id, fill.symbol)
 
         pos = self.positions[key]
         scale = self.price_codec.scale_factor(fill.symbol)
         pos.update(fill, scale=scale)
-        logger.info("Fill processed", key=key, net_qty=pos.net_qty, pnl=pos.realized_pnl)
+        if self._log_fills:
+            logger.info("Fill processed", key=key, net_qty=pos.net_qty, pnl=pos.realized_pnl)
 
         # Emit delta / Update PnL Gauge
         if self.metrics:

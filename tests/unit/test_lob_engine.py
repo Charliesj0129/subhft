@@ -117,7 +117,7 @@ def test_late_packet_handling(engine):
     engine.process_event(BidAskEvent(meta=make_meta(2000), symbol="2330", bids=[[100, 1]], asks=[[102, 1]]))
     book = engine.get_book("2330")
     assert book.exch_ts == 2000
-    assert book.mid_price == 101.0
+    assert book.mid_price_x2 / 2.0 == 101.0
 
     # 2. Late update ts=1000 with DIFFERENT price
     # Should be IGNORED
@@ -125,7 +125,7 @@ def test_late_packet_handling(engine):
 
     # 3. Verify state UNCHANGED
     assert book.exch_ts == 2000
-    assert book.mid_price == 101.0  # If bug exists, this might fail (be 51.0)
+    assert book.mid_price_x2 / 2.0 == 101.0  # If bug exists, this might fail (be 51.0)
 
 
 from unittest.mock import MagicMock

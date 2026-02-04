@@ -1302,16 +1302,13 @@ def fetch_contracts_from_broker() -> list[dict[str, Any]]:
     except Exception as exc:  # pragma: no cover - environment missing SDK
         raise RuntimeError("shioaji SDK not available") from exc
 
-    pid = os.getenv("SHIOAJI_PERSON_ID") or os.getenv("SHIOAJI_API_KEY")
-    pwd = os.getenv("SHIOAJI_PASSWORD") or os.getenv("SHIOAJI_SECRET_KEY")
-    if not pid or not pwd:
-        raise RuntimeError("SHIOAJI credentials missing (env vars)")
+    api_key = os.getenv("SHIOAJI_API_KEY")
+    secret_key = os.getenv("SHIOAJI_SECRET_KEY")
+    if not api_key or not secret_key:
+        raise RuntimeError("SHIOAJI API credentials missing (env vars)")
 
     api = sj.Shioaji(simulation=True)
-    if len(pid) > 20:
-        api.login(api_key=pid, secret_key=pwd, contracts_timeout=60000)
-    else:
-        api.login(person_id=pid, passwd=pwd, contracts_timeout=60000)
+    api.login(api_key=api_key, secret_key=secret_key, contracts_timeout=60000)
 
     if hasattr(api, "fetch_contracts"):
         try:

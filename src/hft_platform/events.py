@@ -47,7 +47,7 @@ class BidAskEvent:
     # Dtype: np.int64 (to support large volumes/prices safely)
     bids: Union[np.ndarray, list]
     asks: Union[np.ndarray, list]
-
+    stats: tuple[int, int, int, int, float, float, float] | None = None
     is_snapshot: bool = False
 
 

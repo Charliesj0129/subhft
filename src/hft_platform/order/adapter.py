@@ -6,7 +6,7 @@ from typing import Any, Dict
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, Side
+from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
@@ -149,10 +149,23 @@ class OrderAdapter:
             # Trigger circuit break? Or just drop?
             # Spec says: Cut off before 250.
             return
+        if not self._validate_client(cmd.intent):
+            self.metrics.order_reject_total.inc()
+            self.circuit_breaker.record_failure()
+            return
         if not self.running:
             await self._dispatch_to_api(cmd)
             return
         await self._enqueue_api(cmd)
+
+    def _validate_client(self, intent: OrderIntent) -> bool:
+        if intent.intent_type == IntentType.NEW:
+            return hasattr(self.client, "place_order") and hasattr(self.client, "get_exchange")
+        if intent.intent_type == IntentType.CANCEL:
+            return hasattr(self.client, "cancel_order")
+        if intent.intent_type == IntentType.AMEND:
+            return hasattr(self.client, "update_order")
+        return True
 
     async def _dispatch_to_api(self, cmd: OrderCommand):
         intent = cmd.intent

@@ -15,8 +15,8 @@
 
 ## 2. 環境變數 (.env)
 **交易/登入**
-- `SHIOAJI_PERSON_ID`, `SHIOAJI_PASSWORD`
 - `SHIOAJI_API_KEY`, `SHIOAJI_SECRET_KEY`
+- `SHIOAJI_PERSON_ID`（CA 啟用必要）
 - `CA_CERT_PATH`, `CA_PASSWORD` (CA 憑證啟用)
 - `SHIOAJI_ACTIVATE_CA=1` (自動啟用 CA)
 
