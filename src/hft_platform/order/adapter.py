@@ -181,7 +181,7 @@ class OrderAdapter:
         """Add a rejected order to the dead letter queue."""
         try:
             await self._dlq.add(
-                order_id=intent.intent_id,
+                order_id=str(intent.intent_id),
                 strategy_id=intent.strategy_id,
                 symbol=intent.symbol,
                 side=str(intent.side.name if hasattr(intent.side, "name") else intent.side),
