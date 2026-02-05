@@ -24,6 +24,7 @@ class RecorderService:
             "fills": Batcher("hft.trades", writer=self.writer),  # 'trades' in schema, 'fills' here?
             # Add backtest routing if needed, or separate service
             "backtest_runs": Batcher("hft.backtest_runs", writer=self.writer),
+            "latency_spans": Batcher("hft.latency_spans", writer=self.writer),
         }
 
     async def recover_wal(self):

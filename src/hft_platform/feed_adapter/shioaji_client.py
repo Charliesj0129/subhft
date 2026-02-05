@@ -50,11 +50,18 @@ class ShioajiClient:
         self.index_exchange = os.getenv("HFT_INDEX_EXCHANGE", "TSE").upper()
         self.resubscribe_cooldown = float(os.getenv("HFT_RESUBSCRIBE_COOLDOWN", "1.5"))
         self.shioaji_config = shioaji_config or {}
-        self.activate_ca = (
-            bool(self.shioaji_config.get("activate_ca"))
-            or os.getenv("SHIOAJI_ACTIVATE_CA", "0") == "1"
-            or os.getenv("HFT_ACTIVATE_CA", "0") == "1"
-        )
+
+        def _as_bool(value: Any) -> bool:
+            if value is None:
+                return False
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+        if "activate_ca" in self.shioaji_config:
+            self.activate_ca = _as_bool(self.shioaji_config.get("activate_ca"))
+        else:
+            self.activate_ca = os.getenv("SHIOAJI_ACTIVATE_CA", "0") == "1" or os.getenv("HFT_ACTIVATE_CA", "0") == "1"
         self.ca_path = self.shioaji_config.get("ca_path") or os.getenv("SHIOAJI_CA_PATH") or os.getenv("CA_CERT_PATH")
         ca_password = (
             self.shioaji_config.get("ca_password") or os.getenv("SHIOAJI_CA_PASSWORD") or os.getenv("CA_PASSWORD")
@@ -73,7 +80,11 @@ class ShioajiClient:
                 else:
                     config_path = "config/base/symbols.yaml"
 
-        is_sim = os.getenv("HFT_MODE", "real") == "sim"
+        sim_override = self.shioaji_config.get("simulation") if "simulation" in self.shioaji_config else None
+        if sim_override is None:
+            is_sim = os.getenv("HFT_MODE", "real") == "sim"
+        else:
+            is_sim = _as_bool(sim_override)
         if sj:
             self.api = sj.Shioaji(simulation=is_sim)
         else:
@@ -87,6 +98,8 @@ class ShioajiClient:
         self._callbacks_registered = False
         self.logged_in = False
         self.mode = "simulation" if (is_sim or self.api is None) else "real"
+        if self.mode == "simulation":
+            self.activate_ca = False
         self.ca_active = False
         self._reconnect_lock = threading.Lock()
         self._last_reconnect_ts = 0.0
@@ -97,6 +110,10 @@ class ShioajiClient:
         self._api_cache_lock = threading.Lock()
         self._positions_cache_ttl_s = float(os.getenv("HFT_POSITIONS_CACHE_TTL_S", "1.5"))
         self._usage_cache_ttl_s = float(os.getenv("HFT_USAGE_CACHE_TTL_S", "5"))
+        self._account_cache_ttl_s = float(os.getenv("HFT_ACCOUNT_CACHE_TTL_S", "5"))
+        self._margin_cache_ttl_s = float(os.getenv("HFT_MARGIN_CACHE_TTL_S", "5"))
+        self._profit_cache_ttl_s = float(os.getenv("HFT_PROFIT_CACHE_TTL_S", "10"))
+        self._positions_detail_cache_ttl_s = float(os.getenv("HFT_POSITION_DETAIL_CACHE_TTL_S", "10"))
         self._api_last_latency_ms: dict[str, float] = {}
         self._api_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_API_SOFT_CAP", "20")),
@@ -117,7 +134,10 @@ class ShioajiClient:
         self.metrics.shioaji_api_latency_ms.labels(op=op, result=result).observe(latency_ms)
         last = self._api_last_latency_ms.get(op)
         if last is not None:
-            self.metrics.shioaji_api_jitter_ms.labels(op=op).set(abs(latency_ms - last))
+            jitter = abs(latency_ms - last)
+            self.metrics.shioaji_api_jitter_ms.labels(op=op).set(jitter)
+            if hasattr(self.metrics, "shioaji_api_jitter_ms_hist"):
+                self.metrics.shioaji_api_jitter_ms_hist.labels(op=op).observe(jitter)
         self._api_last_latency_ms[op] = latency_ms
         if not ok:
             self.metrics.shioaji_api_errors_total.labels(op=op).inc()
@@ -1056,4 +1076,94 @@ class ShioajiClient:
             raise RuntimeError("Shioaji API missing update_order/update_qty")
 
     def get_account_balance(self, account=None):
-        return {}
+        if self.mode == "simulation":
+            return {}
+        cached = self._cache_get("account_balance")
+        if cached is not None:
+            return cached
+        try:
+            if not self._rate_limit_api("account_balance"):
+                return cached or {}
+            start_ns = time.perf_counter_ns()
+            result = None
+            if account is not None:
+                result = self.api.account_balance(account)
+            else:
+                result = self.api.account_balance()
+            self._record_api_latency("account_balance", start_ns, ok=True)
+            self._cache_set("account_balance", self._account_cache_ttl_s, result)
+            return result
+        except Exception as exc:
+            self._record_api_latency("account_balance", start_ns, ok=False)
+            logger.warning("Failed to fetch account balance", error=str(exc))
+            return cached or {}
+
+    def get_margin(self, account=None):
+        if self.mode == "simulation":
+            return {}
+        cached = self._cache_get("margin")
+        if cached is not None:
+            return cached
+        try:
+            if not self._rate_limit_api("margin"):
+                return cached or {}
+            start_ns = time.perf_counter_ns()
+            acct = account
+            if acct is None and hasattr(self.api, "futopt_account"):
+                acct = self.api.futopt_account
+            result = self.api.margin(acct)
+            self._record_api_latency("margin", start_ns, ok=True)
+            self._cache_set("margin", self._margin_cache_ttl_s, result)
+            return result
+        except Exception as exc:
+            self._record_api_latency("margin", start_ns, ok=False)
+            logger.warning("Failed to fetch margin", error=str(exc))
+            return cached or {}
+
+    def list_position_detail(self, account=None):
+        if self.mode == "simulation":
+            return []
+        cached = self._cache_get("position_detail")
+        if cached is not None:
+            return cached
+        try:
+            if not self._rate_limit_api("position_detail"):
+                return cached or []
+            start_ns = time.perf_counter_ns()
+            acct = account
+            if acct is None and hasattr(self.api, "stock_account"):
+                acct = self.api.stock_account
+            result = self.api.list_position_detail(acct) if acct is not None else self.api.list_position_detail()
+            self._record_api_latency("position_detail", start_ns, ok=True)
+            self._cache_set("position_detail", self._positions_detail_cache_ttl_s, result)
+            return result
+        except Exception as exc:
+            self._record_api_latency("position_detail", start_ns, ok=False)
+            logger.warning("Failed to fetch position detail", error=str(exc))
+            return cached or []
+
+    def list_profit_loss(self, account=None, begin_date: str | None = None, end_date: str | None = None):
+        if self.mode == "simulation":
+            return []
+        cache_key = f"profit_loss:{begin_date}:{end_date}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            if not self._rate_limit_api("profit_loss"):
+                return cached or []
+            start_ns = time.perf_counter_ns()
+            acct = account
+            if acct is None and hasattr(self.api, "stock_account"):
+                acct = self.api.stock_account
+            if acct is not None:
+                result = self.api.list_profit_loss(acct, begin_date=begin_date, end_date=end_date)
+            else:
+                result = self.api.list_profit_loss(begin_date=begin_date, end_date=end_date)
+            self._record_api_latency("profit_loss", start_ns, ok=True)
+            self._cache_set(cache_key, self._profit_cache_ttl_s, result)
+            return result
+        except Exception as exc:
+            self._record_api_latency("profit_loss", start_ns, ok=False)
+            logger.warning("Failed to fetch profit/loss", error=str(exc))
+            return cached or []

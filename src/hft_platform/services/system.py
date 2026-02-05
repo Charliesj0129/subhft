@@ -31,6 +31,8 @@ class HFTSystem:
         self.position_store = self.registry.position_store
         self.order_id_map = self.registry.order_id_map
         self.storm_guard = self.registry.storm_guard
+        self.md_client = self.registry.md_client
+        self.order_client = self.registry.order_client
         self.client = self.registry.client
         self.symbol_metadata = self.registry.symbol_metadata
         self.price_scale_provider = self.registry.price_scale_provider
@@ -58,7 +60,7 @@ class HFTSystem:
         logger.info("System Starting...")
 
         # Hooks for Shioaji
-        self.client.set_execution_callbacks(
+        self.order_client.set_execution_callbacks(
             on_order=lambda state, payload: self._on_exec("order", {"state": state, "payload": payload}),
             on_deal=lambda payload: self._on_exec("deal", {"payload": payload}),
         )
@@ -108,7 +110,7 @@ class HFTSystem:
             last_tick = now_tick
 
             # A. Update StormGuard
-            # usages = self.client.get_usage() # API Call
+            # usages = self.md_client.get_usage() # API Call
             # For prototype, we mock latency/drawdown inputs or read from metrics
             # Assuming LatencyMonitor writes to metrics, we skip reading them back here for now.
             # We assume StormGuard is updated via events or direct calls.

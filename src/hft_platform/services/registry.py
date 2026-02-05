@@ -34,6 +34,8 @@ class ServiceRegistry:
     storm_guard: StormGuard
     symbol_metadata: SymbolMetadata
     price_scale_provider: PriceScaleProvider
+    md_client: ShioajiClient
+    order_client: ShioajiClient
     client: ShioajiClient
     md_service: MarketDataService
     order_adapter: OrderAdapter

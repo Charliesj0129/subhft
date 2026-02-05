@@ -9,6 +9,7 @@ from structlog import get_logger
 from hft_platform.contracts.strategy import OrderIntent
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
+from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.strategy.registry import StrategyRegistry
@@ -37,11 +38,14 @@ class StrategyRunner:
         self._strat_executors: list[tuple[BaseStrategy, Any, Any]] = []
 
         self.metrics = MetricsRegistry.get()
+        self.latency = LatencyRecorder.get()
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.symbol_metadata))
         self._intent_seq = 0
         self._positions_cache: dict = {}
         self._positions_dirty = True
+        self._current_source_ts_ns = 0
+        self._current_trace_id = ""
 
         # Load initial
         for strat in self.registry.instantiate():
@@ -112,9 +116,23 @@ class StrategyRunner:
             self._strat_executors.append((strategy, lat_m, int_m))
 
     def _intent_factory(
-        self, strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None
+        self,
+        strategy_id,
+        symbol,
+        side,
+        price,
+        qty,
+        tif,
+        intent_type,
+        target_order_id=None,
+        source_ts_ns: int | None = None,
+        trace_id: str | None = None,
     ) -> OrderIntent:
         self._intent_seq += 1
+        if source_ts_ns is None:
+            source_ts_ns = self._current_source_ts_ns
+        if trace_id is None:
+            trace_id = self._current_trace_id
         return OrderIntent(
             intent_id=self._intent_seq,
             strategy_id=strategy_id,
@@ -126,6 +144,8 @@ class StrategyRunner:
             tif=tif,
             target_order_id=target_order_id,
             timestamp_ns=time.time_ns(),
+            source_ts_ns=int(source_ts_ns or 0),
+            trace_id=str(trace_id or ""),
         )
 
     def _scale_price(self, symbol: str, price: float) -> int:
@@ -166,6 +186,9 @@ class StrategyRunner:
         self._positions_dirty = True
 
     async def process_event(self, event: Any):
+        source_ts_ns, trace_id = self._extract_event_trace(event)
+        self._current_source_ts_ns = source_ts_ns
+        self._current_trace_id = trace_id
         # Invalidate on position delta events
         if hasattr(event, "delta_source"):
             self._positions_dirty = True
@@ -213,7 +236,34 @@ class StrategyRunner:
                 lat_m.observe(duration)
             if intents and int_m:
                 int_m.inc(len(intents))
+            if self.latency:
+                self.latency.record(
+                    "strategy",
+                    duration,
+                    trace_id=trace_id,
+                    symbol=getattr(event, "symbol", ""),
+                    strategy_id=strategy.strategy_id,
+                )
 
             if intents:
                 for intent in intents:
                     self.risk_queue.put_nowait(intent)
+
+    def _extract_event_trace(self, event: Any) -> tuple[int, str]:
+        source_ts_ns = 0
+        trace_id = ""
+        meta = getattr(event, "meta", None)
+        if meta is not None:
+            source_ts_ns = int(getattr(meta, "local_ts", 0) or getattr(meta, "source_ts", 0) or 0)
+            seq = getattr(meta, "seq", None)
+            topic = getattr(meta, "topic", "event")
+            if seq is not None:
+                trace_id = f"{topic}:{seq}"
+        elif hasattr(event, "ts"):
+            try:
+                source_ts_ns = int(getattr(event, "ts") or 0)
+            except Exception:
+                source_ts_ns = 0
+        if not source_ts_ns:
+            source_ts_ns = time.time_ns()
+        return source_ts_ns, trace_id

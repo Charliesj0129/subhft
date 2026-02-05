@@ -1,3 +1,4 @@
+import fcntl
 import glob
 import json
 import os
@@ -12,12 +13,16 @@ logger = get_logger("wal_loader")
 
 
 class WALLoaderService:
-    def __init__(self, wal_dir=".wal", archive_dir=".wal/archive", ch_host="clickhouse", ch_port=8123):
+    # Configurable poll interval (default 1s, was 5s)
+    DEFAULT_POLL_INTERVAL_S = 1.0
+
+    def __init__(self, wal_dir=".wal", archive_dir=".wal/archive", ch_host="clickhouse", ch_port=9000):
         self.wal_dir = wal_dir
         self.archive_dir = archive_dir
         self.running = False
+        self.poll_interval_s = float(os.getenv("HFT_WAL_POLL_INTERVAL_S", str(self.DEFAULT_POLL_INTERVAL_S)))
 
-        # ClickHouse Client
+        # ClickHouse Client (default to native protocol port 9000)
         self.ch_host = os.getenv("HFT_CLICKHOUSE_HOST") or os.getenv("CLICKHOUSE_HOST") or ch_host
         self.ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT") or os.getenv("CLICKHOUSE_PORT") or ch_port)
         self.ch_client = None
@@ -59,7 +64,7 @@ class WALLoaderService:
             except Exception as e:
                 logger.error("Error processing files", error=str(e))
 
-            time.sleep(5)  # Poll interval
+            time.sleep(self.poll_interval_s)
 
     def process_files(self):
         # Look for *.jsonl
@@ -110,19 +115,36 @@ class WALLoaderService:
             logger.info("Loading file", file=fname, table=target_table)
 
             rows = []
-            with open(fpath, "r") as f:
-                for line in f:
+            try:
+                with open(fpath, "r") as f:
+                    # Try to acquire shared lock (non-blocking)
                     try:
-                        rows.append(json.loads(line))
-                    except Exception:
-                        pass
+                        fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        # File is being written, skip for now
+                        logger.debug("File locked by writer, skipping", file=fname)
+                        continue
+                    try:
+                        for line in f:
+                            try:
+                                rows.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except FileNotFoundError:
+                # File was moved/deleted between glob and open
+                continue
 
             if rows:
                 self.insert_batch(target_table, rows)
 
             # Move to archive
-            shutil.move(fpath, os.path.join(self.archive_dir, fname))
-            logger.info("Archived file", file=fname)
+            try:
+                shutil.move(fpath, os.path.join(self.archive_dir, fname))
+                logger.info("Archived file", file=fname)
+            except FileNotFoundError:
+                pass  # Already moved
 
     def insert_batch(self, table: str, rows: List[Dict[str, Any]]):
         # Flatten/Normalize if needed based on Schema
@@ -142,6 +164,14 @@ class WALLoaderService:
         # Mocking the actual insert command to avoid schema mismatch crashes in this demo
         # context = self.ch_client.insert(table, rows) ...
 
+        # ClickHouse scale factor for price_scaled columns
+        PRICE_SCALE = 1_000_000
+
+        def _to_scaled(val: float | int | None) -> int:
+            if val is None:
+                return 0
+            return int(round(float(val) * PRICE_SCALE))
+
         # Let's try to do it right for market_data
         if table == "market_data":
             data = []
@@ -151,7 +181,7 @@ class WALLoaderService:
                 "type",
                 "exch_ts",
                 "ingest_ts",
-                "price",
+                "price_scaled",
                 "volume",
                 "bids_price",
                 "bids_vol",
@@ -179,6 +209,8 @@ class WALLoaderService:
                     or time.time_ns()
                 )
 
+                # Check if data is already scaled (new format) or float (legacy)
+                price_scaled = r.get("price_scaled")
                 bids_price = r.get("bids_price") or r.get("bid_price")
                 asks_price = r.get("asks_price") or r.get("ask_price")
                 bids_vol = r.get("bids_vol") or r.get("bid_vol")
@@ -188,27 +220,41 @@ class WALLoaderService:
                 raw_bids = r.get("bids")
                 raw_asks = r.get("asks")
                 if raw_bids and isinstance(raw_bids, (list, tuple)) and isinstance(raw_bids[0], (list, tuple)):
-                    bids_price = [float(p[0]) for p in raw_bids]
+                    bids_price = [_to_scaled(p[0]) for p in raw_bids]
                     bids_vol = [int(p[1]) for p in raw_bids]
                 if raw_asks and isinstance(raw_asks, (list, tuple)) and isinstance(raw_asks[0], (list, tuple)):
-                    asks_price = [float(p[0]) for p in raw_asks]
+                    asks_price = [_to_scaled(p[0]) for p in raw_asks]
                     asks_vol = [int(p[1]) for p in raw_asks]
+
+                # Convert float arrays to scaled int arrays (legacy support)
+                if bids_price and isinstance(bids_price[0], float):
+                    bids_price = [_to_scaled(p) for p in bids_price]
+                if asks_price and isinstance(asks_price[0], float):
+                    asks_price = [_to_scaled(p) for p in asks_price]
 
                 best_bid = r.get("best_bid") or (bids_price[0] if bids_price else None)
                 best_ask = r.get("best_ask") or (asks_price[0] if asks_price else None)
 
-                price = float(
-                    r.get("price")
-                    or r.get("mid_price")
-                    or ((best_bid + best_ask) / 2 if best_bid is not None and best_ask is not None else 0)
-                )
+                # Handle price: prefer price_scaled, fallback to scaling float price
+                if price_scaled is None:
+                    price_float = r.get("price") or r.get("mid_price")
+                    if price_float is None and best_bid is not None and best_ask is not None:
+                        # best_bid/ask might be scaled or float
+                        if isinstance(best_bid, int) and best_bid > 10000:
+                            price_scaled = (best_bid + best_ask) // 2
+                        else:
+                            price_scaled = _to_scaled((float(best_bid) + float(best_ask)) / 2)
+                    elif price_float is not None:
+                        price_scaled = _to_scaled(price_float)
+                    else:
+                        price_scaled = 0
 
                 # If we only have top-of-book, still store it as depth-1 arrays
                 if not bids_price and best_bid is not None:
-                    bids_price = [float(best_bid)]
+                    bids_price = [_to_scaled(best_bid) if isinstance(best_bid, float) else int(best_bid)]
                     bids_vol = [int(r.get("bid_depth") or 0)]
                 if not asks_price and best_ask is not None:
-                    asks_price = [float(best_ask)]
+                    asks_price = [_to_scaled(best_ask) if isinstance(best_ask, float) else int(best_ask)]
                     asks_vol = [int(r.get("ask_depth") or 0)]
 
                 # Ensure ingest_ts is not earlier than exchange ts to avoid negative lag
@@ -230,8 +276,8 @@ class WALLoaderService:
                     r.get("type", meta.get("topic", "")),
                     ts,
                     ingest_ts,
-                    price,
-                    float(r.get("volume", r.get("total_volume", 0)) or 0),
+                    int(price_scaled),
+                    int(r.get("volume", r.get("total_volume", 0)) or 0),
                     bids_price or [],
                     bids_vol or [],
                     asks_price or [],

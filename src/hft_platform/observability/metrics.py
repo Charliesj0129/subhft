@@ -49,6 +49,8 @@ class MetricsRegistry:
                 "shioaji_api_latency_ms",
                 "shioaji_api_errors_total",
                 "shioaji_api_jitter_ms",
+                "shioaji_api_jitter_ms_hist",
+                "pipeline_latency_ns",
                 "recorder_failures_total",
                 "recorder_batches_flushed_total",
                 "recorder_rows_flushed_total",
@@ -91,6 +93,33 @@ class MetricsRegistry:
         )
         self.shioaji_api_errors_total = Counter("shioaji_api_errors_total", "Shioaji API errors", ["op"])
         self.shioaji_api_jitter_ms = Gauge("shioaji_api_jitter_ms", "Shioaji API jitter (ms)", ["op"])
+        self.shioaji_api_jitter_ms_hist = Histogram(
+            "shioaji_api_jitter_ms_hist",
+            "Shioaji API jitter distribution (ms)",
+            ["op"],
+            buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000],
+        )
+
+        self.pipeline_latency_ns = Histogram(
+            "pipeline_latency_ns",
+            "Pipeline stage latency (ns)",
+            ["stage"],
+            buckets=[
+                1_000,
+                5_000,
+                10_000,
+                50_000,
+                100_000,
+                500_000,
+                1_000_000,
+                5_000_000,
+                10_000_000,
+                50_000_000,
+                100_000_000,
+                500_000_000,
+                1_000_000_000,
+            ],
+        )
 
         # Strategy/Risk
         self.strategy_latency_ns = Histogram(

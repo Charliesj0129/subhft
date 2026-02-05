@@ -16,10 +16,26 @@ logger = get_logger("recorder.writer")
 
 
 class DataWriter:
-    def __init__(self, ch_host="localhost", ch_port=8123, wal_dir=".wal"):
+    # Default to native protocol (port 9000) for better performance
+    # HTTP protocol (8123) is slower but more compatible
+    DEFAULT_NATIVE_PORT = 9000
+    DEFAULT_HTTP_PORT = 8123
+
+    def __init__(self, ch_host="localhost", ch_port=9000, wal_dir=".wal"):
         self.ch_client = None
         self.wal = WALWriter(wal_dir)
-        self.ch_params = {"host": ch_host, "port": ch_port, "username": "default", "password": ""}
+        # Determine protocol based on port (9000=native, 8123=HTTP)
+        use_native = ch_port == self.DEFAULT_NATIVE_PORT
+        self.ch_params = {
+            "host": ch_host,
+            "port": ch_port,
+            "username": "default",
+            "password": "",
+            "compress": True,  # Enable compression for native protocol
+        }
+        # Native protocol uses 'interface' parameter
+        if use_native:
+            self.ch_params["interface"] = "native"
         self.connected = False
         # ClickHouse is opt-in; enable by setting HFT_CLICKHOUSE_ENABLED=1
         self.ch_enabled = str(os.getenv("HFT_CLICKHOUSE_ENABLED", "")).lower() in ("1", "true", "yes", "on")
@@ -27,7 +43,14 @@ class DataWriter:
             self.ch_enabled = False
         # Allow host/port override via env
         self.ch_params["host"] = os.getenv("HFT_CLICKHOUSE_HOST", self.ch_params["host"])
-        self.ch_params["port"] = int(os.getenv("HFT_CLICKHOUSE_PORT", self.ch_params["port"]))
+        env_port = os.getenv("HFT_CLICKHOUSE_PORT")
+        if env_port:
+            self.ch_params["port"] = int(env_port)
+            # Re-check if native based on env port
+            if int(env_port) == self.DEFAULT_NATIVE_PORT:
+                self.ch_params["interface"] = "native"
+            elif "interface" in self.ch_params:
+                del self.ch_params["interface"]
 
     def connect(self):
         if not self.ch_enabled or not clickhouse_connect:

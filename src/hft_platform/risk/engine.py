@@ -6,6 +6,7 @@ from structlog import get_logger
 
 from hft_platform.contracts.strategy import OrderCommand, OrderIntent, RiskDecision
 from hft_platform.core.pricing import PriceScaleProvider
+from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.validators import MaxNotionalValidator, PriceBandValidator, StormGuardFSM
 
@@ -26,6 +27,7 @@ class RiskEngine:
         self.running = False
         self.load_config()
         self.metrics = MetricsRegistry.get()
+        self.latency = LatencyRecorder.get()
 
         # Validators
         self.validators = [
@@ -46,7 +48,17 @@ class RiskEngine:
         while self.running:
             try:
                 intent: OrderIntent = await self.intent_queue.get()
+                start_ns = time.perf_counter_ns()
                 decision = self.evaluate(intent)
+                duration = time.perf_counter_ns() - start_ns
+                if self.latency:
+                    self.latency.record(
+                        "risk",
+                        duration,
+                        trace_id=intent.trace_id,
+                        symbol=intent.symbol,
+                        strategy_id=intent.strategy_id,
+                    )
 
                 if decision.approved:
                     cmd = self.create_command(decision.intent)
@@ -86,5 +98,9 @@ class RiskEngine:
         deadline = time.time_ns() + 500_000_000
 
         return OrderCommand(
-            cmd_id=self.monotomic_cmd_id, intent=intent, deadline_ns=deadline, storm_guard_state=self.storm_guard.state
+            cmd_id=self.monotomic_cmd_id,
+            intent=intent,
+            deadline_ns=deadline,
+            storm_guard_state=self.storm_guard.state,
+            created_ns=time.time_ns(),
         )
