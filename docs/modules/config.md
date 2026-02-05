@@ -34,8 +34,8 @@ Configuration loading and environment/runtime overrides.
 - See `docs/config_reference.md` for the full reference.
 
 ## Symbols Shortcuts
-- `make symbols` (build from `config/symbols.list`)
-- `python -m hft_platform config preview`
-- `python -m hft_platform config validate`
-- `make sync-symbols` (refresh contract cache + rebuild)
-- `python -m hft_platform wizard` (preset/manual/file import)
+- `hft config build --list config/symbols.list --output config/symbols.yaml`
+- `hft config preview`
+- `hft config validate`
+- `hft config sync --list config/symbols.list --output config/symbols.yaml`
+- `hft wizard` (preset/manual/file import)

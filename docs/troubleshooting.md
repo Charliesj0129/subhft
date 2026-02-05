@@ -1,61 +1,110 @@
 # Troubleshooting
 
-常見問題與排查方向。
+常見問題與排查方向（依實際程式行為整理）。
 
-## 1. run live 時自動降級 sim
-**原因**：未設定 `SHIOAJI_API_KEY/SHIOAJI_SECRET_KEY`。
+---
+
+## 1) run live 時自動降級 sim
+**原因**：缺 `SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY`。
 
 **解法**
 ```bash
 export SHIOAJI_API_KEY=...
 export SHIOAJI_SECRET_KEY=...
+export HFT_MODE=live
 ```
 
-## 2. 無行情事件 / LOB 空白
+---
+
+## 2) 無行情 / LOB 空白
 **可能原因**
-- `config/symbols.yaml` 設定錯誤
-- 交易所沒有該標的
-- 尚未抓到 snapshot
+- `SYMBOLS_CONFIG` 指向錯誤
+- `symbols.yaml` 未生成或與 `symbols.list` 不一致
+- 交易所合約不存在 / 訂閱失敗
 
 **排查**
-- 使用 `config resolve` 驗證 exchange
-- 看 Prometheus `feed_events_total`
+```bash
+uv run hft config preview
+uv run hft config validate
 
-## 3. 價格縮放錯誤
-**症狀**：價格變成極大或極小。
+curl -s http://localhost:9090/metrics | rg feed_events_total
+```
+
+---
+
+## 3) 今天 2/3 卻看到 2/4 的資料
+**原因**：
+- 主機/容器時間或時區偏移
+- `ingest_ts` 以 `time.time_ns()` 為基準，若系統時間走快會寫入「未來」
 
 **排查**
-- 確認 `symbols.yaml` 中 `price_scale` 或 `tick_size`
-- 避免不同模組使用不同 scale
+```bash
+date
+# 容器內
+# docker exec hft-engine date
+```
 
-## 4. ClickHouse 寫入失敗
+**建議**
+- 啟用 NTP/PTP 時間同步
+- 在 ClickHouse query 中用 `toDateTime64(..., 'Asia/Taipei')` 比對
+
+---
+
+## 4) ClickHouse 寫入失敗 / WAL 堆積
 **排查**
-- 檢查 `HFT_CLICKHOUSE_HOST/PORT`
-- `docker ps` 檢查 clickhouse container
-- 日誌查看 recorder module
+```bash
+docker exec clickhouse clickhouse-client --query "SELECT count() FROM hft.market_data"
+```
 
-## 5. Prometheus metrics 無法連線
+**修復**
+- 檢查磁碟空間
+- 重啟 `wal-loader`
+- 使用 `sudo ./ops.sh replay-wal`
+
+---
+
+## 5) Metrics 無法連線
 **排查**
-- 確認 `HFT_PROM_PORT`
-- 確認主程序已啟動
-- 透過 `python -m hft_platform feed status` 快速檢查
+- `HFT_PROM_PORT` 是否一致
+- `hft-engine` 是否啟動
 
-## 6. 訂單沒有送出
+```bash
+curl -s http://localhost:9090/metrics | head
+```
+
+---
+
+## 6) 下單沒有送出
 **可能原因**
-- 風控拒絕（PriceBand/Notional）
-- Circuit Breaker 開啟
-- Rate limiter 限速
+- 風控拒單（`risk_reject_total`）
+- Circuit breaker 開啟
+- API rate limit / queue 滿
 
 **排查**
-- 觀察 log 中的 `Order Rejected by Risk`
+- 查 log
 - 檢查 `config/strategy_limits.yaml`
+- 調整 `HFT_API_*` 或 `config/order_adapter.yaml`
 
-## 7. 測試不穩定（async/timeout）
-**排查**
-- 使用 `pytest-timeout` 觀察卡住的 test
-- 透過 `-k` 單獨跑 test 做隔離
+---
 
-## 8. Backtest 無法啟動
+## 7) Latency 突增
 **排查**
-- 確保 `--data` 路徑存在
-- 使用 `backtest convert` 轉換 JSONL
+- `event_loop_lag_ms` / `queue_depth`
+- Shioaji API probe：
+  ```bash
+  uv run python scripts/latency/shioaji_api_probe.py --mode sim --iters 30
+  ```
+
+---
+
+## 8) 測試不穩定
+**排查**
+```bash
+uv run pytest -k <name> -vv
+```
+
+---
+
+更多細節：
+- `docs/runbooks.md`
+- `docs/observability_minimal.md`

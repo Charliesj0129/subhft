@@ -1,119 +1,186 @@
 # CLI Reference
 
-CLI 入口為 `python -m hft_platform`（同 `python -m hft_platform.cli`）。
+CLI 入口：
+- `hft`（由 `uv sync --dev` 安裝的 console script）
+- 或 `python -m hft_platform`（等價）
 
+建議使用：
 ```bash
-python -m hft_platform --help
+uv run hft --help
 ```
 
-## 1. run
-啟動主流程（sim/live/replay）。
+---
+
+## 1) `hft run` — 啟動主流程
 ```bash
-python -m hft_platform run sim
-python -m hft_platform run live
+hft run sim
+hft run live
+hft run replay
 ```
 
-可選參數：
+常用參數：
 - `--strategy <id>`
 - `--strategy-module <module>`
 - `--strategy-class <class>`
 - `--symbols <list>`
 
-## 2. init
-產生 `config/settings.py` + 策略樣板 + 測試樣板。
+範例：
 ```bash
-python -m hft_platform init --strategy-id my_strategy --symbol 2330
+hft run sim --strategy demo --symbols 2330 2317
 ```
 
-## 3. check
-驗證設定是否齊全；可輸出有效設定。
+行為：
+- 若缺 `SHIOAJI_API_KEY/SECRET_KEY`，`live` 會自動降級 `sim`。
+- Prometheus metrics 預設啟動於 `:9090`。
+
+---
+
+## 2) `hft init` — 生成策略骨架
 ```bash
-python -m hft_platform check
-python -m hft_platform check --export json
+hft init --strategy-id my_strategy --symbol 2330
 ```
 
-## 4. wizard
-互動式設定工具。
+產生：
+- `config/settings.py`
+- `src/hft_platform/strategies/<strategy>.py`
+- `tests/test_<strategy>.py`
+
+---
+
+## 3) `hft check` — 驗證設定
 ```bash
-python -m hft_platform wizard
+hft check
+hft check --export json
+hft check --export yaml
 ```
 
-## 5. feed status
-檢查 Prometheus 是否可連線（看 feed metrics）。
+---
+
+## 4) `hft wizard` — 互動式設定
 ```bash
-python -m hft_platform feed status --port 9090
+hft wizard
 ```
 
-## 6. diag
-快速診斷。
+---
+
+## 5) `hft feed status` — Feed / Metrics 檢查
 ```bash
-python -m hft_platform diag
+hft feed status --port 9090
 ```
 
-## 7. strat test
-策略 smoke test（不連行情）。
+---
+
+## 6) `hft diag` — 快速診斷
 ```bash
-python -m hft_platform strat test --symbol 2330
+hft diag
 ```
 
-## 8. backtest convert
-將 JSONL 正規化事件轉成 hftbacktest npz。
+---
+
+## 7) `hft strat test` — 策略 smoke test
 ```bash
-python -m hft_platform backtest convert \
-  --input events.jsonl \
-  --output data.npz \
+hft strat test --symbol 2330
+hft strat test --strategy-id demo --module hft_platform.strategies.simple_mm --cls SimpleMarketMaker
+```
+
+---
+
+## 8) `hft backtest convert` — JSONL → NPZ
+```bash
+hft backtest convert \
+  --input data/events.jsonl \
+  --output data/events.npz \
   --scale 10000
 ```
 
-## 9. backtest run
+---
+
+## 9) `hft backtest run` — 內建 HftBacktest
 ```bash
-python -m hft_platform backtest run \
-  --data data/sample_feed.npz \
+hft backtest run \
+  --data data/events.npz \
   --symbol 2330 \
   --report
 ```
 
-策略模式（Strategy Adapter）：
+策略模式：
 ```bash
-python -m hft_platform backtest run \
-  --data data/sample_feed.npz \
+hft backtest run \
+  --data data/events.npz \
   --strategy-module hft_platform.strategies.simple_mm \
   --strategy-class SimpleMarketMaker \
   --strategy-id demo \
   --symbol 2330
 ```
 
-## 10. config resolve
-查詢股票代碼的交易所 (TSE/OTC)。
+---
+
+## 10) `hft config resolve` — 解析交易所代碼
 ```bash
-python -m hft_platform config resolve 2330 2317 --output config/symbols.yaml
+hft config resolve 2330 2317 --output config/symbols.yaml
 ```
 
-## 11. config build
-從 `symbols.list` 產生 `symbols.yaml`。
+> 需要 `SHIOAJI_API_KEY/SECRET_KEY`，會用 Simulation mode 登入。
+
+---
+
+## 11) `hft config build` — 生成 symbols.yaml
 ```bash
-python -m hft_platform config build --list config/symbols.list --output config/symbols.yaml
-python -m hft_platform config build --metrics config/metrics.json
+hft config build \
+  --list config/symbols.list \
+  --output config/symbols.yaml
 ```
 
-## 12. config preview
-預覽展開後的 symbols 數量與前幾筆。
+選項：
+- `--contracts` 指定合約快取
+- `--metrics` 指定 metrics cache
+- `--no-contracts` 跳過合約快取
+- `--preview` 預覽
+
+---
+
+## 12) `hft config preview` — 預覽展開結果
 ```bash
-python -m hft_platform config preview
-python -m hft_platform config preview --metrics config/metrics.json
+hft config preview --sample 10
 ```
 
-## 13. config validate
-檢查 exchange/tick_size/price_scale、重複代碼、是否可訂閱。
+---
+
+## 13) `hft config validate` — 驗證配置
 ```bash
-python -m hft_platform config validate
-python -m hft_platform config validate --online
-python -m hft_platform config validate --metrics config/metrics.json
+hft config validate
+hft config validate --online
 ```
 
-## 14. config sync
-從券商 API 拉合約快取，並重建 `symbols.yaml`。
+---
+
+## 14) `hft config sync` — 下載合約 + 重建
 ```bash
-python -m hft_platform config sync
-python -m hft_platform config sync --metrics config/metrics.json
+hft config sync --list config/symbols.list --output config/symbols.yaml
+```
+
+---
+
+## 常見使用流程
+
+### A. 模擬啟動
+```bash
+uv sync --dev
+cp .env.example .env
+hft config build --list config/symbols.list --output config/symbols.yaml
+hft run sim
+```
+
+### B. Live 啟動
+```bash
+export SHIOAJI_API_KEY=...
+export SHIOAJI_SECRET_KEY=...
+export HFT_MODE=live
+hft run live
+```
+
+### C. 生成策略與測試
+```bash
+hft init --strategy-id my_strategy --symbol 2330
+hft strat test --symbol 2330
 ```

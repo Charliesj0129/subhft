@@ -1,54 +1,74 @@
 # Project Layout
 
-This repo follows a `src/` layout and keeps runtime artifacts out of version control.
-Use this map to find where to add new code and where to look when debugging.
+This repo follows a `src/` layout. This map reflects the *actual* tree in this project.
 
 ## Top-Level Map
 
 ```
-src/hft_platform/       Core Python package (services, strategy, risk, execution, recorder)
-config/                 Config files (base defaults + env overrides)
-.env.example            Environment variable template
-docs/                   Documentation (start at docs/README.md)
-tests/                  Unit/integration/system tests
-examples/               Example strategies and scripts
-notebooks/              Research notebooks and walkthroughs
-research/               Research prototypes and experiment outputs
-scripts/                Local utilities and helpers
-ops/                    Deployment and ops scripts
-bin/                    Runtime scripts (startup, autostart)
-rust_core/              Rust components (performance-critical pieces)
-hftbacktest/            Backtest integration and docs
+.agent/                Agent rules and prompts
+.claude/               Claude/Codex configs
+.github/               CI workflows
+.benchmarks/           pytest-benchmark data
+AGENTS.md / CLAUDE.md  Agent/assistant policies
+README.md              Entry README
+config/                Config files (base + env overlays)
+docs/                  Documentation
+scripts/               Utility scripts (latency, sim, diagnostics)
+src/                   Main package: hft_platform/
+rust_core/             Rust extension (PyO3)
+rust/                  Rust strategy crate
+tests/                 Unit / integration / benchmark
+specs/                 Architecture specs
+reports/               Generated reports (latency, profiling)
+data/                  Local data (ClickHouse, artifacts)
+.wal/                  WAL (jsonl)
+ops.sh                 Ops / tuning script
 ```
 
-**Separation**
-- `research/` is experimental and not production-ready.
-- `src/` and `rust_core/` are production code paths.
+---
 
-## Config Layout
+## `src/hft_platform/` (Runtime)
 
-- `config/base/` holds default templates tracked in git.
-- `config/env/<mode>/` holds environment-specific overrides (sim/live).
-- `config/env/<env>/` holds environment overlays (dev/staging/prod via `HFT_ENV`).
-- `config/settings.json` / `config/settings.py` are optional local overrides.
-- `config/symbols.list` is the single source for `config/symbols.yaml`.
-- `config/symbols.examples/` contains preset packs and demo lists.
-- `config/contracts.json` caches broker contracts for rule expansion.
+- `cli.py`: CLI entry
+- `main.py`: HFTSystem runtime
+- `feed_adapter/`: shioaji + normalizer + lob
+- `engine/`: event bus
+- `strategy/` + `strategies/`: strategy SDK + implementations
+- `risk/`: risk validators + fast gate
+- `order/`: adapter + rate limiter + circuit breaker
+- `execution/`: router + positions
+- `recorder/`: WAL + ClickHouse
+- `observability/`: metrics
+- `ipc/`: shared memory ring buffer
+- `contracts/`, `events.py`, `core/`, `utils/`
+
+---
+
+## Config Layout (`config/`)
+
+- `config/base/`: defaults tracked in git
+- `config/env/<mode>/`: sim/live overrides
+- `config/env/<env>/`: dev/staging/prod overlay via `HFT_ENV`
+- `config/symbols.list`: source of symbol universe
+- `config/symbols.yaml`: generated
+- `config/contracts.json`: broker contracts cache
+
+---
 
 ## Extension Points
 
-- New strategy implementations: `src/hft_platform/strategies/`
-- Strategy SDK changes: `src/hft_platform/strategy/`
-- New alpha factors: `src/hft_platform/strategy/factors.py` or `src/hft_platform/features/`
-- New services: `src/hft_platform/services/`
-- New risk checks: `src/hft_platform/risk/`
-- New recorder targets: `src/hft_platform/recorder/`
+- New strategies: `src/hft_platform/strategies/`
+- Strategy SDK: `src/hft_platform/strategy/`
+- New risk rules: `src/hft_platform/risk/`
+- New recorder sinks: `src/hft_platform/recorder/`
 - New CLI commands: `src/hft_platform/cli.py`
+- Hot path Rust: `rust_core/`
+
+---
 
 ## Generated / Local Artifacts (safe to ignore)
 
-- Virtualenv and caches: `.venv/`, `.mypy_cache/`, `.hypothesis/`, `.pytest_cache/`, `.ruff_cache/`
-- Local env file: `.env` (do not commit)
-- Runtime output: `logs/`, `.wal/`, `data/`, `reports/`
-- Artifacts/outputs: `artifacts/`, `outputs/` (recommended)
-- Build output: `target/`, `dist/`, `build/`
+- `.venv/`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`
+- `.env` (local secrets)
+- `.wal/`, `data/`, `reports/`
+- `target/`, `dist/`, `build/`

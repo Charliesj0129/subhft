@@ -1,48 +1,53 @@
-# HFT Low-Latency Deployment Runbook (Azure VM)
+# HFT Low-Latency Deployment Runbook
 
-This complements `docs/azure_deployment.md` and adds HFT-oriented steps.
+本文件針對低延遲環境的 host tuning 與部署實務。
 
-## 1) VM & Storage
-- VM SKU: use Compute/Storage optimized (e.g., `F4s_v2` for research, `Ls_v3`/`Ds_v5` for live). Enable **Accelerated Networking** and put in a **PPG**.
-- OS disk 64GB+; mount a Premium/Ultra data disk for ClickHouse/WAL (e.g., `/mnt/data/clickhouse`). Do **not** store data on the OS disk.
+---
 
-## 2) Host tuning (run as root)
+## 1) Host Tuning
 ```bash
-sudo bash ops/host_tuning.sh
+sudo ./ops.sh tune
+sudo ./ops.sh hugepages
 ```
-Then edit `/etc/default/grub` with the suggested kernel flags and `update-grub && reboot`.
 
-## 3) Container layout (host network + pinning)
-- Use the low-latency override:
+可選：CPU 隔離（soft realtime）
 ```bash
-CH_DATA_HOT="/mnt/data/clickhouse/hot" \
-CH_DATA_COLD="/mnt/data/clickhouse/cold" \
-docker compose --project-directory . up -d
+sudo ./ops.sh isolate "python -m hft_platform.main"
 ```
-- Data path override uses ClickHouse hot/cold mounts under `/mnt/data/clickhouse`.
 
-## 4) Data pipeline hygiene
-- WAL loader clamps `ingest_ts >= exch_ts` and warns on missing book sides. To backfill historical WAL:
+---
+
+## 2) ClickHouse Data Path
+
+建議 ClickHouse/WAL 放在獨立資料盤：
 ```bash
-docker compose stop wal-loader
-mv .wal/archive/*.jsonl .wal/
-docker compose start wal-loader
+export HFT_CH_DATA_ROOT=/mnt/data/clickhouse
+sudo ./ops.sh setup
 ```
-- 清理本機舊備份：確認雲端/遠端已備份後，刪除不再需要的 `backups/` 部分檔案以釋出空間。
 
-## 5) Monitoring quick checks
-- ClickHouse lag window:
+---
+
+## 3) Docker Compose (Host)
+```bash
+docker compose up -d --build
+```
+
+---
+
+## 4) 快速檢查
 ```bash
 docker exec clickhouse clickhouse-client --query \
   "SELECT count(), min(toDateTime64(exch_ts/1e9,3)), max(toDateTime64(exch_ts/1e9,3)) FROM hft.market_data"
 ```
-- Per-symbol coverage:
-```bash
-docker exec clickhouse clickhouse-client --query \
-  "SELECT symbol, count(), min(toDateTime64(exch_ts/1e9,3)), max(toDateTime64(exch_ts/1e9,3)) \
-   FROM hft.market_data GROUP BY symbol ORDER BY count() DESC"
-```
 
-## 6) CI/CD alignment
-- Build/push images to GHCR; deploy via `docker compose pull && docker compose up -d` with the low-latency override.
-- Retire the SSH+pips+nohup path in `.github/workflows/deploy.yml` once images are available.
+---
+
+## 5) 時間同步
+- 建議 NTP / PTP
+- 時間漂移會影響 `ingest_ts` 與 latency 分佈
+
+---
+
+## 6) 版本更新
+- 建議用 immutable image
+- 更新：`docker compose pull && docker compose up -d`
