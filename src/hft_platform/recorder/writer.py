@@ -69,7 +69,7 @@ class DataWriter:
     def _compute_backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay with jitter to avoid thundering herd."""
         # Exponential: base_delay * 2^attempt, capped at max_backoff
-        delay = min(self._base_delay_s * (2 ** attempt), self._max_backoff_s)
+        delay = min(self._base_delay_s * (2**attempt), self._max_backoff_s)
         # Add jitter: delay * (1 +/- jitter_factor * random)
         jitter = delay * self._jitter_factor * (random.random() * 2 - 1)
         return max(0.1, delay + jitter)  # Minimum 100ms

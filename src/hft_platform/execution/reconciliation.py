@@ -145,9 +145,7 @@ class ReconciliationService:
     async def _trigger_halt(self, critical_discrepancies: List[PositionDiscrepancy]) -> None:
         """Trigger StormGuard HALT due to reconciliation mismatch."""
         symbols = [d.symbol for d in critical_discrepancies]
-        reason = (
-            f"RECONCILIATION_MISMATCH: {len(critical_discrepancies)} critical discrepancies ({symbols[:3]})"
-        )
+        reason = f"RECONCILIATION_MISMATCH: {len(critical_discrepancies)} critical discrepancies ({symbols[:3]})"
 
         logger.critical(
             "Triggering HALT due to reconciliation mismatch",
