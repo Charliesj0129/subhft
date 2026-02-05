@@ -514,9 +514,7 @@ class MarketDataNormalizer:
                 else:
                     delta = local_ts - exch_ts
                     if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
-                        if _TS_SKEW_LOG_COOLDOWN_NS and (
-                            local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
-                        ):
+                        if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
                             logger.warning(
                                 "Feed time skew",
                                 topic="tick",
@@ -823,9 +821,7 @@ class MarketDataNormalizer:
                 else:
                     delta = local_ts - exch_ts
                     if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
-                        if _TS_SKEW_LOG_COOLDOWN_NS and (
-                            local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
-                        ):
+                        if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
                             logger.warning(
                                 "Feed time skew",
                                 topic="bidask",
@@ -899,9 +895,7 @@ class MarketDataNormalizer:
                 else:
                     delta = local_ts - exch_ts
                     if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
-                        if _TS_SKEW_LOG_COOLDOWN_NS and (
-                            local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
-                        ):
+                        if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
                             logger.warning(
                                 "Feed time skew",
                                 topic="snapshot",
