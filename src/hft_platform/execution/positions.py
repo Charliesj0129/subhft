@@ -35,79 +35,110 @@ if _RUST_POSITIONS:
 
 @dataclass
 class Position:
+    """Position state using integer fixed-point arithmetic (no float for financial calc).
+
+    All price/pnl/fee values are stored as scaled integers to comply with Precision Law.
+    Use descaled_* properties for display purposes only.
+    """
+
     account_id: str
     strategy_id: str
     symbol: str
 
     net_qty: int = 0
-    avg_price: float = 0.0  # Using float for internal calc, but might want fixed-point
+    avg_price_scaled: int = 0  # Fixed-point integer (scaled by price scale)
 
-    realized_pnl: float = 0.0
-    fees: float = 0.0
+    realized_pnl_scaled: int = 0  # Fixed-point integer
+    fees_scaled: int = 0  # Fixed-point integer
 
     last_update_ts: int = 0
 
-    def update(self, fill: FillEvent, scale: float = 1.0):
-        # Weighted Average Price logic
-        # If open position increases: update avg_price
-        # If position closes/reduces: realize PnL
+    # Properties for backward compatibility and display (descaled to human-readable)
+    @property
+    def avg_price(self) -> int:
+        """Return scaled avg_price for internal use (backward compat)."""
+        return self.avg_price_scaled
 
+    @property
+    def realized_pnl(self) -> int:
+        """Return scaled realized_pnl for internal use (backward compat)."""
+        return self.realized_pnl_scaled
+
+    @property
+    def fees(self) -> int:
+        """Return scaled fees for internal use (backward compat)."""
+        return self.fees_scaled
+
+    def descaled_avg_price(self, scale: int) -> float:
+        """Descale avg_price for display purposes only."""
+        return self.avg_price_scaled / scale if scale else 0.0
+
+    def descaled_realized_pnl(self, scale: int) -> float:
+        """Descale realized_pnl for display purposes only."""
+        return self.realized_pnl_scaled / scale if scale else 0.0
+
+    def descaled_fees(self, scale: int) -> float:
+        """Descale fees for display purposes only."""
+        return self.fees_scaled / scale if scale else 0.0
+
+    def update(self, fill: FillEvent, scale: int = 1) -> None:
+        """Update position with fill using integer-only arithmetic.
+
+        Args:
+            fill: The fill event with price already in scaled integer form.
+            scale: Price scale factor (kept for API compat, but fill.price is already scaled).
+        """
+        # fill.price is already in fixed-point scaled integer
         fill_qty = fill.qty
-        fill_price = float(fill.price) / scale
+        fill_price_scaled = fill.price  # Already scaled integer from FillEvent
 
         is_buy = fill.side == Side.BUY
         signed_fill_qty = fill_qty if is_buy else -fill_qty
 
-        # Check if closing
-        # Closing if signs are different
+        # Accumulate fees (already scaled)
+        self.fees_scaled += fill.fee + fill.tax
+
+        # Check if closing: signs are different
         current_sign = 1 if self.net_qty > 0 else -1 if self.net_qty < 0 else 0
         fill_sign = 1 if is_buy else -1
 
-        closing = False
-        if current_sign != 0 and fill_sign != current_sign:
-            closing = True
+        closing = current_sign != 0 and fill_sign != current_sign
 
         if closing:
-            # We are closing some amount
-            # qty to close is min(abs(net), abs(signed_fill))
-            close_qty = min(abs(self.net_qty), abs(signed_fill_qty))
+            # qty to close is min(abs(net), abs(fill_qty))
+            close_qty = min(abs(self.net_qty), fill_qty)
 
-            # PnL = (Exit Price - Entry Price) * Qty * Sign
-            # If LONG, Sell at X. PnL = (X - Avg) * Qty
-            # If SHORT, Buy at X. PnL = (Avg - X) * Qty = (Exit - Entry) * Qty * (-1)? No.
-            # Realized PnL generic: (SellPrice - BuyPrice) * Qty
-
-            pnl = 0.0
+            # PnL calculation using integer arithmetic
+            # PnL = (Exit Price - Entry Price) * Qty for LONG
+            # PnL = (Entry Price - Exit Price) * Qty for SHORT
             if is_buy:  # Covering a SHORT
-                # Entry was avg_price, Exit is fill_price. We are BUYING to close.
-                # PnL = (Entry - Exit) * Qty
-                pnl = (self.avg_price - fill_price) * close_qty
+                pnl = (self.avg_price_scaled - fill_price_scaled) * close_qty
             else:  # Selling a LONG
-                # Entry was avg_price, Exit is fill_price.
-                # PnL = (Exit - Entry) * Qty
-                pnl = (fill_price - self.avg_price) * close_qty
+                pnl = (fill_price_scaled - self.avg_price_scaled) * close_qty
 
-            self.realized_pnl += pnl
+            self.realized_pnl_scaled += pnl
 
             # Update Net Qty
             self.net_qty += signed_fill_qty
 
-            # If we flipped position side (e.g. Long 10, Sell 20 -> Short 10)
-            # The remaining 10 starts new avg price
+            # If we flipped position side, remaining qty starts new avg price
             if (current_sign > 0 and self.net_qty < 0) or (current_sign < 0 and self.net_qty > 0):
-                self.avg_price = fill_price
+                self.avg_price_scaled = fill_price_scaled
 
         else:
             # Increasing position or flat -> open
-            # New Avg = (OldNet*OldAvg + FillQty*FillPrice) / NewNet
+            # Weighted avg: (OldNet * OldAvg + FillQty * FillPrice) / NewNet
+            # Integer division (truncation is acceptable for HFT)
 
             if self.net_qty == 0:
-                self.avg_price = fill_price
+                self.avg_price_scaled = fill_price_scaled
                 self.net_qty += signed_fill_qty
             else:
-                total_val = (self.net_qty * self.avg_price) + (signed_fill_qty * fill_price)
+                # Integer arithmetic: multiply first, divide last
+                total_val = (self.net_qty * self.avg_price_scaled) + (signed_fill_qty * fill_price_scaled)
                 self.net_qty += signed_fill_qty
-                self.avg_price = total_val / self.net_qty
+                if self.net_qty != 0:
+                    self.avg_price_scaled = total_val // self.net_qty
 
         self.last_update_ts = fill.match_ts_ns
 
@@ -142,15 +173,15 @@ class PositionStore:
         )
 
         # Keep Python-visible cache in sync for tests/debugging/metrics parity.
+        # All values stored as scaled integers (no float conversion).
         pos = self.positions.get(key)
         if pos is None:
             pos = Position(fill.account_id, fill.strategy_id, fill.symbol)
             self.positions[key] = pos
-        scale = self.price_codec.scale_factor(fill.symbol)
         pos.net_qty = int(net_qty)
-        pos.avg_price = float(avg_price_scaled) / scale if scale else 0.0
-        pos.realized_pnl = float(realized_pnl_scaled) / scale if scale else 0.0
-        pos.fees = float(fees_scaled) / scale if scale else 0.0
+        pos.avg_price_scaled = int(avg_price_scaled)
+        pos.realized_pnl_scaled = int(realized_pnl_scaled)
+        pos.fees_scaled = int(fees_scaled)
         pos.last_update_ts = fill.match_ts_ns
 
         if self._log_fills:
@@ -183,23 +214,25 @@ class PositionStore:
             self.positions[key] = Position(fill.account_id, fill.strategy_id, fill.symbol)
 
         pos = self.positions[key]
-        scale = self.price_codec.scale_factor(fill.symbol)
-        pos.update(fill, scale=scale)
+        # Pass scale for API compat, but Position.update() uses fill.price directly (already scaled)
+        pos.update(fill)
         if self._log_fills:
-            logger.info("Fill processed", key=key, net_qty=pos.net_qty, pnl=pos.realized_pnl)
+            logger.info("Fill processed", key=key, net_qty=pos.net_qty, pnl=pos.realized_pnl_scaled)
 
-        # Emit delta / Update PnL Gauge
+        # Emit delta / Update PnL Gauge (all values are already scaled integers)
         if self.metrics:
-            self.metrics.position_pnl_realized.labels(strategy=pos.strategy_id, symbol=pos.symbol).set(pos.realized_pnl)
+            self.metrics.position_pnl_realized.labels(strategy=pos.strategy_id, symbol=pos.symbol).set(
+                pos.realized_pnl_scaled
+            )
 
-        # Emit delta (Re-scale avg_price to Fixed Point for consistency)
+        # Emit delta (all values are already in scaled fixed-point form)
         return PositionDelta(
             account_id=pos.account_id,
             strategy_id=pos.strategy_id,
             symbol=pos.symbol,
             net_qty=pos.net_qty,
-            avg_price=self.price_codec.scale(fill.symbol, pos.avg_price),
-            realized_pnl=self.price_codec.scale(fill.symbol, pos.realized_pnl),  # Re-scale PnL to system scale
+            avg_price=pos.avg_price_scaled,
+            realized_pnl=pos.realized_pnl_scaled,
             unrealized_pnl=0,
             delta_source="FILL",
         )

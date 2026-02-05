@@ -1,111 +1,80 @@
 # HFT Platform
 
-High-Performance Event-Driven Trading Platform with Shioaji integration and HftBacktest support.
+High-performance event-driven trading platform with Shioaji integration, ClickHouse recorder, and HftBacktest support.
 
-**What**: Event-driven HFT platform with market data, risk, execution, and recording services.
-**How**: Use `uv` for dependency management and `make` for common workflows; configure credentials via `.env`.
-**Status**: Alpha (active refactor + test coverage expansion).
-
-## ⚡ 3-Line Quick Start
+## Quick Start (Sim, Local)
 ```bash
-git clone <repo> && cd hft_platform
-make start
-open http://localhost:9090/metrics
+# 1) Install deps
+uv sync --dev
+
+# 2) Create env file
+cp .env.example .env
+
+# 3) Build symbols.yaml from symbols.list
+uv run hft config build --list config/symbols.list --output config/symbols.yaml
+
+# 4) Run in simulation mode
+uv run hft run sim
+
+# 5) Verify metrics
+# http://localhost:9090/metrics
 ```
-*(Use `xdg-open` on Linux or open the URL in your browser.)*
 
-## 🚀 Quick Start ( < 30 Minutes )
+> Tip: If the `hft` command is not on PATH, use `uv run hft ...` or `python -m hft_platform ...`.
 
-### Prerequisites
-*   Python 3.10+
-*   uv (recommended)
-*   Make (optional)
-*   Docker (optional, for ops)
-
-### 1. One-Command Start (Docker)
-Build the image, start ClickHouse, and run the engine with one command.
+## Full Stack (Docker Compose)
 ```bash
-make start
-```
-*(This command runs: `uv sync --dev`, copies `.env.example` if missing, builds `config/symbols.yaml`, then `docker compose up -d --build`.)*
+docker compose up -d --build
 
-Optional: install git hooks for Ruff auto-fixes:
+docker compose logs -f hft-engine
+```
+
+- Prometheus: http://localhost:9091
+- Grafana: http://localhost:3000 (admin / admin by default)
+- Alertmanager: http://localhost:9093
+
+## Live Trading (Explicit Only)
 ```bash
-make hooks
-```
+export SHIOAJI_API_KEY=... 
+export SHIOAJI_SECRET_KEY=...
+export HFT_MODE=live
 
-### 2. Local Simulation (No Docker)
-Start the platform with mock data (no credentials required).
+# Optional CA (for order signing)
+export SHIOAJI_PERSON_ID=...
+export SHIOAJI_CA_PATH=/path/to/Sinopac.pfx
+export SHIOAJI_CA_PASSWORD=...
+
+uv run hft run live
+```
+If credentials are missing, the CLI auto-downgrades to `sim` and prints a warning.
+
+## Docs
+Start here:
+- `docs/README.md` (index)
+- `docs/getting_started.md` (full, step-by-step usage)
+- `docs/quickstart.md` (10-minute path)
+- `docs/cli_reference.md` / `docs/config_reference.md`
+
+## Project Map (Top Level)
+- `src/hft_platform/`: Core runtime (services, strategy, risk, execution, recorder).
+- `config/`: Config files and environment overlays.
+- `docs/`: User + ops documentation.
+- `scripts/`: Utility scripts (latency probes, pipeline validation, snapshots).
+- `rust_core/`: Rust extension module.
+- `tests/`: Unit + integration tests.
+
+## Testing
 ```bash
-make dev
-make run-sim
-```
-*   **Web Dashboard**: http://localhost:8080 (if enabled)
-*   **Metrics**: http://localhost:9090
-
-### 3. Run Strategy (Live/Mock)
-Modify `src/hft_platform/strategies/simple_mm.py` or create your own:
-```python
-from hft_platform.events import LOBStatsEvent
-from hft_platform.strategy.base import BaseStrategy
-
-class MyStrategy(BaseStrategy):
-    def on_stats(self, event: LOBStatsEvent) -> None:
-        if event.spread > 5:
-            self.buy(event.symbol, event.best_bid, 1)
+uv run ruff check --fix
+uv run pytest
 ```
 
-## 🏗 Architecture
-*   **Services**: `MarketDataService`, `ExecutionService`, `SystemSupervisor`.
-*   **Events**: Typed `TickEvent`, `BidAskEvent`, `OrderEvent` (Zero-copy slots).
-*   **LOB**: Optimized (fast-path list based) with per-symbol locking.
+## Safety + HFT Laws (short)
+- No heap allocations on the hot path.
+- Structure-of-Arrays for locality.
+- No blocking I/O on the event loop.
+- Never use float for prices/balances/PnL (use scaled int or Decimal).
+- Python <-> Rust must be zero-copy.
 
-```
-Market Data -> Normalizer -> LOB -> Strategy -> Risk -> Order Adapter -> Broker
-                      \-> Recorder -> ClickHouse/WAL
-```
-
-## 🛠 Commands
-| Command | Description |
-| :--- | :--- |
-| `make dev` | Sync environment (uv + .env) |
-| `make hooks` | Install pre-commit hooks (Ruff auto-fix + format) |
-| `make test` | Run unit tests |
-| `make coverage` | Run coverage report |
-| `make symbols` | Build `config/symbols.yaml` from `config/symbols.list` |
-| `make sync-symbols` | Sync broker contracts + rebuild symbols |
-| `make run-sim` | Run platform in Simulation mode |
-| `make run-dev` | Run platform in dev overlay (sim) |
-| `make run-staging` | Run platform in staging overlay (sim) |
-| `make run-prod` | Run platform in Production mode (Requires `.env`) |
-
-## 📦 Project Map
-See `docs/project_layout.md` for the full layout. Key paths:
-*   `src/hft_platform/`: Core package (services, strategy, risk, execution, recorder).
-*   `config/`: Base configs and env overrides.
-*   `docs/`: Documentation (start at `docs/README.md`).
-*   `tests/`: Test suites and fixtures.
-*   `examples/` and `notebooks/`: Samples and research.
-*   `ops/` and `scripts/`: Deployment and tooling.
-
-## 🧪 Testing
-We enforce high test coverage.
-```bash
-make coverage
-```
-**Current Baseline**: ~71%
-**Target**: 95%
-
-## 📚 Docs
-*   `docs/README.md` — 文件入口與閱讀順序
-*   `docs/project_layout.md` — 專案結構與擴充點
-*   `docs/quickstart.md` — 快速上手
-*   `docs/getting_started.md` — 詳細上手指南
-*   `docs/feature_guide.md` — 功能手冊（各模組詳解）
-*   `docs/strategy-guide.md` — 策略開發指南
-*   `docs/config_reference.md` — 設定參考
-*   `docs/cli_reference.md` — CLI 使用說明
-*   `docs/troubleshooting.md` — 常見問題排查
-*   `docs/deployment_guide.md` — 部署指南
-*   `docs/ARCHITECTURE.md` — 系統架構
-*   `docs/modules/README.md` — 模組索引（每個模組詳細說明）
+---
+For detailed workflows (symbols, strategy, latency measurement, deployment), read `docs/getting_started.md`.

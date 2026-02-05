@@ -7,6 +7,8 @@ Command-line entry point for running the system, generating configs, and quick d
 - `src/hft_platform/cli.py`: Argument parsing and command handlers.
 - `src/hft_platform/__main__.py`: Entry point for `python -m hft_platform`.
 
+CLI entrypoint (after install): `hft`
+
 ## Commands
 - `run sim|live|replay`: Run the pipeline.
 - `init`: Generate `config/settings.py` and strategy skeleton.

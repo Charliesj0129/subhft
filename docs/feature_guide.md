@@ -177,10 +177,10 @@ python -m hft_platform backtest run \
 - `src/hft_platform/cli.py`
 
 **常用命令**
-- `make run-sim`
-- `make run-prod`
-- `make test`
-- `make coverage`
+- `uv run hft run sim`
+- `HFT_MODE=live uv run hft run live`
+- `uv run pytest`
+- `uv run pytest --cov=src/hft_platform --cov-branch`
 
 **測試標記**
 `blackbox`, `regression`, `stress`, `system`, `acceptance`（見 `pyproject.toml`）。

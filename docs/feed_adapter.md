@@ -1,95 +1,90 @@
 # Feed Adapter Guide
 
-## Overview
-The Feed Adapter connects Shioaji (Sinotrade) Websocket API to the HFT Event Bus.
-It manages:
-- **Session**: Login, Token Refresh.
-- **Resilience**: Heartbeat monitoring, Automatic Reconnection, Snapshot bootstrapping.
-- **Normalization**: Converting raw Shioaji dicts to standardized `Tick`/`BidAsk` events.
-- **Discipline**: Pinned consumer thread usage to minimize jitter.
+Feed Adapter 負責把 Shioaji 行情轉成標準事件，餵給 Event Bus / LOB。
 
-## Configuration
-Define symbols in `config/symbols.list` and generate `config/symbols.yaml`:
+---
 
+## 1) 結構
+- `feed_adapter/shioaji_client.py`：Shioaji login/subscribe/reconnect
+- `feed_adapter/normalizer.py`：raw payload → `TickEvent` / `BidAskEvent`
+- `feed_adapter/lob_engine.py`：LOB 更新 + `LOBStatsEvent`
+
+---
+
+## 2) Symbols 與訂閱
+
+唯一來源：`config/symbols.list`
 ```bash
-make symbols
+uv run hft config build --list config/symbols.list --output config/symbols.yaml
 ```
 
-```yaml
-symbols:
-  - code: "2330"
-    exchange: "TSE"
-  - code: "2317"
-    exchange: "TSE"
-```
-
-## CLI Usage
-Use the CLI to check connection status or verify config:
-
+Docker Compose 預設 `SYMBOLS_CONFIG=config/base/symbols.yaml`。如需用自建 symbols：
 ```bash
-# Check Config
-python -m hft_platform.feed_adapter.cli status --config config/symbols.yaml
-
-# Verify Login (Requires credentials in env)
-python -m hft_platform.feed_adapter.cli verify-login
+# .env
+SYMBOLS_CONFIG=config/symbols.yaml
 ```
 
-## Metrics
-The adapter exposes Prometheus metrics at `:9090/metrics`:
-- `feed_events_total`: Count of incoming ticks/quotes.
-- `feed_state`: Gauge (0=INIT, 1=CONNECTED, ...).
-- `bus_overflow_total`: Number of drops if consumer lags.
+---
 
-## Architecture
-1. **Shioaji Thread**: Callback -> `raw_queue.put()` (Thread-safe).
-2. **Consumer Task**: `raw_queue.get()` -> Normalize -> Update LOB -> Publish to Bus.
-3. **Monitor Task**: Checks `last_event_ts`. If gap > 5s -> Reconnect.
+## 3) Shioaji Simulation / Live
+- `HFT_MODE=sim` → Shioaji simulation mode
+- `HFT_MODE=live` → 真實帳務
 
-## LOB Engine (Phase 11)
-
-The **LOB Engine** (`lob_engine.py`) maintains an in-memory Limit Order Book for each symbol, bootstrapped from snapshots and updated via incremental feeds.
-
-### BookState Schema
-Each symbol has a `BookState` object containing:
-- **Ladders**: `bids`/`asks` (List of Top-5 levels: `{price, volume}`).
-- **Metadata**: `exch_ts`, `local_ts`, `version`, `degraded` (flag).
-- **Derived Features**:
-    - `mid_price`: `(best_bid + best_ask) / 2`
-    - `spread`: `best_ask - best_bid`
-    - `imbalance`: `(bid_vol - ask_vol) / (bid_vol + ask_vol)` (Top-1)
-    - `bid_depth_total` / `ask_depth_total`: Sum of volumes in top 5 levels.
-
-### Strategy Access
-Strategies consume LOB data through events:
-- `BidAskEvent` for book updates.
-- `LOBStatsEvent` for derived stats (mid/spread/imbalance).
-
-### Observability
-- `lob_updates_total`: Counter by type (BidAsk/Tick).
-- `lob_snapshots_total`: Counter for full resets.
-
-## Normalization Schema
-The normalizer converts raw payloads into consistent events.
-
-### Tick
-```json
-{
-  "type": "Tick",
-  "symbol": "2330",
-  "exch_ts": 1678888888000000,
-  "local_ts": 1678888888000500,
-  "price": 5000000,  // 500.0 * 10000
-  "volume": 15
-}
+CA 啟用：
+```bash
+export SHIOAJI_PERSON_ID=...
+export SHIOAJI_CA_PATH=/path/to/Sinopac.pfx
+export SHIOAJI_CA_PASSWORD=...
+export SHIOAJI_ACTIVATE_CA=1
 ```
 
-### BidAsk / Snapshot
-```json
-{
-  "type": "BidAsk", // or Snapshot
-  "symbol": "2330",
-  "bids": [{"price": 4995000, "volume": 10}, ...],
-  "asks": [{"price": 5000000, "volume": 5}, ...]
-}
-```
-All prices are scaled by `10000`.
+---
+
+## 4) Reconnect / Resubscribe
+常用環境變數：
+- `HFT_RESUBSCRIBE_COOLDOWN`
+- `HFT_MD_RECONNECT_GAP_S`
+- `HFT_MD_FORCE_RECONNECT_GAP_S`
+- `HFT_MD_RECONNECT_COOLDOWN_S`
+- `HFT_RECONNECT_DAYS` / `HFT_RECONNECT_HOURS`
+
+---
+
+## 5) Metrics
+- `feed_events_total`
+- `feed_latency_ns`
+- `feed_interarrival_ns`
+- `feed_last_event_ts`
+- `normalization_errors_total`
+- `lob_updates_total`
+
+---
+
+## 6) LOB Engine
+
+- Rust fast path: `HFT_RUST_ACCEL=1`（default）
+- 強制 numpy path: `HFT_LOB_FORCE_NUMPY=1`
+- 鎖與一致性：`HFT_LOB_LOCKS=1`, `HFT_LOB_READ_LOCKS=1`
+
+`LOBStatsEvent` 包含：
+- mid_price / spread / imbalance
+- best_bid / best_ask
+- bid_depth / ask_depth
+
+---
+
+## 7) 資料格式
+
+### TickEvent
+- price 是整數（scaled）
+- exchange ts + local ts
+
+### BidAskEvent
+- bids/asks 為 numpy array（shape = [N, 2]）
+
+---
+
+## 8) 常見問題
+- 看不到行情：確認 `SYMBOLS_CONFIG` 指向正確 `symbols.yaml`
+- 跨週斷線：檢查 `HFT_RECONNECT_*` 與主機時間
+

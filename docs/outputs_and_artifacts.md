@@ -1,18 +1,21 @@
 # Outputs and Artifacts
 
-Use consistent locations to keep experiments and deployments reproducible.
+本專案產生的檔案會集中於以下資料夾：
 
-## Directories
-- `outputs/`: transient run outputs (plots, snapshots, adhoc exports).
-- `artifacts/`: durable baselines (benchmarks, golden datasets, calibration outputs).
-- `reports/`: human-readable reports (HTML/PDF/Markdown).
+## 主要目錄
+- `.wal/`：WAL（raw jsonl），recorder 來源
+- `data/`：ClickHouse 或外部資料
+- `reports/`：latency report、py-spy SVG、CSV
+- `results/`：實驗結果或分析輸出
+- `research/`：研究腳本與暫存
+- `.benchmarks/`：pytest-benchmark 產物
 
-## Rules
-- Do not commit secrets in outputs or artifacts.
-- Store a config snapshot or metadata next to each artifact (e.g., `metadata.json` with git commit and params).
-- Use date-stamped subfolders: `YYYYMMDD/<task>/...`.
+## 常見產物
+- Shioaji API latency：`reports/shioaji_api_latency.json` / `.csv`
+- E2E latency：`reports/e2e_latency.summary.json`
+- Heatmap：`reports/*.heatmap.csv`
 
-## Cleanup
-- Keep only the latest 3 runs in `outputs/`.
-- Keep only approved baselines in `artifacts/`.
-- Use `make clean` for build artifacts.
+## 建議規範
+- 不要提交含憑證的檔案
+- 每次量測/實驗建議附 `metadata.json`（commit hash + params）
+- 使用日期或任務名稱分資料夾（例如 `reports/20260203/`）

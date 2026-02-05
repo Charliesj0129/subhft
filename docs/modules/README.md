@@ -13,6 +13,7 @@ This directory contains per-module documentation for the code under `src/hft_pla
 - `docs/modules/execution.md` - Execution normalization and positions
 - `docs/modules/features.md` - Feature library and indicators
 - `docs/modules/feed_adapter.md` - Feed adapters and normalizers
+- `docs/modules/ipc.md` - Shared memory / ring buffer utilities
 - `docs/modules/main.md` - Application entrypoint
 - `docs/modules/observability.md` - Metrics and logging
 - `docs/modules/order.md` - Order adapter and routing

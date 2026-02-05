@@ -1,68 +1,105 @@
 # HFT Platform Architecture
 
-## System Overview
-The HFT Platform is an event-driven, low-latency trading system designed for the Taiwan Stock Exchange (TSE/OTC). It emphasizes modularity, type safety, and observability.
+This document describes the *current* architecture and runtime flow.
 
-## 1. Core Components
+---
 
-### 1.1 Feed Adapter (`feed_adapter/`)
-*   **Role**: Connectivity to Exchange (Shioaji).
-*   **Responsibility**:
-    *   Subscribe to Quotes/Ticks.
-    *   Normalize raw API data into internal `MarketEvent` structures.
-    *   Publish events to the `EventBus`.
+## 1) System Overview
 
-### 1.2 LOB Engine (`feed_adapter/lob_engine.py`)
-*   **Role**: State Management.
-*   **Responsibility**:
-    *   Reconstruct Limit Order Book (LOB) from incremental updates.
-    *   Compute L1 Features (Mid, Spread, Imbalance).
-    *   **Future**: Rust acceleration (PyO3).
+HFT Platform is an event‑driven pipeline:
 
-### 1.3 Strategy Engine (`strategy/`, `strategies/`)
-*   **Role**: Decision Making.
-*   **Responsibility**:
-    *   `BaseStrategy`: SDK providing `on_tick`, `buy`, `sell`.
-    *   `SimpleMarketMaker`: Implementation of Alpha logic (Micro-Price, Inventory Skew).
-    *   **Features**: `features/` library (OFI, Entropy, Fractal) provides signals.
-
-### 1.4 Execution & Order Management (`execution/`, `order/`)
-*   **Role**: Market Access.
-*   **Responsibility**:
-    *   `OrderAdapter`: Lifecycle management (New -> Ack -> Fill).
-    *   `RiskGuard`: Pre-trade checks (Max Position, Max Notional).
-    *   `ExectuionRunner`: Routes intents to actual API calls.
-
-### 1.5 Persistence (`recorder/`)
-*   **Role**: Data Lake.
-*   **Technologies**:
-    *   **WAL**: Write-Ahead Log for crash recovery.
-    *   **ClickHouse**: Columnar storage for tick history and analytics.
-    *   **S3**: Tiered storage for cold data (Future).
-
-## 2. Data Flow
-```mermaid
-graph LR
-    Ex[Exchange] -->|WS| FA[FeedAdapter]
-    FA -->|NormEvent| Bus[EventBus]
-    
-    Bus -->|Tick| LOB[LOB Engine]
-    LOB -->|Features| Strat[Strategy]
-    
-    Strat -->|Intent| Risk[RiskGuard]
-    Risk -->|SafeIntent| Exec[Execution]
-    Exec -->|Order| Ex
-    
-    Bus -.->|Async| Rec[Recorder]
-    Rec -->|Batch| DB[(ClickHouse)]
+```
+Market Data -> Normalizer -> LOB -> Event Bus -> Strategy -> Risk -> Order -> Broker
+                                \-> Recorder -> WAL/ClickHouse
 ```
 
-## 3. Infrastructure
-*   **Runtime**: Docker Compose (App + ClickHouse + Grafana + Prometheus).
-*   **Deployment**: GitHub Actions -> GHCR -> Azure VM (SSH).
-*   **HA**: Active-Passive Cluster (Planned).
+Key goals:
+- low latency (hot paths in Rust/Numba)
+- deterministic timing (minimize blocking I/O)
+- observability first (Prometheus metrics everywhere)
 
-## 4. Key Configurations
-*   `config/symbols.yaml`: Universe definition.
-*   `config/base/strategies.yaml`: Strategy defaults (use `config/strategies.yaml` for local overrides).
-*   `metrics.py`: Prometheus instrumentation.
+---
+
+## 2) Core Components
+
+### 2.1 Feed Adapter
+- `feed_adapter/shioaji_client.py`: login, subscribe, reconnect
+- `feed_adapter/normalizer.py`: raw → `TickEvent`/`BidAskEvent`
+- `feed_adapter/lob_engine.py`: LOB state + stats
+
+### 2.2 Event Bus
+- `engine/event_bus.py`: low‑alloc event routing
+- supports Rust path and configurable wait modes
+
+### 2.3 Strategy Engine
+- `strategy/base.py`: SDK + helpers
+- `strategies/*`: strategy implementations
+- `strategy/runner.py`: dispatch + batching
+
+### 2.4 Risk & Order
+- `risk/validators.py`: policy checks
+- `risk/fast_gate.py`: Numba hot‑path gate + kill switch
+- `order/adapter.py`: rate limiting, circuit breaker, Shioaji adapter
+
+### 2.5 Execution & Positions
+- `execution/router.py`: intents → adapter
+- `execution/positions.py`: position tracking / PnL
+
+### 2.6 Recorder
+- `recorder/writer.py`: WAL + ClickHouse writes
+- `recorder/loader.py`: WAL replay
+
+### 2.7 Observability
+- `observability/metrics.py`: Prometheus counters/gauges/histograms
+
+---
+
+## 3) Rust Acceleration
+
+- `rust_core/`: PyO3 extension (normalizer, LOB, hot‑path helpers)
+- `rust/`: separate strategy crate for future/native execution
+
+Build (local):
+```bash
+uv run maturin develop --manifest-path rust_core/Cargo.toml
+```
+
+---
+
+## 4) Data Flow (Mermaid)
+
+```mermaid
+graph LR
+  Ex[Exchange] --> FA[FeedAdapter]
+  FA --> Norm[Normalizer]
+  Norm --> LOB[LOB Engine]
+  LOB --> Bus[EventBus]
+  Bus --> Strat[Strategy]
+  Strat --> Risk[Risk]
+  Risk --> Order[OrderAdapter]
+  Order --> Ex
+  Bus --> Rec[Recorder]
+  Rec --> WAL[WAL]
+  Rec --> CH[(ClickHouse)]
+```
+
+---
+
+## 5) Storage
+
+- WAL: jsonl files under `.wal/`
+- ClickHouse: `hft.market_data`, `hft.orders`, `hft.risk_log`, ...
+- Schema: `src/hft_platform/schemas/clickhouse.sql`
+
+---
+
+## 6) Specs
+
+- Simulation spec: `specs/hft_simulation_architecture.md`
+
+---
+
+## 7) Related Docs
+- `docs/getting_started.md`
+- `docs/config_reference.md`
+- `docs/observability_minimal.md`
