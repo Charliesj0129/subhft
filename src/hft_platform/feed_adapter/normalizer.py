@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import time
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, Iterable, Optional, cast
 
 from structlog import get_logger
@@ -38,6 +39,18 @@ _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
 }
 _SYNTHETIC_TICKS = max(1, int(os.getenv("HFT_MD_SYNTHETIC_TICKS", "1")))
 _TS_ASSUME_TZ = os.getenv("HFT_TS_ASSUME_TZ", "Asia/Taipei")
+try:
+    _TS_ASSUME_TZINFO = ZoneInfo(_TS_ASSUME_TZ)
+except Exception:
+    _TS_ASSUME_TZINFO = None
+try:
+    _TS_MAX_LAG_NS = int(float(os.getenv("HFT_TS_MAX_LAG_S", "5")) * 1e9)
+except Exception:
+    _TS_MAX_LAG_NS = 0
+try:
+    _TS_SKEW_LOG_COOLDOWN_NS = int(float(os.getenv("HFT_TS_SKEW_LOG_COOLDOWN_S", "60")) * 1e9)
+except Exception:
+    _TS_SKEW_LOG_COOLDOWN_NS = 0
 
 try:
     try:
@@ -183,29 +196,6 @@ class SymbolMetadata:
         self._exchange_cache[symbol] = value
         return value
 
-
-def _extract_ts_ns(ts_val: Any) -> int:
-    if ts_val is None:
-        return 0
-    try:
-        if hasattr(ts_val, "timestamp"):
-            tzinfo = getattr(ts_val, "tzinfo", None)
-            if tzinfo is None:
-                try:
-                    from zoneinfo import ZoneInfo
-
-                    ts_val = ts_val.replace(tzinfo=ZoneInfo(_TS_ASSUME_TZ))
-                except Exception:
-                    pass
-            return int(ts_val.timestamp() * 1e9)
-        if isinstance(ts_val, (int, float)):
-            if abs(ts_val) < 1e12:
-                return int(float(ts_val) * 1e9)
-            return int(ts_val)
-    except Exception:
-        return 0
-    return 0
-
     def product_type(self, symbol: str) -> str:
         cached = self._product_type_cache.get(symbol)
         if cached is not None:
@@ -239,6 +229,38 @@ def _extract_ts_ns(ts_val: Any) -> int:
         self._product_type_cache[symbol] = ""
         return ""
 
+
+def _extract_ts_ns(ts_val: Any) -> int:
+    if ts_val is None:
+        return 0
+    try:
+        if hasattr(ts_val, "timestamp"):
+            tzinfo = getattr(ts_val, "tzinfo", None)
+            if tzinfo is None and _TS_ASSUME_TZINFO is not None:
+                ts_val = ts_val.replace(tzinfo=_TS_ASSUME_TZINFO)
+            return int(ts_val.timestamp() * 1e9)
+        if isinstance(ts_val, int):
+            abs_ts = abs(ts_val)
+            if abs_ts < 1e11:
+                return ts_val * 1_000_000_000
+            if abs_ts < 1e14:
+                return ts_val * 1_000_000
+            if abs_ts < 1e17:
+                return ts_val * 1_000
+            return ts_val
+        if isinstance(ts_val, float):
+            abs_ts = abs(ts_val)
+            if abs_ts < 1e11:
+                return int(ts_val * 1e9)
+            if abs_ts < 1e14:
+                return int(ts_val * 1e6)
+            if abs_ts < 1e17:
+                return int(ts_val * 1e3)
+            return int(ts_val)
+    except Exception:
+        return 0
+    return 0
+
     def order_params(self, symbol: str) -> Dict[str, Any]:
         entry = self.meta.get(symbol) or {}
         params: Dict[str, Any] = {}
@@ -249,7 +271,16 @@ def _extract_ts_ns(ts_val: Any) -> int:
 
 
 class MarketDataNormalizer:
-    __slots__ = ("_seq_gen", "metadata", "price_codec", "metrics", "_last_symbol", "_last_scale", "_last_local_ts_ns")
+    __slots__ = (
+        "_seq_gen",
+        "metadata",
+        "price_codec",
+        "metrics",
+        "_last_symbol",
+        "_last_scale",
+        "_last_local_ts_ns",
+        "_last_skew_log_ns",
+    )
 
     def __init__(self, config_path: Optional[str] = None, metadata: SymbolMetadata | None = None):
         import itertools
@@ -262,6 +293,7 @@ class MarketDataNormalizer:
         self._last_symbol: str | None = None
         self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
         self._last_local_ts_ns = {"tick": 0, "bidask": 0, "snapshot": 0}
+        self._last_skew_log_ns = 0
 
     def _next_seq(self) -> int:
         return next(self._seq_gen)
@@ -407,8 +439,26 @@ class MarketDataNormalizer:
                             if _RETURN_TUPLE:
                                 return rust_tuple
                             local_ts = time.time_ns()
-                            if exch_ts and local_ts < exch_ts:
-                                local_ts = exch_ts
+                            if exch_ts:
+                                if local_ts < exch_ts:
+                                    local_ts = exch_ts
+                                else:
+                                    delta = local_ts - exch_ts
+                                    if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                                        if _TS_SKEW_LOG_COOLDOWN_NS and (
+                                            local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
+                                        ):
+                                            logger.warning(
+                                                "Feed time skew",
+                                                topic="tick",
+                                                symbol=_sym,
+                                                delta_ns=delta,
+                                                max_ns=_TS_MAX_LAG_NS,
+                                            )
+                                            self._last_skew_log_ns = local_ts
+                                        if self.metrics:
+                                            self.metrics.feed_time_skew_ns.labels(topic="tick").set(delta)
+                                        local_ts = exch_ts + _TS_MAX_LAG_NS
                             if self.metrics:
                                 if exch_ts:
                                     lag_ns = local_ts - exch_ts
@@ -458,8 +508,26 @@ class MarketDataNormalizer:
                 )
 
             local_ts = time.time_ns()
-            if exch_ts and local_ts < exch_ts:
-                local_ts = exch_ts
+            if exch_ts:
+                if local_ts < exch_ts:
+                    local_ts = exch_ts
+                else:
+                    delta = local_ts - exch_ts
+                    if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                        if _TS_SKEW_LOG_COOLDOWN_NS and (
+                            local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
+                        ):
+                            logger.warning(
+                                "Feed time skew",
+                                topic="tick",
+                                symbol=symbol,
+                                delta_ns=delta,
+                                max_ns=_TS_MAX_LAG_NS,
+                            )
+                            self._last_skew_log_ns = local_ts
+                        if self.metrics:
+                            self.metrics.feed_time_skew_ns.labels(topic="tick").set(delta)
+                        local_ts = exch_ts + _TS_MAX_LAG_NS
             if self.metrics:
                 if exch_ts:
                     lag_ns = local_ts - exch_ts
@@ -749,8 +817,26 @@ class MarketDataNormalizer:
                 return ("bidask", symbol, bids_final, asks_final, exch_ts, False)
 
             local_ts = time.time_ns()
-            if exch_ts and local_ts < exch_ts:
-                local_ts = exch_ts
+            if exch_ts:
+                if local_ts < exch_ts:
+                    local_ts = exch_ts
+                else:
+                    delta = local_ts - exch_ts
+                    if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                        if _TS_SKEW_LOG_COOLDOWN_NS and (
+                            local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
+                        ):
+                            logger.warning(
+                                "Feed time skew",
+                                topic="bidask",
+                                symbol=symbol,
+                                delta_ns=delta,
+                                max_ns=_TS_MAX_LAG_NS,
+                            )
+                            self._last_skew_log_ns = local_ts
+                        if self.metrics:
+                            self.metrics.feed_time_skew_ns.labels(topic="bidask").set(delta)
+                        local_ts = exch_ts + _TS_MAX_LAG_NS
             if self.metrics:
                 if exch_ts:
                     lag_ns = local_ts - exch_ts
@@ -807,8 +893,26 @@ class MarketDataNormalizer:
                 return ("bidask", symbol, bids, asks, exch_ts, True)
 
             local_ts = time.time_ns()
-            if exch_ts and local_ts < exch_ts:
-                local_ts = exch_ts
+            if exch_ts:
+                if local_ts < exch_ts:
+                    local_ts = exch_ts
+                else:
+                    delta = local_ts - exch_ts
+                    if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                        if _TS_SKEW_LOG_COOLDOWN_NS and (
+                            local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
+                        ):
+                            logger.warning(
+                                "Feed time skew",
+                                topic="snapshot",
+                                symbol=symbol,
+                                delta_ns=delta,
+                                max_ns=_TS_MAX_LAG_NS,
+                            )
+                            self._last_skew_log_ns = local_ts
+                        if self.metrics:
+                            self.metrics.feed_time_skew_ns.labels(topic="snapshot").set(delta)
+                        local_ts = exch_ts + _TS_MAX_LAG_NS
             if self.metrics:
                 if exch_ts:
                     lag_ns = local_ts - exch_ts

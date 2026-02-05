@@ -76,6 +76,8 @@
 ### 5.1 基本
 - `HFT_EVENT_MODE=tuple|event`（事件格式）
 - `HFT_TS_ASSUME_TZ=Asia/Taipei`（Exchange TS 假定時區）
+- `HFT_TS_MAX_LAG_S=<sec>`（local_ts 與 exch_ts 最大容許差，超過則夾住）
+- `HFT_TS_SKEW_LOG_COOLDOWN_S=<sec>`（時戳偏差告警的冷卻時間）
 
 ### 5.2 合成資料 / 偵錯
 - `HFT_MD_SYNTHETIC_SIDE=1|0`
@@ -91,6 +93,7 @@
 - `HFT_MD_RECONNECT_GAP_S=<sec>`
 - `HFT_MD_FORCE_RECONNECT_GAP_S=<sec>`
 - `HFT_MD_RECONNECT_COOLDOWN_S=<sec>`
+- `HFT_MD_THREAD_OFFLOAD=1|0`（resubscribe/reconnect/snapshot 使用 to_thread）
 - `HFT_RECONNECT_BACKOFF_S=<sec>`
 - `HFT_RECONNECT_BACKOFF_MAX_S=<sec>`
 - `HFT_RECONNECT_DAYS=mon,tue,...`

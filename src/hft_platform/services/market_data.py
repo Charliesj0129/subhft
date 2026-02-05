@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 import os
+import sys
 import time
 from enum import Enum
 from zoneinfo import ZoneInfo
@@ -46,6 +47,7 @@ class MarketDataService:
         self.state = FeedState.INIT
         self.running = False
         self.last_event_ts = time.time()
+        self.last_event_mono = time.monotonic()
         self.heartbeat_threshold_s = 5.0
         self.resubscribe_gap_s = float(os.getenv("HFT_MD_RESUBSCRIBE_GAP_S", "15"))
         self.reconnect_gap_s = float(os.getenv("HFT_MD_RECONNECT_GAP_S", "60"))
@@ -55,8 +57,14 @@ class MarketDataService:
         self.reconnect_hours = os.getenv("HFT_RECONNECT_HOURS", "")
         self.reconnect_hours_2 = os.getenv("HFT_RECONNECT_HOURS_2", "")
         self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ", "Asia/Taipei")
+        try:
+            self._reconnect_tzinfo = ZoneInfo(self.reconnect_tz)
+        except Exception:
+            logger.warning("Invalid reconnect tz, defaulting to UTC", tz=self.reconnect_tz)
+            self._reconnect_tzinfo = dt.timezone.utc
         self._last_reconnect_ts = 0.0
         self._resubscribe_attempts = 0
+        self._last_rollover_reconnect_date: dt.date | None = None
         self.metrics = {"count": 0, "start_ts": time.time()}
         self.metrics_registry = MetricsRegistry.get()
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
@@ -65,6 +73,7 @@ class MarketDataService:
         self.log_normalized = os.getenv("HFT_MD_LOG_NORMALIZED", "0") == "1"
         self.log_normalized_every = int(os.getenv("HFT_MD_LOG_NORMALIZED_EVERY", "1000"))
         self._normalized_log_counter = 0
+        self._thread_offload = os.getenv("HFT_MD_THREAD_OFFLOAD", "1") != "0" and "pytest" not in sys.modules
 
     async def run(self):
         self.running = True
@@ -86,6 +95,7 @@ class MarketDataService:
                 else:
                     raw = msg
                 self.last_event_ts = time.time()
+                self.last_event_mono = time.monotonic()
                 self.metrics_registry.feed_last_event_ts.labels(source="market_data").set(self.last_event_ts)
                 self.metrics["count"] += 1
 
@@ -155,7 +165,10 @@ class MarketDataService:
 
             # Snapshots
             self._set_state(FeedState.SNAPSHOTTING)
-            snapshots = await asyncio.to_thread(self.client.fetch_snapshots)
+            if self._thread_offload:
+                snapshots = await asyncio.to_thread(self.client.fetch_snapshots)
+            else:
+                snapshots = self.client.fetch_snapshots()
 
             # Application of snapshots
             # Need to normalize snapshots?
@@ -240,8 +253,8 @@ class MarketDataService:
             # 3. Log
             logger.info("Metrics", eps=round(eps, 2), raw_queue=raw_q, state=self.state)
 
+            gap = time.monotonic() - self.last_event_mono
             if self.state == FeedState.CONNECTED:
-                gap = time.time() - self.last_event_ts
                 if gap > self.heartbeat_threshold_s:
                     logger.warning("Heartbeat missing", gap=gap)
                     if self.metrics_registry:
@@ -249,7 +262,13 @@ class MarketDataService:
                 if gap > self.resubscribe_gap_s:
                     await self._attempt_resubscribe(gap)
                 if gap > self.force_reconnect_gap_s or (gap > self.reconnect_gap_s and self._resubscribe_attempts > 2):
-                    await self._trigger_reconnect(gap)
+                    await self._trigger_reconnect(gap, reason="heartbeat_gap")
+
+                if self._should_rollover_reconnect():
+                    await self._trigger_reconnect(gap, reason="session_rollover")
+
+            if self.state in {FeedState.DISCONNECTED, FeedState.RECOVERING}:
+                await self._trigger_reconnect(gap, reason="recovering")
 
             if self.symbol_metadata.reload_if_changed():
                 logger.info("Symbols config reloaded", count=len(self.symbol_metadata.meta))
@@ -291,34 +310,54 @@ class MarketDataService:
     async def _attempt_resubscribe(self, gap: float) -> None:
         if not self._within_reconnect_window():
             return
-        ok = await asyncio.to_thread(self.client.resubscribe)
+        if self._thread_offload:
+            ok = await asyncio.to_thread(self.client.resubscribe)
+        else:
+            ok = self.client.resubscribe()
         if ok:
             self._resubscribe_attempts = 0
         else:
             self._resubscribe_attempts += 1
         logger.info("Resubscribe attempt", gap=gap, ok=ok, attempts=self._resubscribe_attempts)
 
-    async def _trigger_reconnect(self, gap: float) -> None:
+    async def _trigger_reconnect(self, gap: float, reason: str | None = None) -> None:
         now = time.time()
         if now - self._last_reconnect_ts < self.reconnect_cooldown_s:
             return
         if not self._within_reconnect_window():
             return
         self._last_reconnect_ts = now
-        logger.warning("Triggering reconnect", gap=gap)
+        reason_label = reason or "heartbeat_gap"
+        logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
         self._set_state(FeedState.RECOVERING)
-        ok = await asyncio.to_thread(self.client.reconnect, f"heartbeat_gap {gap:.1f}s")
+        if self._thread_offload:
+            ok = await asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s")
+        else:
+            ok = self.client.reconnect(f"{reason_label} {gap:.1f}s")
         if ok:
             self._set_state(FeedState.CONNECTED)
             self.last_event_ts = time.time()
+            self.last_event_mono = time.monotonic()
             self._resubscribe_attempts = 0
         else:
             self._set_state(FeedState.DISCONNECTED)
 
+    def _should_rollover_reconnect(self) -> bool:
+        if not self._within_reconnect_window():
+            return False
+        now_dt = dt.datetime.now(tz=self._reconnect_tzinfo)
+        last_event_dt = dt.datetime.fromtimestamp(self.last_event_ts, tz=self._reconnect_tzinfo)
+        if last_event_dt.date() == now_dt.date():
+            return False
+        if self._last_rollover_reconnect_date == now_dt.date():
+            return False
+        self._last_rollover_reconnect_date = now_dt.date()
+        return True
+
     def _within_reconnect_window(self) -> bool:
         if not self.reconnect_days and not self.reconnect_hours and not self.reconnect_hours_2:
             return True
-        now = dt.datetime.now(tz=ZoneInfo(self.reconnect_tz))
+        now = dt.datetime.now(tz=self._reconnect_tzinfo)
         weekday = now.strftime("%a").lower()
         if self.reconnect_days and weekday not in self.reconnect_days:
             return False
