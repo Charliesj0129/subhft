@@ -4,6 +4,8 @@ import time
 from typing import Any, Dict
 
 import yaml
+from structlog import get_logger
+
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
@@ -13,7 +15,6 @@ from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.circuit_breaker import CircuitBreaker
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
 from hft_platform.order.rate_limiter import RateLimiter
-from structlog import get_logger
 
 logger = get_logger("order_adapter")
 
