@@ -462,6 +462,10 @@ class MarketDataService:
                 continue
         return False
 
+    def within_reconnect_window(self) -> bool:
+        """Public hook for supervisors to check whether reconnection should be active."""
+        return self._within_reconnect_window()
+
     def get_max_feed_gap_s(self) -> float:
         """Return the maximum feed gap across all symbols in seconds.
 
