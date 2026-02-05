@@ -219,13 +219,18 @@ class WALLoaderService:
         try:
             with open(dlq_file, "w") as f:
                 # Write metadata header
-                f.write(json.dumps({
-                    "_dlq_meta": True,
-                    "table": table,
-                    "error": error,
-                    "timestamp": ts,
-                    "row_count": len(rows),
-                }) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            "_dlq_meta": True,
+                            "table": table,
+                            "error": error,
+                            "timestamp": ts,
+                            "row_count": len(rows),
+                        }
+                    )
+                    + "\n"
+                )
                 # Write rows
                 for row in rows:
                     f.write(json.dumps(row) + "\n")
@@ -236,7 +241,8 @@ class WALLoaderService:
     def _compute_insert_backoff(self, attempt: int) -> float:
         """Compute backoff delay for insert retry."""
         import random
-        delay = min(self._insert_base_delay_s * (2 ** attempt), self._insert_max_backoff_s)
+
+        delay = min(self._insert_base_delay_s * (2**attempt), self._insert_max_backoff_s)
         jitter = delay * 0.25 * (random.random() * 2 - 1)
         return max(0.1, delay + jitter)
 

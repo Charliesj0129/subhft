@@ -63,8 +63,7 @@ class PriceBandValidator(RiskValidator):
 
                 if intent.price < lower_bound or intent.price > upper_bound:
                     return False, (
-                        f"PRICE_OUTSIDE_BAND: price={intent.price} "
-                        f"mid={mid_price} band=[{lower_bound}, {upper_bound}]"
+                        f"PRICE_OUTSIDE_BAND: price={intent.price} mid={mid_price} band=[{lower_bound}, {upper_bound}]"
                     )
 
         return True, "OK"
