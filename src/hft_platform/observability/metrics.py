@@ -27,6 +27,7 @@ class MetricsRegistry:
                 "lob_updates_total",
                 "lob_snapshots_total",
                 "feed_last_event_ts",
+                "feed_time_skew_ns",
                 "strategy_latency_ns",
                 "strategy_intents_total",
                 "risk_reject_total",
@@ -77,6 +78,11 @@ class MetricsRegistry:
         self.feed_reconnect_total = Counter("feed_reconnect_total", "Feed reconnect attempts", ["result"])
         self.feed_resubscribe_total = Counter("feed_resubscribe_total", "Feed resubscribe attempts", ["result"])
         self.feed_last_event_ts = Gauge("feed_last_event_ts", "Last feed event timestamp (unix seconds)", ["source"])
+        self.feed_time_skew_ns = Gauge(
+            "feed_time_skew_ns",
+            "Feed time skew (local_ts - exch_ts) in ns",
+            ["topic"],
+        )
         self.shioaji_api_latency_ms = Histogram(
             "shioaji_api_latency_ms",
             "Shioaji API latency (ms)",
