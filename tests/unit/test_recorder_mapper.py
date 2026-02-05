@@ -29,7 +29,7 @@ def test_map_tick_event(tmp_path):
     assert topic == "market_data"
     assert row["symbol"] == "AAA"
     assert row["exchange"] == "TSE"
-    assert row["price"] == 12.345
+    assert row["price_scaled"] == 12_345_000
     assert row["seq_no"] == 1
 
 
@@ -41,8 +41,8 @@ def test_map_bidask_event(tmp_path):
     topic, row = map_event_to_record(event, metadata)
     assert topic == "market_data"
     assert row["type"] == "Snapshot"
-    assert row["bids_price"] == [1.0]
-    assert row["asks_price"] == [1.1]
+    assert row["bids_price"] == [1_000_000]
+    assert row["asks_price"] == [1_100_000]
 
 
 def test_map_bidask_non_snapshot_dict_levels(tmp_path):
@@ -59,8 +59,8 @@ def test_map_bidask_non_snapshot_dict_levels(tmp_path):
     topic, row = map_event_to_record(event, metadata)
     assert topic == "market_data"
     assert row["type"] == "BidAsk"
-    assert row["bids_price"] == [1.0]
-    assert row["asks_price"] == [1.1]
+    assert row["bids_price"] == [1_000_000]
+    assert row["asks_price"] == [1_100_000]
 
 
 def test_map_order_and_fill(tmp_path):
@@ -81,7 +81,7 @@ def test_map_order_and_fill(tmp_path):
     )
     topic, row = map_event_to_record(order, metadata)
     assert topic == "orders"
-    assert row["price"] == 1.0
+    assert row["price_scaled"] == 1_000_000
     assert row["status"] == "SUBMITTED"
 
     fill = FillEvent(
@@ -100,8 +100,8 @@ def test_map_order_and_fill(tmp_path):
     )
     topic, row = map_event_to_record(fill, metadata)
     assert topic == "fills"
-    assert row["price"] == 1.2
-    assert row["fee"] == 0.01
+    assert row["price_scaled"] == 1_200_000
+    assert row["fee_scaled"] == 10_000
 
 
 def test_map_unknown_event_returns_none(tmp_path):

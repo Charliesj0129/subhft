@@ -42,6 +42,39 @@ def _heatmap_query(table: str, latency_expr: str, window_ns: int, time_bucket_s:
     """
 
 
+def _stage_summary_query(window_ns: int) -> str:
+    return f"""
+    SELECT
+        stage,
+        count() AS n,
+        quantileTDigest(0.5)(latency_us) AS p50,
+        quantileTDigest(0.9)(latency_us) AS p90,
+        quantileTDigest(0.95)(latency_us) AS p95,
+        quantileTDigest(0.99)(latency_us) AS p99,
+        max(latency_us) AS max
+    FROM hft.latency_spans
+    WHERE ingest_ts >= toUInt64(toUnixTimestamp64Nano(now64())) - {window_ns}
+      AND latency_us >= 0
+    GROUP BY stage
+    ORDER BY stage
+    """
+
+
+def _stage_heatmap_query(window_ns: int, time_bucket_s: int, latency_bucket_us: int) -> str:
+    return f"""
+    SELECT
+        stage,
+        toStartOfInterval(toDateTime64(ingest_ts / 1000000000.0, 3), INTERVAL {time_bucket_s} SECOND) AS ts_bucket,
+        intDiv(latency_us, {latency_bucket_us}) * {latency_bucket_us} AS latency_bucket_us,
+        count() AS cnt
+    FROM hft.latency_spans
+    WHERE ingest_ts >= toUInt64(toUnixTimestamp64Nano(now64())) - {window_ns}
+      AND latency_us >= 0
+    GROUP BY stage, ts_bucket, latency_bucket_us
+    ORDER BY stage, ts_bucket, latency_bucket_us
+    """
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate end-to-end latency report from ClickHouse.")
     parser.add_argument("--window-min", type=int, default=10)
@@ -98,6 +131,31 @@ def main() -> None:
         }
     except Exception:
         results["orders_latency_us"] = {"window_min": args.window_min, "n": 0}
+
+    # Pipeline latency spans (sampled)
+    try:
+        span_rows = client.query(_stage_summary_query(window_ns)).result_rows
+        results["pipeline_spans"] = [
+            {
+                "stage": row[0],
+                "n": row[1],
+                "p50": row[2],
+                "p90": row[3],
+                "p95": row[4],
+                "p99": row[5],
+                "max": row[6],
+            }
+            for row in span_rows
+        ]
+
+        span_heatmap = client.query(_stage_heatmap_query(window_ns, args.time_bucket_s, args.latency_bucket_us)).result_rows
+        heatmap_spans_path = out_prefix.with_suffix(".pipeline.heatmap.csv")
+        with heatmap_spans_path.open("w", encoding="utf-8") as fh:
+            fh.write("stage,ts_bucket,latency_bucket_us,count\n")
+            for row in span_heatmap:
+                fh.write(f"{row[0]},{row[1]},{row[2]},{row[3]}\n")
+    except Exception:
+        results["pipeline_spans"] = []
 
     summary_path = out_prefix.with_suffix(".summary.json")
     summary_path.write_text(json.dumps(results, indent=2), encoding="utf-8")

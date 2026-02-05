@@ -91,3 +91,34 @@ async def test_broadcast_event_hits_all_strategies():
     assert a.called == 1
     assert b.called == 1
     assert risk_queue.qsize() == 2
+
+
+@pytest.mark.asyncio
+async def test_intent_carries_source_ts_and_trace_id():
+    bus = MagicMock()
+    risk_queue = asyncio.Queue()
+
+    with patch("hft_platform.strategy.runner.StrategyRegistry") as MockReg:
+        MockReg.return_value.instantiate.return_value = []
+        runner = StrategyRunner(bus, risk_queue, config_path="dummy")
+
+    strat = OrderStrategy("alpha", symbols=["AAA"])
+    runner.register(strat)
+
+    event = TickEvent(
+        meta=MetaData(seq=7, topic="tick", source_ts=1, local_ts=123456789),
+        symbol="AAA",
+        price=100,
+        volume=1,
+        total_volume=1,
+        bid_side_total_vol=0,
+        ask_side_total_vol=0,
+        is_simtrade=False,
+        is_odd_lot=False,
+    )
+
+    await runner.process_event(event)
+    intent = await risk_queue.get()
+
+    assert intent.source_ts_ns == 123456789
+    assert intent.trace_id == "tick:7"

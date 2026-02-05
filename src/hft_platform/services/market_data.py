@@ -12,6 +12,7 @@ from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("service.market_data")
@@ -67,6 +68,7 @@ class MarketDataService:
         self._last_rollover_reconnect_date: dt.date | None = None
         self.metrics = {"count": 0, "start_ts": time.time()}
         self.metrics_registry = MetricsRegistry.get()
+        self.latency = LatencyRecorder.get()
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
         self.log_raw_every = int(os.getenv("HFT_MD_LOG_EVERY", "1000"))
         self._raw_log_counter = 0
@@ -117,6 +119,7 @@ class MarketDataService:
                 event = None
                 # Basic key check for dispatch
                 try:
+                    norm_start_ns = time.perf_counter_ns()
                     if isinstance(raw, dict):
                         is_bid = "bid_price" in raw or "bid_volume" in raw or "ask_price" in raw
                         is_tick = "close" in raw or "price" in raw
@@ -128,10 +131,26 @@ class MarketDataService:
                         event = self.normalizer.normalize_bidask(raw)
                     elif is_tick:
                         event = self.normalizer.normalize_tick(raw)
+                    norm_duration = time.perf_counter_ns() - norm_start_ns
                 except Exception as ne:
                     logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))
+                    norm_duration = 0
 
                 if event:
+                    trace_id = ""
+                    meta = getattr(event, "meta", None)
+                    if meta is not None:
+                        seq = getattr(meta, "seq", None)
+                        topic = getattr(meta, "topic", "event")
+                        if seq is not None:
+                            trace_id = f"{topic}:{seq}"
+                    if norm_duration and self.latency:
+                        self.latency.record(
+                            "normalize",
+                            norm_duration,
+                            trace_id=trace_id,
+                            symbol=getattr(event, "symbol", ""),
+                        )
                     if self.log_normalized:
                         self._normalized_log_counter += 1
                         if self._normalized_log_counter % self.log_normalized_every == 0:
@@ -139,7 +158,16 @@ class MarketDataService:
 
                     # Update LOB
                     # Hot path: update LOB
+                    lob_start_ns = time.perf_counter_ns()
                     stats = self.lob.process_event(event)
+                    lob_duration = time.perf_counter_ns() - lob_start_ns
+                    if self.latency:
+                        self.latency.record(
+                            "lob_process",
+                            lob_duration,
+                            trace_id=trace_id,
+                            symbol=getattr(event, "symbol", ""),
+                        )
 
                     if self.publish_full_events:
                         if stats:

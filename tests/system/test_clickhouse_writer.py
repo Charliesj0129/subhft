@@ -35,14 +35,15 @@ async def test_clickhouse_writer_roundtrip(tmp_path, monkeypatch):
     writer.connect()
 
     ingest_ts = int(time.time_ns())
+    # Use scaled Int64 format (price * 1_000_000)
     row = {
         "symbol": "CH_TEST",
         "exchange": "TSE",
         "type": "Tick",
         "exch_ts": ingest_ts,
         "ingest_ts": ingest_ts,
-        "price": 1.0,
-        "volume": 1.0,
+        "price_scaled": 1_000_000,  # 1.0 * 1_000_000
+        "volume": 1,
         "bids_price": [],
         "bids_vol": [],
         "asks_price": [],

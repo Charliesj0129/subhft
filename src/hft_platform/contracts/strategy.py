@@ -45,6 +45,7 @@ class OrderIntent:
     tif: TIF = TIF.LIMIT
     target_order_id: Optional[str] = None  # For AMEND/CANCEL
     timestamp_ns: int = 0
+    source_ts_ns: int = 0
 
     # Metadata for risk/adapter
     reason: str = ""
@@ -73,3 +74,4 @@ class OrderCommand:
     intent: OrderIntent
     deadline_ns: int
     storm_guard_state: StormGuardState
+    created_ns: int = 0

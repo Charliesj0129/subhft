@@ -12,6 +12,7 @@ from hft_platform.execution.reconciliation import ReconciliationService
 from hft_platform.execution.router import ExecutionRouter
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
 from hft_platform.risk.engine import RiskEngine
@@ -25,14 +26,25 @@ class SystemBootstrapper:
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         self.settings = settings or {}
 
+    # Default bounded queue sizes to prevent unbounded memory growth
+    # These can be overridden via environment variables
+    DEFAULT_RAW_QUEUE_SIZE = 65536  # Market data ingestion
+    DEFAULT_RAW_EXEC_QUEUE_SIZE = 8192  # Execution events
+    DEFAULT_RISK_QUEUE_SIZE = 4096  # Risk engine queue
+    DEFAULT_ORDER_QUEUE_SIZE = 2048  # Order dispatch queue
+    DEFAULT_RECORDER_QUEUE_SIZE = 16384  # Recorder/persistence queue
+
     def build(self) -> ServiceRegistry:
         # 1. Infrastructure
         bus = RingBufferBus()
-        raw_queue_size = int(os.getenv("HFT_RAW_QUEUE_SIZE", "0"))
-        raw_exec_queue_size = int(os.getenv("HFT_RAW_EXEC_QUEUE_SIZE", "0"))
-        risk_queue_size = int(os.getenv("HFT_RISK_QUEUE_SIZE", "0"))
-        order_queue_size = int(os.getenv("HFT_ORDER_QUEUE_SIZE", "0"))
-        recorder_queue_size = int(os.getenv("HFT_RECORDER_QUEUE_SIZE", "0"))
+
+        # Bounded queues with sensible defaults (prevents OOM under load)
+        # Set to 0 to disable bounds (not recommended for production)
+        raw_queue_size = int(os.getenv("HFT_RAW_QUEUE_SIZE", str(self.DEFAULT_RAW_QUEUE_SIZE)))
+        raw_exec_queue_size = int(os.getenv("HFT_RAW_EXEC_QUEUE_SIZE", str(self.DEFAULT_RAW_EXEC_QUEUE_SIZE)))
+        risk_queue_size = int(os.getenv("HFT_RISK_QUEUE_SIZE", str(self.DEFAULT_RISK_QUEUE_SIZE)))
+        order_queue_size = int(os.getenv("HFT_ORDER_QUEUE_SIZE", str(self.DEFAULT_ORDER_QUEUE_SIZE)))
+        recorder_queue_size = int(os.getenv("HFT_RECORDER_QUEUE_SIZE", str(self.DEFAULT_RECORDER_QUEUE_SIZE)))
 
         raw_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_queue_size) if raw_queue_size > 0 else asyncio.Queue()
         raw_exec_queue: asyncio.Queue[Any] = (
@@ -47,6 +59,8 @@ class SystemBootstrapper:
         recorder_queue: asyncio.Queue[Any] = (
             asyncio.Queue(maxsize=recorder_queue_size) if recorder_queue_size > 0 else asyncio.Queue()
         )
+
+        LatencyRecorder.get().configure(recorder_queue)
 
         # 2. Shared State
         position_store = PositionStore()
@@ -63,11 +77,25 @@ class SystemBootstrapper:
         symbol_metadata = SymbolMetadata(symbols_path)
         price_scale_provider = SymbolMetadataPriceScaleProvider(symbol_metadata)
 
-        client = ShioajiClient(symbols_path, self.settings.get("shioaji", {}))
+        base_shioaji_cfg = dict(self.settings.get("shioaji", {}))
+        md_client = ShioajiClient(symbols_path, base_shioaji_cfg)
+
+        order_cfg = dict(base_shioaji_cfg)
+        order_mode = os.getenv("HFT_ORDER_MODE", "").strip().lower()
+        order_sim_flag = os.getenv("HFT_ORDER_SIMULATION")
+        order_no_ca = os.getenv("HFT_ORDER_NO_CA", "0").lower() in {"1", "true", "yes", "on"}
+        if order_mode:
+            order_cfg["simulation"] = order_mode in {"sim", "simulation", "paper"}
+        elif order_sim_flag is not None:
+            order_cfg["simulation"] = order_sim_flag.lower() in {"1", "true", "yes", "on", "sim"}
+        if order_no_ca or order_cfg.get("simulation") is True:
+            order_cfg["activate_ca"] = False
+
+        order_client = ShioajiClient(symbols_path, order_cfg)
 
         # 4. Services
-        md_service = MarketDataService(bus, raw_queue, client, symbol_metadata=symbol_metadata)
-        order_adapter = OrderAdapter(adapter_path, order_queue, client, order_id_map)
+        md_service = MarketDataService(bus, raw_queue, md_client, symbol_metadata=symbol_metadata)
+        order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map)
         execution_gateway = ExecutionGateway(order_adapter)
         exec_service = ExecutionRouter(
             bus,
@@ -77,7 +105,7 @@ class SystemBootstrapper:
             execution_gateway.on_terminal_state,
         )
         risk_engine = RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider)
-        recon_service = ReconciliationService(client, position_store, self.settings)
+        recon_service = ReconciliationService(order_client, position_store, self.settings)
         strategy_runner = StrategyRunner(
             bus,
             risk_queue,
@@ -100,7 +128,9 @@ class SystemBootstrapper:
             storm_guard=storm_guard,
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
-            client=client,
+            md_client=md_client,
+            order_client=order_client,
+            client=md_client,
             md_service=md_service,
             order_adapter=order_adapter,
             execution_gateway=execution_gateway,

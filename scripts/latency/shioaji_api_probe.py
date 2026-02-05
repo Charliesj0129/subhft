@@ -81,11 +81,19 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--sleep", type=float, default=0.2, help="sleep between calls (seconds)")
     parser.add_argument("--mode", choices=["sim", "real"], default=os.getenv("HFT_MODE", "sim"))
+    parser.add_argument(
+        "--order-mode",
+        choices=["sim", "real", "inherit"],
+        default=os.getenv("HFT_ORDER_MODE", "sim"),
+        help="Order client mode (default: sim). inherit uses --mode client.",
+    )
+    parser.add_argument("--order-ca", action="store_true", help="Enable CA for order client in real mode")
     parser.add_argument("--symbol", default=os.getenv("HFT_SHIOAJI_PROBE_SYMBOL", "2330"))
     parser.add_argument("--futures", default=os.getenv("HFT_SHIOAJI_PROBE_FUT", "TXFC0"))
     parser.add_argument("--out-prefix", default="reports/shioaji_api_latency")
     parser.add_argument("--no-orders", action="store_true")
     parser.add_argument("--no-accounting", action="store_true")
+    parser.add_argument("--no-market-data", action="store_true")
     args = parser.parse_args()
 
     out_prefix = Path(args.out_prefix)
@@ -107,13 +115,31 @@ def main() -> None:
         if ca_path and ca_pass:
             api.activate_ca(ca_path=ca_path, ca_passwd=ca_pass)
 
+    order_mode = args.order_mode
+    if order_mode == "inherit":
+        order_mode = args.mode
+    order_sim = order_mode == "sim"
+    order_api = sj.Shioaji(simulation=order_sim)
+    order_api.login(api_key=api_key, secret_key=secret, contracts_timeout=60000)
+    if order_mode == "real" and args.order_ca:
+        ca_path = os.getenv("SHIOAJI_CA_PATH")
+        ca_pass = os.getenv("SHIOAJI_CA_PASSWORD")
+        if ca_path and ca_pass:
+            order_api.activate_ca(ca_path=ca_path, ca_passwd=ca_pass)
+
     results: list[ProbeResult] = []
 
     if not args.no_accounting:
         accounting_ops: list[tuple[str, Callable[[], Any]]] = [
             ("account_balance", lambda: api.account_balance()),
+            ("margin", lambda: api.margin(api.futopt_account)),
             ("list_positions_stock", lambda: api.list_positions(api.stock_account)),
             ("list_positions_futopt", lambda: api.list_positions(api.futopt_account)),
+            ("list_position_detail", lambda: api.list_position_detail(api.stock_account)),
+            (
+                "list_profit_loss",
+                lambda: api.list_profit_loss(api.stock_account, begin_date="2024-01-01", end_date="2024-01-02"),
+            ),
         ]
 
         for name, fn in accounting_ops:
@@ -129,38 +155,38 @@ def main() -> None:
             results.append(_summary(name, samples, errors[0]))
 
     if not args.no_orders:
-        stock_contract = api.Contracts.Stocks[args.symbol]
-        stock_order = api.Order(
+        stock_contract = order_api.Contracts.Stocks[args.symbol]
+        stock_order = order_api.Order(
             price=1,
             quantity=1,
             action=sj.constant.Action.Buy,
             price_type=sj.constant.StockPriceType.LMT,
             order_type=sj.constant.OrderType.ROD,
             order_lot=sj.constant.StockOrderLot.Common,
-            account=api.stock_account,
+            account=order_api.stock_account,
         )
 
         def place_stock() -> Any:
-            return api.place_order(stock_contract, stock_order)
+            return order_api.place_order(stock_contract, stock_order)
 
         trade_holder: dict[str, Any] = {"trade": None}
 
         def place_stock_for_update() -> Any:
-            trade_holder["trade"] = api.place_order(stock_contract, stock_order)
+            trade_holder["trade"] = order_api.place_order(stock_contract, stock_order)
 
         def update_stock() -> Any:
             trade = trade_holder.get("trade")
             if trade is None:
                 place_stock_for_update()
                 trade = trade_holder["trade"]
-            return api.update_order(trade=trade, price=1)
+            return order_api.update_order(trade=trade, price=1)
 
         def cancel_stock() -> Any:
             trade = trade_holder.get("trade")
             if trade is None:
                 place_stock_for_update()
                 trade = trade_holder["trade"]
-            return api.cancel_order(trade)
+            return order_api.cancel_order(trade)
 
         order_ops: list[tuple[str, Callable[[], Any]]] = [
             ("place_order_stock", place_stock),
@@ -181,19 +207,19 @@ def main() -> None:
             results.append(_summary(name, samples, errors[0]))
 
         # Futures probe (optional)
-        fut_contract = api.Contracts.Futures[args.futures]
-        fut_order = api.Order(
+        fut_contract = order_api.Contracts.Futures[args.futures]
+        fut_order = order_api.Order(
             price=1,
             quantity=1,
             action=sj.constant.Action.Buy,
             price_type=sj.constant.FuturesPriceType.LMT,
             order_type=sj.constant.OrderType.ROD,
             octype=sj.constant.FuturesOCType.Auto,
-            account=api.futopt_account,
+            account=order_api.futopt_account,
         )
 
         def place_fut() -> Any:
-            return api.place_order(fut_contract, fut_order)
+            return order_api.place_order(fut_contract, fut_order)
 
         samples = []
         errors = [0]
@@ -205,6 +231,28 @@ def main() -> None:
             _time_call(place_fut, samples, errors)
             time.sleep(args.sleep)
         results.append(_summary("place_order_futures", samples, errors[0]))
+
+    if not args.no_market_data:
+        try:
+            contract = api.Contracts.Stocks[args.symbol]
+            market_ops: list[tuple[str, Callable[[], Any]]] = [
+                ("snapshots", lambda: api.snapshots([contract])),
+                ("ticks", lambda: api.ticks(contract, limit=5)),
+                ("kbars", lambda: api.kbars(contract, start="2024-01-02", end="2024-01-03")),
+            ]
+            for name, fn in market_ops:
+                samples: list[float] = []
+                errors = [0]
+                for _ in range(args.warmup):
+                    _time_call(fn, samples, errors)
+                    time.sleep(args.sleep)
+                samples.clear()
+                for _ in range(args.iters):
+                    _time_call(fn, samples, errors)
+                    time.sleep(args.sleep)
+                results.append(_summary(name, samples, errors[0]))
+        except Exception:
+            results.append(_summary("market_data", [], 1))
 
     payload = [r.__dict__ for r in results]
     json_path = out_prefix.with_suffix(".json")

@@ -10,6 +10,7 @@ from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, Order
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
+from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.circuit_breaker import CircuitBreaker
 from hft_platform.order.rate_limiter import RateLimiter
@@ -28,6 +29,7 @@ class OrderAdapter:
         self.order_id_map = order_id_map if order_id_map is not None else {}
         self.running = False
         self.metrics = MetricsRegistry.get()
+        self.latency = LatencyRecorder.get()
         self._metadata: SymbolMetadata = SymbolMetadata()
         self.price_codec: PriceCodec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
 
@@ -154,6 +156,8 @@ class OrderAdapter:
             self.circuit_breaker.record_failure()
             return
         if not self.running:
+            if cmd.created_ns:
+                self._record_queue_latency(cmd)
             await self._dispatch_to_api(cmd)
             return
         await self._enqueue_api(cmd)
@@ -253,6 +257,7 @@ class OrderAdapter:
                     custom_field=c_field,
                     product_type=product_type,
                     price_type=price_type,
+                    intent=intent,
                     **order_params,
                 )
                 if trade is None:
@@ -283,7 +288,9 @@ class OrderAdapter:
 
                 if target_trade:
                     logger.info("Canceling Order", target=target_key)
-                    result = await self._call_api("cancel_order", self.client.cancel_order, target_trade)
+                    result = await self._call_api(
+                        "cancel_order", self.client.cancel_order, target_trade, intent=intent
+                    )
                     if result is None:
                         return
                     self.metrics.order_actions_total.labels(type="cancel").inc()
@@ -302,7 +309,13 @@ class OrderAdapter:
                     price_f = self.price_codec.descale(intent.symbol, intent.price)
 
                     logger.info("Amending Order", target=target_key, new_price=price_f)
-                    result = await self._call_api("update_order", self.client.update_order, target_trade, price=price_f)
+                    result = await self._call_api(
+                        "update_order",
+                        self.client.update_order,
+                        target_trade,
+                        price=price_f,
+                        intent=intent,
+                    )
                     if result is None:
                         return
                     self.metrics.order_actions_total.labels(type="amend").inc()
@@ -351,6 +364,8 @@ class OrderAdapter:
                 cmd = await self._api_queue.get()
             except asyncio.CancelledError:
                 return
+            if cmd.created_ns:
+                self._record_queue_latency(cmd)
             self._store_pending(cmd)
 
             start = time.monotonic()
@@ -369,7 +384,21 @@ class OrderAdapter:
             for item in pending:
                 await self._dispatch_to_api(item)
 
-    async def _call_api(self, op: str, fn, *args, **kwargs):
+    def _record_queue_latency(self, cmd: OrderCommand) -> None:
+        if not self.latency:
+            return
+        if not cmd.created_ns:
+            return
+        queue_latency_ns = time.time_ns() - cmd.created_ns
+        self.latency.record(
+            "order_queue",
+            queue_latency_ns,
+            trace_id=cmd.intent.trace_id,
+            symbol=cmd.intent.symbol,
+            strategy_id=cmd.intent.strategy_id,
+        )
+
+    async def _call_api(self, op: str, fn, *args, intent: OrderIntent | None = None, **kwargs):
         try:
             await asyncio.wait_for(self._api_semaphore.acquire(), timeout=self._api_guard_timeout_s)
         except asyncio.TimeoutError:
@@ -378,16 +407,44 @@ class OrderAdapter:
             return None
 
         try:
+            start_ns = time.perf_counter_ns()
             result = await asyncio.wait_for(
                 asyncio.to_thread(fn, *args, **kwargs),
                 timeout=self._api_timeout_s,
             )
+            duration = time.perf_counter_ns() - start_ns
+            if self.latency:
+                self.latency.record(
+                    f"api_{op}",
+                    duration,
+                    trace_id=intent.trace_id if intent else "",
+                    symbol=intent.symbol if intent else "",
+                    strategy_id=intent.strategy_id if intent else "",
+                )
+                if intent and intent.source_ts_ns:
+                    e2e_ns = time.time_ns() - intent.source_ts_ns
+                    self.latency.record(
+                        "e2e_order",
+                        e2e_ns,
+                        trace_id=intent.trace_id,
+                        symbol=intent.symbol,
+                        strategy_id=intent.strategy_id,
+                    )
             self.circuit_breaker.record_success()
             return result
         except Exception as exc:
             logger.error("API call failed", op=op, error=str(exc))
             self.metrics.order_reject_total.inc()
             self.circuit_breaker.record_failure()
+            if intent and self.latency and intent.source_ts_ns:
+                e2e_ns = time.time_ns() - intent.source_ts_ns
+                self.latency.record(
+                    "e2e_order",
+                    e2e_ns,
+                    trace_id=intent.trace_id,
+                    symbol=intent.symbol,
+                    strategy_id=intent.strategy_id,
+                )
             return None
         finally:
             self._api_semaphore.release()

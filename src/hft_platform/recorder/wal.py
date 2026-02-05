@@ -1,6 +1,8 @@
 import asyncio
+import fcntl
 import json
 import os
+import tempfile
 import time
 from glob import glob
 
@@ -13,21 +15,49 @@ class WALWriter:
     def __init__(self, wal_dir: str):
         self.wal_dir = wal_dir
         os.makedirs(wal_dir, exist_ok=True)
+        self._lock_fd = None
 
     async def write(self, table: str, data: list):
-        """Async append to local disk via thread pool."""
+        """Async append to local disk via thread pool with atomic write."""
         ts = int(time.time_ns())
         filename = f"{self.wal_dir}/{table}_{ts}.jsonl"
 
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, self._write_sync, filename, data)
+            await loop.run_in_executor(None, self._write_sync_atomic, filename, data)
             logger.info("Wrote to WAL", table=table, count=len(data), file=filename)
         except Exception as e:
             logger.critical("WAL Write Failed!", error=str(e))
 
+    def _write_sync_atomic(self, filename: str, data: list):
+        """
+        Atomic write: write to temp file, then rename.
+        This prevents partial reads by the loader.
+        """
+        # Write to temp file in same directory (for atomic rename)
+        dir_path = os.path.dirname(filename)
+        fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=dir_path)
+        try:
+            with os.fdopen(fd, "w") as f:
+                # Acquire exclusive lock during write
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    for row in data:
+                        f.write(json.dumps(row) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            # Atomic rename (on POSIX systems)
+            os.rename(tmp_path, filename)
+        except Exception:
+            # Clean up temp file on failure
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+
     def _write_sync(self, filename: str, data: list):
-        """Blocking write function to be run in executor."""
+        """Legacy blocking write (kept for compatibility)."""
         with open(filename, "w") as f:
             for row in data:
                 f.write(json.dumps(row) + "\n")
