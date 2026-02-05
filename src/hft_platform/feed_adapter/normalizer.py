@@ -3,8 +3,8 @@ import os
 import re
 import sys
 import time
-from zoneinfo import ZoneInfo
 from typing import Any, Dict, Iterable, Optional, cast
+from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
