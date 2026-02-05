@@ -9,9 +9,13 @@ class MetaData:
     """Common metadata headers."""
 
     seq: int
-    topic: str
     source_ts: int  # Exchange timestamp
     local_ts: int  # Ingestion timestamp
+    topic: str = ""
+
+
+# Backward-compatible alias expected by integration tests.
+TickMeta = MetaData
 
 
 @dataclass(slots=True)
