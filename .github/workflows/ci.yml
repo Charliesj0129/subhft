@@ -241,14 +241,24 @@ jobs:
 
       - name: Run benchmarks
         run: |
+          set -euo pipefail
           uv run pytest tests/benchmark \
+            -o addopts= \
+            --no-cov \
             --benchmark-only \
             --benchmark-json=benchmark.json \
             --benchmark-save=ci \
             --benchmark-save-data \
             --benchmark-min-rounds=5 \
             --benchmark-disable-gc \
-            -v || echo "::warning::Benchmark tests failed or not found"
+            -v || status=$?
+          if [ "${status:-0}" -eq 5 ]; then
+            echo "No benchmark tests collected; skipping benchmarks."
+            exit 0
+          fi
+          if [ "${status:-0}" -ne 0 ]; then
+            exit "$status"
+          fi
 
       - name: Darwin Gate - Regression Check
         if: always() && hashFiles('benchmark.json') != ''
@@ -353,10 +363,18 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
         run: |
+          set -euo pipefail
           uv run pytest tests/integration \
+            -o addopts= \
             -v --tb=short \
-            -m "not slow" \
-            || echo "::warning::Integration tests failed or not found"
+            -m "not slow" || status=$?
+          if [ "${status:-0}" -eq 5 ]; then
+            echo "No integration tests collected; skipping integration tests."
+            exit 0
+          fi
+          if [ "${status:-0}" -ne 0 ]; then
+            exit "$status"
+          fi
 
       - name: Integration Test Summary
         if: always()
