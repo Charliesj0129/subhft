@@ -1,3 +1,4 @@
+import os
 import time
 from dataclasses import dataclass
 from enum import IntEnum
@@ -37,8 +38,17 @@ class StormGuard:
     def __init__(self, thresholds: RiskThresholds | None = None):
         self.state = StormGuardState.NORMAL
         self.thresholds = thresholds or RiskThresholds()
+        self._apply_env_overrides()
         self.metrics = MetricsRegistry.get()
         self.last_state_change = time.time()
+
+    def _apply_env_overrides(self) -> None:
+        feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
+        if feed_gap_override:
+            try:
+                self.thresholds.feed_gap_halt_s = float(feed_gap_override)
+            except ValueError:
+                logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
     def update(self, drawdown_pct: float = 0.0, latency_us: int = 0, feed_gap_s: float = 0.0) -> StormGuardState:
         """

@@ -115,6 +115,9 @@ class HFTSystem:
                 feed_gap_s = 0.0
                 if hasattr(self.md_service, "get_max_feed_gap_s"):
                     feed_gap_s = self.md_service.get_max_feed_gap_s()
+                    if hasattr(self.md_service, "within_reconnect_window"):
+                        if not self.md_service.within_reconnect_window():
+                            feed_gap_s = 0.0
 
                 # 2. Get drawdown from position store
                 drawdown_pct = 0.0
