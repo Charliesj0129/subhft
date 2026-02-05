@@ -61,6 +61,12 @@ class MetricsRegistry:
                 "system_cpu_usage",
                 "system_memory_usage",
                 "event_loop_lag_ms",
+                # Phase 5 metrics
+                "circuit_breaker_state",
+                "dlq_size_total",
+                "reconciliation_discrepancy_count",
+                "recorder_insert_retry_total",
+                "feed_gap_by_symbol_seconds",
             ]
         )
         # Market Data
@@ -166,6 +172,37 @@ class MetricsRegistry:
         self.recorder_wal_writes_total = Counter("recorder_wal_writes_total", "WAL writes", ["table"])
         self.queue_depth = Gauge("queue_depth", "Queue depth by type", ["queue"])
         self.event_loop_lag_ms = Gauge("event_loop_lag_ms", "Event loop lag (ms)")
+
+        # Phase 5: Advanced Robustness Metrics
+        # Circuit breaker state (0=closed/healthy, 1=open/tripped)
+        self.circuit_breaker_state = Gauge(
+            "circuit_breaker_state",
+            "Circuit breaker state (0=closed, 1=open)",
+            ["component"],
+        )
+        # Dead Letter Queue cumulative count
+        self.dlq_size_total = Counter(
+            "dlq_size_total",
+            "Dead Letter Queue cumulative entry count",
+            ["source"],  # e.g., "order", "recorder"
+        )
+        # Reconciliation discrepancy count
+        self.reconciliation_discrepancy_count = Gauge(
+            "reconciliation_discrepancy_count",
+            "Number of position discrepancies detected",
+        )
+        # Recorder batch insert retry count
+        self.recorder_insert_retry_total = Counter(
+            "recorder_insert_retry_total",
+            "Recorder batch insert retry count",
+            ["table", "result"],  # result: "success", "failed"
+        )
+        # Per-symbol feed gap in seconds
+        self.feed_gap_by_symbol_seconds = Gauge(
+            "feed_gap_by_symbol_seconds",
+            "Feed gap per symbol (seconds since last tick)",
+            ["symbol"],
+        )
 
         # System (v2)
         try:

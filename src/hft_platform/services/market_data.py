@@ -77,6 +77,11 @@ class MarketDataService:
         self._normalized_log_counter = 0
         self._thread_offload = os.getenv("HFT_MD_THREAD_OFFLOAD", "1") != "0" and "pytest" not in sys.modules
 
+        # Per-symbol feed gap monitoring
+        self._symbol_last_tick: dict[str, float] = {}  # symbol -> monotonic timestamp
+        self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "5.0"))
+        self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
+
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
@@ -85,6 +90,9 @@ class MarketDataService:
 
         # Start Monitor
         monitor_task = asyncio.create_task(self._monitor_loop())
+
+        # Start per-symbol feed gap watchdog
+        watchdog_task = asyncio.create_task(self._watchdog_loop())
 
         # Connect
         await self._connect_sequence()
@@ -137,6 +145,11 @@ class MarketDataService:
                     norm_duration = 0
 
                 if event:
+                    # Update per-symbol timestamp for watchdog
+                    symbol = getattr(event, "symbol", None)
+                    if symbol:
+                        self._symbol_last_tick[symbol] = time.monotonic()
+
                     trace_id = ""
                     meta = getattr(event, "meta", None)
                     if meta is not None:
@@ -184,6 +197,7 @@ class MarketDataService:
             logger.error("MD Error", error=str(e))
         finally:
             monitor_task.cancel()
+            watchdog_task.cancel()
 
     async def _connect_sequence(self):
         try:
@@ -305,6 +319,45 @@ class MarketDataService:
                 except Exception as exc:
                     logger.error("Symbol reload failed", error=str(exc))
 
+    async def _watchdog_loop(self):
+        """Per-symbol feed gap watchdog.
+
+        Checks each symbol's last tick timestamp and triggers reconnection
+        if any symbol exceeds the gap threshold.
+        """
+        while self.running:
+            await asyncio.sleep(self._watchdog_interval_s)
+
+            if self.state != FeedState.CONNECTED:
+                continue
+
+            if not self._symbol_last_tick:
+                continue
+
+            now = time.monotonic()
+            stale_symbols: list[tuple[str, float]] = []
+
+            for symbol, last_ts in self._symbol_last_tick.items():
+                gap = now - last_ts
+                if gap > self._symbol_gap_threshold_s:
+                    stale_symbols.append((symbol, gap))
+
+            if stale_symbols:
+                symbols_str = ", ".join(f"{s}({g:.1f}s)" for s, g in stale_symbols[:5])
+                logger.warning(
+                    "Feed gap detected for symbols",
+                    stale_count=len(stale_symbols),
+                    symbols=symbols_str,
+                    threshold_s=self._symbol_gap_threshold_s,
+                )
+
+                if self.metrics_registry:
+                    self.metrics_registry.feed_reconnect_total.labels(result="symbol_gap").inc()
+
+                # Trigger resubscription if multiple symbols are stale
+                if len(stale_symbols) >= 2:
+                    await self._attempt_resubscribe(max(g for _, g in stale_symbols))
+
     async def _publish(self, event):
         """Publish to bus and handle both async and sync publishers."""
         publish_fn = getattr(self.bus, "publish", None)
@@ -408,3 +461,30 @@ class MarketDataService:
             except Exception:
                 continue
         return False
+
+    def get_max_feed_gap_s(self) -> float:
+        """Return the maximum feed gap across all symbols in seconds.
+
+        Used by StormGuard to detect stale data.
+        """
+        if not self._symbol_last_tick:
+            return 0.0
+
+        now = time.monotonic()
+        max_gap = 0.0
+        for last_ts in self._symbol_last_tick.values():
+            gap = now - last_ts
+            if gap > max_gap:
+                max_gap = gap
+        return max_gap
+
+    def get_feed_gaps_by_symbol(self) -> dict[str, float]:
+        """Return feed gap for each symbol in seconds.
+
+        Used for per-symbol gap monitoring metrics.
+        """
+        if not self._symbol_last_tick:
+            return {}
+
+        now = time.monotonic()
+        return {symbol: now - last_ts for symbol, last_ts in self._symbol_last_tick.items()}

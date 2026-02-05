@@ -4,8 +4,6 @@ import time
 from typing import Any, Dict
 
 import yaml
-from structlog import get_logger
-
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
@@ -13,7 +11,9 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.circuit_breaker import CircuitBreaker
+from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
 from hft_platform.order.rate_limiter import RateLimiter
+from structlog import get_logger
 
 logger = get_logger("order_adapter")
 
@@ -49,6 +49,9 @@ class OrderAdapter:
         self._api_coalesce_window_s = float(os.getenv("HFT_API_COALESCE_WINDOW_S", "0.005"))
         self._api_pending: dict[tuple, OrderCommand] = {}
         self._api_worker_task: asyncio.Task | None = None
+
+        # Dead Letter Queue for rejected orders
+        self._dlq: DeadLetterQueue = get_dlq()
 
         self.load_config()
 
@@ -142,25 +145,54 @@ class OrderAdapter:
             self.order_id_map[str(oid)] = order_key
 
     async def execute(self, cmd: OrderCommand):
+        intent = cmd.intent
+
         # Circuit Breaker Check
         if self.circuit_breaker.is_open():
             logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
+            await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Circuit breaker open")
             return
 
         if not self.check_rate_limit():
-            # Trigger circuit break? Or just drop?
-            # Spec says: Cut off before 250.
+            # Rate limit exceeded
+            await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Rate limit exceeded")
             return
-        if not self._validate_client(cmd.intent):
+
+        if not self._validate_client(intent):
             self.metrics.order_reject_total.inc()
             self.circuit_breaker.record_failure()
+            await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Client validation failed")
             return
+
         if not self.running:
             if cmd.created_ns:
                 self._record_queue_latency(cmd)
             await self._dispatch_to_api(cmd)
             return
         await self._enqueue_api(cmd)
+
+    async def _add_to_dlq(
+        self,
+        intent: OrderIntent,
+        reason: RejectionReason,
+        error_message: str,
+    ) -> None:
+        """Add a rejected order to the dead letter queue."""
+        try:
+            await self._dlq.add(
+                order_id=intent.intent_id,
+                strategy_id=intent.strategy_id,
+                symbol=intent.symbol,
+                side=str(intent.side.name if hasattr(intent.side, "name") else intent.side),
+                price=intent.price,
+                qty=intent.qty,
+                reason=reason,
+                error_message=error_message,
+                intent_type=str(intent.intent_type.name if hasattr(intent.intent_type, "name") else intent.intent_type),
+                trace_id=getattr(intent, "trace_id", ""),
+            )
+        except Exception as e:
+            logger.error("Failed to add to DLQ", error=str(e))
 
     def _validate_client(self, intent: OrderIntent) -> bool:
         if intent.intent_type == IntentType.NEW:
@@ -396,7 +428,20 @@ class OrderAdapter:
             strategy_id=cmd.intent.strategy_id,
         )
 
-    async def _call_api(self, op: str, fn, *args, intent: OrderIntent | None = None, **kwargs):
+    def _is_transient_error(self, exc: Exception) -> bool:
+        """Check if error is transient and worth retrying."""
+        # Connection errors
+        if isinstance(exc, (ConnectionError, ConnectionResetError, ConnectionRefusedError)):
+            return True
+        # Timeout errors
+        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+            return True
+        # Check error message for common transient patterns
+        err_str = str(exc).lower()
+        transient_patterns = ("econnrefused", "econnreset", "etimedout", "connection reset", "temporarily unavailable")
+        return any(p in err_str for p in transient_patterns)
+
+    async def _call_api(self, op: str, fn, *args, intent: OrderIntent | None = None, max_retries: int = 2, **kwargs):
         try:
             await asyncio.wait_for(self._api_semaphore.acquire(), timeout=self._api_guard_timeout_s)
         except asyncio.TimeoutError:
@@ -404,45 +449,77 @@ class OrderAdapter:
             self.metrics.order_reject_total.inc()
             return None
 
+        base_delay_s = 0.01  # 10ms initial backoff
+
         try:
-            start_ns = time.perf_counter_ns()
-            result = await asyncio.wait_for(
-                asyncio.to_thread(fn, *args, **kwargs),
-                timeout=self._api_timeout_s,
-            )
-            duration = time.perf_counter_ns() - start_ns
-            if self.latency:
-                self.latency.record(
-                    f"api_{op}",
-                    duration,
-                    trace_id=intent.trace_id if intent else "",
-                    symbol=intent.symbol if intent else "",
-                    strategy_id=intent.strategy_id if intent else "",
-                )
-                if intent and intent.source_ts_ns:
-                    e2e_ns = time.time_ns() - intent.source_ts_ns
-                    self.latency.record(
-                        "e2e_order",
-                        e2e_ns,
-                        trace_id=intent.trace_id,
-                        symbol=intent.symbol,
-                        strategy_id=intent.strategy_id,
+            for attempt in range(max_retries + 1):
+                try:
+                    start_ns = time.perf_counter_ns()
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(fn, *args, **kwargs),
+                        timeout=self._api_timeout_s,
                     )
-            self.circuit_breaker.record_success()
-            return result
-        except Exception as exc:
-            logger.error("API call failed", op=op, error=str(exc))
-            self.metrics.order_reject_total.inc()
-            self.circuit_breaker.record_failure()
-            if intent and self.latency and intent.source_ts_ns:
-                e2e_ns = time.time_ns() - intent.source_ts_ns
-                self.latency.record(
-                    "e2e_order",
-                    e2e_ns,
-                    trace_id=intent.trace_id,
-                    symbol=intent.symbol,
-                    strategy_id=intent.strategy_id,
-                )
+                    duration = time.perf_counter_ns() - start_ns
+                    if self.latency:
+                        self.latency.record(
+                            f"api_{op}",
+                            duration,
+                            trace_id=intent.trace_id if intent else "",
+                            symbol=intent.symbol if intent else "",
+                            strategy_id=intent.strategy_id if intent else "",
+                        )
+                        if intent and intent.source_ts_ns:
+                            e2e_ns = time.time_ns() - intent.source_ts_ns
+                            self.latency.record(
+                                "e2e_order",
+                                e2e_ns,
+                                trace_id=intent.trace_id,
+                                symbol=intent.symbol,
+                                strategy_id=intent.strategy_id,
+                            )
+                    self.circuit_breaker.record_success()
+                    return result
+
+                except Exception as exc:
+                    is_transient = self._is_transient_error(exc)
+
+                    if is_transient and attempt < max_retries:
+                        # Exponential backoff: 10ms, 20ms, 40ms...
+                        delay = base_delay_s * (2**attempt)
+                        logger.warning(
+                            "API call failed, retrying",
+                            op=op,
+                            error=str(exc),
+                            attempt=attempt + 1,
+                            max_retries=max_retries,
+                            delay_ms=delay * 1000,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    # Non-transient error or exhausted retries
+                    logger.error(
+                        "API call failed",
+                        op=op,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        attempts=attempt + 1,
+                        is_transient=is_transient,
+                    )
+                    self.metrics.order_reject_total.inc()
+                    self.circuit_breaker.record_failure()
+                    if intent and self.latency and intent.source_ts_ns:
+                        e2e_ns = time.time_ns() - intent.source_ts_ns
+                        self.latency.record(
+                            "e2e_order",
+                            e2e_ns,
+                            trace_id=intent.trace_id,
+                            symbol=intent.symbol,
+                            strategy_id=intent.strategy_id,
+                        )
+                    return None
+
+            # Should not reach here, but handle gracefully
             return None
         finally:
             self._api_semaphore.release()

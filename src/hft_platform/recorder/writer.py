@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 from typing import Any
 
 from structlog import get_logger
@@ -20,6 +21,12 @@ class DataWriter:
     # HTTP protocol (8123) is slower but more compatible
     DEFAULT_NATIVE_PORT = 9000
     DEFAULT_HTTP_PORT = 8123
+
+    # Exponential backoff configuration
+    DEFAULT_MAX_RETRIES = 5
+    DEFAULT_BASE_DELAY_S = 1.0
+    DEFAULT_MAX_BACKOFF_S = 30.0
+    DEFAULT_JITTER_FACTOR = 0.5
 
     def __init__(self, ch_host="localhost", ch_port=9000, wal_dir=".wal"):
         self.ch_client = None
@@ -52,6 +59,21 @@ class DataWriter:
             elif "interface" in self.ch_params:
                 del self.ch_params["interface"]
 
+        # Exponential backoff settings (configurable via env)
+        self._max_retries = int(os.getenv("HFT_CH_MAX_RETRIES", str(self.DEFAULT_MAX_RETRIES)))
+        self._base_delay_s = float(os.getenv("HFT_CH_BASE_DELAY_S", str(self.DEFAULT_BASE_DELAY_S)))
+        self._max_backoff_s = float(os.getenv("HFT_CH_MAX_BACKOFF_S", str(self.DEFAULT_MAX_BACKOFF_S)))
+        self._jitter_factor = float(os.getenv("HFT_CH_JITTER_FACTOR", str(self.DEFAULT_JITTER_FACTOR)))
+        self._connect_attempts = 0
+
+    def _compute_backoff_delay(self, attempt: int) -> float:
+        """Compute exponential backoff delay with jitter to avoid thundering herd."""
+        # Exponential: base_delay * 2^attempt, capped at max_backoff
+        delay = min(self._base_delay_s * (2 ** attempt), self._max_backoff_s)
+        # Add jitter: delay * (1 +/- jitter_factor * random)
+        jitter = delay * self._jitter_factor * (random.random() * 2 - 1)
+        return max(0.1, delay + jitter)  # Minimum 100ms
+
     def connect(self):
         if not self.ch_enabled or not clickhouse_connect:
             logger.info("Running in WAL-only mode (ClickHouse disabled or driver missing)")
@@ -59,12 +81,13 @@ class DataWriter:
 
         import time
 
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(self._max_retries):
+            self._connect_attempts = attempt
             try:
                 self.ch_client = clickhouse_connect.get_client(**self.ch_params)
                 self.connected = True
-                logger.info("Connected to ClickHouse")
+                self._connect_attempts = 0  # Reset on success
+                logger.info("Connected to ClickHouse", attempt=attempt + 1)
 
                 # Auto-Init Schema
                 try:
@@ -86,15 +109,21 @@ class DataWriter:
                 break
 
             except Exception as e:
-                if attempt < max_retries - 1:
+                if attempt < self._max_retries - 1:
+                    delay = self._compute_backoff_delay(attempt)
                     logger.warning(
-                        "ClickHouse connection failed, retrying...",
+                        "ClickHouse connection failed, retrying with backoff...",
                         error=str(e),
                         attempt=attempt + 1,
+                        delay_s=round(delay, 2),
                     )
-                    time.sleep(2)
+                    time.sleep(delay)
                 else:
-                    logger.warning("ClickHouse connection failed, falling back to WAL", error=str(e))
+                    logger.warning(
+                        "ClickHouse connection failed after max retries, falling back to WAL",
+                        error=str(e),
+                        max_retries=self._max_retries,
+                    )
                     self.connected = False
 
     async def write(self, table: str, data: list):

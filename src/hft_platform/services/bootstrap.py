@@ -105,7 +105,7 @@ class SystemBootstrapper:
             execution_gateway.on_terminal_state,
         )
         risk_engine = RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider)
-        recon_service = ReconciliationService(order_client, position_store, self.settings)
+        recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
         strategy_runner = StrategyRunner(
             bus,
             risk_queue,

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from structlog import get_logger
 
@@ -6,16 +6,25 @@ from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardS
 from hft_platform.core.pricing import PriceCodec, PriceScaleProvider, SymbolMetadataPriceScaleProvider
 from hft_platform.observability.metrics import MetricsRegistry
 
+if TYPE_CHECKING:
+    from hft_platform.feed_adapter.lob_engine import LOBEngine
+
 logger = get_logger("risk_validators")
 
 
 class RiskValidator:
-    def __init__(self, config: Dict[str, Any], price_scale_provider: PriceScaleProvider | None = None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        price_scale_provider: PriceScaleProvider | None = None,
+        lob: Optional["LOBEngine"] = None,
+    ):
         self.config = config
         self.defaults = config.get("global_defaults", {})
         self.strat_configs = config.get("strategies", {})
         provider = price_scale_provider or SymbolMetadataPriceScaleProvider()
         self.price_codec = PriceCodec(provider)
+        self.lob = lob
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         """Return (Approved, Reason)."""
@@ -27,24 +36,10 @@ class PriceBandValidator(RiskValidator):
         if intent.intent_type == IntentType.CANCEL:
             return True, "OK"
 
-        # Get limits
-        # strat_cfg = self.strat_configs.get(intent.strategy_id, {})
-        # band_ticks = strat_cfg.get("price_band_ticks", self.defaults.get("price_band_ticks", 20))
-
-        # In real impl, we need access to LOB reference price.
-        # For now, we assume simple static bounds or placeholder.
-        # Mocking check:
         if intent.price <= 0:
             return False, "PRICE_ZERO_OR_NEG"
 
-        # Fat Finger Protection
-        # Reject if price is outrageously high/low compared to standard market prices
-        # Assuming price is standard equities, > 10000 or < 0.1 might be wrong (context dependent)
-        # Better: if we had a reference price.
-        # Without ref price (since RiskEngine doesn't have LOB yet), we can enforce max price cap from config
-        # or just simple sanity.
-        # But if we assume this is a refinement for "Deep Defects", we should add at least a sanity check.
-
+        # Fat Finger Protection: Absolute price cap
         max_price_raw = self.defaults.get("max_price_cap", 5000.0)
         scale = self.price_codec.scale_factor(intent.symbol)
         max_price_scaled = int(max_price_raw * scale)
@@ -52,8 +47,45 @@ class PriceBandValidator(RiskValidator):
         if intent.price > max_price_scaled:
             return False, f"PRICE_EXCEEDS_CAP: {intent.price} > {max_price_scaled}"
 
-        # TODO: Compare with LOB mid_price +/- band_ticks * tick_size
+        # LOB-relative price band validation
+        if self.lob is not None:
+            mid_price = self._get_mid_price(intent.symbol)
+            if mid_price is not None and mid_price > 0:
+                strat_cfg = self.strat_configs.get(intent.strategy_id, {})
+                band_ticks = strat_cfg.get("price_band_ticks", self.defaults.get("price_band_ticks", 20))
+                tick_size_raw = self.defaults.get("tick_size", 0.01)
+                tick_size_scaled = int(tick_size_raw * scale)
+
+                # Calculate allowed band: mid_price +/- band_ticks * tick_size
+                band_width = band_ticks * tick_size_scaled
+                lower_bound = mid_price - band_width
+                upper_bound = mid_price + band_width
+
+                if intent.price < lower_bound or intent.price > upper_bound:
+                    return False, (
+                        f"PRICE_OUTSIDE_BAND: price={intent.price} "
+                        f"mid={mid_price} band=[{lower_bound}, {upper_bound}]"
+                    )
+
         return True, "OK"
+
+    def _get_mid_price(self, symbol: str) -> Optional[int]:
+        """Get mid price from LOB as scaled integer.
+
+        Note: LOB stores prices in scaled format already. The mid_price from
+        get_book_snapshot is mid_price_x2/2.0, which is already scaled.
+        """
+        if self.lob is None:
+            return None
+        try:
+            book = self.lob.get_book_snapshot(symbol)
+            if book and book.get("mid_price"):
+                # mid_price from LOB is already in scaled units (as float)
+                # Just convert to int
+                return int(book["mid_price"])
+        except Exception:
+            pass
+        return None
 
 
 class MaxNotionalValidator(RiskValidator):

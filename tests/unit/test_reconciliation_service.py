@@ -19,4 +19,5 @@ async def test_reconciliation_sync_portfolio_logs_remote_positions(tmp_path):
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()
 
-    mock_logger.info.assert_any_call("Portfolio Sync: Remote State", positions={"AAA": 2, "BBB": -3})
+    # Check that broker state was logged
+    mock_logger.info.assert_any_call("Portfolio Sync: Broker State", positions={"AAA": 2, "BBB": -3})
