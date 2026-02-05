@@ -3,7 +3,9 @@ import argparse
 import json
 import os
 import time
+from datetime import datetime, timedelta
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
 
@@ -84,7 +86,7 @@ def _run_ops(
 ) -> None:
     for name, fn in ops:
         if fn is None:
-            results.append(_summary(name, [], 1))
+            results.append(_summary(name, [], 0))
             continue
         samples: list[float] = []
         errors = [0]
@@ -154,6 +156,108 @@ def main() -> None:
 
     results: list[ProbeResult] = []
 
+    def _coerce_price(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            if hasattr(value, "item"):
+                value = value.item()
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    price = _coerce_price(item)
+                    if price:
+                        return price
+                return None
+            dec = Decimal(str(value))
+            if dec <= 0:
+                return None
+            return int(dec.to_integral_value())
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+
+    def _snapshot_price(client: Any, contract: Any) -> int | None:
+        try:
+            snaps = client.snapshots([contract])
+        except Exception:
+            return None
+        if not snaps:
+            return None
+        snap = snaps[0]
+        if isinstance(snap, dict):
+            data = snap
+        elif hasattr(snap, "_asdict"):
+            data = snap._asdict()
+        elif hasattr(snap, "__dict__"):
+            data = snap.__dict__
+        else:
+            data = {}
+        for key in (
+            "last_price",
+            "last",
+            "close",
+            "price",
+            "reference_price",
+            "avg_price",
+            "open",
+            "bid_price",
+            "ask_price",
+        ):
+            if key in data:
+                price = _coerce_price(data[key])
+                if price:
+                    return price
+        return None
+
+    def _limit_price(client: Any, contract: Any, fallback: int = 1) -> int:
+        price = _snapshot_price(client, contract)
+        return price if price is not None else fallback
+
+    def iter_contracts(container: Any):
+        if container is None:
+            return
+        iterable = container.values() if isinstance(container, dict) else container
+        for item in iterable:
+            yield item
+            try:
+                if hasattr(item, "__iter__") and not hasattr(item, "code"):
+                    for sub in item:
+                        yield sub
+            except Exception:
+                continue
+
+    def find_contract_by_code(container: Any, code: str | None, prefixes: tuple[str, ...]) -> Any | None:
+        if container is None:
+            return None
+        if code:
+            try:
+                return container[code]
+            except Exception:
+                pass
+            for contract in iter_contracts(container):
+                if getattr(contract, "code", None) == code:
+                    return contract
+        for contract in iter_contracts(container):
+            ccode = getattr(contract, "code", None)
+            if not ccode:
+                continue
+            if ccode.startswith(prefixes):
+                return contract
+        return None
+
+    def last_trading_date() -> str:
+        tz_name = os.getenv("HFT_SHIOAJI_TZ", "Asia/Taipei")
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = None
+        now = datetime.now(tz=tz)
+        day = now.date()
+        # Roll back to last weekday if weekend
+        while day.weekday() >= 5:
+            day -= timedelta(days=1)
+        return day.strftime("%Y-%m-%d")
+
     if not args.no_accounting:
         accounting_ops: list[tuple[str, Callable[[], Any] | None]] = [
             ("list_accounts", (lambda: api.list_accounts()) if hasattr(api, "list_accounts") else None),
@@ -174,9 +278,10 @@ def main() -> None:
         _run_ops(results, accounting_ops, args.iters, args.warmup, args.sleep)
 
     if not args.no_orders:
-        stock_contract = order_api.Contracts.Stocks[args.symbol]
+        stock_contract = find_contract_by_code(order_api.Contracts.Stocks, args.symbol, ("",))
+        stock_price = _limit_price(order_api, stock_contract, fallback=1)
         stock_order = order_api.Order(
-            price=1,
+            price=stock_price,
             quantity=1,
             action=sj.constant.Action.Buy,
             price_type=sj.constant.StockPriceType.LMT,
@@ -198,7 +303,7 @@ def main() -> None:
             if trade is None:
                 place_stock_for_update()
                 trade = trade_holder["trade"]
-            return order_api.update_order(trade=trade, price=1)
+            return order_api.update_order(trade=trade, price=stock_price)
 
         def cancel_stock() -> Any:
             trade = trade_holder.get("trade")
@@ -216,14 +321,13 @@ def main() -> None:
         _run_ops(results, order_ops, args.iters, args.warmup, args.sleep)
 
         # Futures probe (optional)
-        try:
-            fut_contract = order_api.Contracts.Futures[args.futures]
-        except Exception:
-            fut_contract = None
+        fut_prefix = os.getenv("HFT_SHIOAJI_PROBE_FUT_PREFIX", "TXF")
+        fut_contract = find_contract_by_code(order_api.Contracts.Futures, args.futures, (fut_prefix, "MXF", "TMF"))
 
         if fut_contract is not None:
+            fut_price = _limit_price(order_api, fut_contract, fallback=1)
             fut_order = order_api.Order(
-                price=1,
+                price=fut_price,
                 quantity=1,
                 action=sj.constant.Action.Buy,
                 price_type=sj.constant.FuturesPriceType.LMT,
@@ -237,32 +341,23 @@ def main() -> None:
 
             _run_ops(results, [("place_order_futures", place_fut)], args.iters, args.warmup, args.sleep)
         else:
-            results.append(_summary("place_order_futures", [], 1))
+            results.append(_summary("place_order_futures", [], 0))
 
     if not args.no_market_data:
-        stock_contract = None
-        fut_contract = None
-        opt_contract = None
-        try:
-            stock_contract = api.Contracts.Stocks[args.symbol]
-        except Exception:
-            stock_contract = None
-        try:
-            fut_contract = api.Contracts.Futures[args.futures]
-        except Exception:
-            fut_contract = None
-        try:
-            opt_contract = api.Contracts.Options[args.option]
-        except Exception:
-            opt_contract = None
+        stock_contract = find_contract_by_code(api.Contracts.Stocks, args.symbol, ("",))
+        fut_prefix = os.getenv("HFT_SHIOAJI_PROBE_FUT_PREFIX", "TXF")
+        fut_contract = find_contract_by_code(api.Contracts.Futures, args.futures, (fut_prefix, "MXF", "TMF"))
+        opt_prefix = os.getenv("HFT_SHIOAJI_PROBE_OPT_PREFIX", "TXO")
+        opt_contract = find_contract_by_code(api.Contracts.Options, args.option, (opt_prefix,))
+        trade_date = last_trading_date()
 
         market_ops: list[tuple[str, Callable[[], Any] | None]] = []
         if stock_contract is not None:
             market_ops.extend(
                 [
                     ("snapshots_stock", lambda: api.snapshots([stock_contract])),
-                    ("ticks_stock", lambda: api.ticks(stock_contract, limit=5)),
-                    ("kbars_stock", lambda: api.kbars(stock_contract, start="2024-01-02", end="2024-01-03")),
+                    ("ticks_stock", lambda: api.ticks(stock_contract, date=trade_date)),
+                    ("kbars_stock", lambda: api.kbars(stock_contract, start=trade_date, end=trade_date)),
                 ]
             )
         else:
@@ -272,8 +367,8 @@ def main() -> None:
             market_ops.extend(
                 [
                     ("snapshots_futures", lambda: api.snapshots([fut_contract])),
-                    ("ticks_futures", lambda: api.ticks(fut_contract, limit=5)),
-                    ("kbars_futures", lambda: api.kbars(fut_contract, start="2024-01-02", end="2024-01-03")),
+                    ("ticks_futures", lambda: api.ticks(fut_contract, date=trade_date)),
+                    ("kbars_futures", lambda: api.kbars(fut_contract, start=trade_date, end=trade_date)),
                 ]
             )
         else:
@@ -293,17 +388,42 @@ def main() -> None:
         except Exception:
             quote_contract = None
         if quote_contract is not None and hasattr(api, "quote"):
+            for qt in (sj.constant.QuoteType.Tick, sj.constant.QuoteType.BidAsk):
+                try:
+                    api.quote.unsubscribe(quote_contract, quote_type=qt)
+                except Exception:
+                    pass
+            sub_state = {"tick": False, "bidask": False}
+
             def _quote_sub_tick() -> Any:
-                return api.quote.subscribe(quote_contract, quote_type=sj.constant.QuoteType.Tick)
+                if sub_state["tick"]:
+                    api.quote.unsubscribe(quote_contract, quote_type=sj.constant.QuoteType.Tick)
+                    sub_state["tick"] = False
+                result = api.quote.subscribe(quote_contract, quote_type=sj.constant.QuoteType.Tick)
+                sub_state["tick"] = True
+                return result
 
             def _quote_sub_ba() -> Any:
-                return api.quote.subscribe(quote_contract, quote_type=sj.constant.QuoteType.BidAsk)
+                if sub_state["bidask"]:
+                    api.quote.unsubscribe(quote_contract, quote_type=sj.constant.QuoteType.BidAsk)
+                    sub_state["bidask"] = False
+                result = api.quote.subscribe(quote_contract, quote_type=sj.constant.QuoteType.BidAsk)
+                sub_state["bidask"] = True
+                return result
 
             def _quote_unsub_tick() -> Any:
-                return api.quote.unsubscribe(quote_contract, quote_type=sj.constant.QuoteType.Tick)
+                if sub_state["tick"]:
+                    result = api.quote.unsubscribe(quote_contract, quote_type=sj.constant.QuoteType.Tick)
+                    sub_state["tick"] = False
+                    return result
+                return None
 
             def _quote_unsub_ba() -> Any:
-                return api.quote.unsubscribe(quote_contract, quote_type=sj.constant.QuoteType.BidAsk)
+                if sub_state["bidask"]:
+                    result = api.quote.unsubscribe(quote_contract, quote_type=sj.constant.QuoteType.BidAsk)
+                    sub_state["bidask"] = False
+                    return result
+                return None
 
             quote_ops.extend(
                 [

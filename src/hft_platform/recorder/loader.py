@@ -11,6 +11,11 @@ from structlog import get_logger
 
 logger = get_logger("wal_loader")
 
+# Default retry configuration for batch inserts
+DEFAULT_INSERT_MAX_RETRIES = 3
+DEFAULT_INSERT_BASE_DELAY_S = 0.5
+DEFAULT_INSERT_MAX_BACKOFF_S = 5.0
+
 
 class WALLoaderService:
     # Configurable poll interval (default 1s, was 5s)
@@ -27,22 +32,42 @@ class WALLoaderService:
         self.ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT") or os.getenv("CLICKHOUSE_PORT") or ch_port)
         self.ch_client = None
 
+        # Insert retry configuration
+        self._insert_max_retries = int(os.getenv("HFT_INSERT_MAX_RETRIES", str(DEFAULT_INSERT_MAX_RETRIES)))
+        self._insert_base_delay_s = float(os.getenv("HFT_INSERT_BASE_DELAY_S", str(DEFAULT_INSERT_BASE_DELAY_S)))
+        self._insert_max_backoff_s = float(os.getenv("HFT_INSERT_MAX_BACKOFF_S", str(DEFAULT_INSERT_MAX_BACKOFF_S)))
+
+        # Dead Letter Queue directory for failed inserts
+        self.dlq_dir = os.path.join(self.wal_dir, "dlq")
+        # Quarantine directory for corrupt files
+        self.corrupt_dir = os.path.join(self.wal_dir, "corrupt")
+
     def connect(self):
         try:
             self.ch_client = clickhouse_connect.get_client(
                 host=self.ch_host, port=self.ch_port, username="default", password=""
             )
             # Ensure schema exists (rudimentary check or run init sql)
-            with open("src/hft_platform/schemas/clickhouse.sql", "r") as f:
-                # Naive split by ; - production would use migration tool
-                sql_script = f.read()
-                statements = sql_script.split(";")
-                for stmt in statements:
-                    if stmt.strip():
-                        self.ch_client.command(stmt)
+            schema_path = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
+            if os.path.exists(schema_path):
+                with open(schema_path, "r") as f:
+                    sql_script = f.read()
+                    statements = sql_script.split(";")
+                    for stmt in statements:
+                        if stmt.strip():
+                            self.ch_client.command(stmt)
             logger.info("Connected to ClickHouse and ensured schema.")
+        except ConnectionError as e:
+            logger.error("Connection refused by ClickHouse", error=str(e), host=self.ch_host, port=self.ch_port)
+            self.ch_client = None
+        except TimeoutError as e:
+            logger.error("Connection timeout to ClickHouse", error=str(e), host=self.ch_host, port=self.ch_port)
+            self.ch_client = None
+        except FileNotFoundError as e:
+            logger.error("Schema file not found", error=str(e))
+            # Still connected, just no schema init
         except Exception as e:
-            logger.error("Failed to connect to ClickHouse", error=str(e))
+            logger.error("Failed to connect to ClickHouse", error=str(e), error_type=type(e).__name__)
             self.ch_client = None
 
     def run(self):
@@ -61,8 +86,20 @@ class WALLoaderService:
 
             try:
                 self.process_files()
+            except ConnectionError as e:
+                logger.error("Connection error during file processing", error=str(e), error_type="ConnectionError")
+                # Reset client to force reconnect
+                self.ch_client = None
+            except TimeoutError as e:
+                logger.error("Timeout during file processing", error=str(e), error_type="TimeoutError")
+            except OSError as e:
+                logger.error("OS error during file processing", error=str(e), error_type="OSError", errno=e.errno)
             except Exception as e:
-                logger.error("Error processing files", error=str(e))
+                logger.error(
+                    "Unexpected error processing files",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
 
             time.sleep(self.poll_interval_s)
 
@@ -115,6 +152,7 @@ class WALLoaderService:
             logger.info("Loading file", file=fname, table=target_table)
 
             rows = []
+            corrupt_lines = 0
             try:
                 with open(fpath, "r") as f:
                     # Try to acquire shared lock (non-blocking)
@@ -129,15 +167,32 @@ class WALLoaderService:
                             try:
                                 rows.append(json.loads(line))
                             except json.JSONDecodeError:
-                                pass
+                                corrupt_lines += 1
                     finally:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+                # If entire file is corrupt (all lines failed), quarantine it
+                if corrupt_lines > 0 and not rows:
+                    self._quarantine_corrupt_file(fpath, fname, f"All {corrupt_lines} lines corrupt")
+                    continue
+                elif corrupt_lines > 0:
+                    logger.warning(
+                        "Partial corruption in WAL file",
+                        file=fname,
+                        corrupt_lines=corrupt_lines,
+                        valid_rows=len(rows),
+                    )
+
             except FileNotFoundError:
                 # File was moved/deleted between glob and open
                 continue
 
             if rows:
-                self.insert_batch(target_table, rows)
+                success = self.insert_batch(target_table, rows)
+                if not success:
+                    # Move to DLQ instead of archive on failure
+                    self._write_to_dlq(target_table, rows, "insert_failed_after_retries")
+                    continue
 
             # Move to archive
             try:
@@ -146,23 +201,49 @@ class WALLoaderService:
             except FileNotFoundError:
                 pass  # Already moved
 
-    def insert_batch(self, table: str, rows: List[Dict[str, Any]]):
-        # Flatten/Normalize if needed based on Schema
-        # For prototype, we assume WAL structure matches generic or we map explicitly.
+    def _quarantine_corrupt_file(self, fpath: str, fname: str, reason: str) -> None:
+        """Move corrupt WAL file to quarantine directory."""
+        os.makedirs(self.corrupt_dir, exist_ok=True)
+        try:
+            dest_path = os.path.join(self.corrupt_dir, fname)
+            shutil.move(fpath, dest_path)
+            logger.error("Moved corrupt WAL to quarantine", file=fname, reason=reason, dest=dest_path)
+        except Exception as e:
+            logger.error("Failed to quarantine corrupt file", file=fname, error=str(e))
 
-        # ClickHouse connect insert expects list of lists or usage of pandas
-        # We'll try simple insert if keys match
-        # Naive implementation:
+    def _write_to_dlq(self, table: str, rows: List[Dict[str, Any]], error: str) -> None:
+        """Write failed rows to Dead Letter Queue for later analysis."""
+        os.makedirs(self.dlq_dir, exist_ok=True)
+        ts = int(time.time_ns())
+        dlq_file = os.path.join(self.dlq_dir, f"{table}_{ts}.jsonl")
+        try:
+            with open(dlq_file, "w") as f:
+                # Write metadata header
+                f.write(json.dumps({
+                    "_dlq_meta": True,
+                    "table": table,
+                    "error": error,
+                    "timestamp": ts,
+                    "row_count": len(rows),
+                }) + "\n")
+                # Write rows
+                for row in rows:
+                    f.write(json.dumps(row) + "\n")
+            logger.warning("Wrote failed batch to DLQ", table=table, count=len(rows), file=dlq_file)
+        except Exception as e:
+            logger.error("Failed to write to DLQ", table=table, error=str(e))
+
+    def _compute_insert_backoff(self, attempt: int) -> float:
+        """Compute backoff delay for insert retry."""
+        import random
+        delay = min(self._insert_base_delay_s * (2 ** attempt), self._insert_max_backoff_s)
+        jitter = delay * 0.25 * (random.random() * 2 - 1)
+        return max(0.1, delay + jitter)
+
+    def insert_batch(self, table: str, rows: List[Dict[str, Any]]) -> bool:
+        """Insert batch with retry logic. Returns True on success, False if all retries failed."""
         if not rows:
-            return
-
-        # We need to map dict keys to table columns order
-        # This implies we know the schema.
-        # For simplicity in this step, we just log "INSERTED".
-        # Real impl requires introspection of table schema or hardcoded mapping.
-
-        # Mocking the actual insert command to avoid schema mismatch crashes in this demo
-        # context = self.ch_client.insert(table, rows) ...
+            return True
 
         # ClickHouse scale factor for price_scaled columns
         PRICE_SCALE = 1_000_000
@@ -287,13 +368,39 @@ class WALLoaderService:
                 data.append(row_data)
 
             if self.ch_client and data:
-                try:
-                    self.ch_client.insert("hft.market_data", data, column_names=cols)
-                except Exception as e:
-                    logger.error("Insert failed", table=table, error=str(e))
-                    return
+                last_error = None
+                for attempt in range(self._insert_max_retries):
+                    try:
+                        self.ch_client.insert("hft.market_data", data, column_names=cols)
+                        logger.info("Inserted batch", table=table, count=len(rows))
+                        return True
+                    except Exception as e:
+                        last_error = e
+                        if attempt < self._insert_max_retries - 1:
+                            delay = self._compute_insert_backoff(attempt)
+                            logger.warning(
+                                "Insert failed, retrying with backoff",
+                                table=table,
+                                attempt=attempt + 1,
+                                delay_s=round(delay, 2),
+                                error=str(e),
+                            )
+                            time.sleep(delay)
+                        else:
+                            logger.error(
+                                "Insert failed after max retries",
+                                table=table,
+                                max_retries=self._insert_max_retries,
+                                error=str(last_error),
+                            )
+                            return False
+            elif data:
+                # No client but we have data - also a "failure" for DLQ purposes
+                logger.warning("No ClickHouse client available for insert", table=table, count=len(data))
+                return False
 
         logger.info("Inserted batch", table=table, count=len(rows))
+        return True
 
 
 if __name__ == "__main__":

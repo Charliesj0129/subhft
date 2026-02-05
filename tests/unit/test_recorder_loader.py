@@ -102,7 +102,10 @@ def test_wal_loader_invalid_json_archives(tmp_path):
 
     loader.process_files()
 
-    assert (archive_dir / fpath.name).exists()
+    # Phase 5: Corrupt files now go to quarantine instead of archive
+    corrupt_dir = wal_dir / "corrupt"
+    assert corrupt_dir.exists()
+    assert (corrupt_dir / fpath.name).exists()
 
 
 def test_wal_loader_insert_failure_still_archives(tmp_path):
@@ -137,5 +140,10 @@ def test_wal_loader_insert_failure_still_archives(tmp_path):
 
     loader.process_files()
 
-    assert (archive_dir / fpath.name).exists()
+    # Phase 5: Failed inserts now go to DLQ after retry exhaustion
+    # File should NOT be archived (stays for retry or DLQ written)
+    dlq_dir = wal_dir / "dlq"
+    assert dlq_dir.exists()
+    dlq_files = list(dlq_dir.glob("market_data_*.jsonl"))
+    assert len(dlq_files) == 1
     loader.ch_client.insert.assert_called()

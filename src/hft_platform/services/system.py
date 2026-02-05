@@ -109,12 +109,44 @@ class HFTSystem:
             metrics.event_loop_lag_ms.set(lag_s * 1000.0)
             last_tick = now_tick
 
-            # A. Update StormGuard
-            # usages = self.md_client.get_usage() # API Call
-            # For prototype, we mock latency/drawdown inputs or read from metrics
-            # Assuming LatencyMonitor writes to metrics, we skip reading them back here for now.
-            # We assume StormGuard is updated via events or direct calls.
-            # But here we act as the heartbeat.
+            # A. Update StormGuard with real metrics
+            try:
+                # 1. Get feed gap from market data service
+                feed_gap_s = 0.0
+                if hasattr(self.md_service, "get_max_feed_gap_s"):
+                    feed_gap_s = self.md_service.get_max_feed_gap_s()
+
+                # 2. Get drawdown from position store
+                drawdown_pct = 0.0
+                if hasattr(self.position_store, "get_drawdown_pct"):
+                    drawdown_pct = self.position_store.get_drawdown_pct()
+                elif hasattr(self.position_store, "total_pnl"):
+                    # Simple drawdown approximation from PnL
+                    total_pnl = self.position_store.total_pnl
+                    if total_pnl < 0:
+                        # Assume a base capital for percentage calculation
+                        base_capital = self.settings.get("base_capital", 10_000_000)
+                        drawdown_pct = total_pnl / base_capital if base_capital > 0 else 0.0
+
+                # 3. Get P99 latency estimate (convert event loop lag to microseconds as proxy)
+                latency_us = int(lag_s * 1_000_000)
+
+                # 4. Update StormGuard state
+                self.storm_guard.update(
+                    drawdown_pct=drawdown_pct,
+                    latency_us=latency_us,
+                    feed_gap_s=feed_gap_s,
+                )
+
+                # 5. Update per-symbol feed gap metrics
+                has_gaps_method = hasattr(self.md_service, "get_feed_gaps_by_symbol")
+                has_metric = hasattr(metrics, "feed_gap_by_symbol_seconds")
+                if has_gaps_method and has_metric:
+                    for symbol, gap in self.md_service.get_feed_gaps_by_symbol().items():
+                        metrics.feed_gap_by_symbol_seconds.labels(symbol=symbol).set(gap)
+
+            except Exception as e:
+                logger.warning("StormGuard update failed", error=str(e))
 
             # Check Health
             # If ExecutionGateway crashed
