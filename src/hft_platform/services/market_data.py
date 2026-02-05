@@ -58,7 +58,7 @@ class MarketDataService:
         self.reconnect_hours_2 = os.getenv("HFT_RECONNECT_HOURS_2", "")
         self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ", "Asia/Taipei")
         try:
-            self._reconnect_tzinfo = ZoneInfo(self.reconnect_tz)
+            self._reconnect_tzinfo: dt.tzinfo = ZoneInfo(self.reconnect_tz)
         except Exception:
             logger.warning("Invalid reconnect tz, defaulting to UTC", tz=self.reconnect_tz)
             self._reconnect_tzinfo = dt.timezone.utc

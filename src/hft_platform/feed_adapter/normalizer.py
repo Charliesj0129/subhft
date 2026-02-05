@@ -39,6 +39,7 @@ _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
 }
 _SYNTHETIC_TICKS = max(1, int(os.getenv("HFT_MD_SYNTHETIC_TICKS", "1")))
 _TS_ASSUME_TZ = os.getenv("HFT_TS_ASSUME_TZ", "Asia/Taipei")
+_TS_ASSUME_TZINFO: Optional[ZoneInfo]
 try:
     _TS_ASSUME_TZINFO = ZoneInfo(_TS_ASSUME_TZ)
 except Exception:
@@ -240,7 +241,7 @@ def _extract_ts_ns(ts_val: Any) -> int:
                 ts_val = ts_val.replace(tzinfo=_TS_ASSUME_TZINFO)
             return int(ts_val.timestamp() * 1e9)
         if isinstance(ts_val, int):
-            abs_ts = abs(ts_val)
+            abs_ts = abs(float(ts_val))
             if abs_ts < 1e11:
                 return ts_val * 1_000_000_000
             if abs_ts < 1e14:
@@ -249,7 +250,7 @@ def _extract_ts_ns(ts_val: Any) -> int:
                 return ts_val * 1_000
             return ts_val
         if isinstance(ts_val, float):
-            abs_ts = abs(ts_val)
+            abs_ts = abs(float(ts_val))
             if abs_ts < 1e11:
                 return int(ts_val * 1e9)
             if abs_ts < 1e14:
