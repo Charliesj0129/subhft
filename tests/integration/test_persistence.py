@@ -119,7 +119,7 @@ async def test_loader_integration():
     row = rows[0]
     # cols = symbol, exchange, type, exch_ts, ingest_ts, price, volume, bids_price, bids_vol, asks_price, asks_vol, seq_no
     assert row[0] == "2330"  # symbol
-    assert row[5] == 100.0  # price
+    assert row[5] == 100_000_000  # price_scaled (100.0 * 1e6)
     assert row[11] == 123  # seq_no
 
     # 5. Verify Archival

@@ -238,6 +238,14 @@ docker exec clickhouse clickhouse-client --query \
 uv run python scripts/latency/shioaji_api_probe.py \
   --mode sim --iters 30 --warmup 3 --sleep 0.2
 ```
+真實流量（行情 real、下單維持 sim，避免啟用 CA）：
+```bash
+export HFT_MODE=real
+export HFT_ORDER_MODE=sim
+export HFT_ORDER_NO_CA=1
+uv run python scripts/latency/shioaji_api_probe.py \
+  --mode real --order-mode sim --iters 50 --warmup 5 --sleep 0.2
+```
 輸出：
 - `reports/shioaji_api_latency.json`
 - `reports/shioaji_api_latency.csv`
@@ -246,6 +254,12 @@ uv run python scripts/latency/shioaji_api_probe.py \
 ```bash
 uv run python scripts/latency/e2e_clickhouse_report.py \
   --window-min 10 --time-bucket-s 10 --latency-bucket-us 500
+```
+若要更完整的全路徑分佈，請確保：
+```bash
+export HFT_LATENCY_TRACE=1
+export HFT_LATENCY_SAMPLE_EVERY=10
+export HFT_LATENCY_METRICS=1
 ```
 輸出：
 - `reports/e2e_latency.summary.json`

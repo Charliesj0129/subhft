@@ -72,9 +72,9 @@ async def test_full_order_lifecycle():
     mock_contract.code = "2330"
     mock_api.Contracts.Stocks.TSE.__getitem__.return_value = mock_contract
 
-    # Inject Mock API into ShioajiClient
-    system.client.api = mock_api
-    system.client.logged_in = True  # Fake login
+    # Inject Mock API into Order client (used by OrderAdapter)
+    system.order_client.api = mock_api
+    system.order_client.logged_in = True  # Fake login
 
     # 2. Components to Run
     # HFTSystem.run() runs everything, but blocks. We run components individually for control?
