@@ -288,9 +288,7 @@ class OrderAdapter:
 
                 if target_trade:
                     logger.info("Canceling Order", target=target_key)
-                    result = await self._call_api(
-                        "cancel_order", self.client.cancel_order, target_trade, intent=intent
-                    )
+                    result = await self._call_api("cancel_order", self.client.cancel_order, target_trade, intent=intent)
                     if result is None:
                         return
                     self.metrics.order_actions_total.labels(type="cancel").inc()
