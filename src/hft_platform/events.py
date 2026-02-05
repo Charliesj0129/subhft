@@ -29,13 +29,13 @@ class TickEvent:
     symbol: str
     price: int  # Scaled x10000
     volume: int  # Incremental volume
-    total_volume: int
-    bid_side_total_vol: int
-    ask_side_total_vol: int
+    total_volume: int = 0
+    bid_side_total_vol: int = 0
+    ask_side_total_vol: int = 0
 
     # Optional flags (packed or individual?)
-    is_simtrade: bool
-    is_odd_lot: bool
+    is_simtrade: bool = False
+    is_odd_lot: bool = False
 
 
 @dataclass(slots=True)
