@@ -61,9 +61,6 @@ class StormGuard:
         if drawdown_pct <= self.thresholds.halt_drawdown:
             new_state = StormGuardState.HALT
             reason = f"Drawdown {drawdown_pct:.2%}"
-        elif feed_gap_s >= self.thresholds.feed_gap_halt_s:
-            new_state = StormGuardState.HALT
-            reason = f"Feed Gap {feed_gap_s:.3f}s"
 
         # 2. STORM Check
         elif drawdown_pct <= self.thresholds.storm_drawdown:
@@ -72,6 +69,10 @@ class StormGuard:
         elif latency_us >= self.thresholds.latency_storm_us:
             new_state = StormGuardState.STORM
             reason = f"Latency {latency_us}us"
+        elif feed_gap_s >= self.thresholds.feed_gap_halt_s:
+            # Keep feed gap as warning/storm signal but do not HALT on it.
+            new_state = StormGuardState.STORM
+            reason = f"Feed Gap {feed_gap_s:.3f}s"
 
         # 3. WARM Check
         elif drawdown_pct <= self.thresholds.warm_drawdown:
