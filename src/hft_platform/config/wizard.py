@@ -24,7 +24,7 @@ def print_header():
     print("-" * 60)
 
 
-def get_input(prompt: str, default: str = None, options: List[str] = None) -> str:
+def get_input(prompt: str, default: str | None = None, options: List[str] | None = None) -> str:
     prompt_str = f"{prompt}"
     if default:
         prompt_str += f" (default: {default})"

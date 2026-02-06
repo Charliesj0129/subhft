@@ -36,29 +36,30 @@ class SystemBootstrapper:
 
     def build(self) -> ServiceRegistry:
         # 1. Infrastructure
+        # Note: StormGuard is created below, so we set it after creation
         bus = RingBufferBus()
 
         # Bounded queues with sensible defaults (prevents OOM under load)
-        # Set to 0 to disable bounds (not recommended for production)
-        raw_queue_size = int(os.getenv("HFT_RAW_QUEUE_SIZE", str(self.DEFAULT_RAW_QUEUE_SIZE)))
-        raw_exec_queue_size = int(os.getenv("HFT_RAW_EXEC_QUEUE_SIZE", str(self.DEFAULT_RAW_EXEC_QUEUE_SIZE)))
-        risk_queue_size = int(os.getenv("HFT_RISK_QUEUE_SIZE", str(self.DEFAULT_RISK_QUEUE_SIZE)))
-        order_queue_size = int(os.getenv("HFT_ORDER_QUEUE_SIZE", str(self.DEFAULT_ORDER_QUEUE_SIZE)))
-        recorder_queue_size = int(os.getenv("HFT_RECORDER_QUEUE_SIZE", str(self.DEFAULT_RECORDER_QUEUE_SIZE)))
+        # CRITICAL: Always enforce minimum bounds to prevent unbounded memory growth
+        # Setting size=0 via env var is blocked - use defaults instead
+        MIN_QUEUE_SIZE = 1024  # Minimum enforced size for safety
 
-        raw_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_queue_size) if raw_queue_size > 0 else asyncio.Queue()
-        raw_exec_queue: asyncio.Queue[Any] = (
-            asyncio.Queue(maxsize=raw_exec_queue_size) if raw_exec_queue_size > 0 else asyncio.Queue()
-        )
-        risk_queue: asyncio.Queue[Any] = (
-            asyncio.Queue(maxsize=risk_queue_size) if risk_queue_size > 0 else asyncio.Queue()
-        )
-        order_queue: asyncio.Queue[Any] = (
-            asyncio.Queue(maxsize=order_queue_size) if order_queue_size > 0 else asyncio.Queue()
-        )
-        recorder_queue: asyncio.Queue[Any] = (
-            asyncio.Queue(maxsize=recorder_queue_size) if recorder_queue_size > 0 else asyncio.Queue()
-        )
+        def get_queue_size(env_key: str, default: int) -> int:
+            """Get bounded queue size from env, enforcing minimum."""
+            return max(MIN_QUEUE_SIZE, int(os.getenv(env_key, str(default))))
+
+        raw_queue_size = get_queue_size("HFT_RAW_QUEUE_SIZE", self.DEFAULT_RAW_QUEUE_SIZE)
+        raw_exec_queue_size = get_queue_size("HFT_RAW_EXEC_QUEUE_SIZE", self.DEFAULT_RAW_EXEC_QUEUE_SIZE)
+        risk_queue_size = get_queue_size("HFT_RISK_QUEUE_SIZE", self.DEFAULT_RISK_QUEUE_SIZE)
+        order_queue_size = get_queue_size("HFT_ORDER_QUEUE_SIZE", self.DEFAULT_ORDER_QUEUE_SIZE)
+        recorder_queue_size = get_queue_size("HFT_RECORDER_QUEUE_SIZE", self.DEFAULT_RECORDER_QUEUE_SIZE)
+
+        # All queues are now guaranteed to be bounded
+        raw_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_queue_size)
+        raw_exec_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_exec_queue_size)
+        risk_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=risk_queue_size)
+        order_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=order_queue_size)
+        recorder_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=recorder_queue_size)
 
         LatencyRecorder.get().configure(recorder_queue)
 
@@ -66,6 +67,9 @@ class SystemBootstrapper:
         position_store = PositionStore()
         order_id_map: Dict[str, str] = {}
         storm_guard = StormGuard()
+
+        # Wire StormGuard to EventBus for overflow HALT triggering
+        bus.set_storm_guard(storm_guard)
 
         # 3. Config Paths
         paths = self.settings.get("paths", {})

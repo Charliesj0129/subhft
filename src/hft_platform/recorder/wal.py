@@ -50,6 +50,12 @@ class WALWriter:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             # Atomic rename (on POSIX systems)
             os.rename(tmp_path, filename)
+            # fsync directory to ensure rename is durable on disk
+            dir_fd = os.open(dir_path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         except Exception:
             # Clean up temp file on failure
             if os.path.exists(tmp_path):

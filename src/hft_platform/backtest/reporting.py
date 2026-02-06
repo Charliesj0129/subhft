@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 
@@ -7,11 +8,11 @@ import numpy as np
 class HTMLReporter:
     def __init__(self, output_path: str):
         self.output_path = output_path
-        self.equity_curve = []
-        self.trades = []
-        self.metrics = {}
+        self.equity_curve: dict[str, list[Any]] = {"time": [], "value": []}
+        self.trades: list[dict[str, Any]] = []
+        self.metrics: dict[str, str] = {}
 
-    def compute_stats(self, equity_t: np.array, equity_v: np.array):
+    def compute_stats(self, equity_t: np.ndarray, equity_v: np.ndarray) -> None:
         """Compute Sharpe, Drawdown, etc."""
         # Simple daily returns approx
         # For HFT, we might check minute-by-minute
@@ -33,7 +34,7 @@ class HTMLReporter:
             "Sharpe Ratio": f"{sharpe:.2f}",
             "Max Drawdown": f"{max_dd * 100:.2f}%",
             "Final Equity": f"{equity_v[-1]:.2f}",
-            "Total Trades": len(self.trades),
+            "Total Trades": f"{len(self.trades)}",
         }
 
         # Downsample for charting if too big (> 2000 points)

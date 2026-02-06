@@ -94,7 +94,7 @@ class ShioajiClient:
         self._load_config()
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
-        self.tick_callback = None
+        self.tick_callback: Callable[..., Any] | None = None
         self._callbacks_registered = False
         self.logged_in = False
         self.mode = "simulation" if (is_sim or self.api is None) else "real"
@@ -479,11 +479,21 @@ class ShioajiClient:
             logger.warning(f"Unsubscribe failed for {code}: {e}")
 
     def reload_symbols(self) -> None:
-        old_map = {s.get("code"): s for s in self.symbols if s.get("code")}
+        old_map: dict[str, Dict[str, Any]] = {}
+        for sym in self.symbols:
+            code = sym.get("code")
+            if not code:
+                continue
+            old_map[str(code)] = sym
         self._load_config()
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
 
-        new_map = {s.get("code"): s for s in self.symbols if s.get("code")}
+        new_map: dict[str, Dict[str, Any]] = {}
+        for sym in self.symbols:
+            code = sym.get("code")
+            if not code:
+                continue
+            new_map[str(code)] = sym
         removed = set(old_map) - set(new_map)
         added = set(new_map) - set(old_map)
 
@@ -859,6 +869,8 @@ class ShioajiClient:
         order = None
 
         fallback_cls = getattr(sj, "Order", None)
+        if fallback_cls is None:
+            raise RuntimeError("Shioaji Order class unavailable")
 
         if prod in {"stock", "stk"}:
             pt = self._map_stock_price_type(price_type)

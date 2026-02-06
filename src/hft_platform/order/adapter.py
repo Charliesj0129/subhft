@@ -27,15 +27,18 @@ class OrderAdapter:
         self.order_queue = order_queue
         self.client = shioaji_client
         # Map broker order IDs -> order_key ("strategy_id:intent_id")
+        # Protected by _order_id_map_lock for concurrent access
         self.order_id_map = order_id_map if order_id_map is not None else {}
+        self._order_id_map_lock = asyncio.Lock()
         self.running = False
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
         self._metadata: SymbolMetadata = SymbolMetadata()
         self.price_codec: PriceCodec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
 
-        # State
+        # State - Protected by _live_orders_lock for concurrent access
         self.live_orders: Dict[str, Any] = {}  # Map "strategy_id:intent_id" -> Trade Object or Status dict
+        self._live_orders_lock = asyncio.Lock()
 
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
@@ -85,36 +88,53 @@ class OrderAdapter:
         logger.info("OrderAdapter started")
         self._api_worker_task = asyncio.create_task(self._api_worker())
 
-        while self.running:
-            # Allow exceptions to crash the task (Supervisor will handle)
-            cmd: OrderCommand = await self.order_queue.get()
+        try:
+            while self.running:
+                # Allow exceptions to crash the task (Supervisor will handle)
+                try:
+                    cmd: OrderCommand = await asyncio.wait_for(
+                        self.order_queue.get(),
+                        timeout=1.0,  # Check running flag periodically
+                    )
+                except asyncio.TimeoutError:
+                    continue
 
-            # Check Deadline
-            if time.time_ns() > cmd.deadline_ns:
-                logger.warning("Order Timeout (Pre-dispatch)", cmd_id=cmd.cmd_id)
+                # Check Deadline
+                if time.time_ns() > cmd.deadline_ns:
+                    logger.warning("Order Timeout (Pre-dispatch)", cmd_id=cmd.cmd_id)
+                    self.order_queue.task_done()
+                    continue
+
+                await self.execute(cmd)
                 self.order_queue.task_done()
-                continue
-
-            await self.execute(cmd)
-            self.order_queue.task_done()
-        if self._api_worker_task:
-            self._api_worker_task.cancel()
+        finally:
+            # Ensure worker task is properly cancelled and awaited
+            if self._api_worker_task:
+                self._api_worker_task.cancel()
+                try:
+                    await asyncio.wait_for(self._api_worker_task, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                self._api_worker_task = None
+            logger.info("OrderAdapter stopped")
 
     def check_rate_limit(self) -> bool:
         """Sliding window check."""
         return self.rate_limiter.check()
 
-    def on_terminal_state(self, strategy_id: str, order_id: str):
+    async def on_terminal_state(self, strategy_id: str, order_id: str):
         """Called when an order reaches a terminal state (Filled, Cancelled, Rejected)."""
-        order_key = self.order_id_resolver.resolve_order_key(strategy_id, order_id, self.live_orders)
+        async with self._live_orders_lock:
+            order_key = self.order_id_resolver.resolve_order_key(strategy_id, order_id, self.live_orders)
 
-        if order_key in self.live_orders:
-            logger.info("Removing terminal order", key=order_key)
-            del self.live_orders[order_key]
+            if order_key in self.live_orders:
+                logger.info("Removing terminal order", key=order_key)
+                del self.live_orders[order_key]
 
         # Also clean up rate limit window if needed? No, rate limit is distinct.
 
-    def _register_broker_ids(self, order_key: str, trade: Any):
+    async def _register_broker_ids(self, order_key: str, trade: Any):
+        """Register broker IDs to order_key mapping with lock protection."""
         ids = set()
 
         if isinstance(trade, dict):
@@ -142,8 +162,9 @@ class OrderAdapter:
                     if val:
                         ids.add(val)
 
-        for oid in ids:
-            self.order_id_map[str(oid)] = order_key
+        async with self._order_id_map_lock:
+            for oid in ids:
+                self.order_id_map[str(oid)] = order_key
 
     async def execute(self, cmd: OrderCommand):
         intent = cmd.intent
@@ -297,7 +318,6 @@ class OrderAdapter:
                     return
 
                 self.metrics.order_actions_total.labels(type="new").inc()
-                self.live_orders[order_key] = trade
                 # Inject timestamp for TTL (hacky if trade is object, assumes it absorbs attrs or we wrap)
                 try:
                     if isinstance(trade, dict):
@@ -307,17 +327,22 @@ class OrderAdapter:
                 except Exception:
                     pass  # Object might be rigid
 
+                # Store with lock protection
+                async with self._live_orders_lock:
+                    self.live_orders[order_key] = trade
+
                 # Populate lookup using Shioaji trade attributes (broker ID -> order_key).
-                self._register_broker_ids(order_key, trade)
+                await self._register_broker_ids(order_key, trade)
 
                 self.rate_limiter.record()
                 self.circuit_breaker.record_success()
 
             elif intent.intent_type == IntentType.CANCEL:
-                target_key = self.order_id_resolver.resolve_order_key(
-                    intent.strategy_id, intent.target_order_id, self.live_orders
-                )
-                target_trade = self.live_orders.get(target_key)
+                async with self._live_orders_lock:
+                    target_key = self.order_id_resolver.resolve_order_key(
+                        intent.strategy_id, intent.target_order_id, self.live_orders
+                    )
+                    target_trade = self.live_orders.get(target_key)
 
                 if target_trade:
                     logger.info("Canceling Order", target=target_key)
@@ -330,10 +355,11 @@ class OrderAdapter:
                     logger.warning("Cancel target not found", target=target_key)
 
             elif intent.intent_type == IntentType.AMEND:
-                target_key = self.order_id_resolver.resolve_order_key(
-                    intent.strategy_id, intent.target_order_id, self.live_orders
-                )
-                target_trade = self.live_orders.get(target_key)
+                async with self._live_orders_lock:
+                    target_key = self.order_id_resolver.resolve_order_key(
+                        intent.strategy_id, intent.target_order_id, self.live_orders
+                    )
+                    target_trade = self.live_orders.get(target_key)
 
                 if target_trade:
                     # Descale price

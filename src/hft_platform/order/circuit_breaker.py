@@ -1,3 +1,4 @@
+import threading
 import time
 
 from structlog import get_logger
@@ -6,22 +7,52 @@ logger = get_logger("order.circuit_breaker")
 
 
 class CircuitBreaker:
+    """Thread-safe circuit breaker for order execution protection.
+
+    All state modifications are protected by a lock to prevent race conditions
+    in multi-threaded or multi-coroutine environments.
+    """
+
     def __init__(self, threshold: int, timeout_s: int):
         self.threshold = threshold
         self.timeout_s = timeout_s
-        self.failure_count = 0
-        self.open_until = 0.0
+        self._lock = threading.Lock()
+        self._failure_count = 0
+        self._open_until = 0.0
+
+    @property
+    def failure_count(self) -> int:
+        with self._lock:
+            return self._failure_count
+
+    @failure_count.setter
+    def failure_count(self, value: int) -> None:
+        with self._lock:
+            self._failure_count = value
+
+    @property
+    def open_until(self) -> float:
+        with self._lock:
+            return self._open_until
+
+    @open_until.setter
+    def open_until(self, value: float) -> None:
+        with self._lock:
+            self._open_until = value
 
     def is_open(self) -> bool:
-        return self.open_until > time.time()
+        with self._lock:
+            return self._open_until > time.time()
 
     def record_success(self) -> None:
-        self.failure_count = 0
+        with self._lock:
+            self._failure_count = 0
 
     def record_failure(self) -> bool:
-        self.failure_count += 1
-        if self.failure_count >= self.threshold:
-            self.open_until = time.time() + self.timeout_s
-            logger.critical("Circuit Breaker Tripped")
-            return True
-        return False
+        with self._lock:
+            self._failure_count += 1
+            if self._failure_count >= self.threshold:
+                self._open_until = time.time() + self.timeout_s
+                logger.critical("Circuit Breaker Tripped", failure_count=self._failure_count)
+                return True
+            return False

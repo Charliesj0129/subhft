@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from hft_platform.core.pricing import FixedPriceScaleProvider, PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
@@ -19,3 +21,21 @@ def test_price_codec_symbol_metadata(tmp_path, monkeypatch):
 
     assert codec.scale("AAA", 1.23) == 123
     assert codec.descale("AAA", 123) == 1.23
+
+
+def test_price_codec_provider_error_falls_back_to_one():
+    class BrokenProvider:
+        def price_scale(self, symbol: str) -> int:
+            raise ValueError("boom")
+
+    codec = PriceCodec(BrokenProvider())
+
+    assert codec.scale_factor("AAA") == 1
+    assert codec.scale("AAA", 1.23) == 1
+    assert codec.descale("AAA", 123) == 123.0
+
+
+def test_price_codec_decimal_helpers():
+    codec = PriceCodec(FixedPriceScaleProvider(scale=10))
+    assert codec.scale_decimal("AAA", Decimal("1.23")) == 12
+    assert codec.descale_decimal("AAA", 123) == Decimal("12.3")

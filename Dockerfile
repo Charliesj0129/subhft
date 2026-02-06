@@ -44,7 +44,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libfaketime \
         curl \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Default container timezone (override with TZ env if needed)
+ENV TZ=Asia/Taipei
 
 # Copy source code first (needed for -e . install)
 COPY pyproject.toml .
@@ -55,7 +59,8 @@ COPY config/ ./config/
 COPY scripts/ ./scripts/
 
 # Install dependencies into system python (in container)
-RUN pip install --no-cache-dir --timeout 120 --retries 5 -r requirements.txt
+ENV PIP_DEFAULT_TIMEOUT=600
+RUN pip install --no-cache-dir --timeout 600 --retries 10 -r requirements.txt
 # Install Rust extension wheel (fast-path helpers)
 RUN pip install --no-cache-dir /tmp/wheels/*.whl
 

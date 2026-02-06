@@ -49,6 +49,10 @@ try:
 except Exception:
     _TS_MAX_LAG_NS = 0
 try:
+    _TS_MAX_FUTURE_NS = int(float(os.getenv("HFT_TS_MAX_FUTURE_S", "5")) * 1e9)
+except Exception:
+    _TS_MAX_FUTURE_NS = 0
+try:
     _TS_SKEW_LOG_COOLDOWN_NS = int(float(os.getenv("HFT_TS_SKEW_LOG_COOLDOWN_S", "60")) * 1e9)
 except Exception:
     _TS_SKEW_LOG_COOLDOWN_NS = 0
@@ -262,6 +266,22 @@ def _extract_ts_ns(ts_val: Any) -> int:
         return 0
     return 0
 
+
+def _clamp_future_ts(exch_ts: int, now_ns: int, topic: str, symbol: str) -> int:
+    if not exch_ts or not _TS_MAX_FUTURE_NS:
+        return exch_ts
+    delta_ns = exch_ts - now_ns
+    if delta_ns > _TS_MAX_FUTURE_NS:
+        logger.warning(
+            "Exchange timestamp in future",
+            topic=topic,
+            symbol=symbol,
+            delta_ns=delta_ns,
+            max_future_ns=_TS_MAX_FUTURE_NS,
+        )
+        return now_ns
+    return exch_ts
+
     def order_params(self, symbol: str) -> Dict[str, Any]:
         entry = self.meta.get(symbol) or {}
         params: Dict[str, Any] = {}
@@ -441,6 +461,7 @@ class MarketDataNormalizer:
                                 return rust_tuple
                             local_ts = time.time_ns()
                             if exch_ts:
+                                exch_ts = _clamp_future_ts(exch_ts, local_ts, "tick", _sym)
                                 if local_ts < exch_ts:
                                     local_ts = exch_ts
                                 else:
@@ -510,6 +531,7 @@ class MarketDataNormalizer:
 
             local_ts = time.time_ns()
             if exch_ts:
+                exch_ts = _clamp_future_ts(exch_ts, local_ts, "tick", symbol)
                 if local_ts < exch_ts:
                     local_ts = exch_ts
                 else:
@@ -817,6 +839,7 @@ class MarketDataNormalizer:
 
             local_ts = time.time_ns()
             if exch_ts:
+                exch_ts = _clamp_future_ts(exch_ts, local_ts, "bidask", symbol)
                 if local_ts < exch_ts:
                     local_ts = exch_ts
                 else:
@@ -891,6 +914,7 @@ class MarketDataNormalizer:
 
             local_ts = time.time_ns()
             if exch_ts:
+                exch_ts = _clamp_future_ts(exch_ts, local_ts, "snapshot", symbol)
                 if local_ts < exch_ts:
                     local_ts = exch_ts
                 else:

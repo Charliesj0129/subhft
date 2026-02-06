@@ -811,7 +811,9 @@ def _resolve_metric(
     if key in FILTER_BOOL_KEYS:
         if isinstance(value, bool):
             return value
-        return _parse_bool_value(value)
+        if value is None:
+            return None
+        return _parse_bool_value(str(value))
 
     if key in FILTER_LIST_KEYS and key != "exclude":
         if value is None:
@@ -1009,14 +1011,14 @@ def _expand_futures(
         tokens = filters.months if filters.months is not None else [month_token]
         for token in tokens:
             month = str(token).lower()
-            idx = idx_map.get(month)
-            if idx is None:
+            idx_val = idx_map.get(month)
+            if idx_val is None:
                 result.errors.append(f"Unknown futures month selector: {token} ({root})")
                 continue
-            if idx >= len(groups):
+            if idx_val >= len(groups):
                 result.errors.append(f"Futures month selector out of range: {root}@{token}")
                 continue
-            month_indices.append(idx)
+            month_indices.append(idx_val)
             month_labels.append(month)
 
     for idx, label in zip(month_indices, month_labels):

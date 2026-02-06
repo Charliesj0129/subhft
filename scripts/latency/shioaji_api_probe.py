@@ -175,6 +175,20 @@ def main() -> None:
         except (InvalidOperation, ValueError, TypeError):
             return None
 
+    def _contract_attr(contract: Any, key: str) -> Any:
+        if contract is None:
+            return None
+        if isinstance(contract, dict):
+            return contract.get(key)
+        return getattr(contract, key, None)
+
+    def _contract_price_hint(contract: Any) -> int | None:
+        for key in ("reference", "reference_price", "limit_up", "limit_down", "close", "last_price"):
+            price = _coerce_price(_contract_attr(contract, key))
+            if price:
+                return price
+        return None
+
     def _snapshot_price(client: Any, contract: Any) -> int | None:
         try:
             snaps = client.snapshots([contract])
@@ -210,20 +224,57 @@ def main() -> None:
 
     def _limit_price(client: Any, contract: Any, fallback: int = 1) -> int:
         price = _snapshot_price(client, contract)
+        if price is None:
+            price = _contract_price_hint(contract)
         return price if price is not None else fallback
 
     def iter_contracts(container: Any):
         if container is None:
             return
-        iterable = container.values() if isinstance(container, dict) else container
-        for item in iterable:
-            yield item
-            try:
-                if hasattr(item, "__iter__") and not hasattr(item, "code"):
-                    for sub in item:
-                        yield sub
-            except Exception:
-                continue
+        seen: set[int] = set()
+
+        def _walk(obj: Any):
+            if obj is None:
+                return
+            obj_id = id(obj)
+            if obj_id in seen:
+                return
+            seen.add(obj_id)
+
+            if hasattr(obj, "code"):
+                yield obj
+                return
+
+            if isinstance(obj, dict):
+                for item in obj.values():
+                    yield from _walk(item)
+                return
+
+            if isinstance(obj, (list, tuple, set)):
+                for item in obj:
+                    yield from _walk(item)
+                return
+
+            if hasattr(obj, "values") and callable(obj.values):
+                try:
+                    for item in obj.values():
+                        yield from _walk(item)
+                    return
+                except Exception:
+                    pass
+
+            for name in dir(obj):
+                if name.startswith("_"):
+                    continue
+                try:
+                    attr = getattr(obj, name)
+                except Exception:
+                    continue
+                if callable(attr):
+                    continue
+                yield from _walk(attr)
+
+        yield from _walk(container)
 
     def find_contract_by_code(container: Any, code: str | None, prefixes: tuple[str, ...]) -> Any | None:
         if container is None:
@@ -231,6 +282,14 @@ def main() -> None:
         if code:
             try:
                 return container[code]
+            except Exception:
+                pass
+            try:
+                getter = getattr(container, "get", None)
+                if callable(getter):
+                    found = getter(code)
+                    if found is not None:
+                        return found
             except Exception:
                 pass
             for contract in iter_contracts(container):

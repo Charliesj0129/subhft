@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -50,5 +51,13 @@ class PriceCodec:
     def scale(self, symbol: str, price: float | int) -> int:
         return int(float(price) * self._scale(symbol))
 
+    def scale_decimal(self, symbol: str, price: Decimal) -> int:
+        """Scale a Decimal price to integer, preserving precision until final conversion."""
+        return int(price * Decimal(self._scale(symbol)))
+
     def descale(self, symbol: str, value: float | int) -> float:
         return float(value) / float(self._scale(symbol))
+
+    def descale_decimal(self, symbol: str, value: int) -> Decimal:
+        """Descale an integer to Decimal for precision-preserving operations."""
+        return Decimal(value) / Decimal(self._scale(symbol))

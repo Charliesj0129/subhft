@@ -1194,7 +1194,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "clickhouse-connect" },
-    { name = "gymnasium" },
     { name = "hftbacktest", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "hftbacktest", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "joblib" },
@@ -1202,18 +1201,12 @@ dependencies = [
     { name = "msgspec" },
     { name = "numba" },
     { name = "numpy" },
-    { name = "onnx" },
-    { name = "onnxruntime" },
-    { name = "onnxscript" },
-    { name = "optuna" },
     { name = "pandas" },
     { name = "prometheus-client" },
     { name = "psutil" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "shimmy" },
     { name = "shioaji", extra = ["speed"] },
-    { name = "stable-baselines3" },
     { name = "structlog" },
     { name = "uvloop" },
 ]
@@ -1231,33 +1224,35 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "ruff" },
+]
+research = [
+    { name = "gymnasium" },
+    { name = "onnx" },
+    { name = "onnxruntime" },
+    { name = "onnxscript" },
+    { name = "optuna" },
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "shimmy" },
+    { name = "stable-baselines3" },
     { name = "torch" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "clickhouse-connect" },
-    { name = "gymnasium", specifier = ">=1.2.3" },
     { name = "hftbacktest" },
     { name = "joblib", specifier = ">=1.5.3" },
     { name = "make", specifier = ">=0.1.6.post2" },
     { name = "msgspec" },
     { name = "numba", specifier = ">=0.61" },
     { name = "numpy" },
-    { name = "onnx", specifier = ">=1.20.1" },
-    { name = "onnxruntime", specifier = ">=1.23.2" },
-    { name = "onnxscript", specifier = ">=0.6.0" },
-    { name = "optuna", specifier = ">=4.7.0" },
     { name = "pandas" },
     { name = "prometheus-client" },
     { name = "psutil" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "pyyaml" },
-    { name = "shimmy", specifier = ">=2.0.0" },
     { name = "shioaji", extras = ["speed"] },
-    { name = "stable-baselines3", specifier = ">=2.7.1" },
     { name = "structlog" },
     { name = "uvloop" },
 ]
@@ -1275,7 +1270,16 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.3.1" },
     { name = "ruff", specifier = ">=0.14.10" },
+]
+research = [
+    { name = "gymnasium", specifier = ">=1.2.3" },
+    { name = "onnx", specifier = ">=1.20.1" },
+    { name = "onnxruntime", specifier = ">=1.23.2" },
+    { name = "onnxscript", specifier = ">=0.6.0" },
+    { name = "optuna", specifier = ">=4.7.0" },
     { name = "scikit-learn", specifier = ">=1.7.2" },
+    { name = "shimmy", specifier = ">=2.0.0" },
+    { name = "stable-baselines3", specifier = ">=2.7.1" },
     { name = "torch", specifier = ">=2.10.0" },
 ]
 

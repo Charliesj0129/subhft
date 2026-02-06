@@ -1,7 +1,6 @@
 import asyncio
 import os
 import random
-from typing import Any
 
 from structlog import get_logger
 
@@ -11,7 +10,7 @@ from hft_platform.recorder.wal import WALWriter
 try:
     import clickhouse_connect
 except ImportError:
-    clickhouse_connect: Any | None = None
+    clickhouse_connect = None  # type: ignore[assignment]
 
 logger = get_logger("recorder.writer")
 
@@ -75,6 +74,7 @@ class DataWriter:
         return max(0.1, delay + jitter)  # Minimum 100ms
 
     def connect(self):
+        """Synchronous connect - use connect_async() in async contexts."""
         if not self.ch_enabled or not clickhouse_connect:
             logger.info("Running in WAL-only mode (ClickHouse disabled or driver missing)")
             return
@@ -88,24 +88,7 @@ class DataWriter:
                 self.connected = True
                 self._connect_attempts = 0  # Reset on success
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
-
-                # Auto-Init Schema
-                try:
-                    schema_path = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
-                    if os.path.exists(schema_path):
-                        with open(schema_path, "r") as f:
-                            sql_script = f.read()
-                            statements = sql_script.split(";")
-                            for stmt in statements:
-                                if stmt.strip():
-                                    self.ch_client.command(stmt)
-                        logger.info("Schema initialized from SQL")
-                    else:
-                        logger.warning("Schema file not found", path=schema_path)
-                except Exception as se:
-                    logger.error("Schema initialization failed", error=str(se))
-
-                # If success, break loop
+                self._init_schema()
                 break
 
             except Exception as e:
@@ -125,6 +108,57 @@ class DataWriter:
                         max_retries=self._max_retries,
                     )
                     self.connected = False
+
+    async def connect_async(self):
+        """Async connect - does not block the event loop during retries."""
+        if not self.ch_enabled or not clickhouse_connect:
+            logger.info("Running in WAL-only mode (ClickHouse disabled or driver missing)")
+            return
+
+        for attempt in range(self._max_retries):
+            self._connect_attempts = attempt
+            try:
+                self.ch_client = await asyncio.to_thread(clickhouse_connect.get_client, **self.ch_params)
+                self.connected = True
+                self._connect_attempts = 0  # Reset on success
+                logger.info("Connected to ClickHouse", attempt=attempt + 1)
+                await asyncio.to_thread(self._init_schema)
+                break
+
+            except Exception as e:
+                if attempt < self._max_retries - 1:
+                    delay = self._compute_backoff_delay(attempt)
+                    logger.warning(
+                        "ClickHouse connection failed, retrying with backoff...",
+                        error=str(e),
+                        attempt=attempt + 1,
+                        delay_s=round(delay, 2),
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(
+                        "ClickHouse connection failed after max retries, falling back to WAL",
+                        error=str(e),
+                        max_retries=self._max_retries,
+                    )
+                    self.connected = False
+
+    def _init_schema(self):
+        """Initialize ClickHouse schema from SQL file."""
+        try:
+            schema_path = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
+            if os.path.exists(schema_path):
+                with open(schema_path, "r") as f:
+                    sql_script = f.read()
+                    statements = sql_script.split(";")
+                    for stmt in statements:
+                        if stmt.strip():
+                            self.ch_client.command(stmt)
+                logger.info("Schema initialized from SQL")
+            else:
+                logger.warning("Schema file not found", path=schema_path)
+        except Exception as se:
+            logger.error("Schema initialization failed", error=str(se))
 
     async def write(self, table: str, data: list):
         """

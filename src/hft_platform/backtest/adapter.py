@@ -185,8 +185,14 @@ class HftBacktestAdapter:
     def _sync_positions(self):
         try:
             self.positions[self.symbol] = self.hbt.position(0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(
+                "Failed to sync position from hftbacktest",
+                symbol=self.symbol,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            # Keep stale position rather than silently failing - strategy should be notified
 
 
 class StrategyHbtAdapter:

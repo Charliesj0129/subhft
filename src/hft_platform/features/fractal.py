@@ -67,7 +67,7 @@ def hurst_exponent(ts_input) -> float:
 
         # Average R/S for this scale
         if chunk_rs:
-            rs_values.append(np.mean(chunk_rs))
+            rs_values.append(float(np.mean(chunk_rs)))
         else:
             rs_values.append(0.0)
 

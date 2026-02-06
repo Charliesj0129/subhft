@@ -16,7 +16,13 @@ services:
       - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
       - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
       - HFT_CLICKHOUSE_HOST=clickhouse
+      - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
       - HFT_CLICKHOUSE_ENABLED=1
+      - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
+      - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
+      - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
+      - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
+      - TZ=${TZ:-Asia/Taipei}
       - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
       - PYTHONDONTWRITEBYTECODE=1
     volumes:
@@ -86,6 +92,24 @@ services:
     command: ["python", "-m", "hft_platform.recorder.loader"]
     depends_on:
       - clickhouse
+ 
+  hft-monitor:
+    extends: hft-base
+    container_name: hft-monitor
+    command: ["python", "scripts/monitor_runtime_health.py"]
+    depends_on:
+      - hft-engine
+      - clickhouse
+    environment:
+      - HFT_MONITOR_METRICS_URL=http://hft-engine:9090/metrics
+      - HFT_CLICKHOUSE_HOST=clickhouse
+      - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
+      - HFT_MONITOR_INTERVAL_S=${HFT_MONITOR_INTERVAL_S:-10}
+      - HFT_MONITOR_MAX_INGEST_LAG_S=${HFT_MONITOR_MAX_INGEST_LAG_S:-5}
+      - HFT_MONITOR_FUTURE_TOLERANCE_S=${HFT_MONITOR_FUTURE_TOLERANCE_S:-60}
+      - HFT_MONITOR_FEED_GAP_WARN_S=${HFT_MONITOR_FEED_GAP_WARN_S:-5}
+      - HFT_MONITOR_WAL_RATE_WARN=${HFT_MONITOR_WAL_RATE_WARN:-1}
+      - HFT_MONITOR_INGEST_RATE_MIN=${HFT_MONITOR_INGEST_RATE_MIN:-1}
 
   prometheus:
     image: prom/prometheus:latest

@@ -32,7 +32,7 @@ class Batcher:
         flush_interval_ms: int = 500,
         writer=None,
         max_buffer_size: int | None = None,
-        backpressure_policy: str = BackpressurePolicy.DROP_OLDEST,
+        backpressure_policy: str = BackpressurePolicy.DROP_NEWEST,
     ):
         self.table_name = table_name
         self.flush_limit = flush_limit

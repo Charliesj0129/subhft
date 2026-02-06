@@ -17,6 +17,11 @@ class WithDict:
         return {"value": self.value}
 
 
+class PlainObject:
+    def __init__(self, value):
+        self.value = value
+
+
 def test_serialize_slots_and_enums():
     event = OrderEvent(
         order_id="O1",
@@ -47,3 +52,9 @@ def test_serialize_nested_structures():
     assert payload["color"] == "red"
     assert payload["list"][0]["value"] == 1
     assert payload["list"][1]["inner"]["value"] == 2
+
+
+def test_serialize_dict_fallback_and_scalar():
+    payload = serialize(PlainObject(3))
+    assert payload["value"] == 3
+    assert serialize(42) == 42

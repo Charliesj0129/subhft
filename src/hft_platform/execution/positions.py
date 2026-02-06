@@ -1,5 +1,6 @@
 import importlib
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -152,14 +153,36 @@ class PositionStore:
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self._rust_tracker = _RustPositionTracker() if _RustPositionTracker is not None else None
         self._log_fills = os.getenv("HFT_LOG_FILLS", "0") == "1"
+        # Lock for atomic Rust/Python tracker access to prevent race conditions.
+        # NOTE: This is intentionally a threading.Lock (not asyncio.Lock) because:
+        # 1. The Rust FFI calls are synchronous and cannot be awaited
+        # 2. The critical section is very short (microseconds for Rust path)
+        # 3. For async contexts, use on_fill_async() which runs this in a thread pool
+        self._fill_lock = threading.Lock()
 
     def on_fill(self, fill: FillEvent) -> PositionDelta:
+        """Process fill with atomic tracker access.
+
+        NOTE: This method acquires a threading.Lock. In async contexts, prefer
+        on_fill_async() to avoid blocking the event loop.
+        """
         key = self._key(fill.account_id, fill.strategy_id, fill.symbol)
 
-        if self._rust_tracker is not None:
-            return self._on_fill_rust(fill, key)
+        # Use lock to ensure atomic check-and-call for tracker selection
+        with self._fill_lock:
+            if self._rust_tracker is not None:
+                return self._on_fill_rust(fill, key)
 
-        return self._on_fill_python(fill, key)
+            return self._on_fill_python(fill, key)
+
+    async def on_fill_async(self, fill: FillEvent) -> PositionDelta:
+        """Async-friendly version that runs fill processing in a thread pool.
+
+        Use this in async contexts to avoid blocking the event loop.
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self.on_fill, fill)
 
     def _on_fill_rust(self, fill: FillEvent, key: str) -> PositionDelta:
         net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled = self._rust_tracker.update(

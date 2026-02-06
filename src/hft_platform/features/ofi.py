@@ -18,8 +18,8 @@ class OFICalculator:
 
             self.weights = [math.exp(-decay_alpha * i) for i in range(depth)]
 
-        self.prev_bids = []  # List of (price, vol)
-        self.prev_asks = []
+        self.prev_bids: list[list[float]] = []  # List of [price, vol]
+        self.prev_asks: list[list[float]] = []
 
         # Latest Decomposition components
         self.last_decompose = {"ofi_total": 0.0, "ofi_limit": 0.0, "ofi_cancel": 0.0, "ofi_trade": 0.0}

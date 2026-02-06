@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 
 import yaml
@@ -35,7 +36,8 @@ class RiskEngine:
             MaxNotionalValidator(self.config, price_scale_provider),
         ]
         self.storm_guard = StormGuardFSM(self.config)
-        self.monotomic_cmd_id = 0
+        self._cmd_id_lock = threading.Lock()
+        self._monotomic_cmd_id = 0
 
     def load_config(self):
         with open(self.config_path, "r") as f:
@@ -92,13 +94,25 @@ class RiskEngine:
 
         return RiskDecision(True, intent)
 
+    @property
+    def monotomic_cmd_id(self) -> int:
+        """Thread-safe access to command ID counter."""
+        with self._cmd_id_lock:
+            return self._monotomic_cmd_id
+
+    def _next_cmd_id(self) -> int:
+        """Thread-safe increment and return of command ID."""
+        with self._cmd_id_lock:
+            self._monotomic_cmd_id += 1
+            return self._monotomic_cmd_id
+
     def create_command(self, intent: OrderIntent) -> OrderCommand:
-        self.monotomic_cmd_id += 1
+        cmd_id = self._next_cmd_id()
         # Set 500ms deadline from now (relaxed for Python/Docker latency)
         deadline = time.time_ns() + 500_000_000
 
         return OrderCommand(
-            cmd_id=self.monotomic_cmd_id,
+            cmd_id=cmd_id,
             intent=intent,
             deadline_ns=deadline,
             storm_guard_state=self.storm_guard.state,

@@ -1,5 +1,6 @@
 import time
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, Optional
 
 from structlog import get_logger
@@ -164,7 +165,12 @@ class ExecutionNormalizer:
 
         try:
             qty = int(get("quantity") or get("qty") or get("volume") or 0)
-            price_raw = float(get("price") or 0)
+            # Use Decimal for precise price parsing before scaling to integer
+            price_value = get("price") or 0
+            try:
+                price_decimal = Decimal(str(price_value))
+            except (TypeError, ValueError, InvalidOperation):
+                price_decimal = Decimal(0)
 
             # Map action/side
             action = get("action")
@@ -185,7 +191,8 @@ class ExecutionNormalizer:
                         sym = getattr(c, "code", "")
 
             strategy_id = self._resolve_strategy_id(raw)
-            scale_price = self.price_codec.scale(sym, price_raw)
+            # Scale using Decimal to maintain precision until the final integer conversion
+            scale_price = self.price_codec.scale_decimal(sym, price_decimal)
 
             return FillEvent(
                 fill_id=str(get("seqno") or get("seq_no") or ""),

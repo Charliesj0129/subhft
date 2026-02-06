@@ -55,8 +55,8 @@ class Strategy(BaseStrategy):
         logger.info("RustAlphaStrategy Initialized", params=self.params)
 
         # Shadow Book State
-        self.bids = {}
-        self.asks = {}
+        self.bids: dict[float, float] = {}
+        self.asks: dict[float, float] = {}
 
     def on_book_update(self, event: BidAskEvent) -> None:
         if event.symbol not in self.symbols:

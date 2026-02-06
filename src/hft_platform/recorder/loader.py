@@ -15,11 +15,19 @@ logger = get_logger("wal_loader")
 DEFAULT_INSERT_MAX_RETRIES = 3
 DEFAULT_INSERT_BASE_DELAY_S = 0.5
 DEFAULT_INSERT_MAX_BACKOFF_S = 5.0
+try:
+    _TS_MAX_FUTURE_NS = int(float(os.getenv("HFT_TS_MAX_FUTURE_S", "5")) * 1e9)
+except Exception:
+    _TS_MAX_FUTURE_NS = 0
 
 
 class WALLoaderService:
     # Configurable poll interval (default 1s, was 5s)
     DEFAULT_POLL_INTERVAL_S = 1.0
+    # Connection retry configuration
+    DEFAULT_CONNECT_MAX_RETRIES = 10
+    DEFAULT_CONNECT_BASE_DELAY_S = 5.0
+    DEFAULT_CONNECT_MAX_BACKOFF_S = 300.0  # 5 minutes max between retries
 
     def __init__(self, wal_dir=".wal", archive_dir=".wal/archive", ch_host="clickhouse", ch_port=9000):
         self.wal_dir = wal_dir
@@ -31,6 +39,17 @@ class WALLoaderService:
         self.ch_host = os.getenv("HFT_CLICKHOUSE_HOST") or os.getenv("CLICKHOUSE_HOST") or ch_host
         self.ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT") or os.getenv("CLICKHOUSE_PORT") or ch_port)
         self.ch_client = None
+
+        # Connection retry configuration with circuit breaker pattern
+        self._connect_max_retries = int(os.getenv("HFT_CONNECT_MAX_RETRIES", str(self.DEFAULT_CONNECT_MAX_RETRIES)))
+        self._connect_base_delay_s = float(
+            os.getenv("HFT_CONNECT_BASE_DELAY_S", str(self.DEFAULT_CONNECT_BASE_DELAY_S))
+        )
+        self._connect_max_backoff_s = float(
+            os.getenv("HFT_CONNECT_MAX_BACKOFF_S", str(self.DEFAULT_CONNECT_MAX_BACKOFF_S))
+        )
+        self._connect_failures = 0
+        self._circuit_open_until = 0.0
 
         # Insert retry configuration
         self._insert_max_retries = int(os.getenv("HFT_INSERT_MAX_RETRIES", str(DEFAULT_INSERT_MAX_RETRIES)))
@@ -70,6 +89,14 @@ class WALLoaderService:
             logger.error("Failed to connect to ClickHouse", error=str(e), error_type=type(e).__name__)
             self.ch_client = None
 
+    def _compute_connect_backoff(self, attempt: int) -> float:
+        """Compute exponential backoff delay for connection retry."""
+        import random
+
+        delay = min(self._connect_base_delay_s * (2**attempt), self._connect_max_backoff_s)
+        jitter = delay * 0.25 * (random.random() * 2 - 1)
+        return max(1.0, delay + jitter)
+
     def run(self):
         self.running = True
         if not os.path.exists(self.archive_dir):
@@ -79,10 +106,44 @@ class WALLoaderService:
 
         while self.running:
             if not self.ch_client:
+                # Check circuit breaker
+                now = time.time()
+                if self._circuit_open_until > now:
+                    sleep_time = min(self._circuit_open_until - now, 60.0)
+                    logger.debug(
+                        "Connection circuit breaker open, waiting",
+                        sleep_s=round(sleep_time, 1),
+                        failures=self._connect_failures,
+                    )
+                    time.sleep(sleep_time)
+                    continue
+
                 self.connect()
                 if not self.ch_client:
-                    time.sleep(5)
+                    self._connect_failures += 1
+                    if self._connect_failures >= self._connect_max_retries:
+                        # Open circuit breaker
+                        backoff = self._compute_connect_backoff(self._connect_failures - self._connect_max_retries)
+                        self._circuit_open_until = time.time() + backoff
+                        logger.error(
+                            "ClickHouse connection failed repeatedly, circuit breaker opened",
+                            failures=self._connect_failures,
+                            backoff_s=round(backoff, 1),
+                        )
+                    else:
+                        delay = self._compute_connect_backoff(self._connect_failures)
+                        logger.warning(
+                            "ClickHouse connection failed, retrying with backoff",
+                            attempt=self._connect_failures,
+                            max_retries=self._connect_max_retries,
+                            delay_s=round(delay, 1),
+                        )
+                        time.sleep(delay)
                     continue
+                else:
+                    # Reset on successful connection
+                    self._connect_failures = 0
+                    self._circuit_open_until = 0.0
 
             try:
                 self.process_files()
@@ -345,8 +406,19 @@ class WALLoaderService:
                     asks_vol = [int(r.get("ask_depth") or 0)]
 
                 # Ensure ingest_ts is not earlier than exchange ts to avoid negative lag
-                if ts and ingest_ts < ts:
-                    ingest_ts = ts
+                if ts:
+                    if _TS_MAX_FUTURE_NS:
+                        now_ns = time.time_ns()
+                        if ts - now_ns > _TS_MAX_FUTURE_NS:
+                            logger.warning(
+                                "Exchange timestamp in future",
+                                symbol=r.get("symbol"),
+                                delta_ns=ts - now_ns,
+                                max_future_ns=_TS_MAX_FUTURE_NS,
+                            )
+                            ts = now_ns
+                    if ingest_ts < ts:
+                        ingest_ts = ts
 
                 # Minimal validation for missing book data
                 if not bids_price or not asks_price:

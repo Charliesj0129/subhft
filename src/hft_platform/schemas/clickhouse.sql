@@ -17,15 +17,15 @@ CREATE TABLE IF NOT EXISTS hft.market_data (
     ingest_ts Int64 Codec(DoubleDelta, LZ4),
 
     -- Pricing (Fixed-point scaled, NOT Float - Precision Law)
-    price_scaled Int64 Codec(Gorilla, LZ4),
-    volume Int64 Codec(Gorilla, LZ4),
+    price_scaled Int64 Codec(DoubleDelta, LZ4),
+    volume Int64 Codec(DoubleDelta, LZ4),
 
     -- LOB (Arrays for variable depth, usually 1 or 5)
     -- Prices as scaled Int64, volumes as Int64
-    bids_price Array(Int64) Codec(Gorilla, LZ4),
-    bids_vol Array(Int64) Codec(Gorilla, LZ4),
-    asks_price Array(Int64) Codec(Gorilla, LZ4),
-    asks_vol Array(Int64) Codec(Gorilla, LZ4),
+    bids_price Array(Int64) Codec(LZ4),
+    bids_vol Array(Int64) Codec(LZ4),
+    asks_price Array(Int64) Codec(LZ4),
+    asks_vol Array(Int64) Codec(LZ4),
 
     -- Flags
     seq_no UInt64
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS hft.orders (
     status String, -- 'FILLED', 'NEW'
 
     ingest_ts Int64 Codec(DoubleDelta, LZ4),
-    latency_us Int64 Codec(Gorilla, LZ4) -- Internal system latency (microseconds)
+    latency_us Int64 Codec(DoubleDelta, LZ4) -- Internal system latency (microseconds)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(toDateTime(ingest_ts / 1000000000))
 ORDER BY (strategy_id, symbol, ingest_ts);
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS hft.trades (
     side String,
     price_scaled Int64 Codec(DoubleDelta, LZ4),
     qty Int64,
-    fee_scaled Int64 Codec(Gorilla, LZ4),
+    fee_scaled Int64 Codec(DoubleDelta, LZ4),
 
     match_ts Int64 Codec(DoubleDelta, LZ4)
 ) ENGINE = MergeTree()
@@ -76,11 +76,11 @@ CREATE TABLE IF NOT EXISTS hft.ohlcv_1m (
     exchange String,
     bucket DateTime Codec(DoubleDelta, LZ4),
 
-    open_scaled Int64 Codec(Gorilla, LZ4),
-    high_scaled Int64 Codec(Gorilla, LZ4),
-    low_scaled Int64 Codec(Gorilla, LZ4),
-    close_scaled Int64 Codec(Gorilla, LZ4),
-    volume Int64 Codec(Gorilla, LZ4),
+    open_scaled Int64 Codec(DoubleDelta, LZ4),
+    high_scaled Int64 Codec(DoubleDelta, LZ4),
+    low_scaled Int64 Codec(DoubleDelta, LZ4),
+    close_scaled Int64 Codec(DoubleDelta, LZ4),
+    volume Int64 Codec(DoubleDelta, LZ4),
     tick_count UInt64
 ) ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(bucket)
@@ -108,10 +108,10 @@ CREATE TABLE IF NOT EXISTS hft.latency_stats_1m (
     strategy_id String,
 
     order_count UInt64,
-    latency_p50 Int64 Codec(Gorilla, LZ4),
-    latency_p95 Int64 Codec(Gorilla, LZ4),
-    latency_p99 Int64 Codec(Gorilla, LZ4),
-    latency_max Int64 Codec(Gorilla, LZ4)
+    latency_p50 Int64 Codec(DoubleDelta, LZ4),
+    latency_p95 Int64 Codec(DoubleDelta, LZ4),
+    latency_p99 Int64 Codec(DoubleDelta, LZ4),
+    latency_max Int64 Codec(DoubleDelta, LZ4)
 ) ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(bucket)
 ORDER BY (strategy_id, bucket);
@@ -133,7 +133,7 @@ GROUP BY strategy_id, bucket;
 CREATE TABLE IF NOT EXISTS hft.latency_spans (
     ingest_ts Int64 Codec(DoubleDelta, LZ4),
     stage LowCardinality(String),
-    latency_us Int64 Codec(Gorilla, LZ4),
+    latency_us Int64 Codec(DoubleDelta, LZ4),
     trace_id String,
     symbol LowCardinality(String),
     strategy_id LowCardinality(String)
