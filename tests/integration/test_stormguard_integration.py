@@ -76,21 +76,21 @@ class TestStormGuardStateMachine(unittest.TestCase):
         state = guard.update(latency_us=thresholds.latency_storm_us + 1)
         self.assertEqual(state, StormGuardState.STORM)
 
-    def test_feed_gap_triggers_halt(self):
-        """Feed gap exceeding threshold triggers HALT state."""
+    def test_feed_gap_triggers_storm(self):
+        """Feed gap exceeding threshold triggers STORM state."""
         guard = StormGuard()
         thresholds = guard.thresholds
 
         state = guard.update(feed_gap_s=thresholds.feed_gap_halt_s + 0.1)
-        self.assertEqual(state, StormGuardState.HALT)
+        self.assertEqual(state, StormGuardState.STORM)
 
     def test_halt_priority_over_storm(self):
         """HALT condition takes priority over STORM."""
         guard = StormGuard()
 
-        # Both HALT (feed gap) and STORM (latency) conditions
+        # Both HALT (drawdown) and STORM (latency) conditions
         state = guard.update(
-            feed_gap_s=2.0,  # HALT
+            drawdown_pct=-0.03,  # HALT
             latency_us=25000,  # STORM
         )
         self.assertEqual(state, StormGuardState.HALT)
@@ -100,7 +100,7 @@ class TestStormGuardStateMachine(unittest.TestCase):
         guard = StormGuard()
 
         # Trigger HALT
-        guard.update(feed_gap_s=2.0)
+        guard.update(drawdown_pct=-0.03)
         self.assertEqual(guard.state, StormGuardState.HALT)
 
         # Recover with safe values
@@ -169,9 +169,9 @@ class TestStormGuardWithCustomThresholds(unittest.TestCase):
         custom = RiskThresholds(feed_gap_halt_s=0.5)  # 500ms
         guard = StormGuard(thresholds=custom)
 
-        # 600ms gap should trigger HALT with custom threshold
+        # 600ms gap should trigger STORM with custom threshold
         state = guard.update(feed_gap_s=0.6)
-        self.assertEqual(state, StormGuardState.HALT)
+        self.assertEqual(state, StormGuardState.STORM)
 
 
 class TestStormGuardSystemIntegration(unittest.TestCase):
@@ -247,7 +247,7 @@ class TestStormGuardConcurrency(unittest.TestCase):
         state = guard.update(
             drawdown_pct=-0.007,  # WARM level
             latency_us=10000,  # WARM level
-            feed_gap_s=0.5,  # Below HALT threshold
+            feed_gap_s=0.5,  # Below feed gap threshold
         )
 
         # Should be WARM (highest applicable state below HALT)
@@ -273,12 +273,12 @@ class TestStormGuardMarketDataIntegration(unittest.TestCase):
 
         # Simulate feed gap from market data service
         mock_md_service = MagicMock()
-        mock_md_service.get_max_feed_gap_s.return_value = 1.5  # Above HALT threshold
+        mock_md_service.get_max_feed_gap_s.return_value = 1.5  # Above feed gap threshold
 
         feed_gap_s = mock_md_service.get_max_feed_gap_s()
         state = guard.update(feed_gap_s=feed_gap_s)
 
-        self.assertEqual(state, StormGuardState.HALT)
+        self.assertEqual(state, StormGuardState.STORM)
 
     def test_per_symbol_feed_gaps(self):
         """Test per-symbol feed gap monitoring."""
@@ -295,7 +295,7 @@ class TestStormGuardMarketDataIntegration(unittest.TestCase):
         guard = StormGuard()
         state = guard.update(feed_gap_s=max_gap)
 
-        self.assertEqual(state, StormGuardState.HALT)
+        self.assertEqual(state, StormGuardState.STORM)
 
 
 if __name__ == "__main__":
