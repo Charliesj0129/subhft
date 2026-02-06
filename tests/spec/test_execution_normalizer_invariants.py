@@ -1,5 +1,6 @@
 import os
 import tempfile
+from decimal import Decimal
 
 import pytest
 
@@ -51,7 +52,8 @@ def test_fill_normalization_scales_and_sides(price_int, action):
             1,
         )
         event = norm.normalize_fill(raw)
-        expected_price = int(float(price_float) * 100)
+        # Use Decimal for expected_price calculation to match normalizer's precision
+        expected_price = int(Decimal(str(price_float)) * 100)
         assert event.price == expected_price
 
         expected_side = Side.SELL if action in ("Sell", -1) else Side.BUY

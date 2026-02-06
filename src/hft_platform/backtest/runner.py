@@ -20,7 +20,7 @@ class HftBacktestConfig:
     fee_maker: float = 0
     fee_taker: float = 0
     partial_fill: bool = True
-    record_out: str = None
+    record_out: str | None = None
     report: bool = False
     seed: int = 42
 
@@ -149,14 +149,22 @@ class HftBacktestRunner:
 
             reporter = HTMLReporter(report_path)
 
-            # TODO: Extract real equity curve from hftbacktest stats
-            # For prototype demo, generating a synthetic curve based on final PnL
-            # This allows the user to see the "Chart" features immediately
+            # WARNING: SYNTHETIC EQUITY CURVE - NOT REAL BACKTEST RESULTS
+            # The equity curve below is generated synthetically and does NOT reflect
+            # actual strategy performance. This is a prototype limitation.
+            # TODO(CRITICAL): Extract real equity curve from hftbacktest.stats() API
+            # Real implementation should use: hbt.stats().equity or similar
+            # Do NOT use these metrics for trading decisions until fixed.
+            logger.warning(
+                "Backtest report uses SYNTHETIC equity curve",
+                strategy=self.strategy_name,
+                note="Results are NOT real - implement hftbacktest stats extraction",
+            )
             steps = 1000
             start_equity = 1_000_000
             end_equity = start_equity + pnl
 
-            # Random walk bridge
+            # Random walk bridge (SYNTHETIC - NOT REAL DATA)
             equity_metrics = np.linspace(start_equity, end_equity, steps)
             noise = np.random.normal(0, (end_equity - start_equity) * 0.1, steps)
             equity_curve = equity_metrics + noise

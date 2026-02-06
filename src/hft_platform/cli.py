@@ -373,7 +373,7 @@ def cmd_resolve_symbols(args: argparse.Namespace):
         from hft_platform.config.loader import detect_live_credentials, load_settings
     except ImportError:
 
-        def load_settings():
+        def load_settings(cli_overrides: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
             return {}, {}
 
     # Get credentials

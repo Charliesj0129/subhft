@@ -1,6 +1,7 @@
 import asyncio
+import inspect
 import time
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional, Union
 
 from structlog import get_logger
 
@@ -10,6 +11,37 @@ from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("execution.router")
+
+
+def _create_task_with_error_handling(coro, name: Optional[str] = None) -> asyncio.Task:
+    """Create an asyncio task with proper exception handling to prevent silent failures.
+
+    Args:
+        coro: The coroutine to run as a task.
+        name: Optional name for the task for logging purposes.
+
+    Returns:
+        The created task with exception callback attached.
+    """
+    task = asyncio.create_task(coro, name=name)
+
+    def _on_task_done(t: asyncio.Task) -> None:
+        try:
+            exc = t.exception()
+            if exc is not None:
+                logger.error(
+                    "Background task failed",
+                    task_name=t.get_name(),
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+        except asyncio.CancelledError:
+            pass
+        except asyncio.InvalidStateError:
+            pass
+
+    task.add_done_callback(_on_task_done)
+    return task
 
 
 class ExecutionRouter:
@@ -24,7 +56,7 @@ class ExecutionRouter:
         raw_queue: asyncio.Queue,
         order_id_map: Dict[str, str],
         position_store: PositionStore,
-        terminal_handler: Callable[[str, str], None],
+        terminal_handler: Union[Callable[[str, str], None], object],
     ):
         self.bus = bus
         self.raw_queue = raw_queue
@@ -55,14 +87,29 @@ class ExecutionRouter:
                         if int(norm.status) >= 3:
                             handler = self.terminal_handler
                             if callable(handler):
-                                handler(norm.strategy_id, norm.order_id)
+                                result = handler(norm.strategy_id, norm.order_id)
+                                if inspect.iscoroutine(result):
+                                    _create_task_with_error_handling(
+                                        result,
+                                        name=f"terminal_handler:{norm.strategy_id}:{norm.order_id}",
+                                    )
                             elif hasattr(handler, "on_terminal_state"):
-                                handler.on_terminal_state(norm.strategy_id, norm.order_id)
+                                method = handler.on_terminal_state
+                                result = method(norm.strategy_id, norm.order_id)
+                                if inspect.iscoroutine(result):
+                                    _create_task_with_error_handling(
+                                        result,
+                                        name=f"terminal_state:{norm.strategy_id}:{norm.order_id}",
+                                    )
 
                 elif raw.topic == "deal":
                     norm = self.normalizer.normalize_fill(raw)
                     if norm:
-                        delta = self.position_store.on_fill(norm)
+                        # Use async version to avoid blocking event loop with Rust FFI lock
+                        if hasattr(self.position_store, "on_fill_async"):
+                            delta = await self.position_store.on_fill_async(norm)
+                        else:
+                            delta = self.position_store.on_fill(norm)
                         publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
                         if publish_many_nowait:
                             publish_many_nowait([delta, norm])
@@ -87,4 +134,7 @@ class ExecutionRouter:
         if publish_nowait:
             publish_nowait(event)
             return
-        asyncio.create_task(self.bus.publish(event))
+        _create_task_with_error_handling(
+            self.bus.publish(event),
+            name=f"bus_publish:{type(event).__name__}",
+        )

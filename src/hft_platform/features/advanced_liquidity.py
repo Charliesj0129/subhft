@@ -76,4 +76,4 @@ class RollingAmihud:
         if len(self.ratios) < 5:
             return 0.0
 
-        return np.mean(self.ratios)
+        return float(np.mean(self.ratios))

@@ -3,7 +3,6 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
 from hft_platform.order.adapter import OrderAdapter
 
@@ -120,8 +119,9 @@ def test_circuit_breaker_blocks(mock_load):
         "strat:11",
     ],
 )
+@pytest.mark.asyncio
 @patch("hft_platform.order.adapter.OrderAdapter.load_config")
-def test_terminal_cleanup_resolves_mapping_shapes(mock_load, mapping):
+async def test_terminal_cleanup_resolves_mapping_shapes(mock_load, mapping):
     queue = asyncio.Queue()
     client = MagicMock()
     adapter = OrderAdapter("config/dummy.yaml", queue, client)
@@ -129,7 +129,7 @@ def test_terminal_cleanup_resolves_mapping_shapes(mock_load, mapping):
     adapter.live_orders["strat:11"] = {"id": "T11"}
     adapter.order_id_map["O11"] = mapping
 
-    adapter.on_terminal_state("strat", "O11")
+    await adapter.on_terminal_state("strat", "O11")
     assert "strat:11" not in adapter.live_orders
 
 

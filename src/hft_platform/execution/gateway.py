@@ -37,8 +37,8 @@ class ExecutionGateway:
         self.running = False
         self.adapter.running = False
 
-    def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
-        self.adapter.on_terminal_state(strategy_id, order_id)
+    async def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
+        await self.adapter.on_terminal_state(strategy_id, order_id)
 
     async def execute(self, cmd: Any) -> None:
         await self.adapter.execute(cmd)

@@ -35,7 +35,7 @@ class RingBufferBus:
     - Multiple Readers -> track their own local_seq
     """
 
-    def __init__(self, size: int = 65536):
+    def __init__(self, size: int = 65536, storm_guard: Any = None):
         self.size = size
         self._use_rust = _RUST_ENABLED and _USE_RUST_BUS and _RUST_RING_FACTORY is not None
         ring_factory = _RUST_RING_FACTORY
@@ -56,6 +56,15 @@ class RingBufferBus:
         self._notify_counter = 0
         self._spin_sleep = float(os.getenv("HFT_BUS_SPIN_SLEEP", "0"))
         self._spin_budget = max(1, int(os.getenv("HFT_BUS_SPIN_BUDGET", "100")))
+        # StormGuard reference for triggering HALT on critical overflow
+        self._storm_guard = storm_guard
+        # Overflow threshold for triggering HALT (consecutive overflows)
+        self._overflow_halt_threshold = int(os.getenv("HFT_BUS_OVERFLOW_HALT_THRESHOLD", "3"))
+        self._overflow_count = 0
+
+    def set_storm_guard(self, storm_guard: Any) -> None:
+        """Set StormGuard reference for overflow HALT triggering."""
+        self._storm_guard = storm_guard
 
     def _publish_unlocked(self, event: Any) -> None:
         next_seq = self.cursor + 1
@@ -146,7 +155,21 @@ class RingBufferBus:
             if current_cursor - local_seq > self.size:
                 # Lagged too much, skip to latest - size
                 self.metrics.bus_overflow_total.inc()
-                logger.warning("Consumer lagged too much, skipping", lag=current_cursor - local_seq)
+                self._overflow_count += 1
+                lag = current_cursor - local_seq
+                logger.error(
+                    "CRITICAL: Consumer lagged too much, data loss occurred",
+                    lag=lag,
+                    overflow_count=self._overflow_count,
+                    threshold=self._overflow_halt_threshold,
+                )
+
+                # Trigger StormGuard HALT on repeated overflows
+                if self._overflow_count >= self._overflow_halt_threshold and self._storm_guard is not None:
+                    halt_msg = f"EventBus overflow: {self._overflow_count} overflows, lag={lag}"
+                    self._storm_guard.trigger_halt(halt_msg)
+                    logger.critical("StormGuard HALT triggered due to EventBus overflow")
+
                 local_seq = current_cursor - self.size
 
             while local_seq < current_cursor:
@@ -187,7 +210,21 @@ class RingBufferBus:
             current_cursor = self.cursor
             if current_cursor - local_seq > self.size:
                 self.metrics.bus_overflow_total.inc()
-                logger.warning("Consumer lagged too much, skipping", lag=current_cursor - local_seq)
+                self._overflow_count += 1
+                lag = current_cursor - local_seq
+                logger.error(
+                    "CRITICAL: Consumer batch lagged too much, data loss occurred",
+                    lag=lag,
+                    overflow_count=self._overflow_count,
+                    threshold=self._overflow_halt_threshold,
+                )
+
+                # Trigger StormGuard HALT on repeated overflows
+                if self._overflow_count >= self._overflow_halt_threshold and self._storm_guard is not None:
+                    halt_msg = f"EventBus batch overflow: {self._overflow_count} overflows, lag={lag}"
+                    self._storm_guard.trigger_halt(halt_msg)
+                    logger.critical("StormGuard HALT triggered due to EventBus batch overflow")
+
                 local_seq = current_cursor - self.size
 
             batch: List[Any] = []

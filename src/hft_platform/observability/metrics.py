@@ -3,7 +3,7 @@ from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
 def _unregister_metric_prefixes(prefixes: list[str]) -> None:
     collectors = set()
-    for name, collector in list(REGISTRY._names_to_collectors.items()):  # type: ignore[attr-defined]
+    for name, collector in list(REGISTRY._names_to_collectors.items()):
         if any(name.startswith(prefix) for prefix in prefixes):
             collectors.add(collector)
     for collector in collectors:

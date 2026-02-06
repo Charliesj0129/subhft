@@ -1,9 +1,11 @@
 import json
 import os
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from structlog import get_logger
+
+_import_error: Optional[ImportError]
 
 try:
     from hftbacktest.types import (

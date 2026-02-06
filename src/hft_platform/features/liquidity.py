@@ -43,8 +43,8 @@ class RollingKyleLambda:
 
     def __init__(self, window_size: int = 100):
         self.window_size = window_size
-        self.dp_buffer = deque(maxlen=window_size)
-        self.flow_buffer = deque(maxlen=window_size)
+        self.dp_buffer: deque[float] = deque(maxlen=window_size)
+        self.flow_buffer: deque[float] = deque(maxlen=window_size)
 
         # Incremental stats could be used, but recalculating on deque is robust for small N
 

@@ -224,12 +224,26 @@ class HFTSystem:
             if t_gateway and not t_gateway.done():
                 metrics.execution_gateway_heartbeat_ts.set(now)
 
-            # Check StormGuard State
+            # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
-                logger.error("System HALTED by StormGuard.")
-                # potentially self.stop() or just block orders?
+                logger.error("System HALTED by StormGuard - blocking orders")
+                # Drain order queue to prevent any pending orders from executing
+                drained_count = 0
+                while not self.order_queue.empty():
+                    try:
+                        self.order_queue.get_nowait()
+                        self.order_queue.task_done()
+                        drained_count += 1
+                    except asyncio.QueueEmpty:
+                        break
+                if drained_count > 0:
+                    logger.warning("Drained blocked orders during HALT", count=drained_count)
+                # Signal order adapter to stop processing
+                if hasattr(self.order_adapter, "running"):
+                    self.order_adapter.running = False
 
-    def stop(self):
+    async def stop_async(self):
+        """Async stop with proper task cleanup."""
         self.running = False
         self.md_service.running = False
         self.exec_service.running = False
@@ -237,6 +251,49 @@ class HFTSystem:
         self.recon_service.running = False
         self.strategy_runner.running = False
         self.execution_gateway.stop()  # Clean shutdown
+
+        # Cancel and await all tasks for clean shutdown
+        for name, task in list(self.tasks.items()):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Task cleanup timeout", task=name)
+                except asyncio.CancelledError:
+                    pass  # Expected
+                except Exception as e:
+                    logger.error("Task cleanup error", task=name, error=str(e))
+
+        self.tasks.clear()
+        logger.info("System stopped and tasks cleaned up")
+
+    def stop(self):
+        """Synchronous stop (schedules async cleanup if loop is running)."""
+        self.running = False
+        self.md_service.running = False
+        self.exec_service.running = False
+        self.risk_engine.running = False
+        self.recon_service.running = False
+        self.strategy_runner.running = False
+        self.execution_gateway.stop()  # Clean shutdown
+
+        # Schedule async cleanup if event loop is available
+        if hasattr(self, "loop") and self.loop.is_running():
+            asyncio.create_task(self._cleanup_tasks())
+
+    async def _cleanup_tasks(self):
+        """Cancel and await all running tasks."""
+        for name, task in list(self.tasks.items()):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                except Exception as e:
+                    logger.error("Task cleanup error", task=name, error=str(e))
+        self.tasks.clear()
 
     def _on_exec(self, topic, data):
         # This callback runs in Shioaji thread.
