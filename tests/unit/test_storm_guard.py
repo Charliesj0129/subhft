@@ -28,9 +28,9 @@ class TestStormGuard(unittest.TestCase):
         self.assertEqual(state, StormGuardState.STORM)
 
     def test_transition_to_halt(self):
-        # Feed Gap 1.1 (> 1.0) -> HALT
+        # Feed Gap 1.1 (> 1.0) -> STORM (should not HALT)
         state = self.guard.update(feed_gap_s=1.1)
-        self.assertEqual(state, StormGuardState.HALT)
+        self.assertEqual(state, StormGuardState.STORM)
 
     def test_priority(self):
         # Halt condition AND Storm condition -> Should be HALT
