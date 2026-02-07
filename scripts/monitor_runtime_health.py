@@ -70,6 +70,8 @@ def main() -> None:
     metrics_url = os.getenv("HFT_MONITOR_METRICS_URL", "http://localhost:9090/metrics")
     clickhouse_host = os.getenv("HFT_CLICKHOUSE_HOST") or os.getenv("CLICKHOUSE_HOST") or "clickhouse"
     clickhouse_port = _int_env("HFT_CLICKHOUSE_PORT", 8123)
+    clickhouse_user = os.getenv("HFT_CLICKHOUSE_USER") or os.getenv("CLICKHOUSE_USER") or "default"
+    clickhouse_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD")
     future_tol_s = _float_env("HFT_MONITOR_FUTURE_TOLERANCE_S", 60.0)
     feed_gap_warn_s = _float_env("HFT_MONITOR_FEED_GAP_WARN_S", 5.0)
     wal_rate_warn = _float_env("HFT_MONITOR_WAL_RATE_WARN", 1.0)
@@ -78,7 +80,12 @@ def main() -> None:
     webhook_url = os.getenv("HFT_MONITOR_ALERT_WEBHOOK", "")
     run_once = os.getenv("HFT_MONITOR_ONCE", "0") in {"1", "true", "yes"}
 
-    ch_client = clickhouse_connect.get_client(host=clickhouse_host, port=clickhouse_port)
+    ch_client = clickhouse_connect.get_client(
+        host=clickhouse_host,
+        port=clickhouse_port,
+        username=clickhouse_user,
+        password=clickhouse_password,
+    )
     last_wal_total: float | None = None
     last_ts = time.time()
 
