@@ -91,11 +91,11 @@ class Strategy(BaseStrategy):
         """Trim shadow books to max size, keeping best levels."""
         if len(self.bids) > self._max_book_levels:
             sorted_bids = sorted(self.bids.keys(), reverse=True)
-            for p in sorted_bids[self._max_book_levels:]:
+            for p in sorted_bids[self._max_book_levels :]:
                 del self.bids[p]
         if len(self.asks) > self._max_book_levels:
             sorted_asks = sorted(self.asks.keys())
-            for p in sorted_asks[self._max_book_levels:]:
+            for p in sorted_asks[self._max_book_levels :]:
                 del self.asks[p]
 
     def on_book_update(self, event: BidAskEvent) -> None:
