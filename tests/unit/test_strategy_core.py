@@ -105,12 +105,10 @@ def test_base_strategy_other_events():
     )
     strat.handle_event(ctx, order)
 
-    # LOBStats
+    # LOBStats - backward-compatible interface auto-computes mid_price/spread
     stats = LOBStatsEvent(
         symbol="AAPL",
         ts=0,
-        mid_price=100.5,
-        spread=1.0,
         imbalance=0.1,
         best_bid=100,
         best_ask=101,

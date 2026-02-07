@@ -43,15 +43,13 @@ async def test_simple_mm_logic():
     task = asyncio.create_task(runner.run())
 
     # 2. Publish Stats Event (Typed)
-    # mid=100.0, spread=1.0
+    # Backward-compatible: provide best_bid/best_ask, mid_price/spread auto-computed
     stats = LOBStatsEvent(
         symbol="2330",
         ts=1000,
-        mid_price=100.0,
-        spread=1.0,
         imbalance=0.1,
-        best_bid=99.5,
-        best_ask=100.5,
+        best_bid=99,
+        best_ask=100,
         bid_depth=10,
         ask_depth=10,
     )

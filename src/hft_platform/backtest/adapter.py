@@ -107,13 +107,10 @@ class HftBacktestAdapter:
             if best_bid == 0 or best_ask == 2147483647:
                 continue
 
-            mid = (best_bid + best_ask) / 2.0
-            spread = best_ask - best_bid
+            # LOBStatsEvent auto-computes mid_price_x2/spread from best_bid/best_ask
             event = LOBStatsEvent(
                 symbol=self.symbol,
                 ts=int(self.hbt.current_timestamp),
-                mid_price=float(mid),
-                spread=float(spread),
                 imbalance=0.0,
                 best_bid=int(best_bid),
                 best_ask=int(best_ask),
