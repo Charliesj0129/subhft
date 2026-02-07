@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import time
+from decimal import Decimal
 from typing import Any, List
 
 from structlog import get_logger
@@ -148,7 +149,7 @@ class StrategyRunner:
             trace_id=str(trace_id or ""),
         )
 
-    def _scale_price(self, symbol: str, price: float) -> int:
+    def _scale_price(self, symbol: str, price: int | Decimal) -> int:
         return self.price_codec.scale(symbol, price)
 
     def _build_positions_by_strategy(self):
