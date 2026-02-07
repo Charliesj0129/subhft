@@ -30,6 +30,7 @@ class OrderAdapter:
         # Protected by _order_id_map_lock for concurrent access
         self.order_id_map = order_id_map if order_id_map is not None else {}
         self._order_id_map_lock = asyncio.Lock()
+        self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self.running = False
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
@@ -163,6 +164,15 @@ class OrderAdapter:
                         ids.add(val)
 
         async with self._order_id_map_lock:
+            # Evict oldest entries if at limit (simple FIFO eviction)
+            if len(self.order_id_map) >= self._order_id_map_max_size:
+                # Remove oldest 10% to avoid frequent evictions
+                evict_count = max(1, len(self.order_id_map) // 10)
+                keys_to_remove = list(self.order_id_map.keys())[:evict_count]
+                for k in keys_to_remove:
+                    del self.order_id_map[k]
+                logger.info("Evicted stale order IDs", count=evict_count, remaining=len(self.order_id_map))
+
             for oid in ids:
                 self.order_id_map[str(oid)] = order_key
 

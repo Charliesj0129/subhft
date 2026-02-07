@@ -108,6 +108,7 @@ class ShioajiClient:
         self.metrics = MetricsRegistry.get()
         self._api_cache: dict[str, tuple[float, Any]] = {}
         self._api_cache_lock = threading.Lock()
+        self._api_cache_max_size = int(os.getenv("HFT_API_CACHE_MAX_SIZE", "1000"))
         self._positions_cache_ttl_s = float(os.getenv("HFT_POSITIONS_CACHE_TTL_S", "1.5"))
         self._usage_cache_ttl_s = float(os.getenv("HFT_USAGE_CACHE_TTL_S", "5"))
         self._account_cache_ttl_s = float(os.getenv("HFT_ACCOUNT_CACHE_TTL_S", "5"))
@@ -157,6 +158,16 @@ class ShioajiClient:
     def _cache_set(self, key: str, ttl_s: float, value: Any) -> None:
         expires_at = time.time() + max(0.0, ttl_s)
         with self._api_cache_lock:
+            # Evict expired entries if cache is at limit
+            if len(self._api_cache) >= self._api_cache_max_size:
+                now = time.time()
+                expired_keys = [k for k, (exp, _) in self._api_cache.items() if now >= exp]
+                for k in expired_keys:
+                    del self._api_cache[k]
+                # If still at limit, remove oldest entry
+                if len(self._api_cache) >= self._api_cache_max_size:
+                    oldest_key = min(self._api_cache.keys(), key=lambda k: self._api_cache[k][0])
+                    del self._api_cache[oldest_key]
             self._api_cache[key] = (expires_at, value)
 
     def _rate_limit_api(self, op: str) -> bool:

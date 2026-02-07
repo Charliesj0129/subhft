@@ -114,8 +114,11 @@ class FastGate:
         if self.ks_shm is not None:
             try:
                 self.ks_shm.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # Log cleanup failures for debugging SHM issues
+                import logging
+
+                logging.getLogger("risk.fast_gate").debug("SHM cleanup failed: %s", e)
             self.ks_shm = None
         self.ks_array = None
 
@@ -169,5 +172,8 @@ class FastGate:
         """Destructor - attempt to close shared memory if not already closed."""
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Log destructor failures for debugging (use standard logging to avoid structlog issues)
+            import logging
+
+            logging.getLogger("risk.fast_gate").debug("FastGate destructor error: %s", e)

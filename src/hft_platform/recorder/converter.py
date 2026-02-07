@@ -49,7 +49,12 @@ class WALConverter:
                             continue
 
                         raw_rows.append(row)
-                    except Exception:
+                    except json.JSONDecodeError as e:
+                        logger.warning(
+                            "Skipping corrupt JSON line",
+                            file=fpath,
+                            error=str(e),
+                        )
                         continue
 
         if not raw_rows:

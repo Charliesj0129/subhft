@@ -63,7 +63,13 @@ class Batcher:
         if not isinstance(row_dict, dict):
             try:
                 row_dict = dict(row_dict)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "Failed to convert row to dict, skipping",
+                    table=self.table_name,
+                    row_type=type(row).__name__,
+                    error=str(e),
+                )
                 return  # Skip invalid
 
         async with self.lock:

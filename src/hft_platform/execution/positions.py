@@ -148,6 +148,7 @@ class PositionStore:
     def __init__(self):
         # map: f"{account}:{strategy}:{symbol}" -> Position
         self.positions: Dict[str, Position] = {}
+        self._positions_max_size = int(os.getenv("HFT_POSITIONS_MAX_SIZE", "10000"))
         self.metrics = MetricsRegistry.get()
         self.metadata = SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
@@ -234,6 +235,9 @@ class PositionStore:
 
     def _on_fill_python(self, fill: FillEvent, key: str) -> PositionDelta:
         if key not in self.positions:
+            # Evict flat positions if at limit
+            if len(self.positions) >= self._positions_max_size:
+                self._evict_flat_positions()
             self.positions[key] = Position(fill.account_id, fill.strategy_id, fill.symbol)
 
         pos = self.positions[key]
@@ -262,3 +266,14 @@ class PositionStore:
 
     def _key(self, acc, strat, sym):
         return f"{acc}:{strat}:{sym}"
+
+    def _evict_flat_positions(self) -> None:
+        """Evict positions with net_qty=0 to free memory."""
+        flat_keys = [k for k, pos in self.positions.items() if pos.net_qty == 0]
+        if flat_keys:
+            # Sort by last_update_ts and remove oldest flat positions
+            flat_keys.sort(key=lambda k: self.positions[k].last_update_ts)
+            evict_count = min(len(flat_keys), max(1, len(self.positions) // 10))
+            for k in flat_keys[:evict_count]:
+                del self.positions[k]
+            logger.info("Evicted flat positions", count=evict_count, remaining=len(self.positions))

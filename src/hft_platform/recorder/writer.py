@@ -32,11 +32,13 @@ class DataWriter:
         self.wal = WALWriter(wal_dir)
         # Determine protocol based on port (9000=native, 8123=HTTP)
         use_native = ch_port == self.DEFAULT_NATIVE_PORT
+        ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME") or os.getenv("CLICKHOUSE_USERNAME") or "default"
+        ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
         self.ch_params = {
             "host": ch_host,
             "port": ch_port,
-            "username": "default",
-            "password": "",
+            "username": ch_username,
+            "password": ch_password,
             "compress": True,  # Enable compression for native protocol
         }
         # Native protocol uses 'interface' parameter
