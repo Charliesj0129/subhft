@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import time
 
 from structlog import get_logger
 
@@ -32,7 +33,13 @@ class DataWriter:
         self.wal = WALWriter(wal_dir)
         # Determine protocol based on port (9000=native, 8123=HTTP)
         use_native = ch_port == self.DEFAULT_NATIVE_PORT
-        ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME") or os.getenv("CLICKHOUSE_USERNAME") or "default"
+        ch_username = (
+            os.getenv("HFT_CLICKHOUSE_USER")
+            or os.getenv("HFT_CLICKHOUSE_USERNAME")
+            or os.getenv("CLICKHOUSE_USER")
+            or os.getenv("CLICKHOUSE_USERNAME")
+            or "default"
+        )
         ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
         self.ch_params = {
             "host": ch_host,
@@ -66,6 +73,11 @@ class DataWriter:
         self._max_backoff_s = float(os.getenv("HFT_CH_MAX_BACKOFF_S", str(self.DEFAULT_MAX_BACKOFF_S)))
         self._jitter_factor = float(os.getenv("HFT_CH_JITTER_FACTOR", str(self.DEFAULT_JITTER_FACTOR)))
         self._connect_attempts = 0
+        try:
+            self._ts_max_future_ns = int(float(os.getenv("HFT_TS_MAX_FUTURE_S", "5")) * 1e9)
+        except ValueError as exc:
+            logger.warning("Failed to parse HFT_TS_MAX_FUTURE_S, disabling future filter", error=str(exc))
+            self._ts_max_future_ns = 0
 
     def _compute_backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay with jitter to avoid thundering herd."""
@@ -168,6 +180,9 @@ class DataWriter:
         """
         if not data:
             return
+        data = self._sanitize_timestamps(table, data)
+        if not data:
+            return
 
         success = False
         if self.connected and self.ch_client:
@@ -196,3 +211,48 @@ class DataWriter:
         values = [[row.get(k) for k in keys] for row in data]
         self.ch_client.insert(table, values, column_names=keys)
         logger.info(f"Insert success: {table} {len(data)}")
+
+    def _sanitize_timestamps(self, table: str, data: list[dict]) -> list[dict]:
+        """Drop rows with far-future timestamps and enforce ingest_ts >= exch_ts."""
+        if not data:
+            return data
+        if not self._ts_max_future_ns:
+            # Still enforce ingest_ts >= exch_ts when both present
+            for row in data:
+                try:
+                    exch_ts = row.get("exch_ts")
+                    ingest_ts = row.get("ingest_ts")
+                    if exch_ts and ingest_ts and int(ingest_ts) < int(exch_ts):
+                        row["ingest_ts"] = int(exch_ts)
+                except Exception:
+                    continue
+            return data
+
+        now_ns = time.time_ns()
+        kept: list[dict] = []
+        dropped = 0
+        for row in data:
+            try:
+                exch_ts = row.get("exch_ts")
+                ingest_ts = row.get("ingest_ts")
+                exch_ts_i = int(exch_ts) if exch_ts is not None else 0
+                ingest_ts_i = int(ingest_ts) if ingest_ts is not None else 0
+                if exch_ts_i and exch_ts_i - now_ns > self._ts_max_future_ns:
+                    dropped += 1
+                    continue
+                if ingest_ts_i and ingest_ts_i - now_ns > self._ts_max_future_ns:
+                    dropped += 1
+                    continue
+                if exch_ts_i and ingest_ts_i and ingest_ts_i < exch_ts_i:
+                    row["ingest_ts"] = exch_ts_i
+                kept.append(row)
+            except Exception:
+                kept.append(row)
+        if dropped:
+            logger.warning(
+                "Dropped future timestamp rows",
+                table=table,
+                dropped=dropped,
+                max_future_ns=self._ts_max_future_ns,
+            )
+        return kept
