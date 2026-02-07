@@ -60,6 +60,13 @@ packages = ["src/hft_platform"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing"
+norecursedirs = [
+    "research",
+    ".venv",
+    "data",
+    "examples",
+    "scripts",
+]
 markers = [
     "blackbox: black-box CLI/system interface tests",
     "regression: regression tests for fixed defects",

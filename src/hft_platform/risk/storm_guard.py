@@ -1,11 +1,10 @@
 import os
-import time
 from dataclasses import dataclass
 from enum import IntEnum
 
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
+from structlog import get_logger
 
 logger = get_logger("risk.storm_guard")
 
@@ -40,7 +39,7 @@ class StormGuard:
         self.thresholds = thresholds or RiskThresholds()
         self._apply_env_overrides()
         self.metrics = MetricsRegistry.get()
-        self.last_state_change = time.time()
+        self.last_state_change = timebase.now_s()
 
     def _apply_env_overrides(self) -> None:
         feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
@@ -93,7 +92,7 @@ class StormGuard:
     def transition(self, new_state: StormGuardState, reason: str):
         old_state = self.state
         self.state = new_state
-        self.last_state_change = time.time()
+        self.last_state_change = timebase.now_s()
 
         logger.warning("StormGuard Transition", old=old_state.name, new=new_state.name, reason=reason)
 

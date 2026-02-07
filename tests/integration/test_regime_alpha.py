@@ -1,6 +1,9 @@
 import pytest
 
 rust_core = pytest.importorskip("rust_core", reason="rust_core extension not built")
+if not hasattr(rust_core, "AlphaRegimePressure"):
+    pytest.skip("AlphaRegimePressure not available in rust_core build", allow_module_level=True)
+
 AlphaRegimePressure = rust_core.AlphaRegimePressure
 LimitOrderBook = rust_core.LimitOrderBook
 

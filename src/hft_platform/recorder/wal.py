@@ -3,9 +3,9 @@ import fcntl
 import json
 import os
 import tempfile
-import time
 from glob import glob
 
+from hft_platform.core import timebase
 from structlog import get_logger
 
 logger = get_logger("recorder.wal")
@@ -19,7 +19,7 @@ class WALWriter:
 
     async def write(self, table: str, data: list):
         """Async append to local disk via thread pool with atomic write."""
-        ts = int(time.time_ns())
+        ts = int(timebase.now_ns())
         filename = f"{self.wal_dir}/{table}_{ts}.jsonl"
 
         loop = asyncio.get_running_loop()

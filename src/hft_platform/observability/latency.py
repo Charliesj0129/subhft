@@ -1,7 +1,7 @@
 import os
-import time
 from typing import Any
 
+from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 
 
@@ -74,7 +74,7 @@ class LatencyRecorder:
             return
 
         if ts_ns is None:
-            ts_ns = time.time_ns()
+            ts_ns = timebase.now_ns()
 
         payload = {
             "ingest_ts": int(ts_ns),

@@ -1,10 +1,10 @@
 import glob
 import json
 import os
-import time
 from typing import Optional
 
 import numpy as np
+from hft_platform.core import timebase
 from structlog import get_logger
 
 logger = get_logger("wal.converter")
@@ -128,7 +128,7 @@ class WALConverter:
 
         # Include Metadata
         metadata = {
-            "created_at": time.time(),
+            "created_at": timebase.now_s(),
             "source_files": len(files),
             "rows": count,
             "git_commit": os.getenv("GIT_COMMIT", "unknown"),

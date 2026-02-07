@@ -4,10 +4,10 @@ import time
 from typing import Any, Callable, Dict, List
 
 import yaml
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.rate_limiter import RateLimiter
+from structlog import get_logger
 
 try:
     import shioaji as sj
@@ -144,7 +144,7 @@ class ShioajiClient:
             self.metrics.shioaji_api_errors_total.labels(op=op).inc()
 
     def _cache_get(self, key: str) -> Any | None:
-        now = time.time()
+        now = timebase.now_s()
         with self._api_cache_lock:
             entry = self._api_cache.get(key)
             if not entry:
@@ -156,11 +156,11 @@ class ShioajiClient:
             return value
 
     def _cache_set(self, key: str, ttl_s: float, value: Any) -> None:
-        expires_at = time.time() + max(0.0, ttl_s)
+        expires_at = timebase.now_s() + max(0.0, ttl_s)
         with self._api_cache_lock:
             # Evict expired entries if cache is at limit
             if len(self._api_cache) >= self._api_cache_max_size:
-                now = time.time()
+                now = timebase.now_s()
                 expired_keys = [k for k, (exp, _) in self._api_cache.items() if now >= exp]
                 for k in expired_keys:
                     del self._api_cache[k]
@@ -373,7 +373,7 @@ class ShioajiClient:
     def reconnect(self, reason: str = "") -> bool:
         if not self.api:
             return False
-        now = time.time()
+        now = timebase.now_s()
         cooldown = float(os.getenv("HFT_RECONNECT_COOLDOWN", "30"))
         if now - self._last_reconnect_ts < max(cooldown, self._reconnect_backoff_s):
             return False
@@ -407,7 +407,7 @@ class ShioajiClient:
     def _resubscribe_all(self) -> None:
         if not self.api or not self.logged_in or not self.tick_callback:
             return
-        now = time.time()
+        now = timebase.now_s()
         last = getattr(self, "_last_resubscribe_ts", 0.0)
         cooldown = getattr(self, "resubscribe_cooldown", 1.5)
         if now - last < cooldown:
@@ -811,7 +811,7 @@ class ShioajiClient:
         """
         if not self.api:
             logger.warning("Shioaji SDK missing; mock place_order invoked.")
-            return {"seq_no": f"sim-{int(time.time() * 1000)}"}
+            return {"seq_no": f"sim-{int(timebase.now_s() * 1000)}"}
 
         contract = self._get_contract(exchange, contract_code, product_type=product_type, allow_synthetic=False)
         if not contract:

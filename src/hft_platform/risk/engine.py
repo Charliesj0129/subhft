@@ -3,13 +3,13 @@ import threading
 import time
 
 import yaml
-from structlog import get_logger
-
 from hft_platform.contracts.strategy import OrderCommand, OrderIntent, RiskDecision
+from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.validators import MaxNotionalValidator, PriceBandValidator, StormGuardFSM
+from structlog import get_logger
 
 logger = get_logger("risk_engine")
 
@@ -109,12 +109,12 @@ class RiskEngine:
     def create_command(self, intent: OrderIntent) -> OrderCommand:
         cmd_id = self._next_cmd_id()
         # Set 500ms deadline from now (relaxed for Python/Docker latency)
-        deadline = time.time_ns() + 500_000_000
+        deadline = timebase.now_ns() + 500_000_000
 
         return OrderCommand(
             cmd_id=cmd_id,
             intent=intent,
             deadline_ns=deadline,
             storm_guard_state=self.storm_guard.state,
-            created_ns=time.time_ns(),
+            created_ns=timebase.now_ns(),
         )

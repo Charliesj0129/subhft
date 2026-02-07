@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from hft_platform.recorder.worker import RecorderService
 
@@ -13,6 +13,8 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
             # Setup mock writer
             mock_writer_inst = MockWriter.return_value
             mock_writer_inst.active = True
+            mock_writer_inst.connect_async = AsyncMock()
+            mock_writer_inst.write = AsyncMock()
 
             worker = RecorderService(queue)
 

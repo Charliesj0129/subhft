@@ -1,14 +1,13 @@
 import asyncio
 import inspect
-import time
 from typing import Callable, Dict, Optional, Union
 
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
+from structlog import get_logger
 
 logger = get_logger("execution.router")
 
@@ -70,14 +69,14 @@ class ExecutionRouter:
         self.running = True
         logger.info("ExecutionRouter started")
         self.metrics.execution_router_alive.set(1)
-        self.metrics.execution_router_heartbeat_ts.set(time.time())
+        self.metrics.execution_router_heartbeat_ts.set(timebase.now_s())
         while self.running:
             try:
                 raw: RawExecEvent = await self.raw_queue.get()
-                now_ns = time.time_ns()
+                now_ns = timebase.now_ns()
                 if raw.ingest_ts_ns:
                     self.metrics.execution_router_lag_ns.observe(now_ns - raw.ingest_ts_ns)
-                self.metrics.execution_router_heartbeat_ts.set(time.time())
+                self.metrics.execution_router_heartbeat_ts.set(timebase.now_s())
 
                 if raw.topic == "order":
                     norm = self.normalizer.normalize_order(raw)

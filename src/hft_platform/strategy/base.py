@@ -2,12 +2,11 @@ from abc import ABC
 from decimal import Decimal
 from typing import Callable, Dict, List, Optional, Union
 
-from structlog import get_logger
-
 # Fill/Order Events might be imported from contracts or events
 from hft_platform.contracts.execution import FillEvent, OrderEvent
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
+from structlog import get_logger
 
 logger = get_logger("strategy")
 

@@ -4,9 +4,8 @@ import time
 from typing import Any, Dict
 
 import yaml
-from structlog import get_logger
-
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
+from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
@@ -15,6 +14,7 @@ from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.circuit_breaker import CircuitBreaker
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
 from hft_platform.order.rate_limiter import RateLimiter
+from structlog import get_logger
 
 logger = get_logger("order_adapter")
 
@@ -101,7 +101,7 @@ class OrderAdapter:
                     continue
 
                 # Check Deadline
-                if time.time_ns() > cmd.deadline_ns:
+                if timebase.now_ns() > cmd.deadline_ns:
                     logger.warning("Order Timeout (Pre-dispatch)", cmd_id=cmd.cmd_id)
                     self.order_queue.task_done()
                     continue
@@ -354,7 +354,7 @@ class OrderAdapter:
 
                 self.metrics.order_actions_total.labels(type="new").inc()
                 # Inject timestamp for TTL tracking
-                trade_ts = time.time()
+                trade_ts = timebase.now_s()
                 try:
                     if isinstance(trade, dict):
                         trade["timestamp"] = trade_ts
@@ -490,7 +490,7 @@ class OrderAdapter:
             return
         if not cmd.created_ns:
             return
-        queue_latency_ns = time.time_ns() - cmd.created_ns
+        queue_latency_ns = timebase.now_ns() - cmd.created_ns
         self.latency.record(
             "order_queue",
             queue_latency_ns,
@@ -540,7 +540,7 @@ class OrderAdapter:
                             strategy_id=intent.strategy_id if intent else "",
                         )
                         if intent and intent.source_ts_ns:
-                            e2e_ns = time.time_ns() - intent.source_ts_ns
+                            e2e_ns = timebase.now_ns() - intent.source_ts_ns
                             self.latency.record(
                                 "e2e_order",
                                 e2e_ns,
@@ -580,7 +580,7 @@ class OrderAdapter:
                     self.metrics.order_reject_total.inc()
                     self.circuit_breaker.record_failure()
                     if intent and self.latency and intent.source_ts_ns:
-                        e2e_ns = time.time_ns() - intent.source_ts_ns
+                        e2e_ns = timebase.now_ns() - intent.source_ts_ns
                         self.latency.record(
                             "e2e_order",
                             e2e_ns,
