@@ -70,6 +70,9 @@ ORDER BY (symbol, match_ts);
 -- Materialized Views for Real-Time Analytics
 -- =============================================================================
 
+-- Legacy cleanup: drop old MV that referenced `price` (pre-scale schema)
+DROP TABLE IF EXISTS hft.candles_1m_mv;
+
 -- OHLCV 1-minute candles (pre-aggregated from ticks)
 CREATE TABLE IF NOT EXISTS hft.ohlcv_1m (
     symbol String,
@@ -101,6 +104,20 @@ SELECT
 FROM hft.market_data
 WHERE type = 'Tick' AND price_scaled > 0
 GROUP BY symbol, exchange, bucket;
+
+-- Compatibility view for legacy dashboards/queries
+CREATE VIEW IF NOT EXISTS hft.candles_1m_mv AS
+SELECT
+    symbol,
+    exchange,
+    bucket AS window,
+    open_scaled,
+    high_scaled,
+    low_scaled,
+    close_scaled,
+    volume,
+    tick_count
+FROM hft.ohlcv_1m;
 
 -- Latency Statistics (P50, P95, P99 per minute)
 CREATE TABLE IF NOT EXISTS hft.latency_stats_1m (

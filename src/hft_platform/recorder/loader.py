@@ -68,7 +68,13 @@ class WALLoaderService:
 
     def connect(self):
         try:
-            ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME") or os.getenv("CLICKHOUSE_USERNAME") or "default"
+            ch_username = (
+                os.getenv("HFT_CLICKHOUSE_USER")
+                or os.getenv("HFT_CLICKHOUSE_USERNAME")
+                or os.getenv("CLICKHOUSE_USER")
+                or os.getenv("CLICKHOUSE_USERNAME")
+                or "default"
+            )
             ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
             self.ch_client = clickhouse_connect.get_client(
                 host=self.ch_host, port=self.ch_port, username=ch_username, password=ch_password
