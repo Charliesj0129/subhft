@@ -3,6 +3,9 @@ from datetime import datetime
 from typing import Any
 
 import numpy as np
+from structlog import get_logger
+
+logger = get_logger("backtest.reporting")
 
 
 class HTMLReporter:
@@ -97,4 +100,4 @@ class HTMLReporter:
 
         with open(self.output_path, "w") as f:
             f.write(template)
-        print(f"Report generated: {self.output_path}")
+        logger.info("Report generated", path=self.output_path)

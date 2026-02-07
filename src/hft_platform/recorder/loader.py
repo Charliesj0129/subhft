@@ -17,7 +17,12 @@ DEFAULT_INSERT_BASE_DELAY_S = 0.5
 DEFAULT_INSERT_MAX_BACKOFF_S = 5.0
 try:
     _TS_MAX_FUTURE_NS = int(float(os.getenv("HFT_TS_MAX_FUTURE_S", "5")) * 1e9)
-except Exception:
+except Exception as e:
+    logger.warning(
+        "Failed to parse HFT_TS_MAX_FUTURE_S, timestamp validation disabled",
+        error=str(e),
+        env_value=os.getenv("HFT_TS_MAX_FUTURE_S"),
+    )
     _TS_MAX_FUTURE_NS = 0
 
 
@@ -63,8 +68,10 @@ class WALLoaderService:
 
     def connect(self):
         try:
+            ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME") or os.getenv("CLICKHOUSE_USERNAME") or "default"
+            ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
             self.ch_client = clickhouse_connect.get_client(
-                host=self.ch_host, port=self.ch_port, username="default", password=""
+                host=self.ch_host, port=self.ch_port, username=ch_username, password=ch_password
             )
             # Ensure schema exists (rudimentary check or run init sql)
             schema_path = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
@@ -203,7 +210,8 @@ class WALLoaderService:
                 # Fallback: try to guess by stripping last part
                 try:
                     target_table = "_".join(fname.split("_")[:-1])
-                except Exception:
+                except Exception as e:
+                    logger.warning("Failed to parse table name from filename", file=fname, error=str(e))
                     target_table = "unknown"
 
             if target_table == "unknown":

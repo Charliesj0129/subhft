@@ -40,7 +40,7 @@ def test_broker_id_cleanup_and_strategy_resolution(mock_load):
     assert adapter.order_id_map["S1"] == "stratX:1"
     assert adapter.order_id_map["O1"] == "stratX:1"
 
-    adapter.on_terminal_state("stratX", "O1")
+    asyncio.run(adapter.on_terminal_state("stratX", "O1"))
     assert "stratX:1" not in adapter.live_orders
 
     norm = ExecutionNormalizer(order_id_map={"O1": "stratX:1"})

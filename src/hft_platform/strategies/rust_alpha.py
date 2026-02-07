@@ -34,9 +34,22 @@ class Strategy(BaseStrategy):
         "tick_size": 1.0,
     }
 
+    # Parameter validation bounds
+    _PARAM_BOUNDS = {
+        "depth_level": (0, 10),
+        "hawkes_mu": (0.0, 100.0),
+        "hawkes_alpha": (0.0, 100.0),
+        "hawkes_beta": (0.1, 1000.0),
+        "signal_threshold": (0.0, 10.0),
+        "max_pos": (1, 10000),
+        "lot_size": (1, 1000),
+        "tick_size": (0.0001, 1000.0),
+    }
+
     def __init__(self, strategy_id: str, **params):
         super().__init__(strategy_id, **params)
         self.params = {**self.default_params, **(params or {})}
+        self._validate_params()
 
         if AlphaStrategy is None:
             raise ImportError("hft_platform.rust_core not found. Please build extension.")
@@ -54,82 +67,106 @@ class Strategy(BaseStrategy):
 
         logger.info("RustAlphaStrategy Initialized", params=self.params)
 
-        # Shadow Book State
+        # Shadow Book State (with max size limit to prevent unbounded growth)
+        self._max_book_levels = 50
         self.bids: dict[float, float] = {}
         self.asks: dict[float, float] = {}
+
+    def _validate_params(self) -> None:
+        """Validate strategy parameters are within acceptable bounds."""
+        errors = []
+        for param, (min_val, max_val) in self._PARAM_BOUNDS.items():
+            value = self.params.get(param)
+            if value is None:
+                continue
+            if not isinstance(value, (int, float)):
+                errors.append(f"{param}: expected numeric, got {type(value).__name__}")
+            elif value < min_val or value > max_val:
+                errors.append(f"{param}: {value} out of bounds [{min_val}, {max_val}]")
+
+        if errors:
+            raise ValueError(f"Invalid strategy parameters: {'; '.join(errors)}")
+
+    def _trim_book(self) -> None:
+        """Trim shadow books to max size, keeping best levels."""
+        if len(self.bids) > self._max_book_levels:
+            sorted_bids = sorted(self.bids.keys(), reverse=True)
+            for p in sorted_bids[self._max_book_levels:]:
+                del self.bids[p]
+        if len(self.asks) > self._max_book_levels:
+            sorted_asks = sorted(self.asks.keys())
+            for p in sorted_asks[self._max_book_levels:]:
+                del self.asks[p]
 
     def on_book_update(self, event: BidAskEvent) -> None:
         if event.symbol not in self.symbols:
             return
 
-        # Update Shadow Book
-        # Bids
-        if len(event.bids) > 0:
-            for p, q in event.bids:
-                if q <= 0:
-                    self.bids.pop(p, None)
-                else:
-                    self.bids[p] = q
+        try:
+            # Update Shadow Book
+            # Bids
+            if len(event.bids) > 0:
+                for p, q in event.bids:
+                    if q <= 0:
+                        self.bids.pop(p, None)
+                    else:
+                        self.bids[p] = q
 
-        # Asks
-        if len(event.asks) > 0:
-            for p, q in event.asks:
-                if q <= 0:
-                    self.asks.pop(p, None)
-                else:
-                    self.asks[p] = q
+            # Asks
+            if len(event.asks) > 0:
+                for p, q in event.asks:
+                    if q <= 0:
+                        self.asks.pop(p, None)
+                    else:
+                        self.asks[p] = q
 
-        # Update BBO for Trade Direction Inference
-        if self.bids and self.asks:
-            self.best_bid = max(self.bids.keys())
-            self.best_ask = min(self.asks.keys())
+            # Trim book to prevent unbounded growth
+            self._trim_book()
 
-            # Sampling: Only compute every X updates?
-            # For now, compute every update to verify responsiveness.
+            # Update BBO for Trade Direction Inference
+            if self.bids and self.asks:
+                self.best_bid = max(self.bids.keys())
+                self.best_ask = min(self.asks.keys())
 
-            # Convert to Sorted List for Rust
-            # Descending for Bids, Ascending for Asks
-            sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
-            sorted_asks = sorted(self.asks.items(), key=lambda x: x[0])[:5]
+                # Convert to Sorted List for Rust
+                # Descending for Bids, Ascending for Asks
+                sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
+                sorted_asks = sorted(self.asks.items(), key=lambda x: x[0])[:5]
 
-            # Call Rust Core
-            signal = self.core.on_depth(sorted_bids, sorted_asks)
+                # Call Rust Core
+                signal = self.core.on_depth(sorted_bids, sorted_asks)
 
-            # Execution
-            self._execute_on_signal(event.symbol, signal)
+                # Execution
+                self._execute_on_signal(event.symbol, signal)
+        except Exception as e:
+            logger.error("Error in on_book_update", error=str(e), symbol=event.symbol)
 
     def on_tick(self, event: TickEvent) -> None:
         if event.symbol not in self.symbols:
             return
 
-        # Infer direction
-        is_buyer_maker = False  # Logic depends on Aggressor.
-        # If Price >= Ask, Aggressor is Buyer -> Maker is Seller.
-        # If Price <= Bid, Aggressor is Seller -> Maker is Buyer.
-        # Rust `on_trade` expects `is_buyer_maker` (boolean).
-        # Actually `on_trade` in Rust logic (Momentum) uses it to decaying impact?
-        # Let's assume standard:
-        # Aggressor Buy -> Price Up.
-        # We pass `is_buyer_maker`?
-        # Let's check `strategy.rs` usage or just pass `is_buyer` (Aggressor).
-        # Rust signature: `on_trade(ts, px, qty, is_buyer_maker)`
+        try:
+            # Infer direction
+            is_buyer_maker = False  # Logic depends on Aggressor.
+            # If Price >= Ask, Aggressor is Buyer -> Maker is Seller.
+            # If Price <= Bid, Aggressor is Seller -> Maker is Buyer.
+            # Rust `on_trade` expects `is_buyer_maker` (boolean).
 
-        # Check `run_rust_strategy.py`: `is_buyer_maker = (side == -1)` (Sell Aggressor).
-        # So `is_buyer_maker` means "Is the Maker a Buyer?" i.e. "Is Aggressor a Seller?"
-
-        is_aggressor_buy = False
-        if self.best_ask > 0 and event.price >= self.best_ask:
-            is_aggressor_buy = True
-        elif self.best_bid > 0 and event.price <= self.best_bid:
             is_aggressor_buy = False
-        else:
-            # Unclear/Mid, assume Buy if close to Ask?
-            is_aggressor_buy = True
+            if self.best_ask > 0 and event.price >= self.best_ask:
+                is_aggressor_buy = True
+            elif self.best_bid > 0 and event.price <= self.best_bid:
+                is_aggressor_buy = False
+            else:
+                # Unclear/Mid, assume Buy if close to Ask?
+                is_aggressor_buy = True
 
-        # is_buyer_maker = True if Aggressor is Sell
-        is_buyer_maker = not is_aggressor_buy
+            # is_buyer_maker = True if Aggressor is Sell
+            is_buyer_maker = not is_aggressor_buy
 
-        self.core.on_trade(int(event.meta.source_ts), float(event.price), float(event.volume), is_buyer_maker)
+            self.core.on_trade(int(event.meta.source_ts), float(event.price), float(event.volume), is_buyer_maker)
+        except Exception as e:
+            logger.error("Error in on_tick", error=str(e), symbol=event.symbol)
 
     def _execute_on_signal(self, symbol, signal):
         threshold = self.params["signal_threshold"]

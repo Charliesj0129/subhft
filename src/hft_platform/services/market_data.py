@@ -79,6 +79,7 @@ class MarketDataService:
 
         # Per-symbol feed gap monitoring
         self._symbol_last_tick: dict[str, float] = {}  # symbol -> monotonic timestamp
+        self._symbol_last_tick_lock = asyncio.Lock()  # Protect dict from concurrent access
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "5.0"))
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
 
@@ -145,10 +146,10 @@ class MarketDataService:
                     norm_duration = 0
 
                 if event:
-                    # Update per-symbol timestamp for watchdog
+                    # Update per-symbol timestamp for watchdog (fire-and-forget async update)
                     symbol = getattr(event, "symbol", None)
                     if symbol:
-                        self._symbol_last_tick[symbol] = time.monotonic()
+                        asyncio.create_task(self._update_symbol_tick(symbol))
 
                     trace_id = ""
                     meta = getattr(event, "meta", None)
@@ -319,6 +320,11 @@ class MarketDataService:
                 except Exception as exc:
                     logger.error("Symbol reload failed", error=str(exc))
 
+    async def _update_symbol_tick(self, symbol: str) -> None:
+        """Update symbol tick timestamp with lock protection."""
+        async with self._symbol_last_tick_lock:
+            self._symbol_last_tick[symbol] = time.monotonic()
+
     async def _watchdog_loop(self):
         """Per-symbol feed gap watchdog.
 
@@ -331,13 +337,16 @@ class MarketDataService:
             if self.state != FeedState.CONNECTED:
                 continue
 
-            if not self._symbol_last_tick:
-                continue
+            # Take snapshot under lock to avoid iteration during modification
+            async with self._symbol_last_tick_lock:
+                if not self._symbol_last_tick:
+                    continue
+                tick_snapshot = dict(self._symbol_last_tick)
 
             now = time.monotonic()
             stale_symbols: list[tuple[str, float]] = []
 
-            for symbol, last_ts in self._symbol_last_tick.items():
+            for symbol, last_ts in tick_snapshot.items():
                 gap = now - last_ts
                 if gap > self._symbol_gap_threshold_s:
                     stale_symbols.append((symbol, gap))
@@ -470,13 +479,22 @@ class MarketDataService:
         """Return the maximum feed gap across all symbols in seconds.
 
         Used by StormGuard to detect stale data.
+        Note: This is a sync method that reads a snapshot. For thread-safe
+        access in async code, use get_max_feed_gap_s_async().
         """
-        if not self._symbol_last_tick:
+        # Take a snapshot of values to avoid iteration during modification
+        try:
+            tick_values = list(self._symbol_last_tick.values())
+        except RuntimeError:
+            # Dict changed during iteration - return 0 as safe default
+            return 0.0
+
+        if not tick_values:
             return 0.0
 
         now = time.monotonic()
         max_gap = 0.0
-        for last_ts in self._symbol_last_tick.values():
+        for last_ts in tick_values:
             gap = now - last_ts
             if gap > max_gap:
                 max_gap = gap
@@ -486,9 +504,18 @@ class MarketDataService:
         """Return feed gap for each symbol in seconds.
 
         Used for per-symbol gap monitoring metrics.
+        Note: This is a sync method that reads a snapshot. For thread-safe
+        access in async code, use get_feed_gaps_by_symbol_async().
         """
-        if not self._symbol_last_tick:
+        # Take a snapshot to avoid iteration during modification
+        try:
+            tick_snapshot = dict(self._symbol_last_tick)
+        except RuntimeError:
+            # Dict changed during iteration - return empty as safe default
+            return {}
+
+        if not tick_snapshot:
             return {}
 
         now = time.monotonic()
-        return {symbol: now - last_ts for symbol, last_ts in self._symbol_last_tick.items()}
+        return {symbol: now - last_ts for symbol, last_ts in tick_snapshot.items()}

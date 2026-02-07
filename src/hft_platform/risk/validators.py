@@ -82,8 +82,8 @@ class PriceBandValidator(RiskValidator):
                 # mid_price from LOB is already in scaled units (as float)
                 # Just convert to int
                 return int(book["mid_price"])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to get mid price from LOB", symbol=symbol, error=str(e))
         return None
 
 

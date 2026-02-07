@@ -77,7 +77,7 @@ class RiskEngine:
                 logger.info("RiskEngine stopped")
                 break
             except Exception as e:
-                logger.error("RiskEngine error", error=str(e))
+                logger.exception("RiskEngine error", error=str(e), error_type=type(e).__name__)
                 self.intent_queue.task_done()
 
     def evaluate(self, intent: OrderIntent) -> RiskDecision:

@@ -12,7 +12,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust toolchain (needed for PyO3 extensions)
-RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+# Download and verify rustup installer
+RUN curl -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && echo "Verifying rustup installer..." \
+    && sh /tmp/rustup-init.sh -y --default-toolchain stable \
+    && rm /tmp/rustup-init.sh
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install uv for fast dependency management
