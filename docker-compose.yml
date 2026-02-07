@@ -18,6 +18,7 @@ services:
       - HFT_CLICKHOUSE_HOST=clickhouse
       - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
       - HFT_CLICKHOUSE_ENABLED=1
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
       - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
       - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
       - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
@@ -59,7 +60,7 @@ services:
           memory: ${HFT_MEM_LIMIT:-1500M}
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    image: clickhouse/clickhouse-server:25.12.3
     container_name: clickhouse
     environment:
       - CLICKHOUSE_USER=default
