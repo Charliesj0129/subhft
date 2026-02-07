@@ -13,6 +13,9 @@ class SimpleMarketMaker(BaseStrategy):
         mid_price = event.mid_price
         spread = event.spread
         imbalance = event.imbalance
+        # Guard clause - return early if any values are None or invalid
+        if mid_price is None or spread is None:
+            return
         if mid_price <= 0 or spread <= 0 or event.best_bid <= 0 or event.best_ask <= 0:
             return
 
