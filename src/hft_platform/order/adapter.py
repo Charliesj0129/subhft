@@ -249,22 +249,47 @@ class OrderAdapter:
                 if hasattr(meta, "exchange"):
                     try:
                         meta_exchange = meta.exchange(intent.symbol)
-                    except Exception:
+                    except Exception as ex_err:
+                        logger.warning(
+                            "Metadata exchange lookup failed",
+                            symbol=intent.symbol,
+                            error=str(ex_err),
+                        )
                         meta_exchange = ""
-                exchange = meta_exchange or self.client.get_exchange(intent.symbol) or "TSE"
+
+                client_exchange = ""
+                if hasattr(self.client, "get_exchange"):
+                    client_exchange = self.client.get_exchange(intent.symbol) or ""
+                exchange = meta_exchange or client_exchange or "TSE"
+
+                if not meta_exchange and not client_exchange:
+                    logger.warning(
+                        "Exchange unknown - using default TSE",
+                        symbol=intent.symbol,
+                    )
 
                 product_type = None
                 if hasattr(meta, "product_type"):
                     try:
                         product_type = meta.product_type(intent.symbol) or None
-                    except Exception:
+                    except Exception as pt_err:
+                        logger.warning(
+                            "Product type lookup failed",
+                            symbol=intent.symbol,
+                            error=str(pt_err),
+                        )
                         product_type = None
 
                 order_params: Dict[str, Any] = {}
                 if hasattr(meta, "order_params"):
                     try:
                         order_params = meta.order_params(intent.symbol) or {}
-                    except Exception:
+                    except Exception as op_err:
+                        logger.warning(
+                            "Order params lookup failed",
+                            symbol=intent.symbol,
+                            error=str(op_err),
+                        )
                         order_params = {}
 
                 # Convert Side IntEnum to String for ShioajiClient
@@ -328,14 +353,23 @@ class OrderAdapter:
                     return
 
                 self.metrics.order_actions_total.labels(type="new").inc()
-                # Inject timestamp for TTL (hacky if trade is object, assumes it absorbs attrs or we wrap)
+                # Inject timestamp for TTL tracking
+                trade_ts = time.time()
                 try:
                     if isinstance(trade, dict):
-                        trade["timestamp"] = time.time()
+                        trade["timestamp"] = trade_ts
                     else:
-                        trade.timestamp = time.time()
-                except Exception:
-                    pass  # Object might be rigid
+                        trade.timestamp = trade_ts
+                except Exception as ts_err:
+                    logger.warning(
+                        "Failed to set trade timestamp - TTL tracking may be affected",
+                        order_key=order_key,
+                        error=str(ts_err),
+                    )
+                    # Store timestamp externally if object is rigid
+                    if isinstance(trade, dict):
+                        trade["_external_timestamp"] = trade_ts
+                    # For objects, we'll rely on live_orders insertion time
 
                 # Store with lock protection
                 async with self._live_orders_lock:

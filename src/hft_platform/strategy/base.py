@@ -1,4 +1,5 @@
 from abc import ABC
+from decimal import Decimal
 from typing import Callable, Dict, List, Optional, Union
 
 from structlog import get_logger
@@ -27,7 +28,7 @@ class StrategyContext:
         positions,
         strategy_id: str,
         intent_factory: Callable[..., OrderIntent],
-        price_scaler: Callable[[str, float], int],
+        price_scaler: Callable[[str, int | Decimal], int],
         lob_source: Callable[[str], Optional[Dict]] | None = None,
     ):
         self.positions = positions
@@ -41,17 +42,25 @@ class StrategyContext:
         *,
         symbol: str,
         side: Side,
-        price: float,
+        price: int | Decimal,
         qty: int,
         tif: TIF = TIF.LIMIT,
         intent_type: IntentType = IntentType.NEW,
         target_order_id: Optional[str] = None,
     ) -> OrderIntent:
-        # Auto-scaling convenience
+        # Auto-scaling convenience: int = already scaled, Decimal = needs scaling
         if isinstance(price, int):
             scaled_price = price
-        else:
+        elif isinstance(price, Decimal):
             scaled_price = self.scale_price(symbol, price)
+        else:
+            # Legacy float support with deprecation warning
+            logger.warning(
+                "Float price deprecated - use int (scaled) or Decimal",
+                symbol=symbol,
+                price=price,
+            )
+            scaled_price = self.scale_price(symbol, Decimal(str(price)))
 
         return self._intent_factory(
             strategy_id=self.strategy_id,
@@ -64,7 +73,7 @@ class StrategyContext:
             target_order_id=target_order_id,
         )
 
-    def scale_price(self, symbol: str, price: float) -> int:
+    def scale_price(self, symbol: str, price: int | Decimal) -> int:
         return self._price_scaler(symbol, price)
 
 
@@ -139,10 +148,10 @@ class BaseStrategy(ABC):
 
     # --- Actions ---
 
-    def buy(self, symbol: str, price: float, qty: int, tif: TIF = TIF.LIMIT):
+    def buy(self, symbol: str, price: int | Decimal, qty: int, tif: TIF = TIF.LIMIT):
         self._place(symbol, Side.BUY, price, qty, tif)
 
-    def sell(self, symbol: str, price: float, qty: int, tif: TIF = TIF.LIMIT):
+    def sell(self, symbol: str, price: int | Decimal, qty: int, tif: TIF = TIF.LIMIT):
         self._place(symbol, Side.SELL, price, qty, tif)
 
     def cancel(self, symbol: str, order_id: str):

@@ -49,6 +49,8 @@ class ReconciliationService:
         self.last_heartbeat = time.time()
         self.running = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
+        self._consecutive_failures: int = 0
+        self._max_consecutive_failures: int = config.get("reconciliation", {}).get("max_consecutive_failures", 3)
 
     async def run(self):
         self.running = True
@@ -63,8 +65,26 @@ class ReconciliationService:
             # 2. Runtime Check - periodic reconciliation
             try:
                 await self.sync_portfolio()
+                self._consecutive_failures = 0  # Reset on success
             except Exception as e:
-                logger.error("Runtime reconciliation failed", error=str(e))
+                self._consecutive_failures += 1
+                logger.error(
+                    "Runtime reconciliation failed",
+                    error=str(e),
+                    consecutive_failures=self._consecutive_failures,
+                    max_failures=self._max_consecutive_failures,
+                )
+
+                if self._consecutive_failures >= self._max_consecutive_failures:
+                    reason = f"RECONCILIATION_UNAVAILABLE: {self._consecutive_failures} consecutive failures"
+                    logger.critical(
+                        "Triggering HALT due to reconciliation unavailability",
+                        consecutive_failures=self._consecutive_failures,
+                    )
+                    if self.storm_guard:
+                        self.storm_guard.trigger_halt(reason)
+                    else:
+                        logger.error("No StormGuard configured - HALT not triggered (manual intervention required)")
 
     async def sync_portfolio(self):
         logger.info("Starting Portfolio Sync...")
