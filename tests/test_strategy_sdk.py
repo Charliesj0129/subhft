@@ -9,9 +9,11 @@ from hft_platform.strategy.base import BaseStrategy, StrategyContext
 class MockStrategy(BaseStrategy):
     def on_stats(self, event: LOBStatsEvent):
         # Logic: If spread > 1, place Buy/Sell
-        if event.spread > 1.0:
-            self.buy(event.symbol, event.mid_price - 1, 1)
-            self.sell(event.symbol, event.mid_price + 1, 1)
+        # Use mid_price_scaled for integer price (avoid float)
+        if event.spread > 1:
+            mid = event.mid_price_scaled
+            self.buy(event.symbol, mid - 1, 1)
+            self.sell(event.symbol, mid + 1, 1)
 
 
 class TestStrategySDK(unittest.TestCase):
@@ -47,11 +49,10 @@ class TestStrategySDK(unittest.TestCase):
         )
 
         # 2. Simulate Event (LOB Stats)
+        # With backward-compatible interface: provide best_bid/best_ask, mid_price/spread are auto-computed
         event = LOBStatsEvent(
             symbol="2330",
             ts=1000,
-            mid_price=100.0,
-            spread=2.0,
             imbalance=0.0,
             best_bid=99,
             best_ask=101,

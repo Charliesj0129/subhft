@@ -42,19 +42,23 @@ _TS_ASSUME_TZ = os.getenv("HFT_TS_ASSUME_TZ", "Asia/Taipei")
 _TS_ASSUME_TZINFO: Optional[ZoneInfo]
 try:
     _TS_ASSUME_TZINFO = ZoneInfo(_TS_ASSUME_TZ)
-except Exception:
+except Exception as exc:
+    logger.warning("Failed to load timezone, timestamps may be incorrect", tz=_TS_ASSUME_TZ, error=str(exc))
     _TS_ASSUME_TZINFO = None
 try:
     _TS_MAX_LAG_NS = int(float(os.getenv("HFT_TS_MAX_LAG_S", "5")) * 1e9)
-except Exception:
+except Exception as exc:
+    logger.warning("Failed to parse HFT_TS_MAX_LAG_S, using 0", error=str(exc))
     _TS_MAX_LAG_NS = 0
 try:
     _TS_MAX_FUTURE_NS = int(float(os.getenv("HFT_TS_MAX_FUTURE_S", "5")) * 1e9)
-except Exception:
+except Exception as exc:
+    logger.warning("Failed to parse HFT_TS_MAX_FUTURE_S, using 0", error=str(exc))
     _TS_MAX_FUTURE_NS = 0
 try:
     _TS_SKEW_LOG_COOLDOWN_NS = int(float(os.getenv("HFT_TS_SKEW_LOG_COOLDOWN_S", "60")) * 1e9)
-except Exception:
+except Exception as exc:
+    logger.warning("Failed to parse HFT_TS_SKEW_LOG_COOLDOWN_S, using 0", error=str(exc))
     _TS_SKEW_LOG_COOLDOWN_NS = 0
 
 try:
@@ -72,7 +76,13 @@ try:
     _RUST_NORMALIZE_BIDASK = getattr(_rust_core, "normalize_bidask_tuple", None)
     _RUST_NORMALIZE_BIDASK_NP = getattr(_rust_core, "normalize_bidask_tuple_np", None)
     _RUST_NORMALIZE_BIDASK_SYNTH = getattr(_rust_core, "normalize_bidask_tuple_with_synth", None)
-except Exception:
+except Exception as exc:
+    # CRITICAL: Rust acceleration disabled - performance will be 10-100x slower
+    logger.warning(
+        "Rust acceleration DISABLED - falling back to pure Python (10-100x slower)",
+        error=str(exc),
+        hint="Run 'maturin develop --manifest-path rust_core/Cargo.toml' to build",
+    )
     _RUST_SCALE_BOOK = None
     _RUST_SCALE_BOOK_SEQ = None
     _RUST_SCALE_BOOK_PAIR = None

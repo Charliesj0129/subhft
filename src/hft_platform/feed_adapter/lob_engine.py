@@ -37,7 +37,11 @@ try:
         _rust_core = importlib.import_module("rust_core")
 
     _RUST_COMPUTE_STATS = _rust_core.compute_book_stats
-except Exception:
+except Exception as exc:
+    logger.warning(
+        "Rust compute_book_stats unavailable - using pure Python fallback",
+        error=str(exc),
+    )
     _RUST_COMPUTE_STATS = None
 
 
@@ -233,8 +237,8 @@ class BookState:
             return LOBStatsEvent(
                 symbol=self.symbol,
                 ts=self.exch_ts,
-                mid_price=self.mid_price_x2 / 2.0,
-                spread=float(self.spread),
+                mid_price_x2=self.mid_price_x2,
+                spread_scaled=self.spread,
                 imbalance=self.imbalance,
                 best_bid=best_bid,
                 best_ask=best_ask,
@@ -257,8 +261,8 @@ class BookState:
             return (
                 self.symbol,
                 self.exch_ts,
-                self.mid_price_x2 / 2.0,
-                float(self.spread),
+                self.mid_price_x2,  # Integer (best_bid + best_ask)
+                self.spread,  # Integer (best_ask - best_bid)
                 self.imbalance,
                 best_bid,
                 best_ask,
@@ -494,6 +498,10 @@ class LOBEngine:
                 "timestamp": book.exch_ts,
                 "best_bid": best_bid,
                 "best_ask": best_ask,
-                "spread": float(book.spread),
+                # Backward-compatible float fields (scaled units)
                 "mid_price": book.mid_price_x2 / 2.0,
+                "spread": float(book.spread),
+                # Strict integer fields
+                "mid_price_x2": book.mid_price_x2,  # Scaled integer (best_bid + best_ask)
+                "spread_scaled": book.spread,  # Scaled integer (best_ask - best_bid)
             }

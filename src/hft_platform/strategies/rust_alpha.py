@@ -62,15 +62,17 @@ class Strategy(BaseStrategy):
             self.params["hawkes_beta"],
         )
 
-        self.best_bid = 0.0
-        self.best_ask = 0.0
+        # Best prices stored as scaled integers to comply with Precision Law
+        self.best_bid: int = 0
+        self.best_ask: int = 0
 
         logger.info("RustAlphaStrategy Initialized", params=self.params)
 
         # Shadow Book State (with max size limit to prevent unbounded growth)
+        # Keys and values are scaled integers to avoid float equality issues
         self._max_book_levels = 50
-        self.bids: dict[float, float] = {}
-        self.asks: dict[float, float] = {}
+        self.bids: dict[int, int] = {}
+        self.asks: dict[int, int] = {}
 
     def _validate_params(self) -> None:
         """Validate strategy parameters are within acceptable bounds."""
@@ -104,26 +106,30 @@ class Strategy(BaseStrategy):
 
         try:
             # Update Shadow Book
-            # Bids
+            # Bids - prices are already scaled integers from BidAskEvent
             if len(event.bids) > 0:
                 for p, q in event.bids:
-                    if q <= 0:
-                        self.bids.pop(p, None)
+                    price = int(p)
+                    qty = int(q)
+                    if qty <= 0:
+                        self.bids.pop(price, None)
                     else:
-                        self.bids[p] = q
+                        self.bids[price] = qty
 
-            # Asks
+            # Asks - prices are already scaled integers from BidAskEvent
             if len(event.asks) > 0:
                 for p, q in event.asks:
-                    if q <= 0:
-                        self.asks.pop(p, None)
+                    price = int(p)
+                    qty = int(q)
+                    if qty <= 0:
+                        self.asks.pop(price, None)
                     else:
-                        self.asks[p] = q
+                        self.asks[price] = qty
 
             # Trim book to prevent unbounded growth
             self._trim_book()
 
-            # Update BBO for Trade Direction Inference
+            # Update BBO for Trade Direction Inference (scaled integers)
             if self.bids and self.asks:
                 self.best_bid = max(self.bids.keys())
                 self.best_ask = min(self.asks.keys())
@@ -151,6 +157,7 @@ class Strategy(BaseStrategy):
             # If Price >= Ask, Aggressor is Buyer -> Maker is Seller.
             # If Price <= Bid, Aggressor is Seller -> Maker is Buyer.
             # Rust `on_trade` expects `is_buyer_maker` (boolean).
+            # Note: event.price is already a scaled integer
 
             is_aggressor_buy = False
             if self.best_ask > 0 and event.price >= self.best_ask:
@@ -164,11 +171,12 @@ class Strategy(BaseStrategy):
             # is_buyer_maker = True if Aggressor is Sell
             is_buyer_maker = not is_aggressor_buy
 
-            self.core.on_trade(int(event.meta.source_ts), float(event.price), float(event.volume), is_buyer_maker)
+            # Pass scaled integers to Rust core
+            self.core.on_trade(int(event.meta.source_ts), event.price, event.volume, is_buyer_maker)
         except Exception as e:
             logger.error("Error in on_tick", error=str(e), symbol=event.symbol)
 
-    def _execute_on_signal(self, symbol, signal):
+    def _execute_on_signal(self, symbol: str, signal: float) -> None:
         threshold = self.params["signal_threshold"]
         pos = self.position(symbol)
         max_pos = self.params["max_pos"]
@@ -177,15 +185,17 @@ class Strategy(BaseStrategy):
         # Signal > Thresh -> Buy
         if signal > threshold:
             if pos < max_pos:
-                # Join Bid
+                # Join Bid - price is already a scaled integer
                 price = self.best_bid
                 if price > 0:
+                    # BaseStrategy.buy expects int price (scaled)
                     self.buy(symbol, price, qty)
 
         # Signal < -Thresh -> Sell
         elif signal < -threshold:
             if pos > -max_pos:
-                # Join Ask
+                # Join Ask - price is already a scaled integer
                 price = self.best_ask
                 if price > 0:
+                    # BaseStrategy.sell expects int price (scaled)
                     self.sell(symbol, price, qty)

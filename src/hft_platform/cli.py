@@ -170,8 +170,6 @@ def cmd_init(args: argparse.Namespace):
             event = LOBStatsEvent(
                 symbol="{symbol}",
                 ts=0,
-                mid_price=1000100,
-                spread=200,
                 imbalance=0.0,
                 best_bid=1000000,
                 best_ask=1000200,
@@ -289,8 +287,6 @@ def cmd_strat_test(args: argparse.Namespace):
     event = LOBStatsEvent(
         symbol=symbol,
         ts=0,
-        mid_price=100.0,
-        spread=1.0,
         imbalance=0.0,
         best_bid=99,
         best_ask=101,

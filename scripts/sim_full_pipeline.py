@@ -231,7 +231,7 @@ async def main():
     stats = book.get_stats()
     print(
         "lob_stats",
-        f"mid={stats.mid_price}",
+        f"mid_x2={stats.mid_price_x2}",
         f"spread={stats.spread}",
         f"best_bid={stats.best_bid}",
         f"best_ask={stats.best_ask}",

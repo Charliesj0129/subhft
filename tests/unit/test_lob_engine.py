@@ -25,8 +25,8 @@ def test_bidask_update(engine):
     assert stats.symbol == "2330"
     assert stats.best_bid == 5000000
     assert stats.best_ask == 5010000
-    assert stats.mid_price == 5005000.0
-    assert stats.spread == 10000.0
+    assert stats.mid_price_x2 == 10010000  # best_bid + best_ask
+    assert stats.spread_scaled == 10000  # best_ask - best_bid
     assert stats.bid_depth == 10
     assert stats.ask_depth == 20
     assert stats.imbalance == pytest.approx(-0.3333333)
@@ -50,8 +50,8 @@ def test_incremental_update(engine):
     stats = engine.process_event(event)
 
     assert stats.best_bid == 101
-    assert stats.mid_price == 101.5
-    assert stats.spread == 1.0
+    assert stats.mid_price_x2 == 203  # 101 + 102
+    assert stats.spread_scaled == 1  # 102 - 101
     assert stats.bid_depth == 5
 
 
@@ -108,7 +108,7 @@ def test_empty_update(engine):
     # So it clears.
     engine.process_event(BidAskEvent(meta=make_meta(1000), symbol="2330", bids=[[100, 1]], asks=[[102, 1]]))
     stats = engine.process_event(BidAskEvent(meta=make_meta(1001), symbol="2330", bids=[], asks=[]))
-    assert stats.mid_price == 0.0
+    assert stats.mid_price == 0.0  # Empty book, backward-compat field
     assert stats.bid_depth == 0
 
 

@@ -159,7 +159,7 @@ def test_lob_stats_invariants(base_price, spread, bid_steps, ask_steps):
 
     assert stats.best_bid == bids[0][0]
     assert stats.best_ask == asks[0][0]
-    assert stats.spread == stats.best_ask - stats.best_bid
-    assert stats.mid_price == (stats.best_bid + stats.best_ask) / 2.0
+    assert stats.spread_scaled == stats.best_ask - stats.best_bid
+    assert stats.mid_price_x2 == stats.best_bid + stats.best_ask
     assert stats.bid_depth == sum(v for _, v in bids)
     assert stats.ask_depth == sum(v for _, v in asks)

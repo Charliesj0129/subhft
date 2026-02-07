@@ -59,14 +59,57 @@ class BidAskEvent:
 class LOBStatsEvent:
     """
     Derived LOB metrics emitted by LOBEngine.
+
+    Precision Law: All price values stored as scaled integers (x10000 default).
+    For backward compatibility, mid_price/spread are still exposed as floats
+    in scaled units. Prefer mid_price_x2/spread_scaled for strict integer math.
     """
 
     symbol: str
     ts: int
-    mid_price: float
-    spread: float
-    imbalance: float
+    imbalance: float  # Ratio [-1, 1], float acceptable for bounded ratios
     best_bid: int
     best_ask: int
     bid_depth: int
     ask_depth: int
+    # Backward-compatible fields (scaled floats)
+    mid_price: float | None = None
+    spread: float | None = None
+    # Strict integer fields (preferred)
+    mid_price_x2: int | None = None  # best_bid + best_ask (divide by 2 for mid price)
+    spread_scaled: int | None = None  # best_ask - best_bid (scaled integer)
+
+    def __post_init__(self) -> None:
+        if self.mid_price_x2 is None:
+            if self.best_bid and self.best_ask:
+                self.mid_price_x2 = int(self.best_bid) + int(self.best_ask)
+            elif self.mid_price is not None:
+                self.mid_price_x2 = int(round(self.mid_price * 2))
+            else:
+                self.mid_price_x2 = 0
+        if self.mid_price is None:
+            self.mid_price = self.mid_price_x2 / 2.0
+        else:
+            self.mid_price = float(self.mid_price)
+
+        if self.spread_scaled is None:
+            if self.best_bid and self.best_ask:
+                self.spread_scaled = int(self.best_ask) - int(self.best_bid)
+            elif self.spread is not None:
+                self.spread_scaled = int(round(self.spread))
+            else:
+                self.spread_scaled = 0
+        if self.spread is None:
+            self.spread = float(self.spread_scaled)
+        else:
+            self.spread = float(self.spread)
+
+    @property
+    def mid_price_scaled(self) -> int:
+        """Returns mid price as scaled integer (truncated)."""
+        return (self.mid_price_x2 or 0) // 2
+
+    @property
+    def mid_price_float(self) -> float:
+        """Returns mid price as float (for display/logging only)."""
+        return (self.mid_price_x2 or 0) / 2.0

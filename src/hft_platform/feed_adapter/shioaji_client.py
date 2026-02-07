@@ -384,8 +384,8 @@ class ShioajiClient:
             logger.warning("Reconnecting Shioaji", reason=reason)
             try:
                 self.api.logout()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Logout failed during reconnect", error=str(exc))
             self.logged_in = False
             self._callbacks_registered = False
             self.subscribed_codes = set()
@@ -636,8 +636,8 @@ class ShioajiClient:
 
         try:
             return container[code]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Direct contract lookup failed", code=code, label=label, error=str(exc))
 
         def iter_contracts(value: Any):
             iterable = value.values() if isinstance(value, dict) else value
@@ -647,14 +647,16 @@ class ShioajiClient:
                     if hasattr(item, "__iter__") and not hasattr(item, "code"):
                         for sub in item:
                             yield sub
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Error iterating contract sub-items", error=str(exc))
                     continue
 
         try:
             for contract in iter_contracts(container):
                 if getattr(contract, "code", None) == code:
                     return contract
-        except Exception:
+        except Exception as exc:
+            logger.warning("Error searching contracts by code", code=code, label=label, error=str(exc))
             return None
 
         if not allow_symbol_fallback:
@@ -665,7 +667,8 @@ class ShioajiClient:
                 if getattr(contract, "symbol", None) == code:
                     logger.warning("Symbol fallback used for contract", code=code, type=label)
                     return contract
-        except Exception:
+        except Exception as exc:
+            logger.warning("Error searching contracts by symbol fallback", code=code, label=label, error=str(exc))
             return None
         return None
 
