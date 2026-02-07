@@ -1,6 +1,6 @@
 import threading
-import time
 
+from hft_platform.core import timebase
 from structlog import get_logger
 
 logger = get_logger("order.circuit_breaker")
@@ -42,7 +42,7 @@ class CircuitBreaker:
 
     def is_open(self) -> bool:
         with self._lock:
-            return self._open_until > time.time()
+            return self._open_until > timebase.now_s()
 
     def record_success(self) -> None:
         with self._lock:
@@ -52,7 +52,7 @@ class CircuitBreaker:
         with self._lock:
             self._failure_count += 1
             if self._failure_count >= self.threshold:
-                self._open_until = time.time() + self.timeout_s
+                self._open_until = timebase.now_s() + self.timeout_s
                 logger.critical("Circuit Breaker Tripped", failure_count=self._failure_count)
                 return True
             return False

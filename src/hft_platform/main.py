@@ -2,10 +2,9 @@ import asyncio
 import os
 import signal
 
+from hft_platform.services.system import HFTSystem
 from prometheus_client import start_http_server
 from structlog import get_logger
-
-from hft_platform.services.system import HFTSystem
 
 # Configure structlog globally? HFTSystem does it.
 logger = get_logger("launcher")

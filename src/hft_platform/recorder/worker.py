@@ -1,9 +1,8 @@
 import asyncio
 
-from structlog import get_logger
-
 from hft_platform.recorder.batcher import Batcher
 from hft_platform.recorder.writer import DataWriter
+from structlog import get_logger
 
 logger = get_logger("recorder")
 
@@ -15,7 +14,6 @@ class RecorderService:
 
         # Init Writer
         self.writer = DataWriter()
-        self.writer.connect()
 
         self.batchers = {
             "market_data": Batcher("hft.market_data", writer=self.writer),
@@ -41,7 +39,7 @@ class RecorderService:
 
             # We use default config for now, assuming env vars set
             loader = WALLoaderService()
-            loader.connect()
+            await asyncio.to_thread(loader.connect)
             if loader.ch_client:
                 logger.info("Starting WAL Recovery...")
                 # Run in thread to avoid blocking loop if heavy
@@ -55,6 +53,8 @@ class RecorderService:
     async def run(self):
         self.running = True
         logger.info("Recorder started")
+
+        await self.writer.connect_async()
 
         # Attempt recovery
         await self.recover_wal()

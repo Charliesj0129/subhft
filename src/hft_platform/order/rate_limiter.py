@@ -1,6 +1,6 @@
-import time
 from collections import deque
 
+from hft_platform.core import timebase
 from structlog import get_logger
 
 logger = get_logger("order.rate_limiter")
@@ -22,7 +22,7 @@ class RateLimiter:
             self.window_s = window_s
 
     def check(self) -> bool:
-        now = time.time()
+        now = timebase.now_s()
         while self.rate_window and now - self.rate_window[0] > self.window_s:
             self.rate_window.popleft()
 
@@ -36,4 +36,4 @@ class RateLimiter:
         return True
 
     def record(self) -> None:
-        self.rate_window.append(time.time())
+        self.rate_window.append(timebase.now_s())

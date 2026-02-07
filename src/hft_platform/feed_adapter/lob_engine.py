@@ -1,15 +1,14 @@
 import asyncio
 import importlib
 import os
-import time
 from threading import Lock
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
+from structlog import get_logger
 
 logger = get_logger("feed_adapter.lob")
 
@@ -111,7 +110,7 @@ class BookState:
 
             self.exch_ts = exch_ts
             if _LOCAL_TS_ENABLED:
-                self.local_ts = time.time_ns()
+                self.local_ts = timebase.now_ns()
 
             # Assign directly (allow numpy arrays for zero-copy stats computation)
             if isinstance(bids, np.ndarray):
@@ -289,7 +288,7 @@ class BookState:
 
             self.exch_ts = exch_ts
             if _LOCAL_TS_ENABLED:
-                self.local_ts = time.time_ns()
+                self.local_ts = timebase.now_ns()
 
             if isinstance(bids, np.ndarray):
                 self.bids = bids if bids.size > 0 else []

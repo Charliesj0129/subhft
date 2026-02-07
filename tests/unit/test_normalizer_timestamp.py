@@ -29,7 +29,7 @@ def test_extract_ts_ns_units():
 def test_local_ts_clamp_on_skew(monkeypatch, normalizer):
     monkeypatch.setattr(norm, "_TS_MAX_LAG_NS", 10)
     monkeypatch.setattr(norm, "_TS_SKEW_LOG_COOLDOWN_NS", 0)
-    monkeypatch.setattr(norm.time, "time_ns", lambda: 2_000_000_000)
+    monkeypatch.setattr(norm.timebase, "now_ns", lambda: 2_000_000_000)
 
     payload = {
         "code": "2330",

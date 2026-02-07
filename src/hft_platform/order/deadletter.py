@@ -13,12 +13,12 @@ Complies with HFT Laws:
 import asyncio
 import json
 import os
-import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from hft_platform.core import timebase
 from structlog import get_logger
 
 logger = get_logger("order.deadletter")
@@ -111,7 +111,7 @@ class DeadLetterQueue:
     ) -> None:
         """Add a rejected order to the dead letter queue."""
         entry = DeadLetterEntry(
-            timestamp_ns=time.time_ns(),
+            timestamp_ns=timebase.now_ns(),
             order_id=order_id,
             strategy_id=strategy_id,
             symbol=symbol,
@@ -162,7 +162,7 @@ class DeadLetterQueue:
 
     def _write_entries(self, entries: List[DeadLetterEntry]) -> int:
         """Blocking write to disk (run in executor)."""
-        ts = int(time.time_ns())
+        ts = int(timebase.now_ns())
         filename = self.dlq_dir / f"dlq_{ts}.jsonl"
 
         try:

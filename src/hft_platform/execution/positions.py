@@ -4,12 +4,11 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from structlog import get_logger
-
 from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.metrics import MetricsRegistry
+from structlog import get_logger
 
 logger = get_logger("positions")
 

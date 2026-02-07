@@ -2,15 +2,13 @@ import importlib
 import os
 import re
 import sys
-import time
 from typing import Any, Dict, Iterable, Optional, cast
-from zoneinfo import ZoneInfo
 
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.events import BidAskEvent, MetaData, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
+from structlog import get_logger
 
 # Validated Imports
 
@@ -38,13 +36,6 @@ _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
     "off",
 }
 _SYNTHETIC_TICKS = max(1, int(os.getenv("HFT_MD_SYNTHETIC_TICKS", "1")))
-_TS_ASSUME_TZ = os.getenv("HFT_TS_ASSUME_TZ", "Asia/Taipei")
-_TS_ASSUME_TZINFO: Optional[ZoneInfo]
-try:
-    _TS_ASSUME_TZINFO = ZoneInfo(_TS_ASSUME_TZ)
-except Exception as exc:
-    logger.warning("Failed to load timezone, timestamps may be incorrect", tz=_TS_ASSUME_TZ, error=str(exc))
-    _TS_ASSUME_TZINFO = None
 try:
     _TS_MAX_LAG_NS = int(float(os.getenv("HFT_TS_MAX_LAG_S", "5")) * 1e9)
 except Exception as exc:
@@ -244,37 +235,17 @@ class SymbolMetadata:
         self._product_type_cache[symbol] = ""
         return ""
 
+    def order_params(self, symbol: str) -> Dict[str, Any]:
+        entry = self.meta.get(symbol) or {}
+        params: Dict[str, Any] = {}
+        for key in ("order_cond", "order_lot", "oc_type", "account"):
+            if key in entry and entry[key] is not None:
+                params[key] = entry[key]
+        return params
+
 
 def _extract_ts_ns(ts_val: Any) -> int:
-    if ts_val is None:
-        return 0
-    try:
-        if hasattr(ts_val, "timestamp"):
-            tzinfo = getattr(ts_val, "tzinfo", None)
-            if tzinfo is None and _TS_ASSUME_TZINFO is not None:
-                ts_val = ts_val.replace(tzinfo=_TS_ASSUME_TZINFO)
-            return int(ts_val.timestamp() * 1e9)
-        if isinstance(ts_val, int):
-            abs_ts = abs(float(ts_val))
-            if abs_ts < 1e11:
-                return ts_val * 1_000_000_000
-            if abs_ts < 1e14:
-                return ts_val * 1_000_000
-            if abs_ts < 1e17:
-                return ts_val * 1_000
-            return ts_val
-        if isinstance(ts_val, float):
-            abs_ts = abs(float(ts_val))
-            if abs_ts < 1e11:
-                return int(ts_val * 1e9)
-            if abs_ts < 1e14:
-                return int(ts_val * 1e6)
-            if abs_ts < 1e17:
-                return int(ts_val * 1e3)
-            return int(ts_val)
-    except Exception:
-        return 0
-    return 0
+    return timebase.coerce_ns(ts_val)
 
 
 def _clamp_future_ts(exch_ts: int, now_ns: int, topic: str, symbol: str) -> int:
@@ -291,14 +262,6 @@ def _clamp_future_ts(exch_ts: int, now_ns: int, topic: str, symbol: str) -> int:
         )
         return now_ns
     return exch_ts
-
-    def order_params(self, symbol: str) -> Dict[str, Any]:
-        entry = self.meta.get(symbol) or {}
-        params: Dict[str, Any] = {}
-        for key in ("order_cond", "order_lot", "oc_type", "account"):
-            if key in entry and entry[key] is not None:
-                params[key] = entry[key]
-        return params
 
 
 class MarketDataNormalizer:
@@ -469,7 +432,7 @@ class MarketDataNormalizer:
                                 exch_ts = exch_ts_py
                             if _RETURN_TUPLE:
                                 return rust_tuple
-                            local_ts = time.time_ns()
+                            local_ts = timebase.now_ns()
                             if exch_ts:
                                 exch_ts = _clamp_future_ts(exch_ts, local_ts, "tick", _sym)
                                 if local_ts < exch_ts:
@@ -539,7 +502,7 @@ class MarketDataNormalizer:
                     exch_ts,
                 )
 
-            local_ts = time.time_ns()
+            local_ts = timebase.now_ns()
             if exch_ts:
                 exch_ts = _clamp_future_ts(exch_ts, local_ts, "tick", symbol)
                 if local_ts < exch_ts:
@@ -847,7 +810,7 @@ class MarketDataNormalizer:
                     )
                 return ("bidask", symbol, bids_final, asks_final, exch_ts, False)
 
-            local_ts = time.time_ns()
+            local_ts = timebase.now_ns()
             if exch_ts:
                 exch_ts = _clamp_future_ts(exch_ts, local_ts, "bidask", symbol)
                 if local_ts < exch_ts:
@@ -922,7 +885,7 @@ class MarketDataNormalizer:
             if _RETURN_TUPLE:
                 return ("bidask", symbol, bids, asks, exch_ts, True)
 
-            local_ts = time.time_ns()
+            local_ts = timebase.now_ns()
             if exch_ts:
                 exch_ts = _clamp_future_ts(exch_ts, local_ts, "snapshot", symbol)
                 if local_ts < exch_ts:

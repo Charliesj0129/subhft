@@ -1,12 +1,11 @@
 import asyncio
-import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.execution.positions import PositionStore
 from hft_platform.risk.storm_guard import StormGuard
+from structlog import get_logger
 
 logger = get_logger("reconciliation")
 
@@ -46,7 +45,7 @@ class ReconciliationService:
         self.config = config
         self.storm_guard = storm_guard
         self.check_interval_s = config.get("reconciliation", {}).get("heartbeat_threshold_ms", 1000) / 1000.0
-        self.last_heartbeat = time.time()
+        self.last_heartbeat = timebase.now_s()
         self.running = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._consecutive_failures: int = 0

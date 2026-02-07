@@ -23,6 +23,7 @@ logs/
 .hypothesis/
 .ruff_cache/
 .benchmarks/
+benchmark.json
 .coverage
 coverage.xml
 htmlcov/

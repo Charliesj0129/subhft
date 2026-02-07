@@ -7,6 +7,8 @@ import time
 from typing import Any, Dict, List
 
 import clickhouse_connect
+from hft_platform.core import timebase
+from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 from structlog import get_logger
 
 logger = get_logger("wal_loader")
@@ -80,14 +82,8 @@ class WALLoaderService:
                 host=self.ch_host, port=self.ch_port, username=ch_username, password=ch_password
             )
             # Ensure schema exists (rudimentary check or run init sql)
-            schema_path = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
-            if os.path.exists(schema_path):
-                with open(schema_path, "r") as f:
-                    sql_script = f.read()
-                    statements = sql_script.split(";")
-                    for stmt in statements:
-                        if stmt.strip():
-                            self.ch_client.command(stmt)
+            apply_schema(self.ch_client)
+            ensure_price_scaled_views(self.ch_client)
             logger.info("Connected to ClickHouse and ensured schema.")
         except ConnectionError as e:
             logger.error("Connection refused by ClickHouse", error=str(e), host=self.ch_host, port=self.ch_port)
@@ -120,7 +116,7 @@ class WALLoaderService:
         while self.running:
             if not self.ch_client:
                 # Check circuit breaker
-                now = time.time()
+                now = timebase.now_s()
                 if self._circuit_open_until > now:
                     sleep_time = min(self._circuit_open_until - now, 60.0)
                     logger.debug(
@@ -137,7 +133,7 @@ class WALLoaderService:
                     if self._connect_failures >= self._connect_max_retries:
                         # Open circuit breaker
                         backoff = self._compute_connect_backoff(self._connect_failures - self._connect_max_retries)
-                        self._circuit_open_until = time.time() + backoff
+                        self._circuit_open_until = timebase.now_s() + backoff
                         logger.error(
                             "ClickHouse connection failed repeatedly, circuit breaker opened",
                             failures=self._connect_failures,
@@ -190,7 +186,7 @@ class WALLoaderService:
         if not files:
             return
 
-        now = time.time()
+        now = timebase.now_s()
         for fpath in files:
             # Check modification time to ensure writer is done
             mtime = os.path.getmtime(fpath)
@@ -289,7 +285,7 @@ class WALLoaderService:
     def _write_to_dlq(self, table: str, rows: List[Dict[str, Any]], error: str) -> None:
         """Write failed rows to Dead Letter Queue for later analysis."""
         os.makedirs(self.dlq_dir, exist_ok=True)
-        ts = int(time.time_ns())
+        ts = int(timebase.now_ns())
         dlq_file = os.path.join(self.dlq_dir, f"{table}_{ts}.jsonl")
         try:
             with open(dlq_file, "w") as f:
@@ -368,7 +364,7 @@ class WALLoaderService:
                     or r.get("ts")
                     or r.get("timestamp")
                     or meta.get("local_ts")
-                    or time.time_ns()
+                    or timebase.now_ns()
                 )
 
                 # Check if data is already scaled (new format) or float (legacy)
@@ -422,7 +418,7 @@ class WALLoaderService:
                 # Ensure ingest_ts is not earlier than exchange ts to avoid negative lag
                 if ts:
                     if _TS_MAX_FUTURE_NS:
-                        now_ns = time.time_ns()
+                        now_ns = timebase.now_ns()
                         if ts - now_ns > _TS_MAX_FUTURE_NS:
                             logger.warning(
                                 "Exchange timestamp in future",

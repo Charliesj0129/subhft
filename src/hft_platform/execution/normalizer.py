@@ -1,15 +1,14 @@
-import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, Optional
 
-from structlog import get_logger
-
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus, Side
+from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.metrics import MetricsRegistry
+from structlog import get_logger
 
 logger = get_logger("exec_normalizer")
 
@@ -82,15 +81,15 @@ class ExecutionNormalizer:
 
     def _normalize_ts_ns(self, value: Any) -> int:
         if value is None:
-            return time.time_ns()
+            return timebase.now_ns()
         try:
             from decimal import Decimal, InvalidOperation
 
             ts = Decimal(str(value))
         except (TypeError, ValueError, InvalidOperation):
-            return time.time_ns()
+            return timebase.now_ns()
         if ts <= 0:
-            return time.time_ns()
+            return timebase.now_ns()
         if ts > Decimal("1e17"):
             return int(ts)
         if ts > Decimal("1e14"):

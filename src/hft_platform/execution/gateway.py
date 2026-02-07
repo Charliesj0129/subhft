@@ -1,10 +1,9 @@
-import time
 from typing import Any
 
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.adapter import OrderAdapter
+from structlog import get_logger
 
 logger = get_logger("execution.gateway")
 
@@ -24,7 +23,7 @@ class ExecutionGateway:
         self.running = True
         logger.info("ExecutionGateway started")
         self.metrics.execution_gateway_alive.set(1)
-        self.metrics.execution_gateway_heartbeat_ts.set(time.time())
+        self.metrics.execution_gateway_heartbeat_ts.set(timebase.now_s())
         try:
             await self.adapter.run()
         except Exception:

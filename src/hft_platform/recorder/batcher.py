@@ -1,8 +1,8 @@
 import asyncio
 import os
-import time
 from typing import Any, Dict, List
 
+from hft_platform.core import timebase
 from structlog import get_logger
 
 logger = get_logger("recorder.batcher")
@@ -46,7 +46,7 @@ class Batcher:
         self.backpressure_policy = backpressure_policy
 
         self.buffer: List[Dict[str, Any]] = []
-        self.last_flush_time = time.time()
+        self.last_flush_time = timebase.now_s()
         self.lock = asyncio.Lock()
 
         # Metrics for monitoring backpressure events
@@ -113,7 +113,7 @@ class Batcher:
             if not self.buffer:
                 return
 
-            age = (time.time() - self.last_flush_time) * 1000
+            age = (timebase.now_s() - self.last_flush_time) * 1000
             if age >= self.flush_interval_ms:
                 await self._flush_locked()
 
@@ -128,7 +128,7 @@ class Batcher:
 
         data = self.buffer[:]  # Copy
         self.buffer.clear()
-        self.last_flush_time = time.time()
+        self.last_flush_time = timebase.now_s()
 
         if self.writer:
             try:

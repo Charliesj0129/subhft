@@ -1,19 +1,18 @@
 import asyncio
 import datetime as dt
 import os
-import sys
 import time
 from enum import Enum
 from zoneinfo import ZoneInfo
 
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
+from structlog import get_logger
 
 logger = get_logger("service.market_data")
 
@@ -47,7 +46,7 @@ class MarketDataService:
 
         self.state = FeedState.INIT
         self.running = False
-        self.last_event_ts = time.time()
+        self.last_event_ts = timebase.now_s()
         self.last_event_mono = time.monotonic()
         self.heartbeat_threshold_s = 5.0
         self.resubscribe_gap_s = float(os.getenv("HFT_MD_RESUBSCRIBE_GAP_S", "15"))
@@ -57,7 +56,7 @@ class MarketDataService:
         self.reconnect_days = {d.strip().lower() for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",") if d.strip()}
         self.reconnect_hours = os.getenv("HFT_RECONNECT_HOURS", "")
         self.reconnect_hours_2 = os.getenv("HFT_RECONNECT_HOURS_2", "")
-        self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ", "Asia/Taipei")
+        self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ") or timebase.TZ_NAME or "Asia/Taipei"
         try:
             self._reconnect_tzinfo: dt.tzinfo = ZoneInfo(self.reconnect_tz)
         except Exception:
@@ -66,7 +65,7 @@ class MarketDataService:
         self._last_reconnect_ts = 0.0
         self._resubscribe_attempts = 0
         self._last_rollover_reconnect_date: dt.date | None = None
-        self.metrics = {"count": 0, "start_ts": time.time()}
+        self.metrics = {"count": 0, "start_ts": timebase.now_s()}
         self.metrics_registry = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
@@ -75,7 +74,6 @@ class MarketDataService:
         self.log_normalized = os.getenv("HFT_MD_LOG_NORMALIZED", "0") == "1"
         self.log_normalized_every = int(os.getenv("HFT_MD_LOG_NORMALIZED_EVERY", "1000"))
         self._normalized_log_counter = 0
-        self._thread_offload = os.getenv("HFT_MD_THREAD_OFFLOAD", "1") != "0" and "pytest" not in sys.modules
 
         # Per-symbol feed gap monitoring
         self._symbol_last_tick: dict[str, float] = {}  # symbol -> monotonic timestamp
@@ -105,7 +103,7 @@ class MarketDataService:
                     _exchange, raw = msg
                 else:
                     raw = msg
-                self.last_event_ts = time.time()
+                self.last_event_ts = timebase.now_s()
                 self.last_event_mono = time.monotonic()
                 self.metrics_registry.feed_last_event_ts.labels(source="market_data").set(self.last_event_ts)
                 self.metrics["count"] += 1
@@ -203,15 +201,13 @@ class MarketDataService:
     async def _connect_sequence(self):
         try:
             self._set_state(FeedState.CONNECTING)
-            self.client.login()
-            self.client.validate_symbols()
+            # Always offload blocking API calls to a worker thread.
+            await asyncio.to_thread(self.client.login)
+            await asyncio.to_thread(self.client.validate_symbols)
 
             # Snapshots
             self._set_state(FeedState.SNAPSHOTTING)
-            if self._thread_offload:
-                snapshots = await asyncio.to_thread(self.client.fetch_snapshots)
-            else:
-                snapshots = self.client.fetch_snapshots()
+            snapshots = await asyncio.to_thread(self.client.fetch_snapshots)
 
             # Application of snapshots
             # Need to normalize snapshots?
@@ -237,7 +233,7 @@ class MarketDataService:
                 elif stats:
                     self._publish_nowait(stats)
 
-            self.client.subscribe_basket(self._on_shioaji_event)
+            await asyncio.to_thread(self.client.subscribe_basket, self._on_shioaji_event)
             self._set_state(FeedState.CONNECTED)
 
         except Exception as e:
@@ -282,7 +278,7 @@ class MarketDataService:
             await asyncio.sleep(5.0)  # 5s interval
 
             # 1. Throughput
-            now = time.time()
+            now = timebase.now_s()
             elapsed = now - self.metrics["start_ts"]
             count = self.metrics["count"]
             eps = count / elapsed if elapsed > 0 else 0
@@ -316,7 +312,7 @@ class MarketDataService:
             if self.symbol_metadata.reload_if_changed():
                 logger.info("Symbols config reloaded", count=len(self.symbol_metadata.meta))
                 try:
-                    self.client.reload_symbols()
+                    await asyncio.to_thread(self.client.reload_symbols)
                 except Exception as exc:
                     logger.error("Symbol reload failed", error=str(exc))
 
@@ -400,10 +396,7 @@ class MarketDataService:
     async def _attempt_resubscribe(self, gap: float) -> None:
         if not self._within_reconnect_window():
             return
-        if self._thread_offload:
-            ok = await asyncio.to_thread(self.client.resubscribe)
-        else:
-            ok = self.client.resubscribe()
+        ok = await asyncio.to_thread(self.client.resubscribe)
         if ok:
             self._resubscribe_attempts = 0
         else:
@@ -411,7 +404,7 @@ class MarketDataService:
         logger.info("Resubscribe attempt", gap=gap, ok=ok, attempts=self._resubscribe_attempts)
 
     async def _trigger_reconnect(self, gap: float, reason: str | None = None) -> None:
-        now = time.time()
+        now = timebase.now_s()
         if now - self._last_reconnect_ts < self.reconnect_cooldown_s:
             return
         if not self._within_reconnect_window():
@@ -420,13 +413,10 @@ class MarketDataService:
         reason_label = reason or "heartbeat_gap"
         logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
         self._set_state(FeedState.RECOVERING)
-        if self._thread_offload:
-            ok = await asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s")
-        else:
-            ok = self.client.reconnect(f"{reason_label} {gap:.1f}s")
+        ok = await asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s")
         if ok:
             self._set_state(FeedState.CONNECTED)
-            self.last_event_ts = time.time()
+            self.last_event_ts = timebase.now_s()
             self.last_event_mono = time.monotonic()
             self._resubscribe_attempts = 0
         else:

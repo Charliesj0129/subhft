@@ -5,15 +5,15 @@ import time
 from decimal import Decimal
 from typing import Any, List
 
-from structlog import get_logger
-
 from hft_platform.contracts.strategy import OrderIntent
+from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.strategy.registry import StrategyRegistry
+from structlog import get_logger
 
 logger = get_logger("strategy_runner")
 
@@ -144,7 +144,7 @@ class StrategyRunner:
             qty=qty,
             tif=tif,
             target_order_id=target_order_id,
-            timestamp_ns=time.time_ns(),
+            timestamp_ns=timebase.now_ns(),
             source_ts_ns=int(source_ts_ns or 0),
             trace_id=str(trace_id or ""),
         )
@@ -266,5 +266,5 @@ class StrategyRunner:
             except Exception:
                 source_ts_ns = 0
         if not source_ts_ns:
-            source_ts_ns = time.time_ns()
+            source_ts_ns = timebase.now_ns()
         return source_ts_ns, trace_id

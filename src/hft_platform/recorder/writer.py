@@ -3,9 +3,10 @@ import os
 import random
 import time
 
-from structlog import get_logger
-
+from hft_platform.core import timebase
+from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 from hft_platform.recorder.wal import WALWriter
+from structlog import get_logger
 
 # import clickhouse_connect # Mocked for now if not available in env
 try:
@@ -93,8 +94,6 @@ class DataWriter:
             logger.info("Running in WAL-only mode (ClickHouse disabled or driver missing)")
             return
 
-        import time
-
         for attempt in range(self._max_retries):
             self._connect_attempts = attempt
             try:
@@ -160,17 +159,8 @@ class DataWriter:
     def _init_schema(self):
         """Initialize ClickHouse schema from SQL file."""
         try:
-            schema_path = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
-            if os.path.exists(schema_path):
-                with open(schema_path, "r") as f:
-                    sql_script = f.read()
-                    statements = sql_script.split(";")
-                    for stmt in statements:
-                        if stmt.strip():
-                            self.ch_client.command(stmt)
-                logger.info("Schema initialized from SQL")
-            else:
-                logger.warning("Schema file not found", path=schema_path)
+            apply_schema(self.ch_client)
+            ensure_price_scaled_views(self.ch_client)
         except Exception as se:
             logger.error("Schema initialization failed", error=str(se))
 
@@ -228,7 +218,7 @@ class DataWriter:
                     continue
             return data
 
-        now_ns = time.time_ns()
+        now_ns = timebase.now_ns()
         kept: list[dict] = []
         dropped = 0
         for row in data:

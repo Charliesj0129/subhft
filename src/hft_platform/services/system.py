@@ -1,14 +1,13 @@
 import asyncio
 import os
-import time
 from typing import Any, Dict, Optional
 
-from structlog import get_logger
-
+from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
 from hft_platform.utils.logging import configure_logging
+from structlog import get_logger
 
 logger = get_logger("system")
 
@@ -217,7 +216,7 @@ class HFTSystem:
             metrics.queue_depth.labels(queue="order").set(self.order_queue.qsize())
             metrics.queue_depth.labels(queue="recorder").set(self.recorder_queue.qsize())
 
-            now = time.time()
+            now = timebase.now_s()
             t_router = self.tasks.get("exec_router")
             if t_router and not t_router.done():
                 metrics.execution_router_heartbeat_ts.set(now)
@@ -299,11 +298,9 @@ class HFTSystem:
         # This callback runs in Shioaji thread.
         # We must schedule work on the main loop.
         if self.running and hasattr(self, "loop"):
-            import time
-
             from hft_platform.execution.normalizer import RawExecEvent
 
-            event = RawExecEvent(topic, data, time.time_ns())
+            event = RawExecEvent(topic, data, timebase.now_ns())
             self.loop.call_soon_threadsafe(self.raw_exec_queue.put_nowait, event)
 
     async def _recorder_bridge(self):

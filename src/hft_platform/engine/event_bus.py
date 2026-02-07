@@ -3,9 +3,8 @@ import importlib
 import os
 from typing import Any, Callable, List, Optional
 
-from structlog import get_logger
-
 from hft_platform.observability.metrics import MetricsRegistry
+from structlog import get_logger
 
 # from collections import deque
 
