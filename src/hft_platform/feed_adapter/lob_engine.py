@@ -5,10 +5,11 @@ from threading import Lock
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
-from structlog import get_logger
 
 logger = get_logger("feed_adapter.lob")
 

@@ -4,8 +4,9 @@ import os
 from typing import Optional
 
 import numpy as np
-from hft_platform.core import timebase
 from structlog import get_logger
+
+from hft_platform.core import timebase
 
 logger = get_logger("wal.converter")
 

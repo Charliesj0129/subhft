@@ -2,12 +2,13 @@ import asyncio
 import inspect
 from typing import Callable, Dict, Optional, Union
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
-from structlog import get_logger
 
 logger = get_logger("execution.router")
 

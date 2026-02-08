@@ -3,13 +3,14 @@ import threading
 import time
 
 import yaml
+from structlog import get_logger
+
 from hft_platform.contracts.strategy import OrderCommand, OrderIntent, RiskDecision
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.validators import MaxNotionalValidator, PriceBandValidator, StormGuardFSM
-from structlog import get_logger
 
 logger = get_logger("risk_engine")
 

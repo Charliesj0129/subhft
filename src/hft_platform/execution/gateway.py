@@ -1,9 +1,10 @@
 from typing import Any
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.adapter import OrderAdapter
-from structlog import get_logger
 
 logger = get_logger("execution.gateway")
 

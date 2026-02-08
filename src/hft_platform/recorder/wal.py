@@ -5,8 +5,9 @@ import os
 import tempfile
 from glob import glob
 
-from hft_platform.core import timebase
 from structlog import get_logger
+
+from hft_platform.core import timebase
 
 logger = get_logger("recorder.wal")
 

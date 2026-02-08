@@ -4,10 +4,11 @@ import time
 from typing import Any, Callable, Dict, List
 
 import yaml
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.rate_limiter import RateLimiter
-from structlog import get_logger
 
 try:
     import shioaji as sj

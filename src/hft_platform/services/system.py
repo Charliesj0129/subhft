@@ -2,12 +2,13 @@ import asyncio
 import os
 from typing import Any, Dict, Optional
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
 from hft_platform.utils.logging import configure_logging
-from structlog import get_logger
 
 logger = get_logger("system")
 

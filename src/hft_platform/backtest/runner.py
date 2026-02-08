@@ -140,6 +140,7 @@ class HftBacktestRunner:
     def _generate_report(self, pnl):
         try:
             import numpy as np
+
             from hft_platform.backtest.reporting import HTMLReporter
 
             report_path = f"reports/{self.strategy_name}_{self.date}.html"

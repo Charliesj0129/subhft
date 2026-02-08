@@ -2,10 +2,11 @@ import asyncio
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.execution.positions import PositionStore
 from hft_platform.risk.storm_guard import StormGuard
-from structlog import get_logger
 
 logger = get_logger("reconciliation")
 
