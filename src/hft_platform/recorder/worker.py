@@ -1,8 +1,9 @@
 import asyncio
 
+from structlog import get_logger
+
 from hft_platform.recorder.batcher import Batcher
 from hft_platform.recorder.writer import DataWriter
-from structlog import get_logger
 
 logger = get_logger("recorder")
 

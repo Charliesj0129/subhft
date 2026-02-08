@@ -4,11 +4,12 @@ import re
 import sys
 from typing import Any, Dict, Iterable, Optional, cast
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.events import BidAskEvent, MetaData, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
-from structlog import get_logger
 
 # Validated Imports
 

@@ -1,7 +1,8 @@
 import threading
 
-from hft_platform.core import timebase
 from structlog import get_logger
+
+from hft_platform.core import timebase
 
 logger = get_logger("order.circuit_breaker")
 

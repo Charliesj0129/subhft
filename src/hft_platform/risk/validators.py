@@ -1,9 +1,10 @@
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
+from structlog import get_logger
+
 from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
 from hft_platform.core.pricing import PriceCodec, PriceScaleProvider, SymbolMetadataPriceScaleProvider
 from hft_platform.observability.metrics import MetricsRegistry
-from structlog import get_logger
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.lob_engine import LOBEngine

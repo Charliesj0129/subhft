@@ -5,6 +5,8 @@ import time
 from enum import Enum
 from zoneinfo import ZoneInfo
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.feed_adapter.lob_engine import LOBEngine
@@ -12,7 +14,6 @@ from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMet
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
-from structlog import get_logger
 
 logger = get_logger("service.market_data")
 

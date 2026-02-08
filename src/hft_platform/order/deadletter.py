@@ -18,8 +18,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from hft_platform.core import timebase
 from structlog import get_logger
+
+from hft_platform.core import timebase
 
 logger = get_logger("order.deadletter")
 

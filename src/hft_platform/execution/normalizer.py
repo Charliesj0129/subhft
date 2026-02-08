@@ -2,13 +2,14 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, Optional
 
+from structlog import get_logger
+
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus, Side
 from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.metrics import MetricsRegistry
-from structlog import get_logger
 
 logger = get_logger("exec_normalizer")
 

@@ -1,6 +1,7 @@
+from structlog import get_logger
+
 from hft_platform.events import BidAskEvent, TickEvent
 from hft_platform.strategy.base import BaseStrategy
-from structlog import get_logger
 
 # Import Rust Core
 # We use try/except to allow running in envs where it's not built yet,

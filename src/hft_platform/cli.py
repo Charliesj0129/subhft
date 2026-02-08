@@ -7,13 +7,14 @@ import textwrap
 from importlib import import_module
 from typing import Any, Dict
 
+from structlog import get_logger
+
 from hft_platform.config.loader import (
     detect_live_credentials,
     load_settings,
     summarize_settings,
 )
 from hft_platform.utils.logging import configure_logging
-from structlog import get_logger
 
 logger = get_logger("cli")
 
@@ -55,8 +56,9 @@ def cmd_run(args: argparse.Namespace):
         return
 
     # Live/Sim share the same runtime pipeline; sim runs with Shioaji stub.
-    from hft_platform.main import HFTSystem
     from prometheus_client import start_http_server
+
+    from hft_platform.main import HFTSystem
 
     start_http_server(settings.get("prometheus_port", 9090))
     print(f"Prometheus metrics started on :{settings.get('prometheus_port', 9090)}")

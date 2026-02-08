@@ -2,9 +2,10 @@ import os
 from dataclasses import dataclass
 from enum import IntEnum
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
-from structlog import get_logger
 
 logger = get_logger("risk.storm_guard")
 

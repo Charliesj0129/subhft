@@ -1,8 +1,9 @@
 import argparse
 import json
 
-from hft_platform.strategy.registry import StrategyRegistry
 from structlog import get_logger
+
+from hft_platform.strategy.registry import StrategyRegistry
 
 logger = get_logger("strategy.cli")
 

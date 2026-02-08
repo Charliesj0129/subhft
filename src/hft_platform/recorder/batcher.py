@@ -2,8 +2,9 @@ import asyncio
 import os
 from typing import Any, Dict, List
 
-from hft_platform.core import timebase
 from structlog import get_logger
+
+from hft_platform.core import timebase
 
 logger = get_logger("recorder.batcher")
 
