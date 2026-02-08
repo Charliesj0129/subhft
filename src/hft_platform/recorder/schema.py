@@ -25,7 +25,10 @@ def apply_schema(client, schema_path: str = DEFAULT_SCHEMA_PATH) -> None:
         logger.warning("Schema file not found", path=schema_path)
         return
     for stmt in statements:
-        client.command(stmt)
+        try:
+            client.command(stmt)
+        except Exception as exc:
+            logger.warning("Schema statement failed", error=str(exc), statement=stmt[:160])
     logger.info("Schema initialized from SQL")
 
 
@@ -54,7 +57,8 @@ def _execute_all(client, statements: Iterable[str]) -> None:
 
 def ensure_price_scaled_views(client) -> bool:
     """Repair legacy views that still reference `price` instead of `price_scaled`."""
-    if not _view_uses_legacy_price(client, "candles_1m_mv"):
+    legacy_views = ("candles_1m_mv", "ohlcv_1m_mv")
+    if not any(_view_uses_legacy_price(client, name) for name in legacy_views):
         return False
 
     logger.warning("Legacy candles_1m_mv detected, repairing view definitions")

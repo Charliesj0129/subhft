@@ -7,9 +7,10 @@ import time
 from typing import Any, Dict, List
 
 import clickhouse_connect
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
-from structlog import get_logger
 
 logger = get_logger("wal_loader")
 
@@ -82,8 +83,14 @@ class WALLoaderService:
                 host=self.ch_host, port=self.ch_port, username=ch_username, password=ch_password
             )
             # Ensure schema exists (rudimentary check or run init sql)
-            apply_schema(self.ch_client)
-            ensure_price_scaled_views(self.ch_client)
+            try:
+                apply_schema(self.ch_client)
+            except Exception as e:
+                logger.error("Schema initialization failed", error=str(e))
+            try:
+                ensure_price_scaled_views(self.ch_client)
+            except Exception as e:
+                logger.error("Schema view repair failed", error=str(e))
             logger.info("Connected to ClickHouse and ensured schema.")
         except ConnectionError as e:
             logger.error("Connection refused by ClickHouse", error=str(e), host=self.ch_host, port=self.ch_port)
