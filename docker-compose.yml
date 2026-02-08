@@ -18,7 +18,7 @@ services:
       - HFT_CLICKHOUSE_HOST=clickhouse
       - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
       - HFT_CLICKHOUSE_ENABLED=1
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-changeme}
       - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
       - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
       - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
@@ -64,7 +64,7 @@ services:
     container_name: clickhouse
     environment:
       - CLICKHOUSE_USER=default
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-changeme}
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     ports:
       - "8123:8123"
@@ -98,7 +98,7 @@ services:
   redis:
     image: redis:7
     container_name: redis
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD required}"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
     ports:
       - "6379:6379"
     restart: always
@@ -132,7 +132,7 @@ services:
       - HFT_CLICKHOUSE_HOST=clickhouse
       - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
       - HFT_CLICKHOUSE_USER=${HFT_CLICKHOUSE_USER:-default}
-      - HFT_CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
+      - HFT_CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-changeme}
       - HFT_MONITOR_INTERVAL_S=${HFT_MONITOR_INTERVAL_S:-10}
       - HFT_MONITOR_MAX_INGEST_LAG_S=${HFT_MONITOR_MAX_INGEST_LAG_S:-5}
       - HFT_MONITOR_FUTURE_TOLERANCE_S=${HFT_MONITOR_FUTURE_TOLERANCE_S:-60}
@@ -203,7 +203,7 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
     volumes:
       - ./config/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
       - ./config/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro

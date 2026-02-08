@@ -3,10 +3,11 @@ import os
 import random
 import time
 
+from structlog import get_logger
+
 from hft_platform.core import timebase
 from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 from hft_platform.recorder.wal import WALWriter
-from structlog import get_logger
 
 # import clickhouse_connect # Mocked for now if not available in env
 try:
@@ -160,9 +161,12 @@ class DataWriter:
         """Initialize ClickHouse schema from SQL file."""
         try:
             apply_schema(self.ch_client)
-            ensure_price_scaled_views(self.ch_client)
         except Exception as se:
             logger.error("Schema initialization failed", error=str(se))
+        try:
+            ensure_price_scaled_views(self.ch_client)
+        except Exception as se:
+            logger.error("Schema view repair failed", error=str(se))
 
     async def write(self, table: str, data: list):
         """
