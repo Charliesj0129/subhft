@@ -11,7 +11,7 @@ import yaml
 # We will mock the module `shioaji` in `sys.modules` or rely on `sj` being None check if we can't install it.
 # However, we want to test the logic when `sj` IS present.
 # So we must patch `hft_platform.feed_adapter.shioaji_client.sj`
-from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+from hft_platform.feed_adapter.shioaji_client import ShioajiClient, dispatch_tick_cb
 
 
 class TestShioajiClientFull(unittest.TestCase):
@@ -82,7 +82,30 @@ class TestShioajiClientFull(unittest.TestCase):
         # Verify subscriptions
         # 2 symbols * 2 quote types = 4 subscribes
         self.assertEqual(self.mock_api_instance.quote.subscribe.call_count, 4)
-        self.mock_api_instance.quote.set_on_tick_stk_v1_callback.assert_called_with(cb)
+        self.mock_api_instance.quote.set_on_tick_stk_v1_callback.assert_called_with(dispatch_tick_cb)
+
+    def test_callback_retry_loop_sets_registered(self):
+        self.client.logged_in = True
+        cb = MagicMock()
+        self.client._callbacks_registered = False
+
+        attempts = {"n": 0}
+
+        def fake_register(_cb):
+            attempts["n"] += 1
+            if attempts["n"] < 2:
+                return False
+            self.client._callbacks_registered = True
+            return True
+
+        with patch.object(self.client, "_register_callbacks", side_effect=fake_register):
+            with patch("time.sleep", return_value=None):
+                self.client._start_callback_retry(cb)
+                self.client._callbacks_retry_thread.join(timeout=1)
+
+        self.assertTrue(self.client._callbacks_registered)
+        self.assertFalse(self.client._callbacks_retrying)
+        self.assertGreaterEqual(attempts["n"], 2)
 
     def test_place_order(self):
         self.client.place_order("2330", "TSE", "Buy", 100.0, 1, "ROD", "Regular")
