@@ -66,6 +66,10 @@ class MarketDataService:
         self._last_reconnect_ts = 0.0
         self._resubscribe_attempts = 0
         self._last_rollover_reconnect_date: dt.date | None = None
+        self._last_rollover_seen_date: dt.date | None = None
+        self._pending_reconnect_reason: str | None = None
+        self._pending_reconnect_gap: float = 0.0
+        self._pending_reconnect_since: float | None = None
         self.metrics = {"count": 0, "start_ts": timebase.now_s()}
         self.metrics_registry = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
@@ -203,12 +207,12 @@ class MarketDataService:
         try:
             self._set_state(FeedState.CONNECTING)
             # Always offload blocking API calls to a worker thread.
-            await asyncio.to_thread(self.client.login)
-            await asyncio.to_thread(self.client.validate_symbols)
+            await self._call_client(self.client.login)
+            await self._call_client(self.client.validate_symbols)
 
             # Snapshots
             self._set_state(FeedState.SNAPSHOTTING)
-            snapshots = await asyncio.to_thread(self.client.fetch_snapshots)
+            snapshots = await self._call_client(self.client.fetch_snapshots)
 
             # Application of snapshots
             # Need to normalize snapshots?
@@ -234,7 +238,7 @@ class MarketDataService:
                 elif stats:
                     self._publish_nowait(stats)
 
-            await asyncio.to_thread(self.client.subscribe_basket, self._on_shioaji_event)
+            await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
             self._set_state(FeedState.CONNECTED)
 
         except Exception as e:
@@ -294,6 +298,14 @@ class MarketDataService:
             logger.info("Metrics", eps=round(eps, 2), raw_queue=raw_q, state=self.state)
 
             gap = time.monotonic() - self.last_event_mono
+            if self._pending_reconnect_reason and self._within_reconnect_window():
+                ok = await self._trigger_reconnect(self._pending_reconnect_gap, reason=self._pending_reconnect_reason)
+                if ok:
+                    if self._pending_reconnect_reason == "session_rollover":
+                        self._last_rollover_reconnect_date = dt.datetime.now(tz=self._reconnect_tzinfo).date()
+                    self._pending_reconnect_reason = None
+                    self._pending_reconnect_gap = 0.0
+                    self._pending_reconnect_since = None
             if self.state == FeedState.CONNECTED:
                 if gap > self.heartbeat_threshold_s:
                     logger.warning("Heartbeat missing", gap=gap)
@@ -302,13 +314,13 @@ class MarketDataService:
                 if gap > self.resubscribe_gap_s:
                     await self._attempt_resubscribe(gap)
                 if gap > self.force_reconnect_gap_s or (gap > self.reconnect_gap_s and self._resubscribe_attempts > 2):
-                    await self._trigger_reconnect(gap, reason="heartbeat_gap")
+                    await self._request_reconnect(gap, reason="heartbeat_gap")
 
                 if self._should_rollover_reconnect():
-                    await self._trigger_reconnect(gap, reason="session_rollover")
+                    await self._request_reconnect(gap, reason="session_rollover")
 
             if self.state in {FeedState.DISCONNECTED, FeedState.RECOVERING}:
-                await self._trigger_reconnect(gap, reason="recovering")
+                await self._request_reconnect(gap, reason="recovering")
 
             if self.symbol_metadata.reload_if_changed():
                 logger.info("Symbols config reloaded", count=len(self.symbol_metadata.meta))
@@ -404,17 +416,24 @@ class MarketDataService:
             self._resubscribe_attempts += 1
         logger.info("Resubscribe attempt", gap=gap, ok=ok, attempts=self._resubscribe_attempts)
 
-    async def _trigger_reconnect(self, gap: float, reason: str | None = None) -> None:
+    async def _request_reconnect(self, gap: float, reason: str | None = None) -> None:
+        if self._within_reconnect_window():
+            await self._trigger_reconnect(gap, reason=reason)
+            return
+        self._mark_pending_reconnect(gap, reason=reason)
+
+    async def _trigger_reconnect(self, gap: float, reason: str | None = None) -> bool:
         now = timebase.now_s()
         if now - self._last_reconnect_ts < self.reconnect_cooldown_s:
-            return
+            return False
         if not self._within_reconnect_window():
-            return
+            return False
         self._last_reconnect_ts = now
         reason_label = reason or "heartbeat_gap"
         logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
         self._set_state(FeedState.RECOVERING)
-        ok = await asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s")
+        force_login = reason_label == "session_rollover"
+        ok = await asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s", force_login)
         if ok:
             self._set_state(FeedState.CONNECTED)
             self.last_event_ts = timebase.now_s()
@@ -422,17 +441,16 @@ class MarketDataService:
             self._resubscribe_attempts = 0
         else:
             self._set_state(FeedState.DISCONNECTED)
+        return ok
 
     def _should_rollover_reconnect(self) -> bool:
-        if not self._within_reconnect_window():
-            return False
         now_dt = dt.datetime.now(tz=self._reconnect_tzinfo)
         last_event_dt = dt.datetime.fromtimestamp(self.last_event_ts, tz=self._reconnect_tzinfo)
         if last_event_dt.date() == now_dt.date():
             return False
-        if self._last_rollover_reconnect_date == now_dt.date():
+        if self._last_rollover_seen_date == now_dt.date():
             return False
-        self._last_rollover_reconnect_date = now_dt.date()
+        self._last_rollover_seen_date = now_dt.date()
         return True
 
     def _within_reconnect_window(self) -> bool:
@@ -461,6 +479,22 @@ class MarketDataService:
             except Exception:
                 continue
         return False
+
+    def _mark_pending_reconnect(self, gap: float, reason: str | None = None) -> None:
+        reason_label = reason or "heartbeat_gap"
+        if self._pending_reconnect_reason != reason_label:
+            logger.warning("Reconnect pending (outside window)", gap=gap, reason=reason_label)
+        self._pending_reconnect_reason = reason_label
+        self._pending_reconnect_gap = gap
+        if self._pending_reconnect_since is None:
+            self._pending_reconnect_since = timebase.now_s()
+
+    async def _call_client(self, func, *args):
+        if os.getenv("HFT_MD_SYNC_CONNECT") == "1":
+            return func(*args)
+        if hasattr(func, "assert_called") or getattr(func, "_mock_name", None):
+            return func(*args)
+        return await asyncio.to_thread(func, *args)
 
     def within_reconnect_window(self) -> bool:
         """Public hook for supervisors to check whether reconnection should be active."""

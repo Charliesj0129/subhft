@@ -97,6 +97,9 @@ class ShioajiClient:
         self.subscribed_codes: set[str] = set()
         self.tick_callback: Callable[..., Any] | None = None
         self._callbacks_registered = False
+        self._pending_quote_resubscribe = False
+        self._callbacks_retrying = False
+        self._callbacks_retry_thread: threading.Thread | None = None
         self.logged_in = False
         self.mode = "simulation" if (is_sim or self.api is None) else "real"
         if self.mode == "simulation":
@@ -203,6 +206,7 @@ class ShioajiClient:
 
         # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
+
 
     def login(
         self,
@@ -331,7 +335,7 @@ class ShioajiClient:
 
         # Store callback permanently for binding (fix GC issues)
         self.tick_callback = cb
-        self._register_callbacks(cb)
+        self._ensure_callbacks(cb)
 
         for sym in self.symbols:
             if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
@@ -343,57 +347,106 @@ class ShioajiClient:
                     self.subscribed_codes.add(code)
                 self.subscribed_count = len(self.subscribed_codes)
 
-    def _register_callbacks(self, cb: Callable[..., Any]) -> None:
-        if not self.api or self._callbacks_registered:
+    def _ensure_callbacks(self, cb: Callable[..., Any]) -> None:
+        if not self.api:
             return
+        if self._callbacks_registered:
+            return
+        ok = self._register_callbacks(cb)
+        if not ok:
+            self._start_callback_retry(cb)
+
+    def _register_callbacks(self, cb: Callable[..., Any]) -> bool:
+        if not self.api:
+            return False
+        if self._callbacks_registered:
+            return True
+        ok = True
         try:
             self.api.quote.set_on_tick_stk_v1_callback(cb)
             self.api.quote.set_on_bidask_stk_v1_callback(cb)
         except Exception as e:
             logger.error(f"Failed stock v1 callback registration: {e}")
+            ok = False
 
         try:
             self.api.quote.set_event_callback(self._on_quote_event)
         except Exception as exc:
             logger.warning("Failed quote event callback registration", error=str(exc))
+            ok = False
 
         try:
             self.api.quote.set_on_tick_fop_v1_callback(dispatch_tick_cb)
             self.api.quote.set_on_bidask_fop_v1_callback(dispatch_tick_cb)
         except Exception as e:
             logger.error(f"Failed FOP v1 callback registration: {e}")
+            ok = False
+
+        if ok:
+            self._callbacks_registered = True
+        return ok
+
+    def _start_callback_retry(self, cb: Callable[..., Any]) -> None:
+        if self._callbacks_retrying:
+            return
+        self._callbacks_retrying = True
+
+        def _retry_loop() -> None:
+            interval = float(os.getenv("HFT_QUOTE_CB_RETRY_S", "5"))
+            while self.api and not self._callbacks_registered:
+                ok = self._register_callbacks(cb)
+                if ok:
+                    break
+                logger.warning("Quote callback registration retrying", interval_s=interval)
+                time.sleep(interval)
+            self._callbacks_retrying = False
+
+        self._callbacks_retry_thread = threading.Thread(
+            target=_retry_loop,
+            name="shioaji-callback-retry",
+            daemon=True,
+        )
+        self._callbacks_retry_thread.start()
 
         self._callbacks_registered = True
 
     def _on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
         if event_code in (1, 2, 3, 4, 12, 13):
             logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event_name=event)
-        if event_code in (4, 13):
+        if event_code == 12:
+            self._pending_quote_resubscribe = True
+        elif event_code == 13:
+            if self._pending_quote_resubscribe:
+                self._pending_quote_resubscribe = False
+            self._resubscribe_all()
+        elif event_code == 4:
             self._resubscribe_all()
 
-    def reconnect(self, reason: str = "") -> bool:
+    def reconnect(self, reason: str = "", force: bool = False) -> bool:
         if not self.api:
             return False
         now = timebase.now_s()
         cooldown = float(os.getenv("HFT_RECONNECT_COOLDOWN", "30"))
-        if now - self._last_reconnect_ts < max(cooldown, self._reconnect_backoff_s):
+        if not force and now - self._last_reconnect_ts < max(cooldown, self._reconnect_backoff_s):
             return False
         if not self._reconnect_lock.acquire(blocking=False):
             return False
         try:
             self._last_reconnect_ts = now
-            logger.warning("Reconnecting Shioaji", reason=reason)
+            logger.warning("Reconnecting Shioaji", reason=reason, force=force)
             try:
                 self.api.logout()
             except Exception as exc:
                 logger.warning("Logout failed during reconnect", error=str(exc))
             self.logged_in = False
             self._callbacks_registered = False
+            self._pending_quote_resubscribe = False
             self.subscribed_codes = set()
             self.subscribed_count = 0
 
             self.login()
             if self.logged_in and self.tick_callback:
+                self._ensure_callbacks(self.tick_callback)
                 self.subscribe_basket(self.tick_callback)
             if self.logged_in:
                 self.metrics.feed_reconnect_total.labels(result="ok").inc()
@@ -408,6 +461,7 @@ class ShioajiClient:
     def _resubscribe_all(self) -> None:
         if not self.api or not self.logged_in or not self.tick_callback:
             return
+        self._ensure_callbacks(self.tick_callback)
         now = timebase.now_s()
         last = getattr(self, "_last_resubscribe_ts", 0.0)
         cooldown = getattr(self, "resubscribe_cooldown", 1.5)
