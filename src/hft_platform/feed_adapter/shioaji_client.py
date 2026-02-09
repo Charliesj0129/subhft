@@ -207,7 +207,6 @@ class ShioajiClient:
         # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
 
-
     def login(
         self,
         api_key: str | None = None,
