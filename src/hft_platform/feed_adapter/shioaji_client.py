@@ -362,8 +362,9 @@ class ShioajiClient:
             return True
         ok = True
         try:
-            self.api.quote.set_on_tick_stk_v1_callback(cb)
-            self.api.quote.set_on_bidask_stk_v1_callback(cb)
+            # Use global dispatcher to avoid weak-ref issues with bound methods.
+            self.api.quote.set_on_tick_stk_v1_callback(dispatch_tick_cb)
+            self.api.quote.set_on_bidask_stk_v1_callback(dispatch_tick_cb)
         except Exception as e:
             logger.error(f"Failed stock v1 callback registration: {e}")
             ok = False
@@ -389,12 +390,14 @@ class ShioajiClient:
         if self._callbacks_retrying:
             return
         self._callbacks_retrying = True
+        logger.warning("Starting quote callback retry loop")
 
         def _retry_loop() -> None:
             interval = float(os.getenv("HFT_QUOTE_CB_RETRY_S", "5"))
             while self.api and not self._callbacks_registered:
                 ok = self._register_callbacks(cb)
                 if ok:
+                    logger.info("Quote callbacks registered after retry")
                     break
                 logger.warning("Quote callback registration retrying", interval_s=interval)
                 time.sleep(interval)
@@ -406,8 +409,6 @@ class ShioajiClient:
             daemon=True,
         )
         self._callbacks_retry_thread.start()
-
-        self._callbacks_registered = True
 
     def _on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
         if event_code in (1, 2, 3, 4, 12, 13):
