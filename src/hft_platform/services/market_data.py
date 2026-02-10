@@ -86,10 +86,9 @@ class MarketDataService:
         self._raw_first_parsed = False
         self._first_tick_event = False
         self._first_bidask_event = False
-        self._record_direct = (
-            self.recorder_queue is not None
-            and os.getenv("HFT_MD_RECORD_DIRECT", "1").lower() not in {"0", "false", "no", "off"}
-        )
+        self._record_direct = self.recorder_queue is not None and os.getenv(
+            "HFT_MD_RECORD_DIRECT", "1"
+        ).lower() not in {"0", "false", "no", "off"}
         drop_default = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1")
         self._record_drop_on_full = os.getenv("HFT_MD_RECORD_DROP_ON_FULL", drop_default).lower() not in {
             "0",
@@ -216,12 +215,12 @@ class MarketDataService:
                     stats = self.lob.process_event(event)
                     lob_duration = time.perf_counter_ns() - lob_start_ns
                     if self.latency:
-                            self.latency.record(
-                                "lob_process",
-                                lob_duration,
-                                trace_id=trace_id,
-                                symbol=getattr(event, "symbol", ""),
-                            )
+                        self.latency.record(
+                            "lob_process",
+                            lob_duration,
+                            trace_id=trace_id,
+                            symbol=getattr(event, "symbol", ""),
+                        )
                     if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
                         self._record_direct_event(event)
 
