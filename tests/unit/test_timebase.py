@@ -29,3 +29,20 @@ def test_coerce_ns_int_float_and_datetime():
 
 def test_coerce_ns_none_returns_zero():
     assert timebase.coerce_ns(None) == 0
+
+
+def test_monotonic_and_perf_ns_are_ints():
+    assert isinstance(timebase.monotonic_ns(), int)
+    assert isinstance(timebase.perf_ns(), int)
+
+
+def test_coerce_ns_unknown_type_returns_zero():
+    assert timebase.coerce_ns("not-a-timestamp") == 0
+
+
+def test_coerce_ns_timestamp_error_returns_zero():
+    class BadTimestamp:
+        def timestamp(self):
+            raise ValueError("boom")
+
+    assert timebase.coerce_ns(BadTimestamp()) == 0
