@@ -16,7 +16,10 @@ def _to_scaled_int(value: int | float) -> int:
 
 def _descale(symbol: str, value: int | float, metadata: SymbolMetadata, price_codec: PriceCodec | None) -> float:
     if price_codec:
-        return price_codec.descale(symbol, value)
+        try:
+            return price_codec.descale(symbol, int(value))
+        except Exception:
+            return float(value)
     scale = metadata.price_scale(symbol)
     if not scale:
         return float(value)

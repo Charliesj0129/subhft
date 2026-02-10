@@ -9,6 +9,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.events import BidAskEvent, TickEvent
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
@@ -35,11 +36,13 @@ class MarketDataService:
         client: ShioajiClient,
         publish_full_events: bool = True,
         symbol_metadata: SymbolMetadata | None = None,
+        recorder_queue: asyncio.Queue | None = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
         self.client = client
         self.publish_full_events = publish_full_events
+        self.recorder_queue = recorder_queue
 
         self.lob = LOBEngine()
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
@@ -79,6 +82,21 @@ class MarketDataService:
         self.log_normalized = os.getenv("HFT_MD_LOG_NORMALIZED", "0") == "1"
         self.log_normalized_every = int(os.getenv("HFT_MD_LOG_NORMALIZED_EVERY", "1000"))
         self._normalized_log_counter = 0
+        self._raw_first_seen = False
+        self._raw_first_parsed = False
+        self._first_tick_event = False
+        self._first_bidask_event = False
+        self._record_direct = (
+            self.recorder_queue is not None
+            and os.getenv("HFT_MD_RECORD_DIRECT", "1").lower() not in {"0", "false", "no", "off"}
+        )
+        drop_default = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1")
+        self._record_drop_on_full = os.getenv("HFT_MD_RECORD_DROP_ON_FULL", drop_default).lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
 
         # Per-symbol feed gap monitoring
         self._symbol_last_tick: dict[str, float] = {}  # symbol -> monotonic timestamp
@@ -149,6 +167,25 @@ class MarketDataService:
                     norm_duration = 0
 
                 if event:
+                    if isinstance(event, TickEvent) and not self._first_tick_event:
+                        self._first_tick_event = True
+                        logger.info(
+                            "First Tick event",
+                            symbol=event.symbol,
+                            price=event.price,
+                            volume=event.volume,
+                        )
+                    elif isinstance(event, BidAskEvent) and not self._first_bidask_event:
+                        self._first_bidask_event = True
+                        bids_len = len(event.bids) if event.bids is not None else 0
+                        asks_len = len(event.asks) if event.asks is not None else 0
+                        logger.info(
+                            "First BidAsk event",
+                            symbol=event.symbol,
+                            snapshot=event.is_snapshot,
+                            bids_len=bids_len,
+                            asks_len=asks_len,
+                        )
                     # Update per-symbol timestamp for watchdog (fire-and-forget async update)
                     symbol = getattr(event, "symbol", None)
                     if symbol:
@@ -179,12 +216,14 @@ class MarketDataService:
                     stats = self.lob.process_event(event)
                     lob_duration = time.perf_counter_ns() - lob_start_ns
                     if self.latency:
-                        self.latency.record(
-                            "lob_process",
-                            lob_duration,
-                            trace_id=trace_id,
-                            symbol=getattr(event, "symbol", ""),
-                        )
+                            self.latency.record(
+                                "lob_process",
+                                lob_duration,
+                                trace_id=trace_id,
+                                symbol=getattr(event, "symbol", ""),
+                            )
+                    if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
+                        self._record_direct_event(event)
 
                     if self.publish_full_events:
                         if stats:
@@ -212,7 +251,11 @@ class MarketDataService:
 
             # Snapshots
             self._set_state(FeedState.SNAPSHOTTING)
-            snapshots = await self._call_client(self.client.fetch_snapshots)
+            try:
+                snapshots = await self._call_client(self.client.fetch_snapshots)
+            except Exception as exc:
+                logger.warning("Snapshot fetch failed; continuing", error=str(exc))
+                snapshots = []
 
             # Application of snapshots
             # Need to normalize snapshots?
@@ -224,19 +267,20 @@ class MarketDataService:
             # But snapshots are needed for initial state.
 
             for snap in snapshots:
-                event = self.normalizer.normalize_snapshot(snap)
-                if not event:
-                    continue
-
-                stats = self.lob.process_event(event)
-
-                if self.publish_full_events:
-                    if stats:
-                        self._publish_many_nowait([event, stats])
-                    else:
-                        self._publish_nowait(event)
-                elif stats:
-                    self._publish_nowait(stats)
+                try:
+                    event = self.normalizer.normalize_snapshot(snap)
+                    if not event:
+                        continue
+                    stats = self.lob.process_event(event)
+                    if self.publish_full_events:
+                        if stats:
+                            self._publish_many_nowait([event, stats])
+                        else:
+                            self._publish_nowait(event)
+                    elif stats:
+                        self._publish_nowait(stats)
+                except Exception as exc:
+                    logger.warning("Snapshot normalize failed; skipping", error=str(exc))
 
             await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
             self._set_state(FeedState.CONNECTED)
@@ -251,6 +295,13 @@ class MarketDataService:
         Signature can vary: (exchange, msg) or (topic, msg, ...)
         """
         try:
+            if not self._raw_first_seen:
+                self._raw_first_seen = True
+                logger.info(
+                    "First quote callback",
+                    args_types=[type(a).__name__ for a in args],
+                    kwargs_keys=list(kwargs.keys()),
+                )
             # DEBUG: Log every callback to confirm flow
             if self.log_raw:
                 logger.debug("Callback hit", args_len=len(args))
@@ -258,20 +309,117 @@ class MarketDataService:
             exchange = None
             msg = None
 
-            # Heuristic to find Exchange and Msg from *args (usually 4 args now)
-            if len(args) >= 2:
-                p0 = args[0]
-                p1 = args[1]
-                msg = p1
-                if hasattr(p0, "name") or isinstance(p0, str):
-                    exchange = p0
+            def _looks_like_md(obj: object) -> bool:
+                if obj is None:
+                    return False
+                price_fields = (
+                    "close",
+                    "price",
+                    "bid_price",
+                    "ask_price",
+                    "bid_volume",
+                    "ask_volume",
+                    "buy_price",
+                    "sell_price",
+                )
+                time_fields = ("ts", "datetime")
+                code_fields = ("code", "symbol")
+                if isinstance(obj, dict):
+                    keys = obj.keys()
+                    if any(k in keys for k in code_fields):
+                        return True
+                    if any(k in keys for k in price_fields):
+                        return True
+                    if any(k in keys for k in time_fields):
+                        return True
+                    return False
+                has_code = any(hasattr(obj, attr) for attr in code_fields)
+                has_price = any(hasattr(obj, attr) for attr in price_fields)
+                has_time = any(hasattr(obj, attr) for attr in time_fields)
+                return has_price or (has_code and (has_price or has_time))
+
+            def _unwrap_md(obj: object) -> object:
+                if obj is None:
+                    return obj
+                if isinstance(obj, dict):
+                    for key in ("tick", "bidask"):
+                        inner = obj.get(key)
+                        if _looks_like_md(inner):
+                            return inner
+                    return obj
+                for attr in ("tick", "bidask"):
+                    if hasattr(obj, attr):
+                        inner = getattr(obj, attr)
+                        if _looks_like_md(inner):
+                            return inner
+                return obj
+
+            def _summarize_md(obj: object) -> dict:
+                if obj is None:
+                    return {}
+                fields = ("code", "close", "price", "bid_price", "ask_price", "bid_volume", "ask_volume", "volume")
+                time_fields = ("ts", "datetime")
+                if isinstance(obj, dict):
+                    keys = list(obj.keys())
+                    present = [k for k in (*fields, *time_fields) if k in obj]
+                    nested = {k: type(obj.get(k)).__name__ for k in ("tick", "bidask") if k in obj}
+                    return {"keys": keys[:20], "present": present, "nested": nested}
+                present = [k for k in (*fields, *time_fields) if hasattr(obj, k)]
+                nested = {}
+                for k in ("tick", "bidask"):
+                    if hasattr(obj, k):
+                        nested[k] = type(getattr(obj, k)).__name__
+                return {"attrs": present, "nested": nested}
+
+            # Prefer explicit payload from kwargs if provided.
+            for key in ("quote", "tick", "bidask", "data", "msg"):
+                if key in kwargs:
+                    candidate = _unwrap_md(kwargs[key])
+                    if _looks_like_md(candidate):
+                        msg = candidate
+                        break
+            if exchange is None and "exchange" in kwargs:
+                exchange = kwargs["exchange"]
+
+            # Heuristic: find exchange + market data payload among args.
+            for arg in args:
+                candidate = _unwrap_md(arg)
+                looks_like_md = _looks_like_md(candidate)
+                if exchange is None and not looks_like_md and (hasattr(arg, "name") or isinstance(arg, str)):
+                    exchange = arg
+                if looks_like_md:
+                    msg = candidate
+
+            # Fallbacks
+            if msg is None:
+                if len(args) >= 2:
+                    msg = _unwrap_md(args[-1])
+                elif len(args) == 1:
+                    msg = _unwrap_md(args[0])
+
+            if msg is not None:
+                msg = _unwrap_md(msg)
+
+            if not self.log_raw and msg is not None and not self._raw_first_parsed:
+                self._raw_first_parsed = True
+                logger.info(
+                    "Quote callback parsed",
+                    msg_type=type(msg).__name__,
+                    msg_code=getattr(msg, "code", None),
+                    exchange=str(exchange) if exchange is not None else None,
+                    msg_fields=_summarize_md(msg),
+                )
 
             # Enqueue as tuple (exchange, msg) to match consumer
             if hasattr(self, "loop"):
-                if msg:
+                if msg is not None:
                     self.loop.call_soon_threadsafe(self.raw_queue.put_nowait, (exchange, msg))
                 else:
-                    pass  # logger.warning(f"Could not parse msg from {args}")
+                    if self.log_raw:
+                        logger.warning(
+                            "Could not parse msg from callback args",
+                            args_types=[type(a).__name__ for a in args],
+                        )
             else:
                 logger.error("Callback loop missing")
 
@@ -400,6 +548,27 @@ class MarketDataService:
             return
         for event in events:
             self._publish_nowait(event)
+
+    def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
+        if self.recorder_queue is None:
+            return
+        try:
+            from hft_platform.recorder.mapper import map_event_to_record
+
+            mapped = map_event_to_record(event, self.symbol_metadata, self.normalizer.price_codec)
+        except Exception as exc:
+            logger.warning("Direct record mapping failed", error=str(exc), event_type=type(event).__name__)
+            return
+        if not mapped:
+            return
+        topic, payload = mapped
+        if self._record_drop_on_full:
+            try:
+                self.recorder_queue.put_nowait({"topic": topic, "data": payload})
+            except asyncio.QueueFull:
+                pass
+        else:
+            asyncio.create_task(self.recorder_queue.put({"topic": topic, "data": payload}))
 
     def _set_state(self, new_state):
         if self.state != new_state:

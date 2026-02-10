@@ -31,8 +31,15 @@ COPY src/ ./src/
 # Generate requirements.txt from pyproject.toml (fresh resolve)
 RUN uv pip compile pyproject.toml -o requirements.txt
 
+# Cargo network tuning for slow/unstable links
+ENV CARGO_NET_RETRY=10 \
+    CARGO_HTTP_TIMEOUT=600 \
+    CARGO_HTTP_LOW_SPEED_LIMIT=1 \
+    CARGO_HTTP_LOW_SPEED_TIME=120 \
+    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
+
 # Build Rust extension wheel
-RUN pip install maturin \
+RUN pip install --no-cache-dir --timeout 600 --retries 10 maturin \
     && maturin build --release --manifest-path rust_core/Cargo.toml -o /tmp/wheels
 
 # Runtime stage
