@@ -82,17 +82,13 @@ class SubscriptionStateManager:
     _instance: "SubscriptionStateManager | None" = None
 
     def __init__(self, state_path: str | None = None):
-        self._state_path: str = state_path or os.getenv(
-            "HFT_SUBSCRIPTION_STATE_PATH"
-        ) or DEFAULT_STATE_PATH
+        self._state_path: str = state_path or os.getenv("HFT_SUBSCRIPTION_STATE_PATH") or DEFAULT_STATE_PATH
         self._state = SubscriptionStateData()
         self._lock = threading.Lock()
         self._dirty = False
         self._session_id = f"{timebase.now_ns()}"
         self._state.session_id = self._session_id
-        self._auto_save_interval_s = float(
-            os.getenv("HFT_SUBSCRIPTION_AUTOSAVE_S", "5.0")
-        )
+        self._auto_save_interval_s = float(os.getenv("HFT_SUBSCRIPTION_AUTOSAVE_S", "5.0"))
         self._auto_save_thread: threading.Thread | None = None
         self._running = False
 
@@ -279,6 +275,7 @@ class SubscriptionStateManager:
 
         def _auto_save_loop() -> None:
             import time
+
             while self._running:
                 time.sleep(self._auto_save_interval_s)
                 if self._dirty:
