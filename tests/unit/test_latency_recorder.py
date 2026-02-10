@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import MagicMock
 
 from hft_platform.observability.latency import LatencyRecorder, _bool_env
 
@@ -70,3 +71,68 @@ def test_latency_recorder_invalid_sample_env(monkeypatch):
     rec = LatencyRecorder.get()
     assert rec._sample_every == 100
     assert rec._should_sample() is False
+
+
+def test_latency_recorder_retry_buffer_and_drop(monkeypatch):
+    monkeypatch.setenv("HFT_LATENCY_TRACE", "1")
+    monkeypatch.setenv("HFT_LATENCY_SAMPLE_EVERY", "1")
+    monkeypatch.setenv("HFT_LATENCY_RETRY_BUFFER_SIZE", "1")
+    LatencyRecorder.reset_for_tests()
+    rec = LatencyRecorder.get()
+
+    class AlwaysFullQueue:
+        def put_nowait(self, _item):
+            raise RuntimeError("full")
+
+    class MetricsStub:
+        def __init__(self):
+            self.latency_spans_dropped_total = MagicMock()
+
+        def pipeline_latency_ns(self):  # pragma: no cover - helper
+            raise AssertionError("not used")
+
+    rec.metrics = MetricsStub()
+    rec.configure(AlwaysFullQueue())
+    rec._dropped_total = 99
+
+    rec.record("stage", 1000)
+    rec.record("stage", 2000)
+
+    assert rec._dropped_total >= 100
+    rec.metrics.latency_spans_dropped_total.inc.assert_called()
+
+
+def test_latency_recorder_drain_retry_buffer(monkeypatch):
+    monkeypatch.setenv("HFT_LATENCY_TRACE", "1")
+    monkeypatch.setenv("HFT_LATENCY_SAMPLE_EVERY", "1")
+    LatencyRecorder.reset_for_tests()
+    rec = LatencyRecorder.get()
+
+    class FlakyQueue:
+        def __init__(self):
+            self.calls = 0
+
+        def put_nowait(self, _item):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("full")
+
+    queue = FlakyQueue()
+    rec.configure(queue)
+    rec._retry_buffer.extend(
+        [
+            {"topic": "latency_spans", "data": {"a": 1}},
+            {"topic": "latency_spans", "data": {"a": 2}},
+        ]
+    )
+
+    rec._drain_retry_buffer()
+
+    assert len(rec._retry_buffer) == 1
+
+
+def test_latency_recorder_invalid_retry_buffer_env(monkeypatch):
+    monkeypatch.setenv("HFT_LATENCY_RETRY_BUFFER_SIZE", "bad")
+    LatencyRecorder.reset_for_tests()
+    rec = LatencyRecorder.get()
+    assert rec._retry_buffer_size == 1000

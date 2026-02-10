@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.events import BidAskEvent, MetaData, TickEvent
 from hft_platform.services.market_data import FeedState, MarketDataService
 
 
@@ -138,6 +139,73 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.service, "_within_reconnect_window", return_value=False):
             await self.service._trigger_reconnect(9.0)
         self.client.reconnect.assert_not_called()
+
+    async def test_record_direct_event_enqueues(self):
+        queue = asyncio.Queue(maxsize=2)
+        service = MarketDataService(self.bus, self.raw_queue, self.client, recorder_queue=queue)
+        meta = MetaData(seq=1, source_ts=1_000, local_ts=2_000)
+        event = TickEvent(meta=meta, symbol="2330", price=10000, volume=1)
+        service._record_direct_event(event)
+        payload = queue.get_nowait()
+        self.assertEqual(payload["topic"], "market_data")
+        self.assertEqual(payload["data"]["symbol"], "2330")
+
+    async def test_record_direct_event_drop_on_full(self):
+        queue = asyncio.Queue(maxsize=1)
+        service = MarketDataService(self.bus, self.raw_queue, self.client, recorder_queue=queue)
+        service._record_drop_on_full = True
+        queue.put_nowait({"topic": "market_data", "data": {"symbol": "2330"}})
+        meta = MetaData(seq=2, source_ts=2_000, local_ts=3_000)
+        event = TickEvent(meta=meta, symbol="2330", price=10000, volume=1)
+        service._record_direct_event(event)
+        self.assertEqual(queue.qsize(), 1)
+
+    async def test_record_direct_event_async_put(self):
+        queue = asyncio.Queue(maxsize=1)
+        service = MarketDataService(self.bus, self.raw_queue, self.client, recorder_queue=queue)
+        service._record_drop_on_full = False
+        meta = MetaData(seq=3, source_ts=3_000, local_ts=4_000)
+        event = BidAskEvent(meta=meta, symbol="2330", bids=[[10000, 1]], asks=[[10010, 2]])
+        service._record_direct_event(event)
+        await asyncio.sleep(0)
+        payload = queue.get_nowait()
+        self.assertEqual(payload["topic"], "market_data")
+        self.assertEqual(payload["data"]["symbol"], "2330")
+
+    def test_record_direct_event_mapper_failure(self):
+        queue = asyncio.Queue(maxsize=1)
+        service = MarketDataService(self.bus, self.raw_queue, self.client, recorder_queue=queue)
+        meta = MetaData(seq=4, source_ts=4_000, local_ts=5_000)
+        event = TickEvent(meta=meta, symbol="2330", price=10000, volume=1)
+        with patch("hft_platform.recorder.mapper.map_event_to_record", side_effect=RuntimeError("boom")):
+            service._record_direct_event(event)
+        self.assertTrue(queue.empty())
+
+    def test_should_rollover_reconnect_once(self):
+        self.service.last_event_ts = time.time() - 172800
+        self.service._last_rollover_seen_date = None
+        self.assertTrue(self.service._should_rollover_reconnect())
+        self.assertFalse(self.service._should_rollover_reconnect())
+
+    async def test_call_client_sync_env(self):
+        with patch.dict(os.environ, {"HFT_MD_SYNC_CONNECT": "1"}):
+            result = await self.service._call_client(lambda x: x + 1, 1)
+        self.assertEqual(result, 2)
+
+    async def test_call_client_mock_shortcut(self):
+        func = MagicMock(return_value=5)
+        result = await self.service._call_client(func, 2)
+        self.assertEqual(result, 5)
+        func.assert_called_once_with(2)
+
+    def test_feed_gap_helpers(self):
+        with patch("hft_platform.services.market_data.time.monotonic", return_value=100.0):
+            self.service._symbol_last_tick = {"AAA": 90.0, "BBB": 95.0}
+            self.assertEqual(self.service.get_max_feed_gap_s(), 10.0)
+            self.assertEqual(
+                self.service.get_feed_gaps_by_symbol(),
+                {"AAA": 10.0, "BBB": 5.0},
+            )
 
     def test_within_reconnect_window_unrestricted(self):
         self.service.reconnect_days = set()
