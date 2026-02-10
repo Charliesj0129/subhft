@@ -1,4 +1,5 @@
 import os
+from collections import deque
 from typing import Any
 
 from hft_platform.core import timebase
@@ -27,6 +28,15 @@ class LatencyRecorder:
         self._counter = 0
         self._queue: Any | None = None
         self.metrics = MetricsRegistry.get()
+
+        # Retry buffer for overflow handling (B2)
+        try:
+            retry_buffer_size = int(os.getenv("HFT_LATENCY_RETRY_BUFFER_SIZE", "1000"))
+        except ValueError:
+            retry_buffer_size = 1000
+        self._retry_buffer_size = max(1, retry_buffer_size)
+        self._retry_buffer: deque[dict] = deque(maxlen=self._retry_buffer_size)
+        self._dropped_total = 0
 
     @classmethod
     def get(cls) -> "LatencyRecorder":
@@ -85,7 +95,34 @@ class LatencyRecorder:
             "strategy_id": strategy_id or "",
         }
 
+        # Drain retry buffer first
+        self._drain_retry_buffer()
+
         try:
             self._queue.put_nowait({"topic": "latency_spans", "data": payload})
         except Exception:
-            pass
+            # Queue full, add to retry buffer
+            if len(self._retry_buffer) >= self._retry_buffer_size:
+                # Buffer also full, increment dropped counter
+                self._dropped_total += 1
+                if self._dropped_total % 100 == 0 and self.metrics:
+                    try:
+                        if hasattr(self.metrics, "latency_spans_dropped_total"):
+                            self.metrics.latency_spans_dropped_total.inc(100)
+                    except Exception:
+                        pass
+            else:
+                self._retry_buffer.append({"topic": "latency_spans", "data": payload})
+
+    def _drain_retry_buffer(self) -> None:
+        """Try to flush pending items from retry buffer to queue."""
+        if not self._queue or not self._retry_buffer:
+            return
+        while self._retry_buffer:
+            try:
+                item = self._retry_buffer[0]
+                self._queue.put_nowait(item)
+                self._retry_buffer.popleft()
+            except Exception:
+                # Queue still full, stop draining
+                break
