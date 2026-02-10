@@ -83,14 +83,15 @@ class TestDataWriterRetry(unittest.TestCase):
 
         with patch.dict("os.environ", {"HFT_CLICKHOUSE_ENABLED": "1"}):
             writer = DataWriter()
-            writer.connect()
+            with patch.object(writer, "_start_heartbeat_thread"):
+                writer.connect()
 
         self.assertTrue(writer.connected)
         self.assertEqual(writer._connect_attempts, 0)
         mock_ch.get_client.assert_called_once()
 
     @patch("hft_platform.recorder.writer.clickhouse_connect")
-    @patch("time.sleep")
+    @patch("hft_platform.recorder.writer.time.sleep")
     def test_connect_retry_on_failure(self, mock_sleep, mock_ch):
         """Test connection retry with backoff on failure."""
         mock_ch.get_client.side_effect = [
@@ -108,14 +109,17 @@ class TestDataWriterRetry(unittest.TestCase):
             },
         ):
             writer = DataWriter()
-            writer.connect()
+            with patch.object(writer, "_start_heartbeat_thread"):
+                writer.connect()
+            # Stop heartbeat thread to prevent additional sleeps
+            writer._heartbeat_running = False
 
         self.assertTrue(writer.connected)
         self.assertEqual(mock_ch.get_client.call_count, 3)
         self.assertEqual(mock_sleep.call_count, 2)
 
     @patch("hft_platform.recorder.writer.clickhouse_connect")
-    @patch("time.sleep")
+    @patch("hft_platform.recorder.writer.time.sleep")
     def test_connect_fails_after_max_retries(self, mock_sleep, mock_ch):
         """Test connection fails after max retries exhausted."""
         mock_ch.get_client.side_effect = ConnectionError("Connection refused")
@@ -128,7 +132,8 @@ class TestDataWriterRetry(unittest.TestCase):
             },
         ):
             writer = DataWriter()
-            writer.connect()
+            with patch.object(writer, "_start_heartbeat_thread"):
+                writer.connect()
 
         self.assertFalse(writer.connected)
         self.assertEqual(mock_ch.get_client.call_count, 3)

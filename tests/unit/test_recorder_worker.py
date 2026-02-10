@@ -1,6 +1,8 @@
 import asyncio
+import os
 import unittest
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from hft_platform.recorder.worker import RecorderService
 
@@ -44,3 +46,73 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
             # The worker calls batcher, batcher calls writer.write
             # The MockWriter class mock returns mock_writer_inst when instantiated.
             self.assertTrue(mock_writer_inst.write.called)
+
+    async def test_recover_wal_skips_when_disabled(self):
+        queue = asyncio.Queue()
+
+        with patch.dict(os.environ, {"HFT_DISABLE_CLICKHOUSE": "1"}, clear=False):
+            with patch("hft_platform.recorder.worker.DataWriter"):
+                worker = RecorderService(queue)
+                with patch("hft_platform.recorder.worker.logger.info") as log_info:
+                    await worker.recover_wal()
+                    log_info.assert_any_call("Skipping WAL Recovery (ClickHouse disabled)")
+
+    async def test_recover_wal_warns_without_connection(self):
+        queue = asyncio.Queue()
+
+        class DummyLoader:
+            def __init__(self):
+                self.ch_client = None
+
+            def connect(self):
+                self.ch_client = None
+
+            def process_files(self):
+                raise AssertionError("process_files should not be called without ch_client")
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "1"}, clear=False):
+            with patch("hft_platform.recorder.worker.DataWriter"):
+                worker = RecorderService(queue)
+                with patch("hft_platform.recorder.worker.asyncio.to_thread", new=fake_to_thread):
+                    with patch(
+                        "hft_platform.recorder.loader.WALLoaderService", new=DummyLoader
+                    ):
+                        with patch("hft_platform.recorder.worker.logger.warning") as log_warn:
+                            await worker.recover_wal()
+                            log_warn.assert_any_call(
+                                "Skipping WAL Recovery (No ClickHouse Connection)"
+                            )
+
+    async def test_recover_wal_runs_when_connected(self):
+        queue = asyncio.Queue()
+        calls = SimpleNamespace(connect=0, process=0)
+
+        class DummyLoader:
+            def __init__(self):
+                self.ch_client = object()
+
+            def connect(self):
+                calls.connect += 1
+
+            def process_files(self):
+                calls.process += 1
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "1"}, clear=False):
+            with patch("hft_platform.recorder.worker.DataWriter"):
+                worker = RecorderService(queue)
+                with patch("hft_platform.recorder.worker.asyncio.to_thread", new=fake_to_thread):
+                    with patch(
+                        "hft_platform.recorder.loader.WALLoaderService", new=DummyLoader
+                    ):
+                        with patch("hft_platform.recorder.worker.logger.info") as log_info:
+                            await worker.recover_wal()
+                            self.assertGreaterEqual(calls.connect, 1)
+                            self.assertGreaterEqual(calls.process, 1)
+                            log_info.assert_any_call("Starting WAL Recovery...")
+                            log_info.assert_any_call("WAL Recovery Complete")

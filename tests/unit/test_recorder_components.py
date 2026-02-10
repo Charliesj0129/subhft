@@ -41,6 +41,46 @@ async def test_batcher_flush_on_interval():
 
 
 @pytest.mark.asyncio
+async def test_batcher_backpressure_drop_newest():
+    writer = _Writer()
+    batcher = Batcher(
+        "hft.table",
+        flush_limit=10,
+        flush_interval_ms=10000,
+        writer=writer,
+        max_buffer_size=1,
+        backpressure_policy="drop_newest",
+    )
+
+    await batcher.add({"id": 1})
+    await batcher.add({"id": 2})
+
+    assert batcher.dropped_count == 1
+    assert len(batcher.buffer) == 1
+    assert batcher.buffer[0]["id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_batcher_backpressure_drop_oldest():
+    writer = _Writer()
+    batcher = Batcher(
+        "hft.table",
+        flush_limit=10,
+        flush_interval_ms=10000,
+        writer=writer,
+        max_buffer_size=1,
+        backpressure_policy="drop_oldest",
+    )
+
+    await batcher.add({"id": 1})
+    await batcher.add({"id": 2})
+
+    assert batcher.dropped_count == 1
+    assert len(batcher.buffer) == 1
+    assert batcher.buffer[0]["id"] == 2
+
+
+@pytest.mark.asyncio
 async def test_data_writer_wal_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "0")
     monkeypatch.setenv("HFT_DISABLE_CLICKHOUSE", "1")

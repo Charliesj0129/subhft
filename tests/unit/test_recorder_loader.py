@@ -62,6 +62,12 @@ def test_wal_loader_skips_recent_file(tmp_path):
 
 
 def test_wal_loader_non_market_tables(tmp_path):
+    """Test that orders and trades (fills) tables are properly inserted to ClickHouse.
+
+    Phase 12 fix B1: Previously, non-market tables would fall through without
+    insert logic, returning True but not actually inserting. Now they have
+    proper insert logic with retry.
+    """
     wal_dir = tmp_path / "wal"
     archive_dir = tmp_path / "archive"
     wal_dir.mkdir()
@@ -69,8 +75,8 @@ def test_wal_loader_non_market_tables(tmp_path):
 
     orders = wal_dir / "orders_1.jsonl"
     fills = wal_dir / "fills_2.jsonl"
-    orders.write_text(json.dumps({"order_id": "O1"}) + "\n")
-    fills.write_text(json.dumps({"fill_id": "F1"}) + "\n")
+    orders.write_text(json.dumps({"order_id": "O1", "symbol": "2330", "side": "Buy"}) + "\n")
+    fills.write_text(json.dumps({"fill_id": "F1", "symbol": "2330", "price": 100.5}) + "\n")
 
     past = time.time() - 10
     os.utime(orders, (past, past))
@@ -83,7 +89,12 @@ def test_wal_loader_non_market_tables(tmp_path):
 
     assert (archive_dir / orders.name).exists()
     assert (archive_dir / fills.name).exists()
-    loader.ch_client.insert.assert_not_called()
+    # Phase 12: Now inserts are called for orders and trades tables
+    assert loader.ch_client.insert.call_count == 2
+    # Verify the table names
+    call_args = [call[0][0] for call in loader.ch_client.insert.call_args_list]
+    assert "hft.orders" in call_args
+    assert "hft.trades" in call_args
 
 
 def test_wal_loader_invalid_json_archives(tmp_path):
