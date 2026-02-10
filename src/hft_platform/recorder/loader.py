@@ -659,6 +659,7 @@ class WALLoaderService:
                 context = r.get("context", {})
                 if isinstance(context, dict):
                     import json
+
                     context = json.dumps(context)
 
                 row_data = [
@@ -685,6 +686,7 @@ class WALLoaderService:
             ]
             for r in rows:
                 import json
+
                 params = r.get("params", {})
                 if isinstance(params, dict):
                     params = json.dumps(params)
