@@ -18,6 +18,9 @@ class HFTSystem:
         configure_logging()
         self.settings = settings or {}
         self.running = False
+        self._recorder_seen_tick = False
+        self._recorder_seen_bidask = False
+        self._md_record_direct = os.getenv("HFT_MD_RECORD_DIRECT", "1").lower() not in {"0", "false", "no", "off"}
 
         self.registry = SystemBootstrapper(self.settings).build()
 
@@ -311,6 +314,7 @@ class HFTSystem:
         consumer = (
             self.bus.consume_batch(batch_size, start_cursor=-1) if batch_size > 1 else self.bus.consume(start_cursor=-1)
         )
+        from hft_platform.events import BidAskEvent, TickEvent
         from hft_platform.recorder.mapper import map_event_to_record
 
         metadata = self.symbol_metadata
@@ -319,6 +323,14 @@ class HFTSystem:
             async for item in consumer:
                 batch = item if isinstance(item, list) else [item]
                 for event in batch:
+                    if self._md_record_direct and isinstance(event, (TickEvent, BidAskEvent)):
+                        continue
+                    if isinstance(event, TickEvent) and not self._recorder_seen_tick:
+                        self._recorder_seen_tick = True
+                        logger.info("Recorder saw Tick event", symbol=event.symbol)
+                    elif isinstance(event, BidAskEvent) and not self._recorder_seen_bidask:
+                        self._recorder_seen_bidask = True
+                        logger.info("Recorder saw BidAsk event", symbol=event.symbol, snapshot=event.is_snapshot)
                     mapped = map_event_to_record(event, metadata, price_codec)
                     if not mapped:
                         continue

@@ -1,3 +1,4 @@
+import datetime as dt
 import os
 import threading
 import time
@@ -23,16 +24,17 @@ logger = get_logger("feed_adapter")
 CLIENT_REGISTRY: List[Any] = []
 
 
-def dispatch_tick_cb(exchange, msg):
+def dispatch_tick_cb(*args, **kwargs):
     """
-    Global static callback to dispatch ticks to all registered clients.
-    This avoids issues with Cython holding weak references to bound methods.
+    Global static callback to dispatch ticks/bidask to all registered clients.
+    Passes through raw args to avoid signature drift across Shioaji callbacks.
     """
     try:
-        # logger.debug("Global Dispatch Hit", registry_size=len(CLIENT_REGISTRY))
+        if not args and not kwargs:
+            return
         for client in CLIENT_REGISTRY:
             if hasattr(client, "_process_tick"):
-                client._process_tick(exchange, msg)
+                client._process_tick(*args, **kwargs)
     except Exception as e:
         logger.error("Global Dispatch Error", error=str(e))
 
@@ -98,6 +100,10 @@ class ShioajiClient:
         self.tick_callback: Callable[..., Any] | None = None
         self._callbacks_registered = False
         self._pending_quote_resubscribe = False
+        self._pending_quote_ts = 0.0
+        self._pending_quote_relogining = False
+        self._pending_quote_relogin_thread: threading.Thread | None = None
+        self._last_quote_event_ts = 0.0
         self._callbacks_retrying = False
         self._callbacks_retry_thread: threading.Thread | None = None
         self.logged_in = False
@@ -120,6 +126,17 @@ class ShioajiClient:
         self._profit_cache_ttl_s = float(os.getenv("HFT_PROFIT_CACHE_TTL_S", "10"))
         self._positions_detail_cache_ttl_s = float(os.getenv("HFT_POSITION_DETAIL_CACHE_TTL_S", "10"))
         self._api_last_latency_ms: dict[str, float] = {}
+        self._quote_force_relogin_s = float(os.getenv("HFT_QUOTE_FORCE_RELOGIN_S", "15"))
+        self._quote_version_mode = os.getenv("HFT_QUOTE_VERSION", "v1").strip().lower()
+        if self._quote_version_mode not in {"v0", "v1", "auto"}:
+            self._quote_version_mode = "v1"
+        self._quote_version = "v1" if self._quote_version_mode in {"v1", "auto"} else "v0"
+        self._last_quote_data_ts = 0.0
+        self._first_quote_seen = False
+        self._quote_watchdog_thread: threading.Thread | None = None
+        self._quote_watchdog_running = False
+        self._quote_watchdog_interval_s = float(os.getenv("HFT_QUOTE_WATCHDOG_S", "5"))
+        self._quote_no_data_s = float(os.getenv("HFT_QUOTE_NO_DATA_S", "30"))
         self._api_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_API_SOFT_CAP", "20")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
@@ -181,11 +198,23 @@ class ShioajiClient:
         self._api_rate_limiter.record()
         return True
 
-    def _process_tick(self, exchange, msg):
-        """Internal method called by global dispatcher"""
+    def _process_tick(self, *args, **kwargs):
+        """Internal method called by global dispatcher."""
         try:
+            self._last_quote_data_ts = timebase.now_s()
+            if not self._first_quote_seen:
+                self._first_quote_seen = True
+                logger.info(
+                    "First quote data received",
+                    quote_version=self._quote_version,
+                    quote_version_mode=self._quote_version_mode,
+                )
+            if self._pending_quote_resubscribe:
+                self._pending_quote_resubscribe = False
+                self._pending_quote_ts = 0.0
+                logger.info("Quote data resumed; clearing pending")
             if self.tick_callback:
-                self.tick_callback(exchange, msg)
+                self.tick_callback(*args, **kwargs)
         except Exception as e:
             logger.error("Error processing tick", error=str(e))
 
@@ -335,7 +364,16 @@ class ShioajiClient:
         # Store callback permanently for binding (fix GC issues)
         self.tick_callback = cb
         self._ensure_callbacks(cb)
+        if self._last_quote_data_ts <= 0:
+            self._last_quote_data_ts = timebase.now_s()
 
+        logger.info(
+            "Subscribing quote basket",
+            count=len(self.symbols),
+            mode=self.mode,
+            quote_version=self._quote_version,
+            quote_version_mode=self._quote_version_mode,
+        )
         for sym in self.symbols:
             if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
                 logger.error("Subscription limit reached", limit=self.MAX_SUBSCRIPTIONS)
@@ -345,6 +383,8 @@ class ShioajiClient:
                 if code:
                     self.subscribed_codes.add(code)
                 self.subscribed_count = len(self.subscribed_codes)
+        logger.info("Quote subscription completed", subscribed=self.subscribed_count)
+        self._start_quote_watchdog()
 
     def _ensure_callbacks(self, cb: Callable[..., Any]) -> None:
         if not self.api:
@@ -363,10 +403,9 @@ class ShioajiClient:
         ok = True
         try:
             # Use global dispatcher to avoid weak-ref issues with bound methods.
-            self.api.quote.set_on_tick_stk_v1_callback(dispatch_tick_cb)
-            self.api.quote.set_on_bidask_stk_v1_callback(dispatch_tick_cb)
+            ok = self._register_quote_callbacks()
         except Exception as e:
-            logger.error(f"Failed stock v1 callback registration: {e}")
+            logger.error("Quote callback registration failed", error=str(e))
             ok = False
 
         try:
@@ -375,16 +414,124 @@ class ShioajiClient:
             logger.warning("Failed quote event callback registration", error=str(exc))
             ok = False
 
-        try:
-            self.api.quote.set_on_tick_fop_v1_callback(dispatch_tick_cb)
-            self.api.quote.set_on_bidask_fop_v1_callback(dispatch_tick_cb)
-        except Exception as e:
-            logger.error(f"Failed FOP v1 callback registration: {e}")
-            ok = False
-
         if ok:
             self._callbacks_registered = True
+            logger.info(
+                "Quote callbacks registered",
+                quote_version=self._quote_version,
+                quote_version_mode=self._quote_version_mode,
+            )
+        else:
+            logger.warning(
+                "Quote callbacks not registered",
+                quote_version=self._quote_version,
+                quote_version_mode=self._quote_version_mode,
+            )
         return ok
+
+    def _register_quote_callbacks(self) -> bool:
+        """Register quote callbacks based on active quote version."""
+        if not self.api:
+            return False
+        logger.info(
+            "Registering quote callbacks",
+            quote_version=self._quote_version,
+            quote_version_mode=self._quote_version_mode,
+        )
+        ok = True
+        version = self._quote_version
+
+        def _set_v1() -> bool:
+            nonlocal ok
+            try:
+                self.api.quote.set_on_tick_stk_v1_callback(dispatch_tick_cb)
+                self.api.quote.set_on_bidask_stk_v1_callback(dispatch_tick_cb)
+                self.api.quote.set_on_tick_fop_v1_callback(dispatch_tick_cb)
+                self.api.quote.set_on_bidask_fop_v1_callback(dispatch_tick_cb)
+                return True
+            except Exception as exc:
+                logger.warning("Quote v1 callback registration failed", error=str(exc))
+                ok = False
+                return False
+
+        def _set_v0() -> bool:
+            nonlocal ok
+            if not hasattr(self.api.quote, "set_on_tick_stk_callback"):
+                logger.warning("Quote v0 callbacks not available on this Shioaji version")
+                ok = False
+                return False
+            try:
+                self.api.quote.set_on_tick_stk_callback(dispatch_tick_cb)
+                self.api.quote.set_on_bidask_stk_callback(dispatch_tick_cb)
+                if hasattr(self.api.quote, "set_on_tick_fop_callback"):
+                    self.api.quote.set_on_tick_fop_callback(dispatch_tick_cb)
+                if hasattr(self.api.quote, "set_on_bidask_fop_callback"):
+                    self.api.quote.set_on_bidask_fop_callback(dispatch_tick_cb)
+                return True
+            except Exception as exc:
+                logger.warning("Quote v0 callback registration failed", error=str(exc))
+                ok = False
+                return False
+
+        if version == "v1":
+            if not _set_v1() and self._quote_version_mode == "auto":
+                logger.warning("Falling back to quote v0 callbacks")
+                self._quote_version = "v0"
+                ok = _set_v0()
+        else:
+            ok = _set_v0()
+
+        return ok
+
+    def _get_quote_version(self):
+        if not sj or not hasattr(sj.constant, "QuoteVersion"):
+            return None
+        return sj.constant.QuoteVersion.v0 if self._quote_version == "v0" else sj.constant.QuoteVersion.v1
+
+    def _start_quote_watchdog(self) -> None:
+        if self._quote_version_mode != "auto":
+            return
+        if self._quote_watchdog_running:
+            return
+        self._quote_watchdog_running = True
+        logger.info(
+            "Starting quote watchdog",
+            interval_s=self._quote_watchdog_interval_s,
+            no_data_s=self._quote_no_data_s,
+        )
+
+        def _watch() -> None:
+            try:
+                while self.api and self.logged_in:
+                    time.sleep(self._quote_watchdog_interval_s)
+                    if self._quote_version != "v1":
+                        continue
+                    last = self._last_quote_data_ts
+                    if last <= 0:
+                        continue
+                    gap = timebase.now_s() - last
+                    if gap < self._quote_no_data_s:
+                        continue
+                    logger.warning(
+                        "No quote data; switching quote version",
+                        gap_s=round(gap, 3),
+                        to_version="v0",
+                    )
+                    self._quote_version = "v0"
+                    if self.tick_callback:
+                        self._callbacks_registered = False
+                        self._ensure_callbacks(self.tick_callback)
+                        self._resubscribe_all()
+                    self._last_quote_data_ts = timebase.now_s()
+            finally:
+                self._quote_watchdog_running = False
+
+        self._quote_watchdog_thread = threading.Thread(
+            target=_watch,
+            name="shioaji-quote-watchdog",
+            daemon=True,
+        )
+        self._quote_watchdog_thread.start()
 
     def _start_callback_retry(self, cb: Callable[..., Any]) -> None:
         if self._callbacks_retrying:
@@ -410,16 +557,54 @@ class ShioajiClient:
         )
         self._callbacks_retry_thread.start()
 
+    def _schedule_force_relogin(self) -> None:
+        delay = self._quote_force_relogin_s
+        if delay <= 0:
+            return
+        if self._pending_quote_relogining:
+            return
+        self._pending_quote_relogining = True
+
+        def _relogin_after() -> None:
+            try:
+                time.sleep(delay)
+                if self._pending_quote_resubscribe:
+                    logger.warning(
+                        "Quote pending too long; forcing reconnect",
+                        delay_s=delay,
+                    )
+                    self.reconnect(reason="quote_pending", force=True)
+            finally:
+                self._pending_quote_relogining = False
+
+        self._pending_quote_relogin_thread = threading.Thread(
+            target=_relogin_after,
+            name="shioaji-quote-relogin",
+            daemon=True,
+        )
+        self._pending_quote_relogin_thread.start()
+
     def _on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
+        now = timebase.now_s()
+        self._last_quote_event_ts = now
         if event_code in (1, 2, 3, 4, 12, 13):
             logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event_name=event)
         if event_code == 12:
             self._pending_quote_resubscribe = True
+            self._pending_quote_ts = now
+            if self.tick_callback:
+                self._callbacks_registered = False
+                self._ensure_callbacks(self.tick_callback)
+            self._schedule_force_relogin()
         elif event_code == 13:
-            if self._pending_quote_resubscribe:
-                self._pending_quote_resubscribe = False
+            if self.tick_callback:
+                self._callbacks_registered = False
+                self._ensure_callbacks(self.tick_callback)
             self._resubscribe_all()
         elif event_code == 4:
+            if self.tick_callback:
+                self._callbacks_registered = False
+                self._ensure_callbacks(self.tick_callback)
             self._resubscribe_all()
 
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
@@ -513,9 +698,13 @@ class ShioajiClient:
 
         try:
             start_ns = time.perf_counter_ns()
-            v = sj.constant.QuoteVersion.v1
-            self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-            self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+            v = self._get_quote_version()
+            if v is None:
+                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick)
+                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
+            else:
+                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
+                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
             self._record_api_latency("subscribe", start_ns, ok=True)
             return True
         except Exception as e:
@@ -536,9 +725,13 @@ class ShioajiClient:
             return
         try:
             start_ns = time.perf_counter_ns()
-            v = sj.constant.QuoteVersion.v1
-            self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-            self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+            v = self._get_quote_version()
+            if v is None:
+                self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick)
+                self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
+            else:
+                self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
+                self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
             self._record_api_latency("unsubscribe", start_ns, ok=True)
         except Exception as e:
             self._record_api_latency("unsubscribe", start_ns, ok=False)
@@ -597,14 +790,11 @@ class ShioajiClient:
             logger.warning("Unsubscribable symbols detected", count=len(invalid), symbols=invalid[:10])
         return invalid
 
-    def _wrapped_tick_cb(self, exchange, msg):
-        """Persistent callback wrapper"""
+    def _wrapped_tick_cb(self, *args, **kwargs):
+        """Persistent callback wrapper."""
         try:
-            # Delegate to the registered callback map or fixed callback?
-            # Since subscribe_basket takes 'cb', we need to store 'cb' or pass it?
-            # We can store it in self.tick_callback
             if hasattr(self, "tick_callback") and self.tick_callback:
-                self.tick_callback(exchange, msg)
+                self.tick_callback(*args, **kwargs)
         except Exception as e:
             logger.error(f"Callback error: {e}")
 
@@ -620,6 +810,7 @@ class ShioajiClient:
 
         exch = str(exchange or "").upper()
         prod = str(product_type or "").strip().lower()
+        raw_code = str(code or "").strip().upper()
 
         if prod in {"index", "idx"} or exch in {"IDX", "INDEX"}:
             idx_exch = exch if exch in {"TSE", "OTC"} else self.index_exchange
@@ -661,19 +852,20 @@ class ShioajiClient:
                     return contract
 
         if prod in {"future", "futures"} or exch in {"FUT", "FUTURES", "TAIFEX"}:
-            contract = self._lookup_contract(
-                self.api.Contracts.Futures,
-                code,
-                allow_symbol_fallback=self.allow_symbol_fallback,
-                label="future",
-            )
-            if contract:
-                return contract
+            for candidate in self._expand_future_codes(raw_code):
+                contract = self._lookup_contract(
+                    self.api.Contracts.Futures,
+                    candidate,
+                    allow_symbol_fallback=self.allow_symbol_fallback,
+                    label="future",
+                )
+                if contract:
+                    return contract
 
         if prod in {"option", "options"} or exch in {"OPT", "OPTIONS"}:
             contract = self._lookup_contract(
                 self.api.Contracts.Options,
-                code,
+                raw_code,
                 allow_symbol_fallback=self.allow_symbol_fallback,
                 label="option",
             )
@@ -681,9 +873,49 @@ class ShioajiClient:
                 return contract
 
         if allow_synthetic and sj:
-            return self._build_synthetic_contract(exch, code)
+            return self._build_synthetic_contract(exch, raw_code)
 
         return None
+
+    def _expand_future_codes(self, code: str) -> list[str]:
+        """Expand legacy futures month codes (e.g., TXFD6) to YYYYMM form (TXF202604)."""
+        code = str(code or "").strip().upper()
+        if not code:
+            return []
+        candidates = [code]
+        # Legacy format: ROOT + month_code + year_digit (e.g., TXFD6)
+        if len(code) >= 5:
+            month_code = code[-2]
+            year_digit = code[-1]
+            month_map = {
+                "A": "01",
+                "B": "02",
+                "C": "03",
+                "D": "04",
+                "E": "05",
+                "F": "06",
+                "G": "07",
+                "H": "08",
+                "I": "09",
+                "J": "10",
+                "K": "11",
+                "L": "12",
+            }
+            if year_digit.isdigit() and month_code in month_map:
+                root = code[:-2]
+                year = self._resolve_year_from_digit(int(year_digit))
+                alt = f"{root}{year}{month_map[month_code]}"
+                if alt not in candidates:
+                    candidates.append(alt)
+        return candidates
+
+    def _resolve_year_from_digit(self, digit: int) -> int:
+        now_year = dt.datetime.now(timebase.TZINFO).year
+        base = (now_year // 10) * 10 + digit
+        # If the computed year is too far in the past, roll to next decade.
+        if base < now_year - 1:
+            base += 10
+        return base
 
     def _lookup_contract(self, container: Any, code: str, allow_symbol_fallback: bool, label: str) -> Any | None:
         if not container:

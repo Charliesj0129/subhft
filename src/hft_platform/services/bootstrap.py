@@ -98,7 +98,13 @@ class SystemBootstrapper:
         order_client = ShioajiClient(symbols_path, order_cfg)
 
         # 4. Services
-        md_service = MarketDataService(bus, raw_queue, md_client, symbol_metadata=symbol_metadata)
+        md_service = MarketDataService(
+            bus,
+            raw_queue,
+            md_client,
+            symbol_metadata=symbol_metadata,
+            recorder_queue=recorder_queue,
+        )
         order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map)
         execution_gateway = ExecutionGateway(order_adapter)
         exec_service = ExecutionRouter(
