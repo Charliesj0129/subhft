@@ -69,6 +69,16 @@ class WALLoaderService:
         # Quarantine directory for corrupt files
         self.corrupt_dir = os.path.join(self.wal_dir, "corrupt")
 
+        # DLQ cleanup configuration (B3)
+        self._dlq_retention_days = int(os.getenv("HFT_DLQ_RETENTION_DAYS", "7"))
+        self._dlq_archive_path = os.getenv("HFT_DLQ_ARCHIVE_PATH") or None
+        self._last_dlq_cleanup_ts = 0.0
+        self._dlq_cleanup_interval_s = 3600.0  # 1 hour
+
+        # Corrupt file cleanup configuration (B5)
+        self._corrupt_retention_days = int(os.getenv("HFT_CORRUPT_RETENTION_DAYS", "30"))
+        self._last_corrupt_cleanup_ts = 0.0
+
     def connect(self):
         try:
             ch_username = (
@@ -177,6 +187,13 @@ class WALLoaderService:
                     error=str(e),
                     error_type=type(e).__name__,
                 )
+
+            # Cleanup old DLQ and corrupt files (B3, B5)
+            try:
+                self._cleanup_old_dlq_files()
+                self._cleanup_old_corrupt_files()
+            except Exception as e:
+                logger.warning("Cleanup task failed", error=str(e))
 
             time.sleep(self.poll_interval_s)
 
@@ -288,6 +305,89 @@ class WALLoaderService:
             logger.error("Moved corrupt WAL to quarantine", file=fname, reason=reason, dest=dest_path)
         except Exception as e:
             logger.error("Failed to quarantine corrupt file", file=fname, error=str(e))
+
+    def _cleanup_old_dlq_files(self) -> None:
+        """Remove or archive DLQ files older than retention period (B3)."""
+        now = timebase.now_s()
+        if now - self._last_dlq_cleanup_ts < self._dlq_cleanup_interval_s:
+            return
+        self._last_dlq_cleanup_ts = now
+
+        if not os.path.isdir(self.dlq_dir):
+            return
+
+        retention_seconds = self._dlq_retention_days * 86400
+        cutoff_ts = now - retention_seconds
+        archived = 0
+        deleted = 0
+
+        try:
+            for fname in os.listdir(self.dlq_dir):
+                fpath = os.path.join(self.dlq_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if mtime >= cutoff_ts:
+                        continue
+
+                    if self._dlq_archive_path:
+                        os.makedirs(self._dlq_archive_path, exist_ok=True)
+                        dest = os.path.join(self._dlq_archive_path, fname)
+                        shutil.move(fpath, dest)
+                        archived += 1
+                    else:
+                        os.remove(fpath)
+                        deleted += 1
+                except Exception as e:
+                    logger.warning("Failed to clean up DLQ file", file=fname, error=str(e))
+
+            if archived or deleted:
+                logger.info(
+                    "DLQ cleanup completed",
+                    archived=archived,
+                    deleted=deleted,
+                    retention_days=self._dlq_retention_days,
+                )
+        except Exception as e:
+            logger.warning("DLQ cleanup failed", error=str(e))
+
+    def _cleanup_old_corrupt_files(self) -> None:
+        """Remove corrupt files older than retention period (B5)."""
+        now = timebase.now_s()
+        if now - self._last_corrupt_cleanup_ts < self._dlq_cleanup_interval_s:
+            return
+        self._last_corrupt_cleanup_ts = now
+
+        if not os.path.isdir(self.corrupt_dir):
+            return
+
+        retention_seconds = self._corrupt_retention_days * 86400
+        cutoff_ts = now - retention_seconds
+        deleted = 0
+
+        try:
+            for fname in os.listdir(self.corrupt_dir):
+                fpath = os.path.join(self.corrupt_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if mtime >= cutoff_ts:
+                        continue
+                    os.remove(fpath)
+                    deleted += 1
+                except Exception as e:
+                    logger.warning("Failed to clean up corrupt file", file=fname, error=str(e))
+
+            if deleted:
+                logger.info(
+                    "Corrupt file cleanup completed",
+                    deleted=deleted,
+                    retention_days=self._corrupt_retention_days,
+                )
+        except Exception as e:
+            logger.warning("Corrupt file cleanup failed", error=str(e))
 
     def _write_to_dlq(self, table: str, rows: List[Dict[str, Any]], error: str) -> None:
         """Write failed rows to Dead Letter Queue for later analysis."""
@@ -462,39 +562,196 @@ class WALLoaderService:
                 ]
                 data.append(row_data)
 
-            if self.ch_client and data:
-                last_error = None
-                for attempt in range(self._insert_max_retries):
-                    try:
-                        self.ch_client.insert("hft.market_data", data, column_names=cols)
-                        logger.info("Inserted batch", table=table, count=len(rows))
-                        return True
-                    except Exception as e:
-                        last_error = e
-                        if attempt < self._insert_max_retries - 1:
-                            delay = self._compute_insert_backoff(attempt)
-                            logger.warning(
-                                "Insert failed, retrying with backoff",
-                                table=table,
-                                attempt=attempt + 1,
-                                delay_s=round(delay, 2),
-                                error=str(e),
-                            )
-                            time.sleep(delay)
-                        else:
-                            logger.error(
-                                "Insert failed after max retries",
-                                table=table,
-                                max_retries=self._insert_max_retries,
-                                error=str(last_error),
-                            )
-                            return False
-            elif data:
-                # No client but we have data - also a "failure" for DLQ purposes
-                logger.warning("No ClickHouse client available for insert", table=table, count=len(data))
-                return False
+            return self._insert_with_retry("hft.market_data", cols, data, table, len(rows))
 
-        logger.info("Inserted batch", table=table, count=len(rows))
+        # Handle orders table
+        elif table == "orders":
+            data = []
+            cols = [
+                "order_id",
+                "strategy_id",
+                "symbol",
+                "exchange",
+                "side",
+                "price_scaled",
+                "qty",
+                "order_type",
+                "status",
+                "exch_ts",
+                "ingest_ts",
+            ]
+            for r in rows:
+                price = r.get("price_scaled")
+                if price is None:
+                    price_float = r.get("price")
+                    price = _to_scaled(price_float) if price_float is not None else 0
+
+                exch_ts = int(r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0)
+                ingest_ts = int(r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
+
+                row_data = [
+                    str(r.get("order_id", "")),
+                    str(r.get("strategy_id", "")),
+                    str(r.get("symbol", "")),
+                    str(r.get("exchange", r.get("exch", ""))),
+                    str(r.get("side", r.get("action", ""))),
+                    int(price),
+                    int(r.get("qty", r.get("quantity", 0)) or 0),
+                    str(r.get("order_type", r.get("type", ""))),
+                    str(r.get("status", "")),
+                    exch_ts,
+                    ingest_ts,
+                ]
+                data.append(row_data)
+
+            return self._insert_with_retry("hft.orders", cols, data, table, len(rows))
+
+        # Handle trades/fills table
+        elif table == "trades":
+            data = []
+            cols = [
+                "trade_id",
+                "order_id",
+                "symbol",
+                "exchange",
+                "side",
+                "price_scaled",
+                "qty",
+                "exch_ts",
+                "ingest_ts",
+            ]
+            for r in rows:
+                price = r.get("price_scaled")
+                if price is None:
+                    price_float = r.get("price")
+                    price = _to_scaled(price_float) if price_float is not None else 0
+
+                exch_ts = int(r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0)
+                ingest_ts = int(r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
+
+                row_data = [
+                    str(r.get("trade_id", r.get("fill_id", ""))),
+                    str(r.get("order_id", "")),
+                    str(r.get("symbol", "")),
+                    str(r.get("exchange", r.get("exch", ""))),
+                    str(r.get("side", r.get("action", ""))),
+                    int(price),
+                    int(r.get("qty", r.get("quantity", 0)) or 0),
+                    exch_ts,
+                    ingest_ts,
+                ]
+                data.append(row_data)
+
+            return self._insert_with_retry("hft.trades", cols, data, table, len(rows))
+
+        # Handle risk_log table
+        elif table == "risk_log":
+            data = []
+            cols = [
+                "ts",
+                "strategy_id",
+                "metric",
+                "value",
+                "context",
+            ]
+            for r in rows:
+                ts = int(r.get("ts") or r.get("timestamp") or r.get("ingest_ts") or timebase.now_ns())
+                context = r.get("context", {})
+                if isinstance(context, dict):
+                    import json
+                    context = json.dumps(context)
+
+                row_data = [
+                    ts,
+                    str(r.get("strategy_id", "")),
+                    str(r.get("metric", "")),
+                    float(r.get("value", 0)),
+                    str(context),
+                ]
+                data.append(row_data)
+
+            return self._insert_with_retry("hft.risk_log", cols, data, table, len(rows))
+
+        # Handle backtest_runs table
+        elif table == "backtest_runs":
+            data = []
+            cols = [
+                "run_id",
+                "strategy_id",
+                "start_ts",
+                "end_ts",
+                "params",
+                "metrics",
+            ]
+            for r in rows:
+                import json
+                params = r.get("params", {})
+                if isinstance(params, dict):
+                    params = json.dumps(params)
+                metrics = r.get("metrics", {})
+                if isinstance(metrics, dict):
+                    metrics = json.dumps(metrics)
+
+                row_data = [
+                    str(r.get("run_id", "")),
+                    str(r.get("strategy_id", "")),
+                    int(r.get("start_ts", 0)),
+                    int(r.get("end_ts", 0)),
+                    str(params),
+                    str(metrics),
+                ]
+                data.append(row_data)
+
+            return self._insert_with_retry("hft.backtest_runs", cols, data, table, len(rows))
+
+        else:
+            # Unknown table - log warning and return False to trigger DLQ
+            logger.warning(
+                "No insert logic for table",
+                table=table,
+                count=len(rows),
+            )
+            return False
+
+    def _insert_with_retry(
+        self, full_table_name: str, cols: list, data: list, table_alias: str, row_count: int
+    ) -> bool:
+        """Insert data with retry logic. Returns True on success, False if all retries failed."""
+        if not data:
+            return True
+
+        if self.ch_client and data:
+            last_error = None
+            for attempt in range(self._insert_max_retries):
+                try:
+                    self.ch_client.insert(full_table_name, data, column_names=cols)
+                    logger.info("Inserted batch", table=table_alias, count=row_count)
+                    return True
+                except Exception as e:
+                    last_error = e
+                    if attempt < self._insert_max_retries - 1:
+                        delay = self._compute_insert_backoff(attempt)
+                        logger.warning(
+                            "Insert failed, retrying with backoff",
+                            table=table_alias,
+                            attempt=attempt + 1,
+                            delay_s=round(delay, 2),
+                            error=str(e),
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.error(
+                            "Insert failed after max retries",
+                            table=table_alias,
+                            max_retries=self._insert_max_retries,
+                            error=str(last_error),
+                        )
+                        return False
+        elif data:
+            # No client but we have data - also a "failure" for DLQ purposes
+            logger.warning("No ClickHouse client available for insert", table=table_alias, count=len(data))
+            return False
+
         return True
 
 

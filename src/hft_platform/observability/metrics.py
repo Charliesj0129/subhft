@@ -67,6 +67,13 @@ class MetricsRegistry:
                 "reconciliation_discrepancy_count",
                 "recorder_insert_retry_total",
                 "feed_gap_by_symbol_seconds",
+                # Phase 12 metrics
+                "shioaji_keepalive_failures_total",
+                "quote_version_switch_total",
+                "shioaji_contract_lookup_errors_total",
+                "latency_spans_dropped_total",
+                "clickhouse_connection_health",
+                "wal_corrupt_files_total",
             ]
         )
         # Market Data
@@ -202,6 +209,40 @@ class MetricsRegistry:
             "feed_gap_by_symbol_seconds",
             "Feed gap per symbol (seconds since last tick)",
             ["symbol"],
+        )
+
+        # Phase 12: Market Data Robustness & Database Writing Upgrades
+        # Shioaji keep-alive failure counter (A3)
+        self.shioaji_keepalive_failures_total = Counter(
+            "shioaji_keepalive_failures_total",
+            "Shioaji keep-alive check failures",
+        )
+        # Quote version switch counter (A4)
+        self.quote_version_switch_total = Counter(
+            "quote_version_switch_total",
+            "Quote version switches (upgrade/downgrade)",
+            ["direction"],  # "upgrade" or "downgrade"
+        )
+        # Contract lookup errors by symbol (A5)
+        self.shioaji_contract_lookup_errors_total = Counter(
+            "shioaji_contract_lookup_errors_total",
+            "Contract lookup failures by symbol",
+            ["code"],
+        )
+        # Latency spans dropped due to overflow (B2)
+        self.latency_spans_dropped_total = Counter(
+            "latency_spans_dropped_total",
+            "Latency spans dropped due to queue/buffer overflow",
+        )
+        # ClickHouse connection health gauge (B4)
+        self.clickhouse_connection_health = Gauge(
+            "clickhouse_connection_health",
+            "ClickHouse connection health (1=healthy, 0=unhealthy)",
+        )
+        # Corrupt WAL files counter (B5)
+        self.wal_corrupt_files_total = Counter(
+            "wal_corrupt_files_total",
+            "Corrupt WAL files quarantined",
         )
 
         # System (v2)

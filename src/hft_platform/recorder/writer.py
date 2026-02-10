@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import threading
 import time
 
 from structlog import get_logger
@@ -54,6 +55,7 @@ class DataWriter:
         if use_native:
             self.ch_params["interface"] = "native"
         self.connected = False
+        self._schema_initialized = False
         # ClickHouse is opt-in; enable by setting HFT_CLICKHOUSE_ENABLED=1
         self.ch_enabled = str(os.getenv("HFT_CLICKHOUSE_ENABLED", "")).lower() in ("1", "true", "yes", "on")
         if os.getenv("HFT_DISABLE_CLICKHOUSE"):
@@ -81,6 +83,14 @@ class DataWriter:
             logger.warning("Failed to parse HFT_TS_MAX_FUTURE_S, disabling future filter", error=str(exc))
             self._ts_max_future_ns = 0
 
+        # Heartbeat configuration (B4)
+        self._heartbeat_interval_s = float(os.getenv("HFT_CH_HEARTBEAT_INTERVAL_S", "30"))
+        self._heartbeat_timeout_s = float(os.getenv("HFT_CH_HEARTBEAT_TIMEOUT_S", "5"))
+        self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeat_running = False
+        self._last_heartbeat_ts = 0.0
+        self._last_heartbeat_ok = True
+
     def _compute_backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay with jitter to avoid thundering herd."""
         # Exponential: base_delay * 2^attempt, capped at max_backoff
@@ -103,6 +113,7 @@ class DataWriter:
                 self._connect_attempts = 0  # Reset on success
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
                 self._init_schema()
+                self._start_heartbeat_thread()
                 break
 
             except Exception as e:
@@ -137,6 +148,7 @@ class DataWriter:
                 self._connect_attempts = 0  # Reset on success
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
                 await asyncio.to_thread(self._init_schema)
+                self._start_heartbeat_thread()
                 break
 
             except Exception as e:
@@ -161,12 +173,84 @@ class DataWriter:
         """Initialize ClickHouse schema from SQL file."""
         try:
             apply_schema(self.ch_client)
+            self._schema_initialized = True
         except Exception as se:
-            logger.error("Schema initialization failed", error=str(se))
+            logger.critical(
+                "Schema initialization failed - falling back to WAL-only mode",
+                error=str(se),
+                exc_info=True,
+            )
+            self._schema_initialized = False
+            self.connected = False
+            return
+
         try:
             ensure_price_scaled_views(self.ch_client)
         except Exception as se:
             logger.error("Schema view repair failed", error=str(se))
+            # Views are optional, don't fail completely
+
+    def _start_heartbeat_thread(self) -> None:
+        """Start daemon thread for connection heartbeat."""
+        if self._heartbeat_running:
+            return
+        if not self.ch_enabled or not self.connected:
+            return
+        self._heartbeat_running = True
+        logger.info(
+            "Starting ClickHouse heartbeat",
+            interval_s=self._heartbeat_interval_s,
+            timeout_s=self._heartbeat_timeout_s,
+        )
+
+        def _heartbeat_loop() -> None:
+            try:
+                while self._heartbeat_running and self.connected and self.ch_client:
+                    time.sleep(self._heartbeat_interval_s)
+                    if not self._heartbeat_running:
+                        break
+                    ok = self._do_heartbeat_check()
+                    self._last_heartbeat_ts = timebase.now_s()
+                    self._last_heartbeat_ok = ok
+                    if not ok:
+                        logger.error("ClickHouse heartbeat failed, marking connection as stale")
+                        self.connected = False
+                        self.ch_client = None
+                        break
+            finally:
+                self._heartbeat_running = False
+
+        self._heartbeat_thread = threading.Thread(
+            target=_heartbeat_loop,
+            name="clickhouse-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    def _do_heartbeat_check(self) -> bool:
+        """Execute SELECT 1 to verify connection health."""
+        if not self.ch_client:
+            return False
+        try:
+            self.ch_client.command("SELECT 1")
+            return True
+        except Exception as e:
+            logger.warning("ClickHouse heartbeat check failed", error=str(e))
+            return False
+
+    def get_status(self) -> dict:
+        """Get current writer status for health checks."""
+        return {
+            "ch_enabled": self.ch_enabled,
+            "connected": self.connected,
+            "schema_initialized": self._schema_initialized,
+            "wal_only_mode": not self.connected or not self._schema_initialized,
+            "connect_attempts": self._connect_attempts,
+            "ch_host": self.ch_params.get("host"),
+            "ch_port": self.ch_params.get("port"),
+            "last_heartbeat_ts": self._last_heartbeat_ts,
+            "last_heartbeat_ok": self._last_heartbeat_ok,
+        }
 
     async def write(self, table: str, data: list):
         """
