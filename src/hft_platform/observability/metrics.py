@@ -74,6 +74,14 @@ class MetricsRegistry:
                 "latency_spans_dropped_total",
                 "clickhouse_connection_health",
                 "wal_corrupt_files_total",
+                # Phase 12 P2 metrics
+                "wal_batch_flush_total",
+                "wal_batch_flush_retry_total",
+                "session_refresh_total",
+                "market_open_grace_active",
+                "wal_directory_size_bytes",
+                "wal_file_count",
+                "wal_oldest_file_age_seconds",
             ]
         )
         # Market Data
@@ -243,6 +251,43 @@ class MetricsRegistry:
         self.wal_corrupt_files_total = Counter(
             "wal_corrupt_files_total",
             "Corrupt WAL files quarantined",
+        )
+
+        # Phase 12 P2: Holiday Resilience & Scheduled WAL Import
+        # WAL batch flush at market close (C2)
+        self.wal_batch_flush_total = Counter(
+            "wal_batch_flush_total",
+            "WAL batch flush operations at market close",
+            ["result"],  # "ok" or "error"
+        )
+        # WAL batch flush retry counter (O2)
+        self.wal_batch_flush_retry_total = Counter(
+            "wal_batch_flush_retry_total",
+            "WAL batch flush retry attempts",
+        )
+        # Session refresh counter (C3)
+        self.session_refresh_total = Counter(
+            "session_refresh_total",
+            "Preventive session refresh operations",
+            ["result"],  # "ok" or "error"
+        )
+        # Market open grace period active indicator (C4)
+        self.market_open_grace_active = Gauge(
+            "market_open_grace_active",
+            "Whether market open grace period is active (1=active, 0=inactive)",
+        )
+        # WAL directory monitoring (C5)
+        self.wal_directory_size_bytes = Gauge(
+            "wal_directory_size_bytes",
+            "Total size of WAL directory in bytes",
+        )
+        self.wal_file_count = Gauge(
+            "wal_file_count",
+            "Number of pending WAL files",
+        )
+        self.wal_oldest_file_age_seconds = Gauge(
+            "wal_oldest_file_age_seconds",
+            "Age of oldest WAL file in seconds",
         )
 
         # System (v2)

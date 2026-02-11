@@ -79,6 +79,14 @@ class WALLoaderService:
         self._corrupt_retention_days = int(os.getenv("HFT_CORRUPT_RETENTION_DAYS", "30"))
         self._last_corrupt_cleanup_ts = 0.0
 
+        # WAL accumulation monitoring (C5)
+        self._wal_size_warning_mb = float(os.getenv("HFT_WAL_SIZE_WARNING_MB", "100"))
+        self._wal_size_critical_mb = float(os.getenv("HFT_WAL_SIZE_CRITICAL_MB", "500"))
+        self._last_wal_check_ts = 0.0
+        self._wal_check_interval_s = 60.0  # Check every minute
+        self.metrics = None  # Will be set when run() is called
+        self._wal_scheduler = None
+
     def connect(self):
         try:
             ch_username = (
@@ -128,76 +136,109 @@ class WALLoaderService:
         if not os.path.exists(self.archive_dir):
             os.makedirs(self.archive_dir)
 
+        # Initialize metrics
+        try:
+            from hft_platform.observability.metrics import MetricsRegistry
+
+            self.metrics = MetricsRegistry.get()
+        except Exception as exc:
+            logger.warning("Failed to initialize metrics", error=str(exc))
+            self.metrics = None
+
         logger.info("Starting WAL Loader", wal_dir=self.wal_dir)
+        if self._wal_scheduler is None:
+            try:
+                from hft_platform.recorder.wal_scheduler import WALScheduler
 
-        while self.running:
-            if not self.ch_client:
-                # Check circuit breaker
-                now = timebase.now_s()
-                if self._circuit_open_until > now:
-                    sleep_time = min(self._circuit_open_until - now, 60.0)
-                    logger.debug(
-                        "Connection circuit breaker open, waiting",
-                        sleep_s=round(sleep_time, 1),
-                        failures=self._connect_failures,
-                    )
-                    time.sleep(sleep_time)
-                    continue
+                self._wal_scheduler = WALScheduler(self)
+                self._wal_scheduler.start()
+            except Exception as exc:
+                logger.warning("Failed to start WAL scheduler", error=str(exc))
 
-                self.connect()
+        try:
+            while self.running:
                 if not self.ch_client:
-                    self._connect_failures += 1
-                    if self._connect_failures >= self._connect_max_retries:
-                        # Open circuit breaker
-                        backoff = self._compute_connect_backoff(self._connect_failures - self._connect_max_retries)
-                        self._circuit_open_until = timebase.now_s() + backoff
-                        logger.error(
-                            "ClickHouse connection failed repeatedly, circuit breaker opened",
+                    # Check circuit breaker
+                    now = timebase.now_s()
+                    if self._circuit_open_until > now:
+                        sleep_time = min(self._circuit_open_until - now, 60.0)
+                        logger.debug(
+                            "Connection circuit breaker open, waiting",
+                            sleep_s=round(sleep_time, 1),
                             failures=self._connect_failures,
-                            backoff_s=round(backoff, 1),
                         )
+                        time.sleep(sleep_time)
+                        continue
+
+                    self.connect()
+                    if not self.ch_client:
+                        self._connect_failures += 1
+                        if self._connect_failures >= self._connect_max_retries:
+                            # Open circuit breaker
+                            backoff = self._compute_connect_backoff(self._connect_failures - self._connect_max_retries)
+                            self._circuit_open_until = timebase.now_s() + backoff
+                            logger.error(
+                                "ClickHouse connection failed repeatedly, circuit breaker opened",
+                                failures=self._connect_failures,
+                                backoff_s=round(backoff, 1),
+                            )
+                        else:
+                            delay = self._compute_connect_backoff(self._connect_failures)
+                            logger.warning(
+                                "ClickHouse connection failed, retrying with backoff",
+                                attempt=self._connect_failures,
+                                max_retries=self._connect_max_retries,
+                                delay_s=round(delay, 1),
+                            )
+                            time.sleep(delay)
+                        continue
                     else:
-                        delay = self._compute_connect_backoff(self._connect_failures)
-                        logger.warning(
-                            "ClickHouse connection failed, retrying with backoff",
-                            attempt=self._connect_failures,
-                            max_retries=self._connect_max_retries,
-                            delay_s=round(delay, 1),
-                        )
-                        time.sleep(delay)
-                    continue
-                else:
-                    # Reset on successful connection
-                    self._connect_failures = 0
-                    self._circuit_open_until = 0.0
+                        # Reset on successful connection
+                        self._connect_failures = 0
+                        self._circuit_open_until = 0.0
 
-            try:
-                self.process_files()
-            except ConnectionError as e:
-                logger.error("Connection error during file processing", error=str(e), error_type="ConnectionError")
-                # Reset client to force reconnect
-                self.ch_client = None
-            except TimeoutError as e:
-                logger.error("Timeout during file processing", error=str(e), error_type="TimeoutError")
-            except OSError as e:
-                logger.error("OS error during file processing", error=str(e), error_type="OSError", errno=e.errno)
-            except Exception as e:
-                logger.error(
-                    "Unexpected error processing files",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
+                try:
+                    self.process_files()
+                except ConnectionError as e:
+                    logger.error("Connection error during file processing", error=str(e), error_type="ConnectionError")
+                    # Reset client to force reconnect
+                    self.ch_client = None
+                except TimeoutError as e:
+                    logger.error("Timeout during file processing", error=str(e), error_type="TimeoutError")
+                except OSError as e:
+                    logger.error("OS error during file processing", error=str(e), error_type="OSError", errno=e.errno)
+                except Exception as e:
+                    logger.error(
+                        "Unexpected error processing files",
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
 
-            # Cleanup old DLQ and corrupt files (B3, B5)
-            try:
-                self._cleanup_old_dlq_files()
-                self._cleanup_old_corrupt_files()
-            except Exception as e:
-                logger.warning("Cleanup task failed", error=str(e))
+                # Cleanup old DLQ and corrupt files (B3, B5)
+                try:
+                    self._cleanup_old_dlq_files()
+                    self._cleanup_old_corrupt_files()
+                except Exception as e:
+                    logger.warning("Cleanup task failed", error=str(e))
 
-            time.sleep(self.poll_interval_s)
+                # WAL accumulation monitoring (C5)
+                try:
+                    self._check_wal_accumulation()
+                except Exception as e:
+                    logger.warning("WAL accumulation check failed", error=str(e))
 
-    def process_files(self):
+                time.sleep(self.poll_interval_s)
+        finally:
+            if self._wal_scheduler and self._wal_scheduler.running:
+                self._wal_scheduler.stop()
+
+    def process_files(self, force: bool = False):
+        """Process pending WAL files and load to ClickHouse.
+
+        Args:
+            force: If True, skip mtime check and process all files immediately.
+                   Used by WAL scheduler for batch flush at market close.
+        """
         # Look for *.jsonl
         # IMPORTANT: Only process files that are NOT currently being written to.
         # Simple heuristic: WALWriter writes to {table}_{timestamp}.jsonl
@@ -213,10 +254,12 @@ class WALLoaderService:
         now = timebase.now_s()
         for fpath in files:
             # Check modification time to ensure writer is done
-            mtime = os.path.getmtime(fpath)
-            if now - mtime < 2.0:
-                # File touched recently, skip
-                continue
+            # If force=True, skip this check for batch flush
+            if not force:
+                mtime = os.path.getmtime(fpath)
+                if now - mtime < 2.0:
+                    # File touched recently, skip
+                    continue
 
             fname = os.path.basename(fpath)
             # Extract topic/table name
@@ -388,6 +431,60 @@ class WALLoaderService:
                 )
         except Exception as e:
             logger.warning("Corrupt file cleanup failed", error=str(e))
+
+    def _check_wal_accumulation(self) -> None:
+        """Check WAL directory size and emit metrics (C5)."""
+        now = timebase.now_s()
+        if now - self._last_wal_check_ts < self._wal_check_interval_s:
+            return
+        self._last_wal_check_ts = now
+
+        if not os.path.isdir(self.wal_dir):
+            return
+
+        total_size = 0
+        file_count = 0
+        oldest_mtime = now
+
+        try:
+            for fname in os.listdir(self.wal_dir):
+                if not fname.endswith(".jsonl"):
+                    continue
+                fpath = os.path.join(self.wal_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    stat = os.stat(fpath)
+                    total_size += stat.st_size
+                    file_count += 1
+                    oldest_mtime = min(oldest_mtime, stat.st_mtime)
+                except OSError:
+                    continue
+
+            # Emit metrics
+            if self.metrics:
+                self.metrics.wal_directory_size_bytes.set(total_size)
+                self.metrics.wal_file_count.set(file_count)
+                self.metrics.wal_oldest_file_age_seconds.set(now - oldest_mtime if file_count else 0)
+
+            # Log warnings
+            size_mb = total_size / (1024 * 1024)
+            if size_mb > self._wal_size_critical_mb:
+                logger.critical(
+                    "WAL directory critically large",
+                    size_mb=round(size_mb, 2),
+                    file_count=file_count,
+                    threshold_mb=self._wal_size_critical_mb,
+                )
+            elif size_mb > self._wal_size_warning_mb:
+                logger.warning(
+                    "WAL directory large",
+                    size_mb=round(size_mb, 2),
+                    file_count=file_count,
+                    threshold_mb=self._wal_size_warning_mb,
+                )
+        except Exception as e:
+            logger.warning("WAL accumulation check failed", error=str(e))
 
     def _write_to_dlq(self, table: str, rows: List[Dict[str, Any]], error: str) -> None:
         """Write failed rows to Dead Letter Queue for later analysis."""
