@@ -76,18 +76,14 @@ class MarketCalendar:
             logger.warning("Market calendar unavailable (no exchange_calendars)")
 
         # Create instance-bound cached method
-        self._get_session_times_cached = lru_cache(maxsize=self._session_cache_size)(
-            self._get_session_times_uncached
-        )
+        self._get_session_times_cached = lru_cache(maxsize=self._session_cache_size)(self._get_session_times_uncached)
 
     @property
     def available(self) -> bool:
         """Check if calendar is available."""
         return self._cal is not None
 
-    def _get_session_times_uncached(
-        self, date_str: str
-    ) -> tuple[dt.datetime | None, dt.datetime | None]:
+    def _get_session_times_uncached(self, date_str: str) -> tuple[dt.datetime | None, dt.datetime | None]:
         """Get session open/close times for a date (uncached implementation).
 
         Args:
