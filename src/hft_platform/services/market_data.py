@@ -103,6 +103,10 @@ class MarketDataService:
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "5.0"))
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
 
+        # Market open grace period (C4)
+        self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))
+        self._market_open_grace_gap_threshold_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_GAP_S", "30"))
+
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
@@ -502,9 +506,14 @@ class MarketDataService:
             now = time.monotonic()
             stale_symbols: list[tuple[str, float]] = []
 
+            # Use relaxed threshold during market open grace period (C4)
+            threshold = self._symbol_gap_threshold_s
+            if self._is_market_open_grace_period():
+                threshold = max(threshold, self._market_open_grace_gap_threshold_s)
+
             for symbol, last_ts in tick_snapshot.items():
                 gap = now - last_ts
-                if gap > self._symbol_gap_threshold_s:
+                if gap > threshold:
                     stale_symbols.append((symbol, gap))
 
             if stale_symbols:
@@ -625,6 +634,15 @@ class MarketDataService:
         if not self.reconnect_days and not self.reconnect_hours and not self.reconnect_hours_2:
             return True
         now = dt.datetime.now(tz=self._reconnect_tzinfo)
+        if os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}:
+            try:
+                from hft_platform.core.market_calendar import get_calendar
+
+                calendar = get_calendar()
+                if calendar.available and calendar.days_until_trading(now.date()) > 1:
+                    return False
+            except Exception:
+                pass
         weekday = now.strftime("%a").lower()
         if self.reconnect_days and weekday not in self.reconnect_days:
             return False
@@ -712,3 +730,41 @@ class MarketDataService:
 
         now = time.monotonic()
         return {symbol: now - last_ts for symbol, last_ts in tick_snapshot.items()}
+
+    def _is_market_open_grace_period(self) -> bool:
+        """Check if within grace period after market open (C4).
+
+        Returns:
+            True if within grace period
+        """
+        if self._market_open_grace_s <= 0:
+            return False
+
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+        except ImportError:
+            return False
+
+        try:
+            now = dt.datetime.now(calendar._tz)
+
+            if not calendar.is_trading_day(now.date()):
+                return False
+
+            open_time = calendar.get_session_open(now.date())
+            if open_time is None:
+                return False
+
+            # Check if we're within grace period after open
+            elapsed = (now - open_time).total_seconds()
+            in_grace = 0 <= elapsed <= self._market_open_grace_s
+
+            # Update gauge
+            if self.metrics_registry and hasattr(self.metrics_registry, "market_open_grace_active"):
+                self.metrics_registry.market_open_grace_active.set(1 if in_grace else 0)
+
+            return in_grace
+        except Exception:
+            return False

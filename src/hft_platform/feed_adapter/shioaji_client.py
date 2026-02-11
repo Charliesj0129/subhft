@@ -127,9 +127,15 @@ class ShioajiClient:
         self._positions_detail_cache_ttl_s = float(os.getenv("HFT_POSITION_DETAIL_CACHE_TTL_S", "10"))
         self._api_last_latency_ms: dict[str, float] = {}
         self._quote_force_relogin_s = float(os.getenv("HFT_QUOTE_FORCE_RELOGIN_S", "15"))
-        self._quote_version_mode = os.getenv("HFT_QUOTE_VERSION", "v1").strip().lower()
+        self._quote_version_mode = os.getenv("HFT_QUOTE_VERSION", "auto").strip().lower()
         if self._quote_version_mode not in {"v0", "v1", "auto"}:
-            self._quote_version_mode = "v1"
+            self._quote_version_mode = "auto"
+        self._quote_version_strict = os.getenv("HFT_QUOTE_VERSION_STRICT", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self._quote_version = "v1" if self._quote_version_mode in {"v1", "auto"} else "v0"
         self._last_quote_data_ts = 0.0
         self._first_quote_seen = False
@@ -137,11 +143,35 @@ class ShioajiClient:
         self._quote_watchdog_running = False
         self._quote_watchdog_interval_s = float(os.getenv("HFT_QUOTE_WATCHDOG_S", "5"))
         self._quote_no_data_s = float(os.getenv("HFT_QUOTE_NO_DATA_S", "30"))
+        self._event_callback_registered = False
+        self._event_callback_retrying = False
+        self._event_callback_retry_thread: threading.Thread | None = None
+        self._event_callback_retry_s = float(os.getenv("HFT_QUOTE_EVENT_RETRY_S", "5"))
+        self._pending_quote_reason: str | None = None
         self._api_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_API_SOFT_CAP", "20")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
             window_s=int(os.getenv("HFT_SHIOAJI_API_WINDOW_S", "5")),
         )
+
+        # Session refresh configuration (C3)
+        self._session_refresh_interval_s = float(os.getenv("HFT_SESSION_REFRESH_S", "86400"))  # 24 hours
+        self._last_session_refresh_ts = 0.0
+        self._session_refresh_thread: threading.Thread | None = None
+        self._session_refresh_running = False
+        self._session_refresh_check_interval_s = 3600.0  # Check every hour
+
+        # Holiday-aware session refresh (O4)
+        self._session_refresh_holiday_aware = (
+            os.getenv("HFT_SESSION_REFRESH_HOLIDAY_AWARE", "1").strip().lower() in {"1", "true", "yes", "on"}
+        )
+
+        # Post-refresh health check (O5)
+        self._session_refresh_verify_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S", "10.0"))
+
+        # Market open grace period (C4)
+        self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))  # 60 seconds
+        self._market_open_grace_active = False
 
         # Register self globally
         if self not in CLIENT_REGISTRY:
@@ -210,9 +240,7 @@ class ShioajiClient:
                     quote_version_mode=self._quote_version_mode,
                 )
             if self._pending_quote_resubscribe:
-                self._pending_quote_resubscribe = False
-                self._pending_quote_ts = 0.0
-                logger.info("Quote data resumed; clearing pending")
+                self._clear_quote_pending()
             if self.tick_callback:
                 self.tick_callback(*args, **kwargs)
         except Exception as e:
@@ -287,6 +315,7 @@ class ShioajiClient:
                         self._record_api_latency("activate_ca", start_ns, ok=False)
                         logger.error("CA activation failed", error=str(exc))
             self.logged_in = True
+            self._last_session_refresh_ts = timebase.now_s()
             return
 
         if not self.api:
@@ -385,37 +414,39 @@ class ShioajiClient:
                 self.subscribed_count = len(self.subscribed_codes)
         logger.info("Quote subscription completed", subscribed=self.subscribed_count)
         self._start_quote_watchdog()
+        self._start_session_refresh_thread()
 
     def _ensure_callbacks(self, cb: Callable[..., Any]) -> None:
         if not self.api:
             return
-        if self._callbacks_registered:
+        if self._callbacks_registered and self._event_callback_registered:
             return
-        ok = self._register_callbacks(cb)
-        if not ok:
+        self._register_callbacks(cb)
+        if not self._callbacks_registered:
             self._start_callback_retry(cb)
+        if not self._event_callback_registered:
+            self._start_event_callback_retry()
 
     def _register_callbacks(self, cb: Callable[..., Any]) -> bool:
         if not self.api:
             return False
-        if self._callbacks_registered:
+        if self._callbacks_registered and self._event_callback_registered:
             return True
-        ok = True
+        ok_quote = True
+        ok_event = True
         try:
             # Use global dispatcher to avoid weak-ref issues with bound methods.
-            ok = self._register_quote_callbacks()
+            ok_quote = self._register_quote_callbacks()
         except Exception as e:
             logger.error("Quote callback registration failed", error=str(e))
-            ok = False
+            ok_quote = False
 
-        try:
-            self.api.quote.set_event_callback(self._on_quote_event)
-        except Exception as exc:
-            logger.warning("Failed quote event callback registration", error=str(exc))
-            ok = False
+        ok_event = self._register_event_callback()
 
-        if ok:
-            self._callbacks_registered = True
+        self._callbacks_registered = ok_quote
+        self._event_callback_registered = ok_event
+
+        if ok_quote:
             logger.info(
                 "Quote callbacks registered",
                 quote_version=self._quote_version,
@@ -427,7 +458,13 @@ class ShioajiClient:
                 quote_version=self._quote_version,
                 quote_version_mode=self._quote_version_mode,
             )
-        return ok
+
+        if ok_event:
+            logger.info("Quote event callback registered")
+        else:
+            logger.warning("Quote event callback not registered")
+
+        return ok_quote and ok_event
 
     def _register_quote_callbacks(self) -> bool:
         """Register quote callbacks based on active quote version."""
@@ -474,23 +511,270 @@ class ShioajiClient:
                 return False
 
         if version == "v1":
-            if not _set_v1() and self._quote_version_mode == "auto":
-                logger.warning("Falling back to quote v0 callbacks")
-                self._quote_version = "v0"
-                ok = _set_v0()
+            if not _set_v1():
+                allow_fallback = self._quote_version_mode == "auto" or (
+                    self._quote_version_mode == "v1" and not self._quote_version_strict
+                )
+                if allow_fallback:
+                    logger.warning("Falling back to quote v0 callbacks")
+                    self._quote_version = "v0"
+                    ok = _set_v0()
+                    if ok and self.metrics:
+                        self.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
+                else:
+                    ok = False
         else:
             ok = _set_v0()
 
         return ok
+
+    def _register_event_callback(self) -> bool:
+        if not self.api:
+            return False
+        try:
+            self.api.quote.set_event_callback(self._on_quote_event)
+            return True
+        except Exception as exc:
+            logger.warning("Failed quote event callback registration", error=str(exc))
+            return False
 
     def _get_quote_version(self):
         if not sj or not hasattr(sj.constant, "QuoteVersion"):
             return None
         return sj.constant.QuoteVersion.v0 if self._quote_version == "v0" else sj.constant.QuoteVersion.v1
 
-    def _start_quote_watchdog(self) -> None:
-        if self._quote_version_mode != "auto":
+    def _start_session_refresh_thread(self) -> None:
+        """Start background thread for preventive session refresh (C3).
+
+        Refreshes session before long holidays to prevent expiration.
+        When holiday-aware mode is enabled (O4), only refreshes:
+        - When approaching long holidays (days_until_trading > 1)
+        - Regular interval when on trading day or day before
+
+        This reduces unnecessary refreshes during normal trading weeks.
+        """
+        if self._session_refresh_running:
             return
+        if self._session_refresh_interval_s <= 0:
+            return
+
+        self._session_refresh_running = True
+        logger.info(
+            "Starting session refresh thread",
+            interval_s=self._session_refresh_interval_s,
+            check_interval_s=self._session_refresh_check_interval_s,
+            holiday_aware=self._session_refresh_holiday_aware,
+        )
+
+        def _refresh_loop() -> None:
+            try:
+                from hft_platform.core.market_calendar import get_calendar
+
+                calendar = get_calendar()
+            except ImportError:
+                logger.warning("Market calendar not available for session refresh")
+                self._session_refresh_running = False
+                return
+
+            while self.api and self.logged_in and self._session_refresh_running:
+                try:
+                    time.sleep(self._session_refresh_check_interval_s)
+                    if not self._session_refresh_running:
+                        break
+
+                    now = timebase.now_s()
+                    now_dt = dt.datetime.now(calendar._tz)
+
+                    # Skip refresh during active trading hours
+                    if calendar.is_trading_hours(now_dt):
+                        continue
+
+                    days_until = calendar.days_until_trading(now_dt.date())
+                    elapsed = now - self._last_session_refresh_ts
+
+                    if self._session_refresh_holiday_aware:
+                        # Holiday-aware mode (O4):
+                        # - Refresh if approaching long holiday (days_until > 1)
+                        # - Regular refresh only on trading day or day before
+                        holiday_refresh = days_until > 1 and elapsed > 0  # Approaching holiday
+                        regular_refresh = days_until <= 1 and elapsed >= self._session_refresh_interval_s
+
+                        if not (holiday_refresh or regular_refresh):
+                            continue
+
+                        reason = "holiday" if holiday_refresh else "regular"
+                    else:
+                        # Original mode: refresh based on interval only
+                        if days_until > 1:
+                            continue
+                        if elapsed < self._session_refresh_interval_s:
+                            continue
+                        reason = "interval"
+
+                    logger.info(
+                        "Preventive session refresh",
+                        reason=reason,
+                        days_until_trading=days_until,
+                        elapsed_s=round(elapsed, 0),
+                    )
+                    self._do_session_refresh()
+                except Exception as exc:
+                    logger.warning("Session refresh check failed", error=str(exc))
+
+            self._session_refresh_running = False
+
+        self._session_refresh_thread = threading.Thread(
+            target=_refresh_loop,
+            name="shioaji-session-refresh",
+            daemon=True,
+        )
+        self._session_refresh_thread.start()
+
+    def _do_session_refresh(self) -> bool:
+        """Perform session refresh via logout/login cycle.
+
+        Includes post-refresh health check (O5) to verify quotes are flowing.
+
+        Returns:
+            True if refresh succeeded
+        """
+        if not self.api:
+            return False
+
+        try:
+            logger.info("Session refresh: logging out")
+            start_ns = time.perf_counter_ns()
+            try:
+                self.api.logout()
+            except Exception as exc:
+                logger.warning("Session refresh logout failed", error=str(exc))
+
+            self.logged_in = False
+            self._callbacks_registered = False
+
+            logger.info("Session refresh: logging in")
+            self.login()
+
+            if self.logged_in:
+                self._last_session_refresh_ts = timebase.now_s()
+                self._record_api_latency("session_refresh", start_ns, ok=True)
+                logger.info("Session refresh login successful")
+
+                if self.tick_callback:
+                    self._ensure_callbacks(self.tick_callback)
+                    self._resubscribe_all()
+                    self._start_quote_watchdog()
+
+                    # Post-refresh health check (O5)
+                    if self._verify_quotes_flowing():
+                        logger.info("Session refresh completed, quotes flowing")
+                        if self.metrics:
+                            self.metrics.session_refresh_total.labels(result="ok").inc()
+                        return True
+                    else:
+                        logger.warning("Session refresh completed but quotes not flowing")
+                        if self.metrics:
+                            self.metrics.session_refresh_total.labels(result="partial").inc()
+                        # Still return True since login succeeded
+                        return True
+                else:
+                    # No tick callback means no subscriptions to verify
+                    if self.metrics:
+                        self.metrics.session_refresh_total.labels(result="ok").inc()
+                    logger.info("Session refresh completed (no subscriptions)")
+                    return True
+            else:
+                self._record_api_latency("session_refresh", start_ns, ok=False)
+                if self.metrics:
+                    self.metrics.session_refresh_total.labels(result="error").inc()
+                logger.error("Session refresh failed: login unsuccessful")
+                return False
+        except Exception as exc:
+            logger.error("Session refresh failed", error=str(exc))
+            if self.metrics:
+                self.metrics.session_refresh_total.labels(result="error").inc()
+            return False
+
+    def _verify_quotes_flowing(self, timeout_s: float | None = None) -> bool:
+        """Verify quotes are flowing after refresh (O5).
+
+        Waits for new quote data to arrive within timeout period.
+
+        Args:
+            timeout_s: Timeout in seconds (default: HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S)
+
+        Returns:
+            True if new quote data received within timeout
+        """
+        if not self.logged_in or not self.subscribed_count:
+            # No subscriptions to verify
+            return True
+
+        if timeout_s is None:
+            timeout_s = self._session_refresh_verify_timeout_s
+
+        start_ts = self._last_quote_data_ts
+        deadline = timebase.now_s() + timeout_s
+
+        logger.debug(
+            "Verifying quotes flowing",
+            timeout_s=timeout_s,
+            subscribed_count=self.subscribed_count,
+        )
+
+        while timebase.now_s() < deadline:
+            if self._last_quote_data_ts > start_ts:
+                logger.debug(
+                    "Quotes flowing verified",
+                    elapsed_s=round(timebase.now_s() - (deadline - timeout_s), 2),
+                )
+                return True
+            time.sleep(0.5)
+
+        logger.warning(
+            "Quote verification timeout",
+            timeout_s=timeout_s,
+            subscribed_count=self.subscribed_count,
+        )
+        return False
+
+    def _is_market_open_grace_period(self) -> bool:
+        """Check if within grace period after market open (C4).
+
+        Returns:
+            True if within grace period
+        """
+        if self._market_open_grace_s <= 0:
+            return False
+
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+        except ImportError:
+            return False
+
+        now = dt.datetime.now(calendar._tz)
+
+        if not calendar.is_trading_day(now.date()):
+            return False
+
+        open_time = calendar.get_session_open(now.date())
+        if open_time is None:
+            return False
+
+        # Check if we're within grace period after open
+        elapsed = (now - open_time).total_seconds()
+        in_grace = 0 <= elapsed <= self._market_open_grace_s
+
+        # Update gauge
+        if self.metrics and in_grace != self._market_open_grace_active:
+            self.metrics.market_open_grace_active.set(1 if in_grace else 0)
+        self._market_open_grace_active = in_grace
+
+        return in_grace
+
+    def _start_quote_watchdog(self) -> None:
         if self._quote_watchdog_running:
             return
         self._quote_watchdog_running = True
@@ -504,20 +788,31 @@ class ShioajiClient:
             try:
                 while self.api and self.logged_in:
                     time.sleep(self._quote_watchdog_interval_s)
-                    if self._quote_version != "v1":
-                        continue
                     last = self._last_quote_data_ts
                     if last <= 0:
                         continue
                     gap = timebase.now_s() - last
-                    if gap < self._quote_no_data_s:
+                    # Use relaxed threshold during market open grace period (C4)
+                    threshold = self._quote_no_data_s
+                    if self._is_market_open_grace_period():
+                        threshold = max(threshold, self._market_open_grace_s)
+                    if gap < threshold:
                         continue
-                    logger.warning(
-                        "No quote data; switching quote version",
-                        gap_s=round(gap, 3),
-                        to_version="v0",
+                    self._mark_quote_pending("no_data")
+                    downgrade_allowed = self._quote_version_mode == "auto" or (
+                        self._quote_version_mode == "v1" and not self._quote_version_strict
                     )
-                    self._quote_version = "v0"
+                    if downgrade_allowed and self._quote_version == "v1":
+                        logger.warning(
+                            "No quote data; switching quote version",
+                            gap_s=round(gap, 3),
+                            to_version="v0",
+                        )
+                        self._quote_version = "v0"
+                        if self.metrics:
+                            self.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
+                    else:
+                        logger.warning("No quote data; re-registering callbacks", gap_s=round(gap, 3))
                     if self.tick_callback:
                         self._callbacks_registered = False
                         self._ensure_callbacks(self.tick_callback)
@@ -557,6 +852,31 @@ class ShioajiClient:
         )
         self._callbacks_retry_thread.start()
 
+    def _start_event_callback_retry(self) -> None:
+        if self._event_callback_retrying:
+            return
+        self._event_callback_retrying = True
+        logger.warning("Starting quote event callback retry loop")
+
+        def _retry_loop() -> None:
+            interval = self._event_callback_retry_s
+            while self.api and not self._event_callback_registered:
+                ok = self._register_event_callback()
+                if ok:
+                    self._event_callback_registered = True
+                    logger.info("Quote event callback registered after retry")
+                    break
+                logger.warning("Quote event callback registration retrying", interval_s=interval)
+                time.sleep(interval)
+            self._event_callback_retrying = False
+
+        self._event_callback_retry_thread = threading.Thread(
+            target=_retry_loop,
+            name="shioaji-event-callback-retry",
+            daemon=True,
+        )
+        self._event_callback_retry_thread.start()
+
     def _schedule_force_relogin(self) -> None:
         delay = self._quote_force_relogin_s
         if delay <= 0:
@@ -584,24 +904,42 @@ class ShioajiClient:
         )
         self._pending_quote_relogin_thread.start()
 
+    def _mark_quote_pending(self, reason: str) -> None:
+        now = timebase.now_s()
+        if not self._pending_quote_resubscribe or self._pending_quote_reason != reason:
+            logger.warning("Quote pending", reason=reason)
+        self._pending_quote_resubscribe = True
+        self._pending_quote_reason = reason
+        self._pending_quote_ts = now
+        self._schedule_force_relogin()
+
+    def _clear_quote_pending(self) -> None:
+        self._pending_quote_resubscribe = False
+        self._pending_quote_reason = None
+        self._pending_quote_ts = 0.0
+        logger.info("Quote data resumed; clearing pending")
+
     def _on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
         now = timebase.now_s()
         self._last_quote_event_ts = now
+        self._event_callback_registered = True
         if event_code in (1, 2, 3, 4, 12, 13):
             logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event_name=event)
         if event_code == 12:
-            self._pending_quote_resubscribe = True
-            self._pending_quote_ts = now
+            self._mark_quote_pending("event_12")
             if self.tick_callback:
                 self._callbacks_registered = False
                 self._ensure_callbacks(self.tick_callback)
-            self._schedule_force_relogin()
         elif event_code == 13:
+            if self._pending_quote_resubscribe:
+                self._clear_quote_pending()
             if self.tick_callback:
                 self._callbacks_registered = False
                 self._ensure_callbacks(self.tick_callback)
             self._resubscribe_all()
         elif event_code == 4:
+            if self._pending_quote_resubscribe:
+                self._clear_quote_pending()
             if self.tick_callback:
                 self._callbacks_registered = False
                 self._ensure_callbacks(self.tick_callback)

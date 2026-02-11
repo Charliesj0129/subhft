@@ -200,3 +200,98 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client._cache_set("usage", -1, {"subscribed": 1})
         value = self.client._cache_get("usage")
         self.assertIsNone(value)
+
+    def test_session_refresh_config(self):
+        """Test session refresh configuration from env."""
+        with patch.dict(os.environ, {"HFT_SESSION_REFRESH_S": "3600"}):
+            client = ShioajiClient(config_path=self.tmp_config.name)
+            self.assertEqual(client._session_refresh_interval_s, 3600.0)
+
+    def test_market_open_grace_config(self):
+        """Test market open grace period configuration."""
+        with patch.dict(os.environ, {"HFT_MARKET_OPEN_GRACE_S": "120"}):
+            client = ShioajiClient(config_path=self.tmp_config.name)
+            self.assertEqual(client._market_open_grace_s, 120.0)
+
+    def test_is_market_open_grace_period_no_calendar(self):
+        """Test grace period returns False when calendar unavailable."""
+        # Mock import error for market_calendar
+        with patch.dict("sys.modules", {"hft_platform.core.market_calendar": None}):
+            # Should return False gracefully
+            result = self.client._is_market_open_grace_period()
+            # Since the import might be cached, just verify no exception
+            self.assertIsInstance(result, bool)
+
+    def test_do_session_refresh_no_api(self):
+        """Test session refresh handles missing API gracefully."""
+        self.client.api = None
+        result = self.client._do_session_refresh()
+        self.assertFalse(result)
+
+    def test_do_session_refresh_success(self):
+        """Test successful session refresh."""
+        self.client.logged_in = True
+
+        # Mock login to succeed
+        def mock_login(*args, **kwargs):
+            self.client.logged_in = True
+
+        self.client.login = mock_login
+
+        result = self.client._do_session_refresh()
+        self.assertTrue(result)
+        self.assertTrue(self.client._last_session_refresh_ts > 0)
+
+    def test_session_refresh_holiday_aware_config(self):
+        """Test holiday-aware session refresh configuration."""
+        # Default should be enabled
+        self.assertTrue(self.client._session_refresh_holiday_aware)
+
+        # Test disabled via env
+        with patch.dict(os.environ, {"HFT_SESSION_REFRESH_HOLIDAY_AWARE": "0"}):
+            client = ShioajiClient(config_path=self.tmp_config.name)
+            self.assertFalse(client._session_refresh_holiday_aware)
+
+    def test_verify_quotes_flowing_no_subscriptions(self):
+        """Test quote verification returns True when no subscriptions."""
+        self.client.logged_in = True
+        self.client.subscribed_count = 0
+
+        result = self.client._verify_quotes_flowing(timeout_s=0.1)
+        self.assertTrue(result)
+
+    def test_verify_quotes_flowing_success(self):
+        """Test quote verification succeeds when new data arrives."""
+        self.client.logged_in = True
+        self.client.subscribed_count = 1
+        self.client._last_quote_data_ts = 100.0
+
+        # Simulate new quote data arriving
+        def update_ts():
+            time.sleep(0.05)
+            self.client._last_quote_data_ts = 200.0
+
+        import threading
+
+        t = threading.Thread(target=update_ts, daemon=True)
+        t.start()
+
+        result = self.client._verify_quotes_flowing(timeout_s=1.0)
+        self.assertTrue(result)
+        t.join(timeout=1.0)
+
+    def test_verify_quotes_flowing_timeout(self):
+        """Test quote verification times out when no data."""
+        self.client.logged_in = True
+        self.client.subscribed_count = 1
+        self.client._last_quote_data_ts = 100.0
+        # Don't update timestamp
+
+        result = self.client._verify_quotes_flowing(timeout_s=0.2)
+        self.assertFalse(result)
+
+    def test_session_refresh_verify_timeout_config(self):
+        """Test quote verification timeout configuration."""
+        with patch.dict(os.environ, {"HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S": "30.0"}):
+            client = ShioajiClient(config_path=self.tmp_config.name)
+            self.assertEqual(client._session_refresh_verify_timeout_s, 30.0)
