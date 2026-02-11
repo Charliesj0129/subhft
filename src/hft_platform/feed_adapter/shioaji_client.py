@@ -162,9 +162,12 @@ class ShioajiClient:
         self._session_refresh_check_interval_s = 3600.0  # Check every hour
 
         # Holiday-aware session refresh (O4)
-        self._session_refresh_holiday_aware = (
-            os.getenv("HFT_SESSION_REFRESH_HOLIDAY_AWARE", "1").strip().lower() in {"1", "true", "yes", "on"}
-        )
+        self._session_refresh_holiday_aware = os.getenv("HFT_SESSION_REFRESH_HOLIDAY_AWARE", "1").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
         # Post-refresh health check (O5)
         self._session_refresh_verify_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S", "10.0"))
