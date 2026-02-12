@@ -21,6 +21,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "scipy>=1.15.3",
     "exchange-calendars>=4.13.1",
+    "orjson>=3.10",
 ]
 
 [project.scripts]

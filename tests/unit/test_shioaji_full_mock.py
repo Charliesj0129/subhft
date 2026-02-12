@@ -196,6 +196,33 @@ class TestShioajiClientFull(unittest.TestCase):
         self.assertTrue(ok)
         self.assertGreaterEqual(self.mock_api_instance.quote.subscribe.call_count, 1)
 
+    def test_quote_event_12_marks_pending(self):
+        self.client.tick_callback = MagicMock()
+        with patch.object(self.client, "_ensure_callbacks") as ensure_cb:
+            self.client._on_quote_event(0, 12, "info", "event")
+        self.assertTrue(self.client._pending_quote_resubscribe)
+        self.assertEqual(self.client._pending_quote_reason, "event_12")
+        ensure_cb.assert_called_once()
+
+    def test_quote_event_13_resubscribes_and_clears_pending(self):
+        self.client.tick_callback = MagicMock()
+        self.client._pending_quote_resubscribe = True
+        with patch.object(self.client, "_resubscribe_all") as resub, patch.object(self.client, "_ensure_callbacks"):
+            self.client._on_quote_event(0, 13, "info", "event")
+        resub.assert_called_once()
+        self.assertFalse(self.client._pending_quote_resubscribe)
+
+    def test_quote_flap_forces_relogin(self):
+        self.client._quote_flap_events.clear()
+        self.client._last_quote_flap_relogin_ts = 0.0
+        self.client._quote_flap_window_s = 60.0
+        self.client._quote_flap_threshold = 2
+        self.client._quote_flap_cooldown_s = 0.0
+        with patch.object(self.client, "_start_forced_relogin") as force_relogin:
+            self.client._on_quote_event(0, 12, "info", "event")
+            self.client._on_quote_event(0, 12, "info", "event")
+        force_relogin.assert_called_once()
+
     def test_cache_expiry(self):
         self.client._cache_set("usage", -1, {"subscribed": 1})
         value = self.client._cache_get("usage")

@@ -104,9 +104,15 @@ class BookState:
                 return
 
             if _FORCE_NUMPY and _RUST_ENABLED:
-                if not isinstance(bids, np.ndarray) and bids:
+                if isinstance(bids, np.ndarray):
+                    if bids.dtype != np.int64:
+                        bids = bids.astype(np.int64, copy=False)
+                elif bids:
                     bids = np.asarray(bids, dtype=np.int64)
-                if not isinstance(asks, np.ndarray) and asks:
+                if isinstance(asks, np.ndarray):
+                    if asks.dtype != np.int64:
+                        asks = asks.astype(np.int64, copy=False)
+                elif asks:
                     asks = np.asarray(asks, dtype=np.int64)
 
             self.exch_ts = exch_ts
@@ -282,9 +288,15 @@ class BookState:
                 return
 
             if _FORCE_NUMPY and _RUST_ENABLED:
-                if not isinstance(bids, np.ndarray) and bids:
+                if isinstance(bids, np.ndarray):
+                    if bids.dtype != np.int64:
+                        bids = bids.astype(np.int64, copy=False)
+                elif bids:
                     bids = np.asarray(bids, dtype=np.int64)
-                if not isinstance(asks, np.ndarray) and asks:
+                if isinstance(asks, np.ndarray):
+                    if asks.dtype != np.int64:
+                        asks = asks.astype(np.int64, copy=False)
+                elif asks:
                     asks = np.asarray(asks, dtype=np.int64)
 
             self.exch_ts = exch_ts

@@ -1,11 +1,24 @@
 import asyncio
 import fcntl
-import json
 import os
 import tempfile
+import time
 from glob import glob
 
 from structlog import get_logger
+
+try:
+    import orjson
+
+    def _dumps(obj: object) -> str:
+        return orjson.dumps(obj).decode()
+
+    _loads = orjson.loads
+except ImportError:
+    import json
+
+    _dumps = json.dumps  # type: ignore[assignment]
+    _loads = json.loads
 
 from hft_platform.core import timebase
 
@@ -17,9 +30,56 @@ class WALWriter:
         self.wal_dir = wal_dir
         os.makedirs(wal_dir, exist_ok=True)
         self._lock_fd = None
+        # Disk space circuit breaker (EC-4)
+        self._disk_min_mb = float(os.getenv("HFT_WAL_DISK_MIN_MB", "500"))
+        self._disk_full = False
+        self._disk_check_interval_s = 60.0
+        self._last_disk_check_ts = 0.0
+        self._disk_full_count = 0
 
-    async def write(self, table: str, data: list):
-        """Async append to local disk via thread pool with atomic write."""
+    def _check_disk_space(self) -> bool:
+        """Check available disk space; return True if sufficient."""
+        now = time.monotonic()
+        if now - self._last_disk_check_ts < self._disk_check_interval_s:
+            return not self._disk_full
+        self._last_disk_check_ts = now
+        try:
+            stat = os.statvfs(self.wal_dir)
+            avail_mb = (stat.f_bavail * stat.f_frsize) / (1024 * 1024)
+            if avail_mb < self._disk_min_mb:
+                if not self._disk_full:
+                    logger.critical(
+                        "WAL disk space below threshold, activating circuit breaker",
+                        avail_mb=round(avail_mb, 1),
+                        threshold_mb=self._disk_min_mb,
+                    )
+                self._disk_full = True
+                return False
+            if self._disk_full:
+                logger.info(
+                    "WAL disk space recovered, deactivating circuit breaker",
+                    avail_mb=round(avail_mb, 1),
+                )
+            self._disk_full = False
+            return True
+        except OSError:
+            return True  # Fail open if statvfs unavailable
+
+    async def write(self, table: str, data: list) -> bool:
+        """Async append to local disk via thread pool with atomic write.
+
+        Returns True if written, False if skipped (disk full).
+        """
+        if not self._check_disk_space():
+            self._disk_full_count += len(data)
+            logger.warning(
+                "WAL write skipped - disk full circuit breaker active",
+                table=table,
+                rows_skipped=len(data),
+                total_skipped=self._disk_full_count,
+            )
+            return False
+
         ts = int(timebase.now_ns())
         filename = f"{self.wal_dir}/{table}_{ts}.jsonl"
 
@@ -27,8 +87,10 @@ class WALWriter:
         try:
             await loop.run_in_executor(None, self._write_sync_atomic, filename, data)
             logger.info("Wrote to WAL", table=table, count=len(data), file=filename)
+            return True
         except Exception as e:
             logger.critical("WAL Write Failed!", error=str(e))
+            return False
 
     def _write_sync_atomic(self, filename: str, data: list):
         """
@@ -44,7 +106,7 @@ class WALWriter:
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 try:
                     for row in data:
-                        f.write(json.dumps(row) + "\n")
+                        f.write(_dumps(row) + "\n")
                     f.flush()
                     os.fsync(f.fileno())
                 finally:
@@ -67,7 +129,7 @@ class WALWriter:
         """Legacy blocking write (kept for compatibility)."""
         with open(filename, "w") as f:
             for row in data:
-                f.write(json.dumps(row) + "\n")
+                f.write(_dumps(row) + "\n")
 
 
 class WALReplayer:
@@ -93,7 +155,7 @@ class WALReplayer:
                 with open(fpath, "r") as f:
                     for line in f:
                         if line.strip():
-                            data.append(json.loads(line))
+                            data.append(_loads(line))
 
                 if data:
                     success = await self.sender_func(table, data)
