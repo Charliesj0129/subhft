@@ -21,8 +21,7 @@ def _extract_market_data(row) -> dict | None:
             "exchange": getattr(row, "exchange", None)
             or getattr(row, "exch", None)
             or (row.get("exchange", row.get("exch", "TSE")) if isinstance(row, dict) else "TSE"),
-            "type": getattr(row, "type", None)
-            or (row.get("type", "") if isinstance(row, dict) else ""),
+            "type": getattr(row, "type", None) or (row.get("type", "") if isinstance(row, dict) else ""),
             "exch_ts": getattr(row, "exch_ts", None)
             or getattr(row, "ts", None)
             or (row.get("exch_ts", row.get("ts")) if isinstance(row, dict) else None),
@@ -36,12 +35,10 @@ def _extract_market_data(row) -> dict | None:
             or (row.get("volume", row.get("total_volume", 0)) if isinstance(row, dict) else 0),
             "bids_price": getattr(row, "bids_price", None)
             or (row.get("bids_price") if isinstance(row, dict) else None),
-            "bids_vol": getattr(row, "bids_vol", None)
-            or (row.get("bids_vol") if isinstance(row, dict) else None),
+            "bids_vol": getattr(row, "bids_vol", None) or (row.get("bids_vol") if isinstance(row, dict) else None),
             "asks_price": getattr(row, "asks_price", None)
             or (row.get("asks_price") if isinstance(row, dict) else None),
-            "asks_vol": getattr(row, "asks_vol", None)
-            or (row.get("asks_vol") if isinstance(row, dict) else None),
+            "asks_vol": getattr(row, "asks_vol", None) or (row.get("asks_vol") if isinstance(row, dict) else None),
             "seq_no": getattr(row, "seq_no", None)
             or getattr(row, "seq", None)
             or (row.get("seq_no", row.get("seq", 0)) if isinstance(row, dict) else 0),
@@ -54,12 +51,10 @@ def _extract_order(row) -> dict | None:
     """Fast extractor for order events."""
     try:
         return {
-            "order_id": getattr(row, "order_id", None)
-            or (row.get("order_id") if isinstance(row, dict) else None),
+            "order_id": getattr(row, "order_id", None) or (row.get("order_id") if isinstance(row, dict) else None),
             "strategy_id": getattr(row, "strategy_id", None)
             or (row.get("strategy_id") if isinstance(row, dict) else None),
-            "symbol": getattr(row, "symbol", None)
-            or (row.get("symbol") if isinstance(row, dict) else None),
+            "symbol": getattr(row, "symbol", None) or (row.get("symbol") if isinstance(row, dict) else None),
             "exchange": getattr(row, "exchange", None)
             or (row.get("exchange", row.get("exch", "")) if isinstance(row, dict) else ""),
             "side": getattr(row, "side", None)
@@ -72,8 +67,7 @@ def _extract_order(row) -> dict | None:
             or (row.get("qty", row.get("quantity", 0)) if isinstance(row, dict) else 0),
             "order_type": getattr(row, "order_type", None)
             or (row.get("order_type", row.get("type", "")) if isinstance(row, dict) else ""),
-            "status": getattr(row, "status", None)
-            or (row.get("status", "") if isinstance(row, dict) else ""),
+            "status": getattr(row, "status", None) or (row.get("status", "") if isinstance(row, dict) else ""),
             "exch_ts": getattr(row, "exch_ts", None)
             or (row.get("exch_ts", row.get("ts")) if isinstance(row, dict) else None),
             "ingest_ts": getattr(row, "ingest_ts", None)
@@ -90,10 +84,8 @@ def _extract_fill(row) -> dict | None:
             "trade_id": getattr(row, "trade_id", None)
             or getattr(row, "fill_id", None)
             or (row.get("trade_id", row.get("fill_id")) if isinstance(row, dict) else None),
-            "order_id": getattr(row, "order_id", None)
-            or (row.get("order_id") if isinstance(row, dict) else None),
-            "symbol": getattr(row, "symbol", None)
-            or (row.get("symbol") if isinstance(row, dict) else None),
+            "order_id": getattr(row, "order_id", None) or (row.get("order_id") if isinstance(row, dict) else None),
+            "symbol": getattr(row, "symbol", None) or (row.get("symbol") if isinstance(row, dict) else None),
             "exchange": getattr(row, "exchange", None)
             or (row.get("exchange", row.get("exch", "")) if isinstance(row, dict) else ""),
             "side": getattr(row, "side", None)
