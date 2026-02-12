@@ -126,8 +126,14 @@ class TestQueueBackpressure:
             write_count += 1
             write_rows += len(data)
 
+        async def mock_write_columnar(table, cols, data, count):
+            nonlocal write_count, write_rows
+            write_count += 1
+            write_rows += count
+
         mock_writer = AsyncMock(side_effect=mock_write)
         mock_writer.write = mock_write
+        mock_writer.write_columnar = mock_write_columnar
 
         batcher = Batcher(
             table_name="stress_test",

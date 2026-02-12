@@ -518,6 +518,9 @@ class WALLoaderService:
     def _process_single_file(self, fpath: str, force: bool = False) -> bool:
         """Process a single WAL file (CC-3: extracted for parallel use).
 
+        Supports both single-table files (table_ts.jsonl) and multi-table
+        batch files (batch_ts.jsonl) from WALBatchWriter (CC-4).
+
         Returns True if the file was successfully processed and archived.
         """
         fname = os.path.basename(fpath)
@@ -543,14 +546,10 @@ class WALLoaderService:
                 )
                 return False
 
-        target_table = self._parse_table_from_filename(fname)
-        if target_table == "unknown":
-            logger.warning("Unknown table for file", file=fname)
-            return False
+        logger.info("Loading file", file=fname)
 
-        logger.info("Loading file", file=fname, table=target_table)
-
-        rows: list = []
+        # Read all lines from file
+        all_lines: list = []
         corrupt_lines = 0
         try:
             with open(fpath, "r") as f:
@@ -561,14 +560,17 @@ class WALLoaderService:
                     return False
                 try:
                     for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
                         try:
-                            rows.append(_loads(line))
+                            all_lines.append(_loads(line))
                         except Exception:
                             corrupt_lines += 1
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
-            if corrupt_lines > 0 and not rows:
+            if corrupt_lines > 0 and not all_lines:
                 self._quarantine_corrupt_file(fpath, fname, f"All {corrupt_lines} lines corrupt")
                 return False
             elif corrupt_lines > 0:
@@ -576,34 +578,63 @@ class WALLoaderService:
                     "Partial corruption in WAL file",
                     file=fname,
                     corrupt_lines=corrupt_lines,
-                    valid_rows=len(rows),
+                    valid_rows=len(all_lines),
                 )
 
         except FileNotFoundError:
             return False
 
-        if rows:
-            # EC-1: Dedup guard
-            content_hash = ""
-            if self._dedup_enabled and self.ch_client:
-                import hashlib
+        if not all_lines:
+            # Empty file, archive it
+            try:
+                shutil.move(fpath, os.path.join(self.archive_dir, fname))
+            except FileNotFoundError:
+                pass
+            return True
 
-                raw = "".join(str(r) for r in rows)
-                content_hash = hashlib.sha256(raw.encode()).hexdigest()[:16]
-                if self._is_duplicate(target_table, content_hash):
-                    logger.info("Skipping duplicate WAL file", file=fname, hash=content_hash)
-                    # Still archive it
+        # CC-4: Detect multi-table batch format
+        # Check if first line is a batch header: {"__wal_table__": ..., "__row_count__": ...}
+        is_batch = isinstance(all_lines[0], dict) and "__wal_table__" in all_lines[0]
+
+        if is_batch:
+            # Parse multi-table sections
+            table_batches: list[tuple[str, list]] = []
+            current_table = None
+            current_rows: list = []
+
+            for obj in all_lines:
+                if isinstance(obj, dict) and "__wal_table__" in obj:
+                    # Save previous section
+                    if current_table and current_rows:
+                        table_batches.append((current_table, current_rows))
+                    current_table = obj["__wal_table__"]
+                    current_rows = []
                 else:
-                    success = self.insert_batch(target_table, rows)
-                    if not success:
-                        self._write_to_dlq(target_table, rows, "insert_failed_after_retries")
-                        return False
-                    self._record_dedup(target_table, content_hash, len(rows))
-            else:
-                success = self.insert_batch(target_table, rows)
+                    current_rows.append(obj)
+
+            # Save last section
+            if current_table and current_rows:
+                table_batches.append((current_table, current_rows))
+
+            # Insert each table section
+            for target_table, rows in table_batches:
+                # Map batch table name to loader table name
+                parsed_table = self._parse_batch_table_name(target_table)
+                success = self._insert_with_dedup(parsed_table, rows, fname)
                 if not success:
-                    self._write_to_dlq(target_table, rows, "insert_failed_after_retries")
+                    self._write_to_dlq(parsed_table, rows, "insert_failed_after_retries")
                     return False
+        else:
+            # Single-table file (legacy format)
+            target_table = self._parse_table_from_filename(fname)
+            if target_table == "unknown":
+                logger.warning("Unknown table for file", file=fname)
+                return False
+
+            success = self._insert_with_dedup(target_table, all_lines, fname)
+            if not success:
+                self._write_to_dlq(target_table, all_lines, "insert_failed_after_retries")
+                return False
 
         # Move to archive
         try:
@@ -618,6 +649,45 @@ class WALLoaderService:
             return True
         except FileNotFoundError:
             return False
+
+    def _insert_with_dedup(self, target_table: str, rows: list, fname: str) -> bool:
+        """Insert rows with optional dedup guard (EC-1). Returns True on success."""
+        if not rows:
+            return True
+
+        if self._dedup_enabled and self.ch_client:
+            import hashlib
+
+            raw = "".join(str(r) for r in rows)
+            content_hash = hashlib.sha256(raw.encode()).hexdigest()[:16]
+            if self._is_duplicate(target_table, content_hash):
+                logger.info("Skipping duplicate WAL batch", file=fname, table=target_table, hash=content_hash)
+                return True
+            success = self.insert_batch(target_table, rows)
+            if success:
+                self._record_dedup(target_table, content_hash, len(rows))
+            return success
+        else:
+            return self.insert_batch(target_table, rows)
+
+    @staticmethod
+    def _parse_batch_table_name(table_name: str) -> str:
+        """Map batch writer table names (e.g. 'hft.market_data') to loader table names."""
+        # Strip 'hft.' prefix if present
+        if table_name.startswith("hft."):
+            table_name = table_name[4:]
+        # Map to canonical loader names
+        mapping = {
+            "market_data": "market_data",
+            "orders": "orders",
+            "trades": "trades",
+            "fills": "trades",
+            "risk_log": "risk_log",
+            "logs": "risk_log",
+            "backtest_runs": "backtest_runs",
+            "latency_spans": "latency_spans",
+        }
+        return mapping.get(table_name, table_name)
 
     def _is_duplicate(self, table: str, content_hash: str) -> bool:
         """Check if WAL content hash already inserted (EC-1)."""
