@@ -82,6 +82,12 @@ class MetricsRegistry:
                 "wal_directory_size_bytes",
                 "wal_file_count",
                 "wal_oldest_file_age_seconds",
+                # Phase 12 P2.2 metrics
+                "raw_queue_dropped_total",
+                "raw_queue_depth",
+                "clickhouse_pool_active",
+                "clickhouse_pool_timeout_total",
+                "clickhouse_pool_checkout_latency_ms",
             ]
         )
         # Market Data
@@ -288,6 +294,31 @@ class MetricsRegistry:
         self.wal_oldest_file_age_seconds = Gauge(
             "wal_oldest_file_age_seconds",
             "Age of oldest WAL file in seconds",
+        )
+
+        # Phase 12 P2.2: Database & Market Data Optimizations
+        # raw_queue backpressure metrics (P0-1)
+        self.raw_queue_dropped_total = Counter(
+            "raw_queue_dropped_total",
+            "Raw queue messages dropped due to backpressure",
+        )
+        self.raw_queue_depth = Gauge(
+            "raw_queue_depth",
+            "Current raw queue depth",
+        )
+        # ClickHouse connection pool metrics (P0-3)
+        self.clickhouse_pool_active = Gauge(
+            "clickhouse_pool_active",
+            "Number of active connections in ClickHouse pool",
+        )
+        self.clickhouse_pool_timeout_total = Counter(
+            "clickhouse_pool_timeout_total",
+            "ClickHouse connection pool checkout timeouts",
+        )
+        self.clickhouse_pool_checkout_latency_ms = Histogram(
+            "clickhouse_pool_checkout_latency_ms",
+            "ClickHouse connection pool checkout latency (ms)",
+            buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000],
         )
 
         # System (v2)

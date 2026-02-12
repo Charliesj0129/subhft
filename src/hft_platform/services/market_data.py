@@ -97,11 +97,34 @@ class MarketDataService:
             "off",
         }
 
+        # EC-3: Recorder queue overflow graceful degradation
+        self._record_degrade_threshold = int(os.getenv("HFT_RECORD_DEGRADE_THRESHOLD", "500"))
+        self._record_degraded = False
+        self._record_degraded_since: float = 0.0
+        self._record_degraded_drops = 0
+        self._record_degrade_check_s = 10.0
+        self._record_degrade_last_check: float = 0.0
+
         # Per-symbol feed gap monitoring
         self._symbol_last_tick: dict[str, float] = {}  # symbol -> monotonic timestamp
-        self._symbol_last_tick_lock = asyncio.Lock()  # Protect dict from concurrent access
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "5.0"))
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
+        # P0-2: Inline tick update (removes per-tick task creation)
+        self._symbol_tick_inline = os.getenv("HFT_SYMBOL_TICK_INLINE", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+
+        # P0-1: raw_queue backpressure tracking
+        raw_queue_maxsize = getattr(self.raw_queue, "maxsize", 0) or 0
+        self._raw_queue_size = (
+            raw_queue_maxsize if raw_queue_maxsize > 0 else int(os.getenv("HFT_RAW_QUEUE_SIZE", "10000"))
+        )
+        self._raw_queue_high_watermark = float(os.getenv("HFT_RAW_QUEUE_HIGH_WATERMARK", "0.8"))
+        self._dropped_count = 0
+        self._high_watermark_warned = False
 
         # Market open grace period (C4)
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))
@@ -133,6 +156,23 @@ class MarketDataService:
                 self.last_event_mono = time.monotonic()
                 self.metrics_registry.feed_last_event_ts.labels(source="market_data").set(self.last_event_ts)
                 self.metrics["count"] += 1
+
+                # P0-1: Track queue depth and high watermark
+                qsize = self.raw_queue.qsize()
+                if self.metrics_registry:
+                    self.metrics_registry.raw_queue_depth.set(qsize)
+                if self._raw_queue_size > 0:
+                    utilization = qsize / self._raw_queue_size
+                    if utilization >= self._raw_queue_high_watermark and not self._high_watermark_warned:
+                        self._high_watermark_warned = True
+                        logger.warning(
+                            "raw_queue high watermark",
+                            utilization=round(utilization, 2),
+                            qsize=qsize,
+                            limit=self._raw_queue_size,
+                        )
+                    elif utilization < self._raw_queue_high_watermark * 0.8:
+                        self._high_watermark_warned = False
 
                 # logger.debug(f"MD Raw Type: {type(raw)}")
                 if self.log_raw:
@@ -189,10 +229,16 @@ class MarketDataService:
                             bids_len=bids_len,
                             asks_len=asks_len,
                         )
-                    # Update per-symbol timestamp for watchdog (fire-and-forget async update)
+                    # Update per-symbol timestamp for watchdog
+                    # P0-2: Use inline update (CPython dict assignment is atomic)
                     symbol = getattr(event, "symbol", None)
                     if symbol:
-                        asyncio.create_task(self._update_symbol_tick(symbol))
+                        if self._symbol_tick_inline:
+                            # Direct assignment - atomic in CPython due to GIL
+                            self._symbol_last_tick[symbol] = time.monotonic()
+                        else:
+                            # Legacy path: async task (for backwards compatibility)
+                            asyncio.create_task(self._update_symbol_tick(symbol))
 
                     trace_id = ""
                     meta = getattr(event, "meta", None)
@@ -416,7 +462,8 @@ class MarketDataService:
             # Enqueue as tuple (exchange, msg) to match consumer
             if hasattr(self, "loop"):
                 if msg is not None:
-                    self.loop.call_soon_threadsafe(self.raw_queue.put_nowait, (exchange, msg))
+                    # P0-1: Handle QueueFull with backpressure in loop context
+                    self.loop.call_soon_threadsafe(self._enqueue_raw, exchange, msg)
                 else:
                     if self.log_raw:
                         logger.warning(
@@ -481,9 +528,12 @@ class MarketDataService:
                     logger.error("Symbol reload failed", error=str(exc))
 
     async def _update_symbol_tick(self, symbol: str) -> None:
-        """Update symbol tick timestamp with lock protection."""
-        async with self._symbol_last_tick_lock:
-            self._symbol_last_tick[symbol] = time.monotonic()
+        """Update symbol tick timestamp (legacy async path).
+
+        Note: With P0-2 inline updates enabled (HFT_SYMBOL_TICK_INLINE=1),
+        this method is only called when the legacy path is used.
+        """
+        self._symbol_last_tick[symbol] = time.monotonic()
 
     async def _watchdog_loop(self):
         """Per-symbol feed gap watchdog.
@@ -497,11 +547,14 @@ class MarketDataService:
             if self.state != FeedState.CONNECTED:
                 continue
 
-            # Take snapshot under lock to avoid iteration during modification
-            async with self._symbol_last_tick_lock:
-                if not self._symbol_last_tick:
-                    continue
+            # P1-4: Lock-free snapshot (CPython dict copy is safe during iteration)
+            if not self._symbol_last_tick:
+                continue
+            try:
                 tick_snapshot = dict(self._symbol_last_tick)
+            except RuntimeError:
+                # Dict changed size during iteration - skip this cycle
+                continue
 
             now = time.monotonic()
             stale_symbols: list[tuple[str, float]] = []
@@ -560,6 +613,29 @@ class MarketDataService:
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
         if self.recorder_queue is None:
             return
+
+        # EC-3: Skip recording entirely in degraded mode
+        if self._record_degraded:
+            now = time.monotonic()
+            if now - self._record_degrade_last_check >= self._record_degrade_check_s:
+                self._record_degrade_last_check = now
+                qsize = self.recorder_queue.qsize()
+                maxsize = getattr(self.recorder_queue, "maxsize", 0) or 0
+                if maxsize > 0 and qsize < maxsize * 0.5:
+                    logger.info(
+                        "Recorder queue recovered, exiting degraded mode",
+                        drops_during_degraded=self._record_degraded_drops,
+                        degraded_duration_s=round(now - self._record_degraded_since, 1),
+                    )
+                    self._record_degraded = False
+                    self._record_degraded_drops = 0
+                else:
+                    self._record_degraded_drops += 1
+                    return
+            else:
+                self._record_degraded_drops += 1
+                return
+
         try:
             from hft_platform.recorder.mapper import map_event_to_record
 
@@ -574,9 +650,35 @@ class MarketDataService:
             try:
                 self.recorder_queue.put_nowait({"topic": topic, "data": payload})
             except asyncio.QueueFull:
-                pass
+                self._dropped_count += 1
+                # EC-3: Enter degraded mode if consecutive drops exceed threshold
+                if self._dropped_count >= self._record_degrade_threshold and not self._record_degraded:
+                    self._record_degraded = True
+                    self._record_degraded_since = time.monotonic()
+                    self._record_degrade_last_check = self._record_degraded_since
+                    self._record_degraded_drops = 0
+                    logger.warning(
+                        "Recorder queue overflow: entering degraded mode",
+                        consecutive_drops=self._dropped_count,
+                        threshold=self._record_degrade_threshold,
+                    )
         else:
             asyncio.create_task(self.recorder_queue.put({"topic": topic, "data": payload}))
+
+    def _enqueue_raw(self, exchange, msg) -> None:
+        """Enqueue raw quote messages with backpressure handling."""
+        try:
+            self.raw_queue.put_nowait((exchange, msg))
+        except asyncio.QueueFull:
+            self._dropped_count += 1
+            if self.metrics_registry:
+                self.metrics_registry.raw_queue_dropped_total.inc()
+            if self._dropped_count % 100 == 1:
+                logger.warning(
+                    "raw_queue full, dropping tick",
+                    dropped=self._dropped_count,
+                    queue_size=self._raw_queue_size,
+                )
 
     def _set_state(self, new_state):
         if self.state != new_state:

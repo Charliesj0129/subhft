@@ -2,6 +2,7 @@ import datetime as dt
 import os
 import threading
 import time
+from collections import deque
 from typing import Any, Callable, Dict, List
 
 import yaml
@@ -127,6 +128,11 @@ class ShioajiClient:
         self._positions_detail_cache_ttl_s = float(os.getenv("HFT_POSITION_DETAIL_CACHE_TTL_S", "10"))
         self._api_last_latency_ms: dict[str, float] = {}
         self._quote_force_relogin_s = float(os.getenv("HFT_QUOTE_FORCE_RELOGIN_S", "15"))
+        self._quote_flap_window_s = float(os.getenv("HFT_QUOTE_FLAP_WINDOW_S", "60"))
+        self._quote_flap_threshold = int(os.getenv("HFT_QUOTE_FLAP_THRESHOLD", "5"))
+        self._quote_flap_cooldown_s = float(os.getenv("HFT_QUOTE_FLAP_COOLDOWN_S", "300"))
+        self._quote_flap_events: deque[float] = deque()
+        self._last_quote_flap_relogin_ts = 0.0
         self._quote_version_mode = os.getenv("HFT_QUOTE_VERSION", "auto").strip().lower()
         if self._quote_version_mode not in {"v0", "v1", "auto"}:
             self._quote_version_mode = "auto"
@@ -907,6 +913,41 @@ class ShioajiClient:
         )
         self._pending_quote_relogin_thread.start()
 
+    def _start_forced_relogin(self, reason: str) -> None:
+        if self._pending_quote_relogining:
+            return
+        self._pending_quote_relogining = True
+
+        def _do_relogin() -> None:
+            try:
+                self.reconnect(reason=reason, force=True)
+            finally:
+                self._pending_quote_relogining = False
+
+        threading.Thread(
+            target=_do_relogin,
+            name="shioaji-force-relogin",
+            daemon=True,
+        ).start()
+
+    def _note_quote_flap(self, now: float) -> None:
+        if self._quote_flap_window_s <= 0 or self._quote_flap_threshold <= 0:
+            return
+        self._quote_flap_events.append(now)
+        while self._quote_flap_events and now - self._quote_flap_events[0] > self._quote_flap_window_s:
+            self._quote_flap_events.popleft()
+        if len(self._quote_flap_events) < self._quote_flap_threshold:
+            return
+        if now - self._last_quote_flap_relogin_ts < self._quote_flap_cooldown_s:
+            return
+        self._last_quote_flap_relogin_ts = now
+        logger.warning(
+            "Quote session flapping; forcing relogin",
+            count=len(self._quote_flap_events),
+            window_s=self._quote_flap_window_s,
+        )
+        self._start_forced_relogin("quote_flap")
+
     def _mark_quote_pending(self, reason: str) -> None:
         now = timebase.now_s()
         if not self._pending_quote_resubscribe or self._pending_quote_reason != reason:
@@ -923,30 +964,47 @@ class ShioajiClient:
         logger.info("Quote data resumed; clearing pending")
 
     def _on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
-        now = timebase.now_s()
-        self._last_quote_event_ts = now
-        self._event_callback_registered = True
-        if event_code in (1, 2, 3, 4, 12, 13):
-            logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event_name=event)
-        if event_code == 12:
-            self._mark_quote_pending("event_12")
-            if self.tick_callback:
-                self._callbacks_registered = False
-                self._ensure_callbacks(self.tick_callback)
-        elif event_code == 13:
-            if self._pending_quote_resubscribe:
-                self._clear_quote_pending()
-            if self.tick_callback:
-                self._callbacks_registered = False
-                self._ensure_callbacks(self.tick_callback)
-            self._resubscribe_all()
-        elif event_code == 4:
-            if self._pending_quote_resubscribe:
-                self._clear_quote_pending()
-            if self.tick_callback:
-                self._callbacks_registered = False
-                self._ensure_callbacks(self.tick_callback)
-            self._resubscribe_all()
+        try:
+            now = timebase.now_s()
+            self._last_quote_event_ts = now
+            self._event_callback_registered = True
+            if event_code in (1, 2, 3, 4, 12, 13):
+                logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event_name=event)
+            if event_code == 12:
+                self._note_quote_flap(now)
+                if self.metrics:
+                    self.metrics.shioaji_keepalive_failures_total.inc()
+                self._mark_quote_pending("event_12")
+                if self.tick_callback:
+                    self._callbacks_registered = False
+                    self._ensure_callbacks(self.tick_callback)
+            elif event_code == 13:
+                if self._pending_quote_resubscribe:
+                    self._clear_quote_pending()
+                if self.tick_callback:
+                    self._callbacks_registered = False
+                    self._ensure_callbacks(self.tick_callback)
+                self._resubscribe_all()
+                if self.metrics:
+                    self.metrics.feed_resubscribe_total.labels(result="event_13").inc()
+            elif event_code == 4:
+                if self._pending_quote_resubscribe:
+                    self._clear_quote_pending()
+                if self.tick_callback:
+                    self._callbacks_registered = False
+                    self._ensure_callbacks(self.tick_callback)
+                self._resubscribe_all()
+                if self.metrics:
+                    self.metrics.feed_resubscribe_total.labels(result="event_4").inc()
+        except Exception as exc:
+            logger.error(
+                "Quote event handler failed",
+                resp_code=resp_code,
+                event_code=event_code,
+                info=info,
+                event_name=event,
+                error=str(exc),
+            )
 
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
         if not self.api:
@@ -1161,28 +1219,40 @@ class ShioajiClient:
             )
 
         if prod in {"stock", "stk"} or exch in {"TSE", "OTC", "OES"}:
-            if exch == "TSE":
+            stocks = getattr(self.api.Contracts, "Stocks", None)
+            tse_group = getattr(stocks, "TSE", None) if stocks is not None else None
+            otc_group = getattr(stocks, "OTC", None) if stocks is not None else None
+            oes_group = getattr(stocks, "OES", None) if stocks is not None else None
+            if isinstance(stocks, dict):
+                tse_group = stocks.get("TSE", tse_group)
+                otc_group = stocks.get("OTC", otc_group)
+                oes_group = stocks.get("OES", oes_group)
+
+            if exch == "TSE" and tse_group is not None:
                 return self._lookup_contract(
-                    self.api.Contracts.Stocks.TSE,
+                    tse_group,
                     code,
                     allow_symbol_fallback=self.allow_symbol_fallback,
                     label="stock",
                 )
-            if exch == "OTC":
+            if exch == "OTC" and otc_group is not None:
                 return self._lookup_contract(
-                    self.api.Contracts.Stocks.OTC,
+                    otc_group,
                     code,
                     allow_symbol_fallback=self.allow_symbol_fallback,
                     label="stock",
                 )
-            if exch == "OES":
+            if exch == "OES" and oes_group is not None:
                 return self._lookup_contract(
-                    self.api.Contracts.Stocks.OES,
+                    oes_group,
                     code,
                     allow_symbol_fallback=self.allow_symbol_fallback,
                     label="stock",
                 )
-            for group in (self.api.Contracts.Stocks.TSE, self.api.Contracts.Stocks.OTC, self.api.Contracts.Stocks.OES):
+
+            for group in (tse_group, otc_group, oes_group):
+                if group is None:
+                    continue
                 contract = self._lookup_contract(
                     group,
                     code,
@@ -1191,6 +1261,14 @@ class ShioajiClient:
                 )
                 if contract:
                     return contract
+
+            if stocks is not None:
+                return self._lookup_contract(
+                    stocks,
+                    code,
+                    allow_symbol_fallback=self.allow_symbol_fallback,
+                    label="stock",
+                )
 
         if prod in {"future", "futures"} or exch in {"FUT", "FUTURES", "TAIFEX"}:
             for candidate in self._expand_future_codes(raw_code):

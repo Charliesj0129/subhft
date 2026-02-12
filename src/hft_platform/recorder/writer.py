@@ -34,6 +34,10 @@ class DataWriter:
     def __init__(self, ch_host="localhost", ch_port=9000, wal_dir=".wal"):
         self.ch_client = None
         self.wal = WALWriter(wal_dir)
+        # Per-table lock striping: avoid serializing inserts across different tables
+        self._ch_locks: dict[str, threading.Lock] = {}
+        self._ch_locks_guard = threading.Lock()
+        self._ch_heartbeat_lock = threading.Lock()
         # Determine protocol based on port (9000=native, 8123=HTTP)
         use_native = ch_port == self.DEFAULT_NATIVE_PORT
         ch_username = (
@@ -90,6 +94,27 @@ class DataWriter:
         self._heartbeat_running = False
         self._last_heartbeat_ts = 0.0
         self._last_heartbeat_ok = True
+        self._reconnect_lock = threading.Lock()
+        self._reconnect_running = False
+        self._last_reconnect_ts = 0.0
+        self._reconnect_min_interval_s = float(os.getenv("HFT_CH_RECONNECT_MIN_S", "5"))
+
+        try:
+            from hft_platform.observability.metrics import MetricsRegistry
+
+            self.metrics = MetricsRegistry.get()
+        except Exception:
+            self.metrics = None
+
+    def _get_table_lock(self, table: str) -> threading.Lock:
+        """Get or create a per-table lock for ClickHouse inserts."""
+        lock = self._ch_locks.get(table)
+        if lock is not None:
+            return lock
+        with self._ch_locks_guard:
+            if table not in self._ch_locks:
+                self._ch_locks[table] = threading.Lock()
+            return self._ch_locks[table]
 
     def _compute_backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay with jitter to avoid thundering herd."""
@@ -112,6 +137,8 @@ class DataWriter:
                 self.connected = True
                 self._connect_attempts = 0  # Reset on success
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
+                if self.metrics:
+                    self.metrics.clickhouse_connection_health.set(1)
                 self._init_schema()
                 self._start_heartbeat_thread()
                 break
@@ -133,6 +160,8 @@ class DataWriter:
                         max_retries=self._max_retries,
                     )
                     self.connected = False
+                    if self.metrics:
+                        self.metrics.clickhouse_connection_health.set(0)
 
     async def connect_async(self):
         """Async connect - does not block the event loop during retries."""
@@ -147,6 +176,8 @@ class DataWriter:
                 self.connected = True
                 self._connect_attempts = 0  # Reset on success
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
+                if self.metrics:
+                    self.metrics.clickhouse_connection_health.set(1)
                 await asyncio.to_thread(self._init_schema)
                 self._start_heartbeat_thread()
                 break
@@ -168,6 +199,8 @@ class DataWriter:
                         max_retries=self._max_retries,
                     )
                     self.connected = False
+                    if self.metrics:
+                        self.metrics.clickhouse_connection_health.set(0)
 
     def _init_schema(self):
         """Initialize ClickHouse schema from SQL file."""
@@ -216,6 +249,9 @@ class DataWriter:
                         logger.error("ClickHouse heartbeat failed, marking connection as stale")
                         self.connected = False
                         self.ch_client = None
+                        if self.metrics:
+                            self.metrics.clickhouse_connection_health.set(0)
+                        self._schedule_reconnect("heartbeat_failed")
                         break
             finally:
                 self._heartbeat_running = False
@@ -232,11 +268,39 @@ class DataWriter:
         if not self.ch_client:
             return False
         try:
-            self.ch_client.command("SELECT 1")
+            with self._ch_heartbeat_lock:
+                self.ch_client.command("SELECT 1")
             return True
         except Exception as e:
             logger.warning("ClickHouse heartbeat check failed", error=str(e))
             return False
+
+    def _schedule_reconnect(self, reason: str) -> None:
+        if not self.ch_enabled or not clickhouse_connect:
+            return
+        now = timebase.now_s()
+        if now - self._last_reconnect_ts < self._reconnect_min_interval_s:
+            return
+        if self._reconnect_running:
+            return
+        if not self._reconnect_lock.acquire(blocking=False):
+            return
+        self._reconnect_running = True
+        self._last_reconnect_ts = now
+        logger.warning("Scheduling ClickHouse reconnect", reason=reason)
+
+        def _do_reconnect() -> None:
+            try:
+                self.connect()
+            finally:
+                self._reconnect_running = False
+                self._reconnect_lock.release()
+
+        threading.Thread(
+            target=_do_reconnect,
+            name="clickhouse-reconnect",
+            daemon=True,
+        ).start()
 
     def get_status(self) -> dict:
         """Get current writer status for health checks."""
@@ -271,12 +335,24 @@ class DataWriter:
                 success = True
             except Exception as e:
                 logger.error("ClickHouse write failed", table=table, error=str(e))
+                self._schedule_reconnect("write_failed")
                 success = False
+        else:
+            if self.ch_enabled:
+                self._schedule_reconnect("not_connected")
 
         if not success:
             logger.warning("Fallback to WAL", table=table, count=len(data))
-            # WAL write is now async
-            await self.wal.write(table, data)
+            if self.metrics:
+                self.metrics.recorder_wal_writes_total.labels(table=table).inc()
+            # WAL write is now async; returns False if disk full
+            wal_ok = await self.wal.write(table, data)
+            if not wal_ok:
+                logger.critical(
+                    "Data loss: both ClickHouse and WAL failed",
+                    table=table,
+                    rows_lost=len(data),
+                )
 
     def _ch_insert(self, table, data):
         # Infer columns from first row assuming consistent dicts
@@ -287,7 +363,8 @@ class DataWriter:
         # Transform data to list of lists (values based on keys order) or dicts if supported
         # clickhouse-connect insert expects list of lists typically
         values = [[row.get(k) for k in keys] for row in data]
-        self.ch_client.insert(table, values, column_names=keys)
+        with self._get_table_lock(table):
+            self.ch_client.insert(table, values, column_names=keys)
         logger.info(f"Insert success: {table} {len(data)}")
 
     def _sanitize_timestamps(self, table: str, data: list[dict]) -> list[dict]:
