@@ -309,3 +309,189 @@ def test_session_cache_different_dates():
     calendar.get_session_open(monday)
     info3 = calendar.get_session_cache_info()
     assert info3["hits"] == 1
+
+
+def test_market_calendar_zoneinfo_fallback_and_no_xcals():
+    """Force ZoneInfo failure and missing exchange_calendars to hit fallback paths."""
+    from hft_platform.core import market_calendar as mc
+
+    mc._xcals = None
+    with patch("zoneinfo.ZoneInfo", side_effect=Exception("boom")):
+        with patch.object(mc, "_get_xcals", return_value=None):
+            calendar = mc.MarketCalendar("XTAI")
+            assert calendar.available is False
+            assert calendar._tz.utcoffset(None) == dt.timedelta(hours=8)
+
+
+def test_market_calendar_session_times_exception():
+    """Ensure session lookup errors return None and do not raise."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    calendar._cal = MagicMock()
+    calendar._cal.is_session.side_effect = RuntimeError("boom")
+
+    open_time, close_time = calendar._get_session_times_uncached("2026-02-11")
+    assert open_time is None
+    assert close_time is None
+
+
+def test_market_calendar_trading_day_exception():
+    """Ensure is_trading_day falls back when calendar check fails."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    calendar._cal = MagicMock()
+    calendar._cal.is_session.side_effect = RuntimeError("boom")
+
+    monday = dt.date(2026, 2, 16)
+    assert calendar.is_trading_day(monday) is True
+
+
+def test_market_calendar_trading_hours_exception():
+    """Ensure is_trading_hours returns False when calendar lookup fails."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    calendar._cal = MagicMock()
+    calendar._cal.session_open.side_effect = RuntimeError("boom")
+
+    monday_10am = dt.datetime(2026, 2, 16, 10, 0, tzinfo=calendar._tz)
+    assert calendar.is_trading_hours(monday_10am) is False
+
+
+def test_get_xcals_import_error_returns_none():
+    """Ensure ImportError path returns None and caches False."""
+    import builtins
+
+    from hft_platform.core import market_calendar as mc
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "exchange_calendars":
+            raise ImportError("boom")
+        return real_import(name, *args, **kwargs)
+
+    mc._xcals = None
+    with patch("builtins.__import__", side_effect=fake_import):
+        assert mc._get_xcals() is None
+        assert mc._xcals is False
+
+
+def test_market_calendar_get_calendar_error():
+    """Ensure calendar init handles get_calendar errors."""
+    from hft_platform.core import market_calendar as mc
+
+    class Dummy:
+        def get_calendar(self, *_args, **_kwargs):
+            raise RuntimeError("boom")
+
+    with patch.object(mc, "_get_xcals", return_value=Dummy()):
+        calendar = mc.MarketCalendar("XTAI")
+        assert calendar.available is False
+
+
+def test_market_calendar_next_trading_day_exception_fallback():
+    """Ensure next_trading_day falls back on exception."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    calendar._cal = MagicMock()
+    calendar._cal.next_session.side_effect = RuntimeError("boom")
+
+    friday = dt.date(2026, 2, 13)
+    assert calendar.next_trading_day(friday) == dt.date(2026, 2, 16)
+
+
+def test_market_calendar_previous_trading_day_exception_fallback():
+    """Ensure previous_trading_day falls back on exception."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    calendar._cal = MagicMock()
+    calendar._cal.previous_session.side_effect = RuntimeError("boom")
+
+    monday = dt.date(2026, 2, 16)
+    assert calendar.previous_trading_day(monday) == dt.date(2026, 2, 13)
+
+
+def test_days_until_trading_next_none_fallback():
+    """Ensure days_until_trading falls back when next_trading_day is None."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    with patch.object(calendar, "is_trading_day", return_value=False):
+        with patch.object(calendar, "next_trading_day", return_value=None):
+            assert calendar.days_until_trading(dt.date(2026, 2, 14)) == 1
+
+
+def test_is_trading_day_default_branches():
+    """Cover default date paths with and without calendar."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    calendar._cal = None
+    assert isinstance(calendar.is_trading_day(), bool)
+
+    calendar._cal = MagicMock()
+    calendar._cal.is_session.return_value = True
+    assert calendar.is_trading_day() is True
+
+
+def test_is_trading_hours_default_and_success():
+    """Cover default timestamp branch and calendar success path."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    calendar._cal = None
+    with patch.object(calendar, "is_trading_day", return_value=False):
+        assert calendar.is_trading_hours() is False
+
+    ts = dt.datetime(2026, 2, 16, 10, 0, tzinfo=calendar._tz)
+    calendar._cal = MagicMock()
+    calendar._cal.session_open.return_value = ts - dt.timedelta(minutes=1)
+    calendar._cal.session_close.return_value = ts + dt.timedelta(minutes=1)
+    assert calendar.is_trading_hours(ts) is True
+
+
+def test_get_session_open_close_default_date():
+    """Cover default date paths for get_session_open/close."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    open_time = dt.datetime(2026, 2, 16, 9, 0, tzinfo=calendar._tz)
+    close_time = dt.datetime(2026, 2, 16, 13, 30, tzinfo=calendar._tz)
+    calendar._get_session_times_cached = MagicMock(return_value=(open_time, close_time))
+
+    assert calendar.get_session_open() == open_time
+    assert calendar.get_session_close() == close_time
+
+
+def test_next_previous_trading_day_success_paths():
+    """Cover calendar success paths for next/previous trading day."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    class FakeSession:
+        def __init__(self, day: dt.date):
+            self._day = day
+
+        def date(self):
+            return self._day
+
+    calendar = MarketCalendar("XTAI")
+    calendar._cal = MagicMock()
+    calendar._cal.next_session.return_value = FakeSession(dt.date(2026, 2, 17))
+    calendar._cal.previous_session.return_value = FakeSession(dt.date(2026, 2, 13))
+
+    assert calendar.next_trading_day() == dt.date(2026, 2, 17)
+    assert calendar.previous_trading_day() == dt.date(2026, 2, 13)
+
+
+def test_days_until_trading_default_date():
+    """Cover default date branch in days_until_trading."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    calendar = MarketCalendar("XTAI")
+    with patch.object(calendar, "is_trading_day", return_value=True):
+        assert calendar.days_until_trading() == 0
