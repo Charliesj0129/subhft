@@ -436,9 +436,7 @@ class WALLoaderService:
             # Atomic write via temp + rename
             import tempfile
 
-            fd, tmp_path = tempfile.mkstemp(
-                suffix=".tmp", dir=manifest_dir
-            )
+            fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=manifest_dir)
             try:
                 with os.fdopen(fd, "w") as f:
                     for fname in sorted(self._manifest):
