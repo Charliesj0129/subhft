@@ -60,6 +60,8 @@ class TestDataWriter(unittest.IsolatedAsyncioTestCase):
         writer = DataWriter(wal_dir=self.tmp_dir)
         writer.ch_client = MagicMock()
         writer.connected = True
+        # Disable WAL batch writer so individual WAL files are created
+        writer._wal_batch_enabled = False
         # Simulate CH error
         writer.ch_client.insert.side_effect = Exception("CH Down")
 
@@ -67,9 +69,9 @@ class TestDataWriter(unittest.IsolatedAsyncioTestCase):
         await writer.write("test_table", data)
 
         # Should have written to WAL
-        files = os.listdir(self.tmp_dir)
-        self.assertTrue(len(files) > 0)
-        self.assertTrue(files[0].startswith("test_table"))
+        wal_files = [f for f in os.listdir(self.tmp_dir) if f.endswith(".jsonl")]
+        self.assertTrue(len(wal_files) > 0)
+        self.assertTrue(wal_files[0].startswith("test_table"))
 
 
 import time

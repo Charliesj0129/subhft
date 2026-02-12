@@ -13,14 +13,18 @@ async def test_writer_write_fallback_on_insert_error(tmp_path, monkeypatch):
     writer.connected = True
     writer.ch_client = MagicMock()
     writer._ts_max_future_ns = 0
+    # Disable WAL batch writer so direct wal.write is used
+    writer._wal_batch_enabled = False
 
     writer._ch_insert = MagicMock(side_effect=RuntimeError("boom"))
     writer.wal.write = AsyncMock()
 
-    async def fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
+    # Patch run_in_executor to call synchronously
+    async def fake_run_in_executor(executor, func, *args):
+        return func(*args)
 
-    monkeypatch.setattr(writer_module.asyncio, "to_thread", fake_to_thread)
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "run_in_executor", fake_run_in_executor)
 
     await writer.write("hft.market_data", [{"exch_ts": 1, "ingest_ts": 1}])
 
@@ -38,10 +42,12 @@ async def test_writer_write_success_no_wal(tmp_path, monkeypatch):
     writer._ch_insert = MagicMock()
     writer.wal.write = AsyncMock()
 
-    async def fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
+    # Patch run_in_executor to call synchronously
+    async def fake_run_in_executor(executor, func, *args):
+        return func(*args)
 
-    monkeypatch.setattr(writer_module.asyncio, "to_thread", fake_to_thread)
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "run_in_executor", fake_run_in_executor)
 
     await writer.write("hft.market_data", [{"exch_ts": 1, "ingest_ts": 1}])
 

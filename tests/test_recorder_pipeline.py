@@ -65,6 +65,11 @@ async def test_batcher_logic():
         async def write(self, table, data):
             flushed.append(data)
 
+        async def write_columnar(self, table, cols, data, count):
+            # Reconstruct row dicts for backward-compat
+            rows = [{cols[j]: data[j][i] for j in range(len(cols))} for i in range(count)]
+            flushed.append(rows)
+
     b = Batcher("t", flush_limit=2, writer=MockWriter())
     await b.add({"a": 1})
     assert len(flushed) == 0  # Not full

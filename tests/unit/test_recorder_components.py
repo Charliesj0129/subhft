@@ -13,6 +13,13 @@ class _Writer:
     async def write(self, table, data):
         self.calls.append((table, list(data)))
 
+    async def write_columnar(self, table, cols, data, count):
+        # Reconstruct row dicts for backward-compat assertions
+        rows = []
+        for i in range(count):
+            rows.append({cols[j]: data[j][i] for j in range(len(cols))})
+        self.calls.append((table, rows))
+
 
 @pytest.mark.asyncio
 async def test_batcher_flush_on_limit():
@@ -84,6 +91,7 @@ async def test_batcher_backpressure_drop_oldest():
 async def test_data_writer_wal_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "0")
     monkeypatch.setenv("HFT_DISABLE_CLICKHOUSE", "1")
+    monkeypatch.setenv("HFT_WAL_BATCH_ENABLED", "0")
 
     writer = DataWriter(wal_dir=str(tmp_path))
     writer.connect()

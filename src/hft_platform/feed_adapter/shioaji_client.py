@@ -154,6 +154,9 @@ class ShioajiClient:
         self._event_callback_retry_thread: threading.Thread | None = None
         self._event_callback_retry_s = float(os.getenv("HFT_QUOTE_EVENT_RETRY_S", "5"))
         self._pending_quote_reason: str | None = None
+        self._resubscribe_scheduled = False
+        self._resubscribe_thread: threading.Thread | None = None
+        self._resubscribe_delay_s = float(os.getenv("HFT_RESUBSCRIBE_DELAY_S", "0.5"))
         self._api_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_API_SOFT_CAP", "20")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
@@ -501,6 +504,8 @@ class ShioajiClient:
         """Register quote callbacks based on active quote version."""
         if not self.api:
             return False
+        supports_v1 = self._supports_quote_v1()
+        supports_v0 = self._supports_quote_v0()
         logger.info(
             "Registering quote callbacks",
             quote_version=self._quote_version,
@@ -542,20 +547,34 @@ class ShioajiClient:
                 return False
 
         if version == "v1":
-            if not _set_v1():
-                allow_fallback = self._quote_version_mode == "auto" or (
-                    self._quote_version_mode == "v1" and not self._quote_version_strict
-                )
-                if allow_fallback:
-                    logger.warning("Falling back to quote v0 callbacks")
-                    self._quote_version = "v0"
-                    ok = _set_v0()
-                    if ok and self.metrics:
-                        self.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
-                else:
-                    ok = False
+            if supports_v1 and _set_v1():
+                return ok
+            allow_fallback = self._quote_version_mode == "auto" or (
+                self._quote_version_mode == "v1" and not self._quote_version_strict
+            )
+            if allow_fallback and supports_v0:
+                logger.warning("Falling back to quote v0 callbacks")
+                self._quote_version = "v0"
+                ok = _set_v0()
+                if ok and self.metrics:
+                    self.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
+                if not ok:
+                    self._quote_version = "v1"
+            else:
+                if not supports_v1:
+                    logger.warning("Quote v1 callbacks not available on this Shioaji version")
+                if allow_fallback and not supports_v0:
+                    logger.warning("Quote v0 callbacks not available; staying on v1")
+                self._quote_version = "v1"
+                ok = False
         else:
-            ok = _set_v0()
+            if supports_v0:
+                ok = _set_v0()
+            else:
+                logger.warning("Quote v0 callbacks not available on this Shioaji version")
+                if supports_v1:
+                    self._quote_version = "v1"
+                ok = False
 
         return ok
 
@@ -571,6 +590,10 @@ class ShioajiClient:
 
     def _get_quote_version(self):
         if not sj or not hasattr(sj.constant, "QuoteVersion"):
+            return None
+        if self._quote_version == "v0" and not self._supports_quote_v0():
+            if self._supports_quote_v1():
+                return sj.constant.QuoteVersion.v1
             return None
         return sj.constant.QuoteVersion.v0 if self._quote_version == "v0" else sj.constant.QuoteVersion.v1
 
@@ -833,7 +856,7 @@ class ShioajiClient:
                     downgrade_allowed = self._quote_version_mode == "auto" or (
                         self._quote_version_mode == "v1" and not self._quote_version_strict
                     )
-                    if downgrade_allowed and self._quote_version == "v1":
+                    if downgrade_allowed and self._quote_version == "v1" and self._supports_quote_v0():
                         logger.warning(
                             "No quote data; switching quote version",
                             gap_s=round(gap, 3),
@@ -843,7 +866,13 @@ class ShioajiClient:
                         if self.metrics:
                             self.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
                     else:
-                        logger.warning("No quote data; re-registering callbacks", gap_s=round(gap, 3))
+                        if downgrade_allowed and self._quote_version == "v1" and not self._supports_quote_v0():
+                            logger.warning("Quote v0 callbacks unavailable; staying on v1")
+                        logger.warning(
+                            "No quote data; re-registering callbacks",
+                            gap_s=round(gap, 3),
+                            quote_version=self._quote_version,
+                        )
                     if self.tick_callback:
                         self._callbacks_registered = False
                         self._ensure_callbacks(self.tick_callback)
@@ -970,6 +999,16 @@ class ShioajiClient:
         )
         self._start_forced_relogin("quote_flap")
 
+    def _supports_quote_v0(self) -> bool:
+        if not self.api or not hasattr(self.api, "quote"):
+            return False
+        return hasattr(self.api.quote, "set_on_tick_stk_callback")
+
+    def _supports_quote_v1(self) -> bool:
+        if not self.api or not hasattr(self.api, "quote"):
+            return False
+        return hasattr(self.api.quote, "set_on_tick_stk_v1_callback")
+
     def _mark_quote_pending(self, reason: str) -> None:
         now = timebase.now_s()
         if not self._pending_quote_resubscribe or self._pending_quote_reason != reason:
@@ -985,6 +1024,31 @@ class ShioajiClient:
         self._pending_quote_ts = 0.0
         logger.info("Quote data resumed; clearing pending")
 
+    def _schedule_resubscribe(self, reason: str) -> None:
+        if self._resubscribe_scheduled:
+            return
+        self._resubscribe_scheduled = True
+        delay = max(0.0, self._resubscribe_delay_s)
+
+        def _do_resubscribe() -> None:
+            try:
+                if delay > 0:
+                    time.sleep(delay)
+                if self.tick_callback:
+                    self._callbacks_registered = False
+                    self._ensure_callbacks(self.tick_callback)
+                    self._resubscribe_all()
+                logger.info("Resubscribe completed", reason=reason)
+            finally:
+                self._resubscribe_scheduled = False
+
+        self._resubscribe_thread = threading.Thread(
+            target=_do_resubscribe,
+            name="shioaji-resubscribe",
+            daemon=True,
+        )
+        self._resubscribe_thread.start()
+
     def _on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
         try:
             now = timebase.now_s()
@@ -997,25 +1061,16 @@ class ShioajiClient:
                 if self.metrics:
                     self.metrics.shioaji_keepalive_failures_total.inc()
                 self._mark_quote_pending("event_12")
-                if self.tick_callback:
-                    self._callbacks_registered = False
-                    self._ensure_callbacks(self.tick_callback)
             elif event_code == 13:
                 if self._pending_quote_resubscribe:
                     self._clear_quote_pending()
-                if self.tick_callback:
-                    self._callbacks_registered = False
-                    self._ensure_callbacks(self.tick_callback)
-                self._resubscribe_all()
+                self._schedule_resubscribe("event_13")
                 if self.metrics:
                     self.metrics.feed_resubscribe_total.labels(result="event_13").inc()
             elif event_code == 4:
                 if self._pending_quote_resubscribe:
                     self._clear_quote_pending()
-                if self.tick_callback:
-                    self._callbacks_registered = False
-                    self._ensure_callbacks(self.tick_callback)
-                self._resubscribe_all()
+                self._schedule_resubscribe("event_4")
                 if self.metrics:
                     self.metrics.feed_resubscribe_total.labels(result="event_4").inc()
         except Exception as exc:

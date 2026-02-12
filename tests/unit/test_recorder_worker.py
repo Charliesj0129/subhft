@@ -17,6 +17,9 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
             mock_writer_inst.active = True
             mock_writer_inst.connect_async = AsyncMock()
             mock_writer_inst.write = AsyncMock()
+            mock_writer_inst.write_columnar = AsyncMock()
+            mock_writer_inst.shutdown = AsyncMock()
+            mock_writer_inst.set_health_tracker = MagicMock()
 
             worker = RecorderService(queue)
 
@@ -42,10 +45,10 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-            # We need to verify calls on the MOCK instance
-            # The worker calls batcher, batcher calls writer.write
-            # The MockWriter class mock returns mock_writer_inst when instantiated.
-            self.assertTrue(mock_writer_inst.write.called)
+            # The worker calls batcher, batcher calls writer.write_columnar (or write)
+            self.assertTrue(
+                mock_writer_inst.write_columnar.called or mock_writer_inst.write.called
+            )
 
     async def test_recover_wal_skips_when_disabled(self):
         queue = asyncio.Queue()
