@@ -292,21 +292,43 @@ class ShioajiClient:
         if key and secret:
             logger.info("Using API Key/Secret for login")
             start_ns = time.perf_counter_ns()
-            try:
+            login_fetch_contract = self.fetch_contract
+            fallback_enabled = os.getenv("HFT_LOGIN_FETCH_CONTRACT_FALLBACK", "1").lower() not in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }
+
+            def _do_login(fetch_contract: bool) -> None:
                 self.api.login(
                     api_key=key,
                     secret_key=secret,
                     contracts_timeout=self.contracts_timeout,
                     contracts_cb=contracts_cb,
-                    fetch_contract=self.fetch_contract,
+                    fetch_contract=fetch_contract,
                     subscribe_trade=self.subscribe_trade,
                 )
+
+            try:
+                _do_login(login_fetch_contract)
                 self._record_api_latency("login", start_ns, ok=True)
-            except Exception:
+            except Exception as exc:
                 self._record_api_latency("login", start_ns, ok=False)
-                raise
+                if login_fetch_contract and fallback_enabled:
+                    logger.warning(
+                        "Login failed with contract fetch; retrying without contracts",
+                        error=str(exc),
+                    )
+                    start_ns = time.perf_counter_ns()
+                    _do_login(False)
+                    self._record_api_latency("login", start_ns, ok=True)
+                    login_fetch_contract = False
+                    self.fetch_contract = False
+                else:
+                    raise
             logger.info("Login successful (API Key)")
-            if not self.fetch_contract:
+            if not login_fetch_contract:
                 self._ensure_contracts()
             if self.activate_ca:
                 if not pid:
