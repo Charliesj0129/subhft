@@ -51,6 +51,10 @@ class OrderIntent:
     reason: str = ""
     trace_id: str = ""  # OpenTelemetry Trace ID for distributed tracing support
 
+    # CE2-01: Gateway idempotency and TTL fields (default-valued, backward-compat)
+    idempotency_key: str = ""  # Caller-supplied dedup key; empty = no dedup
+    ttl_ns: int = 0  # Expiry in nanoseconds from enqueue; 0 = no expiry
+
 
 @dataclass(slots=True)
 class RiskDecision:

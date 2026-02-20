@@ -88,6 +88,21 @@ class MetricsRegistry:
                 "clickhouse_pool_active",
                 "clickhouse_pool_timeout_total",
                 "clickhouse_pool_checkout_latency_ms",
+                # CE-M2 Gateway SLO metrics
+                "gateway_dedup_hits_total",
+                "gateway_reject_total",
+                "gateway_dispatch_latency_ns",
+                "gateway_intent_channel_depth",
+                "gateway_policy_mode",
+                "gateway_exposure_notional_scaled",
+                # CE-M3 WAL SLO metrics
+                "wal_mode",
+                "wal_replay_lag_seconds",
+                "wal_replay_throughput_rows_total",
+                "wal_replay_errors_total",
+                "wal_backlog_files",
+                "wal_drain_eta_seconds",
+                "disk_pressure_level",
             ]
         )
         # Market Data
@@ -319,6 +334,76 @@ class MetricsRegistry:
             "clickhouse_pool_checkout_latency_ms",
             "ClickHouse connection pool checkout latency (ms)",
             buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000],
+        )
+
+        # CE-M2 Gateway SLO (CE2-07)
+        # SLO: P99 < 1ms, alert > 2ms
+        self.gateway_dedup_hits_total = Counter(
+            "gateway_dedup_hits_total",
+            "Idempotency cache hits (duplicate intents suppressed)",
+        )
+        # reason label: HALT, DEGRADE, EXPOSURE, VALIDATOR, DEDUP
+        self.gateway_reject_total = Counter(
+            "gateway_reject_total",
+            "Gateway rejected intents by reason",
+            ["reason"],
+        )
+        # SLO: P99 < 1_000_000 ns (1ms); alert > 2_000_000 ns (2ms)
+        self.gateway_dispatch_latency_ns = Histogram(
+            "gateway_dispatch_latency_ns",
+            "End-to-end gateway dispatch latency (ns): dedup→policy→exposure→risk→dispatch",
+            buckets=[1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000],
+        )
+        # SLO: depth < 100; alert > 500
+        self.gateway_intent_channel_depth = Gauge(
+            "gateway_intent_channel_depth",
+            "Current depth of LocalIntentChannel queue",
+        )
+        # 0=NORMAL, 1=DEGRADE, 2=HALT
+        self.gateway_policy_mode = Gauge(
+            "gateway_policy_mode",
+            "Current GatewayPolicy mode (0=NORMAL, 1=DEGRADE, 2=HALT)",
+        )
+        self.gateway_exposure_notional_scaled = Gauge(
+            "gateway_exposure_notional_scaled",
+            "Current per-strategy/symbol exposure (scaled integer)",
+            ["strategy", "symbol"],
+        )
+
+        # CE-M3 WAL SLO (CE3-06)
+        # 0=direct, 1=wal_first
+        self.wal_mode = Gauge(
+            "wal_mode",
+            "Current recorder WAL mode (0=direct, 1=wal_first)",
+        )
+        # SLO: lag < 300s; alert > 600s
+        self.wal_replay_lag_seconds = Gauge(
+            "wal_replay_lag_seconds",
+            "Oldest unprocessed WAL file age in seconds (replay lag)",
+        )
+        self.wal_replay_throughput_rows_total = Counter(
+            "wal_replay_throughput_rows_total",
+            "Total rows successfully replayed from WAL to ClickHouse",
+        )
+        self.wal_replay_errors_total = Counter(
+            "wal_replay_errors_total",
+            "WAL replay errors by type",
+            ["type"],
+        )
+        # SLO: backlog < 50; alert > 200
+        self.wal_backlog_files = Gauge(
+            "wal_backlog_files",
+            "Number of WAL files pending replay",
+        )
+        self.wal_drain_eta_seconds = Gauge(
+            "wal_drain_eta_seconds",
+            "Estimated seconds to drain WAL backlog at current throughput",
+        )
+        # SLO: level = 0; alert >= 2
+        # 0=ok, 1=warn, 2=critical, 3=halt
+        self.disk_pressure_level = Gauge(
+            "disk_pressure_level",
+            "Current disk pressure level (0=ok, 1=warn, 2=critical, 3=halt)",
         )
 
         # System (v2)

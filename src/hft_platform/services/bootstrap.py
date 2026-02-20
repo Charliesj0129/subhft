@@ -116,9 +116,38 @@ class SystemBootstrapper:
         )
         risk_engine = RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider)
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
+
+        # CE-M2: GatewayService wiring
+        gateway_service = None
+        intent_channel = None
+        _gateway_enabled = os.getenv("HFT_GATEWAY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+        if _gateway_enabled:
+            from hft_platform.gateway.channel import LocalIntentChannel
+            from hft_platform.gateway.dedup import IdempotencyStore
+            from hft_platform.gateway.exposure import ExposureStore
+            from hft_platform.gateway.policy import GatewayPolicy
+            from hft_platform.gateway.service import GatewayService
+
+            intent_channel = LocalIntentChannel(maxsize=risk_queue_size)
+            exposure_store = ExposureStore()
+            dedup_store = IdempotencyStore()
+            dedup_store.load()
+            gateway_policy = GatewayPolicy()
+            gateway_service = GatewayService(
+                channel=intent_channel,
+                risk_engine=risk_engine,
+                order_adapter=order_adapter,
+                exposure_store=exposure_store,
+                dedup_store=dedup_store,
+                storm_guard=storm_guard,
+                policy=gateway_policy,
+            )
+
+        # StrategyRunner: use intent_channel when gateway enabled, else risk_queue
+        _runner_queue = intent_channel if _gateway_enabled and intent_channel is not None else risk_queue
         strategy_runner = StrategyRunner(
             bus,
-            risk_queue,
+            _runner_queue,
             md_service.lob,
             position_store,
             symbol_metadata=symbol_metadata,
@@ -149,4 +178,6 @@ class SystemBootstrapper:
             recon_service=recon_service,
             strategy_runner=strategy_runner,
             recorder=recorder,
+            gateway_service=gateway_service,
+            intent_channel=intent_channel,
         )
