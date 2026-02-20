@@ -1058,21 +1058,38 @@ class ShioajiClient:
                 logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event_name=event)
             if event_code == 12:
                 self._note_quote_flap(now)
-                if self.metrics:
-                    self.metrics.shioaji_keepalive_failures_total.inc()
+                try:
+                    if self.metrics:
+                        self.metrics.shioaji_keepalive_failures_total.inc()
+                except Exception:
+                    pass
                 self._mark_quote_pending("event_12")
+                if self.tick_callback:
+                    self._callbacks_registered = False
+                    self._ensure_callbacks(self.tick_callback)
             elif event_code == 13:
                 if self._pending_quote_resubscribe:
                     self._clear_quote_pending()
-                self._schedule_resubscribe("event_13")
-                if self.metrics:
-                    self.metrics.feed_resubscribe_total.labels(result="event_13").inc()
+                if self.tick_callback:
+                    self._callbacks_registered = False
+                    self._ensure_callbacks(self.tick_callback)
+                    self._resubscribe_all()
+                else:
+                    self._schedule_resubscribe("event_13")
+                try:
+                    if self.metrics:
+                        self.metrics.feed_resubscribe_total.labels(result="event_13").inc()
+                except Exception:
+                    pass
             elif event_code == 4:
                 if self._pending_quote_resubscribe:
                     self._clear_quote_pending()
                 self._schedule_resubscribe("event_4")
-                if self.metrics:
-                    self.metrics.feed_resubscribe_total.labels(result="event_4").inc()
+                try:
+                    if self.metrics:
+                        self.metrics.feed_resubscribe_total.labels(result="event_4").inc()
+                except Exception:
+                    pass
         except Exception as exc:
             logger.error(
                 "Quote event handler failed",
