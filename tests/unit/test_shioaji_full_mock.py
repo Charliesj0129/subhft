@@ -45,6 +45,7 @@ class TestShioajiClientFull(unittest.TestCase):
         # Client init tries to create Shioaji() if sj is present
         # We need to ensure self.client.api is our mock
         self.client.api = self.mock_api_instance
+        self.client.metrics = MagicMock()
 
         # Mock Contracts lookup structure
         # Contracts.Stocks.TSE["2330"] etc
