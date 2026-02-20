@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from typing import Any, Dict
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
@@ -45,3 +45,6 @@ class ServiceRegistry:
     recon_service: ReconciliationService
     strategy_runner: StrategyRunner
     recorder: RecorderService
+    # CE-M2: GatewayService wiring (appended at end for slots safety)
+    gateway_service: Optional[Any] = field(default=None)
+    intent_channel: Optional[Any] = field(default=None)

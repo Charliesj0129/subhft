@@ -123,6 +123,12 @@ class WALLoaderService:
         self._strict_order = os.getenv("HFT_WAL_STRICT_ORDER", "0").lower() in {"1", "true", "yes", "on"}
         self._last_processed_ts: int = 0
 
+        # CE3-03: Shard claim registry
+        from hft_platform.recorder.shard_claim import FileClaimRegistry
+        self._claim_registry = FileClaimRegistry(
+            claim_dir=os.path.join(wal_dir, "claims"),
+        )
+
     def connect(self):
         try:
             ch_username = (
@@ -188,6 +194,19 @@ class WALLoaderService:
         # Load manifest for P1-1
         if self._manifest_enabled:
             self._load_manifest()
+
+        # CE3-03: recover stale claims on startup
+        try:
+            self._claim_registry.recover_stale_claims()
+        except Exception as exc:
+            logger.warning("Stale claim recovery failed", error=str(exc))
+
+        # CE3-04: validate replay preconditions
+        from hft_platform.recorder.replay_contract import validate_replay_preconditions
+        violations = validate_replay_preconditions(self)
+        if violations:
+            for v in violations:
+                logger.warning("ReplayContract violation", violation=v)
 
         logger.info("Starting WAL Loader", wal_dir=self.wal_dir)
         if self._wal_scheduler is None:
@@ -298,6 +317,19 @@ class WALLoaderService:
         # Load manifest for P1-1
         if self._manifest_enabled:
             self._load_manifest()
+
+        # CE3-03: recover stale claims on startup
+        try:
+            self._claim_registry.recover_stale_claims()
+        except Exception as exc:
+            logger.warning("Stale claim recovery failed", error=str(exc))
+
+        # CE3-04: validate replay preconditions
+        from hft_platform.recorder.replay_contract import validate_replay_preconditions
+        violations = validate_replay_preconditions(self)
+        if violations:
+            for v in violations:
+                logger.warning("ReplayContract violation", violation=v)
 
         logger.info("Starting WAL Loader (async mode)", wal_dir=self.wal_dir)
         if self._wal_scheduler is None:
@@ -525,6 +557,18 @@ class WALLoaderService:
         """
         fname = os.path.basename(fpath)
 
+        # CE3-03: Shard claim — skip if another worker has it
+        if not self._claim_registry.try_claim(fname):
+            logger.debug("WAL file already claimed, skipping", file=fname)
+            return False
+
+        try:
+            return self._process_single_file_inner(fpath, fname, force)
+        finally:
+            self._claim_registry.release_claim(fname)
+
+    def _process_single_file_inner(self, fpath: str, fname: str, force: bool) -> bool:
+        """Inner processing logic (called after claim acquired)."""
         # Check modification time to ensure writer is done
         if not force:
             try:
@@ -876,7 +920,11 @@ class WALLoaderService:
             if self.metrics:
                 self.metrics.wal_directory_size_bytes.set(total_size)
                 self.metrics.wal_file_count.set(file_count)
-                self.metrics.wal_oldest_file_age_seconds.set(now - oldest_mtime if file_count else 0)
+                oldest_age = now - oldest_mtime if file_count else 0
+                self.metrics.wal_oldest_file_age_seconds.set(oldest_age)
+                # CE3-06: WAL SLO metrics
+                self.metrics.wal_backlog_files.set(file_count)
+                self.metrics.wal_replay_lag_seconds.set(oldest_age)
 
             # Log warnings
             size_mb = total_size / (1024 * 1024)
@@ -1233,8 +1281,11 @@ class WALLoaderService:
                     with self._ch_lock:
                         self.ch_client.insert(full_table_name, data, column_names=cols)
                     logger.info("Inserted batch", table=table_alias, count=row_count)
-                    if attempt > 0 and self.metrics:
-                        self.metrics.recorder_insert_retry_total.labels(table=table_alias, result="success").inc()
+                    if self.metrics:
+                        if attempt > 0:
+                            self.metrics.recorder_insert_retry_total.labels(table=table_alias, result="success").inc()
+                        # CE3-06: throughput counter
+                        self.metrics.wal_replay_throughput_rows_total.inc(row_count)
                     return True
                 except Exception as e:
                     last_error = e

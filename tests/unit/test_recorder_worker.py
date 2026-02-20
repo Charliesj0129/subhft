@@ -58,7 +58,11 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
                 worker = RecorderService(queue)
                 with patch("hft_platform.recorder.worker.logger.info") as log_info:
                     await worker.recover_wal()
-                    log_info.assert_any_call("Skipping WAL Recovery (ClickHouse disabled)")
+                    # CE3-01: message now includes mode kwarg
+                    calls = [str(c) for c in log_info.call_args_list]
+                    assert any("Skipping WAL Recovery" in c for c in calls), (
+                        f"Expected 'Skipping WAL Recovery' log, got: {calls}"
+                    )
 
     async def test_recover_wal_warns_without_connection(self):
         queue = asyncio.Queue()

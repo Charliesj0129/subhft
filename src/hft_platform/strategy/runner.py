@@ -23,7 +23,7 @@ class StrategyRunner:
     def __init__(
         self,
         bus,
-        risk_queue: asyncio.Queue,
+        risk_queue,  # asyncio.Queue or LocalIntentChannel (CE2-03 backward compat)
         lob_engine=None,
         position_store=None,
         config_path: str = "config/base/strategies.yaml",
@@ -249,7 +249,11 @@ class StrategyRunner:
 
             if intents:
                 for intent in intents:
-                    self.risk_queue.put_nowait(intent)
+                    # CE2-03: accept LocalIntentChannel (submit_nowait) or asyncio.Queue (put_nowait)
+                    if hasattr(self.risk_queue, "submit_nowait"):
+                        self.risk_queue.submit_nowait(intent)
+                    else:
+                        self.risk_queue.put_nowait(intent)
 
     def _extract_event_trace(self, event: Any) -> tuple[int, str]:
         source_ts_ns = 0

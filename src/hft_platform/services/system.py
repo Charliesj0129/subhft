@@ -48,6 +48,7 @@ class HFTSystem:
         self.recon_service = self.registry.recon_service
         self.strategy_runner = self.registry.strategy_runner
         self.recorder = self.registry.recorder
+        self.gateway_service = self.registry.gateway_service
 
         self.tasks: Dict[str, asyncio.Task[Any]] = {}
         self._recorder_drop_on_full = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1").lower() not in {
@@ -72,7 +73,11 @@ class HFTSystem:
             # Start Services
             self._start_service("md", self.md_service.run())
             self._start_service("exec_router", self.exec_service.run())
-            self._start_service("risk", self.risk_engine.run())
+            # CE-M2: start GatewayService when enabled; otherwise start RiskEngine standalone
+            if self.gateway_service is not None:
+                self._start_service("gateway", self.gateway_service.run())
+            else:
+                self._start_service("risk", self.risk_engine.run())
             self._start_service("order", self.order_adapter.run())
             self._start_service("exec_gateway", self.execution_gateway.run())
             self._start_service("recon", self.recon_service.run())
@@ -195,6 +200,19 @@ class HFTSystem:
                     pass
                 logger.warning("Restarting OrderAdapter...")
                 self._start_service("order", self.order_adapter.run())
+
+            # CE-M2: Supervise GatewayService crash
+            if self.gateway_service is not None:
+                t_gw = self.tasks.get("gateway")
+                if t_gw and t_gw.done():
+                    try:
+                        exc = t_gw.exception()
+                        logger.critical("GatewayService Crashed!", error=str(exc))
+                        self.storm_guard.trigger_halt("Critical Component Crash: GatewayService")
+                    except asyncio.CancelledError:
+                        pass
+                    logger.warning("Restarting GatewayService...")
+                    self._start_service("gateway", self.gateway_service.run())
 
             # Update Metrics
             metrics.update_system_metrics()

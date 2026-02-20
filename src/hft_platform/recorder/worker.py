@@ -5,6 +5,7 @@ from structlog import get_logger
 
 from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
 from hft_platform.recorder.health import PipelineHealthTracker
+from hft_platform.recorder.mode import RecorderMode, get_recorder_mode
 from hft_platform.recorder.writer import DataWriter
 
 logger = get_logger("recorder")
@@ -118,6 +119,10 @@ class RecorderService:
         self.queue = queue
         self.running = False
 
+        # CE3-01: Recorder mode
+        self._mode = get_recorder_mode()
+        self._wal_first_writer = None  # set in run() when mode=wal_first
+
         # EC-5: Health tracker
         self.health_tracker = PipelineHealthTracker()
 
@@ -188,8 +193,8 @@ class RecorderService:
         import os
 
         ch_enabled = str(os.getenv("HFT_CLICKHOUSE_ENABLED", "")).lower() in ("1", "true", "yes", "on")
-        if os.getenv("HFT_DISABLE_CLICKHOUSE") or not ch_enabled:
-            logger.info("Skipping WAL Recovery (ClickHouse disabled)")
+        if self._mode == RecorderMode.WAL_FIRST or os.getenv("HFT_DISABLE_CLICKHOUSE") or not ch_enabled:
+            logger.info("Skipping WAL Recovery (ClickHouse disabled or wal_first mode)", mode=self._mode.value)
             return
 
         try:
@@ -210,9 +215,29 @@ class RecorderService:
 
     async def run(self):
         self.running = True
-        logger.info("Recorder started")
+        logger.info("Recorder started", mode=self._mode.value)
 
-        await self.writer.connect_async()
+        # CE3-01: set wal_mode metric
+        try:
+            from hft_platform.observability.metrics import MetricsRegistry
+            MetricsRegistry.get().wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
+        except Exception:
+            pass
+
+        # CE3-02: init WAL-first writer when in wal_first mode
+        if self._mode == RecorderMode.WAL_FIRST:
+            from hft_platform.recorder.disk_monitor import DiskPressureMonitor
+            from hft_platform.recorder.wal import WALBatchWriter
+            from hft_platform.recorder.wal_first import WALFirstWriter
+
+            _wal_dir = os.getenv("HFT_WAL_DIR", ".wal")
+            _disk_monitor = DiskPressureMonitor(wal_dir=_wal_dir)
+            _disk_monitor.start()
+            _batch_writer = WALBatchWriter(wal_dir=_wal_dir)
+            self._wal_first_writer = WALFirstWriter(_batch_writer, _disk_monitor)
+
+        if self._mode != RecorderMode.WAL_FIRST:
+            await self.writer.connect_async()
 
         # Attempt recovery
         await self.recover_wal()
@@ -226,9 +251,23 @@ class RecorderService:
                 topic = item.get("topic")
                 data = item.get("data")
 
-                if topic in self.batchers:
-                    # Normalize moved to batcher or here?
-                    # Ideally normalize BEFORE batching.
+                # CE3-02: route to WAL-first writer or batcher depending on mode
+                if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
+                    if isinstance(data, dict):
+                        rows = [data]
+                    elif isinstance(data, list):
+                        rows = data
+                    else:
+                        rows = [data]
+                    ok = await self._wal_first_writer.write(topic, rows)
+                    if not ok:
+                        self.health_tracker.record_event("data_loss")
+                        try:
+                            from hft_platform.observability.metrics import MetricsRegistry
+                            MetricsRegistry.get().recorder_failures_total.inc()
+                        except Exception:
+                            pass
+                elif topic in self.batchers:
                     await self.batchers[topic].add(data)
 
                 self.queue.task_done()
