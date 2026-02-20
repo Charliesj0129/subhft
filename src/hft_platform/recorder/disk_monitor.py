@@ -11,6 +11,7 @@ Env vars:
     HFT_DISK_CHECK_INTERVAL_S: check interval seconds (default 10)
     HFT_WAL_FIRST_POLICY_{TABLE}: write|drop|halt per table (default write)
 """
+
 from __future__ import annotations
 
 import os
@@ -55,8 +56,8 @@ class DiskPressureMonitor:
         self._warn_mb = warn_mb if warn_mb is not None else float(os.getenv("HFT_WAL_WARN_MB", "100"))
         self._critical_mb = critical_mb if critical_mb is not None else float(os.getenv("HFT_WAL_CRITICAL_MB", "300"))
         self._halt_mb = halt_mb if halt_mb is not None else float(os.getenv("HFT_WAL_HALT_MB", "500"))
-        self._interval = check_interval_s if check_interval_s is not None else float(
-            os.getenv("HFT_DISK_CHECK_INTERVAL_S", "10")
+        self._interval = (
+            check_interval_s if check_interval_s is not None else float(os.getenv("HFT_DISK_CHECK_INTERVAL_S", "10"))
         )
 
         self._level = DiskPressureLevel.OK
@@ -131,6 +132,7 @@ class DiskPressureMonitor:
         # Update Prometheus metric
         try:
             from hft_platform.observability.metrics import MetricsRegistry
+
             MetricsRegistry.get().disk_pressure_level.set(int(new_level))
         except Exception:
             pass

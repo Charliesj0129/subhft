@@ -9,6 +9,7 @@ Architecture:
 Env vars:
     HFT_WAL_FIRST_POLICY_{TABLE}: write|drop|halt (default write)
 """
+
 from __future__ import annotations
 
 from typing import Any

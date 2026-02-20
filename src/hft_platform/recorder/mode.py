@@ -5,6 +5,7 @@ HFT_RECORDER_MODE=wal_first           — always write to WAL; CH ingestion via 
 
 HFT_DISABLE_CLICKHOUSE=1 maps to wal_first for backward compatibility.
 """
+
 import os
 from enum import Enum
 

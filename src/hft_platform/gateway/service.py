@@ -14,6 +14,7 @@ Architecture (D2):
     7. order_adapter._api_queue.put_nowait(cmd)
 - Latency histogram CE2-07 wraps steps 1-7.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -105,6 +106,7 @@ class GatewayService:
             self._dedup_hits += 1
             try:
                 from hft_platform.observability.metrics import MetricsRegistry
+
                 MetricsRegistry.get().gateway_dedup_hits_total.inc()
             except Exception:
                 pass
@@ -197,6 +199,7 @@ class GatewayService:
     def _emit_reject(self, reason: str) -> None:
         try:
             from hft_platform.observability.metrics import MetricsRegistry
+
             MetricsRegistry.get().gateway_reject_total.labels(reason=reason).inc()
         except Exception:
             pass
@@ -204,6 +207,7 @@ class GatewayService:
     def _record_latency(self, t0: int) -> None:
         try:
             from hft_platform.observability.metrics import MetricsRegistry
+
             MetricsRegistry.get().gateway_dispatch_latency_ns.observe(time.perf_counter_ns() - t0)
         except Exception:
             pass
@@ -211,6 +215,7 @@ class GatewayService:
     def _update_channel_depth_metric(self) -> None:
         try:
             from hft_platform.observability.metrics import MetricsRegistry
+
             MetricsRegistry.get().gateway_intent_channel_depth.set(self._channel.qsize())
         except Exception:
             pass

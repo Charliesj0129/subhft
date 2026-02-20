@@ -7,6 +7,7 @@ Rules:
 
 Mode is readable as a Prometheus gauge (gateway_policy_mode).
 """
+
 from __future__ import annotations
 
 import os
@@ -44,7 +45,10 @@ class GatewayPolicy:
         self._mode = GatewayPolicyMode.NORMAL
         self._halt_cancel = os.getenv("HFT_GATEWAY_HALT_CANCEL", "1").lower() not in {"0", "false", "no", "off"}
         self._degrade_on_storm = os.getenv("HFT_GATEWAY_DEGRADE_ON_STORM", "1").lower() not in {
-            "0", "false", "no", "off"
+            "0",
+            "false",
+            "no",
+            "off",
         }
 
     # ── Public ────────────────────────────────────────────────────────────
@@ -99,6 +103,7 @@ class GatewayPolicy:
         self._mode = new_mode
         try:
             from hft_platform.observability.metrics import MetricsRegistry
+
             MetricsRegistry.get().gateway_policy_mode.set(self.mode_int())
         except Exception:
             pass
