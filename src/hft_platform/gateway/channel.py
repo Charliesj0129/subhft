@@ -6,6 +6,7 @@ Design decisions (D1):
 - submit_nowait() is the hot-path entry point (raises QueueFull on backpressure).
 - Protocol class IntentChannelProtocol enables future network-transport swap.
 """
+
 from __future__ import annotations
 
 import asyncio

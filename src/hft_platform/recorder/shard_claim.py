@@ -10,6 +10,7 @@ Architecture (D3):
 Env vars:
     HFT_WAL_SHARD_CLAIM_ENABLED: enable sidecar locking (default 1)
 """
+
 from __future__ import annotations
 
 import fcntl
@@ -31,8 +32,10 @@ class FileClaimRegistry:
         claim_dir: str = ".wal/claims",
         enabled: bool | None = None,
     ) -> None:
-        _enabled = enabled if enabled is not None else (
-            os.getenv("HFT_WAL_SHARD_CLAIM_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
+        _enabled = (
+            enabled
+            if enabled is not None
+            else (os.getenv("HFT_WAL_SHARD_CLAIM_ENABLED", "1").lower() not in {"0", "false", "no", "off"})
         )
         self._enabled = _enabled
         self._claim_dir = claim_dir

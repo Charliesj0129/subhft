@@ -5,6 +5,7 @@ Architecture (D2):
 - All values are scaled integers (Precision Law).
 - CANCEL intents skip check_and_update; release_exposure reduces notional.
 """
+
 from __future__ import annotations
 
 import os
@@ -44,8 +45,10 @@ class ExposureStore:
         global_max_notional: int | None = None,
         limits: Optional[dict[str, ExposureLimits]] = None,
     ) -> None:
-        _gmax = global_max_notional if global_max_notional is not None else int(
-            os.getenv("HFT_EXPOSURE_GLOBAL_MAX_NOTIONAL", "0")
+        _gmax = (
+            global_max_notional
+            if global_max_notional is not None
+            else int(os.getenv("HFT_EXPOSURE_GLOBAL_MAX_NOTIONAL", "0"))
         )
         self._global_max: int = _gmax
         # acct → strategy_id → symbol → notional_scaled

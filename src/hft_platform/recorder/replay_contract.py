@@ -4,6 +4,7 @@ Defines the contract that a WALLoaderService instance must satisfy before
 starting file processing. Violations are returned as a list of human-readable
 strings (not exceptions) so callers can decide to warn or abort.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,17 +36,13 @@ def validate_replay_preconditions(loader: Any) -> list[str]:
 
     # strict_ns requires manifest (to avoid reprocessing)
     if strict_order and not manifest_enabled:
-        violations.append(
-            "strict_ns file ordering requires manifest (HFT_WAL_USE_MANIFEST=1)"
-        )
+        violations.append("strict_ns file ordering requires manifest (HFT_WAL_USE_MANIFEST=1)")
 
     # dedup requires ClickHouse client (writes to hft._wal_dedup)
     if dedup_enabled:
         ch_client = getattr(loader, "ch_client", None)
         if ch_client is None:
-            violations.append(
-                "dedup_enabled requires an active ClickHouse client (ch_client is None)"
-            )
+            violations.append("dedup_enabled requires an active ClickHouse client (ch_client is None)")
 
     # archive_on_success requires archive_dir to be set
     if archive_dir is None:

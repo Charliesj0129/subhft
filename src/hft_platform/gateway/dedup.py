@@ -6,6 +6,7 @@ Guarantees:
 - Window evicts oldest entry when full (LRU via OrderedDict).
 - Persist/load from disk for crash-recovery.
 """
+
 from __future__ import annotations
 
 import os
@@ -63,8 +64,10 @@ class IdempotencyStore:
         persist_path: str | None = None,
     ) -> None:
         self._window_size = window_size or int(os.getenv("HFT_DEDUP_WINDOW_SIZE", "10000"))
-        _pe = persist_enabled if persist_enabled is not None else (
-            os.getenv("HFT_DEDUP_PERSIST_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
+        _pe = (
+            persist_enabled
+            if persist_enabled is not None
+            else (os.getenv("HFT_DEDUP_PERSIST_ENABLED", "1").lower() not in {"0", "false", "no", "off"})
         )
         self._persist_enabled = _pe
         self._persist_path = persist_path or os.getenv("HFT_DEDUP_PERSIST_PATH", ".state/dedup_window.jsonl")
@@ -115,9 +118,7 @@ class IdempotencyStore:
             rec.cmd_id = cmd_id
         else:
             # Commit without prior reserve (tolerated)
-            self._records[key] = IdempotencyRecord(
-                key=key, approved=approved, reason_code=reason_code, cmd_id=cmd_id
-            )
+            self._records[key] = IdempotencyRecord(key=key, approved=approved, reason_code=reason_code, cmd_id=cmd_id)
 
     def persist(self) -> None:
         """Write current window to disk atomically (temp+fsync+rename)."""

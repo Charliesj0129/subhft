@@ -125,6 +125,7 @@ class WALLoaderService:
 
         # CE3-03: Shard claim registry
         from hft_platform.recorder.shard_claim import FileClaimRegistry
+
         self._claim_registry = FileClaimRegistry(
             claim_dir=os.path.join(wal_dir, "claims"),
         )
@@ -203,6 +204,7 @@ class WALLoaderService:
 
         # CE3-04: validate replay preconditions
         from hft_platform.recorder.replay_contract import validate_replay_preconditions
+
         violations = validate_replay_preconditions(self)
         if violations:
             for v in violations:
@@ -326,6 +328,7 @@ class WALLoaderService:
 
         # CE3-04: validate replay preconditions
         from hft_platform.recorder.replay_contract import validate_replay_preconditions
+
         violations = validate_replay_preconditions(self)
         if violations:
             for v in violations:

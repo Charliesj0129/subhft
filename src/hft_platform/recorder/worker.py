@@ -220,6 +220,7 @@ class RecorderService:
         # CE3-01: set wal_mode metric
         try:
             from hft_platform.observability.metrics import MetricsRegistry
+
             MetricsRegistry.get().wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
         except Exception:
             pass
@@ -264,6 +265,7 @@ class RecorderService:
                         self.health_tracker.record_event("data_loss")
                         try:
                             from hft_platform.observability.metrics import MetricsRegistry
+
                             MetricsRegistry.get().recorder_failures_total.inc()
                         except Exception:
                             pass
