@@ -256,7 +256,14 @@ class MarketCalendar:
         try:
             import pandas as pd
 
-            next_session = self._cal.next_session(pd.Timestamp(date))
+            ts = pd.Timestamp(date)
+            # next_session requires an existing session label. For weekends/holidays,
+            # resolve to the nearest next session first to avoid noisy exceptions.
+            if self._cal.is_session(ts):
+                next_session = self._cal.next_session(ts)
+                return next_session.date()
+
+            next_session = self._cal.date_to_session(ts, direction="next")
             return next_session.date()
         except Exception as exc:
             logger.debug("next_trading_day failed", date=str(date), error=str(exc))
@@ -287,7 +294,14 @@ class MarketCalendar:
         try:
             import pandas as pd
 
-            prev_session = self._cal.previous_session(pd.Timestamp(date))
+            ts = pd.Timestamp(date)
+            # previous_session requires an existing session label. For weekends/holidays,
+            # resolve to the nearest previous session first to avoid noisy exceptions.
+            if self._cal.is_session(ts):
+                prev_session = self._cal.previous_session(ts)
+                return prev_session.date()
+
+            prev_session = self._cal.date_to_session(ts, direction="previous")
             return prev_session.date()
         except Exception as exc:
             logger.debug("previous_trading_day failed", date=str(date), error=str(exc))
