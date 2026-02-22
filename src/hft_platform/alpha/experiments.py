@@ -1,3 +1,13 @@
+"""Alpha experiment tracking — log runs, compare metrics, load signal/equity arrays.
+
+Each run is stored as a directory under ``base_dir/runs/<run_id>/`` containing:
+  - ``meta.json``:             ExperimentRun metadata
+  - ``scorecard.json``:        gate-C scorecard payload
+  - ``backtest_report.json``:  full backtest report dict
+  - ``signals.npy`` (opt):     signal array (float64)
+  - ``equity.npy``   (opt):    equity-curve array (float64)
+"""
+
 from __future__ import annotations
 
 import json
@@ -7,6 +17,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from structlog import get_logger
+
+logger = get_logger("alpha.experiments")
 
 
 @dataclass(frozen=True)
@@ -87,7 +100,8 @@ class ExperimentTracker:
             try:
                 payload = json.loads(meta_path.read_text())
                 row = _from_dict(payload)
-            except Exception:
+            except (OSError, ValueError, KeyError) as exc:
+                logger.warning("experiments.list_runs: skipping corrupt meta", path=str(meta_path), error=str(exc))
                 continue
             if alpha_id and row.alpha_id != alpha_id:
                 continue
@@ -219,6 +233,7 @@ def _load_numpy(path_str: str) -> np.ndarray | None:
         return None
     try:
         arr = np.load(path, allow_pickle=False)
-    except Exception:
+    except (OSError, ValueError) as exc:
+        logger.warning("experiments._load_numpy: failed to load", path=str(path), error=str(exc))
         return None
     return np.asarray(arr, dtype=np.float64)

@@ -1,3 +1,9 @@
+"""Alpha combinatorial search engine — random, template-sweep, and genetic strategies.
+
+``AlphaSearchEngine`` evaluates expression strings against a feature dict and returns
+``SearchResult`` objects ranked by a composite score (Sharpe − 0.25 × pool-correlation).
+"""
+
 from __future__ import annotations
 
 import itertools
@@ -44,6 +50,7 @@ class AlphaSearchEngine:
         self._rng = random.Random(int(random_seed))
 
     def random_search(self, n_trials: int = 1000) -> list[SearchResult]:
+        """Generate and evaluate *n_trials* random expressions; return sorted best-first."""
         out: list[SearchResult] = []
         for _ in range(max(1, int(n_trials))):
             expr = self._random_expression()
@@ -56,6 +63,11 @@ class AlphaSearchEngine:
         template: str,
         param_grid: Mapping[str, Sequence[Any]],
     ) -> list[SearchResult]:
+        """Evaluate all combinations of *param_grid* substituted into *template*.
+
+        The template uses Python ``str.format`` syntax, e.g. ``"ts_mean(x, {window})"``.
+        Returns results sorted best-first.
+        """
         keys = sorted(param_grid)
         if not keys:
             return [self.evaluate_expression(template)]
@@ -76,6 +88,10 @@ class AlphaSearchEngine:
         survival_ratio: float = 0.3,
         mutation_prob: float = 0.7,
     ) -> list[SearchResult]:
+        """Evolutionary search: survive top *survival_ratio* each generation, mutate rest.
+
+        Returns the final population sorted best-first.
+        """
         pop_size = max(4, int(population))
         keep_n = max(2, int(pop_size * float(survival_ratio)))
         mutate_p = float(mutation_prob)
@@ -96,6 +112,7 @@ class AlphaSearchEngine:
         return results
 
     def evaluate_expression(self, expression: str) -> SearchResult:
+        """Compile and evaluate a single *expression* string; return its ``SearchResult``."""
         compiled = compile_expression(expression)
         signal = compiled.evaluate(self.features)
         sharpe = _signal_sharpe(signal, self.returns)
@@ -121,6 +138,7 @@ class AlphaSearchEngine:
         *,
         path: str = "research/combinatorial/results/latest.json",
     ) -> str:
+        """Serialise *results* to JSON at *path*; returns the path written."""
         out = Path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
         payload = [item.to_dict() for item in results]

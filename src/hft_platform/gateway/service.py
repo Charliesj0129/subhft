@@ -26,7 +26,7 @@ from structlog import get_logger
 from hft_platform.contracts.strategy import IntentType
 from hft_platform.gateway.channel import IntentEnvelope, LocalIntentChannel
 from hft_platform.gateway.dedup import IdempotencyStore
-from hft_platform.gateway.exposure import ExposureKey, ExposureStore
+from hft_platform.gateway.exposure import ExposureKey, ExposureLimitError, ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 
 logger = get_logger("gateway.service")
@@ -48,11 +48,11 @@ class GatewayService:
     def __init__(
         self,
         channel: LocalIntentChannel,
-        risk_engine: Any,
-        order_adapter: Any,
+        risk_engine: Any,  # deferred: RiskEngine lives in hft_platform.risk — avoids circular import
+        order_adapter: Any,  # deferred: OrderAdapter lives in hft_platform.execution — avoids circular import
         exposure_store: ExposureStore,
         dedup_store: IdempotencyStore,
-        storm_guard: Any,
+        storm_guard: Any,  # deferred: StormGuard lives in hft_platform.risk — avoids circular import
         policy: GatewayPolicy,
     ) -> None:
         self._channel = channel
@@ -108,7 +108,7 @@ class GatewayService:
                 from hft_platform.observability.metrics import MetricsRegistry
 
                 MetricsRegistry.get().gateway_dedup_hits_total.inc()
-            except Exception:
+            except Exception:  # noqa: BLE001  # best-effort metrics: never break hot path
                 pass
             logger.debug(
                 "Dedup hit — returning cached decision",
@@ -136,7 +136,21 @@ class GatewayService:
             symbol=intent.symbol,
         )
         if intent.intent_type != IntentType.CANCEL:
-            exp_ok, exp_reason = self._exposure.check_and_update(exp_key, intent)
+            try:
+                exp_ok, exp_reason = self._exposure.check_and_update(exp_key, intent)
+            except ExposureLimitError as exc:
+                # Symbol-cardinality hard limit reached; reject and commit dedup so
+                # the same key is not retried in a busy-loop (CE2-12).
+                self._rejected += 1
+                self._dedup.commit(key, False, "EXPOSURE_SYMBOL_LIMIT", 0)
+                self._emit_reject("EXPOSURE_SYMBOL_LIMIT")
+                logger.error(
+                    "GatewayService exposure symbol limit hit",
+                    ack_token=envelope.ack_token,
+                    error=str(exc),
+                )
+                self._record_latency(t0)
+                return
             if not exp_ok:
                 self._rejected += 1
                 self._dedup.commit(key, False, exp_reason, 0)
@@ -201,7 +215,7 @@ class GatewayService:
             from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().gateway_reject_total.labels(reason=reason).inc()
-        except Exception:
+        except Exception:  # noqa: BLE001  # best-effort metrics: never break hot path
             pass
 
     def _record_latency(self, t0: int) -> None:
@@ -209,7 +223,7 @@ class GatewayService:
             from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().gateway_dispatch_latency_ns.observe(time.perf_counter_ns() - t0)
-        except Exception:
+        except Exception:  # noqa: BLE001  # best-effort metrics: never break hot path
             pass
 
     def _update_channel_depth_metric(self) -> None:
@@ -217,5 +231,5 @@ class GatewayService:
             from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().gateway_intent_channel_depth.set(self._channel.qsize())
-        except Exception:
+        except Exception:  # noqa: BLE001  # best-effort metrics: never break hot path
             pass

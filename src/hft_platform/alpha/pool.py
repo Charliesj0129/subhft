@@ -38,7 +38,7 @@ def compute_pool_matrix(
 
 def compute_correlation_payload(
     *,
-    signals: Mapping[str, Sequence[float]],
+    signals: Mapping[str, Any],
     sample_step: int = 1,
 ) -> dict[str, Any]:
     alpha_ids, data = _aligned_signal_matrix(signals, sample_step=max(1, int(sample_step)))
@@ -108,8 +108,8 @@ def optimize_pool_weights(
     base_dir: str = "research/experiments",
     method: str = "equal_weight",
     ridge_alpha: float = 0.1,
-    signals: Mapping[str, Sequence[float]] | None = None,
-    returns: Sequence[float] | None = None,
+    signals: Mapping[str, Any] | None = None,
+    returns: Any | None = None,
 ) -> PoolOptimizationResult:
     tracker = ExperimentTracker(base_dir=base_dir)
     source_signals = signals if signals is not None else tracker.latest_signals_by_alpha()
@@ -155,12 +155,12 @@ def optimize_pool_weights(
 
 def marginal_contribution_test(
     *,
-    new_signal: Sequence[float],
-    existing_signals: Mapping[str, Sequence[float]],
+    new_signal: Any,
+    existing_signals: Mapping[str, Any],
     method: str = "equal_weight",
     min_uplift: float = 0.05,
     ridge_alpha: float = 0.1,
-    returns: Sequence[float] | None = None,
+    returns: Any | None = None,
 ) -> dict[str, Any]:
     if not existing_signals:
         return {
@@ -254,7 +254,7 @@ def evaluate_marginal_alpha(
 
 
 def _aligned_signal_matrix(
-    signals: Mapping[str, Sequence[float]],
+    signals: Mapping[str, Any],
     *,
     sample_step: int,
 ) -> tuple[list[str], np.ndarray]:

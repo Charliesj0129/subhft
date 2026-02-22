@@ -70,7 +70,11 @@ class IdempotencyStore:
             else (os.getenv("HFT_DEDUP_PERSIST_ENABLED", "1").lower() not in {"0", "false", "no", "off"})
         )
         self._persist_enabled = _pe
-        self._persist_path = persist_path or os.getenv("HFT_DEDUP_PERSIST_PATH", ".state/dedup_window.jsonl")
+        self._persist_path: str = (
+            persist_path
+            if persist_path is not None
+            else os.getenv("HFT_DEDUP_PERSIST_PATH", ".state/dedup_window.jsonl")
+        )
         self._records: OrderedDict[str, IdempotencyRecord] = OrderedDict()
 
     # ── Public API ────────────────────────────────────────────────────────

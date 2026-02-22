@@ -155,6 +155,8 @@ files = [
     "src/hft_platform/risk",
     "src/hft_platform/utils/metrics.py",
     "src/hft_platform/config/loader.py",
+    "src/hft_platform/alpha",
+    "src/hft_platform/gateway",
 ]
 namespace_packages = true
 explicit_package_bases = true
