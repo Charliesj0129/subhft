@@ -1,3 +1,14 @@
+"""Alpha promotion pipeline — Gate D (backtest) + Gate E (shadow) evaluation.
+
+``promote_alpha`` is the single entry point.  It:
+  1. Loads the backtest scorecard produced by Gate C.
+  2. Evaluates Gate D (quantitative thresholds: Sharpe, drawdown, turnover, correlation).
+  3. Evaluates Gate E (operational thresholds: shadow sessions, drift, rejection rate).
+  4. Writes ``integration_report.json`` and ``promotion_decision.json`` to the alpha dir.
+  5. On approval, writes a YAML promotion config under ``config/strategy_promotions/``.
+  6. Best-effort audit logs to ClickHouse (guarded by ``HFT_ALPHA_AUDIT_ENABLED``).
+"""
+
 from __future__ import annotations
 
 import json
@@ -150,7 +161,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
     turnover = _to_float(scorecard.get("turnover"))
     corr = _to_float(scorecard.get("correlation_pool_max"))
 
-    checks = {
+    checks: dict[str, dict[str, Any]] = {
         "sharpe_oos": {
             "value": sharpe,
             "min": config.min_sharpe_oos,
@@ -177,7 +188,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
 
 
 def _evaluate_gate_e(config: PromotionConfig) -> tuple[bool, dict[str, Any]]:
-    checks = {
+    checks: dict[str, dict[str, Any]] = {
         "shadow_sessions": {
             "value": config.shadow_sessions,
             "min": config.min_shadow_sessions,

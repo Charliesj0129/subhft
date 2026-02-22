@@ -1,3 +1,15 @@
+"""Combinatorial alpha operator library — pure-numpy signal primitives.
+
+All operators follow a consistent contract:
+  - Accept 1-D or broadcastable arrays; coerced internally via ``_as_1d``.
+  - Accept an optional ``out`` buffer (pre-allocated, same shape) for zero-alloc reuse.
+  - Return ``float64`` arrays of the same length as the (possibly truncated) input.
+  - Never raise on empty inputs; return zero-filled arrays instead.
+
+``OPERATORS`` at the bottom maps string names to callables for use by the expression
+language and search engine.
+"""
+
 from __future__ import annotations
 
 from typing import Callable
@@ -6,6 +18,7 @@ import numpy as np
 
 
 def ts_mean(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Rolling mean over the last *window* samples (inclusive)."""
     arr = _as_1d(x)
     w = max(1, int(window))
     target = _target(out, arr.shape)
@@ -18,6 +31,7 @@ def ts_mean(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.
 
 
 def ts_std(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Rolling standard deviation over the last *window* samples (inclusive)."""
     arr = _as_1d(x)
     w = max(1, int(window))
     target = _target(out, arr.shape)
@@ -29,6 +43,7 @@ def ts_std(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.n
 
 
 def ts_sum(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Rolling sum over the last *window* samples (inclusive)."""
     arr = _as_1d(x)
     w = max(1, int(window))
     target = _target(out, arr.shape)
@@ -40,6 +55,7 @@ def ts_sum(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.n
 
 
 def ts_delta(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Difference between current value and the value *window* samples ago."""
     arr = _as_1d(x)
     w = max(1, int(window))
     target = _target(out, arr.shape)
@@ -50,6 +66,7 @@ def ts_delta(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np
 
 
 def ts_rank(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Percentile rank of the current value within the last *window* samples."""
     arr = _as_1d(x)
     w = max(1, int(window))
     target = _target(out, arr.shape)
@@ -62,6 +79,7 @@ def ts_rank(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.
 
 
 def decay_linear(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Linearly-weighted moving average; weights increase linearly toward the current bar."""
     arr = _as_1d(x)
     w = max(1, int(window))
     target = _target(out, arr.shape)
@@ -74,6 +92,7 @@ def decay_linear(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -
 
 
 def ts_corr(x: np.ndarray, y: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Rolling Pearson correlation between *x* and *y* over the last *window* samples."""
     lhs = _as_1d(x)
     rhs = _as_1d(y)
     n = min(lhs.size, rhs.size)
@@ -94,6 +113,7 @@ def ts_corr(x: np.ndarray, y: np.ndarray, window: int, *, out: np.ndarray | None
 
 
 def rank(x: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Cross-sectional rank normalised to [0, 1] (0 = smallest, 1 = largest)."""
     arr = _as_1d(x)
     target = _target(out, arr.shape)
     if arr.size <= 1:
@@ -106,6 +126,7 @@ def rank(x: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
 
 
 def zscore(x: np.ndarray, window: int | None = None, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Z-score normalisation; rolling (over *window* bars) or full-series when *window* is None."""
     arr = _as_1d(x)
     target = _target(out, arr.shape)
     if window is None:
@@ -127,6 +148,7 @@ def zscore(x: np.ndarray, window: int | None = None, *, out: np.ndarray | None =
 
 
 def sign(x: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Element-wise sign: −1, 0, or +1."""
     arr = _as_1d(x)
     target = _target(out, arr.shape)
     np.sign(arr, out=target)
@@ -134,6 +156,7 @@ def sign(x: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
 
 
 def log1p(x: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Element-wise log(1 + x); values clipped to [−0.999999, ∞) to avoid log(0)."""
     arr = _as_1d(x)
     target = _target(out, arr.shape)
     np.log1p(np.clip(arr, a_min=-0.999999, a_max=None), out=target)
@@ -141,6 +164,7 @@ def log1p(x: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
 
 
 def abs_(x: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Element-wise absolute value."""
     arr = _as_1d(x)
     target = _target(out, arr.shape)
     np.abs(arr, out=target)
@@ -148,6 +172,7 @@ def abs_(x: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
 
 
 def add(x: np.ndarray, y: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Element-wise addition; arrays are aligned to the shorter length."""
     lhs, rhs = _align_2(x, y)
     target = _target(out, lhs.shape)
     np.add(lhs, rhs, out=target)
@@ -155,6 +180,7 @@ def add(x: np.ndarray, y: np.ndarray, *, out: np.ndarray | None = None) -> np.nd
 
 
 def mul(x: np.ndarray, y: np.ndarray, *, out: np.ndarray | None = None) -> np.ndarray:
+    """Element-wise multiplication; arrays are aligned to the shorter length."""
     lhs, rhs = _align_2(x, y)
     target = _target(out, lhs.shape)
     np.multiply(lhs, rhs, out=target)
@@ -162,6 +188,7 @@ def mul(x: np.ndarray, y: np.ndarray, *, out: np.ndarray | None = None) -> np.nd
 
 
 def div(x: np.ndarray, y: np.ndarray, *, out: np.ndarray | None = None, eps: float = 1e-12) -> np.ndarray:
+    """Safe element-wise division; outputs 0 where |y| ≤ *eps* to avoid division by zero."""
     lhs, rhs = _align_2(x, y)
     target = _target(out, lhs.shape)
     np.divide(lhs, rhs, out=target, where=np.abs(rhs) > eps)

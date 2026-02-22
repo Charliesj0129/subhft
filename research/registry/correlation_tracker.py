@@ -1,21 +1,38 @@
+"""Registry helper for computing and persisting alpha correlation matrices.
+
+``CorrelationTracker`` delegates computation to ``hft_platform.alpha.pool``
+and persists the result to Parquet (preferred) or JSON (fallback).
+"""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 import numpy as np
+from structlog import get_logger
 
 from hft_platform.alpha.pool import compute_correlation_payload
 
+logger = get_logger("registry.correlation_tracker")
+
 
 class CorrelationTracker:
+    """Compute, flag, and persist correlation matrices for the alpha pool."""
+
     def compute_matrix(
         self,
-        signals: Mapping[str, Sequence[float]],
+        signals: Mapping[str, Any],
         *,
         sample_step: int = 1,
     ) -> dict[str, Any]:
+        """Return a correlation payload dict (Pearson + Spearman) for *signals*.
+
+        Args:
+            signals:     alpha_id → signal sequence/array mapping.
+            sample_step: downsample factor applied before computing correlations.
+        """
         return compute_correlation_payload(signals=signals, sample_step=sample_step)
 
     def flag_redundant(
@@ -25,6 +42,13 @@ class CorrelationTracker:
         threshold: float = 0.7,
         metric: str = "pearson",
     ) -> list[dict[str, Any]]:
+        """Return pairs whose absolute correlation exceeds *threshold*.
+
+        Args:
+            payload:   result of :meth:`compute_matrix`.
+            threshold: absolute-correlation cutoff (default 0.7).
+            metric:    ``"pearson"`` or ``"spearman"``.
+        """
         from hft_platform.alpha.pool import flag_redundant_pairs
 
         return flag_redundant_pairs(dict(payload), threshold=threshold, metric=metric)
@@ -35,6 +59,10 @@ class CorrelationTracker:
         *,
         path: str = "research/registry/correlation_matrix.parquet",
     ) -> str:
+        """Persist *payload* to *path* (Parquet) with a JSON fallback.
+
+        Returns the path that was actually written (Parquet or ``.json``).
+        """
         out = Path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -48,7 +76,12 @@ class CorrelationTracker:
                 frame = pd.DataFrame(matrix, index=alpha_ids, columns=alpha_ids)
                 frame.to_parquet(out)
                 frame_written = True
-        except Exception:
+        except (ImportError, OSError, ValueError) as exc:
+            logger.warning(
+                "correlation_tracker.save: Parquet write failed, falling back to JSON",
+                path=str(out),
+                error=str(exc),
+            )
             frame_written = False
 
         if frame_written:
