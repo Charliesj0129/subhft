@@ -1,10 +1,13 @@
-
 import numpy as np
 import pytest
 
 factor_registry = pytest.importorskip("research.tools.factor_registry", reason="research tools not available")
 _compute_matched_filter_flow = factor_registry._compute_matched_filter_flow
-from rust_core import MatchedFilterTradeFlow
+
+try:
+    from hft_platform.rust_core import MatchedFilterTradeFlow  # type: ignore[import]
+except ImportError:
+    pytest.skip("rust_core extension not built", allow_module_level=True)
 
 
 def test_rust_parity():
@@ -40,11 +43,12 @@ def test_rust_parity():
     # Let's check from where both have enough history (slow_window)
     valid_idx = slow_w + 5
 
-    mse = np.mean((py_signal[valid_idx:] - rust_signal[valid_idx:])**2)
+    mse = np.mean((py_signal[valid_idx:] - rust_signal[valid_idx:]) ** 2)
     print(f"MSE: {mse}")
 
     # Assert close
     np.testing.assert_allclose(py_signal[valid_idx:], rust_signal[valid_idx:], rtol=1e-5, atol=1e-8)
+
 
 if __name__ == "__main__":
     test_rust_parity()
