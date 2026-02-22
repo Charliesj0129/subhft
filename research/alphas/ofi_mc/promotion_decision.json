@@ -1,0 +1,27 @@
+{
+  "alpha_id": "ofi_mc",
+  "canary_weight": 0.02,
+  "decision": "approve",
+  "forced": false,
+  "gate_d_passed": true,
+  "gate_e_checks": {
+    "drift_alerts": {
+      "max": 0,
+      "pass": true,
+      "value": 0
+    },
+    "execution_reject_rate": {
+      "max": 0.01,
+      "pass": true,
+      "value": 0.0
+    },
+    "shadow_sessions": {
+      "min": 5,
+      "pass": true,
+      "value": 8
+    }
+  },
+  "gate_e_passed": true,
+  "reasons": [],
+  "timestamp": "2026-02-17T14:03:14.939758+00:00"
+}

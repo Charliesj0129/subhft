@@ -1,0 +1,18 @@
+API /metrics latency (ms)
+samples: 120
+avg_ms: 16.76407845
+p50_ms: 5.719077
+p90_ms: 9.045005
+p99_ms: 38.216657
+max_ms: 1241.686814
+stdev_ms: 112.346350608643
+
+Queue depth stats
+order: {'avg': 0.0, 'max': 0.0, 'p95': 0.0}
+raw: {'avg': 0.0, 'max': 0.0, 'p95': 0.0}
+raw_exec: {'avg': 0.0, 'max': 0.0, 'p95': 0.0}
+recorder: {'avg': 0.0, 'max': 0.0, 'p95': 0.0}
+risk: {'avg': 0.0, 'max': 0.0, 'p95': 0.0}
+
+CSV: reports/latency_by_symbol.csv
+Heatmap: not generated

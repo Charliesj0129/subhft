@@ -1,0 +1,1190 @@
+{
+  "001": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/001_credit_term_structures_part3.md",
+    "ref": "001",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "credit term structures part3"
+  },
+  "002": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/002_optimal_dynamic_basis_trading.md",
+    "ref": "002",
+    "status": "reviewed",
+    "tags": [
+      "futures_arb"
+    ],
+    "title": "optimal dynamic basis trading"
+  },
+  "003": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/003_data_driven_optimisation_framework.md",
+    "ref": "003",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "data driven optimisation framework"
+  },
+  "004": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/004_fair_basis_funding_capital.md",
+    "ref": "004",
+    "status": "reviewed",
+    "tags": [
+      "futures_arb"
+    ],
+    "title": "fair basis funding capital"
+  },
+  "005": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/005_agent_based_simulation_perpetual.md",
+    "ref": "005",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "agent based simulation perpetual"
+  },
+  "006": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/006_games_in_games_paradigm.md",
+    "ref": "006",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "games in games paradigm"
+  },
+  "007": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/007_lookahead_bias_llm_forecasts.md",
+    "ref": "007",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "lookahead bias llm forecasts"
+  },
+  "008": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/008_alpha_r1_reasoning_via_rl.md",
+    "ref": "008",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "alpha r1 reasoning via rl"
+  },
+  "009": {
+    "alphas": [
+      "kl_regime"
+    ],
+    "note_file": "research/knowledge/notes/009_relative_entropy_change_point.md",
+    "ref": "009",
+    "status": "implemented",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "relative entropy change point"
+  },
+  "010": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/010_autoquant_auditable_execution.md",
+    "ref": "010",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "autoquant auditable execution"
+  },
+  "011": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/011_bondmm_a_decentralized_lending.md",
+    "ref": "011",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "bondmm a decentralized lending"
+  },
+  "012": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/012_equilibrium_liquidity_dex_cex.md",
+    "ref": "012",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "equilibrium liquidity dex cex"
+  },
+  "013": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/013_hft_trading_game_transient_impact.md",
+    "ref": "013",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "hft trading game transient impact"
+  },
+  "014": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/014_arbitrum_timeboost_volatility.md",
+    "ref": "014",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "arbitrum timeboost volatility"
+  },
+  "015": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/015_institutional_backing_crypto_volatility.md",
+    "ref": "015",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "institutional backing crypto volatility"
+  },
+  "016": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/016_interpretable_hypothesis_driven_trading.md",
+    "ref": "016",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "interpretable hypothesis driven trading"
+  },
+  "018": {
+    "alphas": [
+      "ofi_mc"
+    ],
+    "note_file": "research/knowledge/notes/018_optimal_signal_extraction_order_flow.md",
+    "ref": "018",
+    "status": "implemented",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "optimal signal extraction order flow"
+  },
+  "019": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/019_rl_financial_decision_making_review.md",
+    "ref": "019",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "rl financial decision making review"
+  },
+  "020": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/020_high_volume_return_premium_nonlinearity.md",
+    "ref": "020",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "high volume return premium nonlinearity"
+  },
+  "021": {
+    "alphas": [
+      "garch_vol"
+    ],
+    "note_file": "research/knowledge/notes/021_stochastic_volatility_lstm_hybrid.md",
+    "ref": "021",
+    "status": "implemented",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "stochastic volatility lstm hybrid"
+  },
+  "022": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/022_red_queens_trap_failure_analysis.md",
+    "ref": "022",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "red queens trap failure analysis"
+  },
+  "023": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/023_wealth_or_stealth_insider_trading.md",
+    "ref": "023",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "wealth or stealth insider trading"
+  },
+  "024": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/024_funding_mechanics_4h_context.md",
+    "ref": "024",
+    "status": "reviewed",
+    "tags": [
+      "futures_arb"
+    ],
+    "title": "funding mechanics 4h context"
+  },
+  "025": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/025_amm_fee_mechanisms_formal_approach.md",
+    "ref": "025",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "amm fee mechanisms formal approach"
+  },
+  "026": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/026_unified_theory_order_flow_impact.md",
+    "ref": "026",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "unified theory order flow impact"
+  },
+  "027": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/027_explainable_market_integrity_monitoring.md",
+    "ref": "027",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "explainable market integrity monitoring"
+  },
+  "028": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/028_autonomous_market_intelligence_agentic_ai.md",
+    "ref": "028",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "autonomous market intelligence agentic ai"
+  },
+  "029": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/029_bayesian_robust_financial_trading.md",
+    "ref": "029",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "bayesian robust financial trading"
+  },
+  "030": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/030_deepm_regime_robust_macro_portfolio.md",
+    "ref": "030",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "deepm regime robust macro portfolio"
+  },
+  "031": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/031_design_empirical_study_llm_reits.md",
+    "ref": "031",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "design empirical study llm reits"
+  },
+  "032": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/032_directional_liquidity_geometric_shear.md",
+    "ref": "032",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "directional liquidity geometric shear"
+  },
+  "033": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/033_advanced_stat_arb_rl.md",
+    "ref": "033",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading",
+      "stat_arb"
+    ],
+    "title": "advanced stat arb rl"
+  },
+  "034": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/034_temporal_kan_hft.md",
+    "ref": "034",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "temporal kan hft"
+  },
+  "035": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/035_text_to_python_benchmark.md",
+    "ref": "035",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "text to python benchmark"
+  },
+  "036": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/036_alpha_r1_reasoning.md",
+    "ref": "036",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "alpha r1 reasoning"
+  },
+  "037": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/037_graph_learning_fx.md",
+    "ref": "037",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "graph learning fx"
+  },
+  "038": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/038_rl_finance_review.md",
+    "ref": "038",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "rl finance review"
+  },
+  "039": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/039_intraday_lob_markov.md",
+    "ref": "039",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "intraday lob markov"
+  },
+  "040": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/040_dart_spread_trading.md",
+    "ref": "040",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "dart spread trading"
+  },
+  "041": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/041_deepm_portfolio.md",
+    "ref": "041",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "deepm portfolio"
+  },
+  "042": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/042_crypto_range_funding.md",
+    "ref": "042",
+    "status": "reviewed",
+    "tags": [
+      "futures_arb"
+    ],
+    "title": "crypto range funding"
+  },
+  "043": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/043_utility_weighted_forecasting.md",
+    "ref": "043",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "utility weighted forecasting"
+  },
+  "044": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/044_memecoin_bot_detection.md",
+    "ref": "044",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "memecoin bot detection"
+  },
+  "045": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/045_adaptive_dataflow.md",
+    "ref": "045",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "adaptive dataflow"
+  },
+  "046": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/046_probfm_uncertainty.md",
+    "ref": "046",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "probfm uncertainty"
+  },
+  "047": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/047_forward_only_particle_filter.md",
+    "ref": "047",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "forward only particle filter"
+  },
+  "048": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/048_distillation_layer_dropping.md",
+    "ref": "048",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "distillation layer dropping"
+  },
+  "049": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/049_hypergraph_snn_mapping.md",
+    "ref": "049",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "hypergraph snn mapping"
+  },
+  "050": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/050_quantum_hmm_reduction.md",
+    "ref": "050",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "quantum hmm reduction"
+  },
+  "051": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/051_llm_in_sandbox.md",
+    "ref": "051",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "llm in sandbox"
+  },
+  "052": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/052_credit_term_structures.md",
+    "ref": "052",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "credit term structures"
+  },
+  "053": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/053_optimal_basis_trading.md",
+    "ref": "053",
+    "status": "reviewed",
+    "tags": [
+      "futures_arb"
+    ],
+    "title": "optimal basis trading"
+  },
+  "054": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/054_data_driven_optimisation.md",
+    "ref": "054",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "data driven optimisation"
+  },
+  "055": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/055_games_in_games.md",
+    "ref": "055",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "games in games"
+  },
+  "056": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/056_lookahead_bias_llm.md",
+    "ref": "056",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "lookahead bias llm"
+  },
+  "057": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/057_relative_entropy_cpd.md",
+    "ref": "057",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "relative entropy cpd"
+  },
+  "058": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/058_autoquant.md",
+    "ref": "058",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "autoquant"
+  },
+  "059": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/059_bondmm_a.md",
+    "ref": "059",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "bondmm a"
+  },
+  "060": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/060_fair_basis_capital.md",
+    "ref": "060",
+    "status": "reviewed",
+    "tags": [
+      "futures_arb"
+    ],
+    "title": "fair basis capital"
+  },
+  "061": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/061_agent_based_simulation.md",
+    "ref": "061",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "agent based simulation"
+  },
+  "062": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/062_equilibrium_liquidity_dex.md",
+    "ref": "062",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "equilibrium liquidity dex"
+  },
+  "063": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/063_hft_game_transient_impact.md",
+    "ref": "063",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "hft game transient impact"
+  },
+  "064": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/064_volatility_time_ordering.md",
+    "ref": "064",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "volatility time ordering"
+  },
+  "065": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/065_institutional_backing_crypto.md",
+    "ref": "065",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "institutional backing crypto"
+  },
+  "066": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/066_hypothesis_driven_trading.md",
+    "ref": "066",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "hypothesis driven trading"
+  },
+  "067": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/067_optimal_signal_extraction.md",
+    "ref": "067",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "optimal signal extraction"
+  },
+  "068": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/068_rl_finance_review.md",
+    "ref": "068",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "rl finance review"
+  },
+  "069": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/069_high_volume_return_premium.md",
+    "ref": "069",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "high volume return premium"
+  },
+  "070": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/070_stochastic_volatility_lstm.md",
+    "ref": "070",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "stochastic volatility lstm"
+  },
+  "071": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/071_red_queens_trap_hft_failure.md",
+    "ref": "071",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "red queens trap hft failure"
+  },
+  "072": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/072_wealth_or_stealth_insider_trading.md",
+    "ref": "072",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "wealth or stealth insider trading"
+  },
+  "073": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/073_funding_mechanics_crypto.md",
+    "ref": "073",
+    "status": "reviewed",
+    "tags": [
+      "futures_arb"
+    ],
+    "title": "funding mechanics crypto"
+  },
+  "074": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/074_unified_theory_order_flow.md",
+    "ref": "074",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "unified theory order flow"
+  },
+  "075": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/075_aimm_x_market_integrity.md",
+    "ref": "075",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "aimm x market integrity"
+  },
+  "076": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/076_agentic_ai_nowcasting.md",
+    "ref": "076",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "agentic ai nowcasting"
+  },
+  "077": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/077_bayesian_robust_trading.md",
+    "ref": "077",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "bayesian robust trading"
+  },
+  "078": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/078_deepm_macro_portfolio.md",
+    "ref": "078",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "deepm macro portfolio"
+  },
+  "079": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/079_llm_multi_agent_reits.md",
+    "ref": "079",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "llm multi agent reits"
+  },
+  "080": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/080_directional_liquidity_shear.md",
+    "ref": "080",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "directional liquidity shear"
+  },
+  "081": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/081_diverse_optimal_execution.md",
+    "ref": "081",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "diverse optimal execution"
+  },
+  "082": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/082_explainable_crypto_microstructure.md",
+    "ref": "082",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "explainable crypto microstructure"
+  },
+  "083": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/083_timescale_separation.md",
+    "ref": "083",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "timescale separation"
+  },
+  "084": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/084_forecasting_equity_correlations.md",
+    "ref": "084",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "forecasting equity correlations"
+  },
+  "085": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/085_optimal_signal_extraction.md",
+    "ref": "085",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "optimal signal extraction"
+  },
+  "086": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/086_market_making_closing_auctions.md",
+    "ref": "086",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "market making closing auctions"
+  },
+  "087": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/087_market_making_transient_fx.md",
+    "ref": "087",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "market making transient fx"
+  },
+  "088": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/088_prediction_market_bench.md",
+    "ref": "088",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "prediction market bench"
+  },
+  "089": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/089_realised_quantile_variance.md",
+    "ref": "089",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "realised quantile variance"
+  },
+  "090": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/090_cex_dex_arb_subslots.md",
+    "ref": "090",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "cex dex arb subslots"
+  },
+  "091": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/091_manipulation_prediction_markets.md",
+    "ref": "091",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "manipulation prediction markets"
+  },
+  "092": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/092_pregeometric_liquidity.md",
+    "ref": "092",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "pregeometric liquidity"
+  },
+  "093": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/093_probfm_uncertainty.md",
+    "ref": "093",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "probfm uncertainty"
+  },
+  "094": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/094_meme_coin_bots.md",
+    "ref": "094",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "meme coin bots"
+  },
+  "095": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/095_technology_adoption_network.md",
+    "ref": "095",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "technology adoption network"
+  },
+  "096": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/096_temporal_kan_lob.md",
+    "ref": "096",
+    "status": "reviewed",
+    "tags": [
+      "microstructure",
+      "rl_trading"
+    ],
+    "title": "temporal kan lob"
+  },
+  "097": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/097_trade_r1_process_verification.md",
+    "ref": "097",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "trade r1 process verification"
+  },
+  "098": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/098_market_resistance_impact.md",
+    "ref": "098",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "market resistance impact"
+  },
+  "099": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/099_webcryptoagent.md",
+    "ref": "099",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "webcryptoagent"
+  },
+  "100": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/100_stablecoin_peg_mfg.md",
+    "ref": "100",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "stablecoin peg mfg"
+  },
+  "101": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/101_model_free_conventions.md",
+    "ref": "101",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "model free conventions"
+  },
+  "102": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/102_financial_vision_rl.md",
+    "ref": "102",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "financial vision rl"
+  },
+  "103": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/103_strategies_xgb_chiarella.md",
+    "ref": "103",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "strategies xgb chiarella"
+  },
+  "104": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/104_rl_abm_simulation.md",
+    "ref": "104",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "rl abm simulation"
+  },
+  "105": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/105_llm_abm_simulation.md",
+    "ref": "105",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "llm abm simulation"
+  },
+  "106": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/106_quantum_rl_sector_rotation.md",
+    "ref": "106",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "quantum rl sector rotation"
+  },
+  "107": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/107_rl_execution_optimization.md",
+    "ref": "107",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "rl execution optimization"
+  },
+  "108": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/108_hmm_stat_arb_oil.md",
+    "ref": "108",
+    "status": "reviewed",
+    "tags": [
+      "stat_arb"
+    ],
+    "title": "hmm stat arb oil"
+  },
+  "109": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/109_cpp_low_latency_patterns.md",
+    "ref": "109",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "cpp low latency patterns"
+  },
+  "110": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/110_drl_partial_info.md",
+    "ref": "110",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "drl partial info"
+  },
+  "111": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/111_risk_sensitive_rl.md",
+    "ref": "111",
+    "status": "reviewed",
+    "tags": [
+      "rl_trading"
+    ],
+    "title": "risk sensitive rl"
+  },
+  "112": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/112_probfm_der.md",
+    "ref": "112",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "probfm der"
+  },
+  "113": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/113_alpha_r1_llm.md",
+    "ref": "113",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "alpha r1 llm"
+  },
+  "114": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/114_graph_learning_fx.md",
+    "ref": "114",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "graph learning fx"
+  },
+  "115": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/115_options_stat_arb_rnconv.md",
+    "ref": "115",
+    "status": "reviewed",
+    "tags": [
+      "stat_arb"
+    ],
+    "title": "options stat arb rnconv"
+  },
+  "116": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/116_momentum_transformer.md",
+    "ref": "116",
+    "status": "reviewed",
+    "tags": [
+      "stat_arb"
+    ],
+    "title": "momentum transformer"
+  },
+  "117": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/117_attention_factors_stat_arb.md",
+    "ref": "117",
+    "status": "reviewed",
+    "tags": [
+      "stat_arb"
+    ],
+    "title": "attention factors stat arb"
+  },
+  "118": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/118_end_to_end_statarb_autoencoder.md",
+    "ref": "118",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "end to end statarb autoencoder"
+  },
+  "119": {
+    "alphas": [],
+    "note_file": "research/knowledge/notes/119_mtrgl_graph_learning.md",
+    "ref": "119",
+    "status": "reviewed",
+    "tags": [
+      "unclassified"
+    ],
+    "title": "mtrgl graph learning"
+  }
+}

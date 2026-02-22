@@ -1,0 +1,16 @@
+=== top allocations ===
+<frozen importlib._bootstrap_external>:729: size=773 KiB, count=6054, average=131 B
+/usr/local/lib/python3.11/collections/__init__.py:503: size=60.0 KiB, count=306, average=201 B
+<frozen importlib._bootstrap>:241: size=48.6 KiB, count=423, average=118 B
+/usr/local/lib/python3.11/site-packages/yaml/reader.py:97: size=36.5 KiB, count=680, average=55 B
+<frozen importlib._bootstrap>:702: size=25.4 KiB, count=1, average=25.4 KiB
+/usr/local/lib/python3.11/collections/__init__.py:436: size=18.7 KiB, count=217, average=88 B
+/usr/local/lib/python3.11/collections/__init__.py:482: size=12.9 KiB, count=204, average=65 B
+/app/src/hft_platform/feed_adapter/normalizer.py:96: size=11.6 KiB, count=134, average=89 B
+/app/src/hft_platform/feed_adapter/normalizer.py:100: size=10.8 KiB, count=16, average=692 B
+/usr/local/lib/python3.11/re/_compiler.py:761: size=10.8 KiB, count=20, average=551 B
+/usr/local/lib/python3.11/site-packages/yaml/constructor.py:414: size=9480 B, count=79, average=120 B
+/usr/local/lib/python3.11/enum.py:562: size=9144 B, count=28, average=327 B
+/usr/local/lib/python3.11/collections/__init__.py:501: size=8832 B, count=184, average=48 B
+/usr/local/lib/python3.11/collections/__init__.py:443: size=7344 B, count=68, average=108 B
+/usr/local/lib/python3.11/collections/__init__.py:465: size=7072 B, count=68, average=104 B

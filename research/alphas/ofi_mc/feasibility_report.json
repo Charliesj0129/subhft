@@ -1,0 +1,25 @@
+{
+  "details": {
+    "available_fields": [
+      "ask_depth",
+      "best_ask",
+      "best_bid",
+      "bid_depth",
+      "qty"
+    ],
+    "complexity": "O(1)",
+    "complexity_ok": true,
+    "missing_fields": [],
+    "precision_warnings": [],
+    "required_fields": [
+      "bid_px",
+      "bid_qty",
+      "ask_px",
+      "ask_qty",
+      "trade_vol",
+      "current_mid"
+    ]
+  },
+  "gate": "Gate A",
+  "passed": true
+}

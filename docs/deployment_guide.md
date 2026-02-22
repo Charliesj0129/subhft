@@ -9,7 +9,8 @@
 | --- | --- | --- | --- |
 | 本機模擬 | 開發/驗證流程 | `uv run hft run sim` | Python/uv |
 | 本機 live | 接入券商 | `HFT_MODE=live uv run hft run live` | SHIOAJI_* |
-| Docker Compose | 開發 + ClickHouse | `docker compose up -d --build` | Docker |
+| Docker Compose | 單機部署 + ClickHouse（預設） | `docker compose up -d --build` | Docker |
+| Docker Swarm | 服務化部署（可選） | `docker stack deploy -c docker-stack.yml hft` | Docker + Swarm |
 | Ops (Host Tuning) | 低抖動環境 | `sudo ./ops.sh setup` | Linux + sudo |
 
 ---
@@ -34,7 +35,7 @@ uv run hft run sim
 
 ---
 
-## 3. Docker Compose 部署
+## 3. Docker Compose 部署（預設）
 
 ```bash
 docker compose up -d --build
@@ -52,6 +53,8 @@ docker compose up -d --build
 docker compose logs -f hft-engine
 
 docker compose restart hft-engine
+
+docker compose down
 ```
 
 ### 3.3 symbols.yaml 使用注意
@@ -62,7 +65,16 @@ docker-compose 預設 `SYMBOLS_CONFIG=config/base/symbols.yaml`。
 SYMBOLS_CONFIG=config/symbols.yaml
 
 # 然後
-Docker compose restart hft-engine
+docker compose restart hft-engine
+```
+
+### 3.4 Docker Swarm（可選）
+```bash
+docker swarm init 2>/dev/null || true
+docker build -t ${HFT_IMAGE:-hft-platform:latest} .
+docker stack deploy -c docker-stack.yml hft
+docker service logs -f hft_hft-engine
+docker stack rm hft
 ```
 
 ---
@@ -108,7 +120,9 @@ sudo ./ops.sh setup
 
 ## 6. CI / 部署更新
 - CI: `.github/workflows/ci.yml`
-- 部署：建議以 image + `docker compose pull && up -d` 進行
+- 部署：
+  - 單機：`docker compose up -d --build`
+  - 叢集：`docker stack deploy -c docker-stack.yml hft`
 
 ---
 
