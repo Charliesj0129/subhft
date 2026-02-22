@@ -1650,6 +1650,48 @@ class FactorRegistry:
         return results
 
 
+@njit
+def _compute_matched_filter_flow(
+    trade_vol: np.ndarray,
+    trade_side: np.ndarray,
+    fast_w: int,
+    slow_w: int,
+) -> np.ndarray:
+    """Python/Numba reference implementation of MatchedFilterTradeFlow.
+
+    Signal = RollingSum(SignedFlow, fast_w) / RollingMean(Volume, slow_w)
+    Mirrors rust_core.MatchedFilterTradeFlow exactly for parity tests.
+    """
+    n = len(trade_vol)
+    result = np.zeros(n, dtype=np.float64)
+
+    for i in range(n):
+        # Not enough history yet (warmup — mirrors Rust: len < slow_window)
+        if i < slow_w - 1:
+            result[i] = 0.0
+            continue
+
+        # Fast window: rolling sum of signed flow
+        fast_start = max(0, i - fast_w + 1)
+        sum_signed = 0.0
+        for j in range(fast_start, i + 1):
+            sum_signed += trade_vol[j] * trade_side[j]
+
+        # Slow window: rolling sum of volume
+        slow_start = i - slow_w + 1
+        sum_vol = 0.0
+        for j in range(slow_start, i + 1):
+            sum_vol += trade_vol[j]
+
+        capacity = sum_vol / slow_w
+        if capacity > 1e-8:
+            result[i] = sum_signed / capacity
+        else:
+            result[i] = 0.0
+
+    return result
+
+
 def main():
     """Demo: list all factors"""
     print("Registered Alpha Factors:")
