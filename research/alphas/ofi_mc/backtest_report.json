@@ -1,0 +1,24 @@
+{
+  "details": {
+    "capacity_estimate": 20000000.0,
+    "config_hash": "bffb60b40ed4ec73",
+    "criteria": {
+      "max_abs_drawdown": 0.3,
+      "min_sharpe_oos": 0.0
+    },
+    "experiment_meta_path": "/tmp/hft_exp_cli/runs/be1bc2c9-81b7-4911-9e6c-c20b64364f77/meta.json",
+    "ic_mean": -0.37691527052014323,
+    "ic_std": 0.17922677134845777,
+    "max_drawdown": 0.0,
+    "regime_metrics": {
+      "high_vol": 0.0
+    },
+    "run_id": "be1bc2c9-81b7-4911-9e6c-c20b64364f77",
+    "scorecard_path": "/home/charlie/hft_platform/research/alphas/ofi_mc/scorecard.json",
+    "sharpe_is": 0.0,
+    "sharpe_oos": 0.0,
+    "turnover": 0.0
+  },
+  "gate": "Gate C",
+  "passed": true
+}

@@ -1,7 +1,7 @@
 # HFT Platform Makefile
 # Unified CLI for development, testing, and CI
 
-.PHONY: dev test test-all coverage lint format typecheck benchmark start stop build-rust clean help
+.PHONY: dev test test-all coverage lint format typecheck benchmark start stop logs swarm-start swarm-stop swarm-logs build-rust clean help
 
 # Default target
 .DEFAULT_GOAL := help
@@ -96,14 +96,25 @@ benchmark-compare: ## Compare current benchmarks against baseline
 # Docker / Services
 # ============================================================================
 
-start: ## Start services with docker-compose
-	docker compose up -d
+start: ## Start services with Docker Compose (default)
+	docker compose up -d --build
 
-stop: ## Stop services
+stop: ## Stop services with Docker Compose
 	docker compose down
 
-logs: ## Show service logs
-	docker compose logs -f
+logs: ## Show hft-engine logs (Docker Compose)
+	docker compose logs -f hft-engine
+
+swarm-start: ## Build image and deploy Docker Swarm stack (optional)
+	docker swarm init >/dev/null 2>&1 || true
+	docker build -t $${HFT_IMAGE:-hft-platform:latest} .
+	docker stack deploy -c docker-stack.yml hft
+
+swarm-stop: ## Remove Docker Swarm stack
+	docker stack rm hft
+
+swarm-logs: ## Show hft-engine service logs (Swarm)
+	docker service logs -f hft_hft-engine
 
 # ============================================================================
 # Cleanup

@@ -2,9 +2,11 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import textwrap
 from importlib import import_module
+from pathlib import Path
 from typing import Any, Dict
 
 from structlog import get_logger
@@ -336,12 +338,19 @@ def cmd_backtest(args: argparse.Namespace):
                 symbol=args.symbol or "2330",
                 tick_size=args.tick_size,
                 lot_size=args.lot_size,
+                maker_fee=(args.fee_maker or 0.0),
+                taker_fee=(args.fee_taker or 0.0),
+                partial_fill=not args.no_partial_fill,
                 price_scale=args.price_scale,
                 timeout=args.timeout,
+                seed=int(args.seed),
             )
             adapter.run()
             print("Strategy backtest completed.")
         else:
+            if len(args.data) != 1:
+                print("Backtest runner currently supports one data file; run one symbol/file per invocation.")
+                sys.exit(1)
             cfg = HftBacktestConfig(
                 data=args.data,
                 symbols=args.symbols,
@@ -352,12 +361,455 @@ def cmd_backtest(args: argparse.Namespace):
                 fee_maker=args.fee_maker,
                 fee_taker=args.fee_taker,
                 partial_fill=not args.no_partial_fill,
+                strict_equity=bool(args.strict_equity),
                 record_out=args.record_out,
                 report=args.report,
+                seed=int(args.seed),
             )
             runner = HftBacktestRunner(cfg)
-            runner.run()
-            print("Backtest completed.")
+            result = runner.run()
+            if result is None:
+                print("Backtest failed.")
+                sys.exit(1)
+            print(
+                "Backtest completed.",
+                f"run_id={result.run_id}",
+                f"config={result.config_hash}",
+                f"pnl={result.pnl:.2f}",
+                f"synthetic={result.used_synthetic_equity}",
+                f"equity_points={result.equity_points}",
+            )
+
+
+def cmd_alpha_scaffold(args: argparse.Namespace):
+    cmd = [sys.executable, "-m", "research.tools.alpha_scaffold", args.alpha_id, "--complexity", str(args.complexity)]
+    for ref in args.paper or []:
+        cmd.extend(["--paper", str(ref)])
+    if args.force:
+        cmd.append("--force")
+
+    proc = subprocess.run(
+        cmd,
+        cwd=".",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.stdout.strip():
+        print(proc.stdout.strip())
+    if proc.returncode != 0:
+        if proc.stderr.strip():
+            print(proc.stderr.strip())
+        sys.exit(proc.returncode or 1)
+
+
+def cmd_alpha_search(args: argparse.Namespace):
+    mode = str(args.mode)
+    if mode == "template" and not args.template:
+        print("--template is required for template mode")
+        sys.exit(2)
+
+    try:
+        np = import_module("numpy")
+        AlphaSearchEngine = import_module("research.combinatorial.search_engine").AlphaSearchEngine
+    except Exception as exc:
+        print(f"Failed to import alpha search engine: {exc}")
+        sys.exit(1)
+
+    source = np.load(args.data, allow_pickle=False)
+    try:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            if "data" in source:
+                arr = np.asarray(source["data"])
+            else:
+                first_key = source.files[0] if source.files else None
+                if first_key is None:
+                    raise ValueError("Empty NPZ file")
+                arr = np.asarray(source[first_key])
+        else:
+            arr = np.asarray(source)
+    finally:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+
+    field_names = [f.strip() for f in str(args.feature_fields).split(",") if f.strip()]
+    if not field_names:
+        print("--feature-fields is required (comma separated)")
+        sys.exit(2)
+
+    features: dict[str, np.ndarray] = {}
+    if arr.dtype.names:
+        for field in field_names:
+            if field not in arr.dtype.names:
+                print(f"Feature field not found in data: {field}")
+                sys.exit(2)
+            features[field] = np.asarray(arr[field], dtype=np.float64)
+        returns = np.asarray(arr[args.returns_field], dtype=np.float64) if args.returns_field else None
+    else:
+        for i, field in enumerate(field_names):
+            if arr.ndim == 1:
+                if i > 0:
+                    print("Non-structured 1D data supports only one feature field")
+                    sys.exit(2)
+                features[field] = np.asarray(arr, dtype=np.float64)
+            else:
+                if i >= arr.shape[1]:
+                    print(f"Feature index out of range for field '{field}'")
+                    sys.exit(2)
+                features[field] = np.asarray(arr[:, i], dtype=np.float64)
+        if args.returns_field:
+            print("--returns-field is only supported for structured arrays")
+            sys.exit(2)
+        returns = None
+
+    engine = AlphaSearchEngine(
+        features=features,
+        returns=returns,
+        random_seed=int(args.seed),
+    )
+
+    if mode == "random":
+        results = engine.random_search(n_trials=int(args.trials))
+    elif mode == "template":
+        grid = _parse_param_grid(args.grid)
+        results = engine.template_sweep(args.template, grid)
+    else:
+        results = engine.genetic_search(population=int(args.population), generations=int(args.generations))
+
+    top_n = max(1, int(args.top))
+    top_results = results[:top_n]
+    payload: dict[str, Any] = {
+        "mode": mode,
+        "count": len(top_results),
+        "results": [item.to_dict() for item in top_results],
+    }
+
+    if args.save_results:
+        payload["results_path"] = engine.save_results(top_results, path=str(args.save_results))
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _parse_param_grid(raw: str | None) -> dict[str, list[Any]]:
+    if not raw:
+        return {}
+    grid: dict[str, list[Any]] = {}
+    pairs = [part.strip() for part in str(raw).split(";") if part.strip()]
+    for pair in pairs:
+        if "=" not in pair:
+            raise ValueError(f"Invalid grid token: {pair}")
+        key, val = pair.split("=", 1)
+        items = [item.strip() for item in val.split(",") if item.strip()]
+        casted: list[Any] = []
+        for item in items:
+            try:
+                casted.append(int(item))
+                continue
+            except ValueError:
+                pass
+            try:
+                casted.append(float(item))
+                continue
+            except ValueError:
+                pass
+            casted.append(item)
+        grid[key.strip()] = casted
+    return grid
+
+
+def cmd_alpha_list(args: argparse.Namespace):
+    try:
+        from research.registry.alpha_registry import AlphaRegistry
+    except Exception as exc:
+        print(f"Failed to import research registry: {exc}")
+        sys.exit(1)
+
+    registry = AlphaRegistry()
+    loaded = registry.discover("research/alphas")
+    if not loaded:
+        print("No alpha artifacts discovered.")
+        return
+
+    for alpha_id in sorted(loaded):
+        manifest = loaded[alpha_id].manifest
+        print(f"{alpha_id}\tstatus={manifest.status.value}\ttier={manifest.tier.value if manifest.tier else '-'}")
+
+    if registry.errors:
+        print("\nDiscovery warnings:")
+        for msg in registry.errors:
+            print(f"- {msg}")
+
+
+def cmd_alpha_validate(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
+    except Exception as exc:
+        print(f"Failed to import alpha validation pipeline: {exc}")
+        sys.exit(1)
+
+    config = ValidationConfig(
+        alpha_id=args.alpha_id,
+        data_paths=[str(p) for p in args.data],
+        is_oos_split=float(args.is_oos_split),
+        signal_threshold=float(args.signal_threshold),
+        max_position=int(args.max_position),
+        min_sharpe_oos=float(args.min_sharpe_oos),
+        max_abs_drawdown=float(args.max_abs_drawdown),
+        skip_gate_b_tests=bool(args.skip_gate_b_tests),
+        pytest_timeout_s=int(args.pytest_timeout),
+        project_root=".",
+        experiments_dir=str(args.experiments_dir),
+    )
+    result = run_alpha_validation(config)
+    summary = result.to_dict()
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    if not result.passed:
+        sys.exit(2)
+
+
+def cmd_alpha_promote(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
+    except Exception as exc:
+        print(f"Failed to import alpha promotion pipeline: {exc}")
+        sys.exit(1)
+
+    config = PromotionConfig(
+        alpha_id=args.alpha_id,
+        owner=args.owner,
+        project_root=".",
+        scorecard_path=args.scorecard,
+        shadow_sessions=int(args.shadow_sessions),
+        min_shadow_sessions=int(args.min_shadow_sessions),
+        drift_alerts=int(args.drift_alerts),
+        execution_reject_rate=float(args.execution_reject_rate),
+        max_execution_reject_rate=float(args.max_execution_reject_rate),
+        min_sharpe_oos=float(args.min_sharpe_oos),
+        max_abs_drawdown=float(args.max_abs_drawdown),
+        max_turnover=float(args.max_turnover),
+        max_correlation=float(args.max_correlation),
+        canary_weight=(None if args.canary_weight is None else float(args.canary_weight)),
+        expiry_days=int(args.expiry_days),
+        max_live_slippage_bps=float(args.max_live_slippage_bps),
+        max_live_drawdown_contribution=float(args.max_live_drawdown_contribution),
+        max_execution_error_rate=float(args.max_execution_error_rate),
+        force=bool(args.force),
+    )
+    result = promote_alpha(config)
+    summary = result.to_dict()
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    if not result.approved:
+        sys.exit(2)
+
+
+def cmd_alpha_rl_promote(args: argparse.Namespace):
+    try:
+        promote_latest_rl_run = import_module("research.rl.lifecycle").promote_latest_rl_run
+    except Exception as exc:
+        print(f"Failed to import RL lifecycle promotion utility: {exc}")
+        sys.exit(1)
+
+    result = promote_latest_rl_run(
+        alpha_id=str(args.alpha_id),
+        owner=str(args.owner),
+        base_dir=str(args.base_dir),
+        project_root=str(args.project_root),
+        shadow_sessions=int(args.shadow_sessions),
+        min_shadow_sessions=int(args.min_shadow_sessions),
+        drift_alerts=int(args.drift_alerts),
+        execution_reject_rate=float(args.execution_reject_rate),
+        force=bool(args.force),
+    )
+    payload = result.to_dict()
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if not result.approved:
+        sys.exit(2)
+
+
+def cmd_alpha_pool(args: argparse.Namespace):
+    try:
+        import importlib
+
+        pool_mod = importlib.import_module("hft_platform.alpha.pool")
+    except Exception as exc:
+        print(f"Failed to import alpha pool utilities: {exc}")
+        sys.exit(1)
+
+    pool_cmd = getattr(args, "pool_cmd", "matrix")
+    threshold = float(getattr(args, "threshold", None) if getattr(args, "threshold", None) is not None else 0.7)
+    method = str(getattr(args, "method", "equal_weight"))
+    ridge_alpha = float(getattr(args, "ridge_alpha", 0.1))
+    min_uplift = float(getattr(args, "min_uplift", 0.05))
+    alpha_id = getattr(args, "alpha_id", None)
+    payload: dict[str, Any]
+
+    if pool_cmd == "optimize":
+        result = pool_mod.optimize_pool_weights(
+            base_dir=args.base_dir,
+            method=method,
+            ridge_alpha=ridge_alpha,
+        )
+        payload = {"optimization": result.to_dict()}
+    elif pool_cmd == "marginal":
+        if not alpha_id:
+            print("alpha pool marginal requires --alpha-id")
+            sys.exit(2)
+        payload = {
+            "marginal": pool_mod.evaluate_marginal_alpha(
+                alpha_id=str(alpha_id),
+                base_dir=args.base_dir,
+                method=method,
+                min_uplift=min_uplift,
+                ridge_alpha=ridge_alpha,
+            )
+        }
+    else:
+        matrix = pool_mod.compute_pool_matrix(base_dir=args.base_dir)
+        payload = {"matrix": matrix}
+        include_redundant = bool(getattr(args, "redundant", False)) or pool_cmd == "redundant"
+        if include_redundant:
+            metric = str(getattr(args, "corr_metric", "pearson"))
+            try:
+                payload["redundant"] = pool_mod.flag_redundant_pairs(matrix, threshold=threshold, metric=metric)
+            except TypeError:
+                # Backward compatibility for legacy helper signature without metric arg.
+                payload["redundant"] = pool_mod.flag_redundant_pairs(matrix, threshold=threshold)
+            payload["threshold"] = threshold
+            payload["metric"] = metric
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_canary_status(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.canary import CanaryMonitor
+    except Exception as exc:
+        print(f"Failed to import canary monitor: {exc}")
+        sys.exit(1)
+
+    monitor = CanaryMonitor(promotions_dir=args.promotions_dir)
+    canaries = monitor.load_active_canaries()
+    if not canaries:
+        print("No active canaries found.")
+        return
+
+    payload = []
+    for c in canaries:
+        payload.append(
+            {
+                "alpha_id": c.get("alpha_id", "?"),
+                "weight": c.get("weight", 0),
+                "enabled": c.get("enabled", False),
+                "path": c.get("_path", ""),
+            }
+        )
+    print(json.dumps({"canaries": payload, "count": len(payload)}, indent=2, sort_keys=True))
+
+
+def cmd_alpha_canary_evaluate(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.canary import CanaryMonitor
+    except Exception as exc:
+        print(f"Failed to import canary monitor: {exc}")
+        sys.exit(1)
+
+    monitor = CanaryMonitor(promotions_dir=args.promotions_dir)
+    live_metrics = {
+        "slippage_bps": float(args.slippage_bps),
+        "drawdown_contribution": float(args.dd_contrib),
+        "execution_error_rate": float(args.error_rate),
+        "sessions_live": int(args.sessions),
+    }
+    if args.sharpe_live is not None:
+        live_metrics["sharpe_live"] = float(args.sharpe_live)
+
+    status = monitor.evaluate(args.alpha_id, live_metrics)
+    payload = status.to_dict()
+
+    if args.apply:
+        monitor.apply_decision(status)
+        payload["applied"] = True
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_experiments_compare(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.experiments import ExperimentTracker
+    except Exception as exc:
+        print(f"Failed to import experiment tracker: {exc}")
+        sys.exit(1)
+
+    tracker = ExperimentTracker(base_dir=args.base_dir)
+    rows = tracker.compare(run_ids=list(args.run_ids))
+    payload = {"runs": rows, "count": len(rows)}
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_experiments_list(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.experiments import ExperimentTracker
+    except Exception as exc:
+        print(f"Failed to import experiment tracker: {exc}")
+        sys.exit(1)
+
+    tracker = ExperimentTracker(base_dir=args.base_dir)
+    rows = [run.to_dict() for run in tracker.list_runs(alpha_id=args.alpha_id)]
+    payload = {"runs": rows, "count": len(rows)}
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_experiments_best(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.experiments import ExperimentTracker
+    except Exception as exc:
+        print(f"Failed to import experiment tracker: {exc}")
+        sys.exit(1)
+
+    tracker = ExperimentTracker(base_dir=args.base_dir)
+    rows = tracker.best_by_metric(
+        metric=args.metric,
+        n=int(args.top),
+        alpha_id=args.alpha_id,
+    )
+    payload = {"metric": args.metric, "runs": rows, "count": len(rows)}
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def cmd_resolve_symbols(args: argparse.Namespace):
@@ -687,11 +1139,187 @@ def build_parser() -> argparse.ArgumentParser:
     back_run.add_argument("--latency-resp", type=float, help="Order response latency for backtest")
     back_run.add_argument("--fee-maker", type=float, help="Maker fee (per value, negative for rebate)")
     back_run.add_argument("--fee-taker", type=float, help="Taker fee (per value, negative for rebate)")
+    back_run.add_argument("--seed", type=int, default=42, help="Deterministic random seed")
     back_run.add_argument(
         "--no-partial-fill", action="store_true", help="Disable partial fill (use no_partial_fill_exchange)"
     )
+    back_run.add_argument(
+        "--strict-equity", action="store_true", help="Fail run if real equity extraction is unavailable"
+    )
     back_run.add_argument("--report", action="store_true", help="Generate HTML Tearsheet")
     back_run.set_defaults(func=cmd_backtest)
+
+    alpha = sub.add_parser("alpha", help="Alpha research pipeline utilities")
+    alpha_sub = alpha.add_subparsers(dest="alpha_cmd")
+
+    alpha_list = alpha_sub.add_parser("list", help="List discovered research alphas")
+    alpha_list.set_defaults(func=cmd_alpha_list)
+
+    alpha_scaffold = alpha_sub.add_parser("scaffold", help="Scaffold a new research alpha artifact")
+    alpha_scaffold.add_argument("alpha_id", help="Immutable alpha id (e.g. ofi_mc_v2)")
+    alpha_scaffold.add_argument("--paper", action="append", default=[], help="Paper reference (repeatable)")
+    alpha_scaffold.add_argument("--complexity", default="O1", help="Complexity target, e.g. O1 or ON")
+    alpha_scaffold.add_argument("--force", action="store_true", help="Overwrite existing files")
+    alpha_scaffold.set_defaults(func=cmd_alpha_scaffold)
+
+    alpha_search = alpha_sub.add_parser("search", help="Run combinatorial alpha search")
+    alpha_search.add_argument("--mode", choices=["random", "template", "genetic"], default="random")
+    alpha_search.add_argument("--data", required=True, help="Input npy/npz data path")
+    alpha_search.add_argument("--feature-fields", required=True, help="Comma-separated feature field names")
+    alpha_search.add_argument("--returns-field", help="Structured array field name for forward returns")
+    alpha_search.add_argument("--trials", type=int, default=100, help="Random search trials")
+    alpha_search.add_argument("--template", help="Template expression for template mode")
+    alpha_search.add_argument(
+        "--grid",
+        help="Template parameter grid, e.g. 'w=5,10,20;lag=1,2'",
+    )
+    alpha_search.add_argument("--population", type=int, default=40, help="Genetic search population")
+    alpha_search.add_argument("--generations", type=int, default=10, help="Genetic search generations")
+    alpha_search.add_argument("--seed", type=int, default=42, help="Random seed")
+    alpha_search.add_argument("--top", type=int, default=10, help="Top-N results in output")
+    alpha_search.add_argument("--save-results", help="Optional path to persist result artifacts")
+    alpha_search.add_argument("--out", help="Optional JSON output path")
+    alpha_search.set_defaults(func=cmd_alpha_search)
+
+    alpha_validate = alpha_sub.add_parser("validate", help="Run alpha validation pipeline (Gate A-C)")
+    alpha_validate.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")
+    alpha_validate.add_argument("--data", nargs="+", required=True, help="npy/npz path(s) for validation")
+    alpha_validate.add_argument("--is-oos-split", type=float, default=0.7, help="IS ratio for temporal split")
+    alpha_validate.add_argument("--signal-threshold", type=float, default=0.3, help="Signal threshold")
+    alpha_validate.add_argument("--max-position", type=int, default=5, help="Max absolute position")
+    alpha_validate.add_argument("--min-sharpe-oos", type=float, default=0.0, help="Gate C minimum OOS Sharpe")
+    alpha_validate.add_argument("--max-abs-drawdown", type=float, default=0.3, help="Gate C max absolute drawdown")
+    alpha_validate.add_argument("--skip-gate-b-tests", action="store_true", help="Skip per-alpha pytest in Gate B")
+    alpha_validate.add_argument("--pytest-timeout", type=int, default=300, help="Gate B timeout in seconds")
+    alpha_validate.add_argument(
+        "--experiments-dir",
+        default="research/experiments",
+        help="Directory to store experiment run artifacts",
+    )
+    alpha_validate.add_argument("--out", help="Optional summary JSON output path")
+    alpha_validate.set_defaults(func=cmd_alpha_validate)
+
+    alpha_promote = alpha_sub.add_parser("promote", help="Run promotion pipeline (Gate D-E) and write canary config")
+    alpha_promote.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")
+    alpha_promote.add_argument("--owner", required=True, help="Promotion owner")
+    alpha_promote.add_argument("--scorecard", help="Optional scorecard path override")
+    alpha_promote.add_argument("--shadow-sessions", type=int, default=0, help="Observed shadow sessions")
+    alpha_promote.add_argument("--min-shadow-sessions", type=int, default=5, help="Required shadow sessions for Gate E")
+    alpha_promote.add_argument("--drift-alerts", type=int, default=0, help="Drift alerts count from shadow run")
+    alpha_promote.add_argument(
+        "--execution-reject-rate", type=float, default=0.0, help="Observed reject rate in shadow run"
+    )
+    alpha_promote.add_argument(
+        "--max-execution-reject-rate", type=float, default=0.01, help="Gate E max acceptable reject rate"
+    )
+    alpha_promote.add_argument("--min-sharpe-oos", type=float, default=1.0, help="Gate D minimum OOS Sharpe")
+    alpha_promote.add_argument("--max-abs-drawdown", type=float, default=0.2, help="Gate D max absolute drawdown")
+    alpha_promote.add_argument("--max-turnover", type=float, default=2.0, help="Gate D max turnover")
+    alpha_promote.add_argument("--max-correlation", type=float, default=0.7, help="Gate D max correlation to pool")
+    alpha_promote.add_argument("--canary-weight", type=float, help="Override canary weight")
+    alpha_promote.add_argument("--expiry-days", type=int, default=30, help="Expiry review date offset")
+    alpha_promote.add_argument("--max-live-slippage-bps", type=float, default=3.0, help="Rollback slippage threshold")
+    alpha_promote.add_argument(
+        "--max-live-drawdown-contribution", type=float, default=0.02, help="Rollback drawdown contribution threshold"
+    )
+    alpha_promote.add_argument(
+        "--max-execution-error-rate", type=float, default=0.01, help="Rollback execution error rate"
+    )
+    alpha_promote.add_argument("--force", action="store_true", help="Force-write promotion config even if gates fail")
+    alpha_promote.add_argument("--out", help="Optional summary JSON output path")
+    alpha_promote.set_defaults(func=cmd_alpha_promote)
+
+    alpha_rl_promote = alpha_sub.add_parser(
+        "rl-promote",
+        help="Promote latest RL run using the same Gate D-E pipeline",
+    )
+    alpha_rl_promote.add_argument("--alpha-id", required=True, help="RL alpha id")
+    alpha_rl_promote.add_argument("--owner", required=True, help="Promotion owner")
+    alpha_rl_promote.add_argument("--base-dir", default="research/experiments", help="RL experiment base dir")
+    alpha_rl_promote.add_argument("--project-root", default=".", help="Project root for promotion config output")
+    alpha_rl_promote.add_argument("--shadow-sessions", type=int, default=0, help="Observed shadow sessions")
+    alpha_rl_promote.add_argument(
+        "--min-shadow-sessions", type=int, default=5, help="Required shadow sessions for Gate E"
+    )
+    alpha_rl_promote.add_argument("--drift-alerts", type=int, default=0, help="Drift alerts count")
+    alpha_rl_promote.add_argument("--execution-reject-rate", type=float, default=0.0, help="Observed reject rate")
+    alpha_rl_promote.add_argument(
+        "--force", action="store_true", help="Force-write promotion config even if gates fail"
+    )
+    alpha_rl_promote.add_argument("--out", help="Optional summary JSON output path")
+    alpha_rl_promote.set_defaults(func=cmd_alpha_rl_promote)
+
+    alpha_pool = alpha_sub.add_parser("pool", help="Show alpha pool correlation matrix from latest experiment runs")
+    alpha_pool.add_argument(
+        "pool_cmd",
+        nargs="?",
+        choices=["matrix", "redundant", "optimize", "marginal"],
+        default="matrix",
+        help="pool mode (matrix/redundant/optimize/marginal)",
+    )
+    alpha_pool.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
+    alpha_pool.add_argument("--threshold", type=float, default=None, help="Redundant correlation threshold")
+    alpha_pool.add_argument(
+        "--corr-metric", choices=["pearson", "spearman"], default="pearson", help="Correlation metric"
+    )
+    alpha_pool.add_argument("--redundant", action="store_true", help="Include redundant pair detection")
+    alpha_pool.add_argument(
+        "--method",
+        choices=["equal_weight", "ic_weighted", "mean_variance", "ridge"],
+        default="equal_weight",
+        help="Pool weight optimization method",
+    )
+    alpha_pool.add_argument("--ridge-alpha", type=float, default=0.1, help="Ridge regularization strength")
+    alpha_pool.add_argument("--alpha-id", help="Target alpha id for pool marginal contribution test")
+    alpha_pool.add_argument(
+        "--min-uplift", type=float, default=0.05, help="Minimum uplift for marginal contribution pass"
+    )
+    alpha_pool.add_argument("--out", help="Optional JSON output path")
+    alpha_pool.set_defaults(func=cmd_alpha_pool)
+
+    alpha_canary = alpha_sub.add_parser("canary", help="Canary monitor for promoted alphas")
+    alpha_canary_sub = alpha_canary.add_subparsers(dest="canary_cmd")
+
+    canary_status = alpha_canary_sub.add_parser("status", help="List all active canaries")
+    canary_status.add_argument(
+        "--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory"
+    )
+    canary_status.set_defaults(func=cmd_alpha_canary_status)
+
+    canary_eval = alpha_canary_sub.add_parser("evaluate", help="Evaluate canary metrics")
+    canary_eval.add_argument("--alpha-id", required=True, help="Alpha id to evaluate")
+    canary_eval.add_argument("--slippage-bps", type=float, default=0.0, help="Live slippage in bps")
+    canary_eval.add_argument("--dd-contrib", type=float, default=0.0, help="Live drawdown contribution")
+    canary_eval.add_argument("--error-rate", type=float, default=0.0, help="Live execution error rate")
+    canary_eval.add_argument("--sessions", type=int, default=0, help="Number of live sessions")
+    canary_eval.add_argument("--sharpe-live", type=float, default=None, help="Live Sharpe ratio (for escalation)")
+    canary_eval.add_argument("--apply", action="store_true", help="Apply decision (modify YAML)")
+    canary_eval.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory")
+    canary_eval.add_argument("--out", help="Optional JSON output path")
+    canary_eval.set_defaults(func=cmd_alpha_canary_evaluate)
+
+    alpha_exp = alpha_sub.add_parser("experiments", help="Experiment tracking utilities")
+    alpha_exp_sub = alpha_exp.add_subparsers(dest="alpha_exp_cmd")
+
+    alpha_exp_list = alpha_exp_sub.add_parser("list", help="List experiment runs")
+    alpha_exp_list.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
+    alpha_exp_list.add_argument("--alpha-id", help="Filter by alpha id")
+    alpha_exp_list.add_argument("--out", help="Optional JSON output path")
+    alpha_exp_list.set_defaults(func=cmd_alpha_experiments_list)
+
+    alpha_exp_compare = alpha_exp_sub.add_parser("compare", help="Compare experiment runs by run_id")
+    alpha_exp_compare.add_argument("run_ids", nargs="+", help="Run IDs to compare")
+    alpha_exp_compare.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
+    alpha_exp_compare.add_argument("--out", help="Optional JSON output path")
+    alpha_exp_compare.set_defaults(func=cmd_alpha_experiments_compare)
+
+    alpha_exp_best = alpha_exp_sub.add_parser("best", help="List best runs by metric")
+    alpha_exp_best.add_argument("--metric", default="sharpe_oos", help="Metric name")
+    alpha_exp_best.add_argument("--top", type=int, default=10, help="Top N runs")
+    alpha_exp_best.add_argument("--alpha-id", help="Filter by alpha id")
+    alpha_exp_best.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
+    alpha_exp_best.add_argument("--out", help="Optional JSON output path")
+    alpha_exp_best.set_defaults(func=cmd_alpha_experiments_best)
 
     return parser
 

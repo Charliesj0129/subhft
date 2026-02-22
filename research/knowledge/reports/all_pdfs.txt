@@ -1,0 +1,112 @@
+research/knowledge/papers/futures_arb/2009_Defining, Estimating and Using Credit Term Structures. Part .pdf
+research/knowledge/papers/futures_arb/2018_Optimal Dynamic Basis Trading.pdf
+research/knowledge/papers/futures_arb/2020_An end-to-end data-driven optimisation framework for constra.pdf
+research/knowledge/papers/futures_arb/2020_The Fair Basis: Funding and capital in the reduced form fram.pdf
+research/knowledge/papers/futures_arb/2025_Agent-Based Simulation of a Perpetual Futures Market.pdf
+research/knowledge/papers/microstructure/2025_A Games-in-Games Paradigm for Strategic Hybrid Jump-Diffusio.pdf
+research/knowledge/papers/microstructure/2025_A Test of Lookahead Bias in LLM Forecasts.pdf
+research/knowledge/papers/microstructure/2025_Alpha-R1: Alpha Screening with LLM Reasoning via Reinforceme.pdf
+research/knowledge/papers/microstructure/2025_Asymptotic and finite-sample distributions of one- and two-s.pdf
+research/knowledge/papers/microstructure/2025_AutoQuant: An Auditable Expert-System Framework for Executio.pdf
+research/knowledge/papers/microstructure/2025_Design of a Decentralized Fixed-Income Lending Automated Mar.pdf
+research/knowledge/papers/microstructure/2025_Equilibrium Liquidity and Risk Offsetting in Decentralised M.pdf
+research/knowledge/papers/microstructure/2025_High-Frequency Analysis of a Trading Game with Transient Pri.pdf
+research/knowledge/papers/microstructure/2025_Impact of Volatility on Time-Based Transaction Ordering Poli.pdf
+research/knowledge/papers/microstructure/2025_Institutional Backing and Crypto Volatility: A Hybrid Framew.pdf
+research/knowledge/papers/microstructure/2025_Interpretable Hypothesis-Driven Trading:A Rigorous Walk-Forw.pdf
+research/knowledge/papers/microstructure/2025_On the supremum of a quotient of power sums.pdf
+research/knowledge/papers/microstructure/2025_Optimal Signal Extraction from Order Flow: A Matched Filter .pdf
+research/knowledge/papers/microstructure/2025_Reinforcement Learning in Financial Decision Making: A Syste.pdf
+research/knowledge/papers/microstructure/2025_Sources and Nonlinearity of High Volume Return Premium: An E.pdf
+research/knowledge/papers/microstructure/2025_Stochastic Volatility Modelling with LSTM Networks: A Hybrid.pdf
+research/knowledge/papers/microstructure/2025_The Red Queen's Trap: Limits of Deep Evolution in High-Frequ.pdf
+research/knowledge/papers/microstructure/2025_Wealth or Stealth? The Camouflage Effect in Insider Trading.pdf
+research/knowledge/papers/microstructure/2025_Who sets the range? Funding mechanics and 4h context in cryp.pdf
+research/knowledge/papers/microstructure/2026_A Formal Approach to AMM Fee Mechanisms with Lean 4.pdf
+research/knowledge/papers/microstructure/2026_A unified theory of order flow, market impact, and volatilit.pdf
+research/knowledge/papers/microstructure/2026_An Explainable Market Integrity Monitoring System with Multi.pdf
+research/knowledge/papers/microstructure/2026_Autonomous Market Intelligence: Agentic AI Nowcasting Predic.pdf
+research/knowledge/papers/microstructure/2026_Bayesian Robust Financial Trading with Adversarial Synthetic.pdf
+research/knowledge/papers/microstructure/2026_DeePM: Regime-Robust Deep Learning for Systematic Macro Port.pdf
+research/knowledge/papers/microstructure/2026_Design and Empirical Study of a Large Language Model-Based M.pdf
+research/knowledge/papers/microstructure/2026_Directional Liquidity and Geometric Shear in Pregeometric Or.pdf
+research/knowledge/papers/microstructure/2026_Diverse Approaches to Optimal Execution Schedule Generation.pdf
+research/knowledge/papers/microstructure/2026_Explainable Patterns in Cryptocurrency Microstructure.pdf
+research/knowledge/papers/microstructure/2026_Fast Times, Slow Times: Timescale Separation in Financial Ti.pdf
+research/knowledge/papers/microstructure/2026_Forecasting Equity Correlations with Hybrid Transformer Grap.pdf
+research/knowledge/papers/microstructure/2026_History Is Not Enough: An Adaptive Dataflow System for Finan.pdf
+research/knowledge/papers/microstructure/2026_Intraday Limit Order Price Change Transition Dynamics Across.pdf
+research/knowledge/papers/microstructure/2026_Learning Market Making with Closing Auctions.pdf
+research/knowledge/papers/microstructure/2026_Manipulation in Prediction Markets: An Agent-based Modeling .pdf
+research/knowledge/papers/microstructure/2026_Market Making and Transient Impact in Spot FX.pdf
+research/knowledge/papers/microstructure/2026_PredictionMarketBench: A SWE-bench-Style Framework for Backt.pdf
+research/knowledge/papers/microstructure/2026_Pregeometric Origins of Liquidity Geometry in Financial Orde.pdf
+research/knowledge/papers/microstructure/2026_ProbFM: Probabilistic Time Series Foundation Model with Unce.pdf
+research/knowledge/papers/microstructure/2026_Realised quantile-based estimation of the integrated varianc.pdf
+research/knowledge/papers/microstructure/2026_Resisting Manipulative Bots in Meme Coin Copy Trading: A Mul.pdf
+research/knowledge/papers/microstructure/2026_Second Thoughts: How 1-second subslots transform CEX-DEX Arb.pdf
+research/knowledge/papers/microstructure/2026_Technology Adoption and Network Externalities in Financial S.pdf
+research/knowledge/papers/microstructure/2026_Temporal Kolmogorov-Arnold Networks (T-KAN) for High-Frequen.pdf
+research/knowledge/papers/microstructure/2026_Trade-R1: Bridging Verifiable Rewards to Stochastic Environm.pdf
+research/knowledge/papers/microstructure/2026_Trading Electrons: Predicting DART Spread Spikes in ISO Elec.pdf
+research/knowledge/papers/microstructure/2026_Trading with market resistance and concave price impact.pdf
+research/knowledge/papers/microstructure/2026_Utility-Weighted Forecasting and Calibration for Risk-Adjust.pdf
+research/knowledge/papers/microstructure/2026_WebCryptoAgent: Agentic Crypto Trading with Web Informatics.pdf
+research/knowledge/papers/microstructure/2026_Who Restores the Peg? A Mean-Field Game Approach to Model St.pdf
+research/knowledge/papers/rl_trading/2020_Model-free conventions in multi-agent reinforcement learning.pdf
+research/knowledge/papers/rl_trading/2022_Financial Vision Based Reinforcement Learning Trading Strate.pdf
+research/knowledge/papers/rl_trading/2022_Understanding intra-day price formation process by agent-bas.pdf
+research/knowledge/papers/rl_trading/2024_Reinforcement Learning in Agent-Based Market Simulation: Unv.pdf
+research/knowledge/papers/rl_trading/2025_Agent-Based Simulation of a Financial Market with Large Lang.pdf
+research/knowledge/papers/rl_trading/2025_Quantum Reinforcement Learning Trading Agent for Sector Rota.pdf
+research/knowledge/papers/rl_trading/2025_Right Place, Right Time: Market Simulation-based RL for Exec.pdf
+research/knowledge/papers/rl_trading/2026_History Is Not Enough: An Adaptive Dataflow System for Finan.pdf
+research/knowledge/papers/stat_arb/2023_A hidden Markov model for statistical arbitrage in internati.pdf
+research/knowledge/papers/stat_arb/2023_C++ Design Patterns for Low-latency Applications Including H.pdf
+research/knowledge/papers/stat_arb/2023_Decentralised Finance and Automated Market Making: Execution.pdf
+research/knowledge/papers/stat_arb/2023_Harnessing Deep Q-Learning for Enhanced Statistical Arbitrag.pdf
+research/knowledge/papers/stat_arb/2023_Linear and nonlinear causality in financial markets.pdf
+research/knowledge/papers/stat_arb/2023_Monte Carlo Simulation for Trading Under a Lévy-Driven Mean-.pdf
+research/knowledge/papers/stat_arb/2023_On statistical arbitrage under a conditional factor model of.pdf
+research/knowledge/papers/stat_arb/2023_Optimal Entry and Exit with Signature in Statistical Arbitra.pdf
+research/knowledge/papers/stat_arb/2023_Optimal Strategies for Round-Trip Pairs Trading Under Geomet.pdf
+research/knowledge/papers/stat_arb/2023_Optimal pair trading: consumption-investment problem.pdf
+research/knowledge/papers/stat_arb/2023_Pairs Trading: An Optimal Selling Rule with Constraints.pdf
+research/knowledge/papers/stat_arb/2023_Pairs-trading System using Quantum-inspired Combinatorial Op.pdf
+research/knowledge/papers/stat_arb/2023_Signature Trading: A Path-Dependent Extension of the Mean-Va.pdf
+research/knowledge/papers/stat_arb/2023_Statistical arbitrage portfolio construction based on prefer.pdf
+research/knowledge/papers/stat_arb/2024_A Comparison between Financial and Gambling Markets.pdf
+research/knowledge/papers/stat_arb/2024_A Markowitz Approach to Managing a Dynamic Basket of Moving-.pdf
+research/knowledge/papers/stat_arb/2024_Advanced Statistical Arbitrage with Reinforcement Learning.pdf
+research/knowledge/papers/stat_arb/2024_An Application of the Ornstein-Uhlenbeck Process to Pairs Tr.pdf
+research/knowledge/papers/stat_arb/2024_Application of Black-Litterman Bayesian in Statistical Arbit.pdf
+research/knowledge/papers/stat_arb/2024_Automated Market Making and Decentralized Finance.pdf
+research/knowledge/papers/stat_arb/2024_Cointegrated Matrix Autoregression Models.pdf
+research/knowledge/papers/stat_arb/2024_ESG driven pairs algorithm for sustainable trading: Analysis.pdf
+research/knowledge/papers/stat_arb/2024_End-to-End Policy Learning of a Statistical Arbitrage Autoen.pdf
+research/knowledge/papers/stat_arb/2024_Enhanced Momentum with Momentum Transformers.pdf
+research/knowledge/papers/stat_arb/2024_Finding Moving-Band Statistical Arbitrages via Convex-Concav.pdf
+research/knowledge/papers/stat_arb/2024_Is the difference between deep hedging and delta hedging a s.pdf
+research/knowledge/papers/stat_arb/2024_LLMs for Time Series: an Application for Single Stocks and S.pdf
+research/knowledge/papers/stat_arb/2024_MTRGL:Effective Temporal Correlation Discerning through Mult.pdf
+research/knowledge/papers/stat_arb/2024_Market information of the fractional stochastic regularity m.pdf
+research/knowledge/papers/stat_arb/2024_Optimal market-neutral currency trading on the cryptocurrenc.pdf
+research/knowledge/papers/stat_arb/2024_Pairs Trading Using a Novel Graphical Matching Approach.pdf
+research/knowledge/papers/stat_arb/2024_Parameters Optimization of Pair Trading Algorithm.pdf
+research/knowledge/papers/stat_arb/2024_Pricing and hedging of decentralised lending contracts.pdf
+research/knowledge/papers/stat_arb/2024_Reinforcement Learning Pair Trading: A Dynamic Scaling appro.pdf
+research/knowledge/papers/stat_arb/2024_Statistical Arbitrage in Rank Space.pdf
+research/knowledge/papers/stat_arb/2024_Statistical arbitrage in multi-pair trading strategy based o.pdf
+research/knowledge/papers/stat_arb/2024_Temporal Representation Learning for Stock Similarities and .pdf
+research/knowledge/papers/stat_arb/2025_Attention Factors for Statistical Arbitrage.pdf
+research/knowledge/papers/stat_arb/2025_CTBench: Cryptocurrency Time Series Generation Benchmark.pdf
+research/knowledge/papers/stat_arb/2025_Deep reinforcement learning for optimal trading with partial.pdf
+research/knowledge/papers/stat_arb/2025_Graph Learning for Foreign Exchange Rate Prediction and Stat.pdf
+research/knowledge/papers/stat_arb/2025_Market-Bench: Evaluating Large Language Models on Introducto.pdf
+research/knowledge/papers/stat_arb/2025_Risk-sensitive Reinforcement Learning Based on Convex Scorin.pdf
+research/knowledge/papers/stat_arb/2025_Signature Decomposition Method Applying to Pair Trading.pdf
+research/knowledge/papers/stat_arb/2025_Statistical Arbitrage in Options Markets by Graph Learning a.pdf
+research/knowledge/papers/stat_arb/2025_Statistical Arbitrage in Polish Equities Market Using Deep L.pdf
+research/knowledge/papers/stat_arb/2025_Stochastic factors can matter: improving robust growth under.pdf
+research/knowledge/papers/stat_arb/2025_Time-Varying Factor-Augmented Models for Volatility Forecast.pdf
+research/knowledge/papers/stat_arb/2025_Toward Quantum Utility in Finance: A Robust Data-Driven Algo.pdf

@@ -36,6 +36,13 @@ class HftBacktestAdapter:
         latency_us=100,
         seed: int = 42,
         price_scale: int = 10_000,
+        equity_sample_ns: int = 1_000_000,
+        initial_balance: float = 1_000_000.0,
+        tick_size: float | None = None,
+        lot_size: float | None = None,
+        maker_fee: float = 0.0,
+        taker_fee: float = 0.0,
+        partial_fill: bool = True,
     ):
         if not HFTBACKTEST_AVAILABLE:
             raise ImportError("hftbacktest not installed")
@@ -53,6 +60,11 @@ class HftBacktestAdapter:
         self.price_codec = PriceCodec(FixedPriceScaleProvider(price_scale))
         self._intent_seq = 0
         self.positions = {self.symbol: 0}
+        self.equity_sample_ns = int(equity_sample_ns)
+        self._next_equity_sample_ns = 0
+        self._last_known_balance = float(initial_balance)
+        self._equity_timestamps_ns: list[int] = []
+        self._equity_values: list[float] = []
 
         # Setup HftBacktest
         # 1. Asset
@@ -65,16 +77,27 @@ class HftBacktestAdapter:
         self.queue_model = PowerProbQueueModel(3.0)  # Standard assumption
 
         # 4. Engine
-        self.hbt = HashMapMarketDepthBacktest(
-            [
-                BacktestAsset()
-                .data([data_path])
-                .linear_asset(1.0)
-                .constant_latency(latency_us * 1000, latency_us * 1000)
-                .power_prob_queue_model(3.0)
-                .int_order_id_converter()
-            ]
-        )
+        asset_builder = BacktestAsset().data([data_path]).linear_asset(1.0)
+        asset_builder = _call_if_exists(asset_builder, "constant_latency", latency_us * 1000, latency_us * 1000)
+        asset_builder = _call_if_exists(asset_builder, "power_prob_queue_model", 3.0)
+        if tick_size is not None:
+            asset_builder = _call_if_exists(asset_builder, "tick_size", float(tick_size))
+        if lot_size is not None:
+            asset_builder = _call_if_exists(asset_builder, "lot_size", float(lot_size))
+        if maker_fee or taker_fee:
+            asset_builder = _call_if_exists(
+                asset_builder,
+                "trading_value_fee_model",
+                float(maker_fee),
+                float(taker_fee),
+            )
+        if partial_fill:
+            asset_builder = _call_if_exists(asset_builder, "partial_fill_exchange")
+        else:
+            asset_builder = _call_if_exists(asset_builder, "no_partial_fill_exchange")
+        asset_builder = _call_if_exists(asset_builder, "int_order_id_converter")
+
+        self.hbt = HashMapMarketDepthBacktest([asset_builder])
 
         # Context Mapping
         self.ctx = StrategyContext(
@@ -87,6 +110,9 @@ class HftBacktestAdapter:
 
     def run(self):
         logger.info("Starting HftBacktest simulation...")
+        self._equity_timestamps_ns.clear()
+        self._equity_values.clear()
+        self._next_equity_sample_ns = 0
 
         # Initialize Strategy
         # Strategy expects on_book(ctx, event)
@@ -120,6 +146,7 @@ class HftBacktestAdapter:
 
             # Update Context State
             self._sync_positions()
+            self._maybe_record_equity_point(int(self.hbt.current_timestamp), int(best_bid), int(best_ask))
 
             # Call Strategy
             intents = self.strategy.handle_event(self.ctx, event)
@@ -129,6 +156,14 @@ class HftBacktestAdapter:
                 self.execute_intent(intent)
 
         return self.hbt.close()
+
+    @property
+    def equity_timestamps_ns(self) -> np.ndarray:
+        return np.asarray(self._equity_timestamps_ns, dtype=np.int64)
+
+    @property
+    def equity_values(self) -> np.ndarray:
+        return np.asarray(self._equity_values, dtype=np.float64)
 
     def get_mid_price(self):
         # Access hbt LOB
@@ -191,6 +226,40 @@ class HftBacktestAdapter:
             )
             # Keep stale position rather than silently failing - strategy should be notified
 
+    def _maybe_record_equity_point(self, ts_ns: int, best_bid: int, best_ask: int) -> None:
+        if self.equity_sample_ns <= 0:
+            return
+        if ts_ns < self._next_equity_sample_ns:
+            return
+        self._next_equity_sample_ns = ts_ns + self.equity_sample_ns
+
+        mid_price = (best_bid + best_ask) / 2.0
+        position = float(self.positions.get(self.symbol, 0))
+        balance = self._read_balance(0)
+        equity = balance + (position * mid_price)
+
+        self._equity_timestamps_ns.append(ts_ns)
+        self._equity_values.append(float(equity))
+
+    def _read_balance(self, asset_id: int) -> float:
+        for method_name in ("balance", "cash", "asset_balance"):
+            fn = getattr(self.hbt, method_name, None)
+            if not callable(fn):
+                continue
+            try:
+                raw = fn(asset_id)
+            except TypeError:
+                try:
+                    raw = fn()
+                except Exception:
+                    continue
+            except Exception:
+                continue
+            if isinstance(raw, (int, float, np.integer, np.floating)):
+                self._last_known_balance = float(raw)
+                return self._last_known_balance
+        return self._last_known_balance
+
 
 class StrategyHbtAdapter:
     def __init__(
@@ -202,6 +271,9 @@ class StrategyHbtAdapter:
         symbol: str,
         tick_size: float | None = None,
         lot_size: float | None = None,
+        maker_fee: float = 0.0,
+        taker_fee: float = 0.0,
+        partial_fill: bool = True,
         price_scale: int = 10_000,
         timeout: int = 0,
         seed: int = 42,
@@ -215,9 +287,24 @@ class StrategyHbtAdapter:
             strategy=self.strategy,
             asset_symbol=symbol,
             data_path=data_path,
+            tick_size=tick_size,
+            lot_size=lot_size,
+            maker_fee=maker_fee,
+            taker_fee=taker_fee,
+            partial_fill=partial_fill,
             seed=seed,
             price_scale=price_scale,
         )
 
     def run(self):
         return self.adapter.run()
+
+
+def _call_if_exists(obj, method_name: str, *args):
+    method = getattr(obj, method_name, None)
+    if not callable(method):
+        return obj
+    try:
+        return method(*args)
+    except Exception:
+        return obj

@@ -3,8 +3,8 @@ import threading
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
-from hft_platform.gateway.exposure import ExposureKey, ExposureLimits, ExposureStore
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+from hft_platform.gateway.exposure import ExposureKey, ExposureLimitError, ExposureLimits, ExposureStore
 
 
 def _make_intent(price: int = 1_000_000, qty: int = 1, intent_type: IntentType = IntentType.NEW) -> OrderIntent:
@@ -101,3 +101,84 @@ def test_exposure_deterministic_rejection_reason():
     ok, reason = store.check_and_update(_key(), _make_intent(500_000, 1))
     assert ok is False
     assert reason == "STRATEGY_EXPOSURE_LIMIT"
+
+
+def _make_intent_for_symbol(symbol: str) -> OrderIntent:
+    return OrderIntent(
+        intent_id=1,
+        strategy_id="s1",
+        symbol=symbol,
+        intent_type=IntentType.NEW,
+        side=Side.BUY,
+        price=1_000_000,
+        qty=1,
+        tif=TIF.LIMIT,
+    )
+
+
+def test_symbol_limit_evicts_zeroes_and_admits():
+    """After releasing all positions, zero-balance eviction allows new symbols."""
+    max_symbols = 10
+    store = ExposureStore(global_max_notional=0, max_symbols=max_symbols)
+
+    # Fill to max with symbols 0..9
+    intents = {}
+    for i in range(max_symbols):
+        sym = f"TSE:{i:04d}"
+        intent = _make_intent_for_symbol(sym)
+        intents[sym] = intent
+        key = ExposureKey(account="default", strategy_id="s1", symbol=sym)
+        ok, _ = store.check_and_update(key, intent)
+        assert ok is True
+
+    assert store._symbol_count == max_symbols
+
+    # Release all positions → all notional → 0
+    for sym, intent in intents.items():
+        key = ExposureKey(account="default", strategy_id="s1", symbol=sym)
+        store.release_exposure(key, intent)
+
+    # Now adding symbol 10 should trigger eviction and succeed
+    new_sym = "TSE:9999"
+    new_intent = _make_intent_for_symbol(new_sym)
+    new_key = ExposureKey(account="default", strategy_id="s1", symbol=new_sym)
+    ok, _ = store.check_and_update(new_key, new_intent)
+    assert ok is True
+    # symbol_count should be 1 (just the new one; zeroes were evicted)
+    assert store._symbol_count == 1
+
+
+def test_symbol_limit_raises_after_10001_symbols():
+    """10,001 unique symbols with non-zero exposure raises ExposureLimitError."""
+    max_symbols = 10_000
+    store = ExposureStore(global_max_notional=0, max_symbols=max_symbols)
+
+    # Add exactly max_symbols symbols (all with live exposure)
+    for i in range(max_symbols):
+        sym = f"SYM:{i:05d}"
+        intent = _make_intent_for_symbol(sym)
+        key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
+        store.check_and_update(key, intent)
+
+    assert store._symbol_count == max_symbols
+
+    # The 10,001st symbol should trigger eviction (no zeroes) then raise
+    overflow_sym = "SYM:OVERFLOW"
+    overflow_intent = _make_intent_for_symbol(overflow_sym)
+    overflow_key = ExposureKey(account="acct", strategy_id="strat", symbol=overflow_sym)
+
+    with pytest.raises(ExposureLimitError):
+        store.check_and_update(overflow_key, overflow_intent)
+
+    # symbol_count must not have grown
+    assert store._symbol_count == max_symbols
+
+
+def test_symbol_limit_same_symbol_repeated_does_not_count():
+    """Repeated updates to the same symbol do not increment symbol_count."""
+    store = ExposureStore(global_max_notional=0, max_symbols=5)
+    key = _key()
+    intent = _make_intent()
+    for _ in range(100):
+        store.check_and_update(key, intent)
+    assert store._symbol_count == 1

@@ -22,16 +22,29 @@ uv run hft run sim
 
 > Tip: If the `hft` command is not on PATH, use `uv run hft ...` or `python -m hft_platform ...`.
 
-## Full Stack (Docker Compose)
+## Full Stack (Docker Compose - Default)
 ```bash
 docker compose up -d --build
-
 docker compose logs -f hft-engine
 ```
 
 - Prometheus: http://localhost:9091
 - Grafana: http://localhost:3000 (admin / admin by default)
 - Alertmanager: http://localhost:9093
+
+Stop compose stack:
+```bash
+docker compose down
+```
+
+## Docker Swarm (Optional)
+```bash
+docker swarm init 2>/dev/null || true
+docker build -t ${HFT_IMAGE:-hft-platform:latest} .
+docker stack deploy -c docker-stack.yml hft
+docker service logs -f hft_hft-engine
+docker stack rm hft
+```
 
 ## Live Trading (Explicit Only)
 ```bash

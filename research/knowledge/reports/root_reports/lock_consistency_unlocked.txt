@@ -1,0 +1,1 @@
+reads=757611 inconsistencies=0 rate=0.000000

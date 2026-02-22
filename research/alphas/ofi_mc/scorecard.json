@@ -1,0 +1,13 @@
+{
+  "capacity_estimate": 20000000.0,
+  "correlation_pool_max": null,
+  "ic_mean": -0.37691527052014323,
+  "ic_std": 0.17922677134845777,
+  "max_drawdown": 0.0,
+  "regime_sharpe": {
+    "high_vol": 0.0
+  },
+  "sharpe_is": 0.0,
+  "sharpe_oos": 0.0,
+  "turnover": 0.0
+}

@@ -1,0 +1,25 @@
+2026-02-01 07:39:10 [info     ] Running in WAL-only mode (ClickHouse disabled or driver missing)
+2026-02-01 07:39:10 [info     ] Recorder started
+2026-02-01 07:39:10 [info     ] Skipping WAL Recovery (ClickHouse disabled)
+2026-02-01 07:39:11 [warning  ] Fallback to WAL                count=507 table=hft.market_data
+2026-02-01 07:39:11 [info     ] Wrote to WAL                   count=507 file=.wal/hft.market_data_1769931551342661720.jsonl table=hft.market_data
+2026-02-01 07:39:11 [warning  ] Fallback to WAL                count=510 table=hft.market_data
+2026-02-01 07:39:11 [info     ] Wrote to WAL                   count=510 file=.wal/hft.market_data_1769931551851860959.jsonl table=hft.market_data
+2026-02-01 07:39:12 [warning  ] Fallback to WAL                count=507 table=hft.market_data
+2026-02-01 07:39:12 [info     ] Wrote to WAL                   count=507 file=.wal/hft.market_data_1769931552360036894.jsonl table=hft.market_data
+2026-02-01 07:39:12 [warning  ] Fallback to WAL                count=510 table=hft.market_data
+2026-02-01 07:39:12 [info     ] Wrote to WAL                   count=510 file=.wal/hft.market_data_1769931552869598450.jsonl table=hft.market_data
+2026-02-01 07:39:13 [warning  ] Fallback to WAL                count=507 table=hft.market_data
+2026-02-01 07:39:13 [info     ] Wrote to WAL                   count=507 file=.wal/hft.market_data_1769931553377392061.jsonl table=hft.market_data
+2026-02-01 07:39:13 [warning  ] Fallback to WAL                count=509 table=hft.market_data
+2026-02-01 07:39:13 [info     ] Wrote to WAL                   count=509 file=.wal/hft.market_data_1769931553886074225.jsonl table=hft.market_data
+2026-02-01 07:39:14 [warning  ] Fallback to WAL                count=506 table=hft.market_data
+2026-02-01 07:39:14 [info     ] Wrote to WAL                   count=506 file=.wal/hft.market_data_1769931554391366627.jsonl table=hft.market_data
+2026-02-01 07:39:14 [warning  ] Fallback to WAL                count=505 table=hft.market_data
+2026-02-01 07:39:14 [info     ] Wrote to WAL                   count=505 file=.wal/hft.market_data_1769931554895549634.jsonl table=hft.market_data
+2026-02-01 07:39:15 [warning  ] Fallback to WAL                count=504 table=hft.market_data
+2026-02-01 07:39:15 [info     ] Wrote to WAL                   count=504 file=.wal/hft.market_data_1769931555401153819.jsonl table=hft.market_data
+2026-02-01 07:39:15 [warning  ] Fallback to WAL                count=435 table=hft.market_data
+2026-02-01 07:39:15 [info     ] Wrote to WAL                   count=435 file=.wal/hft.market_data_1769931555835950507.jsonl table=hft.market_data
+2026-02-01 07:39:15 [info     ] Recorder stopped
+{'samples': 5000, 'p50_ms': 0.5577654901571805, 'p90_ms': 1.0470099914527964, 'p99_ms': 1.2545885265353718, 'max_ms': 5.854454269865528}

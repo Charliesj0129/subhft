@@ -1,0 +1,29 @@
+{
+  "alpha_id": "ofi_mc",
+  "checks": {
+    "correlation_pool_max": {
+      "max": 0.7,
+      "pass": true,
+      "value": null
+    },
+    "max_drawdown": {
+      "min": -1.0,
+      "pass": true,
+      "value": 0.0
+    },
+    "sharpe_oos": {
+      "min": -1.0,
+      "pass": true,
+      "value": 0.0
+    },
+    "turnover": {
+      "max": 2.0,
+      "pass": true,
+      "value": 0.0
+    }
+  },
+  "gate": "Gate D",
+  "passed": true,
+  "scorecard_path": "/home/charlie/hft_platform/research/alphas/ofi_mc/scorecard.json",
+  "timestamp": "2026-02-17T14:03:14.939758+00:00"
+}

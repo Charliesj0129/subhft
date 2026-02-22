@@ -1,0 +1,21 @@
+{
+  "market_data_e2e_us": {
+    "window_min": 10,
+    "n": 0,
+    "p50": NaN,
+    "p90": NaN,
+    "p95": NaN,
+    "p99": NaN,
+    "max": 0.0
+  },
+  "orders_latency_us": {
+    "window_min": 10,
+    "n": 0,
+    "p50": NaN,
+    "p90": NaN,
+    "p95": NaN,
+    "p99": NaN,
+    "max": 0.0
+  },
+  "pipeline_spans": []
+}

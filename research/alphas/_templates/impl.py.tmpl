@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
+
+
+class OfiMcAlpha:
+    def __init__(self) -> None:
+        self._signal = 0.0
+
+    @property
+    def manifest(self) -> AlphaManifest:
+        return AlphaManifest(
+            alpha_id="ofi_mc",
+            hypothesis="TODO: hypothesis",
+            formula="TODO: formula",
+            paper_refs=("018",),
+            data_fields=(),
+            complexity="O(1)",
+            status=AlphaStatus.DRAFT,
+            tier=AlphaTier.ENSEMBLE,
+            rust_module=None,
+        )
+
+    def update(self, *args, **kwargs) -> float:
+        self._signal = 0.0
+        return self._signal
+
+    def reset(self) -> None:
+        self._signal = 0.0
+
+    def get_signal(self) -> float:
+        return self._signal
+
+
+ALPHA_CLASS = OfiMcAlpha
