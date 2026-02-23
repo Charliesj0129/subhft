@@ -176,6 +176,7 @@ class GatewayService:
                 self._order_adapter._api_queue.put_nowait(cmd)
                 self._dispatched += 1
             except asyncio.QueueFull:
+                self._rejected += 1
                 self._dedup.commit(key, False, "ORDER_QUEUE_FULL", 0)
                 self._emit_reject("ORDER_QUEUE_FULL")
                 logger.warning("Order queue full — intent dropped", ack_token=envelope.ack_token)
