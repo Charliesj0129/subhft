@@ -55,22 +55,28 @@ class ResearchBacktestRunner:
     def __init__(self, alpha: AlphaProtocol, config: BacktestConfig):
         self.alpha = alpha
         self.config = config
+        self._last_run_returns: np.ndarray | None = None
+        self._last_run_path: str | None = None
 
     def run(self) -> BacktestResult:
-        data = self._load_data(self.config.data_paths[0])
+        data_path = self.config.data_paths[0]
+        data = self._load_data(data_path)
         price = self._extract_price(data)
         volume = self._extract_volume(data, len(price))
         signals = self._generate_signals(data, len(price))
         positions = self._signals_to_positions(signals)
         equity = self._compute_equity_curve(price, positions)
         fwd_returns = self._forward_returns(price)
+        self._last_run_returns = fwd_returns
+        self._last_run_path = data_path
 
         split = max(2, int(len(equity) * self.config.is_oos_split))
         split = min(split, len(equity) - 1) if len(equity) > 2 else len(equity)
 
         sharpe_is = compute_sharpe(equity[:split]) if split >= 2 else 0.0
-        sharpe_oos = compute_sharpe(equity[split - 1 :]) if split >= 2 else 0.0
-        ic_mean, ic_std, ic_series = compute_ic(signals, fwd_returns)
+        sharpe_oos = compute_sharpe(equity[split:]) if split >= 2 else 0.0
+        # IC on OOS slice only — avoids in-sample look-ahead contamination
+        ic_mean, ic_std, ic_series = compute_ic(signals[split:], fwd_returns[split:])
         turnover = compute_turnover(positions)
         max_dd = compute_max_drawdown(equity)
         capacity = compute_capacity(positions, volume)
@@ -98,7 +104,14 @@ class ResearchBacktestRunner:
         if base.signals.size < 16:
             return {"all": base}
 
-        returns = self._forward_returns(self._extract_price(self._load_data(self.config.data_paths[0])))
+        if (
+            self._last_run_returns is not None
+            and self._last_run_path == self.config.data_paths[0]
+            and self._last_run_returns.size >= base.signals.size
+        ):
+            returns = self._last_run_returns
+        else:
+            returns = self._forward_returns(self._extract_price(self._load_data(self.config.data_paths[0])))
         vol = np.abs(returns)
         q = float(np.quantile(vol, 0.7))
         high_mask = vol >= q
@@ -138,12 +151,26 @@ class ResearchBacktestRunner:
     def _generate_signals(self, data: np.ndarray, n: int) -> np.ndarray:
         self.alpha.reset()
         signals = np.zeros(n, dtype=np.float64)
+
+        update_batch = getattr(self.alpha, "update_batch", None)
+        if callable(update_batch):
+            try:
+                batch_out = np.asarray(update_batch(data), dtype=np.float64).reshape(-1)
+                if batch_out.size >= n:
+                    signals[:] = batch_out[:n]
+                    return signals
+            except Exception:
+                pass
+
         if data.dtype.names:
-            field_names = data.dtype.names
+            field_names = tuple(data.dtype.names)
+            base_keys = set(field_names)
+            payload: dict[str, Any] = {name: 0.0 for name in field_names}
             for i in range(n):
                 row = data[i]
-                payload = {name: _to_python_scalar(row[name]) for name in field_names}
-                payload = _with_standard_aliases(payload)
+                for name in field_names:
+                    payload[name] = _to_python_scalar(row[name])
+                _with_standard_aliases_inplace(payload, base_keys)
                 signals[i] = float(self.alpha.update(**payload))
             return signals
 
@@ -283,6 +310,27 @@ def _with_standard_aliases(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             out["current_mid"] = out.get("mid", out.get("mid_price", out.get("price", 0.0)))
     return out
+
+
+def _with_standard_aliases_inplace(payload: dict[str, Any], base_keys: set[str]) -> dict[str, Any]:
+    if "bid_px" not in base_keys:
+        payload["bid_px"] = payload.get("best_bid", payload.get("bid_price", payload.get("bid")))
+    if "ask_px" not in base_keys:
+        payload["ask_px"] = payload.get("best_ask", payload.get("ask_price", payload.get("ask")))
+    if "bid_qty" not in base_keys:
+        payload["bid_qty"] = payload.get("bid_depth", payload.get("bid_size", payload.get("bqty", 0.0)))
+    if "ask_qty" not in base_keys:
+        payload["ask_qty"] = payload.get("ask_depth", payload.get("ask_size", payload.get("aqty", 0.0)))
+    if "trade_vol" not in base_keys:
+        payload["trade_vol"] = payload.get("qty", payload.get("volume", payload.get("trade_qty", 0.0)))
+    if "current_mid" not in base_keys:
+        bid_px = payload.get("bid_px")
+        ask_px = payload.get("ask_px")
+        if bid_px is not None and ask_px is not None:
+            payload["current_mid"] = (float(bid_px) + float(ask_px)) / 2.0
+        else:
+            payload["current_mid"] = payload.get("mid", payload.get("mid_price", payload.get("price", 0.0)))
+    return payload
 
 
 def _parse_args() -> argparse.Namespace:

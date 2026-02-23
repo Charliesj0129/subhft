@@ -1,3 +1,5 @@
+import heapq
+
 from structlog import get_logger
 
 from hft_platform.events import BidAskEvent, TickEvent
@@ -66,6 +68,10 @@ class Strategy(BaseStrategy):
         self.best_bid: int = 0
         self.best_ask: int = 0
 
+        # Stop-loss tracking: entry price per symbol (scaled integer, Precision Law)
+        # Populated when a new order is sent; cleared on stop-loss exit.
+        self._entry_price: dict[str, int] = {}
+
         logger.info("RustAlphaStrategy Initialized", params=self.params)
 
         # Shadow Book State (with max size limit to prevent unbounded growth)
@@ -90,15 +96,26 @@ class Strategy(BaseStrategy):
             raise ValueError(f"Invalid strategy parameters: {'; '.join(errors)}")
 
     def _trim_book(self) -> None:
-        """Trim shadow books to max size, keeping best levels."""
-        if len(self.bids) > self._max_book_levels:
-            sorted_bids = sorted(self.bids.keys(), reverse=True)
-            for p in sorted_bids[self._max_book_levels :]:
-                del self.bids[p]
-        if len(self.asks) > self._max_book_levels:
-            sorted_asks = sorted(self.asks.keys())
-            for p in sorted_asks[self._max_book_levels :]:
-                del self.asks[p]
+        """Trim shadow books to max size, keeping best levels.
+
+        Uses heapq.nlargest/nsmallest (O(n)) instead of sorted() (O(n log n)).
+        Early-return guard skips all work when within size limits (most common case).
+        """
+        n_bids, n_asks = len(self.bids), len(self.asks)
+        if n_bids <= self._max_book_levels and n_asks <= self._max_book_levels:
+            return  # early exit — no trimming needed
+
+        if n_bids > self._max_book_levels:
+            keep = set(heapq.nlargest(self._max_book_levels, self.bids))
+            for p in list(self.bids):
+                if p not in keep:
+                    del self.bids[p]
+
+        if n_asks > self._max_book_levels:
+            keep = set(heapq.nsmallest(self._max_book_levels, self.asks))
+            for p in list(self.asks):
+                if p not in keep:
+                    del self.asks[p]
 
     def on_book_update(self, event: BidAskEvent) -> None:
         if event.symbol not in self.symbols:
@@ -134,10 +151,9 @@ class Strategy(BaseStrategy):
                 self.best_bid = max(self.bids.keys())
                 self.best_ask = min(self.asks.keys())
 
-                # Convert to Sorted List for Rust
-                # Descending for Bids, Ascending for Asks
-                sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
-                sorted_asks = sorted(self.asks.items(), key=lambda x: x[0])[:5]
+                # Convert to Sorted List for Rust — O(n) heapq vs O(n log n) sorted
+                sorted_bids = heapq.nlargest(5, self.bids.items(), key=lambda x: x[0])
+                sorted_asks = heapq.nsmallest(5, self.asks.items(), key=lambda x: x[0])
 
                 # Call Rust Core
                 signal = self.core.on_depth(sorted_bids, sorted_asks)
@@ -146,6 +162,17 @@ class Strategy(BaseStrategy):
                 self._execute_on_signal(event.symbol, signal)
         except Exception as e:
             logger.error("Error in on_book_update", error=str(e), symbol=event.symbol)
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+                m = MetricsRegistry.get()
+                if hasattr(m, "strategy_exceptions_total"):
+                    m.strategy_exceptions_total.labels(
+                        strategy=self.strategy_id,
+                        exception_type=type(e).__name__,
+                        method="on_book_update",
+                    ).inc()
+            except Exception:
+                pass
 
     def on_tick(self, event: TickEvent) -> None:
         if event.symbol not in self.symbols:
@@ -175,12 +202,45 @@ class Strategy(BaseStrategy):
             self.core.on_trade(int(event.meta.source_ts), event.price, event.volume, is_buyer_maker)
         except Exception as e:
             logger.error("Error in on_tick", error=str(e), symbol=event.symbol)
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+                m = MetricsRegistry.get()
+                if hasattr(m, "strategy_exceptions_total"):
+                    m.strategy_exceptions_total.labels(
+                        strategy=self.strategy_id,
+                        exception_type=type(e).__name__,
+                        method="on_tick",
+                    ).inc()
+            except Exception:
+                pass
 
     def _execute_on_signal(self, symbol: str, signal: float) -> None:
         threshold = self.params["signal_threshold"]
         pos = self.position(symbol)
         max_pos = self.params["max_pos"]
         qty = self.params["lot_size"]
+
+        # Stop-loss check — all integer arithmetic (Precision Law compliant).
+        # stop_loss_ticks × tick_size × 10_000 gives the stop distance in
+        # scaled-integer price units (assumes price scale factor = 10_000).
+        stop_ticks = int(self.params.get("stop_loss_ticks", 10))
+        tick_scaled = int(self.params["tick_size"] * 10_000)
+        stop_dist = stop_ticks * tick_scaled
+        entry = self._entry_price.get(symbol, 0)
+
+        if pos > 0 and entry > 0 and self.best_bid > 0 and self.best_bid < entry - stop_dist:
+            # Long stop-loss: close position at best bid
+            self.sell(symbol, self.best_bid, abs(pos))
+            self._entry_price.pop(symbol, None)
+            logger.info("stop_loss_triggered", symbol=symbol, side="long", entry=entry, bid=self.best_bid)
+            return
+
+        if pos < 0 and entry > 0 and self.best_ask > 0 and self.best_ask > entry + stop_dist:
+            # Short stop-loss: close position at best ask
+            self.buy(symbol, self.best_ask, abs(pos))
+            self._entry_price.pop(symbol, None)
+            logger.info("stop_loss_triggered", symbol=symbol, side="short", entry=entry, ask=self.best_ask)
+            return
 
         # Signal > Thresh -> Buy
         if signal > threshold:
@@ -190,6 +250,7 @@ class Strategy(BaseStrategy):
                 if price > 0:
                     # BaseStrategy.buy expects int price (scaled)
                     self.buy(symbol, price, qty)
+                    self._entry_price[symbol] = price  # record entry for stop-loss
 
         # Signal < -Thresh -> Sell
         elif signal < -threshold:
@@ -199,3 +260,4 @@ class Strategy(BaseStrategy):
                 if price > 0:
                     # BaseStrategy.sell expects int price (scaled)
                     self.sell(symbol, price, qty)
+                    self._entry_price[symbol] = price  # record entry for stop-loss

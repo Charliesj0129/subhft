@@ -36,8 +36,11 @@ class StrategyRunner:
         cfg_path = os.getenv("HFT_STRATEGY_CONFIG") or config_path
         self.registry = StrategyRegistry(cfg_path)
         self.strategies: List[BaseStrategy] = []
-        # Cache of (strategy, latency_metric, intents_metric)
-        self._strat_executors: list[tuple[BaseStrategy, Any, Any]] = []
+        # Cache of (strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g)
+        self._strat_executors: list[tuple[BaseStrategy, StrategyContext, Any, Any, Any, Any, Any]] = []
+        self._risk_submit = self._resolve_risk_submit(risk_queue)
+        self._lob_snapshot_source = getattr(lob_engine, "get_book_snapshot", None) if lob_engine else None
+        self._lob_l1_source = getattr(lob_engine, "get_l1_scaled", None) if lob_engine else None
 
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
@@ -48,6 +51,11 @@ class StrategyRunner:
         self._positions_dirty = True
         self._current_source_ts_ns = 0
         self._current_trace_id = ""
+
+        # Circuit breaker: auto-disable a strategy after N consecutive exceptions
+        _threshold_env = os.getenv("HFT_STRATEGY_CIRCUIT_THRESHOLD", "10")
+        self._circuit_threshold: int = int(_threshold_env) if _threshold_env.isdigit() else 10
+        self._failure_counts: dict[str, int] = {}
 
         # Load initial
         for strat in self.registry.instantiate():
@@ -73,12 +81,7 @@ class StrategyRunner:
     def register(self, strategy: BaseStrategy):
         self.strategies.append(strategy)
         self._resolve_strategy_symbols(strategy)
-
-        # Cache metrics
-        lat_m = self.metrics.strategy_latency_ns.labels(strategy=strategy.strategy_id) if self.metrics else None
-        int_m = self.metrics.strategy_intents_total.labels(strategy=strategy.strategy_id) if self.metrics else None
-
-        self._strat_executors.append((strategy, lat_m, int_m))
+        self._strat_executors.append(self._build_executor_entry(strategy))
         logger.info("Registered strategy", id=strategy.strategy_id)
 
     def _resolve_strategy_symbols(self, strategy: BaseStrategy) -> None:
@@ -111,11 +114,54 @@ class StrategyRunner:
 
     def _rebuild_executors(self):
         """Rebuild executor cache when strategies are replaced externally."""
-        self._strat_executors = []
-        for strategy in self.strategies:
-            lat_m = self.metrics.strategy_latency_ns.labels(strategy=strategy.strategy_id) if self.metrics else None
-            int_m = self.metrics.strategy_intents_total.labels(strategy=strategy.strategy_id) if self.metrics else None
-            self._strat_executors.append((strategy, lat_m, int_m))
+        self._strat_executors = [self._build_executor_entry(strategy) for strategy in self.strategies]
+
+    def _resolve_risk_submit(self, risk_queue: Any):
+        if hasattr(risk_queue, "submit_nowait"):
+            return risk_queue.submit_nowait
+        return risk_queue.put_nowait
+
+    def _build_executor_entry(  # noqa: E501
+        self, strategy: BaseStrategy
+    ) -> tuple[BaseStrategy, StrategyContext, Any, Any, Any, Any, Any]:
+        # Cache metrics and a reusable StrategyContext per strategy to reduce per-event allocations.
+        lat_m = self.metrics.strategy_latency_ns.labels(strategy=strategy.strategy_id) if self.metrics else None
+        int_m = self.metrics.strategy_intents_total.labels(strategy=strategy.strategy_id) if self.metrics else None
+
+        alpha_intent_m = None
+        alpha_flat_m = None
+        alpha_last_ts_g = None
+        if self.metrics:
+            alpha_events_total = getattr(self.metrics, "alpha_signal_events_total", None)
+            alpha_last_signal_ts = getattr(self.metrics, "alpha_last_signal_ts", None)
+            try:
+                if alpha_events_total is not None:
+                    alpha_intent_m = alpha_events_total.labels(strategy=strategy.strategy_id, outcome="intent")
+                    alpha_flat_m = alpha_events_total.labels(strategy=strategy.strategy_id, outcome="flat")
+                if alpha_last_signal_ts is not None:
+                    alpha_last_ts_g = alpha_last_signal_ts.labels(strategy=strategy.strategy_id)
+            except Exception:
+                alpha_intent_m = None
+                alpha_flat_m = None
+                alpha_last_ts_g = None
+
+        ctx = StrategyContext(
+            positions={},
+            strategy_id=strategy.strategy_id,
+            intent_factory=self._intent_factory,
+            price_scaler=self._scale_price,
+            lob_source=self._lob_snapshot_source,
+            lob_l1_source=self._lob_l1_source,
+        )
+        return (strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g)
+
+    def _executors_match_strategy_list(self) -> bool:
+        if len(self._strat_executors) != len(self.strategies):
+            return False
+        for idx, strategy in enumerate(self.strategies):
+            if self._strat_executors[idx][0] is not strategy:
+                return False
+        return True
 
     def _intent_factory(
         self,
@@ -201,13 +247,14 @@ class StrategyRunner:
         positions_by_strategy = self._positions_cache
 
         target_strat_id = getattr(event, "strategy_id", None)
+        event_symbol = getattr(event, "symbol", "")
 
         # Keep executors in sync with strategy list (tests may replace list)
-        if [s.strategy_id for s, _, _ in self._strat_executors] != [s.strategy_id for s in self.strategies]:
+        if not self._executors_match_strategy_list():
             self._rebuild_executors()
 
         # Use cached executors
-        for strategy, lat_m, int_m in self._strat_executors:
+        for strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g in self._strat_executors:
             if not strategy.enabled:
                 continue
 
@@ -215,14 +262,7 @@ class StrategyRunner:
                 continue
 
             positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
-
-            ctx = StrategyContext(
-                positions=positions,
-                strategy_id=strategy.strategy_id,
-                intent_factory=self._intent_factory,
-                price_scaler=self._scale_price,
-                lob_source=self.lob_engine.get_book_snapshot if self.lob_engine else None,
-            )
+            ctx.positions = positions
 
             start = time.perf_counter_ns()
             try:
@@ -230,6 +270,29 @@ class StrategyRunner:
             except Exception as e:
                 logger.error("Strategy Exception", id=strategy.strategy_id, error=str(e))
                 intents = []
+                if self.metrics:
+                    exc_m = getattr(self.metrics, "strategy_exceptions_total", None)
+                    if exc_m:
+                        exc_m.labels(
+                            strategy=strategy.strategy_id,
+                            exception_type=type(e).__name__,
+                            method="handle_event",
+                        ).inc()
+                # Circuit breaker: disable strategy after threshold consecutive exceptions
+                sid = strategy.strategy_id
+                self._failure_counts[sid] = self._failure_counts.get(sid, 0) + 1
+                if self._failure_counts[sid] >= self._circuit_threshold:
+                    strategy.enabled = False
+                    logger.error(
+                        "Strategy circuit breaker tripped — disabling",
+                        id=sid,
+                        failures=self._failure_counts[sid],
+                        threshold=self._circuit_threshold,
+                    )
+            else:
+                # Reset failure count on success
+                if strategy.strategy_id in self._failure_counts:
+                    self._failure_counts[strategy.strategy_id] = 0
 
             duration = time.perf_counter_ns() - start
 
@@ -238,22 +301,28 @@ class StrategyRunner:
                 lat_m.observe(duration)
             if intents and int_m:
                 int_m.inc(len(intents))
+            # Alpha liveness: track signal outcome and last active timestamp
+            if self.metrics:
+                if intents:
+                    if alpha_intent_m:
+                        alpha_intent_m.inc()
+                    if alpha_last_ts_g:
+                        alpha_last_ts_g.set(time.monotonic())
+                else:
+                    if alpha_flat_m:
+                        alpha_flat_m.inc()
             if self.latency:
                 self.latency.record(
                     "strategy",
                     duration,
                     trace_id=trace_id,
-                    symbol=getattr(event, "symbol", ""),
+                    symbol=event_symbol,
                     strategy_id=strategy.strategy_id,
                 )
 
             if intents:
                 for intent in intents:
-                    # CE2-03: accept LocalIntentChannel (submit_nowait) or asyncio.Queue (put_nowait)
-                    if hasattr(self.risk_queue, "submit_nowait"):
-                        self.risk_queue.submit_nowait(intent)
-                    else:
-                        self.risk_queue.put_nowait(intent)
+                    self._risk_submit(intent)
 
     def _extract_event_trace(self, event: Any) -> tuple[int, str]:
         source_ts_ns = 0

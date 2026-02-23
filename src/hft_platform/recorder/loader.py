@@ -850,6 +850,11 @@ class WALLoaderService:
                     deleted=deleted,
                     retention_days=self._dlq_retention_days,
                 )
+                if self.metrics:
+                    try:
+                        self.metrics.dlq_size_total.labels(source="cleanup").inc(archived + deleted)
+                    except Exception:
+                        pass
         except Exception as e:
             logger.warning("DLQ cleanup failed", error=str(e))
 
@@ -972,6 +977,11 @@ class WALLoaderService:
                 for row in rows:
                     f.write(_dumps(row) + "\n")
             logger.warning("Wrote failed batch to DLQ", table=table, count=len(rows), file=dlq_file)
+            if self.metrics:
+                try:
+                    self.metrics.dlq_size_total.labels(source="recorder").inc()
+                except Exception:
+                    pass
         except Exception as e:
             logger.error("Failed to write to DLQ", table=table, error=str(e))
 
@@ -1313,10 +1323,13 @@ class WALLoaderService:
                         )
                         if self.metrics:
                             self.metrics.recorder_insert_retry_total.labels(table=table_alias, result="failed").inc()
+                            self.metrics.wal_replay_errors_total.labels(type="insert_failed").inc()
                         return False
         elif data:
             # No client but we have data - also a "failure" for DLQ purposes
             logger.warning("No ClickHouse client available for insert", table=table_alias, count=len(data))
+            if self.metrics:
+                self.metrics.wal_replay_errors_total.labels(type="no_client").inc()
             return False
 
         return True

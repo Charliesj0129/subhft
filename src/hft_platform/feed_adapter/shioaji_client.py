@@ -865,6 +865,12 @@ class ShioajiClient:
                         self._quote_version = "v0"
                         if self.metrics:
                             self.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
+                            try:
+                                self.metrics.quote_watchdog_recovery_attempts_total.labels(
+                                    action="version_downgrade"
+                                ).inc()
+                            except Exception:
+                                pass
                     else:
                         if downgrade_allowed and self._quote_version == "v1" and not self._supports_quote_v0():
                             logger.warning("Quote v0 callbacks unavailable; staying on v1")
@@ -873,6 +879,13 @@ class ShioajiClient:
                             gap_s=round(gap, 3),
                             quote_version=self._quote_version,
                         )
+                        if self.metrics:
+                            try:
+                                self.metrics.quote_watchdog_recovery_attempts_total.labels(
+                                    action="callback_reregister"
+                                ).inc()
+                            except Exception:
+                                pass
                     if self.tick_callback:
                         self._callbacks_registered = False
                         self._ensure_callbacks(self.tick_callback)

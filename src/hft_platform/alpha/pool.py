@@ -1,11 +1,61 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 
 from hft_platform.alpha.experiments import ExperimentTracker
+
+
+class AlphaPool:
+    """Thread-safe pool of alpha factors with weighted combination.
+
+    Weights are applied via ``optimize_pool_weights()`` through the
+    ``AlphaWeightScheduler``.  All mutations use atomic pointer swap so
+    readers never observe a partially-updated state.
+
+    Args:
+        alpha_ids: Initial list of alpha IDs.  Equal weights assigned.
+
+    Environment
+    -----------
+    Used by ``AlphaWeightScheduler`` (``set_weights``) and by signal
+    aggregation pipelines (``get_weights``).
+    """
+
+    def __init__(self, alpha_ids: list[str] | None = None) -> None:
+        self._lock = threading.Lock()
+        if alpha_ids:
+            n = len(alpha_ids)
+            self._weights: dict[str, float] = {a: 1.0 / n for a in alpha_ids}
+        else:
+            self._weights = {}
+
+    def get_weights(self) -> dict[str, float]:
+        """Return a snapshot copy of the current weights (thread-safe)."""
+        with self._lock:
+            return dict(self._weights)
+
+    def set_weights(self, weights: dict[str, float]) -> None:
+        """Atomically replace pool weights (immutable-update pattern).
+
+        The entire dict reference is replaced under lock so that concurrent
+        readers who hold a reference to the old dict see a consistent view.
+        """
+        new = dict(weights)
+        with self._lock:
+            self._weights = new
+
+    def alpha_ids(self) -> list[str]:
+        """Return the current list of alpha IDs."""
+        with self._lock:
+            return list(self._weights)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._weights)
 
 
 @dataclass(frozen=True)

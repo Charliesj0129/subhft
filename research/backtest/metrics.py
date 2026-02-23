@@ -23,6 +23,16 @@ def compute_sharpe(equity_curve: Iterable[float], annualization_factor: float = 
     return float(np.mean(returns) / std * np.sqrt(annualization_factor))
 
 
+def _pearson(s: np.ndarray, r: np.ndarray) -> float:
+    """Single-pass Pearson correlation — avoids np.corrcoef 2×n matrix allocation."""
+    sx = s - s.mean()
+    rx = r - r.mean()
+    denom = float(np.sqrt((sx @ sx) * (rx @ rx)))
+    if denom < 1e-12:
+        return float("nan")
+    return float(sx @ rx) / denom
+
+
 def compute_ic(signals: Iterable[float], forward_returns: Iterable[float], buckets: int = 20) -> tuple[float, float, np.ndarray]:
     sig = np.asarray(list(signals), dtype=np.float64)
     fut = np.asarray(list(forward_returns), dtype=np.float64)
@@ -37,9 +47,7 @@ def compute_ic(signals: Iterable[float], forward_returns: Iterable[float], bucke
     for start in range(0, n - chunk + 1, chunk):
         s = sig[start : start + chunk]
         r = fut[start : start + chunk]
-        if np.std(s) == 0.0 or np.std(r) == 0.0:
-            continue
-        corr = float(np.corrcoef(s, r)[0, 1])
+        corr = _pearson(s, r)
         if np.isfinite(corr):
             ic_values.append(corr)
 
