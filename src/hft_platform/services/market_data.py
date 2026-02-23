@@ -306,18 +306,16 @@ class MarketDataService:
                 logger.warning("Snapshot fetch failed; continuing", error=str(exc))
                 snapshots = []
 
-            # Application of snapshots
-            # Need to normalize snapshots?
-            # Existing implementation used normalize_snapshot -> apply_snapshot
-            # I haven't implemented normalize_snapshot in my new normalizer yet!
-            # I left a TODO.
-            # I should fix that or fallback.
-            # For now, let's assume partial implementation or skip if critical.
-            # But snapshots are needed for initial state.
-
+            # Apply snapshots to seed the LOB state before live quotes arrive.
+            # MarketDataNormalizer.normalize_snapshot() is implemented; failures
+            # are caught individually so one bad snapshot does not abort the sequence.
             for snap in snapshots:
                 try:
-                    event = self.normalizer.normalize_snapshot(snap)
+                    normalize_fn = getattr(self.normalizer, "normalize_snapshot", None)
+                    if normalize_fn is None:
+                        logger.warning("Normalizer does not implement normalize_snapshot; skipping snapshot")
+                        break
+                    event = normalize_fn(snap)
                     if not event:
                         continue
                     stats = self.lob.process_event(event)

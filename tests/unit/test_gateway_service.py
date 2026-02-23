@@ -1,10 +1,19 @@
 """Tests for CE2-03: GatewayService."""
 import asyncio
-from unittest.mock import MagicMock, patch
+from contextlib import suppress
+from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, RiskDecision, Side, StormGuardState, TIF
+from hft_platform.contracts.strategy import (
+    TIF,
+    IntentType,
+    OrderCommand,
+    OrderIntent,
+    RiskDecision,
+    Side,
+    StormGuardState,
+)
 from hft_platform.gateway.channel import LocalIntentChannel
 from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureStore
@@ -12,11 +21,11 @@ from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
 
 
-def _make_intent(intent_id: int = 1, key: str = "k1", intent_type: IntentType = IntentType.NEW) -> OrderIntent:
+def _make_intent(intent_id: int = 1, key: str = "k1", intent_type: IntentType = IntentType.NEW, symbol: str = "TSE:2330") -> OrderIntent:
     return OrderIntent(
         intent_id=intent_id,
         strategy_id="s1",
-        symbol="TSE:2330",
+        symbol=symbol,
         intent_type=intent_type,
         side=Side.BUY,
         price=1_000_000,
@@ -26,7 +35,7 @@ def _make_intent(intent_id: int = 1, key: str = "k1", intent_type: IntentType = 
     )
 
 
-def _make_service(channel=None, approve=True, queue_full=False):
+def _make_service(channel=None, approve=True, queue_full=False, exposure_store=None):
     if channel is None:
         channel = LocalIntentChannel(maxsize=64, ttl_ms=0)
 
@@ -50,7 +59,7 @@ def _make_service(channel=None, approve=True, queue_full=False):
         channel=channel,
         risk_engine=risk_engine,
         order_adapter=order_adapter,
-        exposure_store=ExposureStore(),
+        exposure_store=exposure_store if exposure_store is not None else ExposureStore(),
         dedup_store=IdempotencyStore(persist_enabled=False),
         storm_guard=storm_guard,
         policy=GatewayPolicy(),
@@ -165,3 +174,61 @@ async def test_service_halt_policy_blocks_new():
 
     assert api_queue.qsize() == 0
     assert svc._rejected >= 1
+
+
+@pytest.mark.asyncio
+async def test_order_queue_full_rejects_and_commits_dedup():
+    """D1: When api_queue is full, intent is rejected and dedup records ORDER_QUEUE_FULL."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, api_queue = _make_service(channel=ch, queue_full=True)
+
+    intent = _make_intent(1, "k_full")
+    ch.submit_nowait(intent)
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert svc._dispatched == 0
+    assert svc._rejected == 1
+    rec = svc._dedup.check_or_reserve("k_full")
+    assert rec is not None
+    assert rec.approved is False
+    assert rec.reason_code == "ORDER_QUEUE_FULL"
+
+
+@pytest.mark.asyncio
+async def test_exposure_symbol_limit_commits_dedup():
+    """D2: ExposureLimitError is caught and dedup records EXPOSURE_SYMBOL_LIMIT."""
+    exposure = ExposureStore(max_symbols=1)
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, api_queue = _make_service(channel=ch, exposure_store=exposure)
+
+    # First symbol fills the one slot
+    ch.submit_nowait(_make_intent(1, "k1", symbol="TSE:SYM_A"))
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    # First intent should have dispatched successfully
+    assert svc._dispatched == 1
+
+    # Second intent with a new symbol should hit ExposureLimitError
+    ch2 = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc2, _ = _make_service(channel=ch2, exposure_store=exposure)
+    ch2.submit_nowait(_make_intent(2, "k2", symbol="TSE:SYM_B"))
+    task2 = asyncio.create_task(svc2.run())
+    await asyncio.sleep(0.05)
+    task2.cancel()
+    with suppress(asyncio.CancelledError):
+        await task2
+
+    assert svc2._rejected >= 1
+    rec = svc2._dedup.check_or_reserve("k2")
+    assert rec is not None
+    assert rec.approved is False
+    assert rec.reason_code == "EXPOSURE_SYMBOL_LIMIT"

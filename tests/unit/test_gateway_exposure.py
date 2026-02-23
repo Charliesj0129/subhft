@@ -182,3 +182,34 @@ def test_symbol_limit_same_symbol_repeated_does_not_count():
     for _ in range(100):
         store.check_and_update(key, intent)
     assert store._symbol_count == 1
+
+
+def test_symbol_limit_concurrent_no_overshoot():
+    """D5: 20 threads each submitting a unique symbol with max_symbols=5 must not overshoot."""
+    max_syms = 5
+    store = ExposureStore(global_max_notional=0, max_symbols=max_syms)
+    errors: list[str] = []
+    approved: list[bool] = []
+    lock = threading.Lock()
+
+    def try_add(sym: str) -> None:
+        key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
+        intent = _make_intent_for_symbol(sym)
+        try:
+            ok, _ = store.check_and_update(key, intent)
+            with lock:
+                approved.append(ok)
+        except ExposureLimitError:
+            with lock:
+                errors.append(sym)
+
+    threads = [threading.Thread(target=try_add, args=(f"SYM{i}",)) for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Symbol count must never exceed the configured maximum
+    assert store._symbol_count <= max_syms
+    # All approvals must be within the allowed set (no overshoot)
+    assert sum(approved) <= max_syms

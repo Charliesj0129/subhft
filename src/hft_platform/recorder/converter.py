@@ -1,6 +1,8 @@
 import glob
+import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
@@ -42,12 +44,23 @@ class WALConverter:
                 for line in f:
                     try:
                         row = json.loads(line)
-                        # Filter by Date/Symbol
-                        # Assuming row has 'exch_ts' (ns)
-                        # Filter date logic (simple check)
-                        # TODO: Robust date parsing
+                        # Filter by symbol
                         if symbol and row.get("symbol") != symbol:
                             continue
+
+                        # Filter by date: extract YYYY-MM-DD from exch_ts (nanoseconds)
+                        exch_ts_ns = row.get("exch_ts", 0)
+                        if exch_ts_ns and date_str:
+                            row_date = datetime.fromtimestamp(
+                                exch_ts_ns / 1e9, tz=timezone.utc
+                            ).strftime("%Y-%m-%d")
+                            # Accept both YYYY-MM-DD and YYYYMMDD formats in date_str
+                            normalized_date_str = (
+                                date_str if "-" in date_str
+                                else f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+                            )
+                            if row_date != normalized_date_str:
+                                continue
 
                         raw_rows.append(row)
                     except json.JSONDecodeError as e:
@@ -127,13 +140,20 @@ class WALConverter:
         out_name = f"{symbol}_{date_str}.npz" if symbol else f"full_{date_str}.npz"
         out_path = os.path.join(self.output_dir, out_name)
 
+        # Compute config_hash from conversion parameters for provenance tracking
+        config_payload = json.dumps(
+            {"date": date_str, "symbol": symbol, "wal_dir": self.wal_dir},
+            sort_keys=True,
+        )
+        config_hash = hashlib.sha256(config_payload.encode()).hexdigest()[:12]
+
         # Include Metadata
         metadata = {
             "created_at": timebase.now_s(),
             "source_files": len(files),
             "rows": count,
             "git_commit": os.getenv("GIT_COMMIT", "unknown"),
-            "config_hash": "TODO",  # Calculate hash of current config/symbols
+            "config_hash": config_hash,
             "seed": 42,  # Default seed for this dataset provenance
         }
 
