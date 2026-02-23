@@ -103,6 +103,13 @@ class MetricsRegistry:
                 "wal_backlog_files",
                 "wal_drain_eta_seconds",
                 "disk_pressure_level",
+                # Alpha liveness metrics
+                "alpha_signal_events_total",
+                "alpha_last_signal_ts",
+                # Strategy exception metrics
+                "strategy_exceptions_total",
+                # Quote watchdog recovery metrics
+                "quote_watchdog_recovery_attempts_total",
             ]
         )
         # Market Data
@@ -404,6 +411,32 @@ class MetricsRegistry:
         self.disk_pressure_level = Gauge(
             "disk_pressure_level",
             "Current disk pressure level (0=ok, 1=warn, 2=critical, 3=halt)",
+        )
+
+        # Alpha signal liveness (P0-2)
+        # Tracks whether strategies are producing non-flat signals.
+        # Grafana alert: time() - alpha_last_signal_ts > 300 → "alpha silent"
+        self.alpha_signal_events_total = Counter(
+            "alpha_signal_events_total",
+            "Alpha signal decisions by outcome",
+            ["strategy", "outcome"],  # outcome: "intent" | "flat"
+        )
+        self.alpha_last_signal_ts = Gauge(
+            "alpha_last_signal_ts",
+            "Unix timestamp of last non-flat alpha signal",
+            ["strategy"],
+        )
+        # Strategy exception counter — strategy, exception_type, method
+        self.strategy_exceptions_total = Counter(
+            "strategy_exceptions_total",
+            "Strategy exceptions by type and handler method",
+            ["strategy", "exception_type", "method"],
+        )
+        # Quote watchdog recovery attempts (re-register callbacks / version downgrade)
+        self.quote_watchdog_recovery_attempts_total = Counter(
+            "quote_watchdog_recovery_attempts_total",
+            "Quote watchdog recovery attempts by action",
+            ["action"],  # action: "version_downgrade" | "callback_reregister"
         )
 
         # System (v2)
