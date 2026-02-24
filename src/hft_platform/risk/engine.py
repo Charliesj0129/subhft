@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import time
+from typing import Any
 
 import yaml
 from structlog import get_logger
@@ -38,7 +39,7 @@ class RiskEngine:
         ]
         self.storm_guard = StormGuardFSM(self.config)
         self._cmd_id_lock = threading.Lock()
-        self._monotomic_cmd_id = 0
+        self._monotonic_cmd_id = 0
 
     def load_config(self):
         with open(self.config_path, "r") as f:
@@ -81,7 +82,7 @@ class RiskEngine:
                 logger.exception("RiskEngine error", error=str(e), error_type=type(e).__name__)
                 self.intent_queue.task_done()
 
-    def evaluate(self, intent: OrderIntent) -> RiskDecision:
+    def evaluate(self, intent: Any) -> RiskDecision:
         # 1. StormGuard Check
         ok, reason = self.storm_guard.validate(intent)
         if not ok:
@@ -95,17 +96,38 @@ class RiskEngine:
 
         return RiskDecision(True, intent)
 
+    def evaluate_typed_frame(self, frame: Any) -> RiskDecision:
+        """Risk evaluation on a typed intent frame using a lightweight view object."""
+        intent_view = self.typed_frame_view(frame)
+        return self.evaluate(intent_view)  # validators only require attribute access
+
+    def typed_frame_view(self, frame: Any) -> Any:
+        try:
+            from hft_platform.gateway.channel import typed_frame_to_view
+
+            return typed_frame_to_view(frame)
+        except Exception:
+            # Fallback: materialize full OrderIntent if frame is malformed/unsupported
+            from hft_platform.gateway.channel import typed_frame_to_intent
+
+            return typed_frame_to_intent(frame)
+
+    def create_command_from_typed_frame(self, frame: Any) -> OrderCommand:
+        from hft_platform.gateway.channel import typed_frame_to_intent
+
+        return self.create_command(typed_frame_to_intent(frame))
+
     @property
-    def monotomic_cmd_id(self) -> int:
+    def monotonic_cmd_id(self) -> int:
         """Thread-safe access to command ID counter."""
         with self._cmd_id_lock:
-            return self._monotomic_cmd_id
+            return self._monotonic_cmd_id
 
     def _next_cmd_id(self) -> int:
         """Thread-safe increment and return of command ID."""
         with self._cmd_id_lock:
-            self._monotomic_cmd_id += 1
-            return self._monotomic_cmd_id
+            self._monotonic_cmd_id += 1
+            return self._monotonic_cmd_id
 
     def create_command(self, intent: OrderIntent) -> OrderCommand:
         cmd_id = self._next_cmd_id()

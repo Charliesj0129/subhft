@@ -122,3 +122,63 @@ async def test_intent_carries_source_ts_and_trace_id():
 
     assert intent.source_ts_ns == 123456789
     assert intent.trace_id == "tick:7"
+
+
+@pytest.mark.asyncio
+async def test_typed_intent_channel_fastpath():
+    bus = MagicMock()
+
+    class TypedQueue:
+        def __init__(self):
+            self.frames = []
+
+        def submit_nowait(self, intent):
+            self.frames.append(("legacy", intent))
+
+        def submit_typed_nowait(self, frame):
+            self.frames.append(("typed", frame))
+            return "ok"
+
+        def qsize(self):
+            return len(self.frames)
+
+    risk_queue = TypedQueue()
+
+    with patch("hft_platform.strategy.runner.StrategyRegistry") as MockReg:
+        MockReg.return_value.instantiate.return_value = []
+        runner = StrategyRunner(bus, risk_queue, config_path="dummy")
+
+    strat = OrderStrategy("alpha", symbols=["AAA"])
+    runner.register(strat)
+
+    event = TickEvent(
+        meta=MetaData(seq=11, topic="tick", source_ts=1, local_ts=99),
+        symbol="AAA",
+        price=100,
+        volume=1,
+        total_volume=1,
+        bid_side_total_vol=0,
+        ask_side_total_vol=0,
+        is_simtrade=False,
+        is_odd_lot=False,
+    )
+
+    await runner.process_event(event)
+    assert risk_queue.qsize() == 1
+    mode, payload = risk_queue.frames[0]
+    assert mode == "typed"
+    assert payload[0] == "typed_intent_v1"
+    assert payload[2] == "alpha"
+    assert payload[13] == "tick:11"
+
+
+def test_strategy_runner_obs_policy_minimal_defaults(monkeypatch):
+    monkeypatch.setenv("HFT_OBS_POLICY", "minimal")
+    bus = MagicMock()
+    risk_queue = asyncio.Queue()
+    with patch("hft_platform.strategy.runner.StrategyRegistry") as MockReg:
+        MockReg.return_value.instantiate.return_value = []
+        runner = StrategyRunner(bus, risk_queue, config_path="dummy")
+    assert runner._diagnostic_metrics_enabled is False
+    assert runner._strategy_metrics_sample_every >= 8
+    assert runner._strategy_metrics_batch >= 32

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
+
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
 
@@ -133,6 +135,66 @@ class OFIMCAlpha(OFIMCFactor):
             current_mid=float(current_mid),
         )
         return self.get_signal()
+
+    def update_batch(self, data) -> np.ndarray:
+        arr = np.asarray(data)
+        if arr.size == 0:
+            return np.zeros(0, dtype=np.float64)
+        if not arr.dtype.names:
+            flat = np.asarray(arr, dtype=np.float64).reshape(-1)
+            out = np.zeros(flat.size, dtype=np.float64)
+            return out
+
+        names = set(arr.dtype.names)
+
+        def _resolve_required(primary: str, alternatives: list) -> str:
+            if primary in names:
+                return primary
+            for alt in alternatives:
+                if alt in names:
+                    return alt
+            raise ValueError(
+                f"Missing required field '{primary}' (tried {alternatives}). "
+                f"Available fields: {sorted(names)}"
+            )
+
+        def _resolve_optional(primary: str, alternatives: list) -> str:
+            if primary in names:
+                return primary
+            for alt in alternatives:
+                if alt in names:
+                    return alt
+            return primary  # _col will return zeros for missing optional fields
+
+        bid_px_key = _resolve_required("bid_px", ["best_bid", "bid_price"])
+        ask_px_key = _resolve_required("ask_px", ["best_ask", "ask_price"])
+        bid_qty_key = _resolve_required("bid_qty", ["bid_depth", "bqty"])
+        ask_qty_key = _resolve_required("ask_qty", ["ask_depth", "aqty"])
+        trade_vol_key = _resolve_optional("trade_vol", ["qty", "volume"])
+        mid_key = _resolve_optional("current_mid", ["mid", "mid_price"])
+
+        def _col(key: str, default: float = 0.0) -> np.ndarray:
+            if key in names:
+                return np.asarray(arr[key], dtype=np.float64).reshape(-1)
+            return np.full(arr.shape[0], default, dtype=np.float64)
+
+        bid_px = _col(bid_px_key)
+        ask_px = _col(ask_px_key)
+        bid_qty = _col(bid_qty_key)
+        ask_qty = _col(ask_qty_key)
+        trade_vol = _col(trade_vol_key)
+        current_mid = _col(mid_key)
+        out = np.zeros(arr.shape[0], dtype=np.float64)
+        for i in range(out.size):
+            out[i] = self.update(
+                bid_px=float(bid_px[i]),
+                bid_qty=float(bid_qty[i]),
+                ask_px=float(ask_px[i]),
+                ask_qty=float(ask_qty[i]),
+                trade_vol=float(trade_vol[i]),
+                current_mid=float(current_mid[i]),
+            )
+        return out
 
 
 ALPHA_CLASS = OFIMCAlpha

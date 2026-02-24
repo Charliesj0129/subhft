@@ -24,7 +24,11 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.contracts.strategy import IntentType
-from hft_platform.gateway.channel import IntentEnvelope, LocalIntentChannel
+from hft_platform.gateway.channel import (
+    IntentEnvelope,
+    LocalIntentChannel,
+    TypedIntentEnvelope,
+)
 from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureKey, ExposureLimitError, ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
@@ -74,7 +78,11 @@ class GatewayService:
         logger.info("GatewayService started")
         try:
             while self.running:
-                envelope = await self._channel.receive()
+                receive_raw = getattr(self._channel, "receive_raw", None)
+                if callable(receive_raw):
+                    envelope = await receive_raw()
+                else:
+                    envelope = await self._channel.receive()
                 try:
                     await self._process_envelope(envelope)
                 except Exception as exc:
@@ -95,9 +103,13 @@ class GatewayService:
             except Exception as exc:
                 logger.warning("Dedup persist on shutdown failed", error=str(exc))
 
-    async def _process_envelope(self, envelope: IntentEnvelope) -> None:
-        intent = envelope.intent
-        key = intent.idempotency_key
+    async def _process_envelope(self, envelope: IntentEnvelope | TypedIntentEnvelope) -> None:
+        typed_frame = envelope.payload if isinstance(envelope, TypedIntentEnvelope) else None
+        if typed_frame is not None and hasattr(self._risk_engine, "typed_frame_view"):
+            intent = self._risk_engine.typed_frame_view(typed_frame)
+        else:
+            intent = envelope.intent  # type: ignore[union-attr]
+        key = getattr(intent, "idempotency_key", "")
         t0 = time.perf_counter_ns()
 
         # Step 1: Dedup check
@@ -164,11 +176,18 @@ class GatewayService:
                 return
 
         # Step 4: Risk evaluate (synchronous, CPU-only)
-        decision = self._risk_engine.evaluate(intent)
+        if typed_frame is not None and hasattr(self._risk_engine, "evaluate_typed_frame"):
+            decision = self._risk_engine.evaluate_typed_frame(typed_frame)
+        else:
+            decision = self._risk_engine.evaluate(intent)
 
         # Step 5: Create command
         if decision.approved:
-            cmd = self._risk_engine.create_command(decision.intent)
+            if typed_frame is not None and hasattr(self._risk_engine, "create_command_from_typed_frame"):
+                # Materialize only after passing policy/exposure/risk checks.
+                cmd = self._risk_engine.create_command_from_typed_frame(typed_frame)
+            else:
+                cmd = self._risk_engine.create_command(decision.intent)
             # Step 6: Commit dedup
             self._dedup.commit(key, True, "OK", cmd.cmd_id)
             # Step 7: Dispatch to order adapter

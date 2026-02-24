@@ -9,13 +9,17 @@ from __future__ import annotations
 import itertools
 import json
 import random
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+from structlog import get_logger
 
 from research.combinatorial.expression_lang import compile_expression
+
+logger = get_logger("search_engine")
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,10 @@ class AlphaSearchEngine:
             str(k): np.asarray(v, dtype=np.float64).reshape(-1) for k, v in (pool_signals or {}).items()
         }
         self._rng = random.Random(int(random_seed))
+        self._feature_keys = tuple(sorted(self.features))
+        self._window_choices = (3, 5, 10, 20, 50, 100)
+        self._pool_corr_groups = _build_pool_corr_groups(self.pool_signals)
+        self._mutation_failures = 0
 
     def random_search(self, n_trials: int = 1000) -> list[SearchResult]:
         """Generate and evaluate *n_trials* random expressions; return sorted best-first."""
@@ -116,7 +124,7 @@ class AlphaSearchEngine:
         compiled = compile_expression(expression)
         signal = compiled.evaluate(self.features)
         sharpe = _signal_sharpe(signal, self.returns)
-        corr = _pool_corr_max(signal, self.pool_signals)
+        corr = self._pool_corr_max(signal)
         score = float(sharpe - (0.25 * corr))
         passed = bool(sharpe > 0.5 and corr < 0.7)
         return SearchResult(
@@ -146,8 +154,8 @@ class AlphaSearchEngine:
         return str(out)
 
     def _random_expression(self) -> str:
-        field = self._rng.choice(sorted(self.features))
-        window = self._rng.choice([3, 5, 10, 20, 50, 100])
+        field = self._rng.choice(self._feature_keys)
+        window = self._rng.choice(self._window_choices)
         family = self._rng.choice(["trend", "mean_revert", "volume", "mix"])
         if family == "trend":
             return f"zscore(ts_delta({field}, {window}), {window})"
@@ -155,7 +163,7 @@ class AlphaSearchEngine:
             return f"sign(ts_delta({field}, {window}))"
         if family == "volume":
             return f"rank(ts_sum({field}, {window}))"
-        other = self._rng.choice(sorted(self.features))
+        other = self._rng.choice(self._feature_keys)
         return f"sign(ts_corr({field}, {other}, {window}))"
 
     def _mutate_expression(self, expression: str) -> str:
@@ -163,16 +171,60 @@ class AlphaSearchEngine:
         out = list(tokens)
         for i, token in enumerate(tokens):
             if token.isdigit() and self._rng.random() < 0.5:
-                out[i] = str(self._rng.choice([3, 5, 10, 20, 50, 100]))
+                out[i] = str(self._rng.choice(self._window_choices))
             elif token in self.features and self._rng.random() < 0.3:
-                out[i] = self._rng.choice(sorted(self.features))
+                out[i] = self._rng.choice(self._feature_keys)
         rebuilt = " ".join(out)
         rebuilt = rebuilt.replace(" ,", ",").replace("( ", "(").replace(" )", ")")
         try:
             compile_expression(rebuilt)
             return rebuilt
-        except Exception:
+        except Exception as exc:
+            self._mutation_failures += 1
+            logger.warning("alpha_mutation_failed", expr=rebuilt[:120], reason=str(exc))
             return self._random_expression()
+
+    def _pool_corr_max(self, signal: np.ndarray) -> float:
+        if not self._pool_corr_groups:
+            return 0.0
+        sig = np.asarray(signal, dtype=np.float64).reshape(-1)
+        if sig.size < 2:
+            return 0.0
+
+        out = 0.0
+        used_fast_path = False
+        for n, group in self._pool_corr_groups.items():
+            if n < 2 or sig.size < n:
+                continue
+            mat = group["centered"]
+            norms = group["norms"]
+            if mat.size == 0 or norms.size == 0:
+                continue
+            view = np.nan_to_num(sig[:n], nan=0.0, posinf=0.0, neginf=0.0)
+            view_centered = view - float(np.mean(view))
+            sig_norm = float(np.linalg.norm(view_centered))
+            if sig_norm <= 1e-12:
+                continue
+            denom = norms * sig_norm
+            dots = mat @ view_centered
+            corrs = np.zeros_like(dots, dtype=np.float64)
+            np.divide(dots, denom, out=corrs, where=denom > 1e-12)
+            if corrs.size:
+                local_max = float(np.max(np.abs(corrs)))
+                if np.isfinite(local_max):
+                    out = max(out, local_max)
+                    used_fast_path = True
+
+        # Rare path: pool arrays longer than signal (mismatched lengths). Fall back to exact correlation.
+        if not used_fast_path or any(n > sig.size for n in self._pool_corr_groups):
+            for pool in self.pool_signals.values():
+                n = min(sig.size, pool.size)
+                if n < 2:
+                    continue
+                corr = np.corrcoef(sig[:n], pool[:n])[0, 1]
+                if np.isfinite(corr):
+                    out = max(out, abs(float(corr)))
+        return float(out)
 
 
 def _as_returns(values: Sequence[float] | None) -> np.ndarray | None:
@@ -201,17 +253,31 @@ def _signal_sharpe(signal: np.ndarray, returns: np.ndarray | None) -> float:
     return float(np.mean(pnl) / sigma * np.sqrt(252.0))
 
 
-def _pool_corr_max(signal: np.ndarray, pool_signals: Mapping[str, np.ndarray]) -> float:
+def _build_pool_corr_groups(pool_signals: Mapping[str, np.ndarray]) -> dict[int, dict[str, np.ndarray]]:
     if not pool_signals:
-        return 0.0
-    sig = np.asarray(signal, dtype=np.float64).reshape(-1)
-    out = 0.0
+        return {}
+    grouped_centered: dict[int, list[np.ndarray]] = defaultdict(list)
+    grouped_norms: dict[int, list[float]] = defaultdict(list)
+
     for pool in pool_signals.values():
         arr = np.asarray(pool, dtype=np.float64).reshape(-1)
-        n = min(sig.size, arr.size)
+        n = int(arr.size)
         if n < 2:
             continue
-        corr = np.corrcoef(sig[:n], arr[:n])[0, 1]
-        if np.isfinite(corr):
-            out = max(out, abs(float(corr)))
-    return float(out)
+        clean = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        centered = clean - float(np.mean(clean))
+        norm = float(np.linalg.norm(centered))
+        if norm <= 1e-12:
+            continue
+        grouped_centered[n].append(centered)
+        grouped_norms[n].append(norm)
+
+    out: dict[int, dict[str, np.ndarray]] = {}
+    for n, rows in grouped_centered.items():
+        if not rows:
+            continue
+        out[n] = {
+            "centered": np.ascontiguousarray(np.vstack(rows), dtype=np.float64),
+            "norms": np.asarray(grouped_norms[n], dtype=np.float64),
+        }
+    return out

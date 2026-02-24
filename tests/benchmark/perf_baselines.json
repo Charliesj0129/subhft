@@ -1,0 +1,14 @@
+{
+  "market_data_callback_parse_us_per_event_max": 8.0,
+  "shioaji_callback_soak_calls_per_dispatch_max": 1.2,
+  "shioaji_callback_soak_us_per_dispatch_max": 12.0,
+  "strategy_noop_metrics_on_us_per_event_max": 8.0,
+  "shioaji_callback_dispatch_us_per_event_max": 15.0,
+  "research_backtest_us_per_row_max": 30.0,
+  "research_search_ms_per_trial_max": 80.0,
+  "recorder_batcher_add_us_per_row_max": 12.0,
+  "recorder_map_tick_us_per_event_max": 20.0,
+  "recorder_map_bidask_us_per_event_max": 120.0,
+  "recorder_ck_columnar_write_ms_max": 150.0,
+  "recorder_wal_atomic_stress_ratio_max": 6.0
+}

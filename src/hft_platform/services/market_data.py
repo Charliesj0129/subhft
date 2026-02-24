@@ -3,6 +3,7 @@ import datetime as dt
 import os
 import time
 from enum import Enum
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from structlog import get_logger
@@ -17,6 +18,144 @@ from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("service.market_data")
+
+_MD_PRICE_FIELDS = (
+    "close",
+    "price",
+    "bid_price",
+    "ask_price",
+    "bid_volume",
+    "ask_volume",
+    "buy_price",
+    "sell_price",
+)
+_MD_TIME_FIELDS = ("ts", "datetime")
+_MD_CODE_FIELDS = ("code", "symbol")
+_MD_NESTED_FIELDS = ("tick", "bidask")
+
+
+def _looks_like_md(obj: object) -> bool:
+    if obj is None:
+        return False
+    if isinstance(obj, dict):
+        keys = obj.keys()
+        if "code" in keys or "symbol" in keys:
+            return True
+        if (
+            "bid_price" in keys
+            or "ask_price" in keys
+            or "close" in keys
+            or "price" in keys
+            or "bid_volume" in keys
+            or "ask_volume" in keys
+            or "buy_price" in keys
+            or "sell_price" in keys
+        ):
+            return True
+        return "ts" in keys or "datetime" in keys
+    has_code = getattr(obj, "code", None) is not None or getattr(obj, "symbol", None) is not None
+    has_price = (
+        hasattr(obj, "bid_price")
+        or hasattr(obj, "ask_price")
+        or hasattr(obj, "close")
+        or hasattr(obj, "price")
+        or hasattr(obj, "bid_volume")
+        or hasattr(obj, "ask_volume")
+    )
+    has_time = hasattr(obj, "ts") or hasattr(obj, "datetime")
+    return bool(has_price or (has_code and (has_price or has_time)))
+
+
+def _unwrap_md(obj: object) -> object:
+    if obj is None:
+        return obj
+    if isinstance(obj, dict):
+        tick = obj.get("tick")
+        if _looks_like_md(tick):
+            return tick
+        bidask = obj.get("bidask")
+        if _looks_like_md(bidask):
+            return bidask
+        return obj
+    tick = getattr(obj, "tick", None)
+    if _looks_like_md(tick):
+        return tick
+    bidask = getattr(obj, "bidask", None)
+    if _looks_like_md(bidask):
+        return bidask
+    return obj
+
+
+def _summarize_md(obj: object) -> dict[str, Any]:
+    if obj is None:
+        return {}
+    nested: dict[str, str]
+    if isinstance(obj, dict):
+        keys = list(obj.keys())
+        present = [k for k in (*_MD_CODE_FIELDS, *_MD_PRICE_FIELDS, *_MD_TIME_FIELDS) if k in obj]
+        nested = {k: type(obj.get(k)).__name__ for k in _MD_NESTED_FIELDS if k in obj}
+        return {"keys": keys[:20], "present": present, "nested": nested}
+    present = [k for k in (*_MD_CODE_FIELDS, *_MD_PRICE_FIELDS, *_MD_TIME_FIELDS) if hasattr(obj, k)]
+    nested = {}
+    for k in _MD_NESTED_FIELDS:
+        if hasattr(obj, k):
+            nested[k] = type(getattr(obj, k)).__name__
+    return {"attrs": present, "nested": nested}
+
+
+def _try_fast_extract_callback_payload(*args: Any, **kwargs: Any) -> tuple[object | None, object | None]:
+    exchange = kwargs.get("exchange")
+
+    for key in ("quote", "tick", "bidask", "data", "msg"):
+        if key not in kwargs:
+            continue
+        candidate = _unwrap_md(kwargs[key])
+        if _looks_like_md(candidate):
+            return exchange, candidate
+
+    argc = len(args)
+    if argc == 2:
+        a0, a1 = args
+        # Common Shioaji shape: (exchange/topic, msg)
+        msg = _unwrap_md(a1)
+        if _looks_like_md(msg):
+            if exchange is None and (isinstance(a0, str) or hasattr(a0, "name")):
+                exchange = a0
+            return exchange, msg
+        # Alternate order fallback
+        msg = _unwrap_md(a0)
+        if _looks_like_md(msg):
+            if exchange is None and (isinstance(a1, str) or hasattr(a1, "name")):
+                exchange = a1
+            return exchange, msg
+    elif argc == 1:
+        msg = _unwrap_md(args[0])
+        if _looks_like_md(msg):
+            return exchange, msg
+    elif argc >= 3:
+        # Another common shape: (topic, quote, event) — pick the last MD-like payload quickly.
+        for candidate in (args[-1], args[-2], args[0]):
+            msg = _unwrap_md(candidate)
+            if _looks_like_md(msg):
+                if exchange is None and argc > 0 and (isinstance(args[0], str) or hasattr(args[0], "name")):
+                    exchange = args[0]
+                return exchange, msg
+
+    return exchange, None
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except Exception:
+        return max(1, int(default))
+
+
+def _obs_policy() -> str:
+    policy = os.getenv("HFT_OBS_POLICY", "balanced").strip().lower()
+    if policy not in {"minimal", "balanced", "debug"}:
+        return "balanced"
+    return policy
 
 
 class FeedState(Enum):
@@ -76,6 +215,9 @@ class MarketDataService:
         self.metrics = {"count": 0, "start_ts": timebase.now_s()}
         self.metrics_registry = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
+        self._feed_last_event_metric_child = None
+        self._feed_reconnect_gap_metric_child = None
+        self._md_callback_parse_metric_children: dict[str, Any] = {}
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
         self.log_raw_every = int(os.getenv("HFT_MD_LOG_EVERY", "1000"))
         self._raw_log_counter = 0
@@ -129,6 +271,18 @@ class MarketDataService:
         # Market open grace period (C4)
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))
         self._market_open_grace_gap_threshold_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_GAP_S", "30"))
+        policy = _obs_policy()
+        md_metrics_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
+        md_latency_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
+        cb_parse_metrics_default = 64 if policy != "debug" else 1
+        self._md_metrics_sample_every = _env_int("HFT_MD_METRICS_SAMPLE_EVERY", md_metrics_default)
+        self._md_latency_sample_every = _env_int("HFT_MD_LATENCY_SAMPLE_EVERY", md_latency_default)
+        self._md_callback_parse_metrics_every = _env_int(
+            "HFT_MD_CALLBACK_PARSE_METRICS_EVERY", cb_parse_metrics_default
+        )
+        self._md_metrics_counter = 0
+        self._md_latency_counter = 0
+        self._md_callback_parse_counter = 0
 
     async def run(self):
         self.running = True
@@ -154,12 +308,18 @@ class MarketDataService:
                     raw = msg
                 self.last_event_ts = timebase.now_s()
                 self.last_event_mono = time.monotonic()
-                self.metrics_registry.feed_last_event_ts.labels(source="market_data").set(self.last_event_ts)
+                self._md_metrics_counter += 1
+                if self._md_metrics_counter % self._md_metrics_sample_every == 0:
+                    if self._feed_last_event_metric_child is None:
+                        self._feed_last_event_metric_child = self.metrics_registry.feed_last_event_ts.labels(
+                            source="market_data"
+                        )
+                    self._feed_last_event_metric_child.set(self.last_event_ts)
                 self.metrics["count"] += 1
 
                 # P0-1: Track queue depth and high watermark
                 qsize = self.raw_queue.qsize()
-                if self.metrics_registry:
+                if self.metrics_registry and self._md_metrics_counter % self._md_metrics_sample_every == 0:
                     self.metrics_registry.raw_queue_depth.set(qsize)
                 if self._raw_queue_size > 0:
                     utilization = qsize / self._raw_queue_size
@@ -247,7 +407,8 @@ class MarketDataService:
                         topic = getattr(meta, "topic", "event")
                         if seq is not None:
                             trace_id = f"{topic}:{seq}"
-                    if norm_duration and self.latency:
+                    self._md_latency_counter += 1
+                    if norm_duration and self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
                         self.latency.record(
                             "normalize",
                             norm_duration,
@@ -264,7 +425,7 @@ class MarketDataService:
                     lob_start_ns = time.perf_counter_ns()
                     stats = self.lob.process_event(event)
                     lob_duration = time.perf_counter_ns() - lob_start_ns
-                    if self.latency:
+                    if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
                         self.latency.record(
                             "lob_process",
                             lob_duration,
@@ -353,99 +514,43 @@ class MarketDataService:
             if self.log_raw:
                 logger.debug("Callback hit", args_len=len(args))
 
-            exchange = None
-            msg = None
+            exchange, msg = _try_fast_extract_callback_payload(*args, **kwargs)
+            parse_result = "fast" if msg is not None else "fallback"
 
-            def _looks_like_md(obj: object) -> bool:
-                if obj is None:
-                    return False
-                price_fields = (
-                    "close",
-                    "price",
-                    "bid_price",
-                    "ask_price",
-                    "bid_volume",
-                    "ask_volume",
-                    "buy_price",
-                    "sell_price",
-                )
-                time_fields = ("ts", "datetime")
-                code_fields = ("code", "symbol")
-                if isinstance(obj, dict):
-                    keys = obj.keys()
-                    if any(k in keys for k in code_fields):
-                        return True
-                    if any(k in keys for k in price_fields):
-                        return True
-                    if any(k in keys for k in time_fields):
-                        return True
-                    return False
-                has_code = any(hasattr(obj, attr) for attr in code_fields)
-                has_price = any(hasattr(obj, attr) for attr in price_fields)
-                has_time = any(hasattr(obj, attr) for attr in time_fields)
-                return has_price or (has_code and (has_price or has_time))
-
-            def _unwrap_md(obj: object) -> object:
-                if obj is None:
-                    return obj
-                if isinstance(obj, dict):
-                    for key in ("tick", "bidask"):
-                        inner = obj.get(key)
-                        if _looks_like_md(inner):
-                            return inner
-                    return obj
-                for attr in ("tick", "bidask"):
-                    if hasattr(obj, attr):
-                        inner = getattr(obj, attr)
-                        if _looks_like_md(inner):
-                            return inner
-                return obj
-
-            def _summarize_md(obj: object) -> dict:
-                if obj is None:
-                    return {}
-                fields = ("code", "close", "price", "bid_price", "ask_price", "bid_volume", "ask_volume", "volume")
-                time_fields = ("ts", "datetime")
-                if isinstance(obj, dict):
-                    keys = list(obj.keys())
-                    present = [k for k in (*fields, *time_fields) if k in obj]
-                    nested = {k: type(obj.get(k)).__name__ for k in ("tick", "bidask") if k in obj}
-                    return {"keys": keys[:20], "present": present, "nested": nested}
-                present = [k for k in (*fields, *time_fields) if hasattr(obj, k)]
-                nested = {}
-                for k in ("tick", "bidask"):
-                    if hasattr(obj, k):
-                        nested[k] = type(getattr(obj, k)).__name__
-                return {"attrs": present, "nested": nested}
-
-            # Prefer explicit payload from kwargs if provided.
-            for key in ("quote", "tick", "bidask", "data", "msg"):
-                if key in kwargs:
-                    candidate = _unwrap_md(kwargs[key])
-                    if _looks_like_md(candidate):
-                        msg = candidate
-                        break
-            if exchange is None and "exchange" in kwargs:
-                exchange = kwargs["exchange"]
-
-            # Heuristic: find exchange + market data payload among args.
-            for arg in args:
-                candidate = _unwrap_md(arg)
-                looks_like_md = _looks_like_md(candidate)
-                if exchange is None and not looks_like_md and (hasattr(arg, "name") or isinstance(arg, str)):
-                    exchange = arg
-                if looks_like_md:
-                    msg = candidate
-
-            # Fallbacks
             if msg is None:
-                if len(args) >= 2:
-                    msg = _unwrap_md(args[-1])
-                elif len(args) == 1:
-                    msg = _unwrap_md(args[0])
+                # Generic fallback for signature drift across Shioaji versions.
+                if exchange is None and "exchange" in kwargs:
+                    exchange = kwargs["exchange"]
+                for arg in args:
+                    candidate = _unwrap_md(arg)
+                    looks_like = _looks_like_md(candidate)
+                    if exchange is None and not looks_like and (hasattr(arg, "name") or isinstance(arg, str)):
+                        exchange = arg
+                    if looks_like:
+                        msg = candidate
+                if msg is None:
+                    if len(args) >= 2:
+                        msg = _unwrap_md(args[-1])
+                    elif len(args) == 1:
+                        msg = _unwrap_md(args[0])
+                if msg is not None:
+                    msg = _unwrap_md(msg)
+                parse_result = "fallback" if msg is not None else "miss"
 
-            if msg is not None:
-                msg = _unwrap_md(msg)
+            if self.metrics_registry:
+                self._md_callback_parse_counter += 1
+                if self._md_callback_parse_counter % self._md_callback_parse_metrics_every == 0:
+                    try:
+                        if hasattr(self.metrics_registry, "market_data_callback_parse_total"):
+                            child = self._md_callback_parse_metric_children.get(parse_result)
+                            if child is None:
+                                child = self.metrics_registry.market_data_callback_parse_total.labels(
+                                    result=parse_result
+                                )
+                                self._md_callback_parse_metric_children[parse_result] = child
+                            child.inc()
+                    except Exception:
+                        pass
 
             if not self.log_raw and msg is not None and not self._raw_first_parsed:
                 self._raw_first_parsed = True
@@ -506,7 +611,11 @@ class MarketDataService:
                 if gap > self.heartbeat_threshold_s:
                     logger.warning("Heartbeat missing", gap=gap)
                     if self.metrics_registry:
-                        self.metrics_registry.feed_reconnect_total.labels(result="gap").inc()
+                        if self._feed_reconnect_gap_metric_child is None:
+                            self._feed_reconnect_gap_metric_child = self.metrics_registry.feed_reconnect_total.labels(
+                                result="gap"
+                            )
+                        self._feed_reconnect_gap_metric_child.inc()
                 if gap > self.resubscribe_gap_s:
                     await self._attempt_resubscribe(gap)
                 if gap > self.force_reconnect_gap_s or (gap > self.reconnect_gap_s and self._resubscribe_attempts > 2):
@@ -801,7 +910,8 @@ class MarketDataService:
             return 0.0
 
         if not tick_values:
-            return 0.0
+            # No symbols subscribed yet — return configurable sentinel value
+            return float(os.getenv("HFT_FEED_GAP_NO_DATA_S", "0.0"))
 
         now = time.monotonic()
         max_gap = 0.0

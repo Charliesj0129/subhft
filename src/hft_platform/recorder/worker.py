@@ -13,95 +13,147 @@ logger = get_logger("recorder")
 
 # ── CC-5: Schema extractors ──────────────────────────────────────────────
 
+MARKET_DATA_COLUMNS = [
+    "symbol",
+    "exchange",
+    "type",
+    "exch_ts",
+    "ingest_ts",
+    "price_scaled",
+    "volume",
+    "bids_price",
+    "bids_vol",
+    "asks_price",
+    "asks_vol",
+    "seq_no",
+]
 
-def _extract_market_data(row) -> dict | None:
+ORDER_COLUMNS = [
+    "order_id",
+    "strategy_id",
+    "symbol",
+    "exchange",
+    "side",
+    "price_scaled",
+    "qty",
+    "order_type",
+    "status",
+    "exch_ts",
+    "ingest_ts",
+]
+
+FILL_COLUMNS = [
+    "trade_id",
+    "order_id",
+    "symbol",
+    "exchange",
+    "side",
+    "price_scaled",
+    "qty",
+    "exch_ts",
+    "ingest_ts",
+]
+
+
+def _extract_market_data(row) -> list | None:
     """Fast extractor for market_data events — bypasses generic serialize()."""
     try:
-        return {
-            "symbol": getattr(row, "symbol", None) or (row.get("symbol") if isinstance(row, dict) else None),
-            "exchange": getattr(row, "exchange", None)
-            or getattr(row, "exch", None)
-            or (row.get("exchange", row.get("exch", "TSE")) if isinstance(row, dict) else "TSE"),
-            "type": getattr(row, "type", None) or (row.get("type", "") if isinstance(row, dict) else ""),
-            "exch_ts": getattr(row, "exch_ts", None)
-            or getattr(row, "ts", None)
-            or (row.get("exch_ts", row.get("ts")) if isinstance(row, dict) else None),
-            "ingest_ts": getattr(row, "ingest_ts", None)
-            or getattr(row, "recv_ts", None)
-            or (row.get("ingest_ts", row.get("recv_ts")) if isinstance(row, dict) else None),
-            "price_scaled": getattr(row, "price_scaled", None)
-            or (row.get("price_scaled") if isinstance(row, dict) else None),
-            "volume": getattr(row, "volume", None)
-            or getattr(row, "total_volume", None)
-            or (row.get("volume", row.get("total_volume", 0)) if isinstance(row, dict) else 0),
-            "bids_price": getattr(row, "bids_price", None)
-            or (row.get("bids_price") if isinstance(row, dict) else None),
-            "bids_vol": getattr(row, "bids_vol", None) or (row.get("bids_vol") if isinstance(row, dict) else None),
-            "asks_price": getattr(row, "asks_price", None)
-            or (row.get("asks_price") if isinstance(row, dict) else None),
-            "asks_vol": getattr(row, "asks_vol", None) or (row.get("asks_vol") if isinstance(row, dict) else None),
-            "seq_no": getattr(row, "seq_no", None)
-            or getattr(row, "seq", None)
-            or (row.get("seq_no", row.get("seq", 0)) if isinstance(row, dict) else 0),
-        }
+        if isinstance(row, dict):
+            get = row.get
+            return [
+                get("symbol"),
+                get("exchange", get("exch", "TSE")),
+                get("type", ""),
+                get("exch_ts", get("ts")),
+                get("ingest_ts", get("recv_ts")),
+                get("price_scaled"),
+                get("volume", get("total_volume", 0)),
+                get("bids_price"),
+                get("bids_vol"),
+                get("asks_price"),
+                get("asks_vol"),
+                get("seq_no", get("seq", 0)),
+            ]
+        return [
+            getattr(row, "symbol", None),
+            getattr(row, "exchange", None) or getattr(row, "exch", None) or "TSE",
+            getattr(row, "type", None) or "",
+            getattr(row, "exch_ts", None) or getattr(row, "ts", None),
+            getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
+            getattr(row, "price_scaled", None),
+            getattr(row, "volume", None) or getattr(row, "total_volume", None) or 0,
+            getattr(row, "bids_price", None),
+            getattr(row, "bids_vol", None),
+            getattr(row, "asks_price", None),
+            getattr(row, "asks_vol", None),
+            getattr(row, "seq_no", None) or getattr(row, "seq", None) or 0,
+        ]
     except Exception:
         return None
 
 
-def _extract_order(row) -> dict | None:
+def _extract_order(row) -> list | None:
     """Fast extractor for order events."""
     try:
-        return {
-            "order_id": getattr(row, "order_id", None) or (row.get("order_id") if isinstance(row, dict) else None),
-            "strategy_id": getattr(row, "strategy_id", None)
-            or (row.get("strategy_id") if isinstance(row, dict) else None),
-            "symbol": getattr(row, "symbol", None) or (row.get("symbol") if isinstance(row, dict) else None),
-            "exchange": getattr(row, "exchange", None)
-            or (row.get("exchange", row.get("exch", "")) if isinstance(row, dict) else ""),
-            "side": getattr(row, "side", None)
-            or getattr(row, "action", None)
-            or (row.get("side", row.get("action", "")) if isinstance(row, dict) else ""),
-            "price_scaled": getattr(row, "price_scaled", None)
-            or (row.get("price_scaled") if isinstance(row, dict) else None),
-            "qty": getattr(row, "qty", None)
-            or getattr(row, "quantity", None)
-            or (row.get("qty", row.get("quantity", 0)) if isinstance(row, dict) else 0),
-            "order_type": getattr(row, "order_type", None)
-            or (row.get("order_type", row.get("type", "")) if isinstance(row, dict) else ""),
-            "status": getattr(row, "status", None) or (row.get("status", "") if isinstance(row, dict) else ""),
-            "exch_ts": getattr(row, "exch_ts", None)
-            or (row.get("exch_ts", row.get("ts")) if isinstance(row, dict) else None),
-            "ingest_ts": getattr(row, "ingest_ts", None)
-            or (row.get("ingest_ts", row.get("recv_ts")) if isinstance(row, dict) else None),
-        }
+        if isinstance(row, dict):
+            get = row.get
+            return [
+                get("order_id"),
+                get("strategy_id"),
+                get("symbol"),
+                get("exchange", get("exch", "")),
+                get("side", get("action", "")),
+                get("price_scaled"),
+                get("qty", get("quantity", 0)),
+                get("order_type", get("type", "")),
+                get("status", ""),
+                get("exch_ts", get("ts")),
+                get("ingest_ts", get("recv_ts")),
+            ]
+        return [
+            getattr(row, "order_id", None),
+            getattr(row, "strategy_id", None),
+            getattr(row, "symbol", None),
+            getattr(row, "exchange", None) or "",
+            getattr(row, "side", None) or getattr(row, "action", None) or "",
+            getattr(row, "price_scaled", None),
+            getattr(row, "qty", None) or getattr(row, "quantity", None) or 0,
+            getattr(row, "order_type", None) or getattr(row, "type", None) or "",
+            getattr(row, "status", None) or "",
+            getattr(row, "exch_ts", None) or getattr(row, "ts", None),
+            getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
+        ]
     except Exception:
         return None
 
 
-def _extract_fill(row) -> dict | None:
+def _extract_fill(row) -> list | None:
     """Fast extractor for fill/trade events."""
     try:
-        return {
-            "trade_id": getattr(row, "trade_id", None)
-            or getattr(row, "fill_id", None)
-            or (row.get("trade_id", row.get("fill_id")) if isinstance(row, dict) else None),
-            "order_id": getattr(row, "order_id", None) or (row.get("order_id") if isinstance(row, dict) else None),
-            "symbol": getattr(row, "symbol", None) or (row.get("symbol") if isinstance(row, dict) else None),
-            "exchange": getattr(row, "exchange", None)
-            or (row.get("exchange", row.get("exch", "")) if isinstance(row, dict) else ""),
-            "side": getattr(row, "side", None)
-            or getattr(row, "action", None)
-            or (row.get("side", row.get("action", "")) if isinstance(row, dict) else ""),
-            "price_scaled": getattr(row, "price_scaled", None)
-            or (row.get("price_scaled") if isinstance(row, dict) else None),
-            "qty": getattr(row, "qty", None)
-            or getattr(row, "quantity", None)
-            or (row.get("qty", row.get("quantity", 0)) if isinstance(row, dict) else 0),
-            "exch_ts": getattr(row, "exch_ts", None)
-            or (row.get("exch_ts", row.get("ts")) if isinstance(row, dict) else None),
-            "ingest_ts": getattr(row, "ingest_ts", None)
-            or (row.get("ingest_ts", row.get("recv_ts")) if isinstance(row, dict) else None),
-        }
+        if isinstance(row, dict):
+            get = row.get
+            return [
+                get("trade_id", get("fill_id")),
+                get("order_id"),
+                get("symbol"),
+                get("exchange", get("exch", "")),
+                get("side", get("action", "")),
+                get("price_scaled"),
+                get("qty", get("quantity", 0)),
+                get("exch_ts", get("ts")),
+                get("ingest_ts", get("recv_ts")),
+            ]
+        return [
+            getattr(row, "trade_id", None) or getattr(row, "fill_id", None),
+            getattr(row, "order_id", None),
+            getattr(row, "symbol", None),
+            getattr(row, "exchange", None) or "",
+            getattr(row, "side", None) or getattr(row, "action", None) or "",
+            getattr(row, "price_scaled", None),
+            getattr(row, "qty", None) or getattr(row, "quantity", None) or 0,
+            getattr(row, "exch_ts", None) or getattr(row, "ts", None),
+            getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
+        ]
     except Exception:
         return None
 
@@ -111,6 +163,12 @@ _EXTRACTORS = {
     "market_data": _extract_market_data,
     "orders": _extract_order,
     "fills": _extract_fill,
+}
+
+_EXTRACTOR_COLUMNS = {
+    "market_data": MARKET_DATA_COLUMNS,
+    "orders": ORDER_COLUMNS,
+    "fills": FILL_COLUMNS,
 }
 
 
@@ -147,6 +205,7 @@ class RecorderService:
                 "hft.market_data",
                 writer=self.writer,
                 extractor=_EXTRACTORS.get("market_data") if extract_enabled else None,
+                extractor_columns=_EXTRACTOR_COLUMNS.get("market_data") if extract_enabled else None,
                 memory_guard=self.memory_guard,
                 health_tracker=self.health_tracker,
             ),
@@ -154,6 +213,7 @@ class RecorderService:
                 "hft.orders",
                 writer=self.writer,
                 extractor=_EXTRACTORS.get("orders") if extract_enabled else None,
+                extractor_columns=_EXTRACTOR_COLUMNS.get("orders") if extract_enabled else None,
                 memory_guard=self.memory_guard,
                 health_tracker=self.health_tracker,
             ),
@@ -167,6 +227,7 @@ class RecorderService:
                 "hft.trades",
                 writer=self.writer,
                 extractor=_EXTRACTORS.get("fills") if extract_enabled else None,
+                extractor_columns=_EXTRACTOR_COLUMNS.get("fills") if extract_enabled else None,
                 memory_guard=self.memory_guard,
                 health_tracker=self.health_tracker,
             ),

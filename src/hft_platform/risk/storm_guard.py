@@ -41,6 +41,10 @@ class StormGuard:
         self._apply_env_overrides()
         self.metrics = MetricsRegistry.get()
         self.last_state_change = timebase.now_s()
+        self._de_escalate_count: int = 0
+        self._storm_entry_ts: float = 0.0
+        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))
+        self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
 
     def _apply_env_overrides(self) -> None:
         feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
@@ -82,11 +86,38 @@ class StormGuard:
             new_state = StormGuardState.WARM
             reason = "Latency Warning"
 
-        # Transition Logic
-        if new_state != self.state:
-            # Escalation is instant. De-escalation creates logging but we allow instant for now.
-            # Real system might need hysteresis (cool-down period).
-            self.transition(new_state, reason if new_state > StormGuardState.NORMAL else "Recovery")
+        # Transition Logic (with hysteresis protection for de-escalation)
+        now = timebase.now_s()
+        if new_state > self.state:
+            # Escalation: always instant (safety-first)
+            self._de_escalate_count = 0
+            if new_state >= StormGuardState.STORM and self.state < StormGuardState.STORM:
+                self._storm_entry_ts = now
+            self.transition(new_state, reason)
+        elif new_state < self.state:
+            # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
+            cooldown_ok = (
+                (now - self._storm_entry_ts) >= self._storm_cooldown_s
+                if self.state >= StormGuardState.STORM else True
+            )
+            if cooldown_ok:
+                self._de_escalate_count += 1
+                if self._de_escalate_count >= self._de_escalate_threshold:
+                    old_for_log = self.state
+                    self._de_escalate_count = 0
+                    self.transition(new_state, "Recovery")
+                    logger.info(
+                        "StormGuard de-escalated after hysteresis",
+                        from_state=old_for_log.name,
+                        to_state=new_state.name,
+                        cooldown_s=self._storm_cooldown_s,
+                        threshold=self._de_escalate_threshold,
+                    )
+            else:
+                self._de_escalate_count = 0
+        else:
+            if new_state >= StormGuardState.STORM:
+                self._de_escalate_count = 0
 
         return self.state
 

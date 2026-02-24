@@ -55,3 +55,33 @@
 **Fix**: Added `cargo clippy -- -D warnings` to CI and fixed all existing warnings.
 **Rule**: Always run clippy with `-D warnings` in CI. Fix warnings immediately, never suppress without justification.
 **Commits**: `3fe1cf7`
+
+## [ARCH] StrategyRunner circuit breaker is 3-state FSM (2026-02)
+
+**Context**: Strategy crashes used to disable the strategy permanently. Operators had to redeploy.
+**Fix**: Implemented 3-state FSM (normal→degraded→halted) with cooldown recovery. Halted strategies auto-retry after `HFT_STRATEGY_CIRCUIT_COOLDOWN_S` (default 60s). Degraded requires N/2 consecutive successes to recover.
+**Rule**: Any per-component circuit breaker must have an auto-recovery path. Never make human intervention the only recovery mechanism.
+
+## [PERF] Typed intent tuples eliminate OrderIntent allocation on hot path (2026-02)
+
+**Context**: Every strategy event created an `OrderIntent` dataclass object, adding GC pressure.
+**Fix**: `_intent_factory()` returns a plain tuple tagged `"typed_intent_v1"` when `HFT_TYPED_INTENT_CHANNEL=1`. Gateway's `typed_frame_view()` lazily deserializes only after passing dedup+policy+exposure gates.
+**Rule**: On the hot path, prefer tuples/namedtuples over dataclasses when the object's lifetime is very short and it crosses few boundaries.
+
+## [ARCH] Recorder degrades gracefully under queue overflow (2026-02)
+
+**Context**: When ClickHouse is slow, recorder queue fills up and market data ticks are dropped.
+**Fix**: `MarketDataService` enters degraded mode after N consecutive drops (`HFT_RECORD_DEGRADE_THRESHOLD`=500). In degraded mode, ALL recording is skipped (ticks still flow). Auto-recovers when queue drops below 50%.
+**Rule**: Recording must never block or drop market data. Graceful degradation > crash > data loss.
+
+## [GOTCHA] Gateway uses deferred imports to avoid circular dependencies (2026-02)
+
+**Context**: `GatewayService` needs `MetricsRegistry` but importing it at module level creates circular import chains through `observability → risk → gateway`.
+**Fix**: All metrics access uses deferred `from hft_platform.observability.metrics import MetricsRegistry` inside methods, wrapped in `try/except` to never break the hot path.
+**Rule**: In the gateway/risk/execution import triangle, always use deferred imports for observability. Never move these to top-level.
+
+## [ARCH] AI context files must have a single source of truth (2026-02)
+
+**Context**: Project had 4 overlapping AI context files (`CLAUDE.md`, `AGENTS.md`, `README_AI.md`, `docs/ARCHITECTURE.md`) with contradictions, broken references, and fictional content.
+**Fix**: Deleted `README_AI.md` (referenced 7 nonexistent skills). Rewrote `CLAUDE.md` as the single constitution. Made `docs/ARCHITECTURE.md` an index pointing to canonical `docs/architecture/current-architecture.md`.
+**Rule**: Never create a new top-level AI context file. Extend `CLAUDE.md` or add rules to `.agent/rules/`. Architecture detail goes in `.agent/library/` (auto-synced to `docs/architecture/`).

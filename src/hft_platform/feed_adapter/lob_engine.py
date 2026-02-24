@@ -283,6 +283,21 @@ class BookState:
         exch_ts: int,
         stats: tuple[int, int, int, int, float, float, float],
     ) -> None:
+        self.apply_update_with_stats_fields(bids, asks, exch_ts, *stats)
+
+    def apply_update_with_stats_fields(
+        self,
+        bids: Union[np.ndarray, list],
+        asks: Union[np.ndarray, list],
+        exch_ts: int,
+        best_bid: int,
+        best_ask: int,
+        bid_depth: int,
+        ask_depth: int,
+        _mid_price: float,
+        _spread: float,
+        imbalance: float,
+    ) -> None:
         with self.lock:
             if exch_ts < self.exch_ts:
                 return
@@ -317,11 +332,10 @@ class BookState:
             else:
                 self.asks = []
 
-            _best_bid, _best_ask, bid_depth, ask_depth, _mid, _spread, imbalance = stats
             self.bid_depth_total = int(bid_depth)
             self.ask_depth_total = int(ask_depth)
-            self.mid_price_x2 = int(_best_bid) + int(_best_ask)
-            self.spread = int(_best_ask) - int(_best_bid)
+            self.mid_price_x2 = int(best_bid) + int(best_ask)
+            self.spread = int(best_ask) - int(best_bid)
             self.imbalance = float(imbalance)
             self.version += 1
 
@@ -436,7 +450,11 @@ class LOBEngine:
                         spread,
                         imbalance,
                     ) = event[:13]
-                    stats = (
+                    book = self.get_book(symbol)
+                    book.apply_update_with_stats_fields(
+                        bids,
+                        asks,
+                        exch_ts,
                         int(best_bid),
                         int(best_ask),
                         int(bid_depth),
@@ -445,8 +463,6 @@ class LOBEngine:
                         float(spread),
                         float(imbalance),
                     )
-                    book = self.get_book(symbol)
-                    book.apply_update_with_stats(bids, asks, exch_ts, stats)
                 else:
                     _, symbol, bids, asks, exch_ts, is_snapshot = event
                     book = self.get_book(symbol)
@@ -517,3 +533,37 @@ class LOBEngine:
                 "mid_price_x2": book.mid_price_x2,  # Scaled integer (best_bid + best_ask)
                 "spread_scaled": book.spread,  # Scaled integer (best_ask - best_bid)
             }
+
+    def get_l1_scaled(self, symbol: str) -> Optional[tuple[int, int, int, int, int, int, int]]:
+        """
+        Low-allocation L1 snapshot for strategy hot path.
+
+        Returns:
+            (timestamp_ns, best_bid, best_ask, mid_price_x2, spread_scaled, bid_depth, ask_depth)
+        All price fields are scaled integers.
+        """
+        if symbol not in self.books:
+            return None
+        book = self.books[symbol]
+
+        lock_ctx = book.lock if _READ_LOCKS_ENABLED else _NoopLock()
+        with lock_ctx:
+            if isinstance(book.bids, np.ndarray):
+                best_bid = int(book.bids[0, 0]) if book.bids.size > 0 else 0
+            else:
+                best_bid = int(book.bids[0][0]) if book.bids else 0
+
+            if isinstance(book.asks, np.ndarray):
+                best_ask = int(book.asks[0, 0]) if book.asks.size > 0 else 0
+            else:
+                best_ask = int(book.asks[0][0]) if book.asks else 0
+
+            return (
+                int(book.exch_ts),
+                best_bid,
+                best_ask,
+                int(book.mid_price_x2),
+                int(book.spread),
+                int(book.bid_depth_total),
+                int(book.ask_depth_total),
+            )

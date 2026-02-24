@@ -3,12 +3,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from structlog import get_logger
+
+logger = get_logger("hbt_runner")
 
 from research.backtest.metrics import (
     compute_capacity,
@@ -53,7 +57,7 @@ class BacktestResult:
 
 class ResearchBacktestRunner:
     def __init__(self, alpha: AlphaProtocol, config: BacktestConfig):
-        self.alpha = alpha
+        self.alpha = _maybe_wrap_batch_alpha(alpha)
         self.config = config
         self._last_run_returns: np.ndarray | None = None
         self._last_run_path: str | None = None
@@ -159,8 +163,8 @@ class ResearchBacktestRunner:
                 if batch_out.size >= n:
                     signals[:] = batch_out[:n]
                     return signals
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("batch_alpha_failed_falling_back_to_row_wise", reason=str(exc), exc_info=True)
 
         if data.dtype.names:
             field_names = tuple(data.dtype.names)
@@ -272,6 +276,71 @@ class ResearchBacktestRunner:
         )
 
 
+class _BatchAlphaAdapter:
+    """Compatibility adapter that formalizes a batch API for row-wise alphas.
+
+    The adapter preserves the original alpha semantics (same `update(**row)` order)
+    while exposing `update_batch(data)` so `ResearchBacktestRunner` can treat batch
+    alphas as the primary contract.
+    """
+
+    def __init__(self, alpha: AlphaProtocol):
+        self._alpha = alpha
+        self.manifest = alpha.manifest
+        manifest_fields = tuple(getattr(self.manifest, "data_fields", ()) or ())
+        self._required_fields = tuple(str(f) for f in manifest_fields if f)
+
+    def reset(self) -> None:
+        self._alpha.reset()
+
+    def update(self, *args: Any, **kwargs: Any) -> float:
+        return float(self._alpha.update(*args, **kwargs))
+
+    def get_signal(self) -> float:
+        return float(self._alpha.get_signal())
+
+    def update_batch(self, data: np.ndarray) -> np.ndarray:
+        arr = np.asarray(data)
+        n = int(arr.shape[0]) if arr.ndim > 0 else int(arr.size)
+        out = np.zeros(n, dtype=np.float64)
+        if n <= 0:
+            return out
+
+        if arr.dtype.names:
+            field_names = tuple(arr.dtype.names)
+            selected = tuple(name for name in field_names if not self._required_fields or name in self._required_fields)
+            if not selected:
+                selected = field_names
+            base_keys = set(selected)
+            payload: dict[str, Any] = {name: 0.0 for name in selected}
+            for i in range(n):
+                row = arr[i]
+                for name in selected:
+                    payload[name] = _to_python_scalar(row[name])
+                _with_standard_aliases_inplace(payload, base_keys)
+                out[i] = float(self._alpha.update(**payload))
+            return out
+
+        flat = np.asarray(arr, dtype=np.float64).reshape(-1)
+        for i, value in enumerate(flat):
+            out[i] = float(self._alpha.update(value=float(value)))
+        return out
+
+
+def _maybe_wrap_batch_alpha(alpha: AlphaProtocol) -> AlphaProtocol:
+    """Promote batch API to the default contract using an adapter when needed."""
+    force_disable = os.getenv("HFT_RESEARCH_BATCH_ALPHA_ADAPTER", "1").strip().lower() in {"0", "false", "no", "off"}
+    if force_disable:
+        return alpha
+    update_batch = getattr(alpha, "update_batch", None)
+    if callable(update_batch):
+        return alpha
+    try:
+        return _BatchAlphaAdapter(alpha)
+    except Exception:
+        return alpha
+
+
 def _safe_sharpe_from_returns(returns: np.ndarray) -> float:
     if returns.size < 2:
         return 0.0
@@ -290,26 +359,6 @@ def _to_python_scalar(value: Any) -> Any:
 def _hash_config(config: BacktestConfig) -> str:
     payload = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def _with_standard_aliases(payload: dict[str, Any]) -> dict[str, Any]:
-    out = dict(payload)
-    if "bid_px" not in out:
-        out["bid_px"] = out.get("best_bid", out.get("bid_price", out.get("bid")))
-    if "ask_px" not in out:
-        out["ask_px"] = out.get("best_ask", out.get("ask_price", out.get("ask")))
-    if "bid_qty" not in out:
-        out["bid_qty"] = out.get("bid_depth", out.get("bid_size", out.get("bqty", 0.0)))
-    if "ask_qty" not in out:
-        out["ask_qty"] = out.get("ask_depth", out.get("ask_size", out.get("aqty", 0.0)))
-    if "trade_vol" not in out:
-        out["trade_vol"] = out.get("qty", out.get("volume", out.get("trade_qty", 0.0)))
-    if "current_mid" not in out:
-        if out.get("bid_px") is not None and out.get("ask_px") is not None:
-            out["current_mid"] = (float(out["bid_px"]) + float(out["ask_px"])) / 2.0
-        else:
-            out["current_mid"] = out.get("mid", out.get("mid_price", out.get("price", 0.0)))
-    return out
 
 
 def _with_standard_aliases_inplace(payload: dict[str, Any], base_keys: set[str]) -> dict[str, Any]:

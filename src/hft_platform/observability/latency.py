@@ -14,20 +14,50 @@ def _bool_env(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _obs_policy() -> str:
+    value = str(os.getenv("HFT_OBS_POLICY", "")).strip().lower()
+    if value in {"minimal", "balanced", "debug"}:
+        return value
+    return ""
+
+
 class LatencyRecorder:
     _instance: "LatencyRecorder | None" = None
 
     def __init__(self) -> None:
+        policy = _obs_policy()
         self.enabled = _bool_env(os.getenv("HFT_LATENCY_TRACE", "0"))
         self.metrics_enabled = _bool_env(os.getenv("HFT_LATENCY_METRICS", "1"))
+        if policy == "minimal" and "HFT_LATENCY_TRACE" not in os.environ:
+            self.enabled = False
+        if policy == "minimal" and "HFT_LATENCY_METRICS" not in os.environ:
+            self.metrics_enabled = True
         try:
-            sample_every = int(os.getenv("HFT_LATENCY_SAMPLE_EVERY", "100"))
+            sample_every = int(
+                os.getenv(
+                    "HFT_LATENCY_SAMPLE_EVERY",
+                    "100" if policy != "minimal" else "1000",
+                )
+            )
         except ValueError:
             sample_every = 100
         self._sample_every = max(1, sample_every)
+        try:
+            metrics_sample_every = int(
+                os.getenv(
+                    "HFT_LATENCY_METRICS_SAMPLE_EVERY",
+                    "1" if policy in {"", "debug"} else ("4" if policy == "balanced" else "16"),
+                )
+            )
+        except ValueError:
+            metrics_sample_every = 1
+        self._metrics_sample_every = max(1, metrics_sample_every)
         self._counter = 0
+        self._metrics_counter = 0
         self._queue: Any | None = None
         self.metrics = MetricsRegistry.get()
+        self._stage_metric_cache: dict[str, Any] = {}
+        self._stage_metric_cache_owner_id: int | None = id(self.metrics) if self.metrics is not None else None
 
         # Retry buffer for overflow handling (B2)
         try:
@@ -73,7 +103,17 @@ class LatencyRecorder:
             return
         if self.metrics_enabled and self.metrics:
             try:
-                self.metrics.pipeline_latency_ns.labels(stage=stage).observe(latency_ns)
+                self._metrics_counter = (self._metrics_counter + 1) % self._metrics_sample_every
+                if self._metrics_counter == 0:
+                    metrics_owner_id = id(self.metrics)
+                    if self._stage_metric_cache_owner_id != metrics_owner_id:
+                        self._stage_metric_cache.clear()
+                        self._stage_metric_cache_owner_id = metrics_owner_id
+                    stage_metric = self._stage_metric_cache.get(stage)
+                    if stage_metric is None:
+                        stage_metric = self.metrics.pipeline_latency_ns.labels(stage=stage)
+                        self._stage_metric_cache[stage] = stage_metric
+                    stage_metric.observe(latency_ns)
             except Exception:
                 pass
 

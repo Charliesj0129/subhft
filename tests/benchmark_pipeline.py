@@ -10,29 +10,29 @@ async def benchmark_pipeline():
     bus = RingBufferBus(size=200000)  # Increased size for benchmark
     lob = LOBEngine()
     norm = MarketDataNormalizer()
-    consumer_queue = asyncio.Queue(maxsize=200000)
-    bus.subscribers.append(consumer_queue)
 
     # Mock event
     raw_event = {"code": "2330", "ts": time.time_ns(), "close": 1000.0, "volume": 5, "tick_type": 1}
 
     count = 100000
+    consumed = 0
+
+    async def _consumer():
+        nonlocal consumed
+        async for batch in bus.consume_batch(batch_size=256, start_cursor=-1):
+            consumed += len(batch)
+            if consumed >= count:
+                break
+
+    consumer_task = asyncio.create_task(_consumer())
+    await asyncio.sleep(0)
+
     start = time.time()
-
-    # We must consume elements to prevent full queue
-    # Or just increase size for this micro-benchmark
-
     for _ in range(count):
-        # 1. Normalize
         event = norm.normalize_tick(raw_event)
-        # 2. LOB Update
         lob.process_event(event)
-        # 3. Publish
-        bus.publish(event)
-        # Drain immediately for benchmark to avoid backlog
-        consumer_queue.get_nowait()
-        consumer_queue.task_done()
-
+        bus.publish_nowait(event)
+    await consumer_task
     duration = time.time() - start
     print(f"Processed {count} events in {duration:.4f}s")
     print(f"Throughput: {count / duration:.2f} events/sec")

@@ -5,6 +5,15 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_recorder_drills:
+        description: "Run recorder ClickHouse + WAL stress drills"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "30 18 * * *" # Daily UTC nightly perf drill
 
 env:
   PYTHONPATH: src
@@ -239,6 +248,9 @@ jobs:
       - name: Build Rust extension
         run: uv run maturin develop --manifest-path rust_core/Cargo.toml
 
+      - name: Run lightweight perf regression gate (strategy/research/feed/recorder)
+        run: uv run python tests/benchmark/perf_regression_gate.py
+
       - name: Run benchmarks
         run: |
           set -euo pipefail
@@ -381,6 +393,90 @@ jobs:
         run: |
           echo "## 🔗 Integration Test Results" >> $GITHUB_STEP_SUMMARY
           echo "ClickHouse and Redis services were available for testing." >> $GITHUB_STEP_SUMMARY
+
+      - name: Run ClickHouse writer system smoke
+        env:
+          HFT_CLICKHOUSE_HOST: localhost
+          HFT_CLICKHOUSE_PORT: 8123
+          HFT_CLICKHOUSE_ENABLED: "1"
+        run: |
+          uv run pytest tests/system/test_clickhouse_writer.py \
+            -o addopts= \
+            --no-cov \
+            -q
+
+  recorder-nightly-drills:
+    name: 🧪 Recorder CK + WAL Drills
+    runs-on: ubuntu-latest
+    needs: test
+    if: >
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_recorder_drills)
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:latest
+        ports:
+          - 8123:8123
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --query 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .venv
+            ${{ env.UV_CACHE_DIR }}
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust_core/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust_core/Cargo.lock', 'rust_core/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Build Rust extension
+        run: uv run maturin develop --manifest-path rust_core/Cargo.toml
+
+      - name: Run recorder perf gate (CK + WAL stress drills)
+        env:
+          HFT_PERF_GATE_RECORDER_IO: "1"
+          HFT_CLICKHOUSE_ENABLED: "1"
+          HFT_CLICKHOUSE_HOST: localhost
+          HFT_CLICKHOUSE_PORT: 8123
+        run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-recorder-io
+
+      - name: Recorder Drill Summary
+        if: always()
+        run: |
+          echo "## 🧪 Recorder Nightly Drills" >> $GITHUB_STEP_SUMMARY
+          echo "Executed perf_regression_gate with real ClickHouse + WAL stress drills." >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
   # Stage 6: Security Scanning

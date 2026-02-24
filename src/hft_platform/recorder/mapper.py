@@ -14,6 +14,27 @@ def _to_scaled_int(value: int | float) -> int:
     return int(round(float(value) * CLICKHOUSE_PRICE_SCALE))
 
 
+def _to_ch_price_scaled(
+    symbol: str,
+    value: int | float,
+    metadata: SymbolMetadata,
+    price_codec: PriceCodec | None,
+) -> int:
+    """Convert internal/native price directly to CH scaled price when possible."""
+    if isinstance(value, bool):
+        return _to_scaled_int(float(value))
+    if isinstance(value, int):
+        try:
+            scale = int(metadata.price_scale(symbol))
+        except Exception:
+            scale = 0
+        if scale > 0:
+            # Internal normalized events often carry scaled ints; convert directly.
+            return int(round((value * CLICKHOUSE_PRICE_SCALE) / scale))
+    descaled = _descale(symbol, value, metadata, price_codec)
+    return _to_scaled_int(descaled)
+
+
 def _descale(symbol: str, value: int | float, metadata: SymbolMetadata, price_codec: PriceCodec | None) -> float:
     if price_codec:
         try:
@@ -48,8 +69,7 @@ def _book_to_arrays_scaled(
         if price is None:
             continue
         # Descale from internal format, then scale to ClickHouse format
-        descaled = _descale(symbol, price, metadata, price_codec)
-        prices.append(_to_scaled_int(descaled))
+        prices.append(_to_ch_price_scaled(symbol, price, metadata, price_codec))
         vols.append(int(vol or 0))
 
     return prices, vols
@@ -65,7 +85,6 @@ def map_event_to_record(
 
     if isinstance(event, TickEvent):
         symbol = event.symbol
-        descaled_price = _descale(symbol, event.price, metadata, price_codec)
         return (
             "market_data",
             {
@@ -74,7 +93,7 @@ def map_event_to_record(
                 "type": "Tick",
                 "exch_ts": int(event.meta.source_ts),
                 "ingest_ts": int(event.meta.local_ts),
-                "price_scaled": _to_scaled_int(descaled_price),
+                "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
                 "volume": int(event.volume),
                 "bids_price": [],
                 "bids_vol": [],
@@ -111,7 +130,6 @@ def map_event_to_record(
         latency_us = 0
         if event.broker_ts_ns and event.ingest_ts_ns:
             latency_us = max(0, int((event.ingest_ts_ns - event.broker_ts_ns) / 1000))
-        descaled_price = _descale(symbol, event.price, metadata, price_codec)
         return (
             "orders",
             {
@@ -119,7 +137,7 @@ def map_event_to_record(
                 "strategy_id": event.strategy_id,
                 "symbol": symbol,
                 "side": str(event.side.name if hasattr(event.side, "name") else event.side),
-                "price_scaled": _to_scaled_int(descaled_price),
+                "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
                 "qty": int(event.submitted_qty),
                 "status": str(event.status.name if hasattr(event.status, "name") else event.status),
                 "ingest_ts": int(event.ingest_ts_ns),
@@ -129,8 +147,6 @@ def map_event_to_record(
 
     if isinstance(event, FillEvent):
         symbol = event.symbol
-        descaled_price = _descale(symbol, event.price, metadata, price_codec)
-        descaled_fee = _descale(symbol, event.fee, metadata, price_codec)
         return (
             "fills",
             {
@@ -139,9 +155,9 @@ def map_event_to_record(
                 "strategy_id": event.strategy_id,
                 "symbol": symbol,
                 "side": str(event.side.name if hasattr(event.side, "name") else event.side),
-                "price_scaled": _to_scaled_int(descaled_price),
+                "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
                 "qty": int(event.qty),
-                "fee_scaled": _to_scaled_int(descaled_fee),
+                "fee_scaled": _to_ch_price_scaled(symbol, event.fee, metadata, price_codec),
                 "match_ts": int(event.match_ts_ns),
             },
         )

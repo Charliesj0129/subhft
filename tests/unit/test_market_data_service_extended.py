@@ -198,6 +198,37 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, 5)
         func.assert_called_once_with(2)
 
+    def test_obs_policy_minimal_sampling_defaults(self):
+        with patch.dict(os.environ, {"HFT_OBS_POLICY": "minimal"}, clear=False):
+            service = MarketDataService(self.bus, self.raw_queue, self.client)
+        self.assertGreaterEqual(service._md_metrics_sample_every, 1)
+        self.assertGreaterEqual(service._md_latency_sample_every, 1)
+        self.assertGreaterEqual(service._md_callback_parse_metrics_every, 1)
+
+    def test_on_shioaji_event_fast_path_exchange_msg(self):
+        self.service.loop = MagicMock()
+        msg = {"code": "2330", "ts": 1, "bid_price": [100.0], "bid_volume": [1], "ask_price": [100.1], "ask_volume": [2]}
+
+        self.service._on_shioaji_event("TSE", msg)
+
+        self.service.loop.call_soon_threadsafe.assert_called_once()
+        fn, exchange, payload = self.service.loop.call_soon_threadsafe.call_args[0]
+        self.assertEqual(fn, self.service._enqueue_raw)
+        self.assertEqual(exchange, "TSE")
+        self.assertIs(payload, msg)
+
+    def test_on_shioaji_event_unwraps_nested_kwargs_bidask(self):
+        self.service.loop = MagicMock()
+        inner = {"code": "2330", "ts": 2, "bid_price": [100.0], "bid_volume": [1], "ask_price": [100.2], "ask_volume": [3]}
+        outer = {"bidask": inner}
+
+        self.service._on_shioaji_event(exchange="TSE", quote=outer)
+
+        self.service.loop.call_soon_threadsafe.assert_called_once()
+        _, exchange, payload = self.service.loop.call_soon_threadsafe.call_args[0]
+        self.assertEqual(exchange, "TSE")
+        self.assertIs(payload, inner)
+
     def test_feed_gap_helpers(self):
         with patch("hft_platform.services.market_data.time.monotonic", return_value=100.0):
             self.service._symbol_last_tick = {"AAA": 90.0, "BBB": 95.0}

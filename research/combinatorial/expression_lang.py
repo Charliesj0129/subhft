@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -21,6 +22,7 @@ class CompiledExpression:
     tree: ast.Expression
     max_depth: int
     variables: tuple[str, ...]
+    fast_path: tuple[Any, ...] | None = None
 
     def evaluate(self, features: Mapping[str, Any]) -> np.ndarray:
         context = {str(k): np.asarray(v, dtype=np.float64).reshape(-1) for k, v in features.items()}
@@ -31,6 +33,10 @@ class CompiledExpression:
         if base_len <= 0:
             raise ValueError("Feature arrays are empty")
         trimmed = {name: arr[:base_len] for name, arr in context.items()}
+
+        if self.fast_path:
+            out = _eval_fast_path(self.fast_path, trimmed, base_len)
+            return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
         raw = _eval_node(self.tree.body, trimmed, base_len)
         out = np.asarray(raw, dtype=np.float64)
@@ -48,17 +54,31 @@ def compile_expression(
     max_depth: int = 3,
     forbid_raw_price_levels: bool = True,
 ) -> CompiledExpression:
-    validated = validate_expression(
-        expression,
-        max_depth=max_depth,
-        forbid_raw_price_levels=forbid_raw_price_levels,
-    )
+    return _compile_expression_cached(expression, int(max_depth), bool(forbid_raw_price_levels))
+
+
+@lru_cache(maxsize=4096)
+def _compile_expression_cached(
+    expression: str,
+    max_depth: int,
+    forbid_raw_price_levels: bool,
+) -> CompiledExpression:
+    # Single parse: validate and compile in one pass to avoid double ast.parse
     tree = ast.parse(expression, mode="eval")
+    names, depth = _validate_tree(tree)
+    if depth > max_depth:
+        raise ValueError(f"Expression depth {depth} exceeds max_depth={max_depth}")
+    if forbid_raw_price_levels:
+        bad = [name for name in names if _looks_like_raw_price(name)]
+        if bad:
+            raise ValueError(f"Raw price level variable is not allowed: {sorted(set(bad))}")
+    fast_path = _detect_fast_path(tree.body)
     return CompiledExpression(
         expression=expression,
         tree=tree,
-        max_depth=validated["depth"],
-        variables=tuple(validated["variables"]),
+        max_depth=depth,
+        variables=tuple(sorted(set(names))),
+        fast_path=fast_path,
     )
 
 
@@ -168,3 +188,65 @@ def _looks_like_raw_price(name: str) -> bool:
     if any(token in lower for token in _TRANSFORM_TOKENS):
         return False
     return any(token in lower for token in _RAW_PRICE_TOKENS)
+
+
+def _detect_fast_path(node: ast.AST) -> tuple[Any, ...] | None:
+    # zscore(ts_delta(x, w1), w2)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "zscore" and len(node.args) >= 2:
+        inner = node.args[0]
+        w2 = _const_int(node.args[1])
+        if (
+            w2 is not None
+            and isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id == "ts_delta"
+            and len(inner.args) >= 2
+            and isinstance(inner.args[0], ast.Name)
+        ):
+            w1 = _const_int(inner.args[1])
+            if w1 is not None:
+                return ("zscore_ts_delta", inner.args[0].id, w1, w2)
+
+    # sign(ts_corr(x, y, w))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "sign" and len(node.args) >= 1:
+        inner = node.args[0]
+        if (
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id == "ts_corr"
+            and len(inner.args) >= 3
+            and isinstance(inner.args[0], ast.Name)
+            and isinstance(inner.args[1], ast.Name)
+        ):
+            w = _const_int(inner.args[2])
+            if w is not None:
+                return ("sign_ts_corr", inner.args[0].id, inner.args[1].id, w)
+    return None
+
+
+def _const_int(node: ast.AST) -> int | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return int(node.value)
+    return None
+
+
+def _eval_fast_path(fast_path: tuple[Any, ...], context: Mapping[str, np.ndarray], base_len: int) -> np.ndarray:
+    kind = fast_path[0]
+    if kind == "zscore_ts_delta":
+        _, var_name, w1, w2 = fast_path
+        arr = context[var_name][:base_len]
+        delta_fn = OPERATORS["ts_delta"]
+        zscore_fn = OPERATORS["zscore"]
+        tmp = delta_fn(arr, int(w1))
+        out = zscore_fn(tmp, int(w2))
+        return np.asarray(out, dtype=np.float64).reshape(-1)[:base_len]
+    if kind == "sign_ts_corr":
+        _, x_name, y_name, w = fast_path
+        lhs = context[x_name][:base_len]
+        rhs = context[y_name][:base_len]
+        corr_fn = OPERATORS["ts_corr"]
+        sign_fn = OPERATORS["sign"]
+        tmp = corr_fn(lhs, rhs, int(w))
+        out = sign_fn(tmp)
+        return np.asarray(out, dtype=np.float64).reshape(-1)[:base_len]
+    raise ValueError(f"Unknown fast path: {kind}")

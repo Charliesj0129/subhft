@@ -95,6 +95,28 @@ class GARCHVolAlpha(GARCHFactor):
             return 0.0
         return result.vol_forecast
 
+    def update_batch(self, data) -> np.ndarray:
+        arr = np.asarray(data)
+        if arr.size == 0:
+            return np.zeros(0, dtype=np.float64)
+        if arr.dtype.names:
+            if "price" in arr.dtype.names:
+                values = np.asarray(arr["price"], dtype=np.float64).reshape(-1)
+            elif "current_price" in arr.dtype.names:
+                values = np.asarray(arr["current_price"], dtype=np.float64).reshape(-1)
+            elif "mid" in arr.dtype.names:
+                values = np.asarray(arr["mid"], dtype=np.float64).reshape(-1)
+            elif "mid_price" in arr.dtype.names:
+                values = np.asarray(arr["mid_price"], dtype=np.float64).reshape(-1)
+            else:
+                values = np.asarray(arr, dtype=np.float64).reshape(-1)
+        else:
+            values = np.asarray(arr, dtype=np.float64).reshape(-1)
+        out = np.zeros(values.size, dtype=np.float64)
+        for i, value in enumerate(values):
+            out[i] = self.update(float(value))
+        return out
+
 
 ALPHA_CLASS = GARCHVolAlpha
 

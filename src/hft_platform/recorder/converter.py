@@ -12,6 +12,42 @@ from hft_platform.core import timebase
 
 logger = get_logger("wal.converter")
 
+try:
+    import orjson as _json_fast
+
+    def _loads_json(line: str):
+        return _json_fast.loads(line)
+
+except ImportError:  # pragma: no cover - optional dependency
+
+    def _loads_json(line: str):
+        return json.loads(line)
+
+
+def _normalize_date_str(date_str: str) -> str:
+    if not date_str:
+        return date_str
+    if date_str == "today":
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if "-" in date_str:
+        return date_str
+    if len(date_str) == 8 and date_str.isdigit():
+        return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+    return date_str
+
+
+def _date_bounds_ns(date_str: str) -> tuple[int, int] | None:
+    normalized = _normalize_date_str(date_str)
+    if not normalized:
+        return None
+    try:
+        dt = datetime.strptime(normalized, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    start_ns = int(dt.timestamp() * 1e9)
+    end_ns = start_ns + 86_400 * 1_000_000_000
+    return start_ns, end_ns
+
 
 class WALConverter:
     """
@@ -36,6 +72,7 @@ class WALConverter:
         # Assuming filename contains timestamp or we grep?
         # For prototype, we scan all market_data*.jsonl and filter inside
         files = glob.glob(os.path.join(self.wal_dir, "market_data*.jsonl"))
+        date_bounds = _date_bounds_ns(date_str)
 
         raw_rows = []
 
@@ -43,27 +80,23 @@ class WALConverter:
             with open(fpath, "r") as f:
                 for line in f:
                     try:
-                        row = json.loads(line)
+                        row = _loads_json(line)
                         # Filter by symbol
                         if symbol and row.get("symbol") != symbol:
                             continue
 
-                        # Filter by date: extract YYYY-MM-DD from exch_ts (nanoseconds)
+                        # Filter by UTC day using integer nanosecond bounds (faster than per-row strftime)
                         exch_ts_ns = row.get("exch_ts", 0)
-                        if exch_ts_ns and date_str:
-                            row_date = datetime.fromtimestamp(
-                                exch_ts_ns / 1e9, tz=timezone.utc
-                            ).strftime("%Y-%m-%d")
-                            # Accept both YYYY-MM-DD and YYYYMMDD formats in date_str
-                            normalized_date_str = (
-                                date_str if "-" in date_str
-                                else f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
-                            )
-                            if row_date != normalized_date_str:
+                        if date_bounds is not None and exch_ts_ns:
+                            try:
+                                exch_ts_i = int(exch_ts_ns)
+                            except Exception:
+                                continue
+                            if exch_ts_i < date_bounds[0] or exch_ts_i >= date_bounds[1]:
                                 continue
 
                         raw_rows.append(row)
-                    except json.JSONDecodeError as e:
+                    except Exception as e:
                         logger.warning(
                             "Skipping corrupt JSON line",
                             file=fpath,

@@ -136,3 +136,13 @@ def test_latency_recorder_invalid_retry_buffer_env(monkeypatch):
     LatencyRecorder.reset_for_tests()
     rec = LatencyRecorder.get()
     assert rec._retry_buffer_size == 1000
+
+
+def test_latency_recorder_obs_policy_minimal_defaults(monkeypatch):
+    monkeypatch.delenv("HFT_LATENCY_SAMPLE_EVERY", raising=False)
+    monkeypatch.delenv("HFT_LATENCY_METRICS_SAMPLE_EVERY", raising=False)
+    monkeypatch.setenv("HFT_OBS_POLICY", "minimal")
+    LatencyRecorder.reset_for_tests()
+    rec = LatencyRecorder.get()
+    assert rec._sample_every >= 1000
+    assert rec._metrics_sample_every >= 16

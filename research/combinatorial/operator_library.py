@@ -12,9 +12,100 @@ language and search engine.
 
 from __future__ import annotations
 
+import os
 from typing import Callable
 
 import numpy as np
+
+_NUMBA_ENABLED = os.getenv("HFT_RESEARCH_NUMBA", "1").strip().lower() in {"1", "true", "yes", "on"}
+try:
+    if _NUMBA_ENABLED:
+        from numba import njit
+    else:  # pragma: no cover - disabled path
+        njit = None  # type: ignore[assignment]
+except Exception:  # pragma: no cover - optional dependency
+    njit = None  # type: ignore[assignment]
+    _NUMBA_ENABLED = False
+
+if njit is not None:
+    @njit(cache=True)
+    def _ts_std_numba_kernel(arr: np.ndarray, w: int, target: np.ndarray) -> None:
+        n = arr.size
+        if n == 0:
+            return
+        csum = np.cumsum(arr)
+        csum2 = np.cumsum(arr * arr)
+        for i in range(n):
+            start = i - w + 1
+            if start < 0:
+                start = 0
+            count = i - start + 1
+            total = csum[i] - (csum[start - 1] if start > 0 else 0.0)
+            total2 = csum2[i] - (csum2[start - 1] if start > 0 else 0.0)
+            mean = total / count
+            var = (total2 / count) - (mean * mean)
+            target[i] = np.sqrt(var) if var > 0.0 else 0.0
+
+    @njit(cache=True)
+    def _ts_corr_numba_kernel(lhs: np.ndarray, rhs: np.ndarray, w: int, target: np.ndarray) -> None:
+        n = lhs.size
+        if n == 0:
+            return
+        csum_x = np.cumsum(lhs)
+        csum_y = np.cumsum(rhs)
+        csum_x2 = np.cumsum(lhs * lhs)
+        csum_y2 = np.cumsum(rhs * rhs)
+        csum_xy = np.cumsum(lhs * rhs)
+        for i in range(n):
+            start = i - w + 1
+            if start < 0:
+                start = 0
+            count = i - start + 1
+            if count < 2:
+                target[i] = 0.0
+                continue
+            sx = csum_x[i] - (csum_x[start - 1] if start > 0 else 0.0)
+            sy = csum_y[i] - (csum_y[start - 1] if start > 0 else 0.0)
+            sx2 = csum_x2[i] - (csum_x2[start - 1] if start > 0 else 0.0)
+            sy2 = csum_y2[i] - (csum_y2[start - 1] if start > 0 else 0.0)
+            sxy = csum_xy[i] - (csum_xy[start - 1] if start > 0 else 0.0)
+            cov_num = sxy - ((sx * sy) / count)
+            var_x_num = sx2 - ((sx * sx) / count)
+            var_y_num = sy2 - ((sy * sy) / count)
+            if var_x_num <= 0.0 or var_y_num <= 0.0:
+                target[i] = 0.0
+                continue
+            denom = np.sqrt(var_x_num * var_y_num)
+            if denom <= 1e-24:
+                target[i] = 0.0
+                continue
+            target[i] = cov_num / denom
+
+    @njit(cache=True)
+    def _zscore_roll_numba_kernel(arr: np.ndarray, w: int, target: np.ndarray) -> None:
+        n = arr.size
+        if n == 0:
+            return
+        csum = np.cumsum(arr)
+        csum2 = np.cumsum(arr * arr)
+        for i in range(n):
+            start = i - w + 1
+            if start < 0:
+                start = 0
+            count = i - start + 1
+            total = csum[i] - (csum[start - 1] if start > 0 else 0.0)
+            total2 = csum2[i] - (csum2[start - 1] if start > 0 else 0.0)
+            mean = total / count
+            var = (total2 / count) - (mean * mean)
+            if var <= 0.0:
+                target[i] = 0.0
+            else:
+                sigma = np.sqrt(var)
+                target[i] = 0.0 if sigma <= 1e-12 else (arr[i] - mean) / sigma
+else:  # pragma: no cover - no numba available
+    _ts_std_numba_kernel = None
+    _ts_corr_numba_kernel = None
+    _zscore_roll_numba_kernel = None
 
 
 def ts_mean(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.ndarray:
@@ -35,10 +126,22 @@ def ts_std(x: np.ndarray, window: int, *, out: np.ndarray | None = None) -> np.n
     arr = _as_1d(x)
     w = max(1, int(window))
     target = _target(out, arr.shape)
+    if arr.size == 0:
+        return target
+    if _NUMBA_ENABLED and _ts_std_numba_kernel is not None:
+        _ts_std_numba_kernel(arr, w, target)
+        return target
+
+    csum = np.cumsum(arr, dtype=np.float64)
+    csum2 = np.cumsum(arr * arr, dtype=np.float64)
     for i in range(arr.size):
         start = max(0, i - w + 1)
-        view = arr[start : i + 1]
-        target[i] = np.std(view)
+        count = i - start + 1
+        total = csum[i] - (csum[start - 1] if start > 0 else 0.0)
+        total2 = csum2[i] - (csum2[start - 1] if start > 0 else 0.0)
+        mean = total / float(count)
+        var = (total2 / float(count)) - (mean * mean)
+        target[i] = np.sqrt(var) if var > 0.0 else 0.0
     return target
 
 
@@ -100,15 +203,47 @@ def ts_corr(x: np.ndarray, y: np.ndarray, window: int, *, out: np.ndarray | None
     rhs = rhs[:n]
     w = max(2, int(window))
     target = _target(out, lhs.shape)
+    if n == 0:
+        return target
+    if _NUMBA_ENABLED and _ts_corr_numba_kernel is not None:
+        _ts_corr_numba_kernel(lhs, rhs, w, target)
+        if target.size > n:
+            target[n:] = 0.0
+        return target
+
+    csum_x = np.cumsum(lhs, dtype=np.float64)
+    csum_y = np.cumsum(rhs, dtype=np.float64)
+    csum_x2 = np.cumsum(lhs * lhs, dtype=np.float64)
+    csum_y2 = np.cumsum(rhs * rhs, dtype=np.float64)
+    csum_xy = np.cumsum(lhs * rhs, dtype=np.float64)
+
     for i in range(n):
         start = max(0, i - w + 1)
-        xv = lhs[start : i + 1]
-        yv = rhs[start : i + 1]
-        if xv.size < 2:
+        count = i - start + 1
+        if count < 2:
             target[i] = 0.0
             continue
-        corr = np.corrcoef(xv, yv)[0, 1]
+        sx = csum_x[i] - (csum_x[start - 1] if start > 0 else 0.0)
+        sy = csum_y[i] - (csum_y[start - 1] if start > 0 else 0.0)
+        sx2 = csum_x2[i] - (csum_x2[start - 1] if start > 0 else 0.0)
+        sy2 = csum_y2[i] - (csum_y2[start - 1] if start > 0 else 0.0)
+        sxy = csum_xy[i] - (csum_xy[start - 1] if start > 0 else 0.0)
+
+        count_f = float(count)
+        cov_num = sxy - ((sx * sy) / count_f)
+        var_x_num = sx2 - ((sx * sx) / count_f)
+        var_y_num = sy2 - ((sy * sy) / count_f)
+        if var_x_num <= 0.0 or var_y_num <= 0.0:
+            target[i] = 0.0
+            continue
+        denom = np.sqrt(var_x_num * var_y_num)
+        if denom <= 1e-24:
+            target[i] = 0.0
+            continue
+        corr = cov_num / denom
         target[i] = float(corr) if np.isfinite(corr) else 0.0
+    if target.size > n:
+        target[n:] = 0.0
     return target
 
 
@@ -139,11 +274,23 @@ def zscore(x: np.ndarray, window: int | None = None, *, out: np.ndarray | None =
         return target
 
     w = max(2, int(window))
+    if arr.size == 0:
+        return target
+    if _NUMBA_ENABLED and _zscore_roll_numba_kernel is not None:
+        _zscore_roll_numba_kernel(arr, w, target)
+        return target
+
+    csum = np.cumsum(arr, dtype=np.float64)
+    csum2 = np.cumsum(arr * arr, dtype=np.float64)
     for i in range(arr.size):
         start = max(0, i - w + 1)
-        view = arr[start : i + 1]
-        sigma = float(np.std(view))
-        target[i] = 0.0 if sigma <= 1e-12 else (arr[i] - float(np.mean(view))) / sigma
+        count = i - start + 1
+        total = csum[i] - (csum[start - 1] if start > 0 else 0.0)
+        total2 = csum2[i] - (csum2[start - 1] if start > 0 else 0.0)
+        mean = total / float(count)
+        var = (total2 / float(count)) - (mean * mean)
+        sigma = np.sqrt(var) if var > 0.0 else 0.0
+        target[i] = 0.0 if sigma <= 1e-12 else (arr[i] - mean) / sigma
     return target
 
 

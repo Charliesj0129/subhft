@@ -109,3 +109,11 @@ class AlphaProtocol(Protocol):
 
     def get_signal(self) -> float:
         ...
+
+
+@runtime_checkable
+class BatchAlphaProtocol(AlphaProtocol, Protocol):
+    """Optional high-throughput API for batch evaluation on ndarray inputs."""
+
+    def update_batch(self, data: Any) -> Any:
+        ...

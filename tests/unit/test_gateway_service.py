@@ -232,3 +232,50 @@ async def test_exposure_symbol_limit_commits_dedup():
     assert rec is not None
     assert rec.approved is False
     assert rec.reason_code == "EXPOSURE_SYMBOL_LIMIT"
+
+
+@pytest.mark.asyncio
+async def test_service_typed_intent_path_uses_typed_risk_methods():
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, api_queue = _make_service(channel=ch, approve=True)
+
+    typed_intent = _make_intent(11, "typed-k")
+    frame = (
+        "typed_intent_v1",
+        typed_intent.intent_id,
+        typed_intent.strategy_id,
+        typed_intent.symbol,
+        int(typed_intent.intent_type),
+        int(typed_intent.side),
+        typed_intent.price,
+        typed_intent.qty,
+        int(typed_intent.tif),
+        typed_intent.target_order_id or "",
+        typed_intent.timestamp_ns,
+        typed_intent.source_ts_ns,
+        typed_intent.reason,
+        typed_intent.trace_id,
+        typed_intent.idempotency_key,
+        typed_intent.ttl_ns,
+    )
+
+    svc._risk_engine.typed_frame_view.return_value = typed_intent
+    svc._risk_engine.evaluate_typed_frame.return_value = RiskDecision(approved=True, intent=typed_intent)
+    svc._risk_engine.create_command_from_typed_frame.return_value = OrderCommand(
+        cmd_id=99,
+        intent=typed_intent,
+        deadline_ns=999,
+        storm_guard_state=StormGuardState.NORMAL,
+    )
+
+    ch.submit_typed_nowait(frame)
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert api_queue.qsize() == 1
+    svc._risk_engine.evaluate_typed_frame.assert_called()
+    svc._risk_engine.create_command_from_typed_frame.assert_called()

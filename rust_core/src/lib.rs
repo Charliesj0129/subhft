@@ -30,6 +30,9 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<alpha_meta::MetaAlpha>()?;
     m.add_class::<bus::EventBus>()?;
     m.add_class::<bus::FastRingBuffer>()?;
+    m.add_class::<bus::FastTickRingBuffer>()?;
+    m.add_class::<bus::FastBidAskRingBuffer>()?;
+    m.add_class::<bus::FastLOBStatsRingBuffer>()?;
     m.add_class::<ipc::ShmRingBuffer>()?;
     m.add_class::<risk::FastGate>()?;
     m.add_function(wrap_pyfunction!(fast_lob::scale_book, m)?)?;

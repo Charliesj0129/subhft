@@ -33,6 +33,10 @@ class DataWriter:
     DEFAULT_BASE_DELAY_S = 1.0
     DEFAULT_MAX_BACKOFF_S = 30.0
     DEFAULT_JITTER_FACTOR = 0.5
+    _NATIVE_INTERFACE_ERROR_PATTERNS = (
+        "unrecognized client type native",
+        "invalid interface",
+    )
 
     def __init__(self, ch_host="localhost", ch_port=9000, wal_dir=".wal"):
         self.ch_client = None
@@ -81,6 +85,23 @@ class DataWriter:
         # EC-2: CH insert timeout
         self._insert_timeout_s = float(os.getenv("HFT_CH_INSERT_TIMEOUT_S", "30"))
         self._insert_warn_ms = int(os.getenv("HFT_CH_INSERT_WARN_MS", "5000"))
+        self._ch_column_oriented = os.getenv("HFT_CH_COLUMN_ORIENTED", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        self._ch_insert_chunk_rows = int(os.getenv("HFT_CH_INSERT_CHUNK_ROWS", "0") or "0")
+        self._ch_insert_log_every = int(os.getenv("HFT_CH_INSERT_LOG_EVERY", "0") or "0")
+        self._ch_insert_log_success = os.getenv("HFT_CH_INSERT_LOG_SUCCESS", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._ch_insert_count = 0
+        self._ch_columnar_insert_count = 0
+        self._native_interface_fallback_used = False
         # Apply send_receive_timeout to CH params
         self.ch_params["send_receive_timeout"] = int(self._insert_timeout_s)
 
@@ -136,6 +157,66 @@ class DataWriter:
         except Exception:
             self.metrics = None
 
+    @classmethod
+    def _is_native_interface_unsupported_error(cls, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(pat in text for pat in cls._NATIVE_INTERFACE_ERROR_PATTERNS)
+
+    def _maybe_fallback_clickhouse_interface(self, exc: Exception) -> bool:
+        """Downgrade to HTTP params if clickhouse_connect build lacks native interface support."""
+        if self.ch_params.get("interface") != "native":
+            return False
+        if not self._is_native_interface_unsupported_error(exc):
+            return False
+
+        prev_port = int(self.ch_params.get("port", self.DEFAULT_NATIVE_PORT))
+        fallback_port = int(os.getenv("HFT_CLICKHOUSE_HTTP_FALLBACK_PORT", str(self.DEFAULT_HTTP_PORT)))
+        self.ch_params.pop("interface", None)
+        # If port is the canonical native port, switch to HTTP fallback port by default.
+        if prev_port == self.DEFAULT_NATIVE_PORT:
+            self.ch_params["port"] = fallback_port
+        self._native_interface_fallback_used = True
+        logger.warning(
+            "ClickHouse native interface unsupported by client, falling back",
+            previous_port=prev_port,
+            fallback_port=self.ch_params.get("port"),
+            interface="http",
+        )
+        return True
+
+    def _create_clickhouse_client(self):
+        try:
+            return clickhouse_connect.get_client(**self.ch_params)
+        except Exception as e:
+            if self._maybe_fallback_clickhouse_interface(e):
+                return clickhouse_connect.get_client(**self.ch_params)
+            raise
+
+    def _should_log_insert_success(self, counter: int) -> bool:
+        if self._ch_insert_log_success:
+            return True
+        return self._ch_insert_log_every > 0 and counter % self._ch_insert_log_every == 0
+
+    def _iter_row_chunks(self, data: list[Any]) -> list[list[Any]]:
+        if not self._ch_insert_chunk_rows or len(data) <= self._ch_insert_chunk_rows:
+            return [data]
+        chunk = self._ch_insert_chunk_rows
+        return [data[i : i + chunk] for i in range(0, len(data), chunk)]
+
+    def _iter_columnar_chunks(
+        self,
+        column_data: list[list[Any]],
+        row_count: int,
+    ) -> list[tuple[list[list[Any]], int]]:
+        if not self._ch_insert_chunk_rows or row_count <= self._ch_insert_chunk_rows:
+            return [(column_data, row_count)]
+        chunk = self._ch_insert_chunk_rows
+        chunks: list[tuple[list[list[Any]], int]] = []
+        for start in range(0, row_count, chunk):
+            end = min(row_count, start + chunk)
+            chunks.append(([col[start:end] for col in column_data], end - start))
+        return chunks
+
     def set_health_tracker(self, tracker: Any) -> None:
         self._health_tracker = tracker
 
@@ -177,7 +258,7 @@ class DataWriter:
         for attempt in range(self._max_retries):
             self._connect_attempts = attempt
             try:
-                self.ch_client = clickhouse_connect.get_client(**self.ch_params)
+                self.ch_client = self._create_clickhouse_client()
                 self.connected = True
                 self._connect_attempts = 0  # Reset on success
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
@@ -216,7 +297,7 @@ class DataWriter:
         for attempt in range(self._max_retries):
             self._connect_attempts = attempt
             try:
-                self.ch_client = await asyncio.to_thread(clickhouse_connect.get_client, **self.ch_params)
+                self.ch_client = await asyncio.to_thread(self._create_clickhouse_client)
                 self.connected = True
                 self._connect_attempts = 0  # Reset on success
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
@@ -356,6 +437,8 @@ class DataWriter:
             "connect_attempts": self._connect_attempts,
             "ch_host": self.ch_params.get("host"),
             "ch_port": self.ch_params.get("port"),
+            "ch_interface": self.ch_params.get("interface", "http"),
+            "native_interface_fallback_used": self._native_interface_fallback_used,
             "last_heartbeat_ts": self._last_heartbeat_ts,
             "last_heartbeat_ok": self._last_heartbeat_ok,
         }
@@ -417,19 +500,15 @@ class DataWriter:
             if self._health_tracker:
                 self._health_tracker.record_event("wal_fallback", table=table, count=row_count)
 
-            # Reconstruct row dicts for WAL
-            row_dicts = []
-            for i in range(row_count):
-                row = {}
-                for ci, col in enumerate(column_names):
-                    row[col] = column_data[ci][i]
-                row_dicts.append(row)
-
             # CC-4: Use batch writer if available
             batch_writer = self._get_wal_batch_writer()
-            if batch_writer is not None:
+            if batch_writer is not None and hasattr(batch_writer, "add_columnar"):
+                wal_ok = await batch_writer.add_columnar(table, column_names, column_data, row_count)
+            elif batch_writer is not None:
+                row_dicts = self._columnar_to_row_dicts(column_names, column_data, row_count)
                 wal_ok = await batch_writer.add(table, row_dicts)
             else:
+                row_dicts = self._columnar_to_row_dicts(column_names, column_data, row_count)
                 wal_ok = await self.wal.write(table, row_dicts)
 
             if not wal_ok:
@@ -455,17 +534,35 @@ class DataWriter:
         if not column_data or row_count == 0:
             return
 
-        logger.info(f"Inserting {row_count} rows into {table} (Cols: {column_names})")
+        for chunk_data, chunk_rows in self._iter_columnar_chunks(column_data, row_count):
+            self._ch_insert_columnar_once(table, column_names, chunk_data, chunk_rows)
+
+    def _ch_insert_columnar_once(
+        self,
+        table: str,
+        column_names: list[str],
+        column_data: list[list[Any]],
+        row_count: int,
+    ) -> None:
+        self._ch_columnar_insert_count += 1
+        if self._should_log_insert_success(self._ch_columnar_insert_count):
+            logger.info("ClickHouse columnar insert start", table=table, rows=row_count)
         start_ms = time.monotonic() * 1000
-
-        # Transpose columnar to row-major for clickhouse_connect
-        values = []
-        for i in range(row_count):
-            values.append([col[i] for col in column_data])
-
         with self._get_table_lock(table):
-            self.ch_client.insert(table, values, column_names=column_names)
-
+            if self._ch_column_oriented:
+                try:
+                    self.ch_client.insert(
+                        table,
+                        column_data,
+                        column_names=column_names,
+                        column_oriented=True,
+                    )
+                except TypeError:
+                    values = self._transpose_columnar_rows(column_data, row_count)
+                    self.ch_client.insert(table, values, column_names=column_names)
+            else:
+                values = self._transpose_columnar_rows(column_data, row_count)
+                self.ch_client.insert(table, values, column_names=column_names)
         elapsed_ms = time.monotonic() * 1000 - start_ms
         if elapsed_ms > self._insert_warn_ms:
             logger.warning(
@@ -473,8 +570,27 @@ class DataWriter:
                 table=table,
                 rows=row_count,
                 elapsed_ms=round(elapsed_ms, 1),
+                mode="columnar",
             )
-        logger.info(f"Insert success: {table} {row_count}")
+        elif self._should_log_insert_success(self._ch_columnar_insert_count):
+            logger.info("ClickHouse columnar insert success", table=table, rows=row_count, elapsed_ms=round(elapsed_ms, 1))
+
+    @staticmethod
+    def _transpose_columnar_rows(column_data: list[list[Any]], row_count: int) -> list[list[Any]]:
+        if row_count <= 0 or not column_data:
+            return []
+        return [list(row) for row in zip(*column_data)]
+
+    @staticmethod
+    def _columnar_to_row_dicts(
+        column_names: list[str],
+        column_data: list[list[Any]],
+        row_count: int,
+    ) -> list[dict[str, Any]]:
+        if row_count <= 0 or not column_names or not column_data:
+            return []
+        names = tuple(column_names)
+        return [dict(zip(names, row, strict=False)) for row in zip(*column_data)]
 
     async def write(self, table: str, data: list):
         """
@@ -541,12 +657,16 @@ class DataWriter:
         # Infer columns from first row assuming consistent dicts
         if not data:
             return
-        logger.info(f"Inserting {len(data)} rows into {table} (Keys: {list(data[0].keys())})")
+        for chunk in self._iter_row_chunks(data):
+            self._ch_insert_once(table, chunk)
+
+    def _ch_insert_once(self, table: str, data: list[dict[str, Any]]) -> None:
+        self._ch_insert_count += 1
+        if self._should_log_insert_success(self._ch_insert_count):
+            logger.info("ClickHouse row insert start", table=table, rows=len(data))
         start_ms = time.monotonic() * 1000
 
         keys = list(data[0].keys())
-        # Transform data to list of lists (values based on keys order) or dicts if supported
-        # clickhouse-connect insert expects list of lists typically
         values = [[row.get(k) for k in keys] for row in data]
         with self._get_table_lock(table):
             self.ch_client.insert(table, values, column_names=keys)
@@ -558,8 +678,10 @@ class DataWriter:
                 table=table,
                 rows=len(data),
                 elapsed_ms=round(elapsed_ms, 1),
+                mode="row",
             )
-        logger.info(f"Insert success: {table} {len(data)}")
+        elif self._should_log_insert_success(self._ch_insert_count):
+            logger.info("ClickHouse row insert success", table=table, rows=len(data), elapsed_ms=round(elapsed_ms, 1))
 
     def _sanitize_timestamps(self, table: str, data: list[dict]) -> list[dict]:
         """Drop rows with far-future timestamps and enforce ingest_ts >= exch_ts."""
