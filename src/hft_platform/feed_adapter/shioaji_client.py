@@ -1826,8 +1826,8 @@ class ShioajiClient:
 
     def _is_contract_cache_stale(self) -> bool:
         """Return True if contracts.json is missing, unparseable, or older than refresh interval."""
-        import json
         import datetime
+        import json
         from pathlib import Path
 
         path = Path(self._contract_cache_path)
@@ -1849,8 +1849,8 @@ class ShioajiClient:
 
     def _refresh_contracts_and_symbols(self) -> None:
         """Blocking: re-fetch contracts from broker API and reload symbol config."""
-        import json
         import datetime
+        import json
         from pathlib import Path
 
         if not self.api:
