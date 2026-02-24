@@ -95,7 +95,10 @@ struct LOBStatsFrame {
 
 #[derive(Clone)]
 enum BidAskLevels {
-    Py { bids: PyObject, asks: PyObject },
+    Py {
+        bids: PyObject,
+        asks: PyObject,
+    },
     Packed {
         bid_flat: Vec<i64>,
         bid_rows: usize,
