@@ -13,6 +13,11 @@ try:
 except ImportError:
     AlphaStrategy = None
 
+try:
+    from hft_platform.observability.metrics import MetricsRegistry as _MetricsRegistry
+except Exception:
+    _MetricsRegistry = None  # type: ignore[assignment]
+
 logger = get_logger("rust_alpha")
 
 
@@ -71,6 +76,15 @@ class Strategy(BaseStrategy):
         # Stop-loss tracking: entry price per symbol (scaled integer, Precision Law)
         # Populated when a new order is sent; cleared on stop-loss exit.
         self._entry_price: dict[str, int] = {}
+
+        # Cache metrics reference at init time to avoid re-import on hot exception path (S3)
+        self._exc_metrics = None
+        try:
+            if _MetricsRegistry is not None:
+                m = _MetricsRegistry.get()
+                self._exc_metrics = getattr(m, "strategy_exceptions_total", None)
+        except Exception:
+            pass
 
         logger.info("RustAlphaStrategy Initialized", params=self.params)
 
@@ -162,23 +176,31 @@ class Strategy(BaseStrategy):
                 self._execute_on_signal(event.symbol, signal)
         except Exception as e:
             logger.error("Error in on_book_update", error=str(e), symbol=event.symbol)
-            try:
-                from hft_platform.observability.metrics import MetricsRegistry
-                m = MetricsRegistry.get()
-                if hasattr(m, "strategy_exceptions_total"):
-                    m.strategy_exceptions_total.labels(
+            if self._exc_metrics:
+                try:
+                    self._exc_metrics.labels(
                         strategy=self.strategy_id,
                         exception_type=type(e).__name__,
                         method="on_book_update",
                     ).inc()
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
     def on_tick(self, event: TickEvent) -> None:
         if event.symbol not in self.symbols:
             return
 
         try:
+            # Prefer L1 tuple fast path when local BBO is not initialized yet.
+            if (self.best_bid <= 0 or self.best_ask <= 0) and self.ctx:
+                l1 = self.ctx.get_l1_scaled(event.symbol)
+                if l1 is not None:
+                    _ts, best_bid, best_ask, _mid_x2, _spread, _bid_depth, _ask_depth = l1
+                    if best_bid > 0:
+                        self.best_bid = int(best_bid)
+                    if best_ask > 0:
+                        self.best_ask = int(best_ask)
+
             # Infer direction
             is_buyer_maker = False  # Logic depends on Aggressor.
             # If Price >= Ask, Aggressor is Buyer -> Maker is Seller.
@@ -202,17 +224,15 @@ class Strategy(BaseStrategy):
             self.core.on_trade(int(event.meta.source_ts), event.price, event.volume, is_buyer_maker)
         except Exception as e:
             logger.error("Error in on_tick", error=str(e), symbol=event.symbol)
-            try:
-                from hft_platform.observability.metrics import MetricsRegistry
-                m = MetricsRegistry.get()
-                if hasattr(m, "strategy_exceptions_total"):
-                    m.strategy_exceptions_total.labels(
+            if self._exc_metrics:
+                try:
+                    self._exc_metrics.labels(
                         strategy=self.strategy_id,
                         exception_type=type(e).__name__,
                         method="on_tick",
                     ).inc()
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
     def _execute_on_signal(self, symbol: str, signal: float) -> None:
         threshold = self.params["signal_threshold"]

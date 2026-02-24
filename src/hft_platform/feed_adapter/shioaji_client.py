@@ -1,5 +1,7 @@
 import datetime as dt
 import os
+import queue
+import re
 import threading
 import time
 from collections import deque
@@ -23,6 +25,263 @@ logger = get_logger("feed_adapter")
 # --- Global Callback Registry & Dispatcher ---
 # Using a global list to hold strong references to clients and avoid GC issues with bound methods
 CLIENT_REGISTRY: List[Any] = []
+CLIENT_REGISTRY_LOCK = threading.Lock()
+CLIENT_REGISTRY_BY_CODE: Dict[str, List[Any]] = {}
+CLIENT_REGISTRY_SNAPSHOT: tuple[Any, ...] = ()
+CLIENT_REGISTRY_BY_CODE_SNAPSHOT: Dict[str, tuple[Any, ...]] = {}
+CLIENT_REGISTRY_WILDCARD_SNAPSHOT: tuple[Any, ...] = ()
+CLIENT_DISPATCH_SNAPSHOT: tuple[Callable[..., Any], ...] = ()
+CLIENT_DISPATCH_BY_CODE_SNAPSHOT: Dict[str, tuple[Callable[..., Any], ...]] = {}
+CLIENT_DISPATCH_WILDCARD_SNAPSHOT: tuple[Callable[..., Any], ...] = ()
+TOPIC_CODE_CACHE: Dict[str, str | None] = {}
+_TOPIC_CODE_CACHE_MISS = object()
+_TOPIC_CODE_CACHE_MAX = max(128, int(os.getenv("HFT_SHIOAJI_TOPIC_CODE_CACHE_MAX", "4096")))
+_ROUTE_MISS_STRICT = os.getenv("HFT_SHIOAJI_ROUTE_MISS_STRICT", "0").strip().lower() in {"1", "true", "yes", "on"}
+_ROUTE_MISS_FALLBACK_MODE = os.getenv("HFT_SHIOAJI_ROUTE_MISS_FALLBACK", "wildcard").strip().lower()
+if _ROUTE_MISS_FALLBACK_MODE not in {"wildcard", "broadcast", "none"}:
+    _ROUTE_MISS_FALLBACK_MODE = "wildcard"
+_ROUTE_MISS_LOG_EVERY = max(1, int(os.getenv("HFT_SHIOAJI_ROUTE_MISS_LOG_EVERY", "100")))
+_ROUTE_MISS_COUNT = 0
+_ROUTE_MISS_METRIC = None
+_ROUTE_FALLBACK_METRIC = None
+_ROUTE_DROP_METRIC = None
+
+
+def _refresh_registry_snapshots_locked() -> None:
+    global CLIENT_REGISTRY_SNAPSHOT, CLIENT_REGISTRY_BY_CODE_SNAPSHOT
+    global CLIENT_REGISTRY_WILDCARD_SNAPSHOT
+    global CLIENT_DISPATCH_SNAPSHOT, CLIENT_DISPATCH_BY_CODE_SNAPSHOT, CLIENT_DISPATCH_WILDCARD_SNAPSHOT
+
+    def _dispatch_for(client: Any) -> Callable[..., Any] | None:
+        cb = getattr(client, "_enqueue_tick", None)
+        if cb is not None:
+            return cb
+        return getattr(client, "_process_tick", None)
+
+    client_snapshot = tuple(CLIENT_REGISTRY)
+    CLIENT_REGISTRY_SNAPSHOT = client_snapshot
+    CLIENT_REGISTRY_BY_CODE_SNAPSHOT = {
+        code: tuple(clients) for code, clients in CLIENT_REGISTRY_BY_CODE.items() if clients
+    }
+    CLIENT_DISPATCH_SNAPSHOT = tuple(cb for cb in (_dispatch_for(c) for c in client_snapshot) if cb is not None)
+    CLIENT_DISPATCH_BY_CODE_SNAPSHOT = {
+        code: tuple(cb for cb in (_dispatch_for(c) for c in clients) if cb is not None)
+        for code, clients in CLIENT_REGISTRY_BY_CODE_SNAPSHOT.items()
+        if clients
+    }
+
+    bound_client_ids = {id(c) for clients in CLIENT_REGISTRY_BY_CODE_SNAPSHOT.values() for c in clients}
+    wildcard_clients = tuple(
+        c for c in client_snapshot if bool(getattr(c, "allow_symbol_fallback", False)) or id(c) not in bound_client_ids
+    )
+    CLIENT_REGISTRY_WILDCARD_SNAPSHOT = wildcard_clients
+    CLIENT_DISPATCH_WILDCARD_SNAPSHOT = tuple(
+        cb for cb in (_dispatch_for(c) for c in wildcard_clients) if cb is not None
+    )
+
+
+def _clear_topic_code_cache_locked() -> None:
+    TOPIC_CODE_CACHE.clear()
+
+
+def _record_route_metric(kind: str) -> None:
+    global _ROUTE_MISS_METRIC, _ROUTE_FALLBACK_METRIC, _ROUTE_DROP_METRIC
+    try:
+        metrics = MetricsRegistry.get()
+        if kind == "miss":
+            if _ROUTE_MISS_METRIC is None:
+                _ROUTE_MISS_METRIC = metrics.shioaji_quote_route_total.labels(result="miss")
+            _ROUTE_MISS_METRIC.inc()
+        elif kind == "fallback":
+            if _ROUTE_FALLBACK_METRIC is None:
+                _ROUTE_FALLBACK_METRIC = metrics.shioaji_quote_route_total.labels(result="fallback")
+            _ROUTE_FALLBACK_METRIC.inc()
+        elif kind == "drop":
+            if _ROUTE_DROP_METRIC is None:
+                _ROUTE_DROP_METRIC = metrics.shioaji_quote_route_total.labels(result="drop")
+            _ROUTE_DROP_METRIC.inc()
+    except Exception:
+        pass
+
+
+def _extract_quote_code_from_obj(obj: Any) -> str | None:
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        code = obj.get("code") or obj.get("Code")
+        if code:
+            return str(code)
+        topic = obj.get("topic") or obj.get("Topic")
+        if topic:
+            return _extract_code_from_topic(str(topic))
+        return None
+    code = getattr(obj, "code", None) or getattr(obj, "Code", None)
+    if code:
+        return str(code)
+    topic = getattr(obj, "topic", None)
+    if topic:
+        return _extract_code_from_topic(str(topic))
+    if isinstance(obj, str):
+        return _extract_code_from_topic(obj)
+    return None
+
+
+def _extract_quote_code(*args: Any, **kwargs: Any) -> str | None:
+    # Fast common shapes first: (topic, quote), (exchange, quote), kwargs["quote"].
+    if len(args) >= 2:
+        code = _extract_quote_code_from_obj(args[1])
+        if code:
+            return code
+        if isinstance(args[0], str):
+            code = _extract_code_from_topic(args[0])
+            if code:
+                return code
+    for key in ("quote", "bidask", "tick", "msg", "data"):
+        if key in kwargs:
+            code = _extract_quote_code_from_obj(kwargs.get(key))
+            if code:
+                return code
+    for item in args:
+        code = _extract_quote_code_from_obj(item)
+        if code:
+            return code
+    for item in kwargs.values():
+        code = _extract_quote_code_from_obj(item)
+        if code:
+            return code
+    return None
+
+
+def _extract_code_from_topic(topic: str) -> str | None:
+    if not topic:
+        return None
+    cached = TOPIC_CODE_CACHE.get(topic, _TOPIC_CODE_CACHE_MISS)
+    if cached is not _TOPIC_CODE_CACHE_MISS:
+        return cached
+
+    code: str | None = None
+    # Common fast paths avoid regex allocation.
+    if topic.startswith("Q/"):
+        # e.g. Q/TSE/2330
+        last = topic.rsplit("/", 1)[-1]
+        if last:
+            code = last
+    elif topic.startswith("L1:") and ":" in topic:
+        # e.g. L1:STK:2330:tick -> third token
+        parts = topic.split(":")
+        if len(parts) >= 3 and parts[2]:
+            code = parts[2]
+    elif ":" in topic:
+        # e.g. Quote:v1:BidAsk:TXFF202412
+        parts = topic.split(":")
+        for token in reversed(parts):
+            tok = token.strip()
+            if not tok:
+                continue
+            low = tok.lower()
+            if low in {"tick", "bidask", "stk", "fop", "quote", "quotes", "l1", "v1"}:
+                continue
+            if any(ch.isdigit() for ch in tok) or tok.isalpha():
+                code = tok
+                break
+    if code is None:
+        # General fallback for topic drift.
+        candidates = re.findall(r"[A-Za-z0-9_]+", topic)
+        for token in reversed(candidates):
+            low = token.lower()
+            if low in {"tick", "bidask", "stk", "fop", "quote", "quotes", "l1", "v1"}:
+                continue
+            if any(ch.isdigit() for ch in token) or token.isalpha():
+                code = token
+                break
+        if code is None:
+            for sep in ("/", ":"):
+                if sep in topic:
+                    parts = [p for p in topic.split(sep) if p]
+                    if parts:
+                        code = parts[-1]
+                        break
+
+    with CLIENT_REGISTRY_LOCK:
+        if len(TOPIC_CODE_CACHE) >= _TOPIC_CODE_CACHE_MAX:
+            # Simple coarse reset keeps O(1) behavior on hot path.
+            TOPIC_CODE_CACHE.clear()
+        TOPIC_CODE_CACHE[topic] = code
+    return code
+
+
+def _registry_snapshot(code: str | None = None) -> tuple[tuple[Any, ...], bool]:
+    if code:
+        routed = CLIENT_REGISTRY_BY_CODE_SNAPSHOT.get(str(code))
+        if routed:
+            return routed, True
+    return CLIENT_REGISTRY_SNAPSHOT, False
+
+
+def _registry_dispatch_snapshot(code: str | None = None) -> tuple[tuple[Callable[..., Any], ...], bool]:
+    if code:
+        routed = CLIENT_DISPATCH_BY_CODE_SNAPSHOT.get(str(code))
+        if routed:
+            return routed, True
+    return CLIENT_DISPATCH_SNAPSHOT, False
+
+
+def _registry_fallback_snapshot() -> tuple[Any, ...]:
+    if _ROUTE_MISS_FALLBACK_MODE == "none":
+        return ()
+    if _ROUTE_MISS_FALLBACK_MODE == "broadcast":
+        return CLIENT_REGISTRY_SNAPSHOT
+    return CLIENT_REGISTRY_WILDCARD_SNAPSHOT
+
+
+def _registry_fallback_dispatch_snapshot() -> tuple[Callable[..., Any], ...]:
+    if _ROUTE_MISS_FALLBACK_MODE == "none":
+        return ()
+    if _ROUTE_MISS_FALLBACK_MODE == "broadcast":
+        return CLIENT_DISPATCH_SNAPSHOT
+    return CLIENT_DISPATCH_WILDCARD_SNAPSHOT
+
+
+def _registry_register(client: Any) -> None:
+    with CLIENT_REGISTRY_LOCK:
+        if client not in CLIENT_REGISTRY:
+            CLIENT_REGISTRY.append(client)
+            _refresh_registry_snapshots_locked()
+
+
+def _registry_rebind_codes(client: Any, codes: list[str]) -> None:
+    with CLIENT_REGISTRY_LOCK:
+        for mapped_code, clients in list(CLIENT_REGISTRY_BY_CODE.items()):
+            if client in clients:
+                clients = [c for c in clients if c is not client]
+                if clients:
+                    CLIENT_REGISTRY_BY_CODE[mapped_code] = clients
+                else:
+                    CLIENT_REGISTRY_BY_CODE.pop(mapped_code, None)
+        for code in codes:
+            key = str(code)
+            if not key:
+                continue
+            bucket = CLIENT_REGISTRY_BY_CODE.setdefault(key, [])
+            if client not in bucket:
+                bucket.append(client)
+        _refresh_registry_snapshots_locked()
+        _clear_topic_code_cache_locked()
+
+
+def _registry_unregister(client: Any) -> None:
+    with CLIENT_REGISTRY_LOCK:
+        if client in CLIENT_REGISTRY:
+            CLIENT_REGISTRY[:] = [c for c in CLIENT_REGISTRY if c is not client]
+        for mapped_code, clients in list(CLIENT_REGISTRY_BY_CODE.items()):
+            if client in clients:
+                clients = [c for c in clients if c is not client]
+                if clients:
+                    CLIENT_REGISTRY_BY_CODE[mapped_code] = clients
+                else:
+                    CLIENT_REGISTRY_BY_CODE.pop(mapped_code, None)
+        _refresh_registry_snapshots_locked()
+        _clear_topic_code_cache_locked()
 
 
 def dispatch_tick_cb(*args, **kwargs):
@@ -31,11 +290,74 @@ def dispatch_tick_cb(*args, **kwargs):
     Passes through raw args to avoid signature drift across Shioaji callbacks.
     """
     try:
+        global _ROUTE_MISS_COUNT
         if not args and not kwargs:
             return
-        for client in CLIENT_REGISTRY:
-            if hasattr(client, "_process_tick"):
-                client._process_tick(*args, **kwargs)
+        code = _extract_quote_code(*args, **kwargs)
+        dispatchers, routed_exact = _registry_dispatch_snapshot(code)
+        if code and not routed_exact:
+            _ROUTE_MISS_COUNT += 1
+            _record_route_metric("miss")
+            if _ROUTE_MISS_STRICT:
+                _record_route_metric("drop")
+                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+                    logger.warning(
+                        "Quote route miss; dropping callback payload",
+                        code=code,
+                        strict=True,
+                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
+                    )
+                return
+            dispatchers = _registry_fallback_dispatch_snapshot()
+            if not dispatchers:
+                _record_route_metric("drop")
+                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+                    logger.warning(
+                        "Quote route miss; no fallback targets, dropping callback payload",
+                        code=code,
+                        strict=False,
+                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
+                    )
+                return
+            _record_route_metric("fallback")
+            if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+                logger.warning(
+                    "Quote route miss; falling back to snapshot",
+                    code=code,
+                    strict=False,
+                    fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
+                    fallback_targets=len(dispatchers),
+                )
+        elif code is None and _ROUTE_MISS_STRICT:
+            _ROUTE_MISS_COUNT += 1
+            _record_route_metric("miss")
+            _record_route_metric("drop")
+            if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+                logger.warning("Quote route parse miss; dropping callback payload", strict=True)
+            return
+        elif code is None:
+            _ROUTE_MISS_COUNT += 1
+            _record_route_metric("miss")
+            dispatchers = _registry_fallback_dispatch_snapshot()
+            if not dispatchers:
+                _record_route_metric("drop")
+                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+                    logger.warning(
+                        "Quote route parse miss; no fallback targets, dropping callback payload",
+                        strict=False,
+                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
+                    )
+                return
+            _record_route_metric("fallback")
+            if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+                logger.warning(
+                    "Quote route parse miss; falling back to snapshot",
+                    strict=False,
+                    fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
+                    fallback_targets=len(dispatchers),
+                )
+        for dispatch_fn in dispatchers:
+            dispatch_fn(*args, **kwargs)
     except Exception as e:
         logger.error("Global Dispatch Error", error=str(e))
 
@@ -99,6 +421,30 @@ class ShioajiClient:
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
         self.tick_callback: Callable[..., Any] | None = None
+        self._quote_dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        try:
+            self._quote_dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
+        except ValueError:
+            self._quote_dispatch_queue_size = 8192
+        try:
+            self._quote_dispatch_batch_max = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_BATCH_MAX", "32")))
+        except ValueError:
+            self._quote_dispatch_batch_max = 32
+        try:
+            self._quote_dispatch_metrics_every = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_METRICS_EVERY", "128")))
+        except ValueError:
+            self._quote_dispatch_metrics_every = 128
+        self._quote_dispatch_queue: queue.Queue[tuple[tuple[Any, ...], dict[str, Any]] | None] | None = None
+        self._quote_dispatch_thread: threading.Thread | None = None
+        self._quote_dispatch_running = False
+        self._quote_dispatch_dropped = 0
+        self._quote_dispatch_enqueued = 0
+        self._quote_dispatch_processed = 0
         self._callbacks_registered = False
         self._pending_quote_resubscribe = False
         self._pending_quote_ts = 0.0
@@ -185,10 +531,22 @@ class ShioajiClient:
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))  # 60 seconds
         self._market_open_grace_active = False
 
-        # Register self globally
-        if self not in CLIENT_REGISTRY:
-            CLIENT_REGISTRY.append(self)
-            logger.info("Registered ShioajiClient in Global Registry")
+        # C2: Failed subscription tracking + retry thread
+        self._failed_sub_symbols: list[Dict[str, Any]] = []
+        self._sub_retry_running = False
+        self._sub_retry_thread: threading.Thread | None = None
+        self._contract_retry_s = float(os.getenv("HFT_CONTRACT_RETRY_S", "60"))
+
+        # C3: Contract cache refresh thread
+        self._contract_refresh_s = float(os.getenv("HFT_CONTRACT_REFRESH_S", "86400"))
+        self._contract_cache_path = os.getenv("HFT_CONTRACT_CACHE_PATH", "config/contracts.json")
+        self._contract_refresh_running = False
+        self._contract_refresh_thread: threading.Thread | None = None
+
+        # Register self globally (callback routing + strong ref)
+        _registry_register(self)
+        self._refresh_quote_routes()
+        logger.info("Registered ShioajiClient in Global Registry")
 
     def _record_api_latency(self, op: str, start_ns: int, ok: bool = True) -> None:
         if not self.metrics:
@@ -258,6 +616,122 @@ class ShioajiClient:
         except Exception as e:
             logger.error("Error processing tick", error=str(e))
 
+    def _enqueue_tick(self, *args, **kwargs) -> None:
+        """Non-blocking callback ingress: callback thread enqueues, worker executes."""
+        if not self._quote_dispatch_async:
+            self._process_tick(*args, **kwargs)
+            return
+        self._start_quote_dispatch_worker()
+        q = self._quote_dispatch_queue
+        if q is None:
+            self._process_tick(*args, **kwargs)
+            return
+        try:
+            q.put_nowait((args, kwargs))
+            self._quote_dispatch_enqueued += 1
+            if self.metrics and (self._quote_dispatch_enqueued % self._quote_dispatch_metrics_every == 0):
+                try:
+                    if hasattr(self.metrics, "shioaji_quote_callback_queue_depth"):
+                        self.metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
+                except Exception:
+                    pass
+        except queue.Full:
+            self._quote_dispatch_dropped += 1
+            if self.metrics:
+                try:
+                    self.metrics.raw_queue_dropped_total.inc()
+                    if hasattr(self.metrics, "shioaji_quote_callback_queue_dropped_total"):
+                        self.metrics.shioaji_quote_callback_queue_dropped_total.inc()
+                except Exception:
+                    pass
+            if self._quote_dispatch_dropped % 100 == 1:
+                logger.warning(
+                    "Quote callback queue full; dropping quote callback payload",
+                    dropped_total=self._quote_dispatch_dropped,
+                    maxsize=self._quote_dispatch_queue_size,
+                )
+
+    def _start_quote_dispatch_worker(self) -> None:
+        if not self._quote_dispatch_async or self._quote_dispatch_running:
+            return
+        self._quote_dispatch_queue = queue.Queue(maxsize=self._quote_dispatch_queue_size)
+        self._quote_dispatch_running = True
+        batch_max = self._quote_dispatch_batch_max
+
+        def _worker() -> None:
+            while self._quote_dispatch_running:
+                try:
+                    item = self._quote_dispatch_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if item is None:
+                    continue
+                batch_count = 0
+
+                def _process_item(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+                    try:
+                        self._process_tick(*args, **kwargs)
+                    except Exception as exc:
+                        logger.error("Quote dispatch worker error", error=str(exc))
+
+                args, kwargs = item
+                _process_item(args, kwargs)
+                batch_count += 1
+                while batch_count < batch_max and self._quote_dispatch_running:
+                    try:
+                        nxt = self._quote_dispatch_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if nxt is None:
+                        continue
+                    n_args, n_kwargs = nxt
+                    _process_item(n_args, n_kwargs)
+                    batch_count += 1
+                self._quote_dispatch_processed += batch_count
+                if self.metrics and (self._quote_dispatch_processed % self._quote_dispatch_metrics_every == 0):
+                    try:
+                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth") and self._quote_dispatch_queue:
+                            self.metrics.shioaji_quote_callback_queue_depth.set(self._quote_dispatch_queue.qsize())
+                    except Exception:
+                        pass
+
+        self._quote_dispatch_thread = threading.Thread(
+            target=_worker,
+            name="shioaji-quote-dispatch",
+            daemon=True,
+        )
+        self._quote_dispatch_thread.start()
+
+    def _stop_quote_dispatch_worker(self, join_timeout_s: float = 1.0) -> None:
+        if not self._quote_dispatch_running:
+            return
+        self._quote_dispatch_running = False
+        q = self._quote_dispatch_queue
+        if q is not None:
+            try:
+                q.put_nowait(None)
+            except Exception:
+                pass
+        t = self._quote_dispatch_thread
+        if t and t.is_alive():
+            t.join(timeout=max(0.0, float(join_timeout_s)))
+        self._quote_dispatch_thread = None
+        self._quote_dispatch_queue = None
+
+    def _refresh_quote_routes(self) -> None:
+        codes: list[str] = []
+        for sym in self.symbols:
+            if isinstance(sym, dict):
+                code = sym.get("code")
+            else:
+                code = None
+            if code:
+                codes.append(str(code))
+        subscribed_codes = getattr(self, "subscribed_codes", None)
+        if subscribed_codes:
+            codes.extend(str(c) for c in subscribed_codes)
+        _registry_rebind_codes(self, codes)
+
     def _load_config(self):
         with open(self.config_path, "r") as f:
             data = yaml.safe_load(f) or {}
@@ -275,6 +749,7 @@ class ShioajiClient:
 
         # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
+        self._refresh_quote_routes()
 
     def login(
         self,
@@ -426,7 +901,9 @@ class ShioajiClient:
 
         # Store callback permanently for binding (fix GC issues)
         self.tick_callback = cb
+        self._start_quote_dispatch_worker()
         self._ensure_callbacks(cb)
+        self._start_contract_refresh_thread()
         if self._last_quote_data_ts <= 0:
             self._last_quote_data_ts = timebase.now_s()
 
@@ -446,7 +923,17 @@ class ShioajiClient:
                 if code:
                     self.subscribed_codes.add(code)
                 self.subscribed_count = len(self.subscribed_codes)
+            else:
+                self._failed_sub_symbols.append(sym)
+        self._refresh_quote_routes()
         logger.info("Quote subscription completed", subscribed=self.subscribed_count)
+        if self._failed_sub_symbols:
+            logger.warning(
+                "Failed subscriptions queued for retry",
+                count=len(self._failed_sub_symbols),
+                codes=[s.get("code") for s in self._failed_sub_symbols[:10]],
+            )
+            self._start_sub_retry_thread(cb)
         self._start_quote_watchdog()
         self._start_session_refresh_thread()
 
@@ -1134,6 +1621,7 @@ class ShioajiClient:
             self._pending_quote_resubscribe = False
             self.subscribed_codes = set()
             self.subscribed_count = 0
+            self._refresh_quote_routes()
 
             self.login()
             if self.logged_in and self.tick_callback:
@@ -1170,6 +1658,7 @@ class ShioajiClient:
                 if code:
                     self.subscribed_codes.add(code)
                 self.subscribed_count = len(self.subscribed_codes)
+        self._refresh_quote_routes()
 
     def resubscribe(self) -> bool:
         if not self.api or not self.logged_in or not self.tick_callback:
@@ -1200,6 +1689,11 @@ class ShioajiClient:
         )
         if not contract:
             logger.error("Contract not found", code=code)
+            if hasattr(self.metrics, "shioaji_contract_lookup_errors_total"):
+                try:
+                    self.metrics.shioaji_contract_lookup_errors_total.labels(code=str(code)).inc()
+                except Exception:
+                    pass
             return False
 
         try:
@@ -1265,6 +1759,7 @@ class ShioajiClient:
         if not self.api or not self.logged_in or not self.tick_callback:
             self.subscribed_codes = set(new_map)
             self.subscribed_count = len(self.subscribed_codes)
+            self._refresh_quote_routes()
             return
 
         for code in removed:
@@ -1279,6 +1774,167 @@ class ShioajiClient:
                 self.subscribed_codes.add(code)
 
         self.subscribed_count = len(self.subscribed_codes)
+        self._refresh_quote_routes()
+
+    # --- C2: Failed subscription retry thread ---
+
+    def _start_sub_retry_thread(self, cb: Callable[..., Any]) -> None:
+        """Start background thread to retry symbols that failed initial subscription."""
+        if self._sub_retry_running:
+            return
+        self._sub_retry_running = True
+        logger.info("Starting subscription retry thread", failed=len(self._failed_sub_symbols))
+
+        def _retry_loop() -> None:
+            interval = self._contract_retry_s
+            while self._sub_retry_running and self._failed_sub_symbols:
+                time.sleep(interval)
+                if not self._sub_retry_running:
+                    break
+                remaining: list[Dict[str, Any]] = []
+                for sym in list(self._failed_sub_symbols):
+                    if not self._sub_retry_running:
+                        remaining.append(sym)
+                        continue
+                    if self._subscribe_symbol(sym, cb):
+                        code = sym.get("code")
+                        if code:
+                            self.subscribed_codes.add(code)
+                        self.subscribed_count = len(self.subscribed_codes)
+                        logger.info("Subscription retry succeeded", code=sym.get("code"))
+                    else:
+                        remaining.append(sym)
+                self._failed_sub_symbols = remaining
+                if not self._failed_sub_symbols:
+                    logger.info("All failed subscriptions resolved")
+                    break
+                logger.warning(
+                    "Subscription retry: still pending",
+                    count=len(self._failed_sub_symbols),
+                    codes=[s.get("code") for s in self._failed_sub_symbols[:10]],
+                )
+            self._sub_retry_running = False
+
+        self._sub_retry_thread = threading.Thread(
+            target=_retry_loop,
+            name="shioaji-sub-retry",
+            daemon=True,
+        )
+        self._sub_retry_thread.start()
+
+    # --- C3: Contract cache refresh thread ---
+
+    def _is_contract_cache_stale(self) -> bool:
+        """Return True if contracts.json is missing, unparseable, or older than refresh interval."""
+        import json
+        import datetime
+        from pathlib import Path
+
+        path = Path(self._contract_cache_path)
+        if not path.exists():
+            return True
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            updated_at = data.get("updated_at")
+            if not updated_at:
+                return True
+            dt = datetime.datetime.fromisoformat(updated_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            age_s = (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds()
+            return age_s > self._contract_refresh_s
+        except Exception as exc:
+            logger.warning("Cannot parse contract cache for staleness check", error=str(exc))
+            return True
+
+    def _refresh_contracts_and_symbols(self) -> None:
+        """Blocking: re-fetch contracts from broker API and reload symbol config."""
+        import json
+        import datetime
+        from pathlib import Path
+
+        if not self.api:
+            return
+        try:
+            self._ensure_contracts()
+            logger.info("Contract data refreshed from broker")
+        except Exception as exc:
+            logger.warning("Contract refresh fetch failed", error=str(exc))
+            return
+        # Update updated_at in contracts.json
+        path = Path(self._contract_cache_path)
+        try:
+            data: dict = {}
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+            data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info("Contract cache timestamp updated", path=str(path))
+        except Exception as exc:
+            logger.warning("Failed to update contract cache timestamp", error=str(exc))
+        # Reload symbol config
+        try:
+            self._load_config()
+            logger.info("Symbol config reloaded after contract refresh", symbol_count=len(self.symbols))
+        except Exception as exc:
+            logger.warning("Symbol config reload failed after contract refresh", error=str(exc))
+
+    def _start_contract_refresh_thread(self) -> None:
+        """Start daemon thread that immediately refreshes stale contract cache then runs on schedule."""
+        if self._contract_refresh_running:
+            return
+        self._contract_refresh_running = True
+
+        def _refresh_loop() -> None:
+            if self._is_contract_cache_stale():
+                logger.info("Contract cache stale at startup; triggering immediate refresh")
+                self._refresh_contracts_and_symbols()
+            next_refresh = time.monotonic() + self._contract_refresh_s
+            while self._contract_refresh_running:
+                time.sleep(60.0)
+                if not self._contract_refresh_running:
+                    break
+                if time.monotonic() >= next_refresh:
+                    logger.info("Scheduled contract refresh starting")
+                    self._refresh_contracts_and_symbols()
+                    next_refresh = time.monotonic() + self._contract_refresh_s
+            self._contract_refresh_running = False
+
+        self._contract_refresh_thread = threading.Thread(
+            target=_refresh_loop,
+            name="shioaji-contract-refresh",
+            daemon=True,
+        )
+        self._contract_refresh_thread.start()
+
+    def close(self, logout: bool = False) -> None:
+        """Best-effort client teardown for tests/services (registry cleanup + worker stop)."""
+        self._quote_watchdog_running = False
+        self._session_refresh_running = False
+        self._callbacks_retrying = False
+        self._event_callback_retrying = False
+        self._resubscribe_scheduled = False
+        self._pending_quote_relogining = False
+        self._sub_retry_running = False
+        self._contract_refresh_running = False
+        self.tick_callback = None
+        self._stop_quote_dispatch_worker(join_timeout_s=1.0)
+        for t in (getattr(self, "_session_refresh_thread", None), getattr(self, "_quote_watchdog_thread", None)):
+            if t and t.is_alive():
+                t.join(timeout=0.2)
+        _registry_unregister(self)
+        if logout and self.api:
+            try:
+                self.api.logout()
+            except Exception as exc:
+                logger.warning("Logout failed during close", error=str(exc))
+
+    def shutdown(self, logout: bool = False) -> None:
+        self.close(logout=logout)
 
     def validate_symbols(self) -> list[str]:
         if not self.api or not self.logged_in:

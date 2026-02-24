@@ -5,19 +5,23 @@ import xml.etree.ElementTree as ET
 import os
 import time
 from datetime import datetime
-import ssl
 
 # Arxiv API endpoint
 BASE_URL = 'http://export.arxiv.org/api/query'
 
-# Search criteria
-KEYWORDS = ['Hawkes processes', 'propagator model']
-CATEGORIES = ['q-fin.MF', 'q-fin.TR']
-YEAR_START = 2021
+# Search criteria — covers the three core research directions of the platform:
+# microstructure/Hawkes, order flow / market impact, and RL market-making.
+KEYWORDS = [
+    'Hawkes processes',
+    'propagator model',
+    'order flow imbalance',
+    'market impact estimation',
+    'reinforcement learning market making',
+    'limit order book deep learning',
+]
+CATEGORIES = ['q-fin.MF', 'q-fin.TR', 'q-fin.ST', 'cs.LG']
+YEAR_START = 2023
 OUTPUT_DIR = "research/arxiv_papers"
-
-# SSL context for legacy systems if needed
-ssl._create_default_https_context = ssl._create_unverified_context
 
 def fetch_arxiv(search_query, start=0, max_results=50):
     url = f"{BASE_URL}?search_query={search_query}&start={start}&max_results={max_results}&sortBy=submittedDate&sortOrder=descending"

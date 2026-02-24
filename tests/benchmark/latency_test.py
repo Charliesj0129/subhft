@@ -28,6 +28,11 @@ class BenchStrategy(BaseStrategy):
 
 async def benchmark():
     print("=== HFT Platform Efficiency Benchmark ===")
+    PREWARM = 100
+    NUM = 10000
+    RAW_QUEUE_SIZE = 20000
+    PRODUCER_WATERMARK = 2000
+    PRODUCER_YIELD_EVERY = 250
 
     # 1. Setup
     bus = RingBufferBus(size=65536)
@@ -35,8 +40,7 @@ async def benchmark():
     client = MagicMock()
     client.place_order.return_value = {"status": "Submitted"}
 
-    raw_queue = asyncio.Queue()
-    raw_queue = asyncio.Queue()
+    raw_queue = asyncio.Queue(maxsize=RAW_QUEUE_SIZE)
     # Mock client with valid symbols for normalization if needed
     client = MagicMock(spec=ShioajiClient)
     client.symbols = [{"code": "2330", "price_scale": 1, "exchange": "TSE"}]
@@ -51,28 +55,11 @@ async def benchmark():
     strat.symbols = ["2330"]
     strat.enabled = True
 
-    runner = StrategyRunner(bus, risk_queue, lob_engine=lob_engine)
+    runner = StrategyRunner(bus, risk_queue, lob_engine=lob_engine, config_path="tests/manual/empty_strat.yaml")
     runner.register(strat)
 
     # 2. Start Services
-    # 2. Start Services
     md_service.running = True
-    # Consume loop is integrated in run() for Service, but that blocks.
-    # Service structure: run() spawns monitor, then connect, then loop.
-    # We want pure process loop.
-    # Let's override run to just consume to avoid connect sequence overhead/errors in benchmark?
-    # Or start properly.
-
-    # Let's bypass connect sequence for benchmark purity:
-    async def fast_run():
-        md_service.running = True
-        while md_service.running:
-            # Inline logic from service
-            item = await md_service.raw_queue.get()
-            # We want to use the REAL logic though.
-            # Call internal methods/libs?
-            # Actually, simpler to just run md_service.run() but we need to mock connect sequence to be instant.
-            pass
 
     # Better: Just spawn md_service.run() and ensure client mocks don't hang.
     client.login.return_value = None
@@ -87,21 +74,27 @@ async def benchmark():
     print("Services Started. Pre-warming...")
 
     # 3. Pre-warm (ensure subscriptions active)
-    for _ in range(100):
+    for _ in range(PREWARM):
         raw_queue.put_nowait(
             {"code": "2330", "ts": 1000, "bid_price": [100], "bid_volume": [1], "ask_price": [101], "ask_volume": [1]}
         )
 
-    print(f"Pre-warm complete. Strat processed: {strat.count}")
+    prewarm_deadline = time.perf_counter() + 5.0
+    while strat.count < PREWARM and time.perf_counter() < prewarm_deadline:
+        await asyncio.sleep(0.01)
+
+    print(f"Pre-warm complete. Strat processed: {strat.count}/{PREWARM}")
     strat.count = 0  # Reset
+    strat.start_times.clear()
 
     # 4. Burst Test
-    NUM = 10000
     print(f"Injecting {NUM} events...")
 
     start_t = time.perf_counter()
 
     for i in range(NUM):
+        while raw_queue.qsize() >= PRODUCER_WATERMARK:
+            await asyncio.sleep(0)
         msg = {
             "code": "2330",
             "ts": time.time_ns(),
@@ -111,9 +104,8 @@ async def benchmark():
             "ask_volume": [50],
         }
         raw_queue.put_nowait(msg)
-        # Yield to allow consumer to pick up?
-        # If we just blast, queue fills up.
-        # RingBuffer has 65k size. NUM=10k. It fits.
+        if (i + 1) % PRODUCER_YIELD_EVERY == 0:
+            await asyncio.sleep(0)
 
     while strat.count < NUM:
         await asyncio.sleep(0.01)
@@ -126,15 +118,16 @@ async def benchmark():
 
     print(f"\nResult: Processed {strat.count}/{NUM} in {dur:.4f}s")
     print(f"Throughput: {tput:.2f} events/sec")
+    print(f"Final raw_queue depth: {raw_queue.qsize()}")
 
     if strat.start_times:
         latencies = sorted(strat.start_times)
         p50 = latencies[int(len(latencies) * 0.50)] / 1000.0
         p95 = latencies[int(len(latencies) * 0.95)] / 1000.0
         p99 = latencies[int(len(latencies) * 0.99)] / 1000.0
-        print(f"Latency P50: {p50:.2f} us")
-        print(f"Latency P95: {p95:.2f} us")
-        print(f"Latency P99: {p99:.2f} us")
+        print(f"E2E Inject->Strategy P50: {p50:.2f} us")
+        print(f"E2E Inject->Strategy P95: {p95:.2f} us")
+        print(f"E2E Inject->Strategy P99: {p99:.2f} us")
 
     # Cleanup
     md_service.running = False

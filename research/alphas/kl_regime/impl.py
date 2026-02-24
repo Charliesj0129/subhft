@@ -139,6 +139,33 @@ class KLRegimeAlpha(KLRegimeDetector):
         self.compute(current_return=current_return)
         return self.get_signal()
 
+    def update_batch(self, data) -> np.ndarray:
+        arr = np.asarray(data)
+        if arr.size == 0:
+            return np.zeros(0, dtype=np.float64)
+        if arr.dtype.names:
+            if "current_return" in arr.dtype.names:
+                values = np.asarray(arr["current_return"], dtype=np.float64).reshape(-1)
+            elif "ret" in arr.dtype.names:
+                values = np.asarray(arr["ret"], dtype=np.float64).reshape(-1)
+            elif "returns" in arr.dtype.names:
+                values = np.asarray(arr["returns"], dtype=np.float64).reshape(-1)
+            elif "price" in arr.dtype.names:
+                px = np.asarray(arr["price"], dtype=np.float64).reshape(-1)
+                values = np.zeros(px.size, dtype=np.float64)
+                if px.size > 1:
+                    base = px[:-1]
+                    diff = np.diff(px)
+                    values[:-1] = np.divide(diff, base, out=np.zeros_like(diff), where=base != 0)
+            else:
+                values = np.asarray(arr, dtype=np.float64).reshape(-1)
+        else:
+            values = np.asarray(arr, dtype=np.float64).reshape(-1)
+        out = np.zeros(values.size, dtype=np.float64)
+        for i, value in enumerate(values):
+            out[i] = self.update(float(value))
+        return out
+
 
 ALPHA_CLASS = KLRegimeAlpha
 

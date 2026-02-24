@@ -37,6 +37,14 @@ _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
     "off",
 }
 _SYNTHETIC_TICKS = max(1, int(os.getenv("HFT_MD_SYNTHETIC_TICKS", "1")))
+# Experimental scratch-array path for fixed 5-level books. Disabled by default
+# because Python-level element copies can be slower on some hosts.
+_SHIOAJI_FIXED5_SCRATCH = os.getenv("HFT_MD_FIXED5_SCRATCH", "0").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 try:
     _TS_MAX_LAG_NS = int(float(os.getenv("HFT_TS_MAX_LAG_S", "5")) * 1e9)
 except Exception as exc:
@@ -275,6 +283,11 @@ class MarketDataNormalizer:
         "_last_scale",
         "_last_local_ts_ns",
         "_last_skew_log_ns",
+        "_fixed5_scratch_enabled",
+        "_fixed5_bid_prices_np",
+        "_fixed5_bid_vols_np",
+        "_fixed5_ask_prices_np",
+        "_fixed5_ask_vols_np",
     )
 
     def __init__(self, config_path: Optional[str] = None, metadata: SymbolMetadata | None = None):
@@ -289,6 +302,22 @@ class MarketDataNormalizer:
         self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
         self._last_local_ts_ns = {"tick": 0, "bidask": 0, "snapshot": 0}
         self._last_skew_log_ns = 0
+        self._fixed5_scratch_enabled = False
+        self._fixed5_bid_prices_np = None
+        self._fixed5_bid_vols_np = None
+        self._fixed5_ask_prices_np = None
+        self._fixed5_ask_vols_np = None
+        if _SHIOAJI_FIXED5_SCRATCH and _RUST_NORMALIZE_BIDASK_NP is not None:
+            try:
+                import numpy as np
+
+                self._fixed5_bid_prices_np = np.empty(5, dtype=np.float64)
+                self._fixed5_bid_vols_np = np.empty(5, dtype=np.int64)
+                self._fixed5_ask_prices_np = np.empty(5, dtype=np.float64)
+                self._fixed5_ask_vols_np = np.empty(5, dtype=np.int64)
+                self._fixed5_scratch_enabled = True
+            except Exception:
+                self._fixed5_scratch_enabled = False
 
     def _next_seq(self) -> int:
         return next(self._seq_gen)
@@ -669,14 +698,56 @@ class MarketDataNormalizer:
                     stats = None
                     synthesized = False
 
+            # Hot path for standard Shioaji bidask streams: avoid Python np.asarray() churn
+            # when Rust can directly scale Python sequences and compute stats.
+            if (
+                stats is None
+                and use_rust
+                and not _SYNTHETIC_SIDE
+                and _RUST_SCALE_BOOK_PAIR_STATS is not None
+                and _RUST_STATS_TUPLE
+            ):
+                try:
+                    bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                except Exception:
+                    bids_final = None
+                    asks_final = None
+                    stats = None
+
             if stats is None and use_rust and _RUST_NORMALIZE_BIDASK_NP is not None:
                 try:
-                    import numpy as np
+                    use_fixed5 = (
+                        self._fixed5_scratch_enabled
+                        and isinstance(bp, (list, tuple))
+                        and isinstance(bv, (list, tuple))
+                        and isinstance(ap, (list, tuple))
+                        and isinstance(av, (list, tuple))
+                        and len(bp) == 5
+                        and len(bv) == 5
+                        and len(ap) == 5
+                        and len(av) == 5
+                    )
+                    if use_fixed5:
+                        bid_prices_np = self._fixed5_bid_prices_np  # type: ignore[assignment]
+                        bid_vols_np = self._fixed5_bid_vols_np  # type: ignore[assignment]
+                        ask_prices_np = self._fixed5_ask_prices_np  # type: ignore[assignment]
+                        ask_vols_np = self._fixed5_ask_vols_np  # type: ignore[assignment]
+                        if bid_prices_np is None or bid_vols_np is None or ask_prices_np is None or ask_vols_np is None:
+                            use_fixed5 = False
+                    if use_fixed5:
+                        # Shioaji stock/futures bidask is typically fixed 5 levels.
+                        for i in range(5):
+                            bid_prices_np[i] = float(bp[i])
+                            bid_vols_np[i] = int(bv[i])
+                            ask_prices_np[i] = float(ap[i])
+                            ask_vols_np[i] = int(av[i])
+                    else:
+                        import numpy as np
 
-                    bid_prices_np = np.asarray(bp, dtype=np.float64)
-                    bid_vols_np = np.asarray(bv, dtype=np.int64)
-                    ask_prices_np = np.asarray(ap, dtype=np.float64)
-                    ask_vols_np = np.asarray(av, dtype=np.int64)
+                        bid_prices_np = np.asarray(bp, dtype=np.float64)
+                        bid_vols_np = np.asarray(bv, dtype=np.int64)
+                        ask_prices_np = np.asarray(ap, dtype=np.float64)
+                        ask_vols_np = np.asarray(av, dtype=np.int64)
 
                     rust_tuple = _RUST_NORMALIZE_BIDASK_NP(
                         symbol,
@@ -753,7 +824,9 @@ class MarketDataNormalizer:
                     asks_final = None
                     stats = None
 
-            if use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
+            # If a Rust normalize path already returned bids/asks+stats, do not recompute
+            # the same work again via scale_book_pair_stats.
+            if stats is None and use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
                 try:
                     bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
                 except Exception:

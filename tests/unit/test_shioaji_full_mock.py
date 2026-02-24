@@ -16,6 +16,8 @@ from hft_platform.feed_adapter.shioaji_client import ShioajiClient, dispatch_tic
 
 class TestShioajiClientFull(unittest.TestCase):
     def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {"HFT_SESSION_REFRESH_S": "0"})
+        self.env_patcher.start()
         # Create temp config
         self.tmp_config = tempfile.NamedTemporaryFile(mode="w", delete=False)
         yaml.dump(
@@ -57,6 +59,11 @@ class TestShioajiClientFull(unittest.TestCase):
         self.mock_api_instance.Contracts.Futures = {"TXFA": self.mock_contract_txfa}
 
     def tearDown(self):
+        try:
+            self.client.close()
+        except Exception:
+            pass
+        self.env_patcher.stop()
         self.patcher.stop()
         os.unlink(self.tmp_config.name)
 

@@ -110,6 +110,10 @@ class MetricsRegistry:
                 "strategy_exceptions_total",
                 # Quote watchdog recovery metrics
                 "quote_watchdog_recovery_attempts_total",
+                "shioaji_quote_route_total",
+                "shioaji_quote_callback_queue_depth",
+                "shioaji_quote_callback_queue_dropped_total",
+                "market_data_callback_parse_total",
             ]
         )
         # Market Data
@@ -213,6 +217,32 @@ class MetricsRegistry:
         self.recorder_batches_flushed_total = Counter("recorder_batches_flushed_total", "Flushed batches", ["table"])
         self.recorder_rows_flushed_total = Counter("recorder_rows_flushed_total", "Flushed rows", ["table"])
         self.recorder_wal_writes_total = Counter("recorder_wal_writes_total", "WAL writes", ["table"])
+        self.recorder_wal_skipped_rows_total = Counter(
+            "recorder_wal_skipped_rows_total",
+            "Recorder WAL rows skipped due to disk pressure policy",
+            ["writer", "table", "reason"],
+        )
+        self.recorder_wal_write_latency_ms = Histogram(
+            "recorder_wal_write_latency_ms",
+            "Recorder WAL write latency in milliseconds",
+            ["writer", "mode"],
+            buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 250, 500, 1000],
+        )
+        self.recorder_wal_fsync_latency_ms = Histogram(
+            "recorder_wal_fsync_latency_ms",
+            "Recorder WAL fsync latency in milliseconds",
+            ["writer", "target"],
+            buckets=[0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100],
+        )
+        self.wal_disk_available_mb = Gauge(
+            "wal_disk_available_mb",
+            "Available disk space for WAL directory in MB",
+        )
+        self.wal_disk_circuit_breaker_active = Gauge(
+            "wal_disk_circuit_breaker_active",
+            "WAL disk space circuit breaker state (1=active, 0=inactive)",
+            ["writer"],
+        )
         self.queue_depth = Gauge("queue_depth", "Queue depth by type", ["queue"])
         self.event_loop_lag_ms = Gauge("event_loop_lag_ms", "Event loop lag (ms)")
 
@@ -437,6 +467,24 @@ class MetricsRegistry:
             "quote_watchdog_recovery_attempts_total",
             "Quote watchdog recovery attempts by action",
             ["action"],  # action: "version_downgrade" | "callback_reregister"
+        )
+        self.shioaji_quote_route_total = Counter(
+            "shioaji_quote_route_total",
+            "Shioaji quote callback route outcomes",
+            ["result"],  # "miss" | "fallback" | "drop"
+        )
+        self.shioaji_quote_callback_queue_depth = Gauge(
+            "shioaji_quote_callback_queue_depth",
+            "Current Shioaji callback ingress queue depth",
+        )
+        self.shioaji_quote_callback_queue_dropped_total = Counter(
+            "shioaji_quote_callback_queue_dropped_total",
+            "Dropped Shioaji callback payloads due to callback ingress queue overflow",
+        )
+        self.market_data_callback_parse_total = Counter(
+            "market_data_callback_parse_total",
+            "MarketDataService Shioaji callback parser outcomes",
+            ["result"],  # "fast" | "fallback" | "miss"
         )
 
         # System (v2)

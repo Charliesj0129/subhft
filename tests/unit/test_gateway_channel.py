@@ -141,3 +141,36 @@ async def test_channel_dlq_bounded():
     # DLQ capped at 2 (deque maxlen)
     assert ch.dlq_size() <= 2
     ch.task_done()
+
+
+@pytest.mark.asyncio
+async def test_channel_submit_typed_and_materialize():
+    ch = LocalIntentChannel(maxsize=10, ttl_ms=0)
+    frame = (
+        "typed_intent_v1",
+        7,
+        "alpha",
+        "TSE:2330",
+        int(IntentType.NEW),
+        int(Side.BUY),
+        1000000,
+        2,
+        int(TIF.LIMIT),
+        "",
+        123,
+        456,
+        "",
+        "trace-1",
+        "idem-7",
+        0,
+    )
+    token = ch.submit_typed_nowait(frame)
+    assert token == "idem-7"
+
+    env = await ch.receive()
+    assert isinstance(env, IntentEnvelope)
+    assert env.intent.intent_id == 7
+    assert env.intent.strategy_id == "alpha"
+    assert env.intent.trace_id == "trace-1"
+    assert env.ack_token == "idem-7"
+    ch.task_done()

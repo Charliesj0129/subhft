@@ -146,6 +146,7 @@ class GlobalMemoryGuard:
         self._batchers: dict[str, "Batcher"] = {}
         self._total_rows = 0
         self._health_tracker: Any = None
+        self._state_lock = threading.Lock()
 
     @classmethod
     def get(cls, max_rows: int | None = None) -> "GlobalMemoryGuard":
@@ -164,14 +165,32 @@ class GlobalMemoryGuard:
         self._health_tracker = tracker
 
     def register(self, batcher: "Batcher") -> None:
-        self._batchers[batcher.table_name] = batcher
+        with self._state_lock:
+            self._batchers[batcher.table_name] = batcher
+            self._total_rows += int(batcher._active.row_count)
 
     def unregister(self, table_name: str) -> None:
-        self._batchers.pop(table_name, None)
+        with self._state_lock:
+            batcher = self._batchers.pop(table_name, None)
+            if batcher is not None:
+                self._total_rows = max(0, self._total_rows - int(batcher._active.row_count))
 
     @property
     def total_rows(self) -> int:
-        return sum(b._active.row_count for b in self._batchers.values())
+        with self._state_lock:
+            return self._total_rows
+
+    def note_rows_added(self, count: int) -> None:
+        if count <= 0:
+            return
+        with self._state_lock:
+            self._total_rows += int(count)
+
+    def note_rows_removed(self, count: int) -> None:
+        if count <= 0:
+            return
+        with self._state_lock:
+            self._total_rows = max(0, self._total_rows - int(count))
 
     def check_budget(self, requesting_table: str, additional_rows: int) -> int:
         """Check if adding rows would exceed budget.
@@ -179,33 +198,39 @@ class GlobalMemoryGuard:
         Returns number of rows allowed (may be less than requested).
         If budget exceeded, drops from lowest-priority batchers first.
         """
-        total = self.total_rows
-        if total + additional_rows <= self._max_rows:
-            return additional_rows
+        drop_events: list[tuple[str, int, int]] = []
+        with self._state_lock:
+            total = self._total_rows
+            if total + additional_rows <= self._max_rows:
+                return additional_rows
 
-        # Need to shed load - drop from lowest priority batchers
-        excess = (total + additional_rows) - self._max_rows
-        req_priority = self.DEFAULT_PRIORITIES.get(requesting_table, 0)
+            excess = (total + additional_rows) - self._max_rows
+            req_priority = self.DEFAULT_PRIORITIES.get(requesting_table, 0)
+            sorted_batchers = sorted(
+                self._batchers.items(),
+                key=lambda x: self.DEFAULT_PRIORITIES.get(x[0], 0),
+            )
 
-        # Sort batchers by priority ascending (lowest first to drop)
-        sorted_batchers = sorted(
-            self._batchers.items(),
-            key=lambda x: self.DEFAULT_PRIORITIES.get(x[0], 0),
-        )
+            for name, batcher in sorted_batchers:
+                if excess <= 0:
+                    break
+                b_priority = self.DEFAULT_PRIORITIES.get(name, 0)
+                if b_priority >= req_priority:
+                    continue
+                available = batcher._active.row_count
+                if available <= 0:
+                    continue
+                drop = min(excess, available)
+                batcher._active.drop_oldest(drop)
+                batcher.dropped_count += drop
+                self._total_rows = max(0, self._total_rows - drop)
+                excess -= drop
+                drop_events.append((name, drop, b_priority))
 
-        for name, batcher in sorted_batchers:
-            if excess <= 0:
-                break
-            b_priority = self.DEFAULT_PRIORITIES.get(name, 0)
-            if b_priority >= req_priority:
-                continue  # Don't drop from same or higher priority
-            available = batcher._active.row_count
-            if available <= 0:
-                continue
-            drop = min(excess, available)
-            batcher._active.drop_oldest(drop)
-            batcher.dropped_count += drop
-            excess -= drop
+            allowed = max(0, self._max_rows - self._total_rows)
+            allowed_rows = min(additional_rows, allowed)
+
+        for name, drop, b_priority in drop_events:
             logger.warning(
                 "Global memory guard: dropped rows from lower-priority batcher",
                 table=name,
@@ -215,10 +240,7 @@ class GlobalMemoryGuard:
             if self._health_tracker:
                 self._health_tracker.record_event("drop", table=name, count=drop)
 
-        # If still over budget, limit what the requester can add
-        current_total = self.total_rows
-        allowed = max(0, self._max_rows - current_total)
-        return min(additional_rows, allowed)
+        return allowed_rows
 
 
 class Batcher:
@@ -232,6 +254,13 @@ class Batcher:
     # Maximum buffer size before backpressure kicks in
     DEFAULT_MAX_BUFFER_SIZE = 10000
 
+    def _new_buffer(self) -> ColumnarBuffer:
+        buf = ColumnarBuffer(self.table_name)
+        cols = getattr(self, "_extractor_columns", None)
+        if cols:
+            buf.set_schema(cols)
+        return buf
+
     def __init__(
         self,
         table_name: str,
@@ -241,6 +270,7 @@ class Batcher:
         max_buffer_size: int | None = None,
         backpressure_policy: str = BackpressurePolicy.DROP_NEWEST,
         extractor: Callable | None = None,
+        extractor_columns: list[str] | None = None,
         memory_guard: GlobalMemoryGuard | None = None,
         health_tracker: Any = None,
     ):
@@ -256,13 +286,17 @@ class Batcher:
         self.backpressure_policy = backpressure_policy
 
         # CC-1: Columnar buffers with CC-2 double-buffer swap
-        self._active = ColumnarBuffer(table_name)
-        self._standby = ColumnarBuffer(table_name)
+        self._active = self._new_buffer()
+        self._standby = self._new_buffer()
         self.last_flush_time = timebase.now_s()
         self.lock = asyncio.Lock()
 
         # CC-5: Schema extractor
         self._extractor = extractor
+        self._extractor_columns = list(extractor_columns) if extractor_columns else None
+        if self._extractor_columns:
+            self._active.set_schema(self._extractor_columns)
+            self._standby.set_schema(self._extractor_columns)
         self._columnar_enabled = os.getenv("HFT_BATCHER_COLUMNAR", "1").lower() not in {
             "0",
             "false",
@@ -351,6 +385,7 @@ class Batcher:
         if extracted is None:
             return
 
+        flush_buf: ColumnarBuffer | None = None
         async with self.lock:
             self.total_count += 1
 
@@ -370,9 +405,14 @@ class Batcher:
                     return  # DROP_NEWEST
 
             self._add_to_active(extracted)
+            if self._memory_guard is not None:
+                self._memory_guard.note_rows_added(1)
 
             if self._active.row_count >= self.flush_limit:
-                await self._flush_locked()
+                flush_buf = self._swap_flush_buffer_locked()
+
+        if flush_buf is not None:
+            await self._write_flush_buffer(flush_buf)
 
     async def add_many(self, rows: list[Any]):
         """Add multiple rows under a single lock acquisition (CC-5)."""
@@ -384,6 +424,7 @@ class Batcher:
         if not extracted_list:
             return
 
+        flush_buf: ColumnarBuffer | None = None
         async with self.lock:
             self.total_count += len(extracted_list)
 
@@ -404,9 +445,14 @@ class Batcher:
 
             for ex in extracted_list:
                 self._add_to_active(ex)
+            if self._memory_guard is not None:
+                self._memory_guard.note_rows_added(len(extracted_list))
 
             if self._active.row_count >= self.flush_limit:
-                await self._flush_locked()
+                flush_buf = self._swap_flush_buffer_locked()
+
+        if flush_buf is not None:
+            await self._write_flush_buffer(flush_buf)
 
     def _apply_backpressure_locked(self, overflow_count: int) -> None:
         """Handle backpressure when buffer is at capacity."""
@@ -415,6 +461,8 @@ class Batcher:
         if self.backpressure_policy == BackpressurePolicy.DROP_OLDEST:
             drop_count = max(overflow_count, self._active.row_count - self.max_buffer_size + 1)
             self._active.drop_oldest(drop_count)
+            if self._memory_guard is not None:
+                self._memory_guard.note_rows_removed(drop_count)
             self.dropped_count += drop_count
             if self.dropped_count % 1000 == 0:
                 logger.warning(
@@ -435,41 +483,46 @@ class Batcher:
 
     async def check_flush(self):
         """Called periodically by worker."""
+        flush_buf: ColumnarBuffer | None = None
         async with self.lock:
             if self._active.row_count == 0:
                 return
 
             age = (timebase.now_s() - self.last_flush_time) * 1000
             if age >= self.flush_interval_ms:
-                await self._flush_locked()
+                flush_buf = self._swap_flush_buffer_locked()
+
+        if flush_buf is not None:
+            await self._write_flush_buffer(flush_buf)
 
     async def force_flush(self):
         """Manually trigger flush (e.g. shutdown)."""
+        flush_buf: ColumnarBuffer | None = None
         async with self.lock:
-            await self._flush_locked()
+            flush_buf = self._swap_flush_buffer_locked()
+        if flush_buf is not None:
+            await self._write_flush_buffer(flush_buf)
 
-    async def _flush_locked(self):
-        """CC-2: Double-buffer swap — O(1) swap under lock, write outside."""
+    def _swap_flush_buffer_locked(self) -> ColumnarBuffer | None:
+        """Swap active/standby under lock and return buffer for out-of-lock write."""
         if self._active.row_count == 0:
-            return
+            return None
 
         # Swap active <-> standby (pointer swap under lock)
         flush_buf = self._active
-        self._active = self._standby
+        next_active = self._standby if self._standby.row_count == 0 else self._new_buffer()
+        self._active = next_active
         self._standby = flush_buf
         # Clear active for new writes (keeps schema)
         self._active.clear()
         self.last_flush_time = timebase.now_s()
+        if self._memory_guard is not None:
+            self._memory_guard.note_rows_removed(flush_buf.row_count)
+        return flush_buf
 
-        # Release lock implicitly via async with above, but we're inside _flush_locked
-        # which is called under self.lock — the actual write happens inside the lock
-        # because we can't release it here. But the swap is O(1) and the write is fast.
-        # For true lock-free write, we'd need to restructure. For now, the swap
-        # eliminates the buffer copy which was the main bottleneck.
-
+    async def _write_flush_buffer(self, flush_buf: ColumnarBuffer) -> None:
         if self.writer:
             try:
-                # EC-4: Sort by timestamp if enabled and applicable
                 if (
                     self._sort_ts_enabled
                     and self.table_name in self._sort_ts_tables
@@ -477,13 +530,11 @@ class Batcher:
                 ):
                     flush_buf.sort_by_column("exch_ts")
 
-                # CC-1: Pass columnar data directly to writer
                 if self._columnar_enabled:
                     cols, data = flush_buf.to_columnar()
                     if cols and data:
                         await self.writer.write_columnar(self.table_name, cols, data, flush_buf.row_count)
                 else:
-                    # Legacy path: convert to row dicts
                     data = flush_buf.to_row_dicts()
                     if data:
                         await self.writer.write(self.table_name, data)
@@ -508,6 +559,4 @@ class Batcher:
                     error_type=type(e).__name__,
                     count=flush_buf.row_count,
                 )
-            finally:
-                # Clear standby (now contains flushed data)
-                flush_buf.clear()
+        flush_buf.clear()

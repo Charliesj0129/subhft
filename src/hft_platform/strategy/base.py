@@ -1,3 +1,4 @@
+import os
 from abc import ABC
 from decimal import Decimal
 from typing import Callable, Dict, List, Optional, Union
@@ -11,6 +12,10 @@ from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
 
 logger = get_logger("strategy")
 
+# When HFT_STRICT_PRICE_MODE=1, float prices raise TypeError instead of warning.
+# Enables CI enforcement of the Precision Law (no float prices in production).
+_STRICT_PRICE = os.getenv("HFT_STRICT_PRICE_MODE", "0") == "1"
+
 
 class StrategyContext:
     """Read-only context passed to strategy."""
@@ -21,6 +26,7 @@ class StrategyContext:
         "_intent_factory",
         "_price_scaler",
         "_lob_source",
+        "_lob_l1_source",
     )
 
     def __init__(
@@ -30,12 +36,14 @@ class StrategyContext:
         intent_factory: Callable[..., OrderIntent],
         price_scaler: Callable[[str, int | Decimal], int],
         lob_source: Callable[[str], Optional[Dict]] | None = None,
+        lob_l1_source: Callable[[str], Optional[tuple]] | None = None,
     ):
         self.positions = positions
         self.strategy_id = strategy_id
         self._intent_factory = intent_factory
         self._price_scaler = price_scaler
         self._lob_source = lob_source
+        self._lob_l1_source = lob_l1_source
 
     def place_order(
         self,
@@ -54,7 +62,12 @@ class StrategyContext:
         elif isinstance(price, Decimal):
             scaled_price = self.scale_price(symbol, price)
         else:
-            # Legacy float support with deprecation warning
+            # Legacy float support — raise in strict mode, warn otherwise.
+            if _STRICT_PRICE:
+                raise TypeError(
+                    f"Float price rejected (HFT_STRICT_PRICE_MODE=1): "
+                    f"symbol={symbol!r} price={price!r} — use int (scaled) or Decimal"
+                )
             logger.warning(
                 "Float price deprecated - use int (scaled) or Decimal",
                 symbol=symbol,
@@ -75,6 +88,17 @@ class StrategyContext:
 
     def scale_price(self, symbol: str, price: int | Decimal) -> int:
         return self._price_scaler(symbol, price)
+
+    def get_l1_scaled(self, symbol: str) -> Optional[tuple]:
+        """Preferred L1 fast path over dict snapshots.
+
+        Returns a tuple:
+          (timestamp_ns, best_bid, best_ask, mid_price_x2, spread_scaled, bid_depth, ask_depth)
+        All price fields are scaled integers.
+        """
+        if self._lob_l1_source is None:
+            return None
+        return self._lob_l1_source(symbol)
 
 
 class BaseStrategy(ABC):

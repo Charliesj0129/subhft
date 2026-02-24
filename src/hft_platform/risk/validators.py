@@ -1,3 +1,5 @@
+import os
+import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from structlog import get_logger
@@ -77,6 +79,13 @@ class PriceBandValidator(RiskValidator):
         if self.lob is None:
             return None
         try:
+            get_l1_scaled = getattr(self.lob, "get_l1_scaled", None)
+            if callable(get_l1_scaled):
+                l1 = get_l1_scaled(symbol)
+                if l1 is not None and len(l1) >= 4:
+                    mid_price_x2 = int(l1[3] or 0)
+                    if mid_price_x2 > 0:
+                        return mid_price_x2 // 2
             book = self.lob.get_book_snapshot(symbol)
             if book and book.get("mid_price"):
                 # mid_price from LOB is already in scaled units (as float)
@@ -115,6 +124,10 @@ class StormGuardFSM:
         self.warm = sg_cfg.get("warm_threshold", -200_000)
         self.storm = sg_cfg.get("storm_threshold", -500_000)
         self.halt = sg_cfg.get("halt_threshold", -1_000_000)
+        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))
+        self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
+        self._de_escalate_count: int = 0
+        self._storm_entry_ts: float = 0.0
 
     def update_pnl(self, pnl: int):
         self.pnl_drawdown = pnl
@@ -122,14 +135,39 @@ class StormGuardFSM:
 
     def _transition(self):
         old_state = self.state
+        # Determine target state from PnL thresholds
         if self.pnl_drawdown <= self.halt:
-            self.state = StormGuardState.HALT
+            target_state = StormGuardState.HALT
         elif self.pnl_drawdown <= self.storm:
-            self.state = StormGuardState.STORM
+            target_state = StormGuardState.STORM
         elif self.pnl_drawdown <= self.warm:
-            self.state = StormGuardState.WARM
+            target_state = StormGuardState.WARM
         else:
-            self.state = StormGuardState.NORMAL
+            target_state = StormGuardState.NORMAL
+
+        now = time.monotonic()
+        if target_state > old_state:
+            # Escalation: always instant (safety-first)
+            self._de_escalate_count = 0
+            if target_state >= StormGuardState.STORM and old_state < StormGuardState.STORM:
+                self._storm_entry_ts = now
+            self.state = target_state
+        elif target_state < old_state:
+            # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
+            cooldown_ok = (
+                (now - self._storm_entry_ts) >= self._storm_cooldown_s
+                if old_state >= StormGuardState.STORM else True
+            )
+            if cooldown_ok:
+                self._de_escalate_count += 1
+                if self._de_escalate_count >= self._de_escalate_threshold:
+                    self._de_escalate_count = 0
+                    self.state = target_state
+            else:
+                self._de_escalate_count = 0
+        else:
+            if target_state >= StormGuardState.STORM:
+                self._de_escalate_count = 0
 
         if self.state != old_state:
             logger.warning("StormGuard Transition", old=old_state, new=self.state, pnl=self.pnl_drawdown)
