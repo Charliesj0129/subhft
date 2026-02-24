@@ -87,7 +87,9 @@ class WALWriter:
         self._disk_full_count += rows
         if self._metrics:
             try:
-                self._metrics.recorder_wal_skipped_rows_total.labels(writer=writer, table=table, reason="disk_full").inc(rows)
+                self._metrics.recorder_wal_skipped_rows_total.labels(
+                    writer=writer, table=table, reason="disk_full"
+                ).inc(rows)
             except Exception:
                 pass
         logger.warning(

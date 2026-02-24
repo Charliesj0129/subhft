@@ -573,7 +573,9 @@ class DataWriter:
                 mode="columnar",
             )
         elif self._should_log_insert_success(self._ch_columnar_insert_count):
-            logger.info("ClickHouse columnar insert success", table=table, rows=row_count, elapsed_ms=round(elapsed_ms, 1))
+            logger.info(
+                "ClickHouse columnar insert success", table=table, rows=row_count, elapsed_ms=round(elapsed_ms, 1)
+            )
 
     @staticmethod
     def _transpose_columnar_rows(column_data: list[list[Any]], row_count: int) -> list[list[Any]]:

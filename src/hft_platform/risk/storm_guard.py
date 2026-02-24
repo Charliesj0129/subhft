@@ -97,8 +97,7 @@ class StormGuard:
         elif new_state < self.state:
             # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
             cooldown_ok = (
-                (now - self._storm_entry_ts) >= self._storm_cooldown_s
-                if self.state >= StormGuardState.STORM else True
+                (now - self._storm_entry_ts) >= self._storm_cooldown_s if self.state >= StormGuardState.STORM else True
             )
             if cooldown_ok:
                 self._de_escalate_count += 1
