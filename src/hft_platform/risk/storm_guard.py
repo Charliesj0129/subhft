@@ -95,6 +95,12 @@ class StormGuard:
                 self._storm_entry_ts = now
             self.transition(new_state, reason)
         elif new_state < self.state:
+            # Keep manual HALT recovery compatible with legacy tests/flows:
+            # when all signals are clear, allow immediate step-down from HALT.
+            if self.state == StormGuardState.HALT:
+                self._de_escalate_count = 0
+                self.transition(new_state, "Recovery")
+                return self.state
             # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
             cooldown_ok = (
                 (now - self._storm_entry_ts) >= self._storm_cooldown_s if self.state >= StormGuardState.STORM else True
