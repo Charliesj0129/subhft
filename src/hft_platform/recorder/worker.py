@@ -55,7 +55,7 @@ FILL_COLUMNS = [
 ]
 
 
-def _extract_market_data(row) -> list | None:
+def _extract_market_data_values(row) -> list | None:
     """Fast extractor for market_data events — bypasses generic serialize()."""
     try:
         if isinstance(row, dict):
@@ -92,7 +92,7 @@ def _extract_market_data(row) -> list | None:
         return None
 
 
-def _extract_order(row) -> list | None:
+def _extract_order_values(row) -> list | None:
     """Fast extractor for order events."""
     try:
         if isinstance(row, dict):
@@ -127,7 +127,7 @@ def _extract_order(row) -> list | None:
         return None
 
 
-def _extract_fill(row) -> list | None:
+def _extract_fill_values(row) -> list | None:
     """Fast extractor for fill/trade events."""
     try:
         if isinstance(row, dict):
@@ -158,11 +158,32 @@ def _extract_fill(row) -> list | None:
         return None
 
 
-# Map of topic -> extractor function (CC-5)
+def _values_to_dict(columns: list[str], values: list | None):
+    if values is None:
+        return None
+    return dict(zip(columns, values))
+
+
+def _extract_market_data(row) -> dict | None:
+    """Compatibility extractor returning dict for tests/tools."""
+    return _values_to_dict(MARKET_DATA_COLUMNS, _extract_market_data_values(row))
+
+
+def _extract_order(row) -> dict | None:
+    """Compatibility extractor returning dict for tests/tools."""
+    return _values_to_dict(ORDER_COLUMNS, _extract_order_values(row))
+
+
+def _extract_fill(row) -> dict | None:
+    """Compatibility extractor returning dict for tests/tools."""
+    return _values_to_dict(FILL_COLUMNS, _extract_fill_values(row))
+
+
+# Map of topic -> preordered-values extractor function (CC-5)
 _EXTRACTORS = {
-    "market_data": _extract_market_data,
-    "orders": _extract_order,
-    "fills": _extract_fill,
+    "market_data": _extract_market_data_values,
+    "orders": _extract_order_values,
+    "fills": _extract_fill_values,
 }
 
 _EXTRACTOR_COLUMNS = {
