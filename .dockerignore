@@ -18,6 +18,7 @@ target/
 rust/target/
 rust_core/target/
 
+research/
 data/
 .wal/
 outputs/
