@@ -70,7 +70,8 @@ impl LobFeatureKernelV1 {
 
         let l1_total = l1_bid_qty + l1_ask_qty;
         let (l1_imbalance_ppm, microprice_x2) = if l1_total > 0 {
-            let l1_imb = py_round_i64(((l1_bid_qty - l1_ask_qty) as f64 * 1_000_000.0) / l1_total as f64);
+            let l1_imb =
+                py_round_i64(((l1_bid_qty - l1_ask_qty) as f64 * 1_000_000.0) / l1_total as f64);
             let mp = py_round_i64(
                 (2.0 * ((best_ask * l1_bid_qty + best_bid * l1_ask_qty) as f64)) / l1_total as f64,
             );
@@ -79,50 +80,51 @@ impl LobFeatureKernelV1 {
             (0, mid_price_x2)
         };
 
-        let (ofi_l1_raw, ofi_l1_cum, ofi_l1_ema8, spread_ema8_scaled, depth_imbalance_ema8_ppm) = if !self.initialized {
-            self.spread_ema8 = spread_scaled as f64;
-            self.imbalance_ema8_ppm = l1_imbalance_ppm as f64;
-            self.initialized = true;
-            (
-                0_i64,
-                0_i64,
-                0_i64,
-                py_round_i64(self.spread_ema8),
-                py_round_i64(self.imbalance_ema8_ppm),
-            )
-        } else {
-            let b_flow = if best_bid > self.prev_best_bid {
-                l1_bid_qty
-            } else if best_bid == self.prev_best_bid {
-                l1_bid_qty - self.prev_l1_bid_qty
+        let (ofi_l1_raw, ofi_l1_cum, ofi_l1_ema8, spread_ema8_scaled, depth_imbalance_ema8_ppm) =
+            if !self.initialized {
+                self.spread_ema8 = spread_scaled as f64;
+                self.imbalance_ema8_ppm = l1_imbalance_ppm as f64;
+                self.initialized = true;
+                (
+                    0_i64,
+                    0_i64,
+                    0_i64,
+                    py_round_i64(self.spread_ema8),
+                    py_round_i64(self.imbalance_ema8_ppm),
+                )
             } else {
-                -self.prev_l1_bid_qty
+                let b_flow = if best_bid > self.prev_best_bid {
+                    l1_bid_qty
+                } else if best_bid == self.prev_best_bid {
+                    l1_bid_qty - self.prev_l1_bid_qty
+                } else {
+                    -self.prev_l1_bid_qty
+                };
+
+                let a_flow = if best_ask > self.prev_best_ask {
+                    -self.prev_l1_ask_qty
+                } else if best_ask == self.prev_best_ask {
+                    l1_ask_qty - self.prev_l1_ask_qty
+                } else {
+                    l1_ask_qty
+                };
+
+                let ofi_raw = b_flow - a_flow;
+                self.ofi_l1_cum += ofi_raw;
+                let alpha = 2.0 / 9.0;
+                self.ofi_l1_ema8 = (1.0 - alpha) * self.ofi_l1_ema8 + alpha * ofi_raw as f64;
+                self.spread_ema8 = (1.0 - alpha) * self.spread_ema8 + alpha * spread_scaled as f64;
+                self.imbalance_ema8_ppm =
+                    (1.0 - alpha) * self.imbalance_ema8_ppm + alpha * l1_imbalance_ppm as f64;
+
+                (
+                    ofi_raw,
+                    self.ofi_l1_cum,
+                    py_round_i64(self.ofi_l1_ema8),
+                    py_round_i64(self.spread_ema8),
+                    py_round_i64(self.imbalance_ema8_ppm),
+                )
             };
-
-            let a_flow = if best_ask > self.prev_best_ask {
-                -self.prev_l1_ask_qty
-            } else if best_ask == self.prev_best_ask {
-                l1_ask_qty - self.prev_l1_ask_qty
-            } else {
-                l1_ask_qty
-            };
-
-            let ofi_raw = b_flow - a_flow;
-            self.ofi_l1_cum += ofi_raw;
-            let alpha = 2.0 / 9.0;
-            self.ofi_l1_ema8 = (1.0 - alpha) * self.ofi_l1_ema8 + alpha * ofi_raw as f64;
-            self.spread_ema8 = (1.0 - alpha) * self.spread_ema8 + alpha * spread_scaled as f64;
-            self.imbalance_ema8_ppm =
-                (1.0 - alpha) * self.imbalance_ema8_ppm + alpha * l1_imbalance_ppm as f64;
-
-            (
-                ofi_raw,
-                self.ofi_l1_cum,
-                py_round_i64(self.ofi_l1_ema8),
-                py_round_i64(self.spread_ema8),
-                py_round_i64(self.imbalance_ema8_ppm),
-            )
-        };
 
         self.prev_best_bid = best_bid;
         self.prev_best_ask = best_ask;
