@@ -125,7 +125,7 @@ async def test_channel_ttl_expired_routes_to_dlq():
 @pytest.mark.asyncio
 async def test_channel_dlq_bounded():
     """DLQ has bounded size; oldest entries are dropped when full."""
-    ch = LocalIntentChannel(maxsize=100, ttl_ms=1, dlq_maxsize=2)
+    ch = LocalIntentChannel(maxsize=100, ttl_ms=5000, dlq_maxsize=2)
     # Submit 5 stale envelopes
     for i in range(5):
         ch._queue.put_nowait(IntentEnvelope(
