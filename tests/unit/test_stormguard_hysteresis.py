@@ -175,3 +175,16 @@ def test_stormguard_fsm_hysteresis():
     # 4th recovery update — should transition
     fsm.update_pnl(0)
     assert fsm.state == StormGuardState.NORMAL
+
+
+def test_stormguard_fsm_halt_immediate_recovery():
+    """FSM: HALT → NORMAL must be immediate (no cooldown or N-count), to allow cancel draining."""
+    fsm = _make_fsm(cooldown_s=9999.0, de_n=99)  # huge hysteresis to prove bypass
+
+    # Escalate to HALT via PnL
+    fsm.update_pnl(-1_100_000)
+    assert fsm.state == StormGuardState.HALT
+
+    # Single recovery update: even with huge cooldown/N, should step down immediately
+    fsm.update_pnl(0)
+    assert fsm.state == StormGuardState.NORMAL, "HALT recovery must bypass hysteresis"

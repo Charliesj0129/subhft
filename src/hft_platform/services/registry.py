@@ -38,6 +38,7 @@ class ServiceRegistry:
     order_client: ShioajiClient
     client: ShioajiClient
     md_service: MarketDataService
+    feature_engine: Optional[Any]
     order_adapter: OrderAdapter
     execution_gateway: ExecutionGateway
     exec_service: ExecutionRouter

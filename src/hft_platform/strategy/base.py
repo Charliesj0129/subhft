@@ -8,7 +8,7 @@ from structlog import get_logger
 # Fill/Order Events might be imported from contracts or events
 from hft_platform.contracts.execution import FillEvent, OrderEvent
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
-from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
+from hft_platform.events import BidAskEvent, FeatureUpdateEvent, LOBStatsEvent, TickEvent
 
 logger = get_logger("strategy")
 
@@ -27,6 +27,10 @@ class StrategyContext:
         "_price_scaler",
         "_lob_source",
         "_lob_l1_source",
+        "_feature_source",
+        "_feature_view_source",
+        "_feature_set_source",
+        "_feature_tuple_get",
     )
 
     def __init__(
@@ -37,6 +41,10 @@ class StrategyContext:
         price_scaler: Callable[[str, int | Decimal], int],
         lob_source: Callable[[str], Optional[Dict]] | None = None,
         lob_l1_source: Callable[[str], Optional[tuple]] | None = None,
+        feature_source: Callable[[str, str], Optional[int | float]] | None = None,
+        feature_view_source: Callable[[str], Optional[Dict]] | None = None,
+        feature_set_source: Callable[[], str] | None = None,
+        feature_tuple_source: Callable[[str], Optional[tuple]] | None = None,
     ):
         self.positions = positions
         self.strategy_id = strategy_id
@@ -44,6 +52,10 @@ class StrategyContext:
         self._price_scaler = price_scaler
         self._lob_source = lob_source
         self._lob_l1_source = lob_l1_source
+        self._feature_source = feature_source
+        self._feature_view_source = feature_view_source
+        self._feature_set_source = feature_set_source
+        self._feature_tuple_get = feature_tuple_source
 
     def place_order(
         self,
@@ -100,6 +112,29 @@ class StrategyContext:
             return None
         return self._lob_l1_source(symbol)
 
+    def get_feature(self, symbol: str, feature_id: str) -> Optional[int | float]:
+        if self._feature_source is None:
+            return None
+        return self._feature_source(symbol, feature_id)
+
+    def get_feature_view(self, symbol: str) -> Optional[Dict]:
+        if self._feature_view_source is None:
+            return None
+        return self._feature_view_source(symbol)
+
+    def get_feature_tuple(self, symbol: str) -> Optional[tuple]:
+        if self._feature_tuple_get is None:
+            return None
+        return self._feature_tuple_get(symbol)
+
+    def get_feature_set_id(self) -> Optional[str]:
+        if self._feature_set_source is None:
+            return None
+        try:
+            return self._feature_set_source()
+        except Exception:
+            return None
+
 
 class BaseStrategy(ABC):
     """
@@ -131,6 +166,10 @@ class BaseStrategy(ABC):
         """Handle Derived LOB Stats (Mid, Spread)."""
         pass
 
+    def on_features(self, event: FeatureUpdateEvent) -> None:
+        """Handle shared feature-plane updates (optional)."""
+        pass
+
     def on_fill(self, event: FillEvent) -> None:
         """Handle Fill Reports."""
         pass
@@ -142,7 +181,9 @@ class BaseStrategy(ABC):
     # --- Internal Dispatch ---
 
     def handle_event(
-        self, ctx: StrategyContext, event: Union[TickEvent, BidAskEvent, LOBStatsEvent, FillEvent, OrderEvent]
+        self,
+        ctx: StrategyContext,
+        event: Union[TickEvent, BidAskEvent, LOBStatsEvent, FeatureUpdateEvent, FillEvent, OrderEvent],
     ) -> List[OrderIntent]:
         self.ctx = ctx
         self._generated_intents.clear()
@@ -163,6 +204,8 @@ class BaseStrategy(ABC):
             self.on_book_update(event)
         elif isinstance(event, LOBStatsEvent):
             self.on_stats(event)
+        elif isinstance(event, FeatureUpdateEvent):
+            self.on_features(event)
         elif isinstance(event, FillEvent):
             self.on_fill(event)
         elif isinstance(event, OrderEvent):

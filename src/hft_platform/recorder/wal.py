@@ -457,7 +457,7 @@ class WALBatchWriter:
     def _write_batch_sync(
         self,
         data: dict[str, list[dict[str, Any]]],
-        approx_bytes: int,
+        _approx_bytes: int,
         columnar_data: dict[str, list[tuple[list[str], list[list[Any]], int]]] | None = None,
     ) -> None:
         """Write multi-table WAL file(s) atomically. EC-3: splits on size limit."""

@@ -96,3 +96,12 @@ def test_policy_no_auto_degrade_when_disabled(monkeypatch):
     policy = GatewayPolicy()
     policy.gate(_make_intent(IntentType.NEW), StormGuardState.STORM)
     assert policy.mode == GatewayPolicyMode.NORMAL
+
+
+def test_policy_gate_typed_matches_object_path():
+    policy = GatewayPolicy()
+    for sg_state in (StormGuardState.NORMAL, StormGuardState.STORM, StormGuardState.HALT):
+        for it in (IntentType.NEW, IntentType.CANCEL, IntentType.AMEND):
+            obj = policy.gate(_make_intent(it), sg_state)
+            typed = policy.gate_typed(int(it), sg_state)
+            assert typed == obj

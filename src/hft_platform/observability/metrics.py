@@ -119,6 +119,11 @@ class MetricsRegistry:
                 "shioaji_quote_callback_queue_depth",
                 "shioaji_quote_callback_queue_dropped_total",
                 "market_data_callback_parse_total",
+                "feature_plane_updates_total",
+                "feature_plane_latency_ns",
+                "feature_quality_flags_total",
+                "feature_shadow_parity_checks_total",
+                "feature_shadow_parity_mismatch_total",
             ]
         )
         # Market Data
@@ -490,6 +495,43 @@ class MetricsRegistry:
             "market_data_callback_parse_total",
             "MarketDataService Shioaji callback parser outcomes",
             ["result"],  # "fast" | "fallback" | "miss"
+        )
+        self.feature_plane_updates_total = Counter(
+            "feature_plane_updates_total",
+            "FeatureEngine runtime update outcomes",
+            ["result", "feature_set"],  # result: "emitted" | "updated" | "error"
+        )
+        self.feature_plane_latency_ns = Histogram(
+            "feature_plane_latency_ns",
+            "FeatureEngine processing latency (ns)",
+            buckets=[
+                1_000,
+                5_000,
+                10_000,
+                20_000,
+                50_000,
+                100_000,
+                200_000,
+                500_000,
+                1_000_000,
+                5_000_000,
+            ],
+        )
+        self.feature_quality_flags_total = Counter(
+            "feature_quality_flags_total",
+            "FeatureEngine quality flags emitted",
+            ["flag"],  # gap/reset/stale/out_of_order/partial
+        )
+        # FE-07 skeleton metrics: used by parity harness/shadow rollout in later phases.
+        self.feature_shadow_parity_checks_total = Counter(
+            "feature_shadow_parity_checks_total",
+            "Feature shadow parity checks",
+            ["feature_set", "result"],  # result: checked|skipped
+        )
+        self.feature_shadow_parity_mismatch_total = Counter(
+            "feature_shadow_parity_mismatch_total",
+            "Feature shadow parity mismatches",
+            ["feature_set", "feature_id"],
         )
 
         # System (v2)

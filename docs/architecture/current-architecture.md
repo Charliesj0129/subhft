@@ -6,6 +6,7 @@ Companion target document: `.agent/library/target-architecture.md`.
 Companion C4 diagrams: `.agent/library/c4-model-current.md`.
 Companion research execution plan: `.agent/library/research_pipeline_execution_plan.md`.
 Companion Rust boundary note: `.agent/library/rust_pyo3.md`.
+Companion planned feature unification spec (TODO): `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 ## 1. Architecture Slices (As-Built)
@@ -37,6 +38,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping.
 - `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events (Python/Rust paths).
 - `src/hft_platform/feed_adapter/lob_engine.py`: per-symbol LOB + stats.
+- 🔄 TODO (planned): add a separate `FeatureEngine` / Feature Plane after `LOBEngine` for shared LOB-derived feature kernels (research/backtest/live parity). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 
 3. Decision plane
 - `src/hft_platform/strategy/runner.py`: consumes bus events, executes strategies, emits `OrderIntent`.
@@ -72,6 +74,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - Shioaji callback -> `raw_queue`
 - `MarketDataService`: normalize -> LOB update -> publish events to bus
 - optional direct recorder mapping to `recorder_queue`
+ - 🔄 TODO (planned): `LOBEngine -> FeatureEngine -> StrategyRunner` path for shared microstructure features (feature plane not implemented in as-built baseline)
 4. Strategy:
 - `StrategyRunner` consumes bus events -> `OrderIntent` -> `risk_queue`
 5. Risk:
@@ -115,6 +118,21 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 6. Experiment and RL integration
 - `hft alpha experiments list|compare|best` reads `research/experiments/runs/*/meta.json`.
 - RL bridge in `research/rl/lifecycle.py` logs RL runs and can promote latest run via Gate D-E (`hft alpha rl-promote`).
+
+## 4A. Planned Research/Runtime Feature Unification (TODO, Not Yet Implemented)
+
+Reference spec: `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+
+Planned direction:
+1. Introduce a Feature Plane (`FeatureEngine`) after `LOBEngine` in runtime and replay/backtest paths.
+2. Add `hftbacktest` adapter feature mode so backtests can use the same shared feature kernels as live.
+3. Migrate shared microstructure features out of strategies and into governed feature kernels.
+4. Preserve strategy-level decision logic in strategy modules (feature plane computes shared inputs only).
+
+Status:
+- 🔄 TODO `FeatureEngine` runtime component
+- 🔄 TODO `HftBacktestAdapter` feature-first mode (`lob_feature`)
+- 🔄 TODO Feature ABI/versioning/parity gates (Python reference vs Rust kernels)
 
 ## 5. Module Inventory (Current)
 
@@ -191,6 +209,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 4. Contract surfaces (`events.py`, `contracts/*`) are cross-module boundaries.
 5. Recorder durability must preserve data under ClickHouse outages (WAL fallback).
 6. HALT state must block new order progression.
+7. 🔄 TODO (planned invariant for feature plane): shared promoted microstructure features must preserve parity across research replay, `hftbacktest`, and live runtime for the same feature set/version.
 
 ## 9. Observed Drift and Risks
 
@@ -209,6 +228,10 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 4. Schema duplication still present on disk
 - runtime uses canonical `clickhouse.sql`, but legacy SQL files remain and can cause confusion without strict governance.
+
+5. Research/live feature drift risk for shared microstructure factors (PLANNED mitigation, TODO)
+- Current architecture allows equivalent features to be implemented separately in research and strategy/runtime code.
+- Planned mitigation: Feature Plane + shared feature ABI/kernels (see `docs/architecture/feature-engine-lob-research-unification-spec.md`).
 
 ## 10. Cluster Evolution (Vector 2 and 3)
 

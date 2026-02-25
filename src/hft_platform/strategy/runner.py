@@ -33,12 +33,14 @@ class StrategyRunner:
         risk_queue,  # asyncio.Queue or LocalIntentChannel (CE2-03 backward compat)
         lob_engine=None,
         position_store=None,
+        feature_engine=None,
         config_path: str = "config/base/strategies.yaml",
         symbol_metadata: SymbolMetadata | None = None,
     ):
         self.bus = bus
         self.risk_queue = risk_queue
         self.lob_engine = lob_engine
+        self.feature_engine = feature_engine or getattr(lob_engine, "feature_engine", None)
         self.position_store = position_store
         cfg_path = os.getenv("HFT_STRATEGY_CONFIG") or config_path
         self.registry = StrategyRegistry(cfg_path)
@@ -52,6 +54,11 @@ class StrategyRunner:
         ).lower() not in {"0", "false", "no", "off"}
         self._lob_snapshot_source = getattr(lob_engine, "get_book_snapshot", None) if lob_engine else None
         self._lob_l1_source = getattr(lob_engine, "get_l1_scaled", None) if lob_engine else None
+        fe = self.feature_engine
+        self._feature_value_source = getattr(fe, "get_feature", None) if fe else None
+        self._feature_view_source = getattr(fe, "get_feature_view", None) if fe else None
+        self._feature_set_source = getattr(fe, "feature_set_id", None) if fe else None
+        self._feature_tuple_source = getattr(fe, "get_feature_tuple", None) if fe else None
 
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
@@ -227,6 +234,10 @@ class StrategyRunner:
             price_scaler=self._scale_price,
             lob_source=self._lob_snapshot_source,
             lob_l1_source=self._lob_l1_source,
+            feature_source=self._feature_value_source,
+            feature_view_source=self._feature_view_source,
+            feature_set_source=self._feature_set_source,
+            feature_tuple_source=self._feature_tuple_source,
         )
         return (strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g)
 

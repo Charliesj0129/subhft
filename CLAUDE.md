@@ -35,6 +35,7 @@
 ## 🏛️ Architecture Quick Reference
 
 - **Canonical architecture doc**: `docs/architecture/current-architecture.md` (252 lines, continuously updated)
+- **Feature/Lob/Research unification spec (TODO plan)**: `docs/architecture/feature-engine-lob-research-unification-spec.md`
 - **C4 diagrams**: `.agent/library/c4-model-current.md`
 - **Cluster evolution backlog**: `.agent/library/cluster-evolution-backlog.md`
 - **Detailed governance rules**: `.agent/rules/` (auto-loaded)
@@ -46,6 +47,8 @@ Exchange → ShioajiClient → Normalizer → LOBEngine → RingBufferBus → St
                                                             ↘ RecorderService → WAL / ClickHouse
 ```
 
+Planned (TODO, not implemented yet): insert a **Feature Plane / FeatureEngine** between `LOBEngine` and `StrategyRunner` for shared microstructure feature computation and research/live parity. See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+
 ### Runtime Planes (6)
 
 | Plane         | Key Module                                                                           | Responsibility                              |
@@ -56,6 +59,12 @@ Exchange → ShioajiClient → Normalizer → LOBEngine → RingBufferBus → St
 | Execution     | `order/adapter.py`, `execution/router.py`, `execution/positions.py`                  | Broker API, fill routing, position tracking |
 | Persistence   | `recorder/worker.py`, `recorder/batcher.py`, `recorder/writer.py`, `recorder/wal.py` | ClickHouse + WAL fallback                   |
 | Observability | `observability/metrics.py`, `risk/storm_guard.py`                                    | Prometheus metrics, StormGuard FSM          |
+
+### Planned Feature Plane (TODO, Not Yet Implemented)
+
+| Plane | Candidate Modules | Responsibility |
+| ----- | ----------------- | -------------- |
+| Feature (planned) | `feature/engine.py`, `feature/registry.py` (TBD) | Shared LOB-derived feature kernels for research/backtest/live parity |
 
 ## 📦 Key Data Contracts (Scaled Int Convention)
 
@@ -101,6 +110,7 @@ Full lifecycle from research to production, implemented in `src/hft_platform/alp
 | **Canary** | Hold/escalate/rollback/graduate    | `alpha/canary.py`                      |
 
 Research artifacts: `research/alphas/<alpha_id>/`, experiment runs: `research/experiments/runs/`.
+Planned (TODO): unify shared LOB-derived feature kernels across research replay, `hftbacktest`, and live runtime via the FeatureEngine spec in `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 
 ## 🦀 Rust Boundary (`rust_core` via PyO3)
 

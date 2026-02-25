@@ -105,6 +105,10 @@ class IdempotencyStore:
 
         return None
 
+    def check_or_reserve_typed(self, key: str) -> Optional[IdempotencyRecord]:
+        """Typed fast-path alias (string key already extracted upstream)."""
+        return self.check_or_reserve(key)
+
     def commit(
         self,
         key: str,
@@ -123,6 +127,16 @@ class IdempotencyStore:
         else:
             # Commit without prior reserve (tolerated)
             self._records[key] = IdempotencyRecord(key=key, approved=approved, reason_code=reason_code, cmd_id=cmd_id)
+
+    def commit_typed(
+        self,
+        key: str,
+        approved: bool,
+        reason_code: str,
+        cmd_id: int,
+    ) -> None:
+        """Typed fast-path alias for consistency with gateway typed path."""
+        self.commit(key, approved, reason_code, cmd_id)
 
     def persist(self) -> None:
         """Write current window to disk atomically (temp+fsync+rename)."""

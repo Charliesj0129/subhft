@@ -17,7 +17,9 @@ except ImportError:
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.core.pricing import FixedPriceScaleProvider, PriceCodec
-from hft_platform.events import LOBStatsEvent
+from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData
+from hft_platform.feature.engine import FeatureEngine
+from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
 logger = get_logger("hbt_adapter")
@@ -43,6 +45,8 @@ class HftBacktestAdapter:
         maker_fee: float = 0.0,
         taker_fee: float = 0.0,
         partial_fill: bool = True,
+        feature_mode: str = "stats_only",
+        dispatch_feature_events: bool = False,
     ):
         if not HFTBACKTEST_AVAILABLE:
             raise ImportError("hftbacktest not installed")
@@ -59,12 +63,24 @@ class HftBacktestAdapter:
         self.price_scale = price_scale
         self.price_codec = PriceCodec(FixedPriceScaleProvider(price_scale))
         self._intent_seq = 0
+        self._hbt_seq = 0
         self.positions = {self.symbol: 0}
         self.equity_sample_ns = int(equity_sample_ns)
         self._next_equity_sample_ns = 0
         self._last_known_balance = float(initial_balance)
         self._equity_timestamps_ns: list[int] = []
         self._equity_values: list[float] = []
+        self.feature_mode = str(feature_mode or "stats_only").strip().lower()
+        self.dispatch_feature_events = bool(dispatch_feature_events)
+        self._lob_engine: LOBEngine | None = None
+        self._feature_engine: FeatureEngine | None = None
+        if self.feature_mode == "lob_feature":
+            self._lob_engine = LOBEngine()
+            self._feature_engine = FeatureEngine()
+            try:
+                setattr(self._lob_engine, "feature_engine", self._feature_engine)
+            except Exception:
+                pass
 
         # Setup HftBacktest
         # 1. Asset
@@ -106,6 +122,11 @@ class HftBacktestAdapter:
             intent_factory=self._intent_factory,
             price_scaler=self._scale_price,
             lob_source=None,
+            lob_l1_source=(self._lob_engine.get_l1_scaled if self._lob_engine else None),
+            feature_source=(self._feature_engine.get_feature if self._feature_engine else None),
+            feature_view_source=(self._feature_engine.get_feature_view if self._feature_engine else None),
+            feature_set_source=(self._feature_engine.feature_set_id if self._feature_engine else None),
+            feature_tuple_source=(self._feature_engine.get_feature_tuple if self._feature_engine else None),
         )
 
     def run(self):
@@ -133,16 +154,41 @@ class HftBacktestAdapter:
             if best_bid == 0 or best_ask == 2147483647:
                 continue
 
-            # LOBStatsEvent auto-computes mid_price_x2/spread from best_bid/best_ask
-            event = LOBStatsEvent(
-                symbol=self.symbol,
-                ts=int(self.hbt.current_timestamp),
-                imbalance=0.0,
-                best_bid=int(best_bid),
-                best_ask=int(best_ask),
-                bid_depth=0,
-                ask_depth=0,
-            )
+            ts_ns = int(self.hbt.current_timestamp)
+            event = None
+            feature_event = None
+            if self.feature_mode == "lob_feature" and self._lob_engine is not None:
+                bidask_event = self._build_l1_bidask_event(dp, ts_ns)
+                stats = self._lob_engine.process_event(bidask_event)
+                if isinstance(stats, LOBStatsEvent):
+                    event = stats
+                    if self._feature_engine is not None:
+                        process_lob_update = getattr(self._feature_engine, "process_lob_update", None)
+                        if callable(process_lob_update):
+                            feature_event = process_lob_update(bidask_event, stats, local_ts_ns=ts_ns)
+                        else:
+                            feature_event = self._feature_engine.process_lob_stats(stats, local_ts_ns=ts_ns)
+                else:
+                    event = LOBStatsEvent(
+                        symbol=self.symbol,
+                        ts=ts_ns,
+                        imbalance=0.0,
+                        best_bid=int(best_bid),
+                        best_ask=int(best_ask),
+                        bid_depth=0,
+                        ask_depth=0,
+                    )
+            else:
+                # LOBStatsEvent auto-computes mid_price_x2/spread from best_bid/best_ask
+                event = LOBStatsEvent(
+                    symbol=self.symbol,
+                    ts=ts_ns,
+                    imbalance=0.0,
+                    best_bid=int(best_bid),
+                    best_ask=int(best_ask),
+                    bid_depth=0,
+                    ask_depth=0,
+                )
 
             # Update Context State
             self._sync_positions()
@@ -150,6 +196,10 @@ class HftBacktestAdapter:
 
             # Call Strategy
             intents = self.strategy.handle_event(self.ctx, event)
+            if feature_event is not None and self.dispatch_feature_events:
+                more = self.strategy.handle_event(self.ctx, feature_event)
+                if more:
+                    intents.extend(more)
 
             # Execute Intents
             for intent in intents:
@@ -177,6 +227,32 @@ class HftBacktestAdapter:
     def get_spread(self):
         dp = self.hbt.depth(0)
         return dp.best_ask - dp.best_bid
+
+    def _build_l1_bidask_event(self, depth_obj, ts_ns: int) -> BidAskEvent:
+        self._hbt_seq += 1
+        best_bid = int(getattr(depth_obj, "best_bid", 0) or 0)
+        best_ask = int(getattr(depth_obj, "best_ask", 0) or 0)
+        bid_qty = int(
+            getattr(depth_obj, "best_bid_qty", None)
+            or getattr(depth_obj, "bid_qty", None)
+            or getattr(depth_obj, "bid_volume", 0)
+            or 0
+        )
+        ask_qty = int(
+            getattr(depth_obj, "best_ask_qty", None)
+            or getattr(depth_obj, "ask_qty", None)
+            or getattr(depth_obj, "ask_volume", 0)
+            or 0
+        )
+        bids = np.asarray([[best_bid, bid_qty]], dtype=np.int64)
+        asks = np.asarray([[best_ask, ask_qty]], dtype=np.int64)
+        return BidAskEvent(
+            meta=MetaData(seq=self._hbt_seq, source_ts=int(ts_ns), local_ts=int(ts_ns), topic="hbt_bidask"),
+            symbol=self.symbol,
+            bids=bids,
+            asks=asks,
+            is_snapshot=False,
+        )
 
     def execute_intent(self, intent):
         # Convert Intent -> HftBacktest Order
@@ -277,6 +353,8 @@ class StrategyHbtAdapter:
         price_scale: int = 10_000,
         timeout: int = 0,
         seed: int = 42,
+        feature_mode: str = "stats_only",
+        dispatch_feature_events: bool = False,
     ):
         import importlib
 
@@ -294,6 +372,8 @@ class StrategyHbtAdapter:
             partial_fill=partial_fill,
             seed=seed,
             price_scale=price_scale,
+            feature_mode=feature_mode,
+            dispatch_feature_events=dispatch_feature_events,
         )
 
     def run(self):

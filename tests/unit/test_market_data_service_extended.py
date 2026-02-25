@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from hft_platform.engine.event_bus import RingBufferBus
-from hft_platform.events import BidAskEvent, MetaData, TickEvent
+from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
+from hft_platform.feature.engine import FeatureEngine
 from hft_platform.services.market_data import FeedState, MarketDataService
 
 
@@ -204,6 +205,65 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(service._md_metrics_sample_every, 1)
         self.assertGreaterEqual(service._md_latency_sample_every, 1)
         self.assertGreaterEqual(service._md_callback_parse_metrics_every, 1)
+        self.assertGreaterEqual(service._feature_metrics_sample_every, 1)
+        self.assertGreaterEqual(service._feature_latency_sample_every, 1)
+
+    def test_maybe_update_features_records_feature_metrics(self):
+        service = MarketDataService(self.bus, self.raw_queue, self.client, feature_engine=FeatureEngine())
+        service._feature_metrics_sample_every = 1
+        service._feature_latency_sample_every = 1
+        evt = BidAskEvent(
+            meta=MetaData(seq=1, source_ts=1, local_ts=1, topic="bidask"),
+            symbol="2330",
+            bids=[[1000000, 10]],
+            asks=[[1001000, 12]],
+            is_snapshot=False,
+        )
+        stats = LOBStatsEvent(
+            symbol="2330",
+            ts=1,
+            imbalance=0.0,
+            best_bid=1000000,
+            best_ask=1001000,
+            bid_depth=10,
+            ask_depth=12,
+        )
+        out = service._maybe_update_features(evt, stats)
+        self.assertIsNotNone(out)
+        self.assertTrue(service._feature_update_metric_children)
+
+    def test_feature_shadow_parity_compare_metrics(self):
+        with patch.dict(
+            os.environ,
+            {
+                "HFT_FEATURE_SHADOW_PARITY": "1",
+                "HFT_FEATURE_SHADOW_BACKEND": "python",
+            },
+            clear=False,
+        ):
+            service = MarketDataService(self.bus, self.raw_queue, self.client, feature_engine=FeatureEngine(kernel_backend="python"))
+        self.assertIsNotNone(service._feature_shadow_engine)
+        service._feature_shadow_sample_every = 1
+        evt = BidAskEvent(
+            meta=MetaData(seq=1, source_ts=1, local_ts=1, topic="bidask"),
+            symbol="2330",
+            bids=[[1000000, 10]],
+            asks=[[1001000, 12]],
+            is_snapshot=False,
+        )
+        stats = LOBStatsEvent(
+            symbol="2330",
+            ts=1,
+            imbalance=0.0,
+            best_bid=1000000,
+            best_ask=1001000,
+            bid_depth=10,
+            ask_depth=12,
+        )
+        out = service._maybe_update_features(evt, stats)
+        self.assertIsNotNone(out)
+        self.assertTrue(service._feature_shadow_checks_metric_children)
+        self.assertFalse(service._feature_shadow_mismatch_metric_children)
 
     def test_on_shioaji_event_fast_path_exchange_msg(self):
         self.service.loop = MagicMock()

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -132,6 +133,60 @@ async def test_enqueue_api_drops_when_full(tmp_path):
     await adapter._api_queue.put(_make_cmd(IntentType.NEW))
     await adapter._enqueue_api(_make_cmd(IntentType.NEW, intent_id=9))
     assert adapter._api_queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_submit_typed_command_nowait_materialized_by_worker(tmp_path, monkeypatch):
+    adapter = _make_adapter(tmp_path)
+    adapter.running = True
+    called = []
+
+    async def _capture_dispatch(cmd):
+        called.append(cmd)
+
+    monkeypatch.setattr(adapter, "_dispatch_to_api", _capture_dispatch)
+    frame = (
+        "typed_order_cmd_v1",
+        77,
+        123456789,
+        int(StormGuardState.NORMAL),
+        111,
+        (
+            "typed_intent_v1",
+            77,
+            "strat",
+            "TXF",
+            int(IntentType.NEW),
+            int(Side.BUY),
+            100,
+            1,
+            int(TIF.LIMIT),
+            "",
+            0,
+            0,
+            "",
+            "",
+            "",
+            0,
+        ),
+    )
+
+    worker = asyncio.create_task(adapter._api_worker())
+    try:
+        adapter.submit_typed_command_nowait(frame)
+        await asyncio.sleep(adapter._api_coalesce_window_s + 0.02)
+        await asyncio.sleep(0.01)
+    finally:
+        adapter.running = False
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+
+    assert called
+    cmd = called[0]
+    assert cmd.cmd_id == 77
+    assert cmd.intent.intent_id == 77
+    assert cmd.intent.symbol == "TXF"
 
 
 @pytest.mark.parametrize(

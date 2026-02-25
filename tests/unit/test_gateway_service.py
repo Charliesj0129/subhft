@@ -279,3 +279,60 @@ async def test_service_typed_intent_path_uses_typed_risk_methods():
     assert api_queue.qsize() == 1
     svc._risk_engine.evaluate_typed_frame.assert_called()
     svc._risk_engine.create_command_from_typed_frame.assert_called()
+    eval_call = svc._risk_engine.evaluate_typed_frame.call_args
+    cmd_call = svc._risk_engine.create_command_from_typed_frame.call_args
+    assert "intent_view" in eval_call.kwargs
+    assert "intent_view" in cmd_call.kwargs
+    assert eval_call.kwargs["intent_view"] is typed_intent
+    assert cmd_call.kwargs["intent_view"] is typed_intent
+
+
+@pytest.mark.asyncio
+async def test_service_typed_intent_path_uses_typed_adapter_submit_when_available():
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, api_queue = _make_service(channel=ch, approve=True)
+    svc._order_adapter.submit_typed_command_nowait = MagicMock()
+    svc._order_adapter._supports_typed_command_ingress = True
+
+    typed_intent = _make_intent(12, "typed-k2")
+    frame = (
+        "typed_intent_v1",
+        typed_intent.intent_id,
+        typed_intent.strategy_id,
+        typed_intent.symbol,
+        int(typed_intent.intent_type),
+        int(typed_intent.side),
+        typed_intent.price,
+        typed_intent.qty,
+        int(typed_intent.tif),
+        typed_intent.target_order_id or "",
+        typed_intent.timestamp_ns,
+        typed_intent.source_ts_ns,
+        typed_intent.reason,
+        typed_intent.trace_id,
+        typed_intent.idempotency_key,
+        typed_intent.ttl_ns,
+    )
+
+    svc._risk_engine.typed_frame_view.return_value = typed_intent
+    svc._risk_engine.evaluate_typed_frame.return_value = RiskDecision(approved=True, intent=typed_intent)
+    svc._risk_engine.create_typed_command_frame_from_typed_frame.return_value = (
+        "typed_order_cmd_v1",
+        123,
+        999,
+        int(StormGuardState.NORMAL),
+        111,
+        frame,
+    )
+
+    ch.submit_typed_nowait(frame)
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert api_queue.qsize() == 0
+    svc._order_adapter.submit_typed_command_nowait.assert_called_once()
+    svc._risk_engine.create_typed_command_frame_from_typed_frame.assert_called_once()

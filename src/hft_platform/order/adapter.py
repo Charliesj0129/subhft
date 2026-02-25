@@ -1,12 +1,12 @@
 import asyncio
 import os
 import time
-from typing import Any, Dict
+from typing import Any, Dict, TypeAlias, TypeGuard, cast
 
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
+from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
@@ -18,6 +18,20 @@ from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_
 from hft_platform.order.rate_limiter import RateLimiter
 
 logger = get_logger("order_adapter")
+
+
+TypedOrderCommandFrame: TypeAlias = tuple[
+    str,  # marker: typed_order_cmd_v1
+    int,  # cmd_id
+    int,  # deadline_ns
+    int,  # storm_guard_state
+    int,  # created_ns
+    Any,  # typed_intent_frame
+]
+
+
+def _is_typed_order_cmd_frame(obj: Any) -> TypeGuard[TypedOrderCommandFrame]:
+    return isinstance(obj, tuple) and len(obj) >= 6 and obj[0] == "typed_order_cmd_v1"
 
 
 class OrderAdapter:
@@ -51,10 +65,13 @@ class OrderAdapter:
         self._api_max_inflight = int(os.getenv("HFT_API_MAX_INFLIGHT", "16"))
         self._api_semaphore = asyncio.Semaphore(self._api_max_inflight)
         self._api_queue_max = int(os.getenv("HFT_API_QUEUE_MAX", "1024"))
-        self._api_queue: asyncio.Queue[OrderCommand] = asyncio.Queue(maxsize=self._api_queue_max)
+        self._api_queue: asyncio.Queue[OrderCommand | TypedOrderCommandFrame] = asyncio.Queue(
+            maxsize=self._api_queue_max
+        )
         self._api_coalesce_window_s = float(os.getenv("HFT_API_COALESCE_WINDOW_S", "0.005"))
         self._api_pending: dict[tuple, OrderCommand] = {}
         self._api_worker_task: asyncio.Task | None = None
+        self._supports_typed_command_ingress = True
 
         # Dead Letter Queue for rejected orders
         self._dlq: DeadLetterQueue = get_dlq()
@@ -436,6 +453,25 @@ class OrderAdapter:
         except asyncio.QueueFull:
             logger.warning("API queue full - dropping", cmd_id=cmd.cmd_id)
 
+    def submit_typed_command_nowait(self, frame: TypedOrderCommandFrame) -> None:
+        """Prototype typed command ingress from GatewayService (avoids early materialization)."""
+        if not _is_typed_order_cmd_frame(frame):
+            raise ValueError("Invalid typed order command frame")
+        self._api_queue.put_nowait(frame)
+
+    def _materialize_typed_command(self, frame: TypedOrderCommandFrame) -> OrderCommand:
+        from hft_platform.gateway.channel import typed_frame_to_intent
+
+        _, cmd_id, deadline_ns, storm_guard_state, created_ns, typed_intent_frame = frame
+        intent = typed_frame_to_intent(typed_intent_frame)
+        return OrderCommand(
+            cmd_id=int(cmd_id),
+            intent=intent,
+            deadline_ns=int(deadline_ns),
+            storm_guard_state=StormGuardState(int(storm_guard_state)),
+            created_ns=int(created_ns),
+        )
+
     def _coalesce_key(self, cmd: OrderCommand) -> tuple:
         intent = cmd.intent
         if intent.intent_type == IntentType.NEW:
@@ -463,9 +499,12 @@ class OrderAdapter:
     async def _api_worker(self) -> None:
         while self.running:
             try:
-                cmd = await self._api_queue.get()
+                item = await self._api_queue.get()
             except asyncio.CancelledError:
                 return
+            cmd: OrderCommand = (
+                self._materialize_typed_command(item) if _is_typed_order_cmd_frame(item) else cast(OrderCommand, item)
+            )
             if cmd.created_ns:
                 self._record_queue_latency(cmd)
             self._store_pending(cmd)
@@ -476,7 +515,12 @@ class OrderAdapter:
                 if remaining <= 0:
                     break
                 try:
-                    cmd = await asyncio.wait_for(self._api_queue.get(), timeout=remaining)
+                    item = await asyncio.wait_for(self._api_queue.get(), timeout=remaining)
+                    cmd = (
+                        self._materialize_typed_command(item)
+                        if _is_typed_order_cmd_frame(item)
+                        else cast(OrderCommand, item)
+                    )
                     self._store_pending(cmd)
                 except asyncio.TimeoutError:
                     break

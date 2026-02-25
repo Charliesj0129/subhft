@@ -69,6 +69,40 @@ def test_exposure_release_allows_subsequent():
     assert ok is True
 
 
+def test_exposure_typed_path_matches_object():
+    store_obj = ExposureStore(global_max_notional=2_000_000)
+    store_typed = ExposureStore(global_max_notional=2_000_000)
+    key = _key()
+    intent = _make_intent(1_000_000, 1)
+
+    ok_obj_1, reason_obj_1 = store_obj.check_and_update(key, intent)
+    ok_t_1, reason_t_1 = store_typed.check_and_update_typed(
+        key,
+        intent_type=int(intent.intent_type),
+        price=int(intent.price),
+        qty=int(intent.qty),
+    )
+    assert (ok_t_1, reason_t_1) == (ok_obj_1, reason_obj_1)
+
+    ok_obj_2, reason_obj_2 = store_obj.check_and_update(key, intent)
+    ok_t_2, reason_t_2 = store_typed.check_and_update_typed(
+        key,
+        intent_type=int(intent.intent_type),
+        price=int(intent.price),
+        qty=int(intent.qty),
+    )
+    assert (ok_t_2, reason_t_2) == (ok_obj_2, reason_obj_2)
+
+    store_obj.release_exposure(key, intent)
+    store_typed.release_exposure_typed(
+        key,
+        intent_type=int(intent.intent_type),
+        price=int(intent.price),
+        qty=int(intent.qty),
+    )
+    assert store_typed.get_global_notional() == store_obj.get_global_notional()
+
+
 def test_exposure_concurrent_no_overshoot():
     """10 threads each requesting same-sized order; only N that fit within limit should pass."""
     global_max = 5_000_000  # allows exactly 5 x 1_000_000

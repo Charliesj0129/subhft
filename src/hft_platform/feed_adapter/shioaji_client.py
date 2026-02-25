@@ -1876,6 +1876,74 @@ class ShioajiClient:
             logger.info("Contract cache timestamp updated", path=str(path))
         except Exception as exc:
             logger.warning("Failed to update contract cache timestamp", error=str(exc))
+        # R2: Rebuild symbol codes from fresh contract data (fixes stale TXO codes after expiry)
+        try:
+            from hft_platform.config.symbols import (
+                DEFAULT_LIST_PATH,
+                ContractIndex,
+                build_symbols,
+                write_symbols_yaml,
+            )
+
+            raw_contracts: list[dict] = []
+
+            def _normalize(c: Any, exchange: str, kind: str) -> dict:
+                right = getattr(c, "option_right", None) or getattr(c, "right", None)
+                if right is not None:
+                    right = getattr(right, "value", right)
+                payload = {
+                    "code": getattr(c, "code", None),
+                    "symbol": getattr(c, "symbol", None),
+                    "name": getattr(c, "name", None),
+                    "exchange": exchange,
+                    "type": kind,
+                    "root": getattr(c, "category", None) or getattr(c, "symbol", None),
+                    "tick_size": getattr(c, "tick_size", None),
+                    "price_scale": getattr(c, "price_scale", None),
+                    "delivery_date": getattr(c, "delivery_date", None),
+                    "strike": getattr(c, "strike_price", None) or getattr(c, "strike", None),
+                    "right": right,
+                }
+                return {k: v for k, v in payload.items() if v is not None}
+
+            try:
+                for c in self.api.Contracts.Stocks.TSE:
+                    raw_contracts.append(_normalize(c, "TSE", "stock"))
+            except Exception:
+                pass
+            try:
+                for c in self.api.Contracts.Stocks.OTC:
+                    raw_contracts.append(_normalize(c, "OTC", "stock"))
+            except Exception:
+                pass
+            try:
+                for root in self.api.Contracts.Futures.keys():
+                    for c in self.api.Contracts.Futures[root]:
+                        raw_contracts.append(_normalize(c, "FUT", "future"))
+            except Exception:
+                pass
+            try:
+                for root in self.api.Contracts.Options.keys():
+                    for c in self.api.Contracts.Options[root]:
+                        raw_contracts.append(_normalize(c, "OPT", "option"))
+            except Exception:
+                pass
+
+            contract_index = ContractIndex(contracts=raw_contracts)
+            list_path = os.getenv("HFT_SYMBOLS_LIST_PATH", DEFAULT_LIST_PATH)
+            build_result = build_symbols(list_path, contract_index)
+            if build_result.symbols:
+                write_symbols_yaml(build_result.symbols, self.config_path)
+                logger.info(
+                    "Symbols rebuilt from fresh contracts",
+                    count=len(build_result.symbols),
+                    errors=len(build_result.errors),
+                )
+            if build_result.errors:
+                logger.warning("Symbol rebuild had errors", errors=build_result.errors[:5])
+        except Exception as exc:
+            logger.warning("Symbol rebuild failed, keeping existing symbols", error=str(exc))
+
         # Reload symbol config
         try:
             self._load_config()
