@@ -145,6 +145,55 @@ class ExposureStore:
 
         return True, "OK"
 
+    def check_and_update_typed(
+        self,
+        key: ExposureKey,
+        *,
+        intent_type: int,
+        price: int,
+        qty: int,
+    ) -> tuple[bool, str]:
+        """Typed fast-path variant using primitive fields (avoids OrderIntent materialization)."""
+        if int(intent_type) == int(IntentType.CANCEL):
+            return True, "OK"
+
+        notional = int(price) * int(qty)
+
+        with self._lock:
+            if self._global_max > 0 and self._global_notional + notional > self._global_max:
+                return False, "GLOBAL_EXPOSURE_LIMIT"
+
+            strat_limits = self._limits.get(key.strategy_id)
+            if strat_limits and strat_limits.max_notional_scaled > 0:
+                current = self._exposure.get(key.account, {}).get(key.strategy_id, {}).get(key.symbol, 0)
+                if current + notional > strat_limits.max_notional_scaled:
+                    return False, "STRATEGY_EXPOSURE_LIMIT"
+
+            is_new_symbol = key.symbol not in self._exposure.get(key.account, {}).get(key.strategy_id, {})
+            if is_new_symbol and self._symbol_count >= self._max_symbols:
+                self._evict_zeroes()
+                if self._symbol_count >= self._max_symbols:
+                    logger.warning(
+                        "exposure_symbol_limit_reached",
+                        max_symbols=self._max_symbols,
+                        account=key.account,
+                        strategy_id=key.strategy_id,
+                        symbol=key.symbol,
+                    )
+                    raise ExposureLimitError(
+                        f"ExposureStore symbol limit ({self._max_symbols}) reached; "
+                        f"cannot admit ({key.account}, {key.strategy_id}, {key.symbol})"
+                    )
+
+            self._global_notional += notional
+            acct_exp = self._exposure.setdefault(key.account, {})
+            strat_exp = acct_exp.setdefault(key.strategy_id, {})
+            if key.symbol not in strat_exp:
+                self._symbol_count += 1
+            strat_exp[key.symbol] = strat_exp.get(key.symbol, 0) + notional
+
+        return True, "OK"
+
     def release_exposure(
         self,
         key: ExposureKey,
@@ -156,6 +205,23 @@ class ExposureStore:
 
         notional = intent.price * intent.qty
 
+        with self._lock:
+            self._global_notional = max(0, self._global_notional - notional)
+            strat_exp = self._exposure.get(key.account, {}).get(key.strategy_id, {})
+            if key.symbol in strat_exp:
+                strat_exp[key.symbol] = max(0, strat_exp[key.symbol] - notional)
+
+    def release_exposure_typed(
+        self,
+        key: ExposureKey,
+        *,
+        intent_type: int,
+        price: int,
+        qty: int,
+    ) -> None:
+        if int(intent_type) == int(IntentType.CANCEL):
+            return
+        notional = int(price) * int(qty)
         with self._lock:
             self._global_notional = max(0, self._global_notional - notional)
             strat_exp = self._exposure.get(key.account, {}).get(key.strategy_id, {})

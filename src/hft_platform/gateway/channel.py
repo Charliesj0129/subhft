@@ -214,22 +214,25 @@ def typed_frame_to_view(frame: TypedIntentFrame) -> TypedIntentView:
     )
 
 
-def typed_frame_to_intent(frame: TypedIntentFrame) -> OrderIntent:
-    view = typed_frame_to_view(frame)
+def typed_view_to_intent(view: TypedIntentView) -> OrderIntent:
     return OrderIntent(
-        intent_id=view.intent_id,
-        strategy_id=view.strategy_id,
-        symbol=view.symbol,
-        intent_type=IntentType(view.intent_type),
-        side=Side(view.side),
-        price=view.price,
-        qty=view.qty,
-        tif=TIF(view.tif),
+        intent_id=int(view.intent_id),
+        strategy_id=str(view.strategy_id),
+        symbol=str(view.symbol),
+        intent_type=IntentType(int(view.intent_type)),
+        side=Side(int(view.side)),
+        price=int(view.price),
+        qty=int(view.qty),
+        tif=TIF(int(view.tif)),
         target_order_id=view.target_order_id,
-        timestamp_ns=view.timestamp_ns,
-        source_ts_ns=view.source_ts_ns,
-        reason=view.reason,
-        trace_id=view.trace_id,
-        idempotency_key=view.idempotency_key,
-        ttl_ns=view.ttl_ns,
+        timestamp_ns=int(view.timestamp_ns),
+        source_ts_ns=int(view.source_ts_ns),
+        reason=str(view.reason),
+        trace_id=str(view.trace_id),
+        idempotency_key=str(view.idempotency_key),
+        ttl_ns=int(view.ttl_ns),
     )
+
+
+def typed_frame_to_intent(frame: TypedIntentFrame) -> OrderIntent:
+    return typed_view_to_intent(typed_frame_to_view(frame))

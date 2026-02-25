@@ -72,6 +72,16 @@ class _SimpleStrategy(BaseStrategy):
         self.buy(event.symbol, event.best_bid, 1)
 
 
+class _FeatureAwareStrategy(BaseStrategy):
+    def __init__(self, strategy_id: str, **kwargs):
+        super().__init__(strategy_id, **kwargs)
+        self.last_spread = None
+
+    def on_stats(self, event):
+        if self.ctx:
+            self.last_spread = self.ctx.get_feature(event.symbol, "spread_scaled")
+
+
 def test_backtest_adapter_submits_scaled_order(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "HFTBACKTEST_AVAILABLE", True, raising=False)
     monkeypatch.setattr(hbt_adapter, "HashMapMarketDepthBacktest", _Hbt, raising=False)
@@ -94,6 +104,30 @@ def test_backtest_adapter_submits_scaled_order(monkeypatch):
     assert order_id == 1
     assert price == 100.0
     assert qty == 1
+
+
+def test_backtest_adapter_lob_feature_mode_populates_ctx_features(monkeypatch):
+    monkeypatch.setattr(hbt_adapter, "HFTBACKTEST_AVAILABLE", True, raising=False)
+    monkeypatch.setattr(hbt_adapter, "HashMapMarketDepthBacktest", _Hbt, raising=False)
+    monkeypatch.setattr(hbt_adapter, "BacktestAsset", _BacktestAsset, raising=False)
+    monkeypatch.setattr(hbt_adapter, "LinearAsset", _Noop, raising=False)
+    monkeypatch.setattr(hbt_adapter, "ConstantLatency", _Noop, raising=False)
+    monkeypatch.setattr(hbt_adapter, "PowerProbQueueModel", _Noop, raising=False)
+    monkeypatch.setattr(hbt_adapter, "IOC", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "ROD", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "Limit", object(), raising=False)
+
+    strategy = _FeatureAwareStrategy("demo")
+    adapter = hbt_adapter.HftBacktestAdapter(
+        strategy=strategy,
+        asset_symbol="AAA",
+        data_path="dummy",
+        price_scale=100,
+        feature_mode="lob_feature",
+    )
+    result = adapter.run()
+    assert result is True
+    assert strategy.last_spread is not None
 
 
 def test_strategy_hbt_adapter_uses_strategy_class(monkeypatch):

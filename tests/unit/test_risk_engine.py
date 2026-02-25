@@ -54,3 +54,24 @@ async def test_risk_lifecycle(engine):
         await task
     except asyncio.CancelledError:
         pass
+
+
+@pytest.mark.asyncio
+async def test_risk_reject_path_safe_when_metrics_none(engine):
+    # PRICE_ZERO_OR_NEG -> reject path; metrics is intentionally disabled to ensure best-effort guard.
+    engine.metrics = None
+    intent = OrderIntent(4, "s1", "2330", IntentType.NEW, Side.BUY, 0, 1, TIF.ROD, None, 0)
+    engine.intent_queue.put_nowait(intent)
+
+    task = asyncio.create_task(engine.run())
+    await asyncio.sleep(0.05)
+
+    # No command should be emitted on reject.
+    assert engine.order_queue.empty()
+
+    engine.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass

@@ -58,6 +58,17 @@ class GatewayPolicy:
         intent: OrderIntent,
         sg_state: StormGuardState,
     ) -> tuple[bool, str]:
+        return self._gate_by_intent_type(int(intent.intent_type), sg_state)
+
+    def gate_typed(self, intent_type: int, sg_state: StormGuardState) -> tuple[bool, str]:
+        """Typed fast-path gate using raw intent_type int to avoid enum conversion overhead."""
+        return self._gate_by_intent_type(int(intent_type), sg_state)
+
+    def _gate_by_intent_type(
+        self,
+        intent_type: int,
+        sg_state: StormGuardState,
+    ) -> tuple[bool, str]:
         """Evaluate current mode + StormGuard state; return (allowed, reason).
 
         Side-effect: auto-transitions to DEGRADE on STORM if configured.
@@ -71,12 +82,12 @@ class GatewayPolicy:
             self._set_mode(GatewayPolicyMode.NORMAL)
 
         if self._mode == GatewayPolicyMode.HALT:
-            if intent.intent_type == IntentType.CANCEL and self._halt_cancel:
+            if intent_type == int(IntentType.CANCEL) and self._halt_cancel:
                 return True, "OK"
             return False, "HALT"
 
         if self._mode == GatewayPolicyMode.DEGRADE:
-            if intent.intent_type == IntentType.NEW:
+            if intent_type == int(IntentType.NEW):
                 return False, "DEGRADE"
 
         return True, "OK"

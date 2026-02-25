@@ -5,7 +5,7 @@ import pytest
 
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
 from hft_platform.contracts.strategy import Side
-from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
+from hft_platform.events import BidAskEvent, FeatureUpdateEvent, LOBStatsEvent, TickEvent
 from hft_platform.execution.positions import Position, PositionStore
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.strategy.registry import StrategyRegistry
@@ -29,6 +29,22 @@ def test_strategy_context_place_order():
     scaler.assert_called_with("AAPL", 1.0)
     intent_factory.assert_called_once()
     assert intent_factory.call_args[1]["price"] == 100
+
+
+def test_strategy_context_feature_accessors():
+    ctx = StrategyContext(
+        positions={},
+        strategy_id="s1",
+        intent_factory=Mock(),
+        price_scaler=Mock(),
+        feature_source=lambda symbol, fid: 123 if (symbol, fid) == ("AAPL", "spread_scaled") else None,
+        feature_view_source=lambda symbol: {"symbol": symbol, "feature_set_id": "lob_shared_v1"},
+        feature_set_source=lambda: "lob_shared_v1",
+    )
+    assert ctx.get_feature("AAPL", "spread_scaled") == 123
+    assert ctx.get_feature("AAPL", "unknown") is None
+    assert ctx.get_feature_view("AAPL") == {"symbol": "AAPL", "feature_set_id": "lob_shared_v1"}
+    assert ctx.get_feature_set_id() == "lob_shared_v1"
 
 
 def test_base_strategy_dispatch_and_helpers():
@@ -120,6 +136,32 @@ def test_base_strategy_other_events():
     # BidAsk
     ba = BidAskEvent(meta=meta, symbol="AAPL", bids=[], asks=[], is_snapshot=False)
     strat.handle_event(ctx, ba)
+
+
+def test_base_strategy_feature_event_dispatch():
+    called = {"v": False}
+
+    class _FeatureStrat(DummyStrategy):
+        def on_features(self, event):
+            called["v"] = True
+
+    strat = _FeatureStrat(strategy_id="test_strat", symbols=["AAPL"])
+    ctx = Mock(spec=StrategyContext)
+    fevt = FeatureUpdateEvent(
+        symbol="AAPL",
+        ts=1,
+        local_ts=1,
+        seq=1,
+        feature_set_id="lob_shared_v1",
+        schema_version=1,
+        changed_mask=1,
+        warmup_ready_mask=1,
+        quality_flags=0,
+        feature_ids=("spread_scaled",),
+        values=(10,),
+    )
+    strat.handle_event(ctx, fevt)
+    assert called["v"] is True
 
 
 def test_strategy_symbol_filtering():

@@ -194,7 +194,7 @@ _EXTRACTOR_COLUMNS = {
 
 
 class RecorderService:
-    def __init__(self, queue: asyncio.Queue, clickhouse_client=None):
+    def __init__(self, queue: asyncio.Queue, _clickhouse_client=None):
         self.queue = queue
         self.running = False
 

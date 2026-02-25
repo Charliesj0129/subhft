@@ -248,7 +248,7 @@ jobs:
       - name: Build Rust extension
         run: uv run maturin develop --manifest-path rust_core/Cargo.toml
 
-      - name: Run lightweight perf regression gate (strategy/research/feed/recorder)
+      - name: Run lightweight perf regression gate (strategy/risk/gateway/research/feed/recorder)
         run: uv run python tests/benchmark/perf_regression_gate.py
 
       - name: Run benchmarks
@@ -472,11 +472,80 @@ jobs:
           HFT_CLICKHOUSE_PORT: 8123
         run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-recorder-io
 
+      - name: Run risk/gateway perf gate (heavier drills)
+        env:
+          HFT_PERF_GATE_RISK_HEAVY: "1"
+        run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-risk-heavy --json risk_perf_gate.json
+
+      - name: Run feature-plane perf gate (Rust parity/perf drills)
+        env:
+          HFT_PERF_GATE_FEATURE_RUST: "1"
+        run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-feature-rust --json feature_perf_gate.json
+
+      - name: Upload risk nightly perf artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: risk-perf-gate-nightly
+          path: risk_perf_gate.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload feature nightly perf artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-perf-gate-nightly
+          path: feature_perf_gate.json
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Recorder Drill Summary
         if: always()
         run: |
-          echo "## 🧪 Recorder Nightly Drills" >> $GITHUB_STEP_SUMMARY
-          echo "Executed perf_regression_gate with real ClickHouse + WAL stress drills." >> $GITHUB_STEP_SUMMARY
+          echo "## 🧪 Nightly Performance Drills" >> $GITHUB_STEP_SUMMARY
+          echo "Executed perf_regression_gate with recorder (real ClickHouse + WAL stress) and risk/gateway heavier drills." >> $GITHUB_STEP_SUMMARY
+          if [ -f risk_perf_gate.json ]; then
+            python - <<'PY' >> $GITHUB_STEP_SUMMARY
+            import json
+            from pathlib import Path
+            payload = json.loads(Path("risk_perf_gate.json").read_text())
+            r = payload.get("results", {})
+            print("")
+            print("### Risk/Gateway Heavy Drill (JSON Artifact)")
+            for key in [
+                "gateway_process_envelope_obj_us_per_call",
+                "gateway_process_envelope_typed_us_per_call",
+                "risk_gateway_typed_vs_obj_ratio",
+                "risk_create_command_from_typed_us_per_call",
+                "risk_evaluate_typed_frame_us_per_call",
+            ]:
+                if key in r:
+                    print(f"- `{key}`: {r[key]:.4f}")
+            fails = payload.get("failures", [])
+            print(f"- `failures`: {len(fails)}")
+            PY
+          fi
+          if [ -f feature_perf_gate.json ]; then
+            python - <<'PY' >> $GITHUB_STEP_SUMMARY
+            import json
+            from pathlib import Path
+            payload = json.loads(Path("feature_perf_gate.json").read_text())
+            r = payload.get("results", {})
+            print("")
+            print("### Feature Plane Rust Drill (JSON Artifact)")
+            for key in [
+                "feature_engine_lob_update_us_per_event",
+                "feature_engine_lob_update_rust_us_per_event",
+                "feature_engine_python_vs_rust_parity_mismatch_rate",
+                "feature_engine_parity_mismatch_rate",
+            ]:
+                if key in r:
+                    print(f"- `{key}`: {r[key]:.6f}")
+            fails = payload.get("failures", [])
+            print(f"- `failures`: {len(fails)}")
+            PY
+          fi
 
   # ============================================================================
   # Stage 6: Security Scanning

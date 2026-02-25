@@ -43,6 +43,16 @@ def test_dedup_empty_key_is_no_op():
     assert store.size() == 0
 
 
+def test_dedup_typed_alias_matches_regular_path():
+    store = IdempotencyStore(window_size=100, persist_enabled=False)
+    assert store.check_or_reserve_typed("tk") is None
+    store.commit_typed("tk", True, "OK", 7)
+    rec = store.check_or_reserve("tk")
+    assert rec is not None
+    assert rec.approved is True
+    assert rec.cmd_id == 7
+
+
 def test_dedup_window_evicts_oldest():
     store = IdempotencyStore(window_size=3, persist_enabled=False)
     for i in range(3):

@@ -10,6 +10,7 @@ from hft_platform.execution.gateway import ExecutionGateway
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
 from hft_platform.execution.router import ExecutionRouter
+from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.latency import LatencyRecorder
@@ -98,12 +99,17 @@ class SystemBootstrapper:
         order_client = ShioajiClient(symbols_path, order_cfg)
 
         # 4. Services
+        feature_engine = None
+        if os.getenv("HFT_FEATURE_ENGINE_ENABLED", "0").lower() in {"1", "true", "yes", "on"}:
+            feature_engine = FeatureEngine()
+
         md_service = MarketDataService(
             bus,
             raw_queue,
             md_client,
             symbol_metadata=symbol_metadata,
             recorder_queue=recorder_queue,
+            feature_engine=feature_engine,
         )
         order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map)
         execution_gateway = ExecutionGateway(order_adapter)
@@ -146,10 +152,11 @@ class SystemBootstrapper:
         # StrategyRunner: use intent_channel when gateway enabled, else risk_queue
         _runner_queue = intent_channel if _gateway_enabled and intent_channel is not None else risk_queue
         strategy_runner = StrategyRunner(
-            bus,
-            _runner_queue,
-            md_service.lob,
-            position_store,
+            bus=bus,
+            risk_queue=_runner_queue,
+            lob_engine=md_service.lob,
+            feature_engine=feature_engine,
+            position_store=position_store,
             symbol_metadata=symbol_metadata,
         )
         recorder = RecorderService(recorder_queue)
@@ -171,6 +178,7 @@ class SystemBootstrapper:
             order_client=order_client,
             client=md_client,
             md_service=md_service,
+            feature_engine=feature_engine,
             order_adapter=order_adapter,
             execution_gateway=execution_gateway,
             exec_service=exec_service,

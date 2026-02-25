@@ -113,3 +113,34 @@ class LOBStatsEvent:
     def mid_price_float(self) -> float:
         """Returns mid price as float (for display/logging only)."""
         return (self.mid_price_x2 or 0) / 2.0
+
+
+@dataclass(slots=True)
+class FeatureUpdateEvent:
+    """Shared feature-plane update emitted after LOB/feature processing (prototype ABI v1)."""
+
+    symbol: str
+    ts: int  # source timestamp ns
+    local_ts: int
+    seq: int
+    feature_set_id: str
+    schema_version: int
+    changed_mask: int
+    warmup_ready_mask: int
+    quality_flags: int
+    feature_ids: tuple[str, ...]
+    values: tuple[int | float, ...]
+
+    def get(self, feature_id: str) -> int | float | None:
+        try:
+            idx = self.feature_ids.index(str(feature_id))
+        except ValueError:
+            return None
+        if idx >= len(self.values):
+            return None
+        return self.values[idx]
+
+    def to_typed_frame(self):
+        from hft_platform.feature.boundary import event_to_typed_frame
+
+        return event_to_typed_frame(self)

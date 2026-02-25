@@ -3,14 +3,22 @@ import datetime as dt
 import os
 import time
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.engine.event_bus import RingBufferBus
-from hft_platform.events import BidAskEvent, TickEvent
+from hft_platform.events import BidAskEvent, FeatureUpdateEvent, LOBStatsEvent, TickEvent
+from hft_platform.feature.engine import (
+    QUALITY_FLAG_GAP,
+    QUALITY_FLAG_OUT_OF_ORDER,
+    QUALITY_FLAG_PARTIAL,
+    QUALITY_FLAG_STALE_INPUT,
+    QUALITY_FLAG_STATE_RESET,
+    FeatureEngine,
+)
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
@@ -32,6 +40,13 @@ _MD_PRICE_FIELDS = (
 _MD_TIME_FIELDS = ("ts", "datetime")
 _MD_CODE_FIELDS = ("code", "symbol")
 _MD_NESTED_FIELDS = ("tick", "bidask")
+_FEATURE_QUALITY_FLAG_LABELS = (
+    (QUALITY_FLAG_GAP, "gap"),
+    (QUALITY_FLAG_STATE_RESET, "state_reset"),
+    (QUALITY_FLAG_STALE_INPUT, "stale_input"),
+    (QUALITY_FLAG_OUT_OF_ORDER, "out_of_order"),
+    (QUALITY_FLAG_PARTIAL, "partial"),
+)
 
 
 def _looks_like_md(obj: object) -> bool:
@@ -176,6 +191,7 @@ class MarketDataService:
         publish_full_events: bool = True,
         symbol_metadata: SymbolMetadata | None = None,
         recorder_queue: asyncio.Queue | None = None,
+        feature_engine: FeatureEngine | None = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
@@ -184,6 +200,13 @@ class MarketDataService:
         self.recorder_queue = recorder_queue
 
         self.lob = LOBEngine()
+        feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+        self.feature_engine = feature_engine or (FeatureEngine() if feature_enabled else None)
+        try:
+            setattr(self.lob, "feature_engine", self.feature_engine)
+        except Exception:
+            pass
+        self._feature_shadow_engine: FeatureEngine | None = None
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.normalizer = MarketDataNormalizer(metadata=self.symbol_metadata)
 
@@ -218,6 +241,16 @@ class MarketDataService:
         self._feed_last_event_metric_child = None
         self._feed_reconnect_gap_metric_child = None
         self._md_callback_parse_metric_children: dict[str, Any] = {}
+        self._feature_update_metric_children: dict[tuple[str, str], Any] = {}
+        self._feature_quality_flag_metric_children: dict[str, Any] = {}
+        self._feature_latency_metric_child = None
+        self._feature_shadow_checks_metric_children: dict[tuple[str, str], Any] = {}
+        self._feature_shadow_mismatch_metric_children: dict[tuple[str, str], Any] = {}
+        self._feature_set_id_cached = (
+            str(self.feature_engine.feature_set_id())
+            if self.feature_engine and hasattr(self.feature_engine, "feature_set_id")
+            else "unknown"
+        )
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
         self.log_raw_every = int(os.getenv("HFT_MD_LOG_EVERY", "1000"))
         self._raw_log_counter = 0
@@ -275,14 +308,63 @@ class MarketDataService:
         md_metrics_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         md_latency_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         cb_parse_metrics_default = 64 if policy != "debug" else 1
+        feature_metrics_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
+        feature_latency_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         self._md_metrics_sample_every = _env_int("HFT_MD_METRICS_SAMPLE_EVERY", md_metrics_default)
         self._md_latency_sample_every = _env_int("HFT_MD_LATENCY_SAMPLE_EVERY", md_latency_default)
         self._md_callback_parse_metrics_every = _env_int(
             "HFT_MD_CALLBACK_PARSE_METRICS_EVERY", cb_parse_metrics_default
         )
+        self._feature_metrics_sample_every = _env_int("HFT_FEATURE_METRICS_SAMPLE_EVERY", feature_metrics_default)
+        self._feature_latency_sample_every = _env_int("HFT_FEATURE_LATENCY_SAMPLE_EVERY", feature_latency_default)
+        self._feature_shadow_sample_every = _env_int("HFT_FEATURE_SHADOW_SAMPLE_EVERY", 64 if policy != "debug" else 1)
+        self._feature_shadow_warn_every = _env_int("HFT_FEATURE_SHADOW_WARN_EVERY", 100)
+        self._feature_shadow_abs_tolerance = float(os.getenv("HFT_FEATURE_SHADOW_ABS_TOL", "0"))
         self._md_metrics_counter = 0
         self._md_latency_counter = 0
         self._md_callback_parse_counter = 0
+        self._feature_metrics_counter = 0
+        self._feature_latency_counter = 0
+        self._feature_shadow_counter = 0
+        self._feature_shadow_mismatch_counter = 0
+
+        self._init_feature_shadow_engine()
+
+    def _init_feature_shadow_engine(self) -> None:
+        if self.feature_engine is None:
+            return
+        enabled = os.getenv("HFT_FEATURE_SHADOW_PARITY", "0").strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return
+        try:
+            primary_backend = (
+                self.feature_engine.kernel_backend() if hasattr(self.feature_engine, "kernel_backend") else "python"
+            )
+        except Exception:
+            primary_backend = "python"
+        requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
+        shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
+        try:
+            shadow = FeatureEngine(
+                feature_set_id=(
+                    self.feature_engine.feature_set_id() if hasattr(self.feature_engine, "feature_set_id") else None
+                ),
+                emit_events=True,
+                kernel_backend=shadow_backend,
+            )
+            # If backend fallback happened and becomes identical to primary due missing Rust,
+            # still allow compare if explicitly requested.
+            if (
+                requested == ""
+                and hasattr(shadow, "kernel_backend")
+                and shadow.kernel_backend() == primary_backend == "python"
+            ):
+                # Auto mode could not create meaningful alternate backend.
+                return
+            self._feature_shadow_engine = shadow
+        except Exception as exc:
+            logger.warning("feature_shadow_engine_init_failed", reason=str(exc))
+            self._feature_shadow_engine = None
 
     async def run(self):
         self.running = True
@@ -424,6 +506,7 @@ class MarketDataService:
                     # Hot path: update LOB
                     lob_start_ns = time.perf_counter_ns()
                     stats = self.lob.process_event(event)
+                    feature_update = self._maybe_update_features(event, stats)
                     lob_duration = time.perf_counter_ns() - lob_start_ns
                     if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
                         self.latency.record(
@@ -436,12 +519,22 @@ class MarketDataService:
                         self._record_direct_event(event)
 
                     if self.publish_full_events:
-                        if stats:
-                            self._publish_many_nowait([event, stats])
+                        if stats or feature_update:
+                            payload = [event]
+                            if stats:
+                                payload.append(stats)
+                            if feature_update:
+                                payload.append(feature_update)
+                            self._publish_many_nowait(payload)
                         else:
                             self._publish_nowait(event)
-                    elif stats:
-                        self._publish_nowait(stats)
+                    elif stats or feature_update:
+                        payload = []
+                        if stats:
+                            payload.append(stats)
+                        if feature_update:
+                            payload.append(feature_update)
+                        self._publish_many_nowait(payload)
 
                 self.raw_queue.task_done()
         except asyncio.CancelledError:
@@ -480,13 +573,24 @@ class MarketDataService:
                     if not event:
                         continue
                     stats = self.lob.process_event(event)
+                    feature_update = self._maybe_update_features(event, stats)
                     if self.publish_full_events:
-                        if stats:
-                            self._publish_many_nowait([event, stats])
+                        if stats or feature_update:
+                            payload = [event]
+                            if stats:
+                                payload.append(stats)
+                            if feature_update:
+                                payload.append(feature_update)
+                            self._publish_many_nowait(payload)
                         else:
                             self._publish_nowait(event)
-                    elif stats:
-                        self._publish_nowait(stats)
+                    elif stats or feature_update:
+                        payload = []
+                        if stats:
+                            payload.append(stats)
+                        if feature_update:
+                            payload.append(feature_update)
+                        self._publish_many_nowait(payload)
                 except Exception as exc:
                     logger.warning("Snapshot normalize failed; skipping", error=str(exc))
 
@@ -716,6 +820,218 @@ class MarketDataService:
             return
         for event in events:
             self._publish_nowait(event)
+
+    def _maybe_update_features(
+        self,
+        event: TickEvent | BidAskEvent,
+        stats: object | None,
+    ) -> FeatureUpdateEvent | None:
+        if self.feature_engine is None or stats is None:
+            return None
+        if not hasattr(stats, "best_bid") or not hasattr(stats, "best_ask"):
+            return None
+        meta = getattr(event, "meta", None)
+        local_ts_ns = int(getattr(meta, "local_ts", 0) or 0) if meta is not None else 0
+        start_ns = time.perf_counter_ns()
+        try:
+            process_lob_update = getattr(self.feature_engine, "process_lob_update", None)
+            if callable(process_lob_update):
+                feature_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
+            else:
+                feature_update = self.feature_engine.process_lob_stats(
+                    cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns
+                )
+            self._maybe_run_feature_shadow_parity(event, stats, local_ts_ns, feature_update)
+            self._feature_latency_counter += 1
+            self._feature_metrics_counter += 1
+            if self.metrics_registry:
+                if self._feature_latency_counter % self._feature_latency_sample_every == 0:
+                    try:
+                        if self._feature_latency_metric_child is None and hasattr(
+                            self.metrics_registry, "feature_plane_latency_ns"
+                        ):
+                            self._feature_latency_metric_child = self.metrics_registry.feature_plane_latency_ns
+                        if self._feature_latency_metric_child is not None:
+                            self._feature_latency_metric_child.observe(time.perf_counter_ns() - start_ns)
+                    except Exception:
+                        pass
+                if self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
+                    try:
+                        if feature_update is not None:
+                            feature_set_id = str(getattr(feature_update, "feature_set_id", self._feature_set_id_cached))
+                            self._feature_set_id_cached = feature_set_id
+                            result = "emitted"
+                            qflags = int(getattr(feature_update, "quality_flags", 0) or 0)
+                        else:
+                            feature_set_id = self._feature_set_id_cached
+                            result = "updated"
+                            state_view = None
+                            qflags = 0
+                            try:
+                                if hasattr(self.feature_engine, "get_feature_view"):
+                                    state_view = self.feature_engine.get_feature_view(getattr(event, "symbol", ""))
+                            except Exception:
+                                state_view = None
+                            if isinstance(state_view, dict):
+                                qflags = int(state_view.get("quality_flags", 0) or 0)
+                        if hasattr(self.metrics_registry, "feature_plane_updates_total"):
+                            key = (result, feature_set_id)
+                            child = self._feature_update_metric_children.get(key)
+                            if child is None:
+                                child = self.metrics_registry.feature_plane_updates_total.labels(
+                                    result=result,
+                                    feature_set=feature_set_id,
+                                )
+                                self._feature_update_metric_children[key] = child
+                            child.inc()
+                        if qflags and hasattr(self.metrics_registry, "feature_quality_flags_total"):
+                            for bit, label in _FEATURE_QUALITY_FLAG_LABELS:
+                                if qflags & bit:
+                                    qchild = self._feature_quality_flag_metric_children.get(label)
+                                    if qchild is None:
+                                        qchild = self.metrics_registry.feature_quality_flags_total.labels(flag=label)
+                                        self._feature_quality_flag_metric_children[label] = qchild
+                                    qchild.inc()
+                    except Exception:
+                        pass
+            return feature_update
+        except Exception as exc:
+            self._feature_metrics_counter += 1
+            if self.metrics_registry and self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
+                try:
+                    if hasattr(self.metrics_registry, "feature_plane_updates_total"):
+                        key = ("error", self._feature_set_id_cached)
+                        child = self._feature_update_metric_children.get(key)
+                        if child is None:
+                            child = self.metrics_registry.feature_plane_updates_total.labels(
+                                result="error",
+                                feature_set=self._feature_set_id_cached,
+                            )
+                            self._feature_update_metric_children[key] = child
+                        child.inc()
+                except Exception:
+                    pass
+            logger.warning("feature_engine_update_failed", reason=str(exc))
+            return None
+
+    def _maybe_run_feature_shadow_parity(
+        self,
+        event: TickEvent | BidAskEvent,
+        stats: object,
+        local_ts_ns: int,
+        primary_update: FeatureUpdateEvent | None,
+    ) -> None:
+        shadow = self._feature_shadow_engine
+        if shadow is None:
+            return
+        self._feature_shadow_counter += 1
+        compare_now = self._feature_shadow_counter % self._feature_shadow_sample_every == 0
+        try:
+            process_lob_update = getattr(shadow, "process_lob_update", None)
+            if callable(process_lob_update):
+                shadow_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
+            else:
+                shadow_update = shadow.process_lob_stats(cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns)
+        except Exception as exc:
+            logger.warning("feature_shadow_engine_update_failed", reason=str(exc))
+            self._emit_feature_shadow_check_metric("skipped")
+            return
+
+        if not compare_now:
+            return
+        self._emit_feature_shadow_check_metric("checked")
+        primary_feature_set = str(getattr(primary_update, "feature_set_id", self._feature_set_id_cached))
+        primary_values = None
+        primary_ids = None
+        if primary_update is not None:
+            primary_values = tuple(primary_update.values)
+            primary_ids = tuple(primary_update.feature_ids)
+        else:
+            try:
+                view = (
+                    self.feature_engine.get_feature_view(getattr(event, "symbol", "")) if self.feature_engine else None
+                )
+            except Exception:
+                view = None
+            if isinstance(view, dict):
+                primary_values = tuple(view.get("values", ()))
+                primary_ids = tuple(view.get("feature_ids", ()))
+                primary_feature_set = str(view.get("feature_set_id", primary_feature_set))
+
+        shadow_values = None
+        shadow_ids = None
+        if shadow_update is not None:
+            shadow_values = tuple(shadow_update.values)
+            shadow_ids = tuple(shadow_update.feature_ids)
+        else:
+            try:
+                sview = shadow.get_feature_view(getattr(event, "symbol", ""))
+            except Exception:
+                sview = None
+            if isinstance(sview, dict):
+                shadow_values = tuple(sview.get("values", ()))
+                shadow_ids = tuple(sview.get("feature_ids", ()))
+
+        if primary_values is None or shadow_values is None or primary_ids is None or shadow_ids is None:
+            return
+        if primary_ids != shadow_ids or len(primary_values) != len(shadow_values):
+            for fid in primary_ids:
+                self._emit_feature_shadow_mismatch_metric(primary_feature_set, str(fid))
+            return
+        mismatched: list[str] = []
+        tol = float(self._feature_shadow_abs_tolerance)
+        for fid, pv, sv in zip(primary_ids, primary_values, shadow_values):
+            if isinstance(pv, float) or isinstance(sv, float):
+                if abs(float(pv) - float(sv)) > tol:
+                    mismatched.append(str(fid))
+            else:
+                if int(pv) != int(sv):
+                    mismatched.append(str(fid))
+        if mismatched:
+            self._feature_shadow_mismatch_counter += 1
+            for fid in mismatched:
+                self._emit_feature_shadow_mismatch_metric(primary_feature_set, fid)
+            if self._feature_shadow_mismatch_counter % self._feature_shadow_warn_every == 1:
+                logger.warning(
+                    "feature_shadow_parity_mismatch",
+                    symbol=getattr(event, "symbol", ""),
+                    feature_set=primary_feature_set,
+                    mismatch_count=len(mismatched),
+                    mismatched_features=mismatched[:8],
+                )
+
+    def _emit_feature_shadow_check_metric(self, result: str) -> None:
+        if not self.metrics_registry or not hasattr(self.metrics_registry, "feature_shadow_parity_checks_total"):
+            return
+        feature_set_id = self._feature_set_id_cached
+        key = (feature_set_id, str(result))
+        try:
+            child = self._feature_shadow_checks_metric_children.get(key)
+            if child is None:
+                child = self.metrics_registry.feature_shadow_parity_checks_total.labels(
+                    feature_set=feature_set_id,
+                    result=str(result),
+                )
+                self._feature_shadow_checks_metric_children[key] = child
+            child.inc()
+        except Exception:
+            pass
+
+    def _emit_feature_shadow_mismatch_metric(self, feature_set_id: str, feature_id: str) -> None:
+        if not self.metrics_registry or not hasattr(self.metrics_registry, "feature_shadow_parity_mismatch_total"):
+            return
+        key = (str(feature_set_id), str(feature_id))
+        try:
+            child = self._feature_shadow_mismatch_metric_children.get(key)
+            if child is None:
+                child = self.metrics_registry.feature_shadow_parity_mismatch_total.labels(
+                    feature_set=str(feature_set_id),
+                    feature_id=str(feature_id),
+                )
+                self._feature_shadow_mismatch_metric_children[key] = child
+            child.inc()
+        except Exception:
+            pass
 
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
         if self.recorder_queue is None:

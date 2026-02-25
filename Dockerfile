@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Build stage
 FROM python:3.11-slim-bookworm as builder
 
@@ -18,18 +20,25 @@ RUN curl -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
     && sh /tmp/rustup-init.sh -y --default-toolchain stable \
     && rm /tmp/rustup-init.sh
 ENV PATH="/root/.cargo/bin:${PATH}"
+ENV CARGO_HOME=/root/.cargo \
+    CARGO_TARGET_DIR=/app/.cargo-target
 
-# Install uv for fast dependency management
-RUN pip install uv
-
-# Copy dependency files
-# Copy dependency files
+# Copy dependency manifests first for better Docker layer caching
 COPY pyproject.toml ./
-COPY rust_core/ ./rust_core/
-COPY src/ ./src/
+RUN mkdir -p rust_core
+COPY rust_core/Cargo.toml ./rust_core/Cargo.toml
+COPY rust_core/src/lib.rs ./rust_core/src/lib.rs
 
-# Generate requirements.txt from pyproject.toml (fresh resolve)
-RUN uv pip compile pyproject.toml -o requirements.txt
+# Generate a simple runtime requirements.txt from pyproject dependencies.
+# This avoids an extra `uv` bootstrap download in constrained build environments.
+RUN python - <<'PY'
+import tomllib
+from pathlib import Path
+
+data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+deps = data.get("project", {}).get("dependencies", [])
+Path("requirements.txt").write_text("".join(f"{dep}\n" for dep in deps), encoding="utf-8")
+PY
 
 # Cargo network tuning for slow/unstable links
 ENV CARGO_NET_RETRY=10 \
@@ -38,9 +47,27 @@ ENV CARGO_NET_RETRY=10 \
     CARGO_HTTP_LOW_SPEED_TIME=120 \
     CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 
-# Build Rust extension wheel
-RUN pip install --no-cache-dir --timeout 600 --retries 10 maturin \
-    && maturin build --release --manifest-path rust_core/Cargo.toml -o /tmp/wheels
+# Install maturin and prefetch Rust dependencies using cache mounts.
+# We keep this explicit prefetch step so progress is visible in Docker logs,
+# then run `maturin build` in offline mode to avoid hanging-looking cargo
+# metadata/index updates during the build step.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    pip install --no-cache-dir --timeout 600 --retries 10 maturin \
+    && cargo fetch --manifest-path rust_core/Cargo.toml -v
+
+# Copy remaining sources after toolchain/dependency prefetch so code changes
+# don't invalidate the cargo prefetch layer.
+COPY rust_core/ ./rust_core/
+COPY src/ ./src/
+
+# Build Rust extension wheel using warm caches and offline cargo mode.
+# This avoids a second network/index roundtrip inside `maturin`.
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/app/.cargo-target \
+    CARGO_NET_OFFLINE=true maturin build --release --manifest-path rust_core/Cargo.toml -o /tmp/wheels
 
 # Runtime stage
 FROM python:3.11-slim-bookworm

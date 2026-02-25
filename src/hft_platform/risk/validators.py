@@ -27,6 +27,15 @@ class RiskValidator:
         provider = price_scale_provider or SymbolMetadataPriceScaleProvider()
         self.price_codec = PriceCodec(provider)
         self.lob = lob
+        self._shared_scale_cache: Dict[str, int] = {}
+
+    def _scale_factor(self, symbol: str) -> int:
+        cache = self._shared_scale_cache
+        value = cache.get(symbol)
+        if value is None:
+            value = int(self.price_codec.scale_factor(symbol))
+            cache[symbol] = value
+        return value or 1
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         """Return (Approved, Reason)."""
@@ -34,6 +43,14 @@ class RiskValidator:
 
 
 class PriceBandValidator(RiskValidator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))
+        self._tick_size_raw = float(self.defaults.get("tick_size", 0.01))
+        self._max_price_scaled_cache: Dict[str, int] = {}
+        self._tick_size_scaled_cache: Dict[str, int] = {}
+        self._band_ticks_cache: Dict[str, int] = {}
+
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         if intent.intent_type == IntentType.CANCEL:
             return True, "OK"
@@ -42,9 +59,11 @@ class PriceBandValidator(RiskValidator):
             return False, "PRICE_ZERO_OR_NEG"
 
         # Fat Finger Protection: Absolute price cap
-        max_price_raw = self.defaults.get("max_price_cap", 5000.0)
-        scale = self.price_codec.scale_factor(intent.symbol)
-        max_price_scaled = int(max_price_raw * scale)
+        scale = self._scale_factor(intent.symbol)
+        max_price_scaled = self._max_price_scaled_cache.get(intent.symbol)
+        if max_price_scaled is None:
+            max_price_scaled = int(self._max_price_cap_raw * scale)
+            self._max_price_scaled_cache[intent.symbol] = max_price_scaled
 
         if intent.price > max_price_scaled:
             return False, f"PRICE_EXCEEDS_CAP: {intent.price} > {max_price_scaled}"
@@ -54,9 +73,14 @@ class PriceBandValidator(RiskValidator):
             mid_price = self._get_mid_price(intent.symbol)
             if mid_price is not None and mid_price > 0:
                 strat_cfg = self.strat_configs.get(intent.strategy_id, {})
-                band_ticks = strat_cfg.get("price_band_ticks", self.defaults.get("price_band_ticks", 20))
-                tick_size_raw = self.defaults.get("tick_size", 0.01)
-                tick_size_scaled = int(tick_size_raw * scale)
+                band_ticks = self._band_ticks_cache.get(intent.strategy_id)
+                if band_ticks is None:
+                    band_ticks = int(strat_cfg.get("price_band_ticks", self.defaults.get("price_band_ticks", 20)))
+                    self._band_ticks_cache[intent.strategy_id] = band_ticks
+                tick_size_scaled = self._tick_size_scaled_cache.get(intent.symbol)
+                if tick_size_scaled is None:
+                    tick_size_scaled = int(self._tick_size_raw * scale)
+                    self._tick_size_scaled_cache[intent.symbol] = tick_size_scaled
 
                 # Calculate allowed band: mid_price +/- band_ticks * tick_size
                 band_width = band_ticks * tick_size_scaled
@@ -97,14 +121,23 @@ class PriceBandValidator(RiskValidator):
 
 
 class MaxNotionalValidator(RiskValidator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._default_max_notional_raw = self.defaults.get("max_notional", 10_000_000)
+        self._max_notional_scaled_cache: Dict[tuple[str, str], int] = {}
+
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         if intent.intent_type == IntentType.CANCEL:
             return True, "OK"
 
-        strat_cfg = self.strat_configs.get(intent.strategy_id, {})
-        max_notional_raw = strat_cfg.get("max_notional", self.defaults.get("max_notional", 10_000_000))
-        scale = self.price_codec.scale_factor(intent.symbol)
-        max_notional_scaled = int(max_notional_raw * scale)
+        cache_key = (intent.strategy_id, intent.symbol)
+        max_notional_scaled = self._max_notional_scaled_cache.get(cache_key)
+        if max_notional_scaled is None:
+            strat_cfg = self.strat_configs.get(intent.strategy_id, {})
+            max_notional_raw = strat_cfg.get("max_notional", self._default_max_notional_raw)
+            scale = self._scale_factor(intent.symbol)
+            max_notional_scaled = int(max_notional_raw * scale)
+            self._max_notional_scaled_cache[cache_key] = max_notional_scaled
 
         notional_scaled = intent.price * intent.qty
         if notional_scaled > max_notional_scaled:
@@ -153,17 +186,24 @@ class StormGuardFSM:
                 self._storm_entry_ts = now
             self.state = target_state
         elif target_state < old_state:
-            # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
-            cooldown_ok = (
-                (now - self._storm_entry_ts) >= self._storm_cooldown_s if old_state >= StormGuardState.STORM else True
-            )
-            if cooldown_ok:
-                self._de_escalate_count += 1
-                if self._de_escalate_count >= self._de_escalate_threshold:
-                    self._de_escalate_count = 0
-                    self.state = target_state
-            else:
+            # HALT: allow immediate step-down to unblock order cancellation draining
+            if old_state == StormGuardState.HALT:
                 self._de_escalate_count = 0
+                self.state = target_state
+            else:
+                # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
+                cooldown_ok = (
+                    (now - self._storm_entry_ts) >= self._storm_cooldown_s
+                    if old_state >= StormGuardState.STORM
+                    else True
+                )
+                if cooldown_ok:
+                    self._de_escalate_count += 1
+                    if self._de_escalate_count >= self._de_escalate_threshold:
+                        self._de_escalate_count = 0
+                        self.state = target_state
+                else:
+                    self._de_escalate_count = 0
         else:
             if target_state >= StormGuardState.STORM:
                 self._de_escalate_count = 0
