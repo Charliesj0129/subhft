@@ -85,6 +85,7 @@ filterwarnings = [
 [tool.coverage.run]
 omit = [
     "src/hft_platform/__main__.py",
+    "src/hft_platform/config/symbols.py",
     "src/hft_platform/feed_adapter/shioaji_client.py",
     "src/hft_platform/execution/gateway.py",
     "src/hft_platform/execution/positions.py",
