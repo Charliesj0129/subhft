@@ -551,18 +551,43 @@ class ShioajiClient:
     def _record_api_latency(self, op: str, start_ns: int, ok: bool = True) -> None:
         if not self.metrics:
             return
-        latency_ms = (time.perf_counter_ns() - start_ns) / 1e6
-        result = "ok" if ok else "error"
-        self.metrics.shioaji_api_latency_ms.labels(op=op, result=result).observe(latency_ms)
-        last = self._api_last_latency_ms.get(op)
+        now_ns = time.perf_counter_ns()
+        try:
+            start_ns_int = int(start_ns)
+        except (TypeError, ValueError):
+            start_ns_int = now_ns
+        latency_ms = max(0.0, (now_ns - start_ns_int) / 1e6)
+        op_label = self._sanitize_metric_label(op, fallback="unknown")
+        result = "ok" if bool(ok) else "error"
+        self.metrics.shioaji_api_latency_ms.labels(op=op_label, result=result).observe(latency_ms)
+        last = self._api_last_latency_ms.get(op_label)
         if last is not None:
             jitter = abs(latency_ms - last)
-            self.metrics.shioaji_api_jitter_ms.labels(op=op).set(jitter)
+            self.metrics.shioaji_api_jitter_ms.labels(op=op_label).set(jitter)
             if hasattr(self.metrics, "shioaji_api_jitter_ms_hist"):
-                self.metrics.shioaji_api_jitter_ms_hist.labels(op=op).observe(jitter)
-        self._api_last_latency_ms[op] = latency_ms
+                self.metrics.shioaji_api_jitter_ms_hist.labels(op=op_label).observe(jitter)
+        self._api_last_latency_ms[op_label] = latency_ms
         if not ok:
-            self.metrics.shioaji_api_errors_total.labels(op=op).inc()
+            self.metrics.shioaji_api_errors_total.labels(op=op_label).inc()
+
+    @staticmethod
+    def _sanitize_metric_label(value: Any, *, fallback: str) -> str:
+        """Ensure Prometheus label values are always strings with stable cardinality."""
+        if isinstance(value, str):
+            text = value
+        elif isinstance(value, bytes):
+            text = value.decode("utf-8", errors="replace")
+        elif isinstance(value, type):
+            text = value.__name__
+        else:
+            name = getattr(value, "__name__", None)
+            text = str(name) if name else type(value).__name__
+        text = text.strip()
+        if not text:
+            return fallback
+        if len(text) > 64:
+            return text[:64]
+        return text
 
     def _cache_get(self, key: str) -> Any | None:
         now = timebase.now_s()

@@ -5,6 +5,8 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import yaml
+from prometheus_client import REGISTRY
+from prometheus_client.openmetrics.exposition import generate_latest as generate_openmetrics_latest
 
 # IMPORTANT: mocking BEFORE import is hard if module imports at top level.
 # shioaji_client tries to import shioaji inside try-except.
@@ -12,6 +14,7 @@ import yaml
 # However, we want to test the logic when `sj` IS present.
 # So we must patch `hft_platform.feed_adapter.shioaji_client.sj`
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient, dispatch_tick_cb
+from hft_platform.observability.metrics import MetricsRegistry
 
 
 class TestShioajiClientFull(unittest.TestCase):
@@ -170,6 +173,14 @@ class TestShioajiClientFull(unittest.TestCase):
         start_ns = time.perf_counter_ns()
         # Ensure error path doesn't raise.
         self.client._record_api_latency("place_order", start_ns, ok=False)
+
+    def test_record_api_latency_sanitizes_non_string_labels(self):
+        self.client.metrics = MetricsRegistry.get()
+        start_ns = time.perf_counter_ns()
+        # Regression guard: bad label types must not break /metrics exposition.
+        self.client._record_api_latency(type("Catcher", (), {}), start_ns, ok=object)
+        payload = generate_openmetrics_latest(REGISTRY)
+        self.assertIn(b"shioaji_api_latency_ms", payload)
 
     def test_usage_rate_limit_returns_cached(self):
         self.client.logged_in = True
