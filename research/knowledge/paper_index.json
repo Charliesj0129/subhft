@@ -11,6 +11,7 @@
   },
   "002": {
     "alphas": [],
+    "arxiv_id": "1809.05961",
     "note_file": "research/knowledge/notes/002_optimal_dynamic_basis_trading.md",
     "ref": "002",
     "status": "reviewed",
@@ -21,6 +22,7 @@
   },
   "003": {
     "alphas": [],
+    "arxiv_id": "2011.11820",
     "note_file": "research/knowledge/notes/003_data_driven_optimisation_framework.md",
     "ref": "003",
     "status": "reviewed",
@@ -51,6 +53,7 @@
   },
   "006": {
     "alphas": [],
+    "arxiv_id": "2512.18098",
     "note_file": "research/knowledge/notes/006_games_in_games_paradigm.md",
     "ref": "006",
     "status": "reviewed",
@@ -61,6 +64,7 @@
   },
   "007": {
     "alphas": [],
+    "arxiv_id": "2512.23847",
     "note_file": "research/knowledge/notes/007_lookahead_bias_llm_forecasts.md",
     "ref": "007",
     "status": "reviewed",
@@ -71,6 +75,7 @@
   },
   "008": {
     "alphas": [],
+    "arxiv_id": "2512.23515",
     "note_file": "research/knowledge/notes/008_alpha_r1_reasoning_via_rl.md",
     "ref": "008",
     "status": "reviewed",
@@ -83,6 +88,7 @@
     "alphas": [
       "kl_regime"
     ],
+    "arxiv_id": "2512.16411",
     "note_file": "research/knowledge/notes/009_relative_entropy_change_point.md",
     "ref": "009",
     "status": "implemented",
@@ -93,6 +99,7 @@
   },
   "010": {
     "alphas": [],
+    "arxiv_id": "2512.22476",
     "note_file": "research/knowledge/notes/010_autoquant_auditable_execution.md",
     "ref": "010",
     "status": "reviewed",
@@ -103,6 +110,7 @@
   },
   "011": {
     "alphas": [],
+    "arxiv_id": "2512.16080",
     "note_file": "research/knowledge/notes/011_bondmm_a_decentralized_lending.md",
     "ref": "011",
     "status": "reviewed",
@@ -113,6 +121,7 @@
   },
   "012": {
     "alphas": [],
+    "arxiv_id": "2512.19838",
     "note_file": "research/knowledge/notes/012_equilibrium_liquidity_dex_cex.md",
     "ref": "012",
     "status": "reviewed",
@@ -123,6 +132,7 @@
   },
   "013": {
     "alphas": [],
+    "arxiv_id": "2512.11765",
     "note_file": "research/knowledge/notes/013_hft_trading_game_transient_impact.md",
     "ref": "013",
     "status": "reviewed",
@@ -133,6 +143,7 @@
   },
   "014": {
     "alphas": [],
+    "arxiv_id": "2512.23386",
     "note_file": "research/knowledge/notes/014_arbitrum_timeboost_volatility.md",
     "ref": "014",
     "status": "reviewed",
@@ -153,6 +164,7 @@
   },
   "016": {
     "alphas": [],
+    "arxiv_id": "2512.12924",
     "note_file": "research/knowledge/notes/016_interpretable_hypothesis_driven_trading.md",
     "ref": "016",
     "status": "reviewed",
@@ -165,6 +177,7 @@
     "alphas": [
       "ofi_mc"
     ],
+    "arxiv_id": "2512.18648",
     "note_file": "research/knowledge/notes/018_optimal_signal_extraction_order_flow.md",
     "ref": "018",
     "status": "implemented",
@@ -175,6 +188,7 @@
   },
   "019": {
     "alphas": [],
+    "arxiv_id": "2512.10913",
     "note_file": "research/knowledge/notes/019_rl_financial_decision_making_review.md",
     "ref": "019",
     "status": "reviewed",
@@ -185,6 +199,7 @@
   },
   "020": {
     "alphas": [],
+    "arxiv_id": "2512.14134",
     "note_file": "research/knowledge/notes/020_high_volume_return_premium_nonlinearity.md",
     "ref": "020",
     "status": "reviewed",
@@ -197,6 +212,7 @@
     "alphas": [
       "garch_vol"
     ],
+    "arxiv_id": "2512.12250",
     "note_file": "research/knowledge/notes/021_stochastic_volatility_lstm_hybrid.md",
     "ref": "021",
     "status": "implemented",
@@ -207,6 +223,7 @@
   },
   "022": {
     "alphas": [],
+    "arxiv_id": "2512.15732",
     "note_file": "research/knowledge/notes/022_red_queens_trap_failure_analysis.md",
     "ref": "022",
     "status": "reviewed",
@@ -217,6 +234,7 @@
   },
   "023": {
     "alphas": [],
+    "arxiv_id": "2512.06309",
     "note_file": "research/knowledge/notes/023_wealth_or_stealth_insider_trading.md",
     "ref": "023",
     "status": "reviewed",
@@ -237,6 +255,7 @@
   },
   "025": {
     "alphas": [],
+    "arxiv_id": "2602.00101",
     "note_file": "research/knowledge/notes/025_amm_fee_mechanisms_formal_approach.md",
     "ref": "025",
     "status": "reviewed",
@@ -247,6 +266,7 @@
   },
   "026": {
     "alphas": [],
+    "arxiv_id": "2601.23172",
     "note_file": "research/knowledge/notes/026_unified_theory_order_flow_impact.md",
     "ref": "026",
     "status": "reviewed",
@@ -257,6 +277,7 @@
   },
   "027": {
     "alphas": [],
+    "arxiv_id": "2601.15304",
     "note_file": "research/knowledge/notes/027_explainable_market_integrity_monitoring.md",
     "ref": "027",
     "status": "reviewed",
@@ -267,6 +288,7 @@
   },
   "028": {
     "alphas": [],
+    "arxiv_id": "2601.11958",
     "note_file": "research/knowledge/notes/028_autonomous_market_intelligence_agentic_ai.md",
     "ref": "028",
     "status": "reviewed",
@@ -277,6 +299,7 @@
   },
   "029": {
     "alphas": [],
+    "arxiv_id": "2601.17008",
     "note_file": "research/knowledge/notes/029_bayesian_robust_financial_trading.md",
     "ref": "029",
     "status": "reviewed",
@@ -287,6 +310,7 @@
   },
   "030": {
     "alphas": [],
+    "arxiv_id": "2601.05975",
     "note_file": "research/knowledge/notes/030_deepm_regime_robust_macro_portfolio.md",
     "ref": "030",
     "status": "reviewed",
@@ -297,6 +321,7 @@
   },
   "031": {
     "alphas": [],
+    "arxiv_id": "2602.00082",
     "note_file": "research/knowledge/notes/031_design_empirical_study_llm_reits.md",
     "ref": "031",
     "status": "reviewed",
@@ -307,6 +332,7 @@
   },
   "032": {
     "alphas": [],
+    "arxiv_id": "2601.19369",
     "note_file": "research/knowledge/notes/032_directional_liquidity_geometric_shear.md",
     "ref": "032",
     "status": "reviewed",
@@ -1186,5 +1212,99 @@
       "unclassified"
     ],
     "title": "mtrgl graph learning"
+  },
+  "120": {
+    "alphas": [
+      "ofi_cycle_demo"
+    ],
+    "arxiv_id": "2408.03594v1",
+    "note_file": "research/knowledge/notes/120_forecasting_high_frequency_order_flow_imbalance.md",
+    "ref": "120",
+    "status": "reviewed",
+    "tags": [],
+    "title": "Forecasting High Frequency Order Flow Imbalance"
+  },
+  "121": {
+    "alphas": [
+      "spread_pressure"
+    ],
+    "arxiv_id": "1602.00731v2",
+    "note_file": "research/knowledge/notes/121_limit_order_book_resiliency_after_effective_market_orders_sp.md",
+    "ref": "121",
+    "status": "reviewed",
+    "tags": [
+      "microstructure",
+      "lob",
+      "spread"
+    ],
+    "title": "Limit-order book resiliency after effective market orders: Spread, depth and intensity"
+  },
+  "122": {
+    "alphas": [
+      "ofi_mc"
+    ],
+    "arxiv_id": "1011.6402v3",
+    "note_file": "research/knowledge/notes/122_the_price_impact_of_order_book_events.md",
+    "ref": "122",
+    "status": "reviewed",
+    "tags": [
+      "microstructure",
+      "ofi",
+      "price_impact"
+    ],
+    "title": "The Price Impact of Order Book Events"
+  },
+  "123": {
+    "alphas": [],
+    "arxiv_id": "2505.17388v1",
+    "note_file": "research/knowledge/notes/123_stochastic_price_dynamics_in_response_to_order_flow_imbalanc.md",
+    "ref": "123",
+    "status": "reviewed",
+    "tags": [
+      "microstructure",
+      "ofi",
+      "regime",
+      "futures",
+      "asian_markets"
+    ],
+    "title": "Stochastic Price Dynamics in Response to Order Flow Imbalance: Evidence from CSI 300 Index Futures"
+  },
+  "124": {
+    "alphas": [],
+    "arxiv_id": "1907.06230v2",
+    "note_file": "research/knowledge/notes/124_multi_level_order_flow_imbalance_in_a_limit_order_book.md",
+    "ref": "124",
+    "status": "reviewed",
+    "tags": [],
+    "title": "Multi-Level Order-Flow Imbalance in a Limit Order Book"
+  },
+  "125": {
+    "alphas": [
+      "queue_imbalance"
+    ],
+    "arxiv_id": "1512.03492v1",
+    "note_file": "research/knowledge/notes/125_queue_imbalance_as_a_one_tick_ahead_price_predictor_in_a_lim.md",
+    "ref": "125",
+    "status": "implemented",
+    "tags": [
+      "lob",
+      "queue_imbalance",
+      "hft",
+      "microstructure"
+    ],
+    "title": "Queue Imbalance as a One-Tick-Ahead Price Predictor in a Limit Order Book"
+  },
+  "depth_slope_ref": {
+    "alphas": [
+      "lob_shape"
+    ],
+    "arxiv_id": "1907.06230v2",
+    "note_file": "research/knowledge/notes/depth_slope_ref.md",
+    "ref": "depth_slope_ref",
+    "status": "reviewed",
+    "tags": [
+      "microstructure"
+    ],
+    "title": "Multi-Level Order-Flow Imbalance in a Limit Order Book (depth_slope_ref alias)"
   }
 }
