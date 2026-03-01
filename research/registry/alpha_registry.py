@@ -118,4 +118,13 @@ class AlphaRegistry:
 
 def _to_module_name(path: Path) -> str:
     rel = path.with_suffix("")
-    return ".".join(rel.parts)
+    if rel.is_absolute():
+        try:
+            rel = rel.relative_to(Path.cwd())
+        except ValueError:
+            # Fallback when cwd differs: trim to "research/..." anchor if present.
+            parts = rel.parts
+            if "research" in parts:
+                rel = Path(*parts[parts.index("research") :])
+    clean_parts = [part for part in rel.parts if part not in ("", ".", "/")]
+    return ".".join(clean_parts)

@@ -1,4 +1,8 @@
 # Explainable Market Integrity Monitoring via Multi-Source Attention Signals and Transparent Scoring
+ref: 027
+arxiv: https://arxiv.org/abs/2601.15304
+Authors: Sandeep Neela (Independent Researcher)
+Published: 2026 (January 10, 2026)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

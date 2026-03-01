@@ -58,6 +58,82 @@ def compute_ic(signals: Iterable[float], forward_returns: Iterable[float], bucke
     return float(np.mean(series)), float(np.std(series)), series
 
 
+def compute_ic_ttest(ic_series: np.ndarray) -> tuple[float, float]:
+    """t-test on IC series: H₀ mean IC = 0.
+
+    Returns (t_stat, p_value).  One-sided p-value (H₁: μ > 0).
+    """
+    from scipy.stats import ttest_1samp
+
+    arr = np.asarray(ic_series, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 3:
+        return 0.0, 1.0
+    t_stat, p_two = ttest_1samp(arr, 0.0)
+    # One-sided: reject H₀ if mean > 0
+    p_one = float(p_two) / 2.0 if float(t_stat) > 0 else 1.0 - float(p_two) / 2.0
+    return float(t_stat), p_one
+
+
+def compute_ic_halflife(signals: np.ndarray, max_lag: int = 50) -> int:
+    """Estimate signal half-life via autocorrelation decay.
+
+    Returns the first lag k where autocorrelation drops below 0.5.
+    If never drops, returns max_lag.
+    """
+    arr = np.asarray(signals, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    n = arr.size
+    if n < 8:
+        return 0
+    mean = arr.mean()
+    var = float(np.var(arr))
+    if var < 1e-15:
+        return 0
+    for lag in range(1, min(max_lag + 1, n // 2)):
+        cov = float(np.mean((arr[:-lag] - mean) * (arr[lag:] - mean)))
+        acf = cov / var
+        if acf < 0.5:
+            return lag
+    return max_lag
+
+
+def compute_sortino(equity_curve: Iterable[float], annualization_factor: float = 252.0) -> float:
+    """Sortino ratio — penalises downside volatility only."""
+    values = np.asarray(list(equity_curve), dtype=np.float64)
+    if values.size < 2:
+        return 0.0
+    base = values[:-1]
+    delta = np.diff(values)
+    returns = np.divide(delta, base, out=np.zeros_like(delta), where=base != 0)
+    returns = returns[np.isfinite(returns)]
+    if returns.size < 2:
+        return 0.0
+    neg = returns[returns < 0.0]
+    downside_std = float(np.std(neg)) if neg.size >= 2 else 1e-9
+    if downside_std < 1e-15:
+        return 0.0
+    return float(np.mean(returns) / downside_std * np.sqrt(annualization_factor))
+
+
+def compute_cvar(equity_curve: Iterable[float], alpha: float = 0.05) -> float:
+    """CVaR (Expected Shortfall) at the given alpha quantile."""
+    values = np.asarray(list(equity_curve), dtype=np.float64)
+    if values.size < 2:
+        return 0.0
+    base = values[:-1]
+    delta = np.diff(values)
+    returns = np.divide(delta, base, out=np.zeros_like(delta), where=base != 0)
+    returns = returns[np.isfinite(returns)]
+    if returns.size < 2:
+        return 0.0
+    cutoff = float(np.quantile(returns, alpha))
+    tail = returns[returns <= cutoff]
+    if tail.size == 0:
+        return cutoff
+    return float(np.mean(tail))
+
+
 def compute_turnover(signals: Iterable[float]) -> float:
     arr = np.asarray(list(signals), dtype=np.float64)
     if arr.size < 2:

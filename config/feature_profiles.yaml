@@ -1,0 +1,22 @@
+default_profile_id: lob_shared_v1_default
+profiles:
+  - profile_id: lob_shared_v1_default
+    feature_set_id: lob_shared_v1
+    schema_version: 1
+    enabled: true
+    state: active
+    owner: platform
+    params:
+      ema_window: 8
+      ofi_enabled: true
+    notes: "Default shared LOB microstructure profile"
+  - profile_id: lob_shared_v1_shadow_fast
+    feature_set_id: lob_shared_v1
+    schema_version: 1
+    enabled: false
+    state: shadow
+    owner: research
+    params:
+      ema_window: 5
+      ofi_enabled: true
+    notes: "Shadow-only faster EMA candidate profile"

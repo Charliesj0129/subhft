@@ -1,53 +1,102 @@
 from __future__ import annotations
 
 import os
-import re
 from typing import Iterable
 
 from structlog import get_logger
 
 logger = get_logger("recorder.schema")
 
-DEFAULT_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "../schemas/clickhouse.sql")
+MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "../migrations/clickhouse")
 
 
-def _load_statements(schema_path: str = DEFAULT_SCHEMA_PATH) -> list[str]:
-    if not os.path.exists(schema_path):
-        return []
-    with open(schema_path, "r") as f:
-        sql_script = f.read()
-    return [stmt.strip() for stmt in sql_script.split(";") if stmt.strip()]
+def _init_migrations_table(client) -> None:
+    """Create the schema_migrations table if it doesn't exist."""
+    client.command("CREATE DATABASE IF NOT EXISTS hft")
+    client.command("""
+        CREATE TABLE IF NOT EXISTS hft.schema_migrations (
+            version String,
+            name String,
+            applied_at DateTime DEFAULT now()
+        ) ENGINE = MergeTree()
+        ORDER BY version
+    """)
 
 
-def apply_schema(client, schema_path: str = DEFAULT_SCHEMA_PATH) -> None:
-    statements = _load_statements(schema_path)
-    if not statements:
-        logger.warning("Schema file not found", path=schema_path)
+def apply_schema(client, schema_path: str | None = None) -> None:
+    """
+    Run all unapplied ClickHouse schema migrations.
+    This replaces the legacy behavior of running a single SQL file.
+    """
+    _init_migrations_table(client)
+
+    # Get all applied migrations
+    try:
+        result = client.query("SELECT version FROM hft.schema_migrations")
+        applied_versions = {row[0] for row in result.result_rows}
+    except Exception as exc:
+        logger.warning("Failed to query schema_migrations", error=str(exc))
+        applied_versions = set()
+
+    # Find migration files
+    if not os.path.exists(MIGRATIONS_DIR):
+        logger.warning("Migrations directory not found", path=MIGRATIONS_DIR)
         return
-    for stmt in statements:
-        try:
-            client.command(stmt)
-        except Exception as exc:
-            logger.warning("Schema statement failed", error=str(exc), statement=stmt[:160])
-    logger.info("Schema initialized from SQL")
+
+    migration_files = sorted([f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql")])
+    if not migration_files:
+        logger.warning("No migration files found", path=MIGRATIONS_DIR)
+        return
+
+    for filename in migration_files:
+        # Expected format: YYYYMMDD_NNN_migration_name.sql
+        parts = filename.split("_", 2)
+        if len(parts) >= 2:
+            version = f"{parts[0]}_{parts[1]}"
+            name = parts[2].replace(".sql", "") if len(parts) > 2 else ""
+        else:
+            version = filename.replace(".sql", "")
+            name = ""
+
+        if version in applied_versions:
+            continue
+
+        filepath = os.path.join(MIGRATIONS_DIR, filename)
+        logger.info("Applying migration", version=version, name=name)
+
+        with open(filepath, "r") as f:
+            content = f.read()
+
+        # Parse Up section
+        up_content = content
+        if "-- Down" in content:
+            up_content = content.split("-- Down")[0]
+        if "-- Up" in up_content:
+            up_content = up_content.split("-- Up")[-1]
+
+        # Extract individual statements
+        statements = [stmt.strip() for stmt in up_content.split(";") if stmt.strip()]
+        for stmt in statements:
+            try:
+                client.command(stmt)
+            except Exception as exc:
+                logger.error("Migration statement failed", version=version, statement=stmt[:160], error=str(exc))
+                raise
+
+        # Record successful migration
+        client.command("INSERT INTO hft.schema_migrations (version, name) VALUES", [[version, name]])
+        logger.info("Migration applied successfully", version=version, name=name)
+
+    logger.info("Schema migrations up to date")
+
+
+# =============================================================================
+# Legacy compatibility stubs for older components
+# =============================================================================
 
 
 def _view_uses_legacy_price(client, name: str) -> bool:
-    try:
-        result = client.query(
-            "SELECT create_table_query FROM system.tables WHERE database='hft' AND name=%(name)s",
-            parameters={"name": name},
-        )
-        if not result.result_rows:
-            return False
-        query = result.result_rows[0][0] or ""
-    except Exception as exc:
-        logger.warning("Failed to inspect view definition", name=name, error=str(exc))
-        return False
-
-    has_price = bool(re.search(r"\\bprice\\b", query))
-    has_price_scaled = "price_scaled" in query
-    return has_price and not has_price_scaled
+    return False
 
 
 def _execute_all(client, statements: Iterable[str]) -> None:
@@ -56,64 +105,8 @@ def _execute_all(client, statements: Iterable[str]) -> None:
 
 
 def ensure_price_scaled_views(client) -> bool:
-    """Repair legacy views that still reference `price` instead of `price_scaled`."""
-    legacy_views = ("candles_1m_mv", "ohlcv_1m_mv")
-    if not any(_view_uses_legacy_price(client, name) for name in legacy_views):
-        return False
-
-    logger.warning("Legacy candles_1m_mv detected, repairing view definitions")
-    _execute_all(
-        client,
-        [
-            "CREATE DATABASE IF NOT EXISTS hft",
-            "DROP TABLE IF EXISTS hft.candles_1m_mv",
-            "DROP TABLE IF EXISTS hft.ohlcv_1m_mv",
-            """
-            CREATE TABLE IF NOT EXISTS hft.ohlcv_1m (
-                symbol String,
-                exchange String,
-                bucket DateTime Codec(DoubleDelta, LZ4),
-                open_scaled Int64 Codec(DoubleDelta, LZ4),
-                high_scaled Int64 Codec(DoubleDelta, LZ4),
-                low_scaled Int64 Codec(DoubleDelta, LZ4),
-                close_scaled Int64 Codec(DoubleDelta, LZ4),
-                volume Int64 Codec(DoubleDelta, LZ4),
-                tick_count UInt64
-            ) ENGINE = SummingMergeTree()
-            PARTITION BY toYYYYMM(bucket)
-            ORDER BY (symbol, bucket)
-            """,
-            """
-            CREATE MATERIALIZED VIEW IF NOT EXISTS hft.ohlcv_1m_mv
-            TO hft.ohlcv_1m AS
-            SELECT
-                symbol,
-                exchange,
-                toStartOfMinute(toDateTime(exch_ts / 1000000000)) AS bucket,
-                argMin(price_scaled, exch_ts) AS open_scaled,
-                max(price_scaled) AS high_scaled,
-                min(price_scaled) AS low_scaled,
-                argMax(price_scaled, exch_ts) AS close_scaled,
-                sum(volume) AS volume,
-                count() AS tick_count
-            FROM hft.market_data
-            WHERE type = 'Tick' AND price_scaled > 0
-            GROUP BY symbol, exchange, bucket
-            """,
-            """
-            CREATE VIEW IF NOT EXISTS hft.candles_1m_mv AS
-            SELECT
-                symbol,
-                exchange,
-                bucket AS window,
-                open_scaled,
-                high_scaled,
-                low_scaled,
-                close_scaled,
-                volume,
-                tick_count
-            FROM hft.ohlcv_1m
-            """,
-        ],
-    )
-    return True
+    """
+    Legacy view repair function. Now handled entirely by migrations.
+    Returns False as a no-op to indicate no repair was needed here.
+    """
+    return False

@@ -14,9 +14,19 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
+from hft_platform.strategy.compat import check_strategy_feature_compat
 from hft_platform.strategy.registry import StrategyRegistry
 
 logger = get_logger("strategy_runner")
+
+
+def _get_trace_sampler():
+    try:
+        from hft_platform.diagnostics.trace import get_trace_sampler
+
+        return get_trace_sampler()
+    except Exception:
+        return None
 
 
 def _obs_policy() -> str:
@@ -58,10 +68,12 @@ class StrategyRunner:
         self._feature_value_source = getattr(fe, "get_feature", None) if fe else None
         self._feature_view_source = getattr(fe, "get_feature_view", None) if fe else None
         self._feature_set_source = getattr(fe, "feature_set_id", None) if fe else None
+        self._feature_profile_source = getattr(fe, "active_profile_id", None) if fe else None
         self._feature_tuple_source = getattr(fe, "get_feature_tuple", None) if fe else None
 
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
+        self._trace_sampler = _get_trace_sampler()
         self._obs_policy = _obs_policy()
         self._diagnostic_metrics_enabled = self._obs_policy != "minimal"
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
@@ -108,6 +120,12 @@ class StrategyRunner:
         self._circuit_halted_at_ns: dict[str, int] = {}
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
+        self._feature_compat_fail_fast = os.getenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
 
         # Load initial
         for strat in self.registry.instantiate():
@@ -133,6 +151,33 @@ class StrategyRunner:
             self._flush_pending_strategy_metrics()
 
     def register(self, strategy: BaseStrategy):
+        compat_issues = check_strategy_feature_compat(strategy, self.feature_engine)
+        for issue in compat_issues:
+            log_fn = logger.error if issue.level == "error" else logger.warning
+            log_fn(
+                "Strategy/Feature compatibility issue",
+                strategy_id=issue.strategy_id,
+                code=issue.code,
+                message=issue.message,
+                level=issue.level,
+            )
+            try:
+                if (
+                    issue.level == "error"
+                    and self.metrics
+                    and hasattr(self.metrics, "feature_profile_compat_failures_total")
+                ):
+                    self.metrics.feature_profile_compat_failures_total.labels(
+                        strategy=str(issue.strategy_id),
+                        code=str(issue.code),
+                    ).inc()
+            except Exception:
+                pass
+        if self._feature_compat_fail_fast and any(i.level == "error" for i in compat_issues):
+            raise RuntimeError(
+                f"Strategy '{strategy.strategy_id}' failed feature compatibility checks: "
+                + "; ".join(i.code for i in compat_issues if i.level == "error")
+            )
         self.strategies.append(strategy)
         self._resolve_strategy_symbols(strategy)
         self._strat_executors.append(self._build_executor_entry(strategy))
@@ -237,6 +282,7 @@ class StrategyRunner:
             feature_source=self._feature_value_source,
             feature_view_source=self._feature_view_source,
             feature_set_source=self._feature_set_source,
+            feature_profile_source=self._feature_profile_source,
             feature_tuple_source=self._feature_tuple_source,
         )
         return (strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g)
@@ -393,10 +439,28 @@ class StrategyRunner:
             ctx.positions = positions
 
             start = time.perf_counter_ns()
+            self._emit_trace(
+                "strategy_dispatch_start",
+                trace_id,
+                {
+                    "strategy_id": strategy.strategy_id,
+                    "event_type": type(event).__name__,
+                    "symbol": getattr(event, "symbol", ""),
+                },
+            )
             try:
                 intents = strategy.handle_event(ctx, event)
             except Exception as e:
                 logger.error("Strategy Exception", id=strategy.strategy_id, error=str(e))
+                self._emit_trace(
+                    "strategy_exception",
+                    trace_id,
+                    {
+                        "strategy_id": strategy.strategy_id,
+                        "event_type": type(event).__name__,
+                        "error": str(e),
+                    },
+                )
                 intents = []
                 if self.metrics:
                     exc_m = getattr(self.metrics, "strategy_exceptions_total", None)
@@ -440,6 +504,17 @@ class StrategyRunner:
                         logger.info("Strategy circuit recovered to normal", id=sid)
 
             duration = time.perf_counter_ns() - start
+            self._emit_trace(
+                "strategy_dispatch_done",
+                trace_id,
+                {
+                    "strategy_id": strategy.strategy_id,
+                    "event_type": type(event).__name__,
+                    "duration_ns": int(duration),
+                    "intent_count": len(intents or []),
+                    "symbol": getattr(event, "symbol", ""),
+                },
+            )
 
             # Direct metric use
             sid = strategy.strategy_id
@@ -494,6 +569,17 @@ class StrategyRunner:
 
             if intents:
                 for intent in intents:
+                    self._emit_trace(
+                        "strategy_intent_submit",
+                        trace_id,
+                        {
+                            "strategy_id": strategy.strategy_id,
+                            "intent_type": int(getattr(intent, "intent_type", -1))
+                            if not (isinstance(intent, tuple) and intent and intent[0] == "typed_intent_v1")
+                            else -2,
+                            "typed": bool(isinstance(intent, tuple) and intent and intent[0] == "typed_intent_v1"),
+                        },
+                    )
                     if (
                         self._typed_intent_fastpath
                         and isinstance(intent, tuple)
@@ -503,6 +589,15 @@ class StrategyRunner:
                         self._risk_submit_typed(intent)
                     else:
                         self._risk_submit(intent)
+
+    def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
+        sampler = getattr(self, "_trace_sampler", None)
+        if sampler is None:
+            return
+        try:
+            sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
+        except Exception:
+            return
 
     def _extract_event_trace(self, event: Any) -> tuple[int, str]:
         source_ts_ns = 0

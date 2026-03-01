@@ -1,4 +1,7 @@
 # Defining, Estimating and Using Credit Term Structures Part 3: Consistent CDS-Bond Basis
+ref: 001
+Authors: Arthur M. Berd, Roy Mashal, Peili Wang (Lehman Brothers)
+Published: 2004 (Presented), 2009 (ArXiv Upload)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

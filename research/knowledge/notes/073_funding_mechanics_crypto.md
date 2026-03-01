@@ -1,4 +1,5 @@
 # Who sets the range? Funding mechanics and 4h context in crypto markets
+ref: 073
 
 **Authors**: Habib Badawi, Mohamed Hani, Taufikin Taufikin
 **Date**: 2025

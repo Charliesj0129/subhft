@@ -46,6 +46,10 @@ class ServiceRegistry:
     recon_service: ReconciliationService
     strategy_runner: StrategyRunner
     recorder: RecorderService
+    feature_profile_registry: Optional[Any] = field(default=None)
+    feature_profile: Optional[Any] = field(default=None)
+    feature_rollout_controller: Optional[Any] = field(default=None)
+    feature_rollout_assignment: Optional[Any] = field(default=None)
     # CE-M2: GatewayService wiring (appended at end for slots safety)
     gateway_service: Optional[Any] = field(default=None)
     intent_channel: Optional[Any] = field(default=None)

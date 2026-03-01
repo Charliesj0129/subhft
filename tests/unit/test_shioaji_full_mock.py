@@ -247,6 +247,36 @@ class TestShioajiClientFull(unittest.TestCase):
         value = self.client._cache_get("usage")
         self.assertIsNone(value)
 
+    def test_quote_schema_guard_rejects_v0_shape_when_v1_locked(self):
+        self.client._quote_version = "v1"
+        self.client._quote_schema_guard = True
+        self.client._quote_schema_guard_strict = True
+        self.client.tick_callback = MagicMock()
+
+        class Quote:
+            code = "2330"
+
+        self.client._process_tick("Q/TSE/2330", Quote())
+
+        self.client.tick_callback.assert_not_called()
+        self.assertGreaterEqual(self.client._quote_schema_mismatch_count, 1)
+
+    def test_quote_schema_guard_allows_v1_object_shape(self):
+        self.client._quote_version = "v1"
+        self.client._quote_schema_guard = True
+        self.client._quote_schema_guard_strict = True
+        self.client.tick_callback = MagicMock()
+
+        class BidAsk:
+            code = "2330"
+            bid_price = [100]
+            ask_price = [101]
+
+        # Common v1 callback shape: (exchange, quote_obj)
+        self.client._process_tick("TSE", BidAsk())
+
+        self.client.tick_callback.assert_called_once()
+
     def test_session_refresh_config(self):
         """Test session refresh configuration from env."""
         with patch.dict(os.environ, {"HFT_SESSION_REFRESH_S": "3600"}):

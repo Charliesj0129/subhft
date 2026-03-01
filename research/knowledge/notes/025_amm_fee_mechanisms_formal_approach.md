@@ -1,4 +1,8 @@
 # A Formal Approach to AMM Fee Mechanisms with Lean 4
+ref: 025
+arxiv: https://arxiv.org/abs/2602.00101
+Authors: Marco Dessalvi, Massimo Bartoletti, Alberto Lluch-Lafuente
+Published: 2026 (January 2026; ArXiv Jan 24, 2026)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

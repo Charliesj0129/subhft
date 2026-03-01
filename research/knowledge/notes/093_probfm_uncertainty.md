@@ -1,4 +1,5 @@
 # ProbFM: Probabilistic Time Series Foundation Model with Uncertainty
+ref: 093
 
 **Authors**: Arundeep Chinta, Lucas Vinh Tran, Jay Katukuri
 **Date**: 2026-01-15

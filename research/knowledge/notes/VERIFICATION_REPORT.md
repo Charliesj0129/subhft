@@ -3,7 +3,7 @@
 ## Verification Report for Research Paper Hypotheses
 
 **驗證日期**: 2026-02-05
-**驗證工具**: `verify_paper_hypotheses_v2.py`
+**驗證工具**: `research/tools/legacy/verify_paper_hypotheses_v2.py`
 
 ---
 
@@ -116,8 +116,8 @@ curvature_delta = gamma_t - gamma_t_1
 
 ## 📎 相關代碼
 
-- `research/verify_paper_hypotheses.py` - 原始驗證 (使用已有模擬數據)
-- `research/verify_paper_hypotheses_v2.py` - 進階驗證 (使用 fBm + Hawkes)
+- `research/verify_paper_hypotheses.py` - 原始驗證 (已刪除，保留歷史記錄)
+- `research/tools/legacy/verify_paper_hypotheses_v2.py` - 進階驗證 (使用 fBm + Hawkes)
 
 ---
 

@@ -5,9 +5,13 @@ Tests:
 - Retry same idempotency_key 3× → 1 dispatch, 2 dedup hits.
 - storm_guard HALT → no NEW dispatches; CANCEL still passes (policy allows).
 - submit_nowait when channel full → QueueFull propagated.
+- active/standby gateway HA lease failover avoids duplicate broker dispatches.
 """
 import asyncio
-from unittest.mock import MagicMock
+import os
+import tempfile
+from contextlib import suppress
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -157,3 +161,81 @@ async def test_queue_full_raises():
 
     with pytest.raises(asyncio.QueueFull):
         channel.submit_nowait(_make_intent(3, "k3"))
+
+
+@pytest.mark.asyncio
+async def test_gateway_ha_failover_no_duplicate_dispatch():
+    """CE2-08/CE2-09: two gateways process duplicated inputs; only leader dispatches, standby takes over after outage."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        lease_path = os.path.join(tmpdir, "gateway.leader.lock")
+        with patch.dict(
+            os.environ,
+            {
+                "HFT_GATEWAY_HA_ENABLED": "1",
+                "HFT_GATEWAY_LEADER_LEASE_PATH": lease_path,
+                "HFT_GATEWAY_LEADER_LEASE_REFRESH_S": "0.05",
+                "HFT_GATEWAY_METRICS": "0",
+            },
+            clear=False,
+        ):
+            ch1 = LocalIntentChannel(maxsize=1024, ttl_ms=0)
+            ch2 = LocalIntentChannel(maxsize=1024, ttl_ms=0)
+            shared_api_queue: asyncio.Queue = asyncio.Queue(maxsize=4096)
+            svc1 = _build_service(ch1, shared_api_queue)
+            svc2 = _build_service(ch2, shared_api_queue)
+
+            # Deterministic cmd_id for duplicate detection across gateways.
+            for svc in (svc1, svc2):
+                def _create_command(intent):
+                    return OrderCommand(
+                        cmd_id=int(intent.intent_id),
+                        intent=intent,
+                        deadline_ns=9_999_999_999_999,
+                        storm_guard_state=StormGuardState.NORMAL,
+                    )
+
+                svc._risk_engine.create_command.side_effect = _create_command
+
+            t1 = asyncio.create_task(svc1.run())
+            t2 = asyncio.create_task(svc2.run())
+            await asyncio.sleep(0.10)  # allow lease election
+
+            def _submit_duped_batch(start_id: int, n: int) -> None:
+                for i in range(n):
+                    iid = start_id + i
+                    key = f"ha-{iid}"
+                    ch1.submit_nowait(_make_intent(iid, key))
+                    ch2.submit_nowait(_make_intent(iid, key))
+
+            _submit_duped_batch(1, 50)
+            await asyncio.sleep(0.30)
+
+            # Only one gateway should have dispatched each unique intent.
+            assert shared_api_queue.qsize() == 50
+
+            leader_first = svc1 if svc1.get_health().get("leader_active") else svc2
+            leader_task = t1 if leader_first is svc1 else t2
+
+            # Simulate gateway outage (leader dies).
+            leader_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await leader_task
+            await asyncio.sleep(0.20)  # standby should acquire lease
+
+            _submit_duped_batch(51, 50)
+            await asyncio.sleep(0.40)
+
+            for task in (t1, t2):
+                if task.done():
+                    continue
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+            cmds = []
+            while not shared_api_queue.empty():
+                cmds.append(shared_api_queue.get_nowait())
+            assert len(cmds) == 100
+            cmd_ids = [int(cmd.cmd_id) for cmd in cmds]
+            assert len(set(cmd_ids)) == 100
+            assert min(cmd_ids) == 1 and max(cmd_ids) == 100

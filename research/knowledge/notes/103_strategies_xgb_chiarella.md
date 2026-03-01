@@ -1,4 +1,5 @@
 # Understanding Intra-day Price Formation Process by Agent-Based Financial Market Simulation: Calibrating the Extended Chiarella Model
+ref: 103
 
 **Authors**: Kang Gao, Perukrishnen Vytelingum, Stephen Weston, Wayne Luk, Ce Guo
 **Date**: 2022-08

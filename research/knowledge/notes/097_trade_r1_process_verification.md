@@ -1,4 +1,5 @@
 # Trade-R1: Bridging Verifiable Rewards to Stochastic Environments via Process-Level Reasoning Verification
+ref: 097
 
 **Authors**: Rui Sun, Yifan Sun, Sheng Xu, Li Zhao, Jing Li, Daxin Jiang, Cheng Hua, Zuo Bai
 **Date**: 2026-01-08

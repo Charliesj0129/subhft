@@ -99,10 +99,17 @@ class FeatureRegistry:
         return reg
 
 
+# Canonical version string for the default LOB feature set.
+# Bump this (and create a new build_default_lob_feature_set_vN function) whenever
+# the feature layout or semantics change incompatibly.  Alpha manifests that declare
+# feature_set_version must match this constant before Gate D promotion.
+FEATURE_SET_VERSION = "lob_shared_v1"
+
+
 def build_default_lob_feature_set_v1() -> FeatureSet:
     """Default shared LOB-derived feature set for the initial FeatureEngine prototype."""
     return FeatureSet(
-        feature_set_id="lob_shared_v1",
+        feature_set_id=FEATURE_SET_VERSION,
         schema_version=1,
         features=(
             FeatureSpec("best_bid", "i64", scale=10_000, source_kind="book"),

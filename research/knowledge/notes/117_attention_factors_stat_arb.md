@@ -1,4 +1,5 @@
 # Attention Factors for Statistical Arbitrage
+ref: 117
 
 **Authors**: Elliot L. Epstein, Rose Wang, Jaewon Choi, Markus Pelger (Stanford University, Hanwha Life)
 **Date**: 2025-11

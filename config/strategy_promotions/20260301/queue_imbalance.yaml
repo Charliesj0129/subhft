@@ -1,0 +1,39 @@
+alpha_id: queue_imbalance
+enabled: true
+weight: 0.1
+owner: charlie
+expiry_review_date: '2026-03-31'
+forced: false
+source_commit: c7b6c37
+config_version: v1
+parent_config_version: null
+scorecard_snapshot:
+  sharpe_oos: 12.875634381400195
+  max_drawdown: -6.224104011239966e-07
+  turnover: 0.01175058752937647
+  correlation_pool_max: 0.26806865410178776
+thresholds:
+  min_sharpe_oos: 0.0
+  max_abs_drawdown: 0.3
+  max_turnover: 2.0
+  max_correlation: 0.7
+  min_shadow_sessions: 5
+  min_paper_trade_calendar_days: 7
+  min_paper_trade_trading_days: 5
+  min_paper_trade_session_minutes: 60
+guardrails:
+  max_live_slippage_bps: 3.0
+  max_live_drawdown_contribution: 0.02
+  max_execution_error_rate: 0.01
+readiness:
+  require_paper_trade_governance: true
+  enable_rust_readiness_gate: false
+  rust_module_name: null
+rollback:
+  trigger:
+    live_slippage_bps_gt: 3.0
+    live_drawdown_contribution_gt: 0.02
+    execution_error_rate_gt: 0.01
+  action:
+    set_weight_to_zero: true
+    open_incident: true

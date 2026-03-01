@@ -49,6 +49,15 @@ _FEATURE_QUALITY_FLAG_LABELS = (
 )
 
 
+def _get_trace_sampler():
+    try:
+        from hft_platform.diagnostics.trace import get_trace_sampler
+
+        return get_trace_sampler()
+    except Exception:
+        return None
+
+
 def _looks_like_md(obj: object) -> bool:
     if obj is None:
         return False
@@ -238,6 +247,7 @@ class MarketDataService:
         self.metrics = {"count": 0, "start_ts": timebase.now_s()}
         self.metrics_registry = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
+        self._trace_sampler = _get_trace_sampler()
         self._feed_last_event_metric_child = None
         self._feed_reconnect_gap_metric_child = None
         self._md_callback_parse_metric_children: dict[str, Any] = {}
@@ -449,6 +459,7 @@ class MarketDataService:
                     norm_duration = time.perf_counter_ns() - norm_start_ns
                 except Exception as ne:
                     logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))
+                    self._emit_trace("md_normalize_error", "", {"raw_type": str(type(raw)), "error": str(ne)})
                     norm_duration = 0
 
                 if event:
@@ -514,6 +525,31 @@ class MarketDataService:
                             lob_duration,
                             trace_id=trace_id,
                             symbol=getattr(event, "symbol", ""),
+                        )
+                    self._emit_trace(
+                        "md_event",
+                        trace_id,
+                        {
+                            "symbol": getattr(event, "symbol", ""),
+                            "event_type": type(event).__name__,
+                            "norm_ns": int(norm_duration or 0),
+                            "lob_ns": int(lob_duration or 0),
+                            "has_stats": bool(stats is not None),
+                            "has_feature_update": bool(feature_update is not None),
+                        },
+                    )
+                    if feature_update is not None:
+                        self._emit_trace(
+                            "feature_update",
+                            trace_id,
+                            {
+                                "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
+                                "feature_set_id": getattr(
+                                    feature_update, "feature_set_id", self._feature_set_id_cached
+                                ),
+                                "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
+                                "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
+                            },
                         )
                     if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
                         self._record_direct_event(event)
@@ -821,6 +857,15 @@ class MarketDataService:
         for event in events:
             self._publish_nowait(event)
 
+    def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
+        sampler = getattr(self, "_trace_sampler", None)
+        if sampler is None:
+            return
+        try:
+            sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
+        except Exception:
+            return
+
     def _maybe_update_features(
         self,
         event: TickEvent | BidAskEvent,
@@ -896,6 +941,11 @@ class MarketDataService:
                         pass
             return feature_update
         except Exception as exc:
+            self._emit_trace(
+                "feature_update_error",
+                "",
+                {"symbol": getattr(event, "symbol", ""), "reason": str(exc)},
+            )
             self._feature_metrics_counter += 1
             if self.metrics_registry and self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
                 try:
@@ -991,6 +1041,16 @@ class MarketDataService:
             self._feature_shadow_mismatch_counter += 1
             for fid in mismatched:
                 self._emit_feature_shadow_mismatch_metric(primary_feature_set, fid)
+            self._emit_trace(
+                "feature_shadow_mismatch",
+                "",
+                {
+                    "symbol": getattr(event, "symbol", ""),
+                    "feature_set_id": primary_feature_set,
+                    "mismatch_count": len(mismatched),
+                    "mismatched_features": mismatched[:16],
+                },
+            )
             if self._feature_shadow_mismatch_counter % self._feature_shadow_warn_every == 1:
                 logger.warning(
                     "feature_shadow_parity_mismatch",

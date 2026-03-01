@@ -1,4 +1,8 @@
 # Asymptotic and Finite-Sample Distributions of Empirical Relative Entropy for Change-Point Detection
+ref: 009
+arxiv: https://arxiv.org/abs/2512.16411
+Authors: Matthieu Garcin & Louis Perot
+Published: 2025 (December 19, 2025; ArXiv Dec 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

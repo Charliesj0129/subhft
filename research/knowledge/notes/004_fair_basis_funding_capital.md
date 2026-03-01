@@ -1,4 +1,7 @@
 # The Fair Basis: Funding and capital in the reduced form framework
+ref: 004
+Authors: Wujiang Lou
+Published: 2017 (Updated 2019/2020)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

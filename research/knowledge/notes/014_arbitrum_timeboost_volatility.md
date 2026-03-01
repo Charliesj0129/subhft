@@ -1,4 +1,8 @@
 # Impact of Volatility on Time-Based Transaction Ordering Policies (Arbitrum Timeboost)
+ref: 014
+arxiv: https://arxiv.org/abs/2512.23386
+Authors: Ko Sunghun, Jinsuk Park (Matroos Labs & KAIST)
+Published: 2025 (December 2025; ArXiv Dec 29, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

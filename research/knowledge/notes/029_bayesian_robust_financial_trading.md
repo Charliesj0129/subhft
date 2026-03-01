@@ -1,4 +1,8 @@
 # Bayesian Robust Financial Trading with Adversarial Synthetic Market Data
+ref: 029
+arxiv: https://arxiv.org/abs/2601.17008
+Authors: Haochong Xia, Simin Li, Ruixiao Xu, et al. (Nanyang Technological University & Beihang University)
+Published: 2026 (January 14, 2026; ArXiv)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

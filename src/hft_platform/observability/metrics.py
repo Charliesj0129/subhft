@@ -75,6 +75,7 @@ class MetricsRegistry:
                 # Phase 12 metrics
                 "shioaji_keepalive_failures_total",
                 "quote_version_switch_total",
+                "quote_schema_mismatch_total",
                 "shioaji_contract_lookup_errors_total",
                 "latency_spans_dropped_total",
                 "clickhouse_connection_health",
@@ -124,6 +125,11 @@ class MetricsRegistry:
                 "feature_quality_flags_total",
                 "feature_shadow_parity_checks_total",
                 "feature_shadow_parity_mismatch_total",
+                "feature_profile_activations_total",
+                "feature_profile_rollout_state",
+                "feature_profile_compat_failures_total",
+                "contract_refresh_total",
+                "contract_refresh_symbols_changed_total",
             ]
         )
         # Market Data
@@ -298,6 +304,11 @@ class MetricsRegistry:
             "quote_version_switch_total",
             "Quote version switches (upgrade/downgrade)",
             ["direction"],  # "upgrade" or "downgrade"
+        )
+        self.quote_schema_mismatch_total = Counter(
+            "quote_schema_mismatch_total",
+            "Quote callback payload schema mismatches rejected by schema guard",
+            ["expected", "reason"],
         )
         # Contract lookup errors by symbol (A5)
         self.shioaji_contract_lookup_errors_total = Counter(
@@ -532,6 +543,31 @@ class MetricsRegistry:
             "feature_shadow_parity_mismatch_total",
             "Feature shadow parity mismatches",
             ["feature_set", "feature_id"],
+        )
+        self.feature_profile_activations_total = Counter(
+            "feature_profile_activations_total",
+            "Feature profile activations / rollbacks",
+            ["feature_set", "profile_id", "action"],  # action: activate|rollback|shadow
+        )
+        self.feature_profile_rollout_state = Gauge(
+            "feature_profile_rollout_state",
+            "Feature profile rollout state (0=disabled,1=shadow,2=active)",
+            ["feature_set", "profile_id"],
+        )
+        self.feature_profile_compat_failures_total = Counter(
+            "feature_profile_compat_failures_total",
+            "Strategy/Feature compatibility failures",
+            ["strategy", "code"],
+        )
+        self.contract_refresh_total = Counter(
+            "contract_refresh_total",
+            "Contract refresh operations",
+            ["result"],  # ok|error|skipped_locked
+        )
+        self.contract_refresh_symbols_changed_total = Counter(
+            "contract_refresh_symbols_changed_total",
+            "Symbol changes detected after contract refresh",
+            ["change"],  # added|removed|same
         )
 
         # System (v2)

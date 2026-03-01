@@ -34,6 +34,15 @@ def _is_typed_order_cmd_frame(obj: Any) -> TypeGuard[TypedOrderCommandFrame]:
     return isinstance(obj, tuple) and len(obj) >= 6 and obj[0] == "typed_order_cmd_v1"
 
 
+def _get_trace_sampler():
+    try:
+        from hft_platform.diagnostics.trace import get_trace_sampler
+
+        return get_trace_sampler()
+    except Exception:
+        return None
+
+
 class OrderAdapter:
     def __init__(
         self, config_path: str, order_queue: asyncio.Queue, shioaji_client, order_id_map: Dict[str, str] | None = None
@@ -72,6 +81,7 @@ class OrderAdapter:
         self._api_pending: dict[tuple, OrderCommand] = {}
         self._api_worker_task: asyncio.Task | None = None
         self._supports_typed_command_ingress = True
+        self._trace_sampler = _get_trace_sampler()
 
         # Dead Letter Queue for rejected orders
         self._dlq: DeadLetterQueue = get_dlq()
@@ -255,6 +265,9 @@ class OrderAdapter:
 
     async def _dispatch_to_api(self, cmd: OrderCommand):
         intent = cmd.intent
+        self._emit_trace(
+            "order_dispatch_start", intent, {"cmd_id": int(cmd.cmd_id), "intent_type": int(intent.intent_type)}
+        )
         try:
             order_key = f"{intent.strategy_id}:{intent.intent_id}"
 
@@ -446,12 +459,17 @@ class OrderAdapter:
             logger.error("Broker Error", error=str(e))
             self.metrics.order_reject_total.inc()
             self.circuit_breaker.record_failure()
+            self._emit_trace("order_dispatch_error", intent, {"cmd_id": int(cmd.cmd_id), "error": str(e)})
+        else:
+            self._emit_trace("order_dispatch_ok", intent, {"cmd_id": int(cmd.cmd_id)})
 
     async def _enqueue_api(self, cmd: OrderCommand) -> None:
         try:
             self._api_queue.put_nowait(cmd)
+            self._emit_trace("order_enqueue_api", cmd.intent, {"cmd_id": int(cmd.cmd_id)})
         except asyncio.QueueFull:
             logger.warning("API queue full - dropping", cmd_id=cmd.cmd_id)
+            self._emit_trace("order_reject", cmd.intent, {"reason": "API_QUEUE_FULL", "cmd_id": int(cmd.cmd_id)})
 
     def submit_typed_command_nowait(self, frame: TypedOrderCommandFrame) -> None:
         """Prototype typed command ingress from GatewayService (avoids early materialization)."""
@@ -639,3 +657,21 @@ class OrderAdapter:
             return None
         finally:
             self._api_semaphore.release()
+
+    def _emit_trace(self, stage: str, intent: OrderIntent, payload: dict[str, Any]) -> None:
+        sampler = getattr(self, "_trace_sampler", None)
+        if sampler is None:
+            return
+        try:
+            sampler.emit(
+                stage=stage,
+                trace_id=str(getattr(intent, "trace_id", "") or ""),
+                payload={
+                    "strategy_id": intent.strategy_id,
+                    "symbol": intent.symbol,
+                    "intent_type": int(intent.intent_type),
+                    **payload,
+                },
+            )
+        except Exception:
+            pass

@@ -1,4 +1,8 @@
 # BondMM-A: Decentralized Fixed-Income Lending AMM Supporting Arbitrary Maturities
+ref: 011
+arxiv: https://arxiv.org/abs/2512.16080
+Authors: Tianyi Ma (Shanghai Jiao Tong University)
+Published: 2025 (December 2025; ArXiv Dec 18, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

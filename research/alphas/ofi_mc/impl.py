@@ -109,9 +109,13 @@ class OFIMCAlpha(OFIMCFactor):
             paper_refs=("018",),
             data_fields=("bid_px", "bid_qty", "ask_px", "ask_qty", "trade_vol", "current_mid"),
             complexity="O(1)",
-            status=AlphaStatus.DRAFT,
+            status=AlphaStatus.GATE_B,
             tier=AlphaTier.TIER_2,
             rust_module="alpha_ofi",
+            # SOP governance: roles and skills applied during research.
+            roles_used=("planner", "code-reviewer"),
+            skills_used=("iterative-retrieval", "validation-gate"),
+            feature_set_version="lob_shared_v1",
         )
 
     def update(self, *args, **kwargs) -> float:

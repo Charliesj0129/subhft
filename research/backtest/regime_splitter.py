@@ -28,3 +28,42 @@ def split_by_vol_regime(forward_returns: np.ndarray) -> dict[str, np.ndarray]:
     median = float(np.median(vol))
     idx = np.arange(ret.size, dtype=np.int64)
     return {"high_vol": idx[vol >= median], "low_vol": idx[vol < median]}
+
+
+def cusum_breakpoints(
+    series: np.ndarray,
+    threshold: float = 5.0,
+) -> list[int]:
+    """Detect structural breakpoints using CUSUM on standardized deviations.
+
+    Returns indices where the CUSUM statistic exceeds *threshold* standard
+    deviations and resets.  High-count → regime instability → alpha risk.
+
+    Args:
+        series: 1-d signal or returns array.
+        threshold: Number of std-devs to trigger a breakpoint reset.
+    """
+    arr = np.asarray(series, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    n = arr.size
+    if n < 8:
+        return []
+
+    mean = float(arr.mean())
+    std = float(arr.std())
+    if std < 1e-15:
+        return []
+
+    breaks: list[int] = []
+    cusum_pos = 0.0
+    cusum_neg = 0.0
+    for i in range(n):
+        z = (float(arr[i]) - mean) / std
+        cusum_pos = max(0.0, cusum_pos + z)
+        cusum_neg = min(0.0, cusum_neg + z)
+        if cusum_pos > threshold or cusum_neg < -threshold:
+            breaks.append(i)
+            cusum_pos = 0.0
+            cusum_neg = 0.0
+    return breaks
+

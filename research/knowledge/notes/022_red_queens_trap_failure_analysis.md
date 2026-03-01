@@ -1,4 +1,8 @@
 # The Red Queen's Trap: Limits of Deep Evolution in High-Frequency Trading
+ref: 022
+arxiv: https://arxiv.org/abs/2512.15732
+Authors: Yijia Chen (Independent Researcher)
+Published: 2025 (December 2025; ArXiv Dec 5, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

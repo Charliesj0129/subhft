@@ -1,8 +1,0 @@
-{
-  "details": {
-    "reason": "skip_gate_b_tests=true",
-    "skipped": true
-  },
-  "gate": "Gate B",
-  "passed": true
-}

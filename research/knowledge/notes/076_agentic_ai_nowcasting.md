@@ -1,4 +1,5 @@
 # Autonomous Market Intelligence: Agentic AI Nowcasting Predicts Stock Returns
+ref: 076
 
 **Authors**: Zefeng Chen, Darcy Pu
 **Date**: 2026

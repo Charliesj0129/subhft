@@ -1,4 +1,5 @@
 # High-Frequency Analysis of a Trading Game with Transient Price Impact
+ref: 063
 
 **Authors**: Marcel Nutz, Alessandro Prosperi
 **Date**: 2025

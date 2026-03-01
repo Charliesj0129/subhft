@@ -52,6 +52,7 @@ research = [
     "onnxscript>=0.6.0",
     "torch>=2.10.0",
     "scikit-learn>=1.7.2",
+    "statsmodels>=0.14.0",  # BDS independence test (lazy import in validation.py)
 ]
 
 [build-system]

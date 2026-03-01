@@ -24,6 +24,15 @@ def _obs_policy() -> str:
     return ""
 
 
+def _get_trace_sampler():
+    try:
+        from hft_platform.diagnostics.trace import get_trace_sampler
+
+        return get_trace_sampler()
+    except Exception:
+        return None
+
+
 class RiskEngine:
     def __init__(
         self,
@@ -70,6 +79,7 @@ class RiskEngine:
             4: "FASTGATE_BAD_QTY_MAX",
             5: "FASTGATE_BAD_QTY_NEG",
         }
+        self._trace_sampler = _get_trace_sampler()
 
     @staticmethod
     def _bool_env(value: Any, default: bool = False) -> bool:
@@ -168,21 +178,28 @@ class RiskEngine:
                 if int(getattr(intent, "intent_type", IntentType.NEW)) != int(IntentType.CANCEL):
                     ok, code = self._fast_gate.check(int(getattr(intent, "price", 0)), int(getattr(intent, "qty", 0)))
                     if not ok:
-                        return RiskDecision(False, intent, self._fast_gate_reason_map.get(int(code), "FASTGATE_REJECT"))
+                        reason = self._fast_gate_reason_map.get(int(code), "FASTGATE_REJECT")
+                        self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": reason})
+                        return RiskDecision(False, intent, reason)
             except Exception:
                 # FastGate is an optional optimization; never fail closed due to integration issue.
                 pass
         # 1. StormGuard Check
         ok, reason = self.storm_guard.validate(intent)
         if not ok:
+            self._emit_trace("risk_reject", intent, {"stage": "storm_guard", "reason": reason})
             return RiskDecision(False, intent, reason)
 
         # 2. Hard Validators
         for v in self.validators:
             ok, reason = v.check(intent)
             if not ok:
+                self._emit_trace(
+                    "risk_reject", intent, {"stage": "validator", "reason": reason, "validator": type(v).__name__}
+                )
                 return RiskDecision(False, intent, reason)
 
+        self._emit_trace("risk_approve", intent, {"stage": "evaluate"})
         return RiskDecision(True, intent)
 
     def evaluate_typed_frame(self, frame: Any, *, intent_view: Any | None = None) -> RiskDecision:
@@ -252,13 +269,15 @@ class RiskEngine:
         # Set 500ms deadline from now (relaxed for Python/Docker latency)
         deadline = timebase.now_ns() + 500_000_000
 
-        return OrderCommand(
+        cmd = OrderCommand(
             cmd_id=cmd_id,
             intent=intent,
             deadline_ns=deadline,
             storm_guard_state=self.storm_guard.state,
             created_ns=timebase.now_ns(),
         )
+        self._emit_trace("risk_command", intent, {"cmd_id": int(cmd_id), "deadline_ns": int(deadline)})
+        return cmd
 
     def _emit_reject_metric(self, strategy_id: str, reason: str) -> None:
         metrics = self.metrics
@@ -278,5 +297,22 @@ class RiskEngine:
                 child = metrics.risk_reject_total.labels(strategy=key[0], reason=key[1])
                 self._reject_metric_cache[key] = child
             child.inc()
+        except Exception:
+            pass
+
+    def _emit_trace(self, stage: str, intent: Any, payload: dict[str, Any]) -> None:
+        sampler = getattr(self, "_trace_sampler", None)
+        if sampler is None:
+            return
+        try:
+            sampler.emit(
+                stage=stage,
+                trace_id=str(getattr(intent, "trace_id", "") or ""),
+                payload={
+                    "strategy_id": getattr(intent, "strategy_id", ""),
+                    "symbol": getattr(intent, "symbol", ""),
+                    **payload,
+                },
+            )
         except Exception:
             pass

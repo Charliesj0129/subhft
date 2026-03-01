@@ -1,4 +1,5 @@
 # A forward-only scheme for online learning of proposal distributions in particle filters
+ref: 047
 
 **Authors**: Procope-Mamert et al. (INRAE, ENSAE, Institut Polytechnique de Paris)
 **Date**: January 2026

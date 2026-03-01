@@ -1,4 +1,5 @@
 # Deep Reinforcement Learning for Optimal Trading with Partial Information
+ref: 110
 
 **Authors**: Andrea Macrì, Sebastian Jaimungal, Fabrizio Lillo
 **Date**: 2025-11

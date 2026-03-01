@@ -14,6 +14,12 @@ env/
 !config/env/
 !config/env/**
 
+# Local secrets and config (never push to GitHub)
+*.local.*
+.env.remote.local
+.remote-credentials.json
+user_rules.md
+
 # Data & Consistency
 .wal/
 data/
@@ -39,6 +45,13 @@ deployment/.env.*
 # IDE
 .idea/
 .vscode/
+.cline/
+.cursor/
+
+# Local tool state
+.mcp.json
+.state/
+claude.json
 
 # Project Specific
 reports/
@@ -48,6 +61,11 @@ research/
 !research/
 research/*
 !research/__init__.py
+!research/__main__.py
+!research/README.md
+!research/factory.py
+!research/pipeline.py
+!research/SOP.md
 !research/alphas/
 !research/alphas/**/README.md
 !research/alphas/**/impl.py
@@ -84,6 +102,11 @@ research/rl/*
 !research/tools/
 research/tools/*
 !research/tools/alpha_scaffold.py
+!research/tools/fetch_paper.py
+!research/tools/paper_autofill.py
+!research/tools/maintenance.py
+!research/tools/legacy/
+!research/tools/legacy/**/*.py
 ops/docker/.env
 config/contracts.json
 docker-compose.override.yml

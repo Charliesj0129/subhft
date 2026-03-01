@@ -11,14 +11,33 @@ class OfiMcAlpha:
     def manifest(self) -> AlphaManifest:
         return AlphaManifest(
             alpha_id="ofi_mc",
-            hypothesis="TODO: hypothesis",
-            formula="TODO: formula",
+            hypothesis=(
+                "Signed order-flow imbalance predicts short-horizon price pressure, "
+                "especially when queue imbalance aligns with OFI direction."
+            ),
+            formula="alpha_t = zscore(ofi_l1_ema8_t) * sign(depth_imbalance_ema8_ppm_t)",
             paper_refs=("018",),
-            data_fields=(),
+            data_fields=(
+                "ofi_l1_raw",
+                "ofi_l1_cum",
+                "ofi_l1_ema8",
+                "depth_imbalance_ppm",
+                "depth_imbalance_ema8_ppm",
+                "l1_bid_qty",
+                "l1_ask_qty",
+                "spread_scaled",
+                "spread_ema8_scaled",
+                "mid_price_x2",
+                "microprice_x2",
+            ),
             complexity="O(1)",
             status=AlphaStatus.DRAFT,
             tier=AlphaTier.ENSEMBLE,
             rust_module=None,
+            latency_profile=None,
+            roles_used=("planner", "code-reviewer"),
+            skills_used=("iterative-retrieval", "validation-gate"),
+            feature_set_version="lob_shared_v1",
         )
 
     def update(self, *args, **kwargs) -> float:

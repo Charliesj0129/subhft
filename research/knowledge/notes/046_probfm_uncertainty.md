@@ -1,4 +1,5 @@
 # ProbFM: Probabilistic Time Series Foundation Model with Uncertainty Decomposition
+ref: 046
 
 **Authors**: Chinta et al. (JPMorgan Chase)
 **Date**: January 2026

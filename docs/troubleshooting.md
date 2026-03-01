@@ -1,110 +1,84 @@
 # Troubleshooting
 
-常見問題與排查方向（依實際程式行為整理）。
+常見問題與快速排查。
 
----
+## 1) `live` 自動降級成 `sim`
+原因：缺 `SHIOAJI_API_KEY` 或 `SHIOAJI_SECRET_KEY`。
 
-## 1) run live 時自動降級 sim
-**原因**：缺 `SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY`。
-
-**解法**
 ```bash
 export SHIOAJI_API_KEY=...
 export SHIOAJI_SECRET_KEY=...
 export HFT_MODE=live
+uv run hft run live
 ```
 
----
+## 2) Compose 警告 `SHIOAJI_ACCOUNT` 未設定
+現象：
+- `The "SHIOAJI_ACCOUNT" variable is not set...`
 
-## 2) 無行情 / LOB 空白
-**可能原因**
-- `SYMBOLS_CONFIG` 指向錯誤
-- `symbols.yaml` 未生成或與 `symbols.list` 不一致
-- 交易所合約不存在 / 訂閱失敗
+說明：
+- 多數情況不影響 sim 或行情訂閱。
+- 若你的帳務流程需要指定 account，請在 `.env` 補上 `SHIOAJI_ACCOUNT`。
 
-**排查**
+## 3) 無行情 / LOB 空白
 ```bash
 uv run hft config preview
 uv run hft config validate
-
-curl -s http://localhost:9090/metrics | rg feed_events_total
+curl -fsS http://localhost:9090/metrics | rg "feed_events_total|feed_last_event_ts"
 ```
 
----
+## 4) Prometheus scrape 失敗（歷史 label 型別問題）
+症狀：
+- `/metrics` 抓取失敗
+- log 出現 `AttributeError ... replace` 類錯誤
 
-## 3) 今天 2/3 卻看到 2/4 的資料
-**原因**：
-- 主機/容器時間或時區偏移
-- `ingest_ts` 以 `time.time_ns()` 為基準，若系統時間走快會寫入「未來」
-
-**排查**
+檢查：
 ```bash
-date
-# 容器內
-# docker exec hft-engine date
+curl -fsS http://localhost:9090/metrics >/tmp/metrics.txt
+rg -n "AttributeError|Traceback|Catcher|<class" /tmp/metrics.txt
 ```
 
-**建議**
-- 啟用 NTP/PTP 時間同步
-- 在 ClickHouse query 中用 `toDateTime64(..., 'Asia/Taipei')` 比對
+期望：
+- 應無 traceback。
+- `shioaji_api_latency_ms` 的 `op/result` labels 應為字串。
 
----
-
-## 4) ClickHouse 寫入失敗 / WAL 堆積
-**排查**
+## 5) ClickHouse 連線失敗（DNS）
 ```bash
-docker exec clickhouse clickhouse-client --query "SELECT count() FROM hft.market_data"
+docker compose ps clickhouse hft-engine
+docker compose logs --tail=200 hft-engine | rg -i "NameResolutionError|clickhouse"
 ```
 
-**修復**
-- 檢查磁碟空間
-- 重啟 `wal-loader`
-- 使用 `sudo ./ops.sh replay-wal`
-
----
-
-## 5) Metrics 無法連線
-**排查**
-- `HFT_PROM_PORT` 是否一致
-- `hft-engine` 是否啟動
-
+修復：
 ```bash
-curl -s http://localhost:9090/metrics | head
+docker compose up -d clickhouse redis
+docker compose restart hft-engine
 ```
 
----
-
-## 6) 下單沒有送出
-**可能原因**
-- 風控拒單（`risk_reject_total`）
-- Circuit breaker 開啟
-- API rate limit / queue 滿
-
-**排查**
-- 查 log
-- 檢查 `config/strategy_limits.yaml`
-- 調整 `HFT_API_*` 或 `config/order_adapter.yaml`
-
----
-
-## 7) Latency 突增
-**排查**
-- `event_loop_lag_ms` / `queue_depth`
-- Shioaji API probe：
-  ```bash
-  uv run python scripts/latency/shioaji_api_probe.py --mode sim --iters 30
-  ```
-
----
-
-## 8) 測試不穩定
-**排查**
+## 6) ClickHouse `MEMORY_LIMIT_EXCEEDED`
 ```bash
-uv run pytest -k <name> -vv
+docker compose logs --tail=300 hft-engine | rg -i "MEMORY_LIMIT_EXCEEDED|Insert failed"
 ```
 
----
+- 若後續持續出現 `Inserted batch`，代表重試成功。
+- 若長時間失敗，需調整 ClickHouse 記憶體/merge 設定。
 
-更多細節：
-- `docs/runbooks.md`
-- `docs/observability_minimal.md`
+## 7) Metrics 無法連線
+```bash
+docker compose ps hft-engine
+curl -fsS http://localhost:9090/metrics | head
+```
+
+## 8) 下單未送出 / 拒單
+- 查 `risk_reject_total`, `order_reject_total`
+- 檢查 `config/strategy_limits.yaml`, `config/risk.yaml`, `config/order_adapter.yaml`
+
+## 9) 延遲異常升高
+```bash
+uv run python scripts/latency/shioaji_api_probe.py --mode sim --iters 30
+curl -fsS http://localhost:9090/metrics | rg "event_loop_lag_ms|queue_depth"
+```
+
+## 10) 測試不穩定
+```bash
+uv run pytest -k <keyword> -vv
+```

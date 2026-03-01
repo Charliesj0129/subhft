@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
@@ -405,10 +406,31 @@ def load_contract_cache(path: str = DEFAULT_CONTRACT_CACHE, metrics_path: str | 
 
 
 def write_contract_cache(contracts: list[dict[str, Any]], path: str = DEFAULT_CONTRACT_CACHE) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    payload = {"updated_at": datetime.utcnow().isoformat() + "Z", "contracts": contracts}
-    with open(path, "w") as f:
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read existing cache_version and increment
+    cache_version = 0
+    if dest.exists():
+        try:
+            existing = json.loads(dest.read_text(encoding="utf-8"))
+            cache_version = int(existing.get("cache_version", 0))
+        except Exception:
+            pass
+    cache_version += 1
+
+    payload = {
+        "cache_version": cache_version,
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "contracts": contracts,
+    }
+    tmp = dest.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=True)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.rename(dest)
+    logger.info("contract_cache_written", cache_version=cache_version, contract_count=len(contracts))
 
 
 def _resolve_include(path: str, raw: str) -> str:
@@ -1225,9 +1247,14 @@ def build_symbols(
 
 
 def write_symbols_yaml(symbols: list[dict[str, Any]], output_path: str = DEFAULT_OUTPUT_PATH) -> None:
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    with open(output_path, "w") as f:
+    dest = Path(output_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".yaml.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         yaml.safe_dump({"symbols": symbols}, f, sort_keys=False)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.rename(dest)
 
 
 def validate_symbols(

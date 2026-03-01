@@ -1,4 +1,5 @@
 # Manipulation in Prediction Markets: An Agent-based Modeling Experiment
+ref: 091
 
 **Authors**: Bridget Smart, Ebba Mark, Anne Bastian, Josefina Waugh
 **Date**: 2026-01-28

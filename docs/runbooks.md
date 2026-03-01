@@ -1,129 +1,118 @@
 # HFT Platform Runbooks
 
-本文件是運維/告警處理手冊，偏「實際操作」。
-
----
+本文件提供值班與日常運維的標準處置流程。
 
 ## 1) Feed Gap / 無行情
 
-**徵兆**
+徵兆：
 - `feed_events_total` 停滯
-- `feed_last_event_ts` 不更新
-- ClickHouse `market_data` 沒有新資料
+- `feed_last_event_ts` 長時間不更新
 
-**檢查**
+檢查：
 ```bash
-curl -s http://localhost:9090/metrics | rg "feed_events_total|feed_last_event_ts"
+curl -fsS http://localhost:9090/metrics | rg "feed_events_total|feed_last_event_ts"
+docker compose logs --tail=200 hft-engine
 ```
 
-**操作**
-1. 查看 hft-engine log：
-   ```bash
-   docker compose logs -f --tail=200 hft-engine
-   ```
-2. 檢查系統時間/時區（避免時間漂移）：
-   ```bash
-   date
-   timedatectl
-   ```
-3. 若是 Shioaji 連線異常，重啟引擎：
-   ```bash
-   docker compose restart hft-engine
-   ```
-4. 若是週末/跨週斷線，確認 `HFT_RECONNECT_*` 設定。
-
----
-
-## 2) Shioaji API Latency 激增
-
-**徵兆**
-- 下單/更新/取消耗時突然上升
-- `shioaji_api_latency_ms` p95/p99 明顯上升
-
-**量測**
+處置：
+1. 檢查 `SYMBOLS_CONFIG` 是否正確。
+2. 檢查 `HFT_QUOTE_NO_DATA_S`、`HFT_QUOTE_WATCHDOG_S` 設定。
+3. 必要時重啟引擎：
 ```bash
+docker compose restart hft-engine
+```
+
+## 2) Shioaji API latency 激增
+
+檢查：
+```bash
+curl -fsS http://localhost:9090/metrics | rg "shioaji_api_latency_ms"
 uv run python scripts/latency/shioaji_api_probe.py --mode sim --iters 30
 ```
 
-**處理**
-- 檢查網路（RTT、封包遺失）
-- 降低呼叫頻率 / 增加 coalesce window
-- 檢查 `HFT_API_MAX_INFLIGHT` / `HFT_API_QUEUE_MAX`
+處置：
+- 檢查網路抖動與封包遺失。
+- 視需要調整 `HFT_API_MAX_INFLIGHT`、`HFT_API_QUEUE_MAX`。
 
----
+## 3) ClickHouse 連不上（DNS/啟動序）
 
-## 3) Recorder/ClickHouse 失敗
+症狀：
+- log 出現 `NameResolutionError(host='clickhouse')`
 
-**徵兆**
-- `recorder_failures_total` 增加
-- WAL 累積無法回灌
-
-**檢查**
+處置：
 ```bash
-docker exec clickhouse clickhouse-client --query "SELECT count() FROM hft.market_data"
+docker compose up -d clickhouse redis
+docker compose ps clickhouse
+# 確認 healthy 後
+
+docker compose restart hft-engine
 ```
 
-**處理**
-1. 檢查 clickhouse container 狀態
-2. 確認磁碟空間
-3. WAL 回灌：
-   ```bash
-   sudo ./ops.sh replay-wal
-   ```
+## 4) ClickHouse `MEMORY_LIMIT_EXCEEDED`
 
----
+症狀：
+- `Insert failed, retrying with backoff`
+- `MEMORY_LIMIT_EXCEEDED`
 
-## 4) Queue Depth 爆增 / Event Loop Lag
+檢查：
+```bash
+docker compose logs --tail=300 hft-engine | rg -i "MEMORY_LIMIT_EXCEEDED|Insert failed"
+docker compose logs --tail=200 clickhouse
+```
 
-**徵兆**
-- `queue_depth{queue=...}` 持續升高
-- `event_loop_lag_ms` 超過門檻
+處置：
+1. 先確認是否可自動恢復（觀察是否出現 `Inserted batch`）。
+2. 若持續發生：降低 ingest 壓力、調整 ClickHouse 記憶體與 merge 參數。
+3. 需要時先維持 WAL（避免資料遺失）。
 
-**處理**
-- 確認是否有同步 I/O
-- 調整批次：`HFT_BUS_BATCH_SIZE`
-- 若 metrics 本身太重，可關閉：`HFT_METRICS_ENABLED=0` 或提高 `HFT_METRICS_BATCH`
+## 5) Recorder/WAL 堆積
 
----
+檢查：
+```bash
+uv run hft recorder status
+ls -lh .wal | head
+```
 
-## 5) 下單失敗 / 風控拒單
+處置：
+1. 確認 ClickHouse 已連線。
+2. 啟動/重啟 loader：
+```bash
+docker compose up -d wal-loader
+```
+3. 持續監控 backlog 是否下降。
 
-**徵兆**
-- `risk_reject_total` 增加
-- log 出現 `Order Rejected by Risk` 或 `Circuit Breaker`
+## 6) Queue Depth 爆增 / Event Loop Lag
 
-**處理**
-1. 檢查 `config/strategy_limits.yaml`
-2. 查看 `risk_log` / `orders_log`（ClickHouse）
-3. 降低策略發單速率
+檢查：
+```bash
+curl -fsS http://localhost:9090/metrics | rg "queue_depth|event_loop_lag_ms"
+```
 
----
+處置：
+- 調整 queue 容量（`HFT_*_QUEUE_SIZE`）。
+- 檢查策略是否有阻塞 I/O。
 
-## 6) 時間偏移 / 未來時間
+## 7) 風控拒單 / 下單失敗
 
-**徵兆**
-- ClickHouse 顯示「未來日期」（如 2/4）
+檢查：
+```bash
+curl -fsS http://localhost:9090/metrics | rg "risk_reject_total|order_reject_total"
+docker compose logs --tail=200 hft-engine
+```
 
-**原因**
-- 主機/容器時間錯誤或時區偏移
+處置：
+- 檢查 `config/strategy_limits.yaml`、`config/risk.yaml`。
+- 驗證策略輸入是否超限。
 
-**處理**
+## 8) 時間偏移 / 未來時間資料
+
+檢查：
 ```bash
 date
-# 若在容器
-# docker exec hft-engine date
+timedatectl
+docker exec hft-engine date
 ```
 
----
-
-## 7) 系統健康檢查
-
-```bash
-curl -s http://localhost:9090/metrics | head
-
-docker compose ps
-```
-
----
-
-更多細節：`docs/troubleshooting.md`
+處置：
+- 啟用 NTP/PTP。
+- 確認 `HFT_TS_TZ`、`HFT_RECONNECT_TZ`。

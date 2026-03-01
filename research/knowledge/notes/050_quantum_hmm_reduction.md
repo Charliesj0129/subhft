@@ -1,4 +1,5 @@
 # Quantum Dimension Reduction of Hidden Markov Models
+ref: 050
 
 **Authors**: Rishi Sundar & Thomas J. Elliott (University of Manchester)
 **Date**: January 2026

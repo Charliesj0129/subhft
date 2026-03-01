@@ -1,4 +1,5 @@
 # Equilibrium Liquidity and Risk Offsetting in Decentralised Markets
+ref: 062
 
 **Authors**: Fayçal Drissi, Xuchen Wu, Sebastian Jaimungal
 **Date**: 2025

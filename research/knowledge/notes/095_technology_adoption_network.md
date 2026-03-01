@@ -1,4 +1,5 @@
 # Technology Adoption and Network Externalities in Financial Systems
+ref: 095
 
 **Authors**: Tatsuru Kikuchi
 **Date**: 2026-01-12

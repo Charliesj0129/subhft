@@ -1,4 +1,5 @@
 # A Hidden Markov Model for Statistical Arbitrage in International Crude Oil Futures Markets
+ref: 108
 
 **Authors**: Viviana Fanelli, Claudio Fontana, Francesco Rotondi
 **Date**: 2024-09

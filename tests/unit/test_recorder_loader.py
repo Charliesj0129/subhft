@@ -230,6 +230,7 @@ def test_wal_loader_accumulation_check(tmp_path):
     loader.metrics.wal_file_count.set.assert_called()
     loader.metrics.wal_directory_size_bytes.set.assert_called()
     loader.metrics.wal_oldest_file_age_seconds.set.assert_called()
+    loader.metrics.wal_drain_eta_seconds.set.assert_called()
 
     # Check file count
     call_args = loader.metrics.wal_file_count.set.call_args[0][0]

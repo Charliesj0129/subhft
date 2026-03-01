@@ -1,4 +1,8 @@
 # Reinforcement Learning in Financial Decision Making: A Systematic Review
+ref: 019
+arxiv: https://arxiv.org/abs/2512.10913
+Authors: Mohammad Rezoanul Hoque et al. (University of New Orleans)
+Published: 2025 (ArXiv Dec 11, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

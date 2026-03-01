@@ -1,4 +1,5 @@
 # DeePM: Regime-Robust Deep Learning for Systematic Macro Portfolio Management
+ref: 041
 
 **Authors**: Kieran Wood et al. (Oxford-Man Inst., University of Oxford)
 **Date**: January 2026

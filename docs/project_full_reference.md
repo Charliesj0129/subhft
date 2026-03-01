@@ -1,277 +1,175 @@
 # HFT Platform — Full Project Reference
 
-本文件嘗試把「專案所有內容」一次性整理成可查詢的完整索引。
-若你只想快速上手，請先看：`docs/getting_started.md`。
-
----
+本文件是「全域索引版」說明，對齊 2026-03-01 代碼狀態。
 
 ## 1) 專案定位
 
-HFT Platform 是一個事件驅動的交易系統：
-- Feed → Normalize → LOB → Strategy → Risk → Order → Broker
-- Recorder 會持續寫入 WAL / ClickHouse
-- Rust Core 提供 hot path 加速
+HFT Platform 是事件驅動交易系統，核心路徑：
 
----
+```text
+Feed -> Normalize -> LOB -> EventBus -> Strategy -> Risk -> Order -> Broker
+                                   \-> Recorder (WAL/ClickHouse)
+```
 
-## 2) Repo 全覽（Top-Level Map）
+並包含：
+- Feature Plane（profile/rollout/compat）
+- Gateway（HA、去重、曝險控制）
+- Alpha 研究治理（validate/promote/canary）
 
-| Path | Purpose |
+## 2) Repo Top-Level
+
+| Path | 作用 |
 | --- | --- |
-| `.agent/` | Agent rules / prompts (IDE/AI workflow) |
-| `.claude/` | Claude/Codex related config |
-| `.github/` | CI workflows, PR templates |
-| `.benchmarks/` | pytest-benchmark artifacts |
-| `.venv/` | Local virtualenv (ignore in git) |
-| `AGENTS.md` / `CLAUDE.md` | System/agent rules |
-| `README.md` | Entry README |
-| `config/` | 所有 config / env / symbols |
-| `docs/` | 使用與運維文檔 |
-| `scripts/` | 量測 / 模擬 / 診斷 / 工具腳本 |
-| `src/` | 主程式碼 (`hft_platform`) |
-| `rust_core/` | Rust 擴展 (PyO3) |
-| `rust/` | Rust strategy / research crate |
-| `tests/` | unit / integration / benchmark |
-| `specs/` | 架構與設計規格 |
-| `reports/` | latency / py-spy 等報告輸出 |
-| `data/` | ClickHouse data / datasets |
-| `.wal/` | WAL (jsonl) |
-| `ops.sh` | Host tuning / setup / ops commands |
-| `Makefile` | Optional convenience commands (dev/test/bench) |
+| `.agent/` | Agent 規則/流程/技能 |
+| `.github/` | CI workflows |
+| `config/` | 基礎與環境設定、symbols、監控 |
+| `docs/` | 使用/運維/架構文件 |
+| `scripts/` | latency、ops、diagnostics 腳本 |
+| `src/hft_platform/` | 主程式碼 |
+| `research/` | 研究工廠與 alpha pipeline |
+| `rust_core/` | Rust PyO3 擴展 |
+| `rust/` | Rust strategy crate |
+| `tests/` | unit/integration/benchmark |
+| `outputs/` | runtime 狀態、trace、治理狀態 |
+| `.wal/` | WAL 檔案 |
 
----
+## 3) Runtime 模組地圖（`src/hft_platform/`）
 
-## 3) Runtime Flow (High Level)
+### 3.1 入口與組裝
+- `cli.py`：CLI 指令入口
+- `main.py`：啟動 runtime 與 metrics server
+- `services/bootstrap.py`：服務初始化與 queue 容量配置
+- `services/system.py`：系統生命週期協調
 
-```mermaid
-graph LR
-  Feed[Shioaji Feed] --> Norm[Normalizer]
-  Norm --> LOB[LOB Engine]
-  LOB --> Bus[Event Bus]
-  Bus --> Strat[Strategy]
-  Strat --> Risk[Risk Engine]
-  Risk --> Order[Order Adapter]
-  Order --> Broker[Shioaji API]
-  Bus --> Rec[Recorder]
-  Rec --> WAL[WAL]
-  Rec --> CH[ClickHouse]
-```
+### 3.2 Feed / Market Data
+- `feed_adapter/shioaji_client.py`：登入、訂閱、重連、quote watchdog
+- `feed_adapter/normalizer.py`：行情 payload 正規化
+- `feed_adapter/lob_engine.py`：LOB 更新與統計
+- `services/market_data.py`：市場資料流程主協調
 
----
+### 3.3 Event 與 Bus
+- `engine/event_bus.py`
+- `events.py`
+- `contracts/`（strategy/execution contract）
 
-## 4) Core Runtime Modules (`src/hft_platform/`)
+### 3.4 Strategy / Feature
+- `strategy/base.py`, `strategy/runner.py`, `strategy/registry.py`
+- `strategies/`（含 alpha strategy 實作）
+- `feature/engine.py`, `feature/profile.py`, `feature/rollout.py`, `feature/compat.py`
 
-### 4.1 Entry & Main
-- `main.py`: 啟動 `HFTSystem`
-- `__main__.py`: `python -m hft_platform` 入口
-- `cli.py`: CLI commands (`hft run`, `hft config`, etc.)
+### 3.5 Risk / Gateway / Order / Execution
+- `risk/engine.py`, `risk/validators.py`, `risk/storm_guard.py`
+- `gateway/service.py`, `gateway/leader_lease.py`, `gateway/dedup.py`, `gateway/exposure.py`
+- `order/adapter.py`, `order/deadletter.py`
+- `execution/positions.py` 等
 
-### 4.2 Feed Adapter
-- `feed_adapter/shioaji_client.py`: 登入、訂閱、重連
-- `feed_adapter/normalizer.py`: raw payload → `TickEvent` / `BidAskEvent`
-- `feed_adapter/lob_engine.py`: 維護 LOB + stats
+### 3.6 Recorder / Observability / Diagnostics
+- `recorder/writer.py`, `recorder/worker.py`, `recorder/wal.py`, `recorder/loader.py`
+- `observability/metrics.py`, `observability/latency.py`
+- `diagnostics/trace.py`, `diagnostics/replay.py`
 
-### 4.3 Event Bus
-- `engine/event_bus.py`: lock‑free / low‑alloc event bus
-- 控制參數見 `HFT_BUS_*`
+### 3.7 Alpha 治理
+- `alpha/validation.py`, `alpha/promotion.py`, `alpha/canary.py`, `alpha/experiments.py`, `alpha/pool.py`
 
-### 4.4 Strategy
-- `strategy/base.py`: BaseStrategy + StrategyContext
-- `strategies/*`: 內建策略
-- `strategy/runner.py`: dispatch / batching
+## 4) 設定系統（`config/`）
 
-### 4.5 Risk
-- `risk/validators.py`: policy rules
-- `risk/fast_gate.py`: Numba hot‑path check + kill switch (shared memory)
+- `config/base/main.yaml`
+- `config/env/sim|live/main.yaml`
+- `config/env/dev|staging|prod/main.yaml`
+- `config/symbols.list`（來源）
+- `config/symbols.yaml`（產物）
+- `config/contracts.json`（合約快取）
+- `config/feature_profiles.yaml`
+- `config/monitoring/`（prometheus/grafana/alerts）
 
-### 4.6 Execution / Orders
-- `execution/router.py`: intent → adapter
-- `execution/positions.py`: position tracking & PnL
-- `order/adapter.py`: Shioaji order placement + rate limiter + circuit breaker
+優先序：Base -> mode/env overlay -> settings.py -> env -> CLI。
 
-### 4.7 Recorder
-- `recorder/writer.py`: WAL + ClickHouse batch writes
-- `recorder/loader.py`: WAL → ClickHouse loader
-- `recorder/converter.py`: WAL transform
+## 5) CLI 總覽
 
-### 4.8 IPC
-- `ipc/shm_ring_buffer.py`: lock‑free shared memory ring buffer (SPSC)
+主指令群：
+- `hft run`, `init`, `check`, `wizard`, `feed`, `diag`
+- `hft config`（`resolve/build/preview/validate/sync/contracts-status`）
+- `hft feature`（`profiles/validate/preflight/rollout-*`）
+- `hft strat test`
+- `hft backtest convert/run`
+- `hft recorder status`
+- `hft alpha`（研究治理）
 
-### 4.9 Observability
-- `observability/metrics.py`: Prometheus metrics
+## 6) Docker / 部署
 
-### 4.10 Contracts / Events / Core
-- `contracts/`: strategy/execution contracts
-- `events.py`: Tick/BidAsk/LOBStats events
-- `core/`: pricing, ids, utilities
+- 主文件：`docker-compose.yml`, `docker-stack.yml`
+- 服務：`hft-engine`, `clickhouse`, `redis`, `wal-loader`, `prometheus`, `grafana`, `alertmanager`, `hft-monitor`
 
----
-
-## 5) Rust Components
-
-### 5.1 `rust_core/`
-- PyO3 extension used for hot‑path acceleration
-- Build (local):
-  ```bash
-  uv run maturin develop --manifest-path rust_core/Cargo.toml
-  ```
-
-### 5.2 `rust/`
-- Separate crate (`rust_strategy`) for strategy research / acceleration
-
----
-
-## 6) Config System (`config/`)
-
-- `config/base/main.yaml`: default settings
-- `config/env/<mode>/main.yaml`: sim/live overrides
-- `config/env/<env>/main.yaml`: dev/staging/prod overlays
-- `config/symbols.list` → `config/symbols.yaml`
-
-詳細：`docs/config_reference.md`
-
----
-
-## 7) CLI Overview
-
-入口：`hft` / `python -m hft_platform`
-
-常用：
+建議啟動順序：
 ```bash
-hft run sim
-hft run live
-hft config build
-hft config sync
-hft strat test
-hft backtest run
+docker compose up -d clickhouse redis
+docker compose up -d --build hft-engine
+docker compose up -d prometheus grafana alertmanager hft-monitor
 ```
 
-詳細：`docs/cli_reference.md`
+## 7) 觀測與健康檢查
 
----
+- Metrics: `http://localhost:9090/metrics`
+- Prometheus: `http://localhost:9091`
+- Grafana: `http://localhost:3000`
 
-## 8) Scripts (`scripts/`)
-
-### 8.1 Latency Probes
-- `scripts/latency/shioaji_api_probe.py` — Shioaji API latency/jitter
-- `scripts/latency/e2e_clickhouse_report.py` — E2E latency + heatmap
-- `scripts/latency_e2e_report.py` — per‑symbol latency heatmap
-
-### 8.2 Simulation / Diagnostics
-- `scripts/sim_full_pipeline.py` — full pipeline sim
-- `scripts/sim_shioaji_stock_diag.py` — shioaji stock diagnostics
-- `scripts/sim_shioaji_order_smoke.py` — order smoke test
-- `scripts/sim_shioaji_futures_smoke.py` — futures smoke test
-- `scripts/sim_futures_strategy_order.py` — futures strategy order test
-
-### 8.3 Misc
-- `scripts/benchmark_gate.py` — Darwin Gate regression check
-- `scripts/verify_rust_deployment.py` — Rust extension verification
-- `scripts/live_contract_cache_refresh.py` — refresh contracts cache
-- `scripts/create_snapshot.py` / `batch_create_snapshots.py`
-
----
-
-## 9) Internal Utility Scripts (`src/hft_platform/scripts/`)
-
-- `generate_mass_config_sharded.py`: config sharding
-- `generate_synthetic_hbt_data.py`: synthetic backtest data
-- `generate_synthetic_mhp_data.py`: synthetic MHP data
-- `generate_valid_config.py`: validate config file
-- `monitor_latency.py`: monitor pipeline latency
-- `record_learning.py`: record dataset
-- `subscribe_futures.py`: futures subscription helper
-
----
-
-## 10) Tests
-
-### 10.1 Unit Tests (`tests/unit/`)
-- contracts, risk fast gate, IPC ring buffer, CLI, etc.
-
-### 10.2 Integration (`tests/integration/`)
-- requires ClickHouse / Redis
-
-### 10.3 Benchmarks (`tests/benchmark/`)
-- pytest‑benchmark based
-- baseline: `tests/benchmark/.benchmark_baseline.json`
- - key benches:
-   - `micro_bench_fast_gate.py`
-   - `micro_bench_lob.py`
-   - `micro_bench_normalizer.py`
-   - `micro_bench_rust_hotpath.py`
-   - `test_rust_hotpath_benchmark.py`
-
-Run locally:
+最小檢查：
 ```bash
-uv run pytest tests/unit
-uv run pytest tests/integration
-uv run pytest tests/benchmark --benchmark-only
+curl -fsS http://localhost:9090/metrics | head
+uv run hft recorder status
+docker compose ps
 ```
 
----
+## 8) 測試與 CI
 
-## 10.5 Optional Makefile Commands
+本機常用：
+```bash
+uv run ruff check src/ tests/
+uv run pytest
+```
 
-If you prefer `make`, there is an optional `Makefile` with shortcuts:
+CI 主要階段：
+- lint / security / type check
+- Rust build & lint
+- tests & coverage
+- benchmark
+- integration tests
+
+## 9) Makefile 快捷
 
 ```bash
 make dev
 make test
-make coverage
-make benchmark
+make start
+make logs
+make recorder-status
+make research
 ```
 
-See `Makefile` for the full list.
+## 10) Research Factory（`research/`）
 
----
+研究流程入口：
+- `python -m research ...`
+- `make research ...`
 
-## 11) CI Pipeline (`.github/workflows/ci.yml`)
+常用：
+```bash
+make research-scaffold ALPHA=<alpha_id>
+make research-fetch-paper ARXIV=<id>
+make research-search-papers QUERY="order flow imbalance"
+```
 
-Stages:
-1. Lint + Format (`ruff`)
-2. Rust build + clippy + tests
-3. mypy typecheck
-4. Unit tests + coverage (fail under 70%)
-5. Benchmark + Darwin Gate (threshold 10%)
-6. Integration tests (ClickHouse + Redis)
-7. Security scan (pip‑audit)
+## 11) 產物與資料
 
----
+- `.wal/`：WAL
+- `outputs/`：trace、rollout state、contract refresh status
+- `reports/`：latency/benchmark 報告
+- `research/experiments/`：研究實驗結果
 
-## 12) Observability
-
-Metrics 入口：`http://localhost:9090/metrics`
-
-重要指標：
-- feed latency / jitter
-- event loop lag
-- queue depth
-- order / execution metrics
-
-詳細：`docs/observability_minimal.md`
-
----
-
-## 13) Ops & Host Tuning
-
-`ops.sh` commands:
-- `setup` / `tune` / `hugepages` / `isolate`
-- `monitor-ch` / `replay-wal`
-
-詳細：`docs/hft_low_latency_runbook.md`
-
----
-
-## 14) Specs / Research
-- `specs/hft_simulation_architecture.md` — hardened digital twin design
-- `research/` — experimental notebooks / prototypes (非 production)
-
----
-
-## 15) Safety Rules (HFT Laws)
-- No heap allocations on hot path
-- SoA layout for locality
-- No blocking I/O on event loop
-- No float for price/PnL
-- Zero‑copy across Python/Rust
+## 12) 參考入口
+- `docs/getting_started.md`
+- `docs/cli_reference.md`
+- `docs/config_reference.md`
+- `docs/deployment_guide.md`
+- `docs/runbooks.md`
+- `docs/troubleshooting.md`

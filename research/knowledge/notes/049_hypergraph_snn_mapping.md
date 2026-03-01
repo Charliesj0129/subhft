@@ -1,4 +1,5 @@
 # A Case for Hypergraphs to Model and Map SNNs on Neuromorphic Hardware
+ref: 049
 
 **Authors**: Marco Ronzani & Cristina Silvano (Politecnico di Milano)
 **Date**: January 2026

@@ -1,4 +1,5 @@
 # Temporal Kolmogorov-Arnold Networks (T-KAN) for High-Frequency Limit Order Book Forecasting
+ref: 096
 
 **Authors**: Ahmad Makinde
 **Date**: 2026-01-05

@@ -1,4 +1,8 @@
 # Alpha-R1: Alpha Screening with LLM Reasoning via Reinforcement Learning
+ref: 008
+arxiv: https://arxiv.org/abs/2512.23515
+Authors: Zuoyou Jiang, Li Zhao et al. (Shanghai Jiao Tong University & StepFun)
+Published: 2025 (ArXiv 2025/12/29)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

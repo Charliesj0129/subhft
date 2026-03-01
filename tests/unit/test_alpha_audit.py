@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 def _make_gate_report(gate: str = "Gate A", passed: bool = True, details: dict | None = None):
     from hft_platform.alpha.validation import GateReport
@@ -23,6 +21,7 @@ def _make_promotion_result(approved: bool = True, forced: bool = False):
         forced=forced,
         gate_d_passed=approved,
         gate_e_passed=approved,
+        gate_f_passed=approved,
         canary_weight=0.05,
         integration_report_path="/tmp/integration.json",
         promotion_decision_path="/tmp/decision.json",

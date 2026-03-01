@@ -1,21 +1,24 @@
 # Outputs and Artifacts
 
-本專案產生的檔案會集中於以下資料夾：
+本專案主要輸出目錄與典型產物如下。
 
 ## 主要目錄
-- `.wal/`：WAL（raw jsonl），recorder 來源
-- `data/`：ClickHouse 或外部資料
-- `reports/`：latency report、py-spy SVG、CSV
-- `results/`：實驗結果或分析輸出
-- `research/`：研究腳本與暫存
+- `.wal/`：WAL jsonl（recorder 原始緩衝）
+- `outputs/`：runtime 狀態與診斷輸出
+- `reports/`：latency/profiling 報告
+- `research/experiments/`：研究實驗 artifacts
+- `data/`：本機資料與中間產物
 - `.benchmarks/`：pytest-benchmark 產物
 
 ## 常見產物
-- Shioaji API latency：`reports/shioaji_api_latency.json` / `.csv`
-- E2E latency：`reports/e2e_latency.summary.json`
-- Heatmap：`reports/*.heatmap.csv`
+- `outputs/contract_refresh_status.json`
+- `outputs/feature_rollout_state.json`
+- `outputs/decision_traces/*.jsonl`
+- `reports/shioaji_api_latency.json` / `.csv`
+- `reports/e2e_latency.summary.json`
+- `reports/*.heatmap.csv`
 
-## 建議規範
-- 不要提交含憑證的檔案
-- 每次量測/實驗建議附 `metadata.json`（commit hash + params）
-- 使用日期或任務名稱分資料夾（例如 `reports/20260203/`）
+## 管理建議
+1. 產物附上 `metadata`（commit hash、參數、時間）。
+2. 長期保留資料放外部儲存，不留在 OS 盤。
+3. 不要提交含憑證或敏感資訊的輸出檔。

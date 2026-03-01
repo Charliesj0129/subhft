@@ -1,4 +1,5 @@
 # ProbFM: Probabilistic Time Series Foundation Model with Uncertainty Decomposition
+ref: 112
 
 **Authors**: Arundeep Chinta, Lucas Vinh Tran, Jay Katukuri (JPMorganChase)
 **Date**: 2026-01

@@ -1,4 +1,8 @@
 # Directional Liquidity and Geometric Shear in Pregeometric Order Books
+ref: 032
+arxiv: https://arxiv.org/abs/2601.19369
+Authors: João P. da Cruz (The Quantum Computer Company)
+Published: 2026 (January 28, 2026; ArXiv)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

@@ -1,4 +1,8 @@
 # Design and Empirical Study of a Large Language Model-Based Multi-Agent Investment System for Chinese Public REITs
+ref: 031
+arxiv: https://arxiv.org/abs/2602.00082
+Authors: Zheng Li (Independent?)
+Published: 2026 (January 22, 2026; ArXiv)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

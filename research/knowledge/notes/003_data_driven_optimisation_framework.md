@@ -1,4 +1,8 @@
 # An end-to-end data-driven optimisation framework for constrained trajectories
+ref: 003
+arxiv: https://arxiv.org/abs/2011.11820
+Authors: Florent Dewez, Benjamin Guedj, Arthur Talpaert, Vincent Vandewalle (Inria & UCL)
+Published: 2020 (ArXiv 2021 v2)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

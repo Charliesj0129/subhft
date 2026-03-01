@@ -1,4 +1,5 @@
 # Resisting Manipulative Bots in Meme Coin Copy Trading
+ref: 094
 
 **Authors**: Yichen Luo, Yebo Feng, Jiahua Xu, Yang Liu
 **Date**: 2026-01-26

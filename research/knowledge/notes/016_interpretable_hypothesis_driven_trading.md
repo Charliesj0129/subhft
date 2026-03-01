@@ -1,4 +1,8 @@
 # Interpretable Hypothesis-Driven Trading: A Rigorous Walk-Forward Validation Framework
+ref: 016
+arxiv: https://arxiv.org/abs/2512.12924
+Authors: Gagan Deep, Akash Deep, William Lamptey (Texas Tech University)
+Published: 2025 (December 2025; ArXiv Dec 16, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

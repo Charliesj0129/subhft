@@ -83,6 +83,8 @@ class GARCHVolAlpha(GARCHFactor):
             status=AlphaStatus.DRAFT,
             tier=AlphaTier.ENSEMBLE,
             rust_module=None,
+            roles_used=("planner", "code-reviewer"),
+            skills_used=("iterative-retrieval", "validation-gate"),
         )
 
     def update(self, *args, **kwargs) -> float:

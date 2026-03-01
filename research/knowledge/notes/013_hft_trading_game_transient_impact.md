@@ -1,4 +1,8 @@
 # High-Frequency Analysis of a Trading Game with Transient Price Impact
+ref: 013
+arxiv: https://arxiv.org/abs/2512.11765
+Authors: Marcel Nutz, Alessandro Prosperi (Columbia University)
+Published: 2025 (December 2025; ArXiv Dec 12, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

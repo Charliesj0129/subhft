@@ -2,15 +2,14 @@
 
 ## Start Here
 
-| Doc                                                    | Description                |
-| ------------------------------------------------------ | -------------------------- |
-| [quickstart.md](quickstart.md)                         | 10-minute sim + metrics    |
-| [onboarding.md](onboarding.md)                         | 上手清單 (繁中)            |
-| [getting_started.md](getting_started.md)               | Full step-by-step guide    |
-| [cli_reference.md](cli_reference.md)                   | CLI commands and examples  |
-| [config_reference.md](config_reference.md)             | Config + env var reference |
-| [strategy-guide.md](strategy-guide.md)                 | Strategy development       |
-| [project_full_reference.md](project_full_reference.md) | Full project catalog       |
+| Doc                                                        | Description                           |
+| ---------------------------------------------------------- | ------------------------------------- |
+| [AI_DEVELOPER_CHEAT_SHEET.md](AI_DEVELOPER_CHEAT_SHEET.md) | **(必讀) 最精簡的 AI 與開發者速查表** |
+| [getting_started.md](getting_started.md)                   | Full step-by-step guide               |
+| [cli_reference.md](cli_reference.md)                       | CLI commands and examples             |
+| [config_reference.md](config_reference.md)                 | Config + env var reference            |
+| [strategy-guide.md](strategy-guide.md)                     | Strategy development                  |
+| [project_full_reference.md](project_full_reference.md)     | Full project catalog                  |
 
 ## Operations & Reliability
 
@@ -29,10 +28,9 @@
 | Doc                                            | Description                           |
 | ---------------------------------------------- | ------------------------------------- |
 | [ARCHITECTURE.md](ARCHITECTURE.md)             | Architecture index → canonical source |
-| [project_layout.md](project_layout.md)         | Repo layout and extension points      |
 | [naming_conventions.md](naming_conventions.md) | File/code/metric naming rules         |
 | [performance_report.md](performance_report.md) | Latency benchmarks                    |
-| [modules/](modules/README.md)                  | Module-level deep dives               |
+| [MODULES_REFERENCE.md](MODULES_REFERENCE.md)   | Consolidated codebase map             |
 | [architecture/](architecture/)                 | Canonical architecture baseline       |
 | [adr/](adr/)                                   | Architecture decision records         |
 
@@ -44,12 +42,10 @@
 | [hftbacktest_integration.md](hftbacktest_integration.md) | Backtest workflow               |
 | [feed_adapter.md](feed_adapter.md)                       | Feed adapter internals          |
 
-## Cloud / Azure
-
-| Doc                                        | Description         |
-| ------------------------------------------ | ------------------- |
-| [deploy_azure.md](deploy_azure.md)         | Azure deployment    |
-| [azure_deployment.md](azure_deployment.md) | Azure setup details |
-| [cost_analysis.md](cost_analysis.md)       | Cloud cost analysis |
-
 > If you are new: read [getting_started.md](getting_started.md) first.
+
+## Project TODOs & Tech Debt
+
+| Doc                | Description                            |
+| ------------------ | -------------------------------------- |
+| [TODO.md](TODO.md) | 專案全域已知 TODO 與系統架構技術債總覽 |

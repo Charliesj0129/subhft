@@ -1,4 +1,5 @@
 # Advanced Statistical Arbitrage with Reinforcement Learning
+ref: 033
 
 **Authors**: Boming Ning, Kiseop Lee (Purdue University)
 **Date**: March 2024

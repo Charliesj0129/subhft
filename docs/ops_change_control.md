@@ -1,20 +1,27 @@
 # Ops Change Control
 
-This document defines the minimum change approval process for infra and config.
+定義基礎變更管控流程，避免線上風險。
 
 ## Scope
-- Deployment manifests and Docker compose files
-- `config/` changes that affect live trading
-- Ops scripts in `ops/`
+- `docker-compose.yml` / `docker-stack.yml`
+- `config/` 下會影響 live 行為的變更
+- `ops.sh` 與 `scripts/` 中運維腳本
+- 監控告警規則變更（Prometheus/Grafana/Alertmanager）
 
 ## Workflow
-1) Create a short change note (what/why/risk/rollback).
-2) Review by a second person (or automated check).
-3) Apply in staging (or sim) first.
-4) Verify metrics: latency, errors, message loss, reconnects.
-5) Roll forward or rollback within 5 minutes if anomalies appear.
+1. 建立變更單：`what / why / risk / rollback`。
+2. 至少一位 reviewer 確認。
+3. 先在 `sim` 或 staging 驗證。
+4. 驗證指標：feed、queue、risk reject、recorder、/metrics scrape。
+5. 若異常，5 分鐘內執行 rollback。
+
+## 最小驗證證據
+- `docker compose ps`
+- `docker compose logs --tail=200 hft-engine`
+- `curl -fsS http://localhost:9090/metrics | head`
+- `uv run hft recorder status`
 
 ## Rollback
-- Keep last known-good image tag in `HFT_IMAGE`.
-- Preserve previous `.env.prod` as `.env.prod.bak`.
-- Document rollback steps in the release note.
+- 保留上一版 image/tag。
+- 保留前一版 `.env`/config 備份。
+- 回滾後重新執行最小驗證證據。

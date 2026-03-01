@@ -1,34 +1,18 @@
 # Strategy Development Guide
 
-本指南說明如何新增策略、事件處理、以及如何與下單/風控串接。
-
----
+本指南說明策略開發、註冊、測試與治理流程。
 
 ## 1) 核心概念
-- 策略繼承 `BaseStrategy`
-- 事件透過 `handle_event()` 分派到：
-  - `on_tick(TickEvent)`
-  - `on_book_update(BidAskEvent)`
-  - `on_stats(LOBStatsEvent)`
-  - `on_fill(FillEvent)`
-  - `on_order(OrderEvent)`
+- 策略繼承 `BaseStrategy`。
+- `handle_event()` 會分派至 `on_tick` / `on_book_update` / `on_stats` / `on_fill` / `on_order`。
+- 策略輸出為 `OrderIntent`，再進入 Risk/Order。
 
-事件型別在：`src/hft_platform/events.py`、`src/hft_platform/contracts/execution.py`
-
----
-
-## 2) 建立策略骨架
+## 2) 產生策略骨架
 ```bash
 uv run hft init --strategy-id my_strategy --symbol 2330
 ```
 
-生成檔案：
-- `src/hft_platform/strategies/my_strategy.py`
-- `tests/test_my_strategy.py`
-
----
-
-## 3) 最小策略範例
+## 3) 最小範例
 ```python
 from hft_platform.events import LOBStatsEvent
 from hft_platform.strategy.base import BaseStrategy
@@ -39,90 +23,44 @@ class Strategy(BaseStrategy):
             self.buy(event.symbol, event.best_bid, 1)
 ```
 
----
+## 4) 價格與精度規範
+- 交易路徑價格應使用 scaled int。
+- `StrategyContext` 會協助縮放；避免在熱路徑用浮點做會計。
 
-## 4) Price Scaling（非常重要）
-- 系統內部 **price 使用整數**（scaled int）
-- `StrategyContext` 會自動做 `price` → `scaled`
+## 5) StrategyContext 能力
+- `buy/sell/place_order`
+- `positions`
+- `price_scaler`
 
-**規則**
-- Strategy 可以傳 float，但實際會在 `place_order()` 自動縮放
-- 若你自己算 price，請用 `ctx.scale_price(symbol, price)`
-
----
-
-## 5) StrategyContext
-`StrategyContext` 提供以下功能：
-- `place_order(...)`：生成 `OrderIntent`
-- `scale_price(symbol, price)`
-- `positions`：目前策略的持倉
-
----
-
-## 6) Intent Types & TIF
-Intent in `hft_platform.contracts.strategy`：
-- `IntentType.NEW`
-- `IntentType.CANCEL`
-- `IntentType.AMEND`
-
-TIF：
-- `TIF.LIMIT`
-- `TIF.IOC`
-- `TIF.FOK`
-
----
-
-## 7) 註冊策略
-
-### A) config/base/strategies.yaml
+## 6) 註冊策略
+`config/base/strategies.yaml`：
 ```yaml
 strategies:
-  - id: maker_01
+  - id: my_strategy
     module: hft_platform.strategies.my_strategy
     class: Strategy
     enabled: true
-    params:
-      subscribe_symbols: ["2330"]
 ```
 
-### B) config/settings.py（本機覆蓋）
-```python
-def get_settings():
-    return {
-        "mode": "sim",
-        "symbols": ["2330"],
-        "strategy": {
-            "id": "maker_01",
-            "module": "hft_platform.strategies.my_strategy",
-            "class": "Strategy",
-            "params": {"subscribe_symbols": ["2330"]},
-        },
-    }
-```
-
----
-
-## 8) 策略測試
+## 7) 測試
 ```bash
 uv run hft strat test --symbol 2330
+uv run pytest tests/unit -k strategy
 ```
 
----
-
-## 9) 回測
+## 8) Feature 相容性預檢
+策略上線前先做 feature 兼容檢查：
 ```bash
-uv run hft backtest run \
-  --data data/sample_feed.npz \
-  --strategy-module hft_platform.strategies.my_strategy \
-  --strategy-class Strategy \
-  --strategy-id maker_01 \
-  --symbol 2330
+uv run hft feature preflight --strategies config/base/strategies.yaml
 ```
 
----
+## 9) Alpha 治理（研究到上線）
+```bash
+uv run hft alpha validate --alpha-id <id> --data <...>
+uv run hft alpha promote --alpha-id <id> --owner <owner>
+```
 
 ## 10) 注意事項
-- 不要在策略裡做阻塞 I/O
-- 不要在 hot path 使用大量 allocation
-- 記錄只用 `structlog`
-
+- 不在策略主路徑做阻塞 I/O。
+- 觀察 `strategy_latency_ns`、`risk_reject_total`。
+- 任何策略改動需同步更新策略配置與測試。
