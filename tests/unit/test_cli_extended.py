@@ -81,12 +81,77 @@ def test_cmd_diag(capsys):
     assert "Diag:" in out
 
 
+def test_cmd_diag_timeline(tmp_path, capsys):
+    trace_file = tmp_path / "t.jsonl"
+    trace_file.write_text(
+        json.dumps({"ts_ns": 1, "stage": "md_event", "trace_id": "x", "payload": {"a": 1}}) + "\n"
+        + json.dumps({"ts_ns": 2, "stage": "risk_approve", "trace_id": "x", "payload": {"b": 2}}) + "\n",
+        encoding="utf-8",
+    )
+    cli.cmd_diag(
+        Namespace(
+            trace_file=str(trace_file),
+            trace_id="x",
+            stage=None,
+            limit=0,
+            timeline=True,
+            timeline_format="json",
+            out=None,
+        )
+    )
+    out = capsys.readouterr().out
+    assert '"timeline"' in out
+    assert "md_event" in out
+
+
 def test_cmd_strat_test_import_failure(monkeypatch):
     monkeypatch.setattr(cli, "load_settings", lambda *a, **k: ({}, {}))
     monkeypatch.setattr(cli, "import_module", lambda *_a, **_k: (_ for _ in ()).throw(ImportError("nope")))
     with pytest.raises(SystemExit) as exc:
         cli.cmd_strat_test(Namespace(module="x", cls="Y", strategy_id="s", symbol="2330"))
     assert exc.value.code == 1
+
+
+def test_feature_rollout_cli_roundtrip(tmp_path, capsys):
+    profiles = tmp_path / "feature_profiles.yaml"
+    profiles.write_text(
+        "default_profile_id: p1\nprofiles:\n"
+        "  - profile_id: p1\n    feature_set_id: lob_shared_v1\n    state: active\n"
+        "  - profile_id: p2\n    feature_set_id: lob_shared_v1\n    state: shadow\n",
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "rollout_state.json"
+    cli.cmd_feature_rollout_set(
+        Namespace(
+            profiles=str(profiles),
+            state_path=str(state_path),
+            feature_set="lob_shared_v1",
+            state="active",
+            profile_id="p1",
+            actor="test",
+            notes="",
+        )
+    )
+    cli.cmd_feature_rollout_set(
+        Namespace(
+            profiles=str(profiles),
+            state_path=str(state_path),
+            feature_set="lob_shared_v1",
+            state="active",
+            profile_id="p2",
+            actor="test",
+            notes="switch",
+        )
+    )
+    cli.cmd_feature_rollout_rollback(
+        Namespace(state_path=str(state_path), feature_set="lob_shared_v1", actor="test", notes="rb")
+    )
+    cli.cmd_feature_rollout_status(
+        Namespace(profiles=str(profiles), state_path=str(state_path), feature_set="lob_shared_v1")
+    )
+    out = capsys.readouterr().out
+    assert "lob_shared_v1" in out
+    assert "resolved_profile_id" in out
 
 
 def test_cmd_strat_test_success(monkeypatch, capsys):
@@ -512,6 +577,7 @@ def test_cmd_alpha_promote(monkeypatch, capsys, tmp_path):
 
     class _Result:
         approved = True
+        checklist = None
 
         @staticmethod
         def to_dict():
@@ -547,6 +613,8 @@ def test_cmd_alpha_promote(monkeypatch, capsys, tmp_path):
         max_live_drawdown_contribution=0.02,
         max_execution_error_rate=0.01,
         force=False,
+        config_version="v1",
+        parent_config_version=None,
         out=str(out_file),
     )
     cli.cmd_alpha_promote(args)

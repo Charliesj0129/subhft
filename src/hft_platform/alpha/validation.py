@@ -63,6 +63,8 @@ class ValidationConfig:
         "research/data/processed",
         "research/data/hbt_multiproduct",
     )
+    required_data_provenance_fields: tuple[str, ...] = ()
+    data_ul: int = 2
     bootstrap_samples: int = 1000
     stress_latency_multiplier: float = 1.5
     stress_fee_multiplier: float = 1.5
@@ -289,6 +291,16 @@ def run_gate_a(
     invalid_data_roots: list[str] = []
     missing_data_metadata: dict[str, str] = {}
     invalid_data_metadata: dict[str, list[str]] = {}
+    data_ul_target = int(getattr(config, "data_ul", 2)) if config is not None else 2
+    data_ul_target = max(1, min(6, data_ul_target))
+    data_ul_achieved_by_path: dict[str, int] = {}
+    data_ul_missing_fields_by_path: dict[str, list[str]] = {}
+    data_ul_warnings: list[str] = []
+    required_data_provenance_fields = (
+        tuple(str(x).strip() for x in getattr(config, "required_data_provenance_fields", ()) if str(x).strip())
+        if config is not None
+        else ()
+    )
     allowed_roots: list[str] = []
     if enforce_data_governance:
         allowed_roots = _resolve_allowed_data_roots(root, config)
@@ -305,17 +317,28 @@ def run_gate_a(
                     missing_data_metadata[str(data_path)] = reason
                     continue
                 problems = _validate_dataset_metadata(meta_payload, data_path)
+                try:
+                    from research.tools.vm_ul import DataUL, infer_data_ul, validate_meta_ul
+
+                    ul_enum = DataUL(data_ul_target)
+                    ul_ok, ul_missing = validate_meta_ul(meta_payload, ul_enum)
+                    data_ul_achieved = int(infer_data_ul(meta_payload))
+                    data_ul_achieved_by_path[str(data_path)] = data_ul_achieved
+                    if not ul_ok:
+                        data_ul_missing_fields_by_path[str(data_path)] = ul_missing
+                        data_ul_warnings.append(
+                            f"{data_path.name}: missing UL{data_ul_target} fields: {', '.join(ul_missing)}"
+                        )
+                except Exception as exc:
+                    data_ul_warnings.append(f"data_ul_validation_error:{type(exc).__name__}:{exc}")
+
+                if required_data_provenance_fields and data_ul_target < 2:
+                    missing = _missing_or_blank_metadata_keys(meta_payload, required_data_provenance_fields)
+                    problems.extend(f"missing_provenance:{key}" for key in missing)
                 if problems:
                     invalid_data_metadata[str(data_path)] = problems
-    data_governance_passed = (
-        (not enforce_data_governance)
-        or (
-            not invalid_data_roots
-            and (
-                not require_data_meta
-                or (not missing_data_metadata and not invalid_data_metadata)
-            )
-        )
+    data_governance_passed = (not enforce_data_governance) or (
+        not invalid_data_roots and (not require_data_meta or (not missing_data_metadata and not invalid_data_metadata))
     )
 
     # Skills / roles attribution governance (warn-only, non-blocking).
@@ -329,11 +352,11 @@ def run_gate_a(
         )
     if not roles_used:
         skills_warnings.append(
-            "manifest.roles_used is empty — add role attribution per SOP Stage 2"
-            " (e.g. planner, code-reviewer)"
+            "manifest.roles_used is empty — add role attribution per SOP Stage 2 (e.g. planner, code-reviewer)"
         )
     try:
         from research.registry.schemas import VALID_ROLES, VALID_SKILLS
+
         invalid_roles_list = [r for r in roles_used if r not in VALID_ROLES]
         invalid_skills_list = [s for s in skills_used if s not in VALID_SKILLS]
     except ImportError:
@@ -351,6 +374,8 @@ def run_gate_a(
         )
 
     passed = not missing_fields_by_path and complexity_ok and paper_governance_passed and data_governance_passed
+    achieved_values = list(data_ul_achieved_by_path.values())
+    data_ul_achieved = min(achieved_values) if achieved_values else None
     return GateReport(
         gate="Gate A",
         passed=passed,
@@ -375,6 +400,12 @@ def run_gate_a(
             "data_governance": {
                 "enforced": enforce_data_governance,
                 "require_data_meta": require_data_meta,
+                "data_ul_target": data_ul_target,
+                "data_ul_achieved": data_ul_achieved,
+                "data_ul_achieved_by_path": data_ul_achieved_by_path,
+                "data_ul_missing_fields": data_ul_missing_fields_by_path,
+                "warnings": data_ul_warnings,
+                "required_data_provenance_fields": list(required_data_provenance_fields),
                 "allowed_data_roots": allowed_roots,
                 "invalid_data_roots": invalid_data_roots,
                 "missing_data_metadata": missing_data_metadata,
@@ -401,7 +432,7 @@ def run_gate_b(alpha_id: str, project_root: Path, skip_tests: bool = False, time
         )
 
     test_path = project_root / "research" / "alphas" / alpha_id / "tests"
-    cmd = ["uv", "run", "pytest", "-q", "--no-cov", str(test_path)]
+    cmd = ["uv", "run", "python", "-m", "pytest", "-q", "--no-cov", str(test_path)]
     try:
         proc = subprocess.run(
             cmd,
@@ -541,18 +572,10 @@ def run_gate_c(
         runner_cls=ResearchBacktestRunner,
     )
     scorecard_extra = {
-        "walk_forward_sharpe_mean": (
-            float(wf_result.fold_sharpe_mean) if wf_result is not None else None
-        ),
-        "walk_forward_sharpe_std": (
-            float(wf_result.fold_sharpe_std) if wf_result is not None else None
-        ),
-        "walk_forward_sharpe_min": (
-            float(wf_result.fold_sharpe_min) if wf_result is not None else None
-        ),
-        "walk_forward_consistency_pct": (
-            float(wf_result.fold_consistency_pct) if wf_result is not None else None
-        ),
+        "walk_forward_sharpe_mean": (float(wf_result.fold_sharpe_mean) if wf_result is not None else None),
+        "walk_forward_sharpe_std": (float(wf_result.fold_sharpe_std) if wf_result is not None else None),
+        "walk_forward_sharpe_min": (float(wf_result.fold_sharpe_min) if wf_result is not None else None),
+        "walk_forward_consistency_pct": (float(wf_result.fold_consistency_pct) if wf_result is not None else None),
         "stat_bh_n_survived": int(n_bh_survived),
         "stat_bh_method": correction_method,
         "stat_bds_pvalue": _extract_bds_pvalue(stat_tests),
@@ -561,6 +584,7 @@ def run_gate_c(
     latest_signals = getattr(tracker, "latest_signals_by_alpha", None)
     pool_signals = latest_signals() if callable(latest_signals) else {}
     pool_signals = {k: v for k, v in dict(pool_signals).items() if str(k) != str(alpha_id)}
+    data_meta_path = _resolve_first_data_meta_path(resolved_data_paths)
     scorecard = compute_scorecard(
         {
             "signals": result.signals,
@@ -576,7 +600,20 @@ def run_gate_c(
         },
         pool_signals=pool_signals,
         wf_extra=scorecard_extra,
+        data_meta_path=data_meta_path,
     )
+    scorecard_data_ul = int(scorecard.data_ul) if scorecard.data_ul is not None else None
+    gate_c_data_ul_advisory = {
+        "value": scorecard_data_ul,
+        "recommended_min": 3,
+        "warn": (scorecard_data_ul is None or scorecard_data_ul < 3),
+        "blocking": False,
+        "detail": (
+            "OK"
+            if scorecard_data_ul is not None and scorecard_data_ul >= 3
+            else "VM-UL<3: Gate C recommends UL3+ metadata for stronger reproducibility."
+        ),
+    }
     scorecard_path = experiments_base / "runs" / result.run_id / "scorecard.json"
 
     core_passed = (
@@ -658,6 +695,8 @@ def run_gate_c(
             "parameter_robustness": robustness_eval,
             "latency_profile": result.latency_profile,
             "scorecard_path": str(scorecard_path),
+            "scorecard_data_meta_path": data_meta_path,
+            "data_ul_advisory": gate_c_data_ul_advisory,
             "selected_signal_threshold": float(selected_cfg.signal_threshold),
             "base_signal_threshold": float(backtest_cfg.signal_threshold),
         },
@@ -1039,13 +1078,9 @@ def _optimize_parameters(
     if neighbor_objs.size and best_obj != 0.0:
         neighbor_ratio = float(np.median(neighbor_objs) / best_obj)
     plateau_risk = bool(
-        best_obj > 0.0
-        and neighbor_objs.size
-        and neighbor_ratio < float(config.opt_min_neighbor_objective_ratio)
+        best_obj > 0.0 and neighbor_objs.size and neighbor_ratio < float(config.opt_min_neighbor_objective_ratio)
     )
-    sign_flip_risk = bool(
-        float(best["sharpe_oos"]) > 0.0 and neighbor_sharpes.size and np.any(neighbor_sharpes <= 0.0)
-    )
+    sign_flip_risk = bool(float(best["sharpe_oos"]) > 0.0 and neighbor_sharpes.size and np.any(neighbor_sharpes <= 0.0))
 
     oos_len = max(2, int((1.0 - float(config.is_oos_split)) * float(base_result.equity_curve.size)))
     n_trials = max(1, len(rows))
@@ -1327,6 +1362,15 @@ def _load_dataset_metadata(data_path: Path) -> tuple[dict[str, Any] | None, Path
     return None, None, "missing_meta_file"
 
 
+def _resolve_first_data_meta_path(data_paths: list[str]) -> str | None:
+    for path_str in data_paths:
+        data_path = Path(path_str).resolve()
+        _payload, meta_path, _error = _load_dataset_metadata(data_path)
+        if meta_path is not None and meta_path.exists():
+            return str(meta_path)
+    return None
+
+
 def _validate_dataset_metadata(meta: dict[str, Any], data_path: Path) -> list[str]:
     problems: list[str] = []
     required_keys = (
@@ -1368,6 +1412,24 @@ def _validate_dataset_metadata(meta: dict[str, Any], data_path: Path) -> list[st
     if not isinstance(fields, list) or not fields:
         problems.append("fields_must_be_nonempty_list")
     return problems
+
+
+def _missing_or_blank_metadata_keys(meta: dict[str, Any], required: tuple[str, ...]) -> list[str]:
+    missing: list[str] = []
+    for key in required:
+        if key not in meta:
+            missing.append(key)
+            continue
+        value = meta.get(key)
+        if value is None:
+            missing.append(key)
+            continue
+        if isinstance(value, str) and not value.strip():
+            missing.append(key)
+            continue
+        if isinstance(value, (list, tuple, set, dict)) and len(value) == 0:
+            missing.append(key)
+    return missing
 
 
 def _dataset_row_count(path: Path) -> int | None:

@@ -1,90 +1,63 @@
 # Feed Adapter Guide
 
-Feed Adapter 負責把 Shioaji 行情轉成標準事件，餵給 Event Bus / LOB。
+Feed Adapter 負責把 Shioaji 行情轉成平台標準事件，並提供重連/回補機制。
 
----
-
-## 1) 結構
-- `feed_adapter/shioaji_client.py`：Shioaji login/subscribe/reconnect
-- `feed_adapter/normalizer.py`：raw payload → `TickEvent` / `BidAskEvent`
-- `feed_adapter/lob_engine.py`：LOB 更新 + `LOBStatsEvent`
-
----
+## 1) 模組結構
+- `src/hft_platform/feed_adapter/shioaji_client.py`
+- `src/hft_platform/feed_adapter/normalizer.py`
+- `src/hft_platform/feed_adapter/lob_engine.py`
 
 ## 2) Symbols 與訂閱
+來源：`config/symbols.list`
 
-唯一來源：`config/symbols.list`
 ```bash
 uv run hft config build --list config/symbols.list --output config/symbols.yaml
 ```
 
-Docker Compose 預設 `SYMBOLS_CONFIG=config/base/symbols.yaml`。如需用自建 symbols：
+compose 預設 `SYMBOLS_CONFIG=config/base/symbols.yaml`；要改用自建版請在 `.env` 設定：
 ```bash
-# .env
 SYMBOLS_CONFIG=config/symbols.yaml
 ```
 
----
+## 3) 模式與帳密
+- `HFT_MODE=sim|live`
+- `SHIOAJI_API_KEY`, `SHIOAJI_SECRET_KEY`
+- `SHIOAJI_PERSON_ID` / `SHIOAJI_CA_PATH` / `SHIOAJI_CA_PASSWORD`（CA 選用）
 
-## 3) Shioaji Simulation / Live
-- `HFT_MODE=sim` → Shioaji simulation mode
-- `HFT_MODE=live` → 真實帳務
+## 4) Quote watchdog / reconnect
+關鍵參數：
+- `HFT_QUOTE_WATCHDOG_S`
+- `HFT_QUOTE_NO_DATA_S`
+- `HFT_QUOTE_FORCE_RELOGIN_S`
+- `HFT_QUOTE_FLAP_WINDOW_S`
+- `HFT_QUOTE_FLAP_THRESHOLD`
+- `HFT_QUOTE_FLAP_COOLDOWN_S`
+- `HFT_RECONNECT_DAYS`, `HFT_RECONNECT_HOURS`, `HFT_RECONNECT_TZ`
 
-CA 啟用：
-```bash
-export SHIOAJI_PERSON_ID=...
-export SHIOAJI_CA_PATH=/path/to/Sinopac.pfx
-export SHIOAJI_CA_PASSWORD=...
-export SHIOAJI_ACTIVATE_CA=1
-```
+## 5) Quote 版本與 schema guard
+- `HFT_QUOTE_VERSION=auto|v0|v1`
+- `HFT_QUOTE_VERSION_STRICT=0|1`
+- `HFT_QUOTE_SCHEMA_GUARD=0|1`
+- `HFT_QUOTE_SCHEMA_GUARD_STRICT=0|1`
 
----
+## 6) Normalizer / LOB
+- `HFT_EVENT_MODE=tuple|event`
+- `HFT_RUST_ACCEL=1|0`
+- `HFT_MD_SYNTHETIC_SIDE=1|0`
+- `HFT_MD_SYNTHETIC_TICKS=<n>`
 
-## 4) Reconnect / Resubscribe
-常用環境變數：
-- `HFT_RESUBSCRIBE_COOLDOWN`
-- `HFT_MD_RECONNECT_GAP_S`
-- `HFT_MD_FORCE_RECONNECT_GAP_S`
-- `HFT_MD_RECONNECT_COOLDOWN_S`
-- `HFT_RECONNECT_DAYS` / `HFT_RECONNECT_HOURS`
+LOB：
+- `HFT_LOB_LOCKS`, `HFT_LOB_READ_LOCKS`
+- `HFT_LOB_FORCE_NUMPY`
 
----
-
-## 5) Metrics
+## 7) 主要 metrics
 - `feed_events_total`
-- `feed_latency_ns`
-- `feed_interarrival_ns`
 - `feed_last_event_ts`
 - `normalization_errors_total`
-- `lob_updates_total`
-
----
-
-## 6) LOB Engine
-
-- Rust fast path: `HFT_RUST_ACCEL=1`（default）
-- 強制 numpy path: `HFT_LOB_FORCE_NUMPY=1`
-- 鎖與一致性：`HFT_LOB_LOCKS=1`, `HFT_LOB_READ_LOCKS=1`
-
-`LOBStatsEvent` 包含：
-- mid_price / spread / imbalance
-- best_bid / best_ask
-- bid_depth / ask_depth
-
----
-
-## 7) 資料格式
-
-### TickEvent
-- price 是整數（scaled）
-- exchange ts + local ts
-
-### BidAskEvent
-- bids/asks 為 numpy array（shape = [N, 2]）
-
----
+- `shioaji_api_latency_ms`
+- `shioaji_api_errors_total`
 
 ## 8) 常見問題
-- 看不到行情：確認 `SYMBOLS_CONFIG` 指向正確 `symbols.yaml`
-- 跨週斷線：檢查 `HFT_RECONNECT_*` 與主機時間
-
+- 無行情：先檢查 `SYMBOLS_CONFIG` + `hft config validate`
+- 啟動期 NameResolutionError：先起 `clickhouse` 再起 `hft-engine`
+- metrics scrape 異常：確認 label 值為字串（避免序列化錯誤）

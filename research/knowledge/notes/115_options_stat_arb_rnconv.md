@@ -1,4 +1,5 @@
 # Statistical Arbitrage in Options Markets by Graph Learning and Synthetic Long Positions
+ref: 115
 
 **Authors**: Yoonsik Hong, Diego Klabjan (Northwestern University)
 **Date**: 2025-08

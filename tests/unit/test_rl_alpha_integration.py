@@ -1,13 +1,23 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from hft_platform.alpha.experiments import ExperimentTracker
 from research.registry.alpha_registry import AlphaRegistry
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
-from research.rl.alpha_adapter import RLAlphaAdapter, RLAlphaConfig
-from research.rl.lifecycle import RLRunConfig, log_rl_run, promote_latest_rl_run, register_rl_alpha
-from research.rl.registry_features import RegistryFeatureProvider
+
+# research.rl was archived; skip this module if not present.
+rl_adapter = pytest.importorskip("research.rl.alpha_adapter")
+rl_lifecycle = pytest.importorskip("research.rl.lifecycle")
+rl_features = pytest.importorskip("research.rl.registry_features")
+RLAlphaAdapter = rl_adapter.RLAlphaAdapter
+RLAlphaConfig = rl_adapter.RLAlphaConfig
+RLRunConfig = rl_lifecycle.RLRunConfig
+log_rl_run = rl_lifecycle.log_rl_run
+promote_latest_rl_run = rl_lifecycle.promote_latest_rl_run
+register_rl_alpha = rl_lifecycle.register_rl_alpha
+RegistryFeatureProvider = rl_features.RegistryFeatureProvider
 
 
 class _DummyAlpha:

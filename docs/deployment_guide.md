@@ -1,83 +1,61 @@
 # HFT Platform 部署指南
 
-本文件整理本機、Docker、Ops 三種部署模式，並指向 Runbook。
-
----
+本文件覆蓋本機、Docker Compose、Swarm 與 Live 啟動重點。
 
 ## 1. 部署模式總覽
-| 模式 | 目的 | 指令 | 依賴 |
-| --- | --- | --- | --- |
-| 本機模擬 | 開發/驗證流程 | `uv run hft run sim` | Python/uv |
-| 本機 live | 接入券商 | `HFT_MODE=live uv run hft run live` | SHIOAJI_* |
-| Docker Compose | 單機部署 + ClickHouse（預設） | `docker compose up -d --build` | Docker |
-| Docker Swarm | 服務化部署（可選） | `docker stack deploy -c docker-stack.yml hft` | Docker + Swarm |
-| Ops (Host Tuning) | 低抖動環境 | `sudo ./ops.sh setup` | Linux + sudo |
 
----
+| 模式 | 目的 | 指令 |
+| --- | --- | --- |
+| 本機模擬 | 開發與功能驗證 | `uv run hft run sim` |
+| 本機 live | 串接券商 | `HFT_MODE=live uv run hft run live` |
+| Docker Compose | 單機完整堆疊 | `docker compose up -d ...` |
+| Docker Swarm | 可選服務化部署 | `docker stack deploy ...` |
 
 ## 2. 本機部署
 
-### 2.1 安裝
 ```bash
 uv sync --dev
 cp .env.example .env
-```
-
-### 2.2 產生 symbols
-```bash
 uv run hft config build --list config/symbols.list --output config/symbols.yaml
-```
-
-### 2.3 啟動
-```bash
 uv run hft run sim
 ```
 
----
+## 3. Docker Compose（預設）
 
-## 3. Docker Compose 部署（預設）
-
+### 3.1 建議啟動順序
 ```bash
-docker compose up -d --build
+# 先起資料與快取
+docker compose up -d clickhouse redis
+
+# 再起主流程
+docker compose up -d --build hft-engine
+
+# 最後起觀測（可選）
+docker compose up -d prometheus grafana alertmanager hft-monitor
 ```
 
-### 3.1 服務清單
-- `hft-engine`：主流程
-- `wal-loader`：WAL 回灌 ClickHouse
-- `clickhouse`：資料庫
-- `redis`：state
-- `prometheus` / `grafana` / `alertmanager`
+### 3.2 驗證
+```bash
+docker compose ps
+docker compose logs --tail=200 hft-engine
+curl -fsS http://localhost:9090/metrics | head
+```
 
-### 3.2 常用命令
+### 3.3 常用命令
 ```bash
 docker compose logs -f hft-engine
-
 docker compose restart hft-engine
-
 docker compose down
 ```
 
-### 3.3 symbols.yaml 使用注意
-docker-compose 預設 `SYMBOLS_CONFIG=config/base/symbols.yaml`。
-若你要用 `config/symbols.yaml`：
+### 3.4 `SYMBOLS_CONFIG` 注意
+compose 預設 `SYMBOLS_CONFIG=config/base/symbols.yaml`。若要改用生成版本：
 ```bash
 # .env
 SYMBOLS_CONFIG=config/symbols.yaml
 
-# 然後
 docker compose restart hft-engine
 ```
-
-### 3.4 Docker Swarm（可選）
-```bash
-docker swarm init 2>/dev/null || true
-docker build -t ${HFT_IMAGE:-hft-platform:latest} .
-docker stack deploy -c docker-stack.yml hft
-docker service logs -f hft_hft-engine
-docker stack rm hft
-```
-
----
 
 ## 4. Live 模式
 
@@ -85,61 +63,64 @@ docker stack rm hft
 export SHIOAJI_API_KEY=...
 export SHIOAJI_SECRET_KEY=...
 export HFT_MODE=live
+uv run hft run live
+```
 
-# Optional CA
+CA（選用）：
+```bash
 export SHIOAJI_PERSON_ID=...
 export SHIOAJI_CA_PATH=/path/to/Sinopac.pfx
 export SHIOAJI_CA_PASSWORD=...
 export SHIOAJI_ACTIVATE_CA=1
-
-uv run hft run live
 ```
 
----
-
-## 5. Ops / 低延遲部署
-
-> 適用 Linux Host。需要 root 權限。
-
+## 5. Swarm（可選）
 ```bash
+docker swarm init 2>/dev/null || true
+docker build -t ${HFT_IMAGE:-hft-platform:latest} .
+docker stack deploy -c docker-stack.yml hft
+docker service logs -f hft_hft-engine
+```
+
+## 6. Ops / Host Tuning（低延遲）
+```bash
+sudo ./ops.sh tune
+sudo ./ops.sh hugepages
 sudo ./ops.sh setup
 ```
 
-可選：
-- `sudo ./ops.sh tune`（sysctl + cpu governor）
-- `sudo ./ops.sh hugepages`
-- `sudo ./ops.sh isolate '<command>'`
-
-ClickHouse data path 可用環境變數覆蓋：
+## 7. 版本更新流程
 ```bash
-export HFT_CH_DATA_ROOT=/mnt/data/clickhouse
-sudo ./ops.sh setup
+git pull
+docker compose up -d --build hft-engine
 ```
-
----
-
-## 6. CI / 部署更新
-- CI: `.github/workflows/ci.yml`
-- 部署：
-  - 單機：`docker compose up -d --build`
-  - 叢集：`docker stack deploy -c docker-stack.yml hft`
-
----
-
-## 7. 驗證
-
-### 7.1 Metrics
-- `http://localhost:9090/metrics`
-
-### 7.2 ClickHouse
-```bash
-docker exec clickhouse clickhouse-client --query \
-  "SELECT count() FROM hft.market_data"
-```
-
----
 
 ## 8. 相關文件
 - `docs/runbooks.md`
 - `docs/troubleshooting.md`
-- `docs/observability_minimal.md`
+- `docs/hft_low_latency_runbook.md`
+
+## 9. Azure Deployment ☁️
+If you plan to run the stack on Azure, you can follow these standardized steps:
+
+### Provisioning (Azure CLI)
+```bash
+az login
+az group create --name hft-rg --location japaneast
+az vm create \
+  --resource-group hft-rg \
+  --name hft-vm \
+  --image Ubuntu2204 \
+  --size Standard_B2s \ # Or Standard_F4s_v2 for lower latency
+  --admin-username hftadmin \
+  --generate-ssh-keys \
+  --public-ip-sku Standard \
+  --storage-sku Standard_LRS
+```
+
+### Setup Sequence
+Once SSH'd into the VM, run the standard Docker install script, then clone the repository.
+Copy `.env.example` -> `.env` and set critical passwords: `CLICKHOUSE_PASSWORD`, `REDIS_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`.
+Start the stack sequentially as noted in step 3 to avoid DB provisioning timeouts in constrained environments.
+
+**Cost Saving Tip**: Set Auto Shutdown on the VM and only run it during market hours. Monitor WAL/Clickhouse storage carefully as market data grows extensively.

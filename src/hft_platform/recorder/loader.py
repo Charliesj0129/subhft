@@ -99,6 +99,9 @@ class WALLoaderService:
         self._wal_size_critical_mb = float(os.getenv("HFT_WAL_SIZE_CRITICAL_MB", "500"))
         self._last_wal_check_ts = 0.0
         self._wal_check_interval_s = 60.0  # Check every minute
+        self._processed_files_total = 0
+        self._eta_sample_last_ts = timebase.now_s()
+        self._eta_sample_last_processed = 0
         self.metrics = None  # Will be set when run() is called
         self._wal_scheduler = None
 
@@ -693,6 +696,7 @@ class WALLoaderService:
             file_ts = self._extract_file_ts(fname)
             if file_ts > self._last_processed_ts:
                 self._last_processed_ts = file_ts
+            self._processed_files_total += 1
             return True
         except FileNotFoundError:
             return False
@@ -933,6 +937,19 @@ class WALLoaderService:
                 # CE3-06: WAL SLO metrics
                 self.metrics.wal_backlog_files.set(file_count)
                 self.metrics.wal_replay_lag_seconds.set(oldest_age)
+                now_ts = now
+                dt = max(1e-6, now_ts - self._eta_sample_last_ts)
+                delta_files = max(0, self._processed_files_total - self._eta_sample_last_processed)
+                files_per_s = (delta_files / dt) if delta_files > 0 else 0.0
+                if file_count <= 0:
+                    eta_s = 0.0
+                elif files_per_s > 0:
+                    eta_s = file_count / files_per_s
+                else:
+                    eta_s = 0.0
+                self.metrics.wal_drain_eta_seconds.set(float(eta_s))
+                self._eta_sample_last_ts = now_ts
+                self._eta_sample_last_processed = self._processed_files_total
 
             # Log warnings
             size_mb = total_size / (1024 * 1024)

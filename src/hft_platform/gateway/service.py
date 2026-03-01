@@ -59,6 +59,15 @@ def _int_env(name: str, default: int) -> int:
         return max(1, int(default))
 
 
+def _get_trace_sampler():
+    try:
+        from hft_platform.diagnostics.trace import get_trace_sampler
+
+        return get_trace_sampler()
+    except Exception:
+        return None
+
+
 class GatewayService:
     """Orchestrates intent validation and dispatch in a single asyncio task.
 
@@ -81,6 +90,7 @@ class GatewayService:
         dedup_store: IdempotencyStore,
         storm_guard: Any,  # deferred: StormGuard lives in hft_platform.risk — avoids circular import
         policy: GatewayPolicy,
+        leader_lease: Any | None = None,
     ) -> None:
         self._channel = channel
         self._risk_engine = risk_engine
@@ -103,6 +113,24 @@ class GatewayService:
         self._gateway_latency_counter = 0
         self._gateway_depth_counter = 0
         self._gateway_dedup_counter = 0
+        self._trace_sampler = _get_trace_sampler()
+        self._leader_lease = leader_lease
+        if self._leader_lease is None and _bool_env(os.getenv("HFT_GATEWAY_HA_ENABLED", "0")):
+            try:
+                from hft_platform.gateway.leader_lease import FileLeaderLease
+
+                lease_path = os.getenv("HFT_GATEWAY_LEADER_LEASE_PATH", ".state/gateway_leader.lock")
+                self._leader_lease = FileLeaderLease(lease_path=lease_path)
+            except Exception:
+                self._leader_lease = None
+        try:
+            self._leader_lease_refresh_s = max(0.05, float(os.getenv("HFT_GATEWAY_LEADER_LEASE_REFRESH_S", "0.5")))
+        except ValueError:
+            self._leader_lease_refresh_s = 0.5
+        self._leader_lease_task: asyncio.Task | None = None
+        self._leader_is_active = bool(
+            getattr(self._leader_lease, "is_leader", lambda: True)() if self._leader_lease is not None else True
+        )
         obs_policy = _obs_policy()
         default_every = 1 if obs_policy in {"", "debug"} else (4 if obs_policy == "balanced" else 16)
         default_latency_every = 1 if obs_policy in {"", "debug"} else (4 if obs_policy == "balanced" else 16)
@@ -138,6 +166,9 @@ class GatewayService:
         self.running = True
         logger.info("GatewayService started")
         try:
+            if self._leader_lease is not None:
+                await self._leader_lease_tick()
+                self._leader_lease_task = asyncio.create_task(self._leader_lease_loop())
             while self.running:
                 receive_raw = getattr(self._channel, "receive_raw", None)
                 if callable(receive_raw):
@@ -158,6 +189,22 @@ class GatewayService:
             logger.info("GatewayService stopping")
         finally:
             self.running = False
+            lease_task = self._leader_lease_task
+            self._leader_lease_task = None
+            if lease_task is not None:
+                lease_task.cancel()
+                try:
+                    await lease_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+            if self._leader_lease is not None:
+                try:
+                    self._leader_lease.release()
+                    self._leader_is_active = False
+                except Exception:
+                    pass
             # Persist dedup state on clean shutdown (async-safe: run in thread)
             try:
                 await asyncio.to_thread(self._dedup.persist)
@@ -186,6 +233,16 @@ class GatewayService:
         if existing is not None and existing.approved is not None:
             self._dedup_hits += 1
             self._inc_dedup_hit_metric()
+            self._emit_trace(
+                "gateway_dedup_hit",
+                getattr(intent, "trace_id", ""),
+                {
+                    "ack_token": envelope.ack_token,
+                    "key": key,
+                    "approved": existing.approved,
+                    "reason": getattr(existing, "reason_code", ""),
+                },
+            )
             logger.debug(
                 "Dedup hit — returning cached decision",
                 key=key,
@@ -207,6 +264,11 @@ class GatewayService:
             else:
                 self._dedup.commit(key, False, reason, 0)
             self._emit_reject(reason)
+            self._emit_trace(
+                "gateway_reject",
+                getattr(intent, "trace_id", ""),
+                {"reason": reason, "stage": "policy", "ack_token": envelope.ack_token},
+            )
             logger.debug("Gateway policy rejected", reason=reason, ack_token=envelope.ack_token)
             self._record_latency(t0)
             return
@@ -237,6 +299,11 @@ class GatewayService:
                 else:
                     self._dedup.commit(key, False, "EXPOSURE_SYMBOL_LIMIT", 0)
                 self._emit_reject("EXPOSURE_SYMBOL_LIMIT")
+                self._emit_trace(
+                    "gateway_reject",
+                    getattr(intent, "trace_id", ""),
+                    {"reason": "EXPOSURE_SYMBOL_LIMIT", "stage": "exposure", "ack_token": envelope.ack_token},
+                )
                 logger.error(
                     "GatewayService exposure symbol limit hit",
                     ack_token=envelope.ack_token,
@@ -251,6 +318,11 @@ class GatewayService:
                 else:
                     self._dedup.commit(key, False, exp_reason, 0)
                 self._emit_reject(exp_reason)
+                self._emit_trace(
+                    "gateway_reject",
+                    getattr(intent, "trace_id", ""),
+                    {"reason": exp_reason, "stage": "exposure", "ack_token": envelope.ack_token},
+                )
                 logger.debug(
                     "Gateway exposure rejected",
                     reason=exp_reason,
@@ -264,6 +336,33 @@ class GatewayService:
             decision = self._risk_engine.evaluate_typed_frame(typed_frame, intent_view=intent)
         else:
             decision = self._risk_engine.evaluate(intent)
+
+        if decision.approved and not self._is_dispatch_leader():
+            self._rejected += 1
+            if is_typed_view and hasattr(self._dedup, "commit_typed"):
+                self._dedup.commit_typed(key, False, "NOT_LEADER", 0)
+            else:
+                self._dedup.commit(key, False, "NOT_LEADER", 0)
+            self._emit_reject("NOT_LEADER")
+            self._emit_trace(
+                "gateway_reject",
+                getattr(intent, "trace_id", ""),
+                {"reason": "NOT_LEADER", "stage": "ha_lease", "ack_token": envelope.ack_token},
+            )
+            if intent_type_value != int(IntentType.CANCEL):
+                if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
+                    self._exposure.release_exposure_typed(
+                        exp_key,
+                        intent_type=intent_type_value,
+                        price=int(intent.price),
+                        qty=int(intent.qty),
+                    )
+                else:
+                    self._exposure.release_exposure(exp_key, intent)
+            logger.debug("Gateway standby suppressed broker dispatch (not leader)", ack_token=envelope.ack_token)
+            self._record_latency(t0)
+            self._update_channel_depth_metric()
+            return
 
         # Step 5: Create command
         if decision.approved:
@@ -305,7 +404,22 @@ class GatewayService:
                 else:
                     self._dedup.commit(key, False, "ORDER_QUEUE_FULL", 0)
                 self._emit_reject("ORDER_QUEUE_FULL")
+                self._emit_trace(
+                    "gateway_reject",
+                    getattr(intent, "trace_id", ""),
+                    {"reason": "ORDER_QUEUE_FULL", "stage": "dispatch", "ack_token": envelope.ack_token},
+                )
                 logger.warning("Order queue full — intent dropped", ack_token=envelope.ack_token)
+            else:
+                self._emit_trace(
+                    "gateway_dispatch",
+                    getattr(intent, "trace_id", ""),
+                    {
+                        "ack_token": envelope.ack_token,
+                        "typed": bool(typed_cmd_frame is not None),
+                        "cmd_id": int(cmd_id_for_commit),
+                    },
+                )
         else:
             self._rejected += 1
             if is_typed_view and hasattr(self._dedup, "commit_typed"):
@@ -313,6 +427,11 @@ class GatewayService:
             else:
                 self._dedup.commit(key, False, decision.reason_code, 0)
             self._emit_reject(decision.reason_code)
+            self._emit_trace(
+                "gateway_reject",
+                getattr(intent, "trace_id", ""),
+                {"reason": decision.reason_code, "stage": "risk", "ack_token": envelope.ack_token},
+            )
             # Release exposure on rejection (was reserved in step 3)
             if intent_type_value != int(IntentType.CANCEL):
                 if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
@@ -344,6 +463,7 @@ class GatewayService:
             "dedup_hits": self._dedup_hits,
             "channel_depth": self._channel.qsize(),
             "policy_mode": self._policy.mode.value,
+            "leader_active": self._is_dispatch_leader(),
         }
 
     # ── Private helpers ───────────────────────────────────────────────────
@@ -421,6 +541,15 @@ class GatewayService:
             self._gateway_depth_metric = None
             self._gateway_dedup_hits_metric = None
 
+    def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
+        sampler = self._trace_sampler
+        if sampler is None:
+            return
+        try:
+            sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
+        except Exception:
+            pass
+
     def _metrics_or_refresh(self):
         metrics = self._metrics
         if metrics is None:
@@ -447,3 +576,28 @@ class GatewayService:
             metric.inc()
         except Exception:
             pass
+
+    async def _leader_lease_loop(self) -> None:
+        while self.running and self._leader_lease is not None:
+            try:
+                await self._leader_lease_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._leader_is_active = False
+            await asyncio.sleep(self._leader_lease_refresh_s)
+
+    async def _leader_lease_tick(self) -> None:
+        lease = self._leader_lease
+        if lease is None:
+            self._leader_is_active = True
+            return
+        try:
+            self._leader_is_active = bool(await asyncio.to_thread(lease.tick))
+        except Exception:
+            self._leader_is_active = False
+
+    def _is_dispatch_leader(self) -> bool:
+        if self._leader_lease is None:
+            return True
+        return bool(self._leader_is_active)

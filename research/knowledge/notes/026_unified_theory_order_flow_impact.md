@@ -1,4 +1,8 @@
 # A unified theory of order flow, market impact, and volatility
+ref: 026
+arxiv: https://arxiv.org/abs/2601.23172
+Authors: Johannes Muhle-Karbe, Youssef Ouazzani Chahdi, Mathieu Rosenbaum, Grégoire Szymanski
+Published: 2026 (February 2026; ArXiv Feb 2, 2026)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

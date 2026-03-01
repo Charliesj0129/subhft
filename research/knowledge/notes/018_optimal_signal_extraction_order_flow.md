@@ -1,4 +1,8 @@
 # Optimal Signal Extraction from Order Flow: A Matched Filter Perspective
+ref: 018
+arxiv: https://arxiv.org/abs/2512.18648
+Authors: Sungwoo Kang (Korea University)
+Published: 2025 (December 2025; ArXiv Jan 7, 2026)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

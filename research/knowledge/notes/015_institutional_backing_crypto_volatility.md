@@ -1,4 +1,7 @@
 # Institutional Backing and Crypto Volatility: A Hybrid Framework for DeFi Stabilization
+ref: 015
+Authors: Ihlas Sovbetov (Istanbul Aydin University)
+Published: 2025 (Published in Computational Economics)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

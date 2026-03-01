@@ -1,4 +1,5 @@
 # Quantum Reinforcement Learning Trading Agent for Sector Rotation in the Taiwan Stock Market
+ref: 106
 
 **Authors**: Chi-Sheng Chen, Xinyu Zhang, Ya-Chuan Chen
 **Date**: 2025-10

@@ -1,4 +1,8 @@
 # Stochastic Volatility Modelling with LSTM Networks: A Hybrid Approach
+ref: 021
+arxiv: https://arxiv.org/abs/2512.12250
+Authors: Anna Perekhodko, Robert Ślepaczuk (University of Warsaw)
+Published: 2025 (December 2025; ArXiv Dec 13, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

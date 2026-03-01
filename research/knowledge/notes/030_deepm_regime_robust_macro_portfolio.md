@@ -1,4 +1,8 @@
 # DeePM: Regime-Robust Deep Learning for Systematic Macro Portfolio Management
+ref: 030
+arxiv: https://arxiv.org/abs/2601.05975
+Authors: Kieran Wood, Stephen J. Roberts, Stefan Zohren (University of Oxford, Oxford-Man Institute)
+Published: 2026 (January 12, 2026; ArXiv)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

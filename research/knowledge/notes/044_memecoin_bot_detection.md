@@ -1,4 +1,5 @@
 # Resisting Manipulative Bots in Memecoin Copy Trading: A Multi-Agent Approach with Chain-of-Thought Reasoning
+ref: 044
 
 **Authors**: Yichen Luo et al. (UCL, NTU)
 **Date**: January 2026

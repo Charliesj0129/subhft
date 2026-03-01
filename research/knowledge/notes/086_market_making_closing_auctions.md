@@ -1,4 +1,5 @@
 # Learning Market Making with Closing Auctions
+ref: 086
 
 **Authors**: Julius Graf, Thibaut Mastrolia
 **Date**: 2026-01-27

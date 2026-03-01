@@ -1,4 +1,5 @@
 # The Fair Basis: Funding and Capital in the Reduced Form Framework
+ref: 060
 
 **Authors**: Wujiang Lou
 **Date**: 2020 (Updated)

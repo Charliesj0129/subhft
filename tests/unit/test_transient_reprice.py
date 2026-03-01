@@ -5,10 +5,12 @@ import numpy as np
 import pytest
 
 sys.path.append(os.path.abspath("research/tools"))
+sys.path.append(os.path.abspath("research/tools/legacy"))
 
 factor_registry = pytest.importorskip("factor_registry", reason="factor registry not available")
 TransientRepriceFactor = factor_registry.TransientRepriceFactor
-from alpha_backtester import AlphaBacktester
+alpha_backtester_mod = pytest.importorskip("alpha_backtester", reason="alpha_backtester not available")
+AlphaBacktester = alpha_backtester_mod.AlphaBacktester
 
 
 class TestTransientReprice:

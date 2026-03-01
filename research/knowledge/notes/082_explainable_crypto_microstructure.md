@@ -1,4 +1,5 @@
 # Explainable Patterns in Cryptocurrency Microstructure
+ref: 082
 
 **Authors**: Bartosz Bieganowski, Robert Ślepaczuk
 **Date**: 2026

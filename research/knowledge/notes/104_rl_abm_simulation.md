@@ -1,4 +1,5 @@
 # Reinforcement Learning in Agent-Based Market Simulation: Unveiling Realistic Stylized Facts and Behavior
+ref: 104
 
 **Authors**: Zhiyuan Yao, Zheng Li, Matthew Thomas, Ionut Florescu
 **Date**: 2024-03

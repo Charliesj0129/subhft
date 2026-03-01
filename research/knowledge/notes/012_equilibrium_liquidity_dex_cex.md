@@ -1,4 +1,8 @@
 # Equilibrium Liquidity and Risk Offsetting in Decentralised Markets
+ref: 012
+arxiv: https://arxiv.org/abs/2512.19838
+Authors: Fayçal Drissi, Xuchen Wu, Sebastian Jaimungal (Oxford & Toronto)
+Published: 2025 (December 2025; ArXiv Dec 24, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

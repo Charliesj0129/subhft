@@ -1,4 +1,5 @@
 # History Is Not Enough: An Adaptive Dataflow System for Financial Time-Series Synthesis
+ref: 045
 
 **Authors**: Haochong Xia et al. (NTU, SMU)
 **Date**: January 2026

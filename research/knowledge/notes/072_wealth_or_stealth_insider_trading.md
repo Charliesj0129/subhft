@@ -1,4 +1,5 @@
 # Wealth or Stealth? The Camouflage Effect in Insider Trading
+ref: 072
 
 **Authors**: Jin Ma, Weixuan Xia, Jianfeng Zhang
 **Date**: 2025

@@ -1,4 +1,8 @@
 # A Test of Lookahead Bias in LLM Forecasts
+ref: 007
+arxiv: https://arxiv.org/abs/2512.23847
+Authors: Zhenyu Gao, Wenxi Jiang, Yutong Yan (CUHK Business School)
+Published: 2026 (January 1, 2026; ArXiv Dec 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

@@ -1,4 +1,5 @@
 # A Test of Lookahead Bias in LLM Forecasts
+ref: 056
 
 **Authors**: Zhenyu Gao et al. (CUHK)
 **Date**: January 2026

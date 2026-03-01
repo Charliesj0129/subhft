@@ -1,4 +1,5 @@
 # WHO SETS THE RANGE? FUNDING MECHANICS AND 4H CONTEXT IN CRYPTO MARKETS
+ref: 042
 
 **Authors**: Prof. Habib Badawi et al.
 **Date**: January 2026

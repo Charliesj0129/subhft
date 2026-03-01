@@ -1,4 +1,8 @@
 # A Games-in-Games Paradigm for Strategic Hybrid Jump-Diffusions
+ref: 006
+arxiv: https://arxiv.org/abs/2512.18098
+Authors: Yunian Pan & Quanyan Zhu (New York University)
+Published: 2025 (ArXiv 2025/12/19)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

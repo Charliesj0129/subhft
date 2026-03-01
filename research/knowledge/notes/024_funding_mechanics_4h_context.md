@@ -1,4 +1,7 @@
 # Who Sets the Range? Funding Mechanics and 4H Context in Crypto Markets
+ref: 024
+Authors: Prof. Habib Badawi, Dr. Mohamed Hani, Dr. Taufikin Taufikin
+Published: 2025 (ArXiv)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

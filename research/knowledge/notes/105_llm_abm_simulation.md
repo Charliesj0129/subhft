@@ -1,4 +1,5 @@
 # Agent-Based Simulation of a Financial Market with Large Language Models
+ref: 105
 
 **Authors**: Ryuji Hashimoto, Takehiro Takayanagi, Masahiro Suzuki, Kiyoshi Izumi
 **Date**: 2025-10

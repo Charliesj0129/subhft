@@ -67,3 +67,59 @@ groups:
     annotations:
         summary: "Recorder Write Failed"
         description: "ClickHouse ingestion failing."
+
+  # CE-M2 Gateway SLO / schema guard
+  - alert: GatewayDispatchLatencyP99High
+    expr: histogram_quantile(0.99, sum(rate(gateway_dispatch_latency_ns_bucket[5m])) by (le)) > 2e6
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Gateway dispatch latency high"
+        description: "Gateway dispatch latency p99 > 2ms for 2m."
+
+  - alert: GatewayIntentChannelDepthHigh
+    expr: max_over_time(gateway_intent_channel_depth[5m]) > 500
+    for: 1m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Gateway intent channel depth high"
+        description: "Gateway intent queue depth exceeded 500."
+
+  - alert: QuoteSchemaMismatchDetected
+    expr: increase(quote_schema_mismatch_total[5m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Quote schema mismatch rejected"
+        description: "Shioaji callback payload failed quote schema guard."
+
+  # CE-M3 WAL SLO
+  - alert: WALReplayLagHigh
+    expr: wal_replay_lag_seconds > 600
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "WAL replay lag high"
+        description: "Oldest pending WAL file age > 600s."
+
+  - alert: WALBacklogFilesHigh
+    expr: wal_backlog_files > 200
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "WAL backlog file count high"
+        description: "Pending WAL files exceed 200."
+
+  - alert: WALDrainETAHigh
+    expr: wal_drain_eta_seconds > 900
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "WAL drain ETA high"
+        description: "Estimated WAL drain ETA exceeds 15 minutes."

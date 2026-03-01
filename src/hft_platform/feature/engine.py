@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from hft_platform.events import FeatureUpdateEvent, LOBStatsEvent
+from hft_platform.feature.profile import FeatureProfile
 from hft_platform.feature.registry import FeatureRegistry, default_feature_registry
 
 try:
@@ -69,6 +70,9 @@ class FeatureEngine:
         "_seq",
         "_emit_events",
         "_quality_flags_next",
+        "_feature_profile",
+        "_ema_alpha",
+        "_ofi_enabled",
     )
 
     def __init__(
@@ -78,6 +82,7 @@ class FeatureEngine:
         feature_set_id: str | None = None,
         emit_events: bool | None = None,
         kernel_backend: str | None = None,
+        feature_profile: FeatureProfile | None = None,
     ) -> None:
         self._registry = registry or default_feature_registry()
         self._feature_set = self._registry.get(feature_set_id) if feature_set_id else self._registry.get_default()
@@ -96,10 +101,15 @@ class FeatureEngine:
             }
         self._emit_events = bool(emit_events)
         self._quality_flags_next: dict[str, int] = {}
+        self._feature_profile = None
+        self._ema_alpha = 2.0 / 9.0
+        self._ofi_enabled = True
         backend = str(kernel_backend or os.getenv("HFT_FEATURE_ENGINE_BACKEND", "python")).strip().lower()
         if backend == "rust" and _RUST_LOB_FEATURE_KERNEL_V1 is None:
             backend = "python"
         self._kernel_backend = backend if backend in {"python", "rust"} else "python"
+        if feature_profile is not None:
+            self.apply_profile(feature_profile)
 
     def feature_set_id(self) -> str:
         return self._feature_set.feature_set_id
@@ -112,6 +122,47 @@ class FeatureEngine:
 
     def kernel_backend(self) -> str:
         return str(self._kernel_backend)
+
+    def active_profile_id(self) -> str | None:
+        prof = self._feature_profile
+        return None if prof is None else str(prof.profile_id)
+
+    def active_profile(self) -> FeatureProfile | None:
+        return self._feature_profile
+
+    def profile_params(self) -> dict[str, Any]:
+        prof = self._feature_profile
+        return dict(prof.params or {}) if prof is not None else {}
+
+    def runtime_status(self) -> dict[str, Any]:
+        return {
+            "feature_set_id": self.feature_set_id(),
+            "schema_version": self.schema_version(),
+            "kernel_backend": self.kernel_backend(),
+            "rust_backend_available": self.rust_backend_available(),
+            "emit_events": bool(self._emit_events),
+            "active_profile_id": self.active_profile_id(),
+            "profile_params": self.profile_params(),
+            "tracked_symbols": len(self._states),
+        }
+
+    def apply_profile(self, profile: FeatureProfile) -> None:
+        if str(profile.feature_set_id) != self._feature_set.feature_set_id:
+            raise ValueError(
+                f"Feature profile {profile.profile_id!r} targets {profile.feature_set_id!r}, "
+                f"but engine uses {self._feature_set.feature_set_id!r}"
+            )
+        if profile.schema_version is not None and int(profile.schema_version) > int(self._feature_set.schema_version):
+            raise ValueError(
+                f"Feature profile schema_version={profile.schema_version} exceeds runtime schema "
+                f"{self._feature_set.schema_version}"
+            )
+        self._feature_profile = profile
+        params = dict(profile.params or {})
+        ema_window = int(params.get("ema_window", 8) or 8)
+        ema_window = max(1, ema_window)
+        self._ema_alpha = 2.0 / float(ema_window + 1)
+        self._ofi_enabled = str(params.get("ofi_enabled", True)).strip().lower() not in {"0", "false", "no", "off"}
 
     def rust_backend_available(self) -> bool:
         return _RUST_LOB_FEATURE_KERNEL_V1 is not None
@@ -168,6 +219,7 @@ class FeatureEngine:
         return {
             "symbol": str(symbol),
             "feature_set_id": self._feature_set.feature_set_id,
+            "feature_profile_id": self.active_profile_id(),
             "schema_version": int(self._feature_set.schema_version),
             "seq": int(state.seq),
             "source_ts_ns": int(state.source_ts_ns),
@@ -269,19 +321,25 @@ class FeatureEngine:
             depth_imbalance_ema8_ppm = int(round(ks.imbalance_ema8_ppm))
             ks.initialized = True
         else:
-            ofi_l1_raw = self._compute_ofi_l1_raw(
-                best_bid=best_bid,
-                best_ask=best_ask,
-                bid_qty=l1_bid_qty,
-                ask_qty=l1_ask_qty,
-                prev_best_bid=ks.prev_best_bid,
-                prev_best_ask=ks.prev_best_ask,
-                prev_bid_qty=ks.prev_l1_bid_qty,
-                prev_ask_qty=ks.prev_l1_ask_qty,
-            )
-            ks.ofi_l1_cum += ofi_l1_raw
-            alpha = 2.0 / 9.0  # EMA8
-            ks.ofi_l1_ema8 = (1.0 - alpha) * ks.ofi_l1_ema8 + alpha * float(ofi_l1_raw)
+            if self._ofi_enabled:
+                ofi_l1_raw = self._compute_ofi_l1_raw(
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                    bid_qty=l1_bid_qty,
+                    ask_qty=l1_ask_qty,
+                    prev_best_bid=ks.prev_best_bid,
+                    prev_best_ask=ks.prev_best_ask,
+                    prev_bid_qty=ks.prev_l1_bid_qty,
+                    prev_ask_qty=ks.prev_l1_ask_qty,
+                )
+                ks.ofi_l1_cum += ofi_l1_raw
+                alpha = float(self._ema_alpha)
+                ks.ofi_l1_ema8 = (1.0 - alpha) * ks.ofi_l1_ema8 + alpha * float(ofi_l1_raw)
+            else:
+                ofi_l1_raw = 0
+                ks.ofi_l1_cum = 0
+                ks.ofi_l1_ema8 = 0.0
+                alpha = float(self._ema_alpha)
             ks.spread_ema8 = (1.0 - alpha) * ks.spread_ema8 + alpha * float(spread_scaled)
             ks.imbalance_ema8_ppm = (1.0 - alpha) * ks.imbalance_ema8_ppm + alpha * float(l1_imbalance_ppm)
             ofi_l1_cum = int(ks.ofi_l1_cum)

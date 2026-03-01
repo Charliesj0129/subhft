@@ -1,4 +1,5 @@
 # Stochastic Volatility Modelling with LSTM Networks: A Hybrid Approach
+ref: 070
 
 **Authors**: Anna Perekhodko, Robert Ślepaczuk
 **Date**: 2025

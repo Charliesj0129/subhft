@@ -1,4 +1,5 @@
 # Alpha-R1: Alpha Screening with LLM Reasoning
+ref: 036
 
 **Authors**: Zuoyou Jiang et al. (Shanghai Jiao Tong University & StepFun)
 **Date**: Dec 2025

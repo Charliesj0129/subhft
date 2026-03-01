@@ -489,6 +489,24 @@ class ShioajiClient:
             "on",
         }
         self._quote_version = "v1" if self._quote_version_mode in {"v1", "auto"} else "v0"
+        self._quote_schema_guard = os.getenv("HFT_QUOTE_SCHEMA_GUARD", "1").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._quote_schema_guard_strict = os.getenv("HFT_QUOTE_SCHEMA_GUARD_STRICT", "1").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        try:
+            self._quote_schema_mismatch_log_every = max(1, int(os.getenv("HFT_QUOTE_SCHEMA_MISMATCH_LOG_EVERY", "100")))
+        except ValueError:
+            self._quote_schema_mismatch_log_every = 100
+        self._quote_schema_mismatch_count = 0
+        self._quote_schema_mismatch_metric_cache: dict[tuple[str, str], Any] = {}
         self._last_quote_data_ts = 0.0
         self._first_quote_seen = False
         self._quote_watchdog_thread: threading.Thread | None = None
@@ -542,6 +560,16 @@ class ShioajiClient:
         self._contract_cache_path = os.getenv("HFT_CONTRACT_CACHE_PATH", "config/contracts.json")
         self._contract_refresh_running = False
         self._contract_refresh_thread: threading.Thread | None = None
+        self._contract_refresh_lock = threading.Lock()
+        self._contract_refresh_version = 0
+        self._contract_refresh_last_diff: dict[str, Any] = {}
+        self._contract_refresh_last_status: dict[str, Any] = {}
+        self._contract_refresh_status_path = os.getenv(
+            "HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json"
+        )
+        self._contract_refresh_resubscribe_policy = (
+            os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "none").strip().lower() or "none"
+        )
 
         # Register self globally (callback routing + strong ref)
         _registry_register(self)
@@ -626,6 +654,10 @@ class ShioajiClient:
     def _process_tick(self, *args, **kwargs):
         """Internal method called by global dispatcher."""
         try:
+            ok_schema, schema_reason = self._validate_quote_schema(*args, **kwargs)
+            if not ok_schema:
+                self._handle_quote_schema_mismatch(schema_reason, *args, **kwargs)
+                return
             self._last_quote_data_ts = timebase.now_s()
             if not self._first_quote_seen:
                 self._first_quote_seen = True
@@ -640,6 +672,82 @@ class ShioajiClient:
                 self.tick_callback(*args, **kwargs)
         except Exception as e:
             logger.error("Error processing tick", error=str(e))
+
+    def _validate_quote_schema(self, *args, **kwargs) -> tuple[bool, str]:
+        """Best-effort schema guard for quote callbacks.
+
+        CE2-11 intent: when quote_version is locked to v1, reject obvious v0-style
+        callback payloads (topic string first arg) and malformed payloads.
+        """
+        if not self._quote_schema_guard:
+            return True, "disabled"
+        if self._quote_version != "v1":
+            return True, "not_v1"
+
+        if not args and not kwargs:
+            return False, "empty"
+
+        if args:
+            first = args[0]
+            # v0-style callbacks typically begin with a topic string.
+            if isinstance(first, str) and ("/" in first or ":" in first):
+                return False, "topic_string_arg_v0_shape"
+
+        payload = None
+        if len(args) >= 2:
+            payload = args[1]
+        elif len(args) == 1:
+            payload = args[0]
+        else:
+            for key in ("quote", "bidask", "tick", "msg", "data"):
+                if key in kwargs:
+                    payload = kwargs.get(key)
+                    break
+            if payload is None and kwargs:
+                payload = next(iter(kwargs.values()))
+
+        if payload is None:
+            return False, "missing_payload"
+
+        if isinstance(payload, dict):
+            if any(k in payload for k in ("code", "Code", "bid_price", "ask_price", "close")):
+                return True, "dict_payload"
+            if self._quote_schema_guard_strict:
+                return False, "dict_payload_unrecognized"
+            return True, "dict_payload_relaxed"
+
+        # v1 callbacks commonly pass typed objects with code/bid/ask/tick fields
+        if hasattr(payload, "code") or hasattr(payload, "Code"):
+            return True, "object_with_code"
+        if hasattr(payload, "bid_price") or hasattr(payload, "ask_price"):
+            return True, "object_bidask"
+        if hasattr(payload, "close") or hasattr(payload, "volume"):
+            return True, "object_tick"
+
+        if self._quote_schema_guard_strict:
+            return False, "object_unrecognized"
+        return True, "object_relaxed"
+
+    def _handle_quote_schema_mismatch(self, reason: str, *args, **kwargs) -> None:
+        self._quote_schema_mismatch_count += 1
+        try:
+            if self.metrics and hasattr(self.metrics, "quote_schema_mismatch_total"):
+                key = ("v1", reason)
+                child = self._quote_schema_mismatch_metric_cache.get(key)
+                if child is None:
+                    child = self.metrics.quote_schema_mismatch_total.labels(expected="v1", reason=reason)
+                    self._quote_schema_mismatch_metric_cache[key] = child
+                child.inc()
+        except Exception:
+            pass
+        if self._quote_schema_mismatch_count % self._quote_schema_mismatch_log_every == 1:
+            logger.error(
+                "Quote schema guard rejected callback payload",
+                expected_version="v1",
+                reason=reason,
+                arg0_type=(type(args[0]).__name__ if args else None),
+                kwargs_keys=sorted(kwargs.keys())[:8],
+            )
 
     def _enqueue_tick(self, *args, **kwargs) -> None:
         """Non-blocking callback ingress: callback thread enqueues, worker executes."""
@@ -931,6 +1039,9 @@ class ShioajiClient:
         self._start_contract_refresh_thread()
         if self._last_quote_data_ts <= 0:
             self._last_quote_data_ts = timebase.now_s()
+
+        if os.getenv("HFT_CONTRACT_PREFLIGHT", "1") == "1":
+            self._preflight_contracts()
 
         logger.info(
             "Subscribing quote basket",
@@ -1872,41 +1983,101 @@ class ShioajiClient:
             logger.warning("Cannot parse contract cache for staleness check", error=str(exc))
             return True
 
+    def _write_contract_refresh_status(self, *, result: str, error: str | None = None) -> None:
+        import json
+        from pathlib import Path
+
+        payload = {
+            "updated_at_ns": time.time_ns(),
+            "result": str(result),
+            "error": (str(error) if error else None),
+            "version": int(getattr(self, "_contract_refresh_version", 0) or 0),
+            "policy": str(getattr(self, "_contract_refresh_resubscribe_policy", "none") or "none"),
+            "thread_running": bool(getattr(self, "_contract_refresh_running", False)),
+            "thread_alive": bool(getattr(self, "_contract_refresh_thread", None).is_alive())
+            if getattr(self, "_contract_refresh_thread", None)
+            else False,
+            "lock_busy": bool(getattr(self, "_contract_refresh_lock", None).locked())
+            if getattr(self, "_contract_refresh_lock", None)
+            else False,
+            "cache_path": str(getattr(self, "_contract_cache_path", "")),
+            "refresh_interval_s": float(getattr(self, "_contract_refresh_s", 0.0) or 0.0),
+            "last_diff": dict(getattr(self, "_contract_refresh_last_diff", {}) or {}),
+        }
+        self._contract_refresh_last_status = payload
+        path = str(getattr(self, "_contract_refresh_status_path", "") or "").strip()
+        if not path:
+            return
+        try:
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(p)
+        except Exception:
+            # diagnostics/ops snapshot only
+            return
+
+    def get_contract_refresh_status(self) -> dict[str, Any]:
+        return {
+            "status": dict(self._contract_refresh_last_status or {}),
+            "version": int(self._contract_refresh_version),
+            "last_diff": dict(self._contract_refresh_last_diff or {}),
+            "policy": str(self._contract_refresh_resubscribe_policy or "none"),
+            "cache_path": str(self._contract_cache_path),
+            "status_path": str(self._contract_refresh_status_path or ""),
+            "thread_running": bool(self._contract_refresh_running),
+            "thread_alive": bool(self._contract_refresh_thread.is_alive()) if self._contract_refresh_thread else False,
+            "lock_busy": bool(self._contract_refresh_lock.locked()),
+        }
+
     def _refresh_contracts_and_symbols(self) -> None:
         """Blocking: re-fetch contracts from broker API and reload symbol config."""
-        import datetime
         import json
         from pathlib import Path
 
         if not self.api:
             return
+        if not self._contract_refresh_lock.acquire(blocking=False):
+            logger.info("contract_refresh_skipped_locked")
+            self._write_contract_refresh_status(result="skipped_locked")
+            try:
+                if self.metrics and hasattr(self.metrics, "contract_refresh_total"):
+                    self.metrics.contract_refresh_total.labels(result="skipped_locked").inc()
+            except Exception:
+                pass
+            return
+
+        # Snapshot codes before refresh for diff report
+        codes_before: set[str] = set()
+        try:
+            cache_path = Path(self._contract_cache_path)
+            if cache_path.exists():
+                old_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+                codes_before = {str(c.get("code", "")) for c in old_cache.get("contracts", []) if c.get("code")}
+        except Exception:
+            pass
+
         try:
             self._ensure_contracts()
             logger.info("Contract data refreshed from broker")
         except Exception as exc:
             logger.warning("Contract refresh fetch failed", error=str(exc))
+            self._write_contract_refresh_status(result="error", error=str(exc))
+            try:
+                if self.metrics and hasattr(self.metrics, "contract_refresh_total"):
+                    self.metrics.contract_refresh_total.labels(result="error").inc()
+            except Exception:
+                pass
+            self._contract_refresh_lock.release()
             return
-        # Update updated_at in contracts.json
-        path = Path(self._contract_cache_path)
-        try:
-            data: dict = {}
-            if path.exists():
-                try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                except Exception:
-                    data = {}
-            data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.info("Contract cache timestamp updated", path=str(path))
-        except Exception as exc:
-            logger.warning("Failed to update contract cache timestamp", error=str(exc))
         # R2: Rebuild symbol codes from fresh contract data (fixes stale TXO codes after expiry)
         try:
             from hft_platform.config.symbols import (
                 DEFAULT_LIST_PATH,
                 ContractIndex,
                 build_symbols,
+                write_contract_cache,
                 write_symbols_yaml,
             )
 
@@ -1954,6 +2125,44 @@ class ShioajiClient:
             except Exception:
                 pass
 
+            # Atomically persist fresh contracts and log diff
+            added_codes: list[str] = []
+            removed_codes: list[str] = []
+            try:
+                write_contract_cache(raw_contracts, self._contract_cache_path)
+                codes_after = {str(c.get("code", "")) for c in raw_contracts if c.get("code")}
+                added_codes = sorted(codes_after - codes_before)
+                removed_codes = sorted(codes_before - codes_after)
+                logger.info(
+                    "contract_refresh_diff",
+                    contracts_before=len(codes_before),
+                    contracts_after=len(codes_after),
+                    added_count=len(added_codes),
+                    removed_count=len(removed_codes),
+                    added_sample=added_codes[:10],
+                    removed_sample=removed_codes[:10],
+                )
+                self._contract_refresh_version += 1
+                self._contract_refresh_last_diff = {
+                    "version": self._contract_refresh_version,
+                    "added_codes": added_codes,
+                    "removed_codes": removed_codes,
+                    "contracts_before": len(codes_before),
+                    "contracts_after": len(codes_after),
+                }
+                try:
+                    if self.metrics and hasattr(self.metrics, "contract_refresh_symbols_changed_total"):
+                        if not added_codes and not removed_codes:
+                            self.metrics.contract_refresh_symbols_changed_total.labels(change="same").inc()
+                        for _ in added_codes:
+                            self.metrics.contract_refresh_symbols_changed_total.labels(change="added").inc()
+                        for _ in removed_codes:
+                            self.metrics.contract_refresh_symbols_changed_total.labels(change="removed").inc()
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.warning("Failed to persist contract cache after refresh", error=str(exc))
+
             contract_index = ContractIndex(contracts=raw_contracts)
             list_path = os.getenv("HFT_SYMBOLS_LIST_PATH", DEFAULT_LIST_PATH)
             build_result = build_symbols(list_path, contract_index)
@@ -1975,12 +2184,67 @@ class ShioajiClient:
             logger.info("Symbol config reloaded after contract refresh", symbol_count=len(self.symbols))
         except Exception as exc:
             logger.warning("Symbol config reload failed after contract refresh", error=str(exc))
+        finally:
+            try:
+                if self.metrics and hasattr(self.metrics, "contract_refresh_total"):
+                    self.metrics.contract_refresh_total.labels(result="ok").inc()
+            except Exception:
+                pass
+            policy = self._contract_refresh_resubscribe_policy
+            should_resub = policy == "all"
+            if policy == "diff":
+                diff = self._contract_refresh_last_diff or {}
+                should_resub = bool(diff.get("added_codes") or diff.get("removed_codes"))
+            if should_resub and self.logged_in:
+                try:
+                    logger.info("contract_refresh_resubscribe", policy=policy)
+                    self._resubscribe_all()
+                except Exception as exc:
+                    logger.warning("contract_refresh_resubscribe_failed", error=str(exc))
+            self._contract_refresh_lock.release()
+            self._write_contract_refresh_status(result="ok")
+
+    def _preflight_contracts(self) -> None:
+        """Advisory preflight check — never raises; logs warnings only."""
+        errors: list[str] = []
+
+        if self._is_contract_cache_stale():
+            logger.warning("preflight_contract_cache_stale", path=self._contract_cache_path)
+            errors.append("contract_cache_stale")
+
+        missing_codes: list[str] = []
+        for sym in self.symbols:
+            code = sym.get("code")
+            exchange = sym.get("exchange")
+            product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
+            if not code or not exchange:
+                continue
+            if not self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False):
+                missing_codes.append(str(code))
+        if missing_codes:
+            logger.warning(
+                "preflight_missing_contracts",
+                missing_count=len(missing_codes),
+                missing_sample=missing_codes[:10],
+            )
+            errors.append(f"missing_contracts:{len(missing_codes)}")
+
+        if len(self.symbols) > self.MAX_SUBSCRIPTIONS:
+            logger.warning(
+                "preflight_subscription_count_exceeded",
+                symbol_count=len(self.symbols),
+                limit=self.MAX_SUBSCRIPTIONS,
+            )
+            errors.append("subscription_count_exceeded")
+
+        logger.info("preflight_complete", passed_all=(len(errors) == 0), errors=errors)
 
     def _start_contract_refresh_thread(self) -> None:
         """Start daemon thread that immediately refreshes stale contract cache then runs on schedule."""
         if self._contract_refresh_running:
             return
         self._contract_refresh_running = True
+        self._write_contract_refresh_status(result="thread_started")
 
         def _refresh_loop() -> None:
             if self._is_contract_cache_stale():
@@ -2016,7 +2280,11 @@ class ShioajiClient:
         self._contract_refresh_running = False
         self.tick_callback = None
         self._stop_quote_dispatch_worker(join_timeout_s=1.0)
-        for t in (getattr(self, "_session_refresh_thread", None), getattr(self, "_quote_watchdog_thread", None)):
+        for t in (
+            getattr(self, "_session_refresh_thread", None),
+            getattr(self, "_quote_watchdog_thread", None),
+            getattr(self, "_contract_refresh_thread", None),
+        ):
             if t and t.is_alive():
                 t.join(timeout=0.2)
         _registry_unregister(self)
@@ -2025,6 +2293,7 @@ class ShioajiClient:
                 self.api.logout()
             except Exception as exc:
                 logger.warning("Logout failed during close", error=str(exc))
+        self._write_contract_refresh_status(result="closed")
 
     def shutdown(self, logout: bool = False) -> None:
         self.close(logout=logout)

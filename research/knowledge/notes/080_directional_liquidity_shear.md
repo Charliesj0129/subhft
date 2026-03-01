@@ -1,4 +1,5 @@
 # Directional Liquidity and Geometric Shear in Pregeometric Order Books
+ref: 080
 
 **Authors**: João P. da Cruz
 **Date**: 2026

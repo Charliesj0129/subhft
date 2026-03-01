@@ -1,4 +1,8 @@
 # Autonomous Market Intelligence: Agentic AI Nowcasting Predicts Stock Returns
+ref: 028
+arxiv: https://arxiv.org/abs/2601.11958
+Authors: Zefeng Chen, Darcy Pu (Peking University)
+Published: 2026 (January 2026; ArXiv Jan 17, 2026)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

@@ -1,4 +1,5 @@
 # WebCryptoAgent: Agentic Crypto Trading with Web Informatics
+ref: 099
 
 **Authors**: Ali Kurban, Wei Luo, Liangyu Zuo, Zeyu Zhang, Renda Han, Zhaolu Kang, Hao Tang
 **Date**: 2026-01-08

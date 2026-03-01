@@ -1,4 +1,5 @@
 # Design of a Decentralized Fixed-Income Lending AMM (BondMM-A)
+ref: 059
 
 **Authors**: Tianyi Ma (Shanghai Jiao Tong)
 **Date**: December 2025

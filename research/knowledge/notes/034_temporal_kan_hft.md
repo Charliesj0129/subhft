@@ -1,4 +1,5 @@
 # Temporal Kolmogorov-Arnold Networks (T-KAN) for HFT
+ref: 034
 
 **Author**: Ahmad Makinde (University of Bristol)
 **Date**: Jan 2026

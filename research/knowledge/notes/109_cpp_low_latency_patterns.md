@@ -1,4 +1,5 @@
 # C++ Design Patterns for Low-Latency Applications Including High-Frequency Trading
+ref: 109
 
 **Authors**: Paul Bilokon, Burak Gunduz (Imperial College London)
 **Date**: 2023-09

@@ -1,15 +1,8 @@
-# HftBacktest Integration (Usage)
+# HftBacktest Integration
 
-本專案提供 `hft backtest` CLI，支援：
-- 將 JSONL 事件轉換為 hftbacktest NPZ
-- 使用策略 adapter 進行回測
+本專案提供 `hft backtest` 命令支援資料轉換與策略回測。
 
----
-
-## 1) Convert JSONL → NPZ
-
-輸入為平台標準 JSONL（通常來自 WAL 或 replay），輸出 NPZ：
-
+## 1) JSONL → NPZ
 ```bash
 uv run hft backtest convert \
   --input data/sample_events.jsonl \
@@ -17,11 +10,9 @@ uv run hft backtest convert \
   --scale 10000
 ```
 
----
+## 2) 執行回測
 
-## 2) Run Backtest
-
-### 2.1 直接回測
+### 2.1 基本模式
 ```bash
 uv run hft backtest run \
   --data data/sample_feed.npz \
@@ -29,7 +20,7 @@ uv run hft backtest run \
   --report
 ```
 
-### 2.2 策略 Adapter 模式
+### 2.2 策略 adapter 模式
 ```bash
 uv run hft backtest run \
   --data data/sample_feed.npz \
@@ -39,22 +30,16 @@ uv run hft backtest run \
   --symbol 2330
 ```
 
-> Strategy adapter 目前一次只支援單一資產。
-
----
-
-## 3) 常見參數
+## 3) 常用參數
 - `--tick-size` / `--lot-size`
+- `--tick-sizes` / `--lot-sizes` / `--symbols`（多資產）
 - `--latency-entry` / `--latency-resp`
 - `--fee-maker` / `--fee-taker`
-- `--report` 生成 HTML
+- `--record-out`（保存 recorder output npz）
+- `--no-partial-fill`
+- `--strict-equity`
+- `--report`
 
----
-
-## 4) 輸出
-- 回測結果會輸出至 console
-- `--report` 會生成 HTML (若支援)
-
----
-
-更多細節：`hft backtest --help`
+## 4) 注意事項
+- 提供 `--strategy-module` 時，現行 adapter 仍以單資產流程最穩定。
+- 回測輸入資料應為已正規化事件格式。

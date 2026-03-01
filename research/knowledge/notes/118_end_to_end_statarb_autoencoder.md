@@ -1,4 +1,5 @@
 # End-to-End Policy Learning of a Statistical Arbitrage Autoencoder Architecture
+ref: 118
 
 **Authors**: Fabian Krause, Jan-Peter Calliess (University of Oxford)
 **Date**: 2024-02

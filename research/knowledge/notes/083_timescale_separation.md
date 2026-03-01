@@ -1,4 +1,5 @@
 # Fast Times, Slow Times: Timescale Separation in Financial Timeseries Data
+ref: 083
 
 **Authors**: Jan Rosenzweig
 **Date**: 2026

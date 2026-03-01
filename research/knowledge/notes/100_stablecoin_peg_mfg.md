@@ -1,4 +1,5 @@
 # Who Restores the Peg? A Mean-Field Game Approach to Model Stablecoin Market Dynamics
+ref: 100
 
 **Authors**: Hardhik Mohanty, Bhaskar Krishnamachari
 **Date**: 2026-01-26

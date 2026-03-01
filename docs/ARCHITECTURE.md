@@ -28,9 +28,6 @@ Key goals:
 
 Companion documents:
 
-- [C4 Model Diagrams](architecture/c4-model-current.md)
-- [Cluster Evolution Backlog](architecture/cluster-evolution-backlog.md)
-- [Design Review Artifacts](architecture/design-review-artifacts.md)
 - [Target Architecture](architecture/target-architecture.md)
 
 ---
@@ -68,7 +65,7 @@ Build: `uv run maturin develop --manifest-path rust_core/Cargo.toml`
 
 - **WAL**: jsonl files under `.wal/`
 - **ClickHouse**: `hft.market_data`, `hft.orders`, `hft.trades`, `hft.ohlcv_1m`, `hft.latency_stats_1m`, `hft.latency_spans`
-- **Schema**: `src/hft_platform/schemas/clickhouse.sql`
+- **Migrations**: `src/hft_platform/migrations/clickhouse/`
 
 ---
 

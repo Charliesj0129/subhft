@@ -1,4 +1,5 @@
 # Second Thoughts: How 1-second subslots transform CEX-DEX Arb
+ref: 090
 
 **Authors**: Aleksei Adadurov, Sergey Barseghyan, Anton Chtepine, Antero Eloranta, Andrei Sebyakin, Arsenii Valitov
 **Date**: 2026-01-02

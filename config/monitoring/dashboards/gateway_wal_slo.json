@@ -1,0 +1,104 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Gateway Dispatch Latency (p50/p95/p99 ns)",
+      "id": 1,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum(rate(gateway_dispatch_latency_ns_bucket[1m])) by (le))", "refId": "A", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, sum(rate(gateway_dispatch_latency_ns_bucket[1m])) by (le))", "refId": "B", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, sum(rate(gateway_dispatch_latency_ns_bucket[1m])) by (le))", "refId": "C", "legendFormat": "p99"}
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway Rejects / Dedup Hits (rate)",
+      "id": 2,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(gateway_reject_total[1m])) by (reason)", "refId": "A", "legendFormat": "reject {{reason}}"},
+        {"expr": "rate(gateway_dedup_hits_total[1m])", "refId": "B", "legendFormat": "dedup_hits"}
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway Intent Channel Depth",
+      "id": 3,
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "gateway_intent_channel_depth", "refId": "A", "legendFormat": "depth"}
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "WAL Replay Lag / Drain ETA (s)",
+      "id": 4,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "wal_replay_lag_seconds", "refId": "A", "legendFormat": "replay_lag"},
+        {"expr": "wal_drain_eta_seconds", "refId": "B", "legendFormat": "drain_eta"}
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "WAL Backlog / Replay Throughput",
+      "id": 5,
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "wal_backlog_files", "refId": "A", "legendFormat": "backlog_files"},
+        {"expr": "rate(wal_replay_throughput_rows_total[1m])", "refId": "B", "legendFormat": "rows_per_s"}
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Quote Schema Mismatch Rejects",
+      "id": 6,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(quote_schema_mismatch_total[5m])) by (reason)", "refId": "A", "legendFormat": "{{reason}}"}
+      ],
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    }
+  ],
+  "schemaVersion": 30,
+  "style": "dark",
+  "tags": ["hft", "gateway", "wal"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "HFT Platform / Gateway & WAL SLO",
+  "uid": "hft-gateway-wal-slo",
+  "version": 1,
+  "weekStart": ""
+}

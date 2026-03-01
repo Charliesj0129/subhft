@@ -12,6 +12,16 @@ on:
         required: false
         default: false
         type: boolean
+      run_research_drills:
+        description: "Run research wrapper benchmark/report artifacts"
+        required: false
+        default: false
+        type: boolean
+      run_diagnostics_drills:
+        description: "Run diagnostics timeline artifact smoke"
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "30 18 * * *" # Daily UTC nightly perf drill
 
@@ -55,6 +65,9 @@ jobs:
 
       - name: Check linting
         run: uv run ruff check src/ tests/
+
+      - name: Enforce research factory contract
+        run: uv run python -m research.factory audit --fail-on-warning
 
   # ============================================================================
   # Stage 2a: Rust Build & Lint
@@ -411,7 +424,7 @@ jobs:
     needs: test
     if: >
       github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_recorder_drills)
+      (github.event_name == 'workflow_dispatch' && (inputs.run_recorder_drills || inputs.run_research_drills || inputs.run_diagnostics_drills))
     services:
       clickhouse:
         image: clickhouse/clickhouse-server:latest
@@ -472,6 +485,16 @@ jobs:
           HFT_CLICKHOUSE_PORT: 8123
         run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-recorder-io
 
+      - name: Run gateway/WAL hardening integration drills (CE2-08/09, CE3-03/04/07)
+        if: github.event_name == 'schedule' || inputs.run_recorder_drills
+        run: |
+          set -o pipefail
+          uv run pytest -q --no-cov \
+            tests/integration/test_gateway_multi_runner.py::test_gateway_ha_failover_no_duplicate_dispatch \
+            tests/integration/test_wal_loader_scale_out.py \
+            tests/spec/test_replay_safety_contract.py \
+            tests/integration/test_wal_outage_drills.py | tee gateway_wal_hardening_drills.log
+
       - name: Run risk/gateway perf gate (heavier drills)
         env:
           HFT_PERF_GATE_RISK_HEAVY: "1"
@@ -482,12 +505,59 @@ jobs:
           HFT_PERF_GATE_FEATURE_RUST: "1"
         run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-feature-rust --json feature_perf_gate.json
 
+      - name: Run research feature benchmark matrix wrapper
+        if: github.event_name == 'schedule' || inputs.run_research_drills
+        run: uv run python research/tools/feature_benchmark_matrix.py --runs 1 --out research_feature_benchmark_matrix.json
+
+      - name: Render synthetic research promotion report artifact
+        if: github.event_name == 'schedule' || inputs.run_research_drills
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = {
+              "alpha_id": "nightly-smoke",
+              "validation": {"passed": True},
+              "feature_profile_validation_errors": [],
+              "promotion": {"approved": False, "canary_weight": 0.0, "reasons": ["nightly_wrapper_smoke_only"]},
+          }
+          Path("research_feature_promotion_smoke.json").write_text(json.dumps(payload), encoding="utf-8")
+          PY
+          uv run python research/tools/render_promotion_report.py research_feature_promotion_smoke.json --out research_feature_promotion_report.md
+
+      - name: Render diagnostics timeline artifact (synthetic)
+        if: github.event_name == 'schedule' || inputs.run_diagnostics_drills
+        run: |
+          python - <<'PY'
+          import json, time
+          from pathlib import Path
+          base = time.time_ns()
+          rows = [
+              {"ts_ns": base, "stage": "md_event", "trace_id": "nightly:t1", "payload": {"symbol": "2330", "event_type": "BidAskEvent"}},
+              {"ts_ns": base + 1_000, "stage": "strategy_dispatch_done", "trace_id": "nightly:t1", "payload": {"strategy_id": "s1", "intent_count": 1}},
+              {"ts_ns": base + 2_000, "stage": "risk_approve", "trace_id": "nightly:t1", "payload": {"stage": "evaluate"}},
+              {"ts_ns": base + 3_000, "stage": "order_dispatch_ok", "trace_id": "nightly:t1", "payload": {"cmd_id": 1}},
+          ]
+          Path("nightly_trace.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\\n" for r in rows), encoding="utf-8")
+          PY
+          uv run python scripts/render_incident_timeline.py nightly_trace.jsonl --trace-id nightly:t1 --format json --out diagnostics_timeline.json
+          uv run python scripts/render_incident_timeline.py nightly_trace.jsonl --trace-id nightly:t1 --format md --out diagnostics_timeline.md
+
       - name: Upload risk nightly perf artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: risk-perf-gate-nightly
           path: risk_perf_gate.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload gateway/WAL hardening drill log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-wal-hardening-drills
+          path: gateway_wal_hardening_drills.log
           if-no-files-found: ignore
           retention-days: 30
 
@@ -500,11 +570,40 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+      - name: Upload research nightly artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-nightly-artifacts
+          path: |
+            research_feature_benchmark_matrix.json
+            research_feature_promotion_smoke.json
+            research_feature_promotion_report.md
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload diagnostics nightly artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-nightly-artifacts
+          path: |
+            nightly_trace.jsonl
+            diagnostics_timeline.json
+            diagnostics_timeline.md
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Recorder Drill Summary
         if: always()
         run: |
           echo "## 🧪 Nightly Performance Drills" >> $GITHUB_STEP_SUMMARY
           echo "Executed perf_regression_gate with recorder (real ClickHouse + WAL stress) and risk/gateway heavier drills." >> $GITHUB_STEP_SUMMARY
+          if [ -f gateway_wal_hardening_drills.log ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Gateway/WAL Hardening Drills" >> $GITHUB_STEP_SUMMARY
+            echo "- Ran CE2-08/09 and CE3-03/04/07 integration/spec drills (see artifact \`gateway-wal-hardening-drills\`)." >> $GITHUB_STEP_SUMMARY
+          fi
           if [ -f risk_perf_gate.json ]; then
             python - <<'PY' >> $GITHUB_STEP_SUMMARY
             import json
@@ -545,6 +644,25 @@ jobs:
             fails = payload.get("failures", [])
             print(f"- `failures`: {len(fails)}")
             PY
+          fi
+          if [ -f research_feature_benchmark_matrix.json ]; then
+            python - <<'PY' >> $GITHUB_STEP_SUMMARY
+            import json
+            from pathlib import Path
+            payload = json.loads(Path("research_feature_benchmark_matrix.json").read_text())
+            print("")
+            print("### Research Wrapper Matrix (Artifact)")
+            for name, result in payload.items():
+                rc = result.get("returncode")
+                j = result.get("json") or {}
+                failures = (j.get("failures") or []) if isinstance(j, dict) else []
+                print(f"- `{name}`: returncode={rc}, failures={len(failures)}")
+            PY
+          fi
+          if [ -f diagnostics_timeline.md ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Diagnostics Timeline Artifact" >> $GITHUB_STEP_SUMMARY
+            echo "- Generated synthetic incident timeline smoke artifacts (\`diagnostics_timeline.json\`, \`diagnostics_timeline.md\`)." >> $GITHUB_STEP_SUMMARY
           fi
 
   # ============================================================================

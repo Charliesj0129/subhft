@@ -1,4 +1,5 @@
 # Graph Learning for Foreign Exchange Rate Prediction and Statistical Arbitrage
+ref: 114
 
 **Authors**: Yoonsik Hong, Diego Klabjan (Northwestern University)
 **Date**: 2025-08

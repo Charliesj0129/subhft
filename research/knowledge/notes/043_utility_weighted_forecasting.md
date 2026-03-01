@@ -1,4 +1,5 @@
 # Utility-Weighted Forecasting and Calibration for Risk-Adjusted Decisions under Trading Frictions
+ref: 043
 
 **Authors**: Craig Wright
 **Date**: January 2026

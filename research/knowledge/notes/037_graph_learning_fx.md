@@ -1,4 +1,5 @@
 # Graph Learning for FX Arbitrage and Prediction
+ref: 037
 
 **Authors**: Yoonsik Hong, Diego Klabjan (Northwestern University)
 **Date**: Aug 2025

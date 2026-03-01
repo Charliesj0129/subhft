@@ -1,4 +1,5 @@
 # Asymptotic and Finite-Sample Distributions of Empirical Relative Entropy
+ref: 057
 
 **Authors**: Matthieu Garcin, Louis Perot
 **Date**: December 2025

@@ -1,4 +1,5 @@
 # Realised Quantile-Based Estimation of the Integrated Variance
+ref: 089
 
 **Authors**: Kim Christensen, Roel Oomen, Mark Podolskij
 **Date**: 2010 (Accessed 2026)

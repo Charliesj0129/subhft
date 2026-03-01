@@ -46,8 +46,10 @@ Any new feature must explicitly choose where it enters this flow.
 
 1. Monetary values in risk/order/execution/position paths use scaled int or Decimal.
 2. Timestamp semantics:
+
 - exchange/source timestamp is preserved
 - local ingest timestamp is captured at stage boundary
+
 3. Any fallback float usage must be marked as non-accounting only.
 
 ## 5. Recorder Durability Rules
@@ -56,7 +58,7 @@ Any new feature must explicitly choose where it enters this flow.
 2. WAL fallback is mandatory for recorder write failures.
 3. WAL replay must remain idempotent-safe or dedup-aware.
 4. Schema changes must preserve replay compatibility for existing WAL files.
-5. Runtime schema source of truth is `src/hft_platform/schemas/clickhouse.sql` only.
+5. Runtime schema source of truth is managed sequentially in `src/hft_platform/migrations/clickhouse/`.
 6. Legacy SQL files are non-bootstrap references unless explicitly migrated.
 
 ## 6. StormGuard and Safety
@@ -84,22 +86,26 @@ Required updates when changing flow, contracts, or persistence:
 ## 9. Broker Adapter Decomposition
 
 1. `ShioajiClient` logic should be separated by concern:
+
 - session lifecycle
 - contract resolution
 - quote stream/callbacks
 - order gateway
 - account/usage queries
+
 2. Quote path failures must not directly impair order path availability.
 3. New broker SDK changes should land in the smallest affected subcomponent.
 
 ## 10. Alpha Contribution Governance
 
 1. Production alpha changes must flow through contribution gates:
+
 - feasibility
 - correctness
 - backtest
 - portfolio integration
 - production readiness
+
 2. Promotion must be config-driven and reversible (canary + rollback).
 3. No direct production enable from research-only artifacts.
 

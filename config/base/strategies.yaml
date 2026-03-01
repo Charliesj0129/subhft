@@ -7,3 +7,22 @@
 #     risk_aversion: 0.1
 #   # Or select by tags from symbols.yaml
 #   # symbol_tags: ["futures", "front_month"]
+
+# lob_shape: LOB depth slope asymmetry + EMA OFI alignment (TIER_1, Phase 18)
+# Requires HFT_FEATURE_ENGINE_ENABLED=1
+# strategy:
+#   id: "LOB_SHAPE_V1"
+#   module: "hft_platform.strategies.alpha.lob_shape_strategy"
+#   class: "LobShapeStrategy"
+#   required_feature_set_id: "lob_shared_v1"
+#   required_feature_ids:
+#     - "best_bid"
+#     - "best_ask"
+#     - "ofi_l1_ema8"
+#     - "depth_imbalance_ema8_ppm"
+#   params:
+#     subscribe_symbols: ["2330", "2317"]
+#     lambda_: 0.3
+#     signal_threshold: 0.05
+#     max_position: 50
+#     qty: 1

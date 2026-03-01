@@ -1,4 +1,8 @@
 # Wealth or Stealth? The Camouflage Effect in Insider Trading
+ref: 023
+arxiv: https://arxiv.org/abs/2512.06309
+Authors: Jin Ma, Weixuan Xia, Jianfeng Zhang (University of Southern California)
+Published: 2025 (December 2025; ArXiv Dec 6, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

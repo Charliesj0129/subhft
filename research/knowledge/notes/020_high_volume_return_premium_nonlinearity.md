@@ -1,4 +1,8 @@
 # Sources and Nonlinearity of High Volume Return Premium
+ref: 020
+arxiv: https://arxiv.org/abs/2512.14134
+Authors: Sungwoo Kang (Korea University)
+Published: 2025 (ArXiv Dec 24, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

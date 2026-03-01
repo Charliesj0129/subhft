@@ -30,6 +30,7 @@ class StrategyContext:
         "_feature_source",
         "_feature_view_source",
         "_feature_set_source",
+        "_feature_profile_source",
         "_feature_tuple_get",
     )
 
@@ -44,6 +45,7 @@ class StrategyContext:
         feature_source: Callable[[str, str], Optional[int | float]] | None = None,
         feature_view_source: Callable[[str], Optional[Dict]] | None = None,
         feature_set_source: Callable[[], str] | None = None,
+        feature_profile_source: Callable[[], str | None] | None = None,
         feature_tuple_source: Callable[[str], Optional[tuple]] | None = None,
     ):
         self.positions = positions
@@ -55,6 +57,7 @@ class StrategyContext:
         self._feature_source = feature_source
         self._feature_view_source = feature_view_source
         self._feature_set_source = feature_set_source
+        self._feature_profile_source = feature_profile_source
         self._feature_tuple_get = feature_tuple_source
 
     def place_order(
@@ -129,6 +132,14 @@ class StrategyContext:
 
     def get_feature_set_id(self) -> Optional[str]:
         if self._feature_set_source is None:
+            return None
+
+    def get_feature_profile_id(self) -> Optional[str]:
+        if self._feature_profile_source is None:
+            return None
+        try:
+            return self._feature_profile_source()
+        except Exception:
             return None
         try:
             return self._feature_set_source()

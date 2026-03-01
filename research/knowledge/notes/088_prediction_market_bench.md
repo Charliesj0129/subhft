@@ -1,4 +1,5 @@
 # PredictionMarketBench: A SWE-bench-Style Framework for Backtesting Trading Agents
+ref: 088
 
 **Authors**: Avi Arora, Ritesh Malpani
 **Date**: 2026-01-28

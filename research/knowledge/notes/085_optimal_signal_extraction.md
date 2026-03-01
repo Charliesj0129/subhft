@@ -1,4 +1,5 @@
 # Optimal Signal Extraction from Order Flow: A Matched Filter Perspective on Normalization and Market Microstructure
+ref: 085
 
 **Authors**: Sungwoo Kang
 **Date**: 2025-12

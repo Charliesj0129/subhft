@@ -1,4 +1,5 @@
 # Interpretable Hypothesis-Driven Trading: A Rigorous Walk-Forward Validation Framework
+ref: 066
 
 **Authors**: Gagan Deep, Akash Deep, William Lamptey
 **Date**: 2025

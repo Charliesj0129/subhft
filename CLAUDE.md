@@ -36,6 +36,7 @@
 
 - **Canonical architecture doc**: `docs/architecture/current-architecture.md` (252 lines, continuously updated)
 - **Feature/Lob/Research unification spec (TODO plan)**: `docs/architecture/feature-engine-lob-research-unification-spec.md`
+- **Latency realism baseline (system vs Shioaji sim API RTT)**: `docs/architecture/latency-baseline-shioaji-sim-vs-system.md`
 - **C4 diagrams**: `.agent/library/c4-model-current.md`
 - **Cluster evolution backlog**: `.agent/library/cluster-evolution-backlog.md`
 - **Detailed governance rules**: `.agent/rules/` (auto-loaded)
@@ -48,6 +49,20 @@ Exchange → ShioajiClient → Normalizer → LOBEngine → RingBufferBus → St
 ```
 
 Planned (TODO, not implemented yet): insert a **Feature Plane / FeatureEngine** between `LOBEngine` and `StrategyRunner` for shared microstructure feature computation and research/live parity. See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+
+### Latency Realism Guard (Research / Backtest / Promotion)
+
+**Do not assume local microsecond-stage latency implies executable trading latency.**
+
+For Shioaji-driven strategies, the measured system internal lower-bound is on the order of **tens of microseconds**, but the measured **simulation API RTT** is on the order of **tens of milliseconds** (roughly **500x+** larger). See:
+
+- `docs/architecture/latency-baseline-shioaji-sim-vs-system.md`
+
+Mandatory policy:
+1. Model `place_order`, `update_order`, and `cancel_order` latencies separately in research/backtests.
+2. Use at least **P95** latency assumptions for promotion decisions (P99 for stress tests).
+3. Record latency assumptions in research artifacts; missing latency profile = non-promotion-ready.
+4. Treat sub-broker-RTT alpha half-lives as optimistic until validated via shadow/live evidence.
 
 ### Runtime Planes (6)
 
@@ -167,3 +182,4 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 - [ ] `datetime.now()` instead of `timebase.now_ns()`? → **REJECT**
 - [ ] Missing `__slots__` on new hot-path dataclass? → **WARN**
 - [ ] `print()` instead of `structlog`? → **REJECT**
+- [ ] Research/backtest assumes zero-latency or mean-only broker RTT for Shioaji? → **REJECT**

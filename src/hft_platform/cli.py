@@ -21,6 +21,15 @@ from hft_platform.utils.logging import configure_logging
 logger = get_logger("cli")
 
 
+def _ensure_project_root_on_path() -> None:
+    """Ensure repository root is importable for research/* modules."""
+    root = Path(__file__).resolve().parents[2]
+    if (root / "research").exists():
+        root_str = str(root)
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+
+
 def _safe_write(path: str, content: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -243,10 +252,274 @@ def cmd_feed_status(args: argparse.Namespace):
 
 
 def cmd_diag(args: argparse.Namespace):
+    trace_file = getattr(args, "trace_file", None)
+    if trace_file:
+        from hft_platform.diagnostics.replay import (
+            build_timeline,
+            filter_traces,
+            load_traces,
+            render_timeline_markdown,
+            summarize_trace,
+        )
+
+        records = load_traces(trace_file)
+        records = filter_traces(records, trace_id=getattr(args, "trace_id", None), stage=getattr(args, "stage", None))
+        if getattr(args, "timeline", False):
+            timeline = build_timeline(records)
+            fmt = str(getattr(args, "timeline_format", "json") or "json").strip().lower()
+            out_path = getattr(args, "out", None)
+            if fmt == "md":
+                text = render_timeline_markdown(timeline)
+                if out_path:
+                    Path(out_path).write_text(text, encoding="utf-8")
+                print(text)
+            else:
+                text = json.dumps(timeline, indent=2, ensure_ascii=False)
+                if out_path:
+                    Path(out_path).write_text(text, encoding="utf-8")
+                print(text)
+            return
+        summary = summarize_trace(records)
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        limit = int(getattr(args, "limit", 20) or 20)
+        if limit > 0:
+            print("\\nLast records:")
+            for rec in sorted(records, key=lambda r: int(r.get("ts_ns", 0) or 0))[-limit:]:
+                print(json.dumps(rec, ensure_ascii=False))
+        return
+
     # Minimal diag stub
     print("Diag:")
     print("- Check metrics at http://localhost:9090/metrics")
     print("- Common fixes: verify credentials, check network, ensure queues not full.")
+    print("- For trace inspection: hft diag --trace-file outputs/decision_traces/<day>.jsonl")
+    print("- For timeline view: hft diag --trace-file ... --timeline --timeline-format md")
+
+
+def cmd_feature_profiles(args: argparse.Namespace):
+    from hft_platform.feature.profile import load_feature_profile_registry
+
+    reg = load_feature_profile_registry(getattr(args, "path", None))
+    payload = reg.to_dict()
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    print(f"Feature profiles path: {payload.get('path')}")
+    print(f"Default profile: {payload.get('default_profile_id')}")
+    for prof in payload.get("profiles", []):
+        print(
+            f"- {prof['profile_id']} set={prof['feature_set_id']} state={prof.get('state')} "
+            f"enabled={prof.get('enabled')} params={prof.get('params')}"
+        )
+    errs = payload.get("errors") or []
+    if errs:
+        print("Validation errors:")
+        for e in errs:
+            print(f"  - {e}")
+
+
+def cmd_feature_rollout_status(args: argparse.Namespace):
+    from hft_platform.feature.profile import load_feature_profile_registry
+    from hft_platform.feature.rollout import load_feature_rollout_controller
+
+    reg = load_feature_profile_registry(getattr(args, "profiles", None))
+    ctrl = load_feature_rollout_controller(getattr(args, "state_path", None))
+    fsid = str(getattr(args, "feature_set", "") or "").strip() or None
+    payload = {
+        "feature_profiles_path": reg.path,
+        "rollout_state_path": ctrl.path,
+        "rollout_version": ctrl.version,
+        "sets": [],
+    }
+    for assignment in ctrl.assignments():
+        if fsid and assignment.feature_set_id != fsid:
+            continue
+        resolved = ctrl.resolve_profile_id(assignment.feature_set_id)
+        prof_exists = bool(resolved and resolved in set(reg.ids()))
+        payload["sets"].append(
+            {
+                **assignment.to_dict(),
+                "resolved_profile_id": resolved,
+                "resolved_profile_exists": prof_exists,
+            }
+        )
+    if fsid and not payload["sets"]:
+        payload["sets"].append(
+            {
+                "feature_set_id": fsid,
+                "state": None,
+                "resolved_profile_id": None,
+                "resolved_profile_exists": False,
+                "note": "no rollout assignment yet",
+            }
+        )
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def cmd_feature_rollout_set(args: argparse.Namespace):
+    from hft_platform.feature.profile import load_feature_profile_registry
+    from hft_platform.feature.rollout import load_feature_rollout_controller
+
+    reg = load_feature_profile_registry(getattr(args, "profiles", None))
+    ctrl = load_feature_rollout_controller(getattr(args, "state_path", None))
+    fsid = str(args.feature_set)
+    state = str(args.state)
+    profile_id = getattr(args, "profile_id", None)
+    if profile_id:
+        profile_id = str(profile_id)
+        try:
+            prof = reg.get(profile_id)
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": f"unknown profile_id {profile_id!r}: {exc}"}, indent=2))
+            sys.exit(1)
+        if prof.feature_set_id != fsid:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": f"profile {profile_id!r} targets feature_set {prof.feature_set_id!r}, not {fsid!r}",
+                    },
+                    indent=2,
+                )
+            )
+            sys.exit(1)
+    try:
+        assignment = ctrl.set_assignment(
+            feature_set_id=fsid,
+            state=state,
+            profile_id=profile_id,
+            actor=str(getattr(args, "actor", "cli") or "cli"),
+            notes=str(getattr(args, "notes", "") or ""),
+        )
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc), "path": ctrl.path}, indent=2, ensure_ascii=False))
+        sys.exit(1)
+    print(json.dumps({"ok": True, "path": ctrl.path, "assignment": assignment.to_dict()}, indent=2, ensure_ascii=False))
+
+
+def cmd_feature_rollout_rollback(args: argparse.Namespace):
+    from hft_platform.feature.rollout import load_feature_rollout_controller
+
+    ctrl = load_feature_rollout_controller(getattr(args, "state_path", None))
+    try:
+        assignment = ctrl.rollback(
+            feature_set_id=str(args.feature_set),
+            actor=str(getattr(args, "actor", "cli") or "cli"),
+            notes=str(getattr(args, "notes", "") or "rollback"),
+        )
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc), "path": ctrl.path}, indent=2, ensure_ascii=False))
+        sys.exit(1)
+    print(json.dumps({"ok": True, "path": ctrl.path, "assignment": assignment.to_dict()}, indent=2, ensure_ascii=False))
+
+
+def cmd_feature_validate(args: argparse.Namespace):
+    from hft_platform.feature.compat import check_feature_profile_compat, check_runtime_feature_engine_compat
+    from hft_platform.feature.engine import FeatureEngine
+    from hft_platform.feature.profile import load_feature_profile_registry
+
+    reg = load_feature_profile_registry(getattr(args, "path", None))
+    errors = list(reg.validate())
+    fe = FeatureEngine()
+    errors.extend(i.message for i in check_runtime_feature_engine_compat(fe) if i.level == "error")
+    profile = reg.get_active_for_set(fe.feature_set_id()) if reg.ids() else None
+    applied = None
+    if profile is not None:
+        prof_issues = check_feature_profile_compat(profile, fe._registry)  # prototype: introspect engine registry
+        errors.extend(i.message for i in prof_issues if i.level == "error")
+        try:
+            fe.apply_profile(profile)
+            applied = profile.profile_id
+        except Exception as exc:
+            errors.append(f"Failed to apply active profile {profile.profile_id!r}: {exc}")
+    out = {
+        "ok": not errors,
+        "feature_set_id": fe.feature_set_id(),
+        "schema_version": fe.schema_version(),
+        "active_profile_id": applied,
+        "errors": errors,
+    }
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    if errors:
+        sys.exit(1)
+
+
+def cmd_feature_preflight(args: argparse.Namespace):
+    from hft_platform.feature.engine import FeatureEngine
+    from hft_platform.feature.profile import load_feature_profile_registry
+    from hft_platform.strategy.compat import check_strategies_feature_compat
+    from hft_platform.strategy.registry import StrategyRegistry
+
+    reg = load_feature_profile_registry(getattr(args, "profiles", None))
+    fe = FeatureEngine()
+    active_profile = reg.get_active_for_set(fe.feature_set_id()) if reg.ids() else None
+    if active_profile is not None:
+        fe.apply_profile(active_profile)
+    sreg = StrategyRegistry(getattr(args, "strategies", "config/base/strategies.yaml"))
+    strategies = sreg.instantiate()
+    issues = [i.to_dict() for i in check_strategies_feature_compat(strategies, fe)]
+    out = {
+        "feature_set_id": fe.feature_set_id(),
+        "feature_schema_version": fe.schema_version(),
+        "feature_profile_id": fe.active_profile_id(),
+        "strategy_count": len(strategies),
+        "issues": issues,
+        "ok": not any(i["level"] == "error" for i in issues),
+    }
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    if not out["ok"]:
+        sys.exit(1)
+
+
+def cmd_contracts_status(args: argparse.Namespace):
+    import datetime as _dt
+
+    path = Path(args.contracts)
+    payload: dict[str, Any] = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        sys.exit(1)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        payload["error"] = str(exc)
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        sys.exit(1)
+    updated_at = data.get("updated_at")
+    age_s = None
+    if updated_at:
+        try:
+            dt = _dt.datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_dt.timezone.utc)
+            age_s = (_dt.datetime.now(_dt.timezone.utc) - dt).total_seconds()
+        except Exception:
+            age_s = None
+    try:
+        stale_after = float(os.getenv("HFT_CONTRACT_REFRESH_S", str(args.stale_after_s)))
+    except ValueError:
+        stale_after = float(args.stale_after_s)
+    contracts = data.get("contracts", []) if isinstance(data, dict) else []
+    payload.update(
+        {
+            "updated_at": updated_at,
+            "age_s": age_s,
+            "stale_after_s": stale_after,
+            "stale": (age_s is None or age_s > stale_after),
+            "cache_version": int(data.get("cache_version", 0)) if isinstance(data, dict) else 0,
+            "contract_count": len(contracts) if isinstance(contracts, list) else 0,
+        }
+    )
+    status_path_raw = str(getattr(args, "status_file", "") or "").strip()
+    if status_path_raw:
+        status_path = Path(status_path_raw)
+        payload["runtime_status_path"] = str(status_path)
+        if status_path.exists():
+            try:
+                payload["runtime_status"] = json.loads(status_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                payload["runtime_status_error"] = str(exc)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def cmd_strat_test(args: argparse.Namespace):
@@ -559,10 +832,45 @@ def cmd_alpha_validate(args: argparse.Namespace):
         max_position=int(args.max_position),
         min_sharpe_oos=float(args.min_sharpe_oos),
         max_abs_drawdown=float(args.max_abs_drawdown),
+        min_turnover=float(getattr(args, "min_turnover", 1e-6)),
         skip_gate_b_tests=bool(args.skip_gate_b_tests),
         pytest_timeout_s=int(args.pytest_timeout),
         project_root=".",
         experiments_dir=str(args.experiments_dir),
+        latency_profile_id=str(getattr(args, "latency_profile_id", "sim_p95_v2026-02-26")),
+        local_decision_pipeline_latency_us=int(getattr(args, "local_decision_pipeline_latency_us", 250)),
+        submit_ack_latency_ms=float(getattr(args, "submit_ack_latency_ms", 36.0)),
+        modify_ack_latency_ms=float(getattr(args, "modify_ack_latency_ms", 43.0)),
+        cancel_ack_latency_ms=float(getattr(args, "cancel_ack_latency_ms", 47.0)),
+        live_uplift_factor=float(getattr(args, "live_uplift_factor", 1.5)),
+        maker_fee_bps=float(getattr(args, "maker_fee_bps", -0.2)),
+        taker_fee_bps=float(getattr(args, "taker_fee_bps", 0.2)),
+        stat_pvalue_threshold=float(getattr(args, "stat_pvalue_threshold", 0.1)),
+        min_stat_tests_pass=int(getattr(args, "min_stat_tests_pass", 2)),
+        stat_correction_method=str(getattr(args, "stat_correction_method", "bh")),
+        min_stat_tests_bh_pass=int(getattr(args, "min_stat_tests_bh_pass", 1)),
+        enable_walk_forward=bool(getattr(args, "enable_walk_forward", True)),
+        wf_n_splits=int(getattr(args, "wf_n_splits", 5)),
+        wf_min_fold_consistency=float(getattr(args, "wf_min_fold_consistency", 0.6)),
+        wf_min_fold_sharpe_min=float(getattr(args, "wf_min_fold_sharpe_min", -0.5)),
+        enable_param_optimization=bool(getattr(args, "enable_param_optimization", True)),
+        opt_signal_threshold_min=float(getattr(args, "opt_signal_threshold_min", 0.05)),
+        opt_signal_threshold_max=float(getattr(args, "opt_signal_threshold_max", 0.6)),
+        opt_signal_threshold_steps=int(getattr(args, "opt_signal_threshold_steps", 8)),
+        opt_objective=str(getattr(args, "opt_objective", "risk_adjusted")),
+        opt_max_is_oos_gap=float(getattr(args, "opt_max_is_oos_gap", 1.0)),
+        opt_min_neighbor_objective_ratio=float(getattr(args, "opt_min_neighbor_objective_ratio", 0.6)),
+        opt_min_deflated_sharpe=float(getattr(args, "opt_min_deflated_sharpe", -0.1)),
+        require_paper_refs=bool(getattr(args, "require_paper_refs", False)),
+        require_paper_index_link=bool(getattr(args, "require_paper_index_link", False)),
+        enforce_data_governance=bool(getattr(args, "enforce_data_governance", False)),
+        require_data_meta=bool(getattr(args, "require_data_meta", False)),
+        allowed_data_roots=tuple(getattr(args, "allowed_data_roots", ()) or ()),
+        bootstrap_samples=int(getattr(args, "bootstrap_samples", 1000)),
+        stress_latency_multiplier=float(getattr(args, "stress_latency_multiplier", 1.5)),
+        stress_fee_multiplier=float(getattr(args, "stress_fee_multiplier", 1.5)),
+        min_stress_sharpe_ratio=float(getattr(args, "min_stress_sharpe_ratio", 0.5)),
+        stress_drawdown_limit_multiplier=float(getattr(args, "stress_drawdown_limit_multiplier", 1.25)),
     )
     result = run_alpha_validation(config)
     summary = result.to_dict()
@@ -586,24 +894,55 @@ def cmd_alpha_promote(args: argparse.Namespace):
         alpha_id=args.alpha_id,
         owner=args.owner,
         project_root=".",
+        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
         scorecard_path=args.scorecard,
         shadow_sessions=int(args.shadow_sessions),
         min_shadow_sessions=int(args.min_shadow_sessions),
         drift_alerts=int(args.drift_alerts),
         execution_reject_rate=float(args.execution_reject_rate),
         max_execution_reject_rate=float(args.max_execution_reject_rate),
+        require_paper_trade_governance=bool(getattr(args, "require_paper_trade_governance", False)),
+        paper_trade_summary_path=(getattr(args, "paper_trade_summary", None) or None),
+        min_paper_trade_calendar_days=int(getattr(args, "min_paper_trade_calendar_days", 7)),
+        min_paper_trade_trading_days=int(getattr(args, "min_paper_trade_trading_days", 5)),
+        min_paper_trade_session_minutes=int(getattr(args, "min_paper_trade_session_minutes", 30)),
         min_sharpe_oos=float(args.min_sharpe_oos),
         max_abs_drawdown=float(args.max_abs_drawdown),
         max_turnover=float(args.max_turnover),
         max_correlation=float(args.max_correlation),
+        enable_rust_readiness_gate=bool(getattr(args, "enable_rust_readiness_gate", False)),
+        rust_module_name=(getattr(args, "rust_module_name", None) or None),
+        rust_parity_test_path=str(getattr(args, "rust_parity_test_path", "tests/unit/test_rust_hotpath_parity.py")),
+        rust_parity_timeout_s=int(getattr(args, "rust_parity_timeout_s", 180)),
+        enforce_rust_benchmark_gate=bool(getattr(args, "enforce_rust_benchmark_gate", False)),
+        rust_benchmark_cmd=str(
+            getattr(
+                args,
+                "rust_benchmark_cmd",
+                (
+                    "uv run python tests/benchmark/perf_regression_gate.py "
+                    "--baseline tests/benchmark/.benchmark_baseline.json "
+                    "--current benchmark.json "
+                    "--threshold 0.10"
+                ),
+            )
+        ),
         canary_weight=(None if args.canary_weight is None else float(args.canary_weight)),
         expiry_days=int(args.expiry_days),
         max_live_slippage_bps=float(args.max_live_slippage_bps),
         max_live_drawdown_contribution=float(args.max_live_drawdown_contribution),
         max_execution_error_rate=float(args.max_execution_error_rate),
         force=bool(args.force),
+        config_version=str(getattr(args, "config_version", "v1") or "v1"),
+        parent_config_version=getattr(args, "parent_config_version", None) or None,
     )
     result = promote_alpha(config)
+    if result.checklist is not None:
+        print("Promotion Checklist:")
+        for item in result.checklist.items:
+            status = "PASS" if item.passed else "FAIL"
+            print(f"  [{status}] {item.label} [{item.detail}]")
+        print()
     summary = result.to_dict()
     if args.out:
         out_path = Path(args.out)
@@ -700,6 +1039,94 @@ def cmd_alpha_pool(args: argparse.Namespace):
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def cmd_recorder_status(args: argparse.Namespace):
+    import time
+    import urllib.request
+
+    wal_dir = getattr(args, "wal_dir", None) or os.getenv("HFT_WAL_DIR", "data/wal")
+    ck_host = getattr(args, "ck_host", None) or os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
+    ck_port = int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
+    recorder_mode = os.getenv("HFT_RECORDER_MODE", "direct")
+    batcher_max = os.getenv("HFT_BATCHER_MAX_BUFFER", "2000")
+    wal_batch_max = os.getenv("HFT_WAL_BATCH_MAX_ROWS", "500")
+    wal_disk_min_mb = os.getenv("HFT_WAL_DISK_MIN_MB", "500")
+    wal_pressure_policy = os.getenv("HFT_WAL_DISK_PRESSURE_POLICY", "drop")
+
+    # WAL backlog scan
+    wal_files: list[tuple[str, float, int]] = []  # (name, mtime, size)
+    try:
+        with os.scandir(wal_dir) as it:
+            for entry in it:
+                if entry.name.endswith(".wal") and entry.is_file():
+                    st = entry.stat()
+                    wal_files.append((entry.name, st.st_mtime, st.st_size))
+    except FileNotFoundError:
+        pass
+
+    now = time.time()
+    wal_count = len(wal_files)
+    wal_total_bytes = sum(s for _, _, s in wal_files)
+    oldest_age_s: float | None = None
+    if wal_files:
+        oldest_mtime = min(m for _, m, _ in wal_files)
+        oldest_age_s = now - oldest_mtime
+
+    def _fmt_bytes(b: int) -> str:
+        if b >= 1024 * 1024:
+            return f"{b / 1024 / 1024:.1f} MB"
+        if b >= 1024:
+            return f"{b / 1024:.1f} KB"
+        return f"{b} B"
+
+    # Disk free
+    disk_free_str = "unknown"
+    try:
+        st_vfs = os.statvfs(wal_dir if os.path.exists(wal_dir) else ".")
+        free_mb = st_vfs.f_frsize * st_vfs.f_bavail / 1024 / 1024
+        if free_mb >= 1024:
+            disk_free_str = f"{free_mb / 1024:.1f} GB"
+        else:
+            disk_free_str = f"{free_mb:.0f} MB"
+    except Exception:
+        pass
+
+    # WAL guard status
+    try:
+        guard_threshold_mb = int(wal_disk_min_mb)
+        disk_free_mb_val = st_vfs.f_frsize * st_vfs.f_bavail / 1024 / 1024  # type: ignore[possibly-undefined]
+        guard_active = disk_free_mb_val < guard_threshold_mb
+        guard_str = "ACTIVE" if guard_active else "OFF"
+    except Exception:
+        guard_str = "unknown"
+
+    if oldest_age_s is not None:
+        backlog_str = f"{wal_count} files (oldest: {oldest_age_s:.0f}s ago, total: {_fmt_bytes(wal_total_bytes)})"
+    else:
+        backlog_str = f"{wal_count} files"
+
+    # ClickHouse reachability
+    ck_status = "unreachable"
+    try:
+        resp = urllib.request.urlopen(f"http://{ck_host}:{ck_port}/ping", timeout=2.0)
+        if resp.status == 200:
+            ck_status = "ok"
+    except Exception:
+        pass
+
+    ck_pool = os.getenv("HFT_CLICKHOUSE_POOL_SIZE", "8")
+
+    print("WAL Status:")
+    print(f"  Mode:        {recorder_mode} (HFT_RECORDER_MODE={recorder_mode})")
+    print(f"  Backlog:     {backlog_str}")
+    print(f"  Disk guard:  {wal_disk_min_mb} MB min (policy={wal_pressure_policy}, free={disk_free_str}) — {guard_str}")
+    print()
+    print("ClickHouse:")
+    print(f"  Status:      {ck_status} ({ck_host}:{ck_port})")
+    print()
+    print("Config:")
+    print(f"  Batcher:     {batcher_max} rows/table | WAL batch: {wal_batch_max} rows | CK pool: {ck_pool} threads")
+
+
 def cmd_alpha_canary_status(args: argparse.Namespace):
     try:
         from hft_platform.alpha.canary import CanaryMonitor
@@ -755,6 +1182,72 @@ def cmd_alpha_canary_evaluate(args: argparse.Namespace):
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_ab_compare(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.experiments import ExperimentTracker
+    except Exception as exc:
+        print(f"Failed to import experiment tracker: {exc}")
+        sys.exit(1)
+
+    base_dir = getattr(args, "base_dir", "research/experiments")
+    tracker = ExperimentTracker(base_dir=base_dir)
+    rows = tracker.compare(run_ids=[args.run_id_a, args.run_id_b])
+
+    if len(rows) < 2:
+        found_ids = [r.get("run_id", "?") for r in rows]
+        print(f"Error: fewer than 2 runs found (got: {found_ids}). Check run IDs.")
+        sys.exit(1)
+
+    run_a = rows[0]
+    run_b = rows[1]
+
+    # Collect numeric metrics from both runs
+    all_metric_keys: list[str] = []
+    seen: set[str] = set()
+    for key in list(run_a.keys()) + list(run_b.keys()):
+        if key in seen or key in {"run_id", "alpha_id", "config_hash", "timestamp"}:
+            continue
+        val_a = run_a.get(key)
+        val_b = run_b.get(key)
+        if isinstance(val_a, (int, float)) or isinstance(val_b, (int, float)):
+            all_metric_keys.append(key)
+            seen.add(key)
+
+    col_w = 16
+    sep = "\u2500" * (20 + col_w * 3)
+    id_a = str(run_a.get("run_id", "?"))
+    id_b = str(run_b.get("run_id", "?"))
+    print(f"A/B Comparison: {id_a} vs {id_b}")
+    print(sep)
+    print(f"{'Metric':<20}{'Run A'.ljust(col_w)}{'Run B'.ljust(col_w)}{'Delta'.ljust(col_w)}")
+    print(sep)
+    for key in all_metric_keys:
+        val_a = run_a.get(key)
+        val_b = run_b.get(key)
+        try:
+            fa = float(val_a) if val_a is not None else None  # type: ignore[arg-type]
+            fb = float(val_b) if val_b is not None else None  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            fa = fb = None
+        if fa is None and fb is None:
+            continue
+        str_a = f"{fa:.3f}" if fa is not None else "-"
+        str_b = f"{fb:.3f}" if fb is not None else "-"
+        if fa is not None and fb is not None:
+            delta = fb - fa
+            str_delta = f"{delta:+.3f}"
+        else:
+            str_delta = "-"
+        print(f"{key:<20}{str_a.ljust(col_w)}{str_b.ljust(col_w)}{str_delta.ljust(col_w)}")
+    print(sep)
+
+    if getattr(args, "out", None):
+        payload = {"run_a": run_a, "run_b": run_b}
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def cmd_alpha_experiments_compare(args: argparse.Namespace):
@@ -1073,6 +1566,16 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--sample", type=int, default=10, help="Preview sample size")
     sync.set_defaults(func=cmd_symbols_sync)
 
+    contracts_status = config_sub.add_parser("contracts-status", help="Inspect contract cache freshness/version")
+    contracts_status.add_argument("--contracts", default="config/contracts.json", help="Contract cache path")
+    contracts_status.add_argument("--stale-after-s", type=float, default=86400.0, help="Staleness threshold seconds")
+    contracts_status.add_argument(
+        "--status-file",
+        default=os.getenv("HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json"),
+        help="Optional runtime status snapshot file path",
+    )
+    contracts_status.set_defaults(func=cmd_contracts_status)
+
     run = sub.add_parser("run", help="Run pipeline (sim|live|replay)")
     run.add_argument("mode", nargs="?", choices=["sim", "live", "replay"])
     run.add_argument("--mode", dest="mode_flag", choices=["sim", "live", "replay"])
@@ -1101,7 +1604,61 @@ def build_parser() -> argparse.ArgumentParser:
     feed_status.set_defaults(func=cmd_feed_status)
 
     diag = sub.add_parser("diag", help="Quick diagnostics")
+    diag.add_argument("--trace-file", help="Decision trace JSONL file to inspect")
+    diag.add_argument("--trace-id", help="Filter by trace_id")
+    diag.add_argument("--stage", help="Filter by stage")
+    diag.add_argument("--limit", type=int, default=20, help="Show last N matching records")
+    diag.add_argument("--timeline", action="store_true", help="Render ordered incident timeline from traces")
+    diag.add_argument(
+        "--timeline-format",
+        choices=["json", "md"],
+        default="json",
+        help="Timeline output format (used with --timeline)",
+    )
+    diag.add_argument("--out", help="Write diag/timeline output to file")
     diag.set_defaults(func=cmd_diag)
+
+    feature = sub.add_parser("feature", help="Feature Plane governance utilities")
+    feature_sub = feature.add_subparsers(dest="feature_cmd")
+
+    feat_profiles = feature_sub.add_parser("profiles", help="List feature profiles")
+    feat_profiles.add_argument("--path", help="Feature profiles YAML path")
+    feat_profiles.add_argument("--json", action="store_true", help="Output JSON")
+    feat_profiles.set_defaults(func=cmd_feature_profiles)
+
+    feat_validate = feature_sub.add_parser("validate", help="Validate feature profiles and apply active profile")
+    feat_validate.add_argument("--path", help="Feature profiles YAML path")
+    feat_validate.set_defaults(func=cmd_feature_validate)
+
+    feat_preflight = feature_sub.add_parser("preflight", help="Check strategy/feature compatibility")
+    feat_preflight.add_argument("--profiles", help="Feature profiles YAML path")
+    feat_preflight.add_argument("--strategies", default="config/base/strategies.yaml", help="Strategy config YAML")
+    feat_preflight.set_defaults(func=cmd_feature_preflight)
+
+    feat_rollout_status = feature_sub.add_parser("rollout-status", help="Inspect local feature rollout state")
+    feat_rollout_status.add_argument("--profiles", help="Feature profiles YAML path")
+    feat_rollout_status.add_argument("--state-path", help="Rollout state JSON path")
+    feat_rollout_status.add_argument("--feature-set", help="Filter by feature_set_id")
+    feat_rollout_status.set_defaults(func=cmd_feature_rollout_status)
+
+    feat_rollout_set = feature_sub.add_parser("rollout-set", help="Set local feature rollout state/profile")
+    feat_rollout_set.add_argument("--profiles", help="Feature profiles YAML path")
+    feat_rollout_set.add_argument("--state-path", help="Rollout state JSON path")
+    feat_rollout_set.add_argument("--feature-set", required=True, help="Feature set id")
+    feat_rollout_set.add_argument("--state", required=True, choices=["active", "shadow", "disabled"])
+    feat_rollout_set.add_argument("--profile-id", help="Profile id (required for active; shadow profile for shadow)")
+    feat_rollout_set.add_argument("--actor", default="cli")
+    feat_rollout_set.add_argument("--notes", default="")
+    feat_rollout_set.set_defaults(func=cmd_feature_rollout_set)
+
+    feat_rollout_rb = feature_sub.add_parser(
+        "rollout-rollback", help="Rollback local feature rollout to previous active"
+    )
+    feat_rollout_rb.add_argument("--state-path", help="Rollout state JSON path")
+    feat_rollout_rb.add_argument("--feature-set", required=True, help="Feature set id")
+    feat_rollout_rb.add_argument("--actor", default="cli")
+    feat_rollout_rb.add_argument("--notes", default="rollback")
+    feat_rollout_rb.set_defaults(func=cmd_feature_rollout_rollback)
 
     strat = sub.add_parser("strat", help="Strategy helpers")
     strat_sub = strat.add_subparsers(dest="strat_cmd")
@@ -1149,6 +1706,13 @@ def build_parser() -> argparse.ArgumentParser:
     back_run.add_argument("--report", action="store_true", help="Generate HTML Tearsheet")
     back_run.set_defaults(func=cmd_backtest)
 
+    recorder = sub.add_parser("recorder", help="Recorder utilities")
+    recorder_sub = recorder.add_subparsers(dest="recorder_cmd")
+    recorder_status = recorder_sub.add_parser("status", help="Show recorder WAL backlog and ClickHouse status")
+    recorder_status.add_argument("--wal-dir", help="Override WAL directory path")
+    recorder_status.add_argument("--ck-host", help="Override ClickHouse host")
+    recorder_status.set_defaults(func=cmd_recorder_status)
+
     alpha = sub.add_parser("alpha", help="Alpha research pipeline utilities")
     alpha_sub = alpha.add_subparsers(dest="alpha_cmd")
 
@@ -1189,6 +1753,122 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_validate.add_argument("--max-position", type=int, default=5, help="Max absolute position")
     alpha_validate.add_argument("--min-sharpe-oos", type=float, default=0.0, help="Gate C minimum OOS Sharpe")
     alpha_validate.add_argument("--max-abs-drawdown", type=float, default=0.3, help="Gate C max absolute drawdown")
+    alpha_validate.add_argument(
+        "--min-turnover",
+        type=float,
+        default=1e-6,
+        help="Gate C minimum turnover floor to reject zero-trade runs",
+    )
+    alpha_validate.add_argument(
+        "--latency-profile-id",
+        default="sim_p95_v2026-02-26",
+        help="Latency profile id recorded in Gate C artifacts",
+    )
+    alpha_validate.add_argument(
+        "--local-decision-pipeline-latency-us",
+        type=int,
+        default=250,
+        help="Local decision path latency (microseconds)",
+    )
+    alpha_validate.add_argument(
+        "--submit-ack-latency-ms",
+        type=float,
+        default=36.0,
+        help="Broker submit ACK latency (milliseconds)",
+    )
+    alpha_validate.add_argument(
+        "--modify-ack-latency-ms",
+        type=float,
+        default=43.0,
+        help="Broker modify ACK latency (milliseconds)",
+    )
+    alpha_validate.add_argument(
+        "--cancel-ack-latency-ms",
+        type=float,
+        default=47.0,
+        help="Broker cancel ACK latency (milliseconds)",
+    )
+    alpha_validate.add_argument(
+        "--live-uplift-factor",
+        type=float,
+        default=1.5,
+        help="Multiplier applied to broker ACK latencies",
+    )
+    alpha_validate.add_argument("--maker-fee-bps", type=float, default=-0.2, help="Maker fee in bps for Gate C")
+    alpha_validate.add_argument("--taker-fee-bps", type=float, default=0.2, help="Taker fee in bps for Gate C")
+    alpha_validate.add_argument(
+        "--stat-pvalue-threshold",
+        type=float,
+        default=0.1,
+        help="P-value threshold for OOS statistical significance tests",
+    )
+    alpha_validate.add_argument(
+        "--min-stat-tests-pass",
+        type=int,
+        default=2,
+        help="Minimum number of significance tests that must pass",
+    )
+    alpha_validate.add_argument(
+        "--bootstrap-samples",
+        type=int,
+        default=1000,
+        help="Bootstrap sample count for OOS mean-return confidence interval",
+    )
+    alpha_validate.add_argument(
+        "--stress-latency-multiplier",
+        type=float,
+        default=1.5,
+        help="Multiplier for latency assumptions in stress backtest",
+    )
+    alpha_validate.add_argument(
+        "--stress-fee-multiplier",
+        type=float,
+        default=1.5,
+        help="Multiplier for maker/taker fees in stress backtest",
+    )
+    alpha_validate.add_argument(
+        "--min-stress-sharpe-ratio",
+        type=float,
+        default=0.5,
+        help="Required stress_sharpe_oos / base_sharpe_oos ratio when base Sharpe > 0",
+    )
+    alpha_validate.add_argument(
+        "--stress-drawdown-limit-multiplier",
+        type=float,
+        default=1.25,
+        help="Multiplier for max_abs_drawdown in stress scenario",
+    )
+    alpha_validate.add_argument(
+        "--require-paper-refs",
+        action="store_true",
+        help="Gate A: require non-empty manifest paper_refs",
+    )
+    alpha_validate.add_argument(
+        "--require-paper-index-link",
+        action="store_true",
+        help="Gate A: require manifest paper_refs mapped in paper_index and linked to alpha_id",
+    )
+    alpha_validate.add_argument(
+        "--enforce-data-governance",
+        action="store_true",
+        help="Gate A: enforce allowed dataset roots",
+    )
+    alpha_validate.add_argument(
+        "--require-data-meta",
+        action="store_true",
+        help="Gate A: require sidecar metadata for each dataset (.meta.json)",
+    )
+    alpha_validate.add_argument(
+        "--allowed-data-roots",
+        nargs="+",
+        default=[
+            "research/data/raw",
+            "research/data/interim",
+            "research/data/processed",
+            "research/data/hbt_multiproduct",
+        ],
+        help="Allowed dataset roots when --enforce-data-governance is enabled",
+    )
     alpha_validate.add_argument("--skip-gate-b-tests", action="store_true", help="Skip per-alpha pytest in Gate B")
     alpha_validate.add_argument("--pytest-timeout", type=int, default=300, help="Gate B timeout in seconds")
     alpha_validate.add_argument(
@@ -1203,6 +1883,7 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")
     alpha_promote.add_argument("--owner", required=True, help="Promotion owner")
     alpha_promote.add_argument("--scorecard", help="Optional scorecard path override")
+    alpha_promote.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
     alpha_promote.add_argument("--shadow-sessions", type=int, default=0, help="Observed shadow sessions")
     alpha_promote.add_argument("--min-shadow-sessions", type=int, default=5, help="Required shadow sessions for Gate E")
     alpha_promote.add_argument("--drift-alerts", type=int, default=0, help="Drift alerts count from shadow run")
@@ -1212,10 +1893,46 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote.add_argument(
         "--max-execution-reject-rate", type=float, default=0.01, help="Gate E max acceptable reject rate"
     )
+    alpha_promote.add_argument(
+        "--require-paper-trade-governance",
+        action="store_true",
+        help="Require paper-trade summary checks (1-week governance) in Gate E",
+    )
+    alpha_promote.add_argument("--paper-trade-summary", default=None, help="Optional paper-trade summary JSON path")
+    alpha_promote.add_argument("--min-paper-trade-calendar-days", type=int, default=7)
+    alpha_promote.add_argument("--min-paper-trade-trading-days", type=int, default=5)
+    alpha_promote.add_argument("--min-paper-trade-session-minutes", type=int, default=30)
     alpha_promote.add_argument("--min-sharpe-oos", type=float, default=1.0, help="Gate D minimum OOS Sharpe")
     alpha_promote.add_argument("--max-abs-drawdown", type=float, default=0.2, help="Gate D max absolute drawdown")
     alpha_promote.add_argument("--max-turnover", type=float, default=2.0, help="Gate D max turnover")
     alpha_promote.add_argument("--max-correlation", type=float, default=0.7, help="Gate D max correlation to pool")
+    alpha_promote.add_argument(
+        "--enable-rust-readiness-gate",
+        action="store_true",
+        help="Enable Gate F Rust readiness checks before approval",
+    )
+    alpha_promote.add_argument("--rust-module-name", default=None, help="Optional rust module override")
+    alpha_promote.add_argument(
+        "--rust-parity-test-path",
+        default="tests/unit/test_rust_hotpath_parity.py",
+        help="Pytest target for Rust parity validation",
+    )
+    alpha_promote.add_argument("--rust-parity-timeout-s", type=int, default=180)
+    alpha_promote.add_argument(
+        "--enforce-rust-benchmark-gate",
+        action="store_true",
+        help="Run Rust benchmark regression command as part of Gate F",
+    )
+    alpha_promote.add_argument(
+        "--rust-benchmark-cmd",
+        default=(
+            "uv run python tests/benchmark/perf_regression_gate.py "
+            "--baseline tests/benchmark/.benchmark_baseline.json "
+            "--current benchmark.json "
+            "--threshold 0.10"
+        ),
+        help="Shell command for Rust benchmark regression gate",
+    )
     alpha_promote.add_argument("--canary-weight", type=float, help="Override canary weight")
     alpha_promote.add_argument("--expiry-days", type=int, default=30, help="Expiry review date offset")
     alpha_promote.add_argument("--max-live-slippage-bps", type=float, default=3.0, help="Rollback slippage threshold")
@@ -1226,6 +1943,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-execution-error-rate", type=float, default=0.01, help="Rollback execution error rate"
     )
     alpha_promote.add_argument("--force", action="store_true", help="Force-write promotion config even if gates fail")
+    alpha_promote.add_argument("--config-version", default="v1", help="Semantic config version (e.g. v1, v2)")
+    alpha_promote.add_argument("--parent-config-version", default=None, help="Parent config version on re-promotion")
     alpha_promote.add_argument("--out", help="Optional summary JSON output path")
     alpha_promote.set_defaults(func=cmd_alpha_promote)
 
@@ -1298,6 +2017,13 @@ def build_parser() -> argparse.ArgumentParser:
     canary_eval.add_argument("--out", help="Optional JSON output path")
     canary_eval.set_defaults(func=cmd_alpha_canary_evaluate)
 
+    alpha_ab_compare = alpha_sub.add_parser("ab-compare", help="A/B compare two experiment runs with delta table")
+    alpha_ab_compare.add_argument("run_id_a", help="First run ID (A)")
+    alpha_ab_compare.add_argument("run_id_b", help="Second run ID (B)")
+    alpha_ab_compare.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
+    alpha_ab_compare.add_argument("--out", help="Optional JSON output path")
+    alpha_ab_compare.set_defaults(func=cmd_alpha_ab_compare)
+
     alpha_exp = alpha_sub.add_parser("experiments", help="Experiment tracking utilities")
     alpha_exp_sub = alpha_exp.add_subparsers(dest="alpha_exp_cmd")
 
@@ -1325,6 +2051,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
+    _ensure_project_root_on_path()
     configure_logging()
     parser = build_parser()
     args = parser.parse_args(argv)

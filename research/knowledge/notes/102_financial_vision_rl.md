@@ -1,4 +1,5 @@
 # Financial Vision Based Reinforcement Learning Trading Strategy
+ref: 102
 
 **Authors**: Yun-Cheng Tsai, Fu-Min Szu, Jun-Hao Chen, Samuel Yen-Chi Chen
 **Date**: 2022-02

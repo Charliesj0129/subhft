@@ -1,4 +1,5 @@
 # Forecasting Equity Correlations with Hybrid Transformer Graph Neural Network
+ref: 084
 
 **Authors**: Jack Fanshawe, Rumi Masih, Alexander Cameron
 **Date**: 2026-01-08

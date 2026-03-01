@@ -1,4 +1,5 @@
 # Pregeometric Origins of Liquidity Geometry in Financial Order Books
+ref: 092
 
 **Authors**: Joao P. da Cruz
 **Date**: 2026-01-27

@@ -1,4 +1,5 @@
 # Defining, Estimating and Using Credit Term Structures (Part 3)
+ref: 052
 
 **Authors**: Arthur M. Berd, Roy Mashal, Peili Wang (Lehman Brothers)
 **Date**: November 2004 (Classic)

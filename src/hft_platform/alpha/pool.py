@@ -112,9 +112,11 @@ def compute_correlation_payload(
             "sample_length": int(data.shape[1]),
         }
 
-    pearson = np.nan_to_num(np.corrcoef(data), nan=0.0, posinf=0.0, neginf=0.0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        pearson = np.nan_to_num(np.corrcoef(data), nan=0.0, posinf=0.0, neginf=0.0)
     ranked = np.apply_along_axis(_rank_1d, 1, data)
-    spearman = np.nan_to_num(np.corrcoef(ranked), nan=0.0, posinf=0.0, neginf=0.0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        spearman = np.nan_to_num(np.corrcoef(ranked), nan=0.0, posinf=0.0, neginf=0.0)
     return {
         "alpha_ids": alpha_ids,
         "matrix": pearson.tolist(),  # Backward-compatible alias.
@@ -381,8 +383,7 @@ def _ic_weighted(data: np.ndarray, returns: np.ndarray | None) -> np.ndarray:
     target = returns[:n]
     ic = np.zeros(data.shape[0], dtype=np.float64)
     for i in range(data.shape[0]):
-        corr = np.corrcoef(data[i, :n], target)[0, 1]
-        ic[i] = float(corr) if np.isfinite(corr) else 0.0
+        ic[i] = _safe_corr(data[i, :n], target)
     if np.allclose(ic, 0.0):
         return _equal_weight(data.shape[0])
     return ic
@@ -401,7 +402,7 @@ def _mean_variance(data: np.ndarray, returns: np.ndarray | None) -> np.ndarray:
             mu = np.ones(data.shape[0], dtype=np.float64)
         else:
             mu = np.array(
-                [np.corrcoef(data[i, :n], returns[:n])[0, 1] for i in range(data.shape[0])],
+                [_safe_corr(data[i, :n], returns[:n]) for i in range(data.shape[0])],
                 dtype=np.float64,
             )
             mu = np.nan_to_num(mu, nan=0.0, posinf=0.0, neginf=0.0)
@@ -452,7 +453,8 @@ def _pool_metric(
     if returns is None:
         if data.shape[0] < 2:
             return 0.0, "diversification_score"
-        corr = np.nan_to_num(np.corrcoef(data), nan=0.0, posinf=0.0, neginf=0.0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            corr = np.nan_to_num(np.corrcoef(data), nan=0.0, posinf=0.0, neginf=0.0)
         weighted_corr = 0.0
         for i in range(corr.shape[0]):
             for j in range(i + 1, corr.shape[1]):
@@ -474,3 +476,19 @@ def _relative_uplift(candidate: float, baseline: float) -> float:
     if abs(baseline) <= 1e-12:
         return 0.0 if abs(candidate) <= 1e-12 else float(np.sign(candidate))
     return float((candidate - baseline) / abs(baseline))
+
+
+def _safe_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
+    x = np.asarray(lhs, dtype=np.float64).reshape(-1)
+    y = np.asarray(rhs, dtype=np.float64).reshape(-1)
+    n = min(x.size, y.size)
+    if n < 2:
+        return 0.0
+    x = x[:n]
+    y = y[:n]
+    x = x - np.mean(x)
+    y = y - np.mean(y)
+    denom = float(np.sqrt(np.dot(x, x) * np.dot(y, y)))
+    if denom <= 1e-12:
+        return 0.0
+    return float(np.dot(x, y) / denom)

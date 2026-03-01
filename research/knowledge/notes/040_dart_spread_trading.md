@@ -1,4 +1,5 @@
 # Trading Electrons: Predicting DART Spread Spikes in ISO Electricity Markets
+ref: 040
 
 **Authors**: Emma Hubert and Dimitrios Lolas (Paris Dauphine, Princeton)
 **Date**: January 2026

@@ -1,4 +1,7 @@
 # Agent-Based Simulation of a Perpetual Futures Market
+ref: 005
+Authors: Ramshreyas Rao
+Published: 2025 (Based on metadata, though likely a thesis/preprint)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

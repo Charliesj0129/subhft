@@ -1,4 +1,5 @@
 # Trading with Market Resistance and Concave Price Impact
+ref: 098
 
 **Authors**: Nathan De Carvalho, Youssef Ouazzani Chahdi, Grégoire Szymanski
 **Date**: 2026-02-05

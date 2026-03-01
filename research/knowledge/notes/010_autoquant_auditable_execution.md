@@ -1,4 +1,8 @@
 # AutoQuant: An Auditable Expert-System Framework for Execution-Constrained Auto-Tuning
+ref: 010
+arxiv: https://arxiv.org/abs/2512.22476
+Authors: Kaihong Deng
+Published: 2025 (December 2025; ArXiv Dec 27, 2025)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 

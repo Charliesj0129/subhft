@@ -1,30 +1,45 @@
 # HFT Platform Performance Report
 
-## Executive Summary
-**Max Frequency**: ~3,300 Hz (Ticks/Second)
-**Latencies**:
-- **Feed Ingestion**: < 50 µs
-- **Strategy Logic (Python)**: ~300 µs (P99)
-- **Architecture Overhead**: ~100 µs
+> 本文件改為「可重現報告格式」，避免固定數字過期。
 
-## Benchmark Results
-Using `tests/benchmark/latency_test.py` (Simulated Shioaji Feed):
+## 1. 報告欄位（每次更新必填）
+- 測試日期：`YYYY-MM-DD`
+- 測試 commit：`<git sha>`
+- 測試環境：CPU / RAM / OS / Python 版本
+- 測試模式：`sim` / `live-data-order-sim`
 
-| Metric | Result | Constraint |
-|---|---|---|
-| **Max Throughput** | **3,300 events/sec** | Global Interpreter Lock (GIL) & Single-threaded Event Loop |
-| **Logic Latency** | **303 µs** | Python dynamic dispatch & Strategy overhead |
-| **Feed Capacity** | **>20,000 events/sec** | High-performance deque/normalization |
+## 2. 重現命令
 
-> [!NOTE]
-> These tests were run in a simulated environment measuring the *software stack overhead*. Real network latency (broker <-> server) will add 5-50ms significantly dominating the 0.3ms internal latency.
+### 2.1 單元與 benchmark
+```bash
+uv run pytest tests/benchmark --benchmark-only --benchmark-json=benchmark.json
+```
 
-## Shioaji API Assessment
-For the specific request of "How fast can we go with Shioaji API?":
-1. **API Limit**: Shioaji typically streams ticks at 100-500ms intervals (Snapshot) or ~10-100Hz (Tick Stream).
-2. **Platform Headroom**: The platform's **3,300 Hz** capacity is **30x faster** than the typical market data rate (100 Hz).
-3. **Bottleneck**: The bottleneck will be the **Network** (Internet/Broker), not this Python platform, for standard strategies.
+### 2.2 Shioaji API latency
+```bash
+uv run python scripts/latency/shioaji_api_probe.py --mode sim --iters 30
+```
 
-## Recommendations
-1. **For Production**: The current Python stack is sufficient for strategies with holding periods > 1 second.
-2. **For HFT (< 10ms)**: Migrating the `on_book_update` logic to Rust/C++ (via the proposed `hftbacktest` integration or Cython) would reduce internal latency from 300µs -> 5µs.
+### 2.3 E2E latency（ClickHouse）
+```bash
+uv run python scripts/latency/e2e_clickhouse_report.py --window-min 10
+```
+
+## 3. 建議輸出
+- `benchmark.json`
+- `reports/shioaji_api_latency.json`
+- `reports/e2e_latency.summary.json`
+
+## 4. 指標解讀重點
+- `event_loop_lag_ms` 是否長時間升高
+- `queue_depth` 是否持續堆積
+- `shioaji_api_latency_ms` 的 p95/p99 是否偏移
+- recorder 是否出現大量 `Insert failed` 或回退 WAL
+
+## 5. 近期觀察模板
+```text
+- 結論：
+- 主要瓶頸：
+- 是否可接受上線：
+- 需要調整項：
+```

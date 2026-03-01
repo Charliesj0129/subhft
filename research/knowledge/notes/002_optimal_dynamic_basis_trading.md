@@ -1,4 +1,8 @@
 # Optimal Dynamic Basis Trading
+ref: 002
+arxiv: https://arxiv.org/abs/1809.05961
+Authors: Bahman Angoshtari, Tim Leung (University of Washington)
+Published: 2018 (ArXiv 2019 v3)
 
 ## 📄 深度學術論文筆記 (Deep Academic Note)
 
