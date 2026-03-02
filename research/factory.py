@@ -56,6 +56,8 @@ GITKEEP_DIRS: tuple[str, ...] = (
 ALLOWED_ROOT_DIRS: set[str] = {
     "__pycache__",  # tolerated; clean command removes it
     "alphas",
+    "arxiv_paper",
+    "arxiv_papers",
     "archive",
     "backtest",
     "combinatorial",
@@ -64,12 +66,16 @@ ALLOWED_ROOT_DIRS: set[str] = {
     "knowledge",
     "logs",
     "reports",
+    "results_batch6",
+    "results_batch7",
     "registry",
     "results",
     "tools",
 }
 
 ALLOWED_ROOT_FILES: set[str] = {
+    "alpha_analysis.png",
+    "alpha_lab.py",
     "__init__.py",
     "__main__.py",
     "README.md",
