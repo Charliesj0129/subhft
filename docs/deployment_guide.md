@@ -34,6 +34,40 @@ docker compose up -d --build hft-engine
 docker compose up -d prometheus grafana alertmanager hft-monitor
 ```
 
+### 3.1.1 Single Runtime Principle（重要）
+
+**任一時刻只允許一個 runtime 持有 Shioaji broker session。**
+
+違反此原則會導致 callback 競爭、reconnect storm、以及訂閱狀態互相覆寫。
+
+| 啟動模式 | 指令 | 說明 |
+|----------|------|------|
+| Engine only | `make start-engine` | HFT engine + ClickHouse + Redis + wal-loader |
+| Monitor only | `make start-monitor` | Prometheus + Grafana + Alertmanager + node-exporter |
+| Both | `make start` | 完整堆疊 |
+| Maintenance shell | `make start-maintenance` | hft-base 維護 shell，不啟動 feed |
+
+**規則：**
+- `hft-engine` 是唯一允許建立 `ShioajiClient` feed 的容器（`HFT_RUNTIME_ROLE=engine`）。
+- `hft-base` 已設為 `maintenance` profile，不會在一般 `docker compose up -d` 中啟動。
+- `wal-loader` 與 `hft-monitor` 不建立 feed，安全並行。
+- 若偵測到同一 Redis 中存在其他 runtime 的 session 鑰匙 (`feed:session:owner`)，啟動時會 log CRITICAL 警告（非阻斷）。
+
+若需要 maintenance shell，請顯式啟用：
+```bash
+make start-maintenance
+# 或：
+docker compose --profile maintenance up -d hft-base
+```
+
+**偵測多 runtime 衝突：**
+```bash
+# 查看是否有衝突告警
+docker compose logs hft-engine | grep "feed_session_conflict"
+# 或查看 Prometheus 指標
+curl -s http://localhost:9090/metrics | grep feed_session_conflict_total
+```
+
 ### 3.2 驗證
 ```bash
 docker compose ps

@@ -59,8 +59,9 @@ def test_preflight_stale_cache_logs_warning(tmp_path: Path):
         client.symbols = []
         client.MAX_SUBSCRIPTIONS = 200
         client.api = MagicMock()  # non-None api so _get_contract would be called
+        runtime = client._contracts()
 
-        with patch.object(client, "_is_contract_cache_stale", return_value=True):
+        with patch.object(type(runtime), "is_contract_cache_stale", return_value=True):
             with patch.object(client, "_get_contract", return_value=None):
                 import structlog.testing
 
@@ -82,8 +83,9 @@ def test_preflight_missing_codes_logs_warning(tmp_path: Path):
         client.symbols = [{"code": "2330", "exchange": "TSE"}]
         client.MAX_SUBSCRIPTIONS = 200
         client.api = MagicMock()
+        runtime = client._contracts()
 
-        with patch.object(client, "_is_contract_cache_stale", return_value=False):
+        with patch.object(type(runtime), "is_contract_cache_stale", return_value=False):
             with patch.object(client, "_get_contract", return_value=None):
                 import structlog.testing
 
@@ -144,6 +146,7 @@ def test_refresh_diff_logged(tmp_path: Path):
         client.config_path = str(tmp_path / "symbols.yaml")
         client.metrics = None
         client.logged_in = False
+        client._contract_refresh_version = 0
         client._contract_refresh_last_diff = {}
         client._contract_refresh_resubscribe_policy = "none"
         client.symbols = []

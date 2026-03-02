@@ -281,10 +281,11 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
     }
     # Feature set version parity check (warn-only: does NOT block Gate D).
     manifest_fsv = str(config.manifest_feature_set_version or "").strip() or None
+    _LIVE_FSV: str | None = None
     try:
         from hft_platform.feature.registry import FEATURE_SET_VERSION as _LIVE_FSV
     except Exception:
-        _LIVE_FSV = None
+        pass
     if manifest_fsv is not None and _LIVE_FSV is not None:
         fsv_match = manifest_fsv == _LIVE_FSV
         checks["feature_set_version"] = {

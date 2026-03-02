@@ -228,6 +228,7 @@ class MarketDataService:
         self.reconnect_gap_s = float(os.getenv("HFT_MD_RECONNECT_GAP_S", "60"))
         self.force_reconnect_gap_s = float(os.getenv("HFT_MD_FORCE_RECONNECT_GAP_S", "300"))
         self.reconnect_cooldown_s = float(os.getenv("HFT_MD_RECONNECT_COOLDOWN_S", "60"))
+        self.reconnect_timeout_s = float(os.getenv("HFT_MD_RECONNECT_TIMEOUT_S", "30"))
         self.reconnect_days = {d.strip().lower() for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",") if d.strip()}
         self.reconnect_hours = os.getenv("HFT_RECONNECT_HOURS", "")
         self.reconnect_hours_2 = os.getenv("HFT_RECONNECT_HOURS_2", "")
@@ -1195,7 +1196,26 @@ class MarketDataService:
         logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
         self._set_state(FeedState.RECOVERING)
         force_login = reason_label == "session_rollover"
-        ok = await asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s", force_login)
+        try:
+            ok = await asyncio.wait_for(
+                asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s", force_login),
+                timeout=max(0.1, float(self.reconnect_timeout_s)),
+            )
+        except asyncio.TimeoutError:
+            logger.error("Reconnect timed out", reason=reason_label, timeout_s=self.reconnect_timeout_s)
+            if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_timeout_total"):
+                self.metrics_registry.feed_reconnect_timeout_total.labels(reason=reason_label).inc()
+            self._set_state(FeedState.DISCONNECTED)
+            return False
+        except Exception as exc:
+            logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
+            if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_exception_total"):
+                self.metrics_registry.feed_reconnect_exception_total.labels(
+                    reason=reason_label,
+                    exception_type=type(exc).__name__,
+                ).inc()
+            self._set_state(FeedState.DISCONNECTED)
+            return False
         if ok:
             self._set_state(FeedState.CONNECTED)
             self.last_event_ts = timebase.now_s()

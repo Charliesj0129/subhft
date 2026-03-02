@@ -1,0 +1,77 @@
+<clickhouse>
+    <!--
+        ClickHouse System Log Retention Configuration
+        ==============================================
+        Prevents unbounded growth of internal ClickHouse diagnostic tables.
+
+        INCIDENT HISTORY:
+          2026-03-02: Disk full (216G / 100%) on remote receiver.
+          Root cause: system.trace_log (104 GB) + system.text_log (19 GB) had
+          no TTL and accumulated continuously since container first started.
+          Resolution: TRUNCATE + add this file.
+
+        POLICY:
+          - trace_log / text_log: high-volume, debug-only → 3 day TTL, WARNING+ only
+          - query_log / part_log: operational value → 7 day TTL
+          - metric snapshots (async_metric, metric_log): 3 day TTL
+          - max_table_size_to_drop = 0: removes the 50 GB hard limit that blocks
+            TRUNCATE on large system tables (safe; only affects system.* tables
+            accessed by operators, not user data).
+    -->
+
+    <!-- Remove the 50 GB drop size guard for system tables (safe for operator use) -->
+    <max_table_size_to_drop>0</max_table_size_to_drop>
+    <max_partition_size_to_drop>0</max_partition_size_to_drop>
+
+    <!-- CPU stack traces: high volume, debug-only. 3 day TTL, batch flush -->
+    <trace_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </trace_log>
+
+    <!-- Internal server text log: WARNING+ only cuts 90%+ of write volume -->
+    <text_log>
+        <level>Warning</level>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </text_log>
+
+    <!-- SQL query history: useful for 7 days -->
+    <query_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_log>
+
+    <!-- Merge / mutation / move audit log: 7 days -->
+    <part_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </part_log>
+
+    <!-- Async system metric snapshots (sampled every 60s): 3 days -->
+    <asynchronous_metric_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </asynchronous_metric_log>
+
+    <!-- Per-metric snapshots: 3 days -->
+    <metric_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </metric_log>
+
+    <!-- Pipeline profiling logs: 3 days -->
+    <processors_profile_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </processors_profile_log>
+
+    <!-- Materialized view query tracking: 3 days -->
+    <query_views_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </query_views_log>
+
+    <!-- Background task scheduler log: 3 days -->
+    <background_schedule_pool_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </background_schedule_pool_log>
+
+    <!-- Per-query metric aggregations: 3 days -->
+    <query_metric_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </query_metric_log>
+</clickhouse>

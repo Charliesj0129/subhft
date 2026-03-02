@@ -1,9 +1,9 @@
 import asyncio
+import datetime as dt
 import os
 import tempfile
-import unittest
-import datetime as dt
 import time
+import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -131,6 +131,32 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.client.reconnect.return_value = False
         with patch.object(self.service, "_within_reconnect_window", return_value=True):
             await self.service._trigger_reconnect(9.0)
+        self.assertEqual(self.service.state, FeedState.DISCONNECTED)
+
+    async def test_trigger_reconnect_timeout(self):
+        self.service._set_state(FeedState.CONNECTED)
+        self.service._last_reconnect_ts = 0.0
+        self.service.reconnect_cooldown_s = 0.0
+        self.service.reconnect_timeout_s = 0.01
+
+        def slow_reconnect(*_args, **_kwargs):
+            time.sleep(0.2)
+            return True
+
+        self.client.reconnect.side_effect = slow_reconnect
+        with patch.object(self.service, "_within_reconnect_window", return_value=True):
+            ok = await self.service._trigger_reconnect(9.0)
+        self.assertFalse(ok)
+        self.assertEqual(self.service.state, FeedState.DISCONNECTED)
+
+    async def test_trigger_reconnect_exception(self):
+        self.service._set_state(FeedState.CONNECTED)
+        self.service._last_reconnect_ts = 0.0
+        self.service.reconnect_cooldown_s = 0.0
+        self.client.reconnect.side_effect = RuntimeError("boom")
+        with patch.object(self.service, "_within_reconnect_window", return_value=True):
+            ok = await self.service._trigger_reconnect(9.0)
+        self.assertFalse(ok)
         self.assertEqual(self.service.state, FeedState.DISCONNECTED)
 
     async def test_trigger_reconnect_window_block(self):

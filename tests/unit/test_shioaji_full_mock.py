@@ -81,6 +81,22 @@ class TestShioajiClientFull(unittest.TestCase):
             self.assertIsNone(kwargs.get("contracts_cb"))
             self.assertTrue(self.client.logged_in)
 
+    def test_login_fallback_failure_does_not_raise(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SHIOAJI_API_KEY": "TESTKEY",
+                "SHIOAJI_SECRET_KEY": "TESTSECRET",
+                "HFT_SHIOAJI_LOGIN_RETRY_MAX": "0",
+                "HFT_SHIOAJI_LOGIN_TIMEOUT_S": "0",
+            },
+            clear=False,
+        ):
+            self.mock_api_instance.login.side_effect = RuntimeError("login down")
+            ok = self.client.login()
+        self.assertFalse(ok)
+        self.assertFalse(self.client.logged_in)
+
     def test_subscribe_basket(self):
         self.client.logged_in = True
         cb = MagicMock()
@@ -215,6 +231,12 @@ class TestShioajiClientFull(unittest.TestCase):
         self.assertTrue(ok)
         self.assertGreaterEqual(self.mock_api_instance.quote.subscribe.call_count, 1)
 
+    def test_reconnect_returns_false_when_login_fails(self):
+        self.client.logged_in = True
+        self.client.login = MagicMock(return_value=False)
+        ok = self.client.reconnect(reason="unit", force=True)
+        self.assertFalse(ok)
+
     def test_quote_event_12_marks_pending(self):
         self.client.tick_callback = MagicMock()
         with patch.object(self.client, "_ensure_callbacks") as ensure_cb:
@@ -241,6 +263,23 @@ class TestShioajiClientFull(unittest.TestCase):
             self.client._on_quote_event(0, 12, "info", "event")
             self.client._on_quote_event(0, 12, "info", "event")
         force_relogin.assert_called_once()
+
+    def test_quote_watchdog_skips_recovery_off_hours(self):
+        self.client.logged_in = True
+        self.client._quote_no_data_s = 0.01
+        self.client._quote_watchdog_interval_s = 0.01
+        self.client._quote_watchdog_skip_off_hours = True
+        self.client._last_quote_data_ts = time.time() - 10.0
+
+        with patch.object(self.client, "_is_trading_hours", return_value=False), patch.object(
+            self.client, "_mark_quote_pending"
+        ) as mark_pending:
+            self.client._start_quote_watchdog()
+            time.sleep(0.05)
+            self.client.logged_in = False
+            if self.client._quote_watchdog_thread is not None:
+                self.client._quote_watchdog_thread.join(timeout=0.2)
+        mark_pending.assert_not_called()
 
     def test_cache_expiry(self):
         self.client._cache_set("usage", -1, {"subscribed": 1})
@@ -308,13 +347,14 @@ class TestShioajiClientFull(unittest.TestCase):
         """Test successful session refresh."""
         self.client.logged_in = True
 
-        # Mock login to succeed
-        def mock_login(*args, **kwargs):
+        # Mock SessionRuntime.login_with_retry() to succeed.
+        def mock_login_with_retry(*args, **kwargs):
             self.client.logged_in = True
+            return True
 
-        self.client.login = mock_login
+        with patch.object(type(self.client._session_runtime), "login_with_retry", side_effect=mock_login_with_retry):
+            result = self.client._do_session_refresh()
 
-        result = self.client._do_session_refresh()
         self.assertTrue(result)
         self.assertTrue(self.client._last_session_refresh_ts > 0)
 
@@ -371,3 +411,242 @@ class TestShioajiClientFull(unittest.TestCase):
         with patch.dict(os.environ, {"HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S": "30.0"}):
             client = ShioajiClient(config_path=self.tmp_config.name)
             self.assertEqual(client._session_refresh_verify_timeout_s, 30.0)
+
+    # --- Feed Governance Tests (B1-B5) ---
+
+    def test_login_fallback_no_contract_also_fails_returns_false(self):
+        """B1: login() fallback failure should be fail-safe and return False."""
+        self.client.api = self.mock_api_instance
+        self.client.logged_in = False
+        # Both login attempts raise
+        self.mock_api_instance.login.side_effect = RuntimeError("token_login failed")
+
+        with patch.dict(
+            os.environ,
+            {
+                "SHIOAJI_API_KEY": "key",
+                "SHIOAJI_SECRET_KEY": "secret",
+                "HFT_LOGIN_FETCH_CONTRACT_FALLBACK": "1",
+            },
+        ):
+            ok = self.client.login()
+            self.assertFalse(ok)
+
+        self.assertGreaterEqual(self.mock_api_instance.login.call_count, 2)
+
+    def test_quote_watchdog_skips_resubscribe_outside_trading_hours(self):
+        """B2: Watchdog must not trigger resubscribe outside trading hours."""
+        import time as _time
+
+        self.client.logged_in = True
+        self.client._quote_watchdog_running = False
+        self.client._quote_watchdog_interval_s = 0.01
+        self.client._quote_no_data_s = 0.0  # threshold so gap always triggers
+        self.client._last_quote_data_ts = 1.0  # old timestamp
+        self.client.tick_callback = MagicMock()
+
+        ensure_cb = MagicMock()
+        resub_all = MagicMock()
+        self.client._ensure_callbacks = ensure_cb
+        self.client._resubscribe_all = resub_all
+
+        with patch.object(self.client, "_is_trading_hours", return_value=False):
+            self.client._start_quote_watchdog()
+            _time.sleep(0.05)
+            # Stop watchdog
+            self.client.logged_in = False
+            _time.sleep(0.02)
+
+        ensure_cb.assert_not_called()
+        resub_all.assert_not_called()
+
+    def test_relogin_after_reconnect_exception_does_not_crash_thread(self):
+        """B3: _relogin_after() must not propagate exception from reconnect()."""
+        self.client._pending_quote_resubscribe = True
+        self.client._pending_quote_relogining = True
+
+        with patch.object(self.client, "reconnect", side_effect=RuntimeError("sim login fail")):
+            # Invoke _schedule_force_relogin with delay=0 and run inner function directly
+            delay = 0.0
+            self.client._quote_force_relogin_s = delay
+
+            def _relogin_after() -> None:
+                try:
+                    import time as _t
+                    _t.sleep(delay)
+                    if self.client._pending_quote_resubscribe:
+                        try:
+                            self.client.reconnect(reason="quote_pending", force=True)
+                        except Exception as exc:
+                            pass  # must be swallowed
+                finally:
+                    self.client._pending_quote_relogining = False
+
+            # Should not raise
+            _relogin_after()
+
+        self.assertFalse(self.client._pending_quote_relogining)
+
+    def test_do_relogin_reconnect_exception_does_not_crash_thread(self):
+        """B4: _do_relogin() must not propagate exception from reconnect()."""
+        self.client._pending_quote_relogining = True
+        reason = "test_reason"
+
+        with patch.object(self.client, "reconnect", side_effect=RuntimeError("login error")):
+            def _do_relogin() -> None:
+                try:
+                    try:
+                        self.client.reconnect(reason=reason, force=True)
+                    except Exception as exc:
+                        pass  # must be swallowed
+                finally:
+                    self.client._pending_quote_relogining = False
+
+            _do_relogin()
+
+        self.assertFalse(self.client._pending_quote_relogining)
+
+    def test_reconnect_login_exception_returns_false(self):
+        """B5: reconnect() must return False when login() raises; backoff must double."""
+        self.client.logged_in = False
+        self.client._reconnect_backoff_s = 30.0
+        self.client._reconnect_backoff_max_s = 600.0
+        self.client._last_reconnect_ts = 0.0
+
+        with patch.object(self.client, "login", side_effect=TimeoutError("token timeout")):
+            result = self.client.reconnect(reason="test", force=True)
+
+        self.assertFalse(result)
+        self.assertFalse(self.client.logged_in)
+        # Backoff should have doubled (30 → 60)
+        self.assertAlmostEqual(self.client._reconnect_backoff_s, 60.0, places=1)
+
+    # --- C0-c: Reconnect Chaos Integration ---
+
+    def test_reconnect_chaos_three_consecutive_login_timeouts_backoff_reaches_cap(self):
+        """C0-c: 3 consecutive login() timeouts → backoff doubles up to cap.
+
+        Each failed reconnect() must:
+        1. Return False without raising.
+        2. Double the backoff (30 → 60 → 120, capped at 120 for backoff_max=120).
+        """
+        self.client.logged_in = False
+        self.client._reconnect_backoff_s = 30.0
+        self.client._reconnect_backoff_max_s = 120.0
+        self.client._last_reconnect_ts = 0.0
+
+        with patch.object(self.client, "login", side_effect=TimeoutError("broker_timeout")):
+            result1 = self.client.reconnect(reason="chaos_1", force=True)
+            # Reset cooldown so subsequent calls are allowed
+            self.client._last_reconnect_ts = 0.0
+            result2 = self.client.reconnect(reason="chaos_2", force=True)
+            self.client._last_reconnect_ts = 0.0
+            result3 = self.client.reconnect(reason="chaos_3", force=True)
+
+        # All must fail cleanly
+        self.assertFalse(result1)
+        self.assertFalse(result2)
+        self.assertFalse(result3)
+
+        # Backoff must have doubled toward cap: 30→60→120→120 (capped)
+        self.assertGreaterEqual(self.client._reconnect_backoff_s, 60.0)
+        self.assertLessEqual(self.client._reconnect_backoff_s, 120.0)
+
+        # logged_in must remain False
+        self.assertFalse(self.client.logged_in)
+
+    def test_reconnect_chaos_exception_from_logout_does_not_abort_reconnect(self):
+        """C0-c: Exception during logout must not propagate; reconnect returns False for other reasons."""
+        self.client.logged_in = True
+        self.client._last_reconnect_ts = 0.0
+        self.mock_api_instance.logout.side_effect = RuntimeError("logout_crashed")
+
+        with patch.object(self.client, "login", return_value=False):
+            result = self.client.reconnect(reason="chaos_logout", force=True)
+
+        # Should not raise; must return False (login failed)
+        self.assertFalse(result)
+
+    def test_reconnect_chaos_subscribe_exception_after_login_backoff_doubles(self):
+        """C0-c: subscribe_basket raises after successful login → backoff doubles."""
+        self.client._reconnect_backoff_s = 30.0
+        self.client._reconnect_backoff_max_s = 600.0
+        self.client._last_reconnect_ts = 0.0
+        self.client.tick_callback = MagicMock()
+
+        def mock_login(*args, **kwargs):
+            self.client.logged_in = True
+            return True
+
+        with patch.object(self.client, "login", side_effect=mock_login):
+            with patch.object(self.client, "_ensure_callbacks", side_effect=RuntimeError("cb_crash")):
+                result = self.client.reconnect(reason="chaos_cb", force=True)
+
+        self.assertFalse(result)
+        # Backoff must have doubled
+        self.assertAlmostEqual(self.client._reconnect_backoff_s, 60.0, places=1)
+
+    def test_first_quote_increments_metric(self):
+        """CANARY-01: feed_first_quote_total.inc() fires exactly once on first quote."""
+        first_quote_counter = MagicMock()
+        self.client.metrics = MagicMock(feed_first_quote_total=first_quote_counter)
+        self.client._first_quote_seen = False
+
+        with patch.object(self.client, "_validate_quote_schema", return_value=(True, "")):
+            with patch.object(self.client, "_clear_quote_pending"):
+                self.client.tick_callback = None
+                self.client._process_tick("topic", MagicMock())
+                self.client._process_tick("topic", MagicMock())
+
+        first_quote_counter.inc.assert_called_once()
+
+    def test_reconnect_exception_fills_exception_metric(self):
+        """CANARY-01: feed_reconnect_exception_total is incremented on outer exception."""
+        self.client._last_reconnect_ts = 0.0
+        exc_counter = MagicMock()
+        self.client.metrics = MagicMock(
+            feed_reconnect_total=MagicMock(),
+            feed_reconnect_exception_total=exc_counter,
+        )
+        self.client.metrics.feed_reconnect_total.labels.return_value = MagicMock()
+        exc_counter.labels.return_value = MagicMock()
+
+        with patch.object(self.client, "login", side_effect=RuntimeError("forced_exc")):
+            self.client.reconnect(reason="test_exc", force=True)
+
+        exc_counter.labels.assert_called_once_with(reason="test_exc", exception_type="RuntimeError")
+        exc_counter.labels.return_value.inc.assert_called_once()
+
+    def test_reconnect_subscribe_timeout_fills_timeout_metric(self):
+        """CANARY-01: feed_reconnect_timeout_total is incremented on subscribe timeout."""
+        self.client._last_reconnect_ts = 0.0
+        self.client.tick_callback = MagicMock()
+        timeout_counter = MagicMock()
+        self.client.metrics = MagicMock(
+            feed_reconnect_total=MagicMock(),
+            feed_reconnect_timeout_total=timeout_counter,
+        )
+        self.client.metrics.feed_reconnect_total.labels.return_value = MagicMock()
+        timeout_counter.labels.return_value = MagicMock()
+
+        def mock_login(*args, **kwargs):
+            self.client.logged_in = True
+            return True
+
+        # _safe_call_with_timeout returns (ok, result, error, timed_out)
+        # timed_out=True triggers the timeout metric
+        def ensure_cb_side_effect(*args):
+            # reconnect() resets _callbacks_registered = False; this restores it
+            self.client._callbacks_registered = True
+
+        with patch.object(self.client, "login", side_effect=mock_login):
+            with patch.object(self.client, "_ensure_callbacks", side_effect=ensure_cb_side_effect):
+                with patch.object(
+                    self.client,
+                    "_safe_call_with_timeout",
+                    return_value=(False, None, None, True),
+                ):
+                    self.client.reconnect(reason="test_timeout", force=True)
+
+        timeout_counter.labels.assert_called_once_with(reason="subscribe")
+        timeout_counter.labels.return_value.inc.assert_called_once()

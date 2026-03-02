@@ -375,7 +375,7 @@ def run_gate_a(
 
     passed = not missing_fields_by_path and complexity_ok and paper_governance_passed and data_governance_passed
     achieved_values = list(data_ul_achieved_by_path.values())
-    data_ul_achieved = min(achieved_values) if achieved_values else None
+    data_ul_achieved_min = min(achieved_values) if achieved_values else None
     return GateReport(
         gate="Gate A",
         passed=passed,
@@ -401,7 +401,7 @@ def run_gate_a(
                 "enforced": enforce_data_governance,
                 "require_data_meta": require_data_meta,
                 "data_ul_target": data_ul_target,
-                "data_ul_achieved": data_ul_achieved,
+                "data_ul_achieved": data_ul_achieved_min,
                 "data_ul_achieved_by_path": data_ul_achieved_by_path,
                 "data_ul_missing_fields": data_ul_missing_fields_by_path,
                 "warnings": data_ul_warnings,
@@ -907,9 +907,9 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
 
     try:
         try:
-            from statsmodels.tsa.stattools import bds as sm_bds  # type: ignore[import-not-found]
+            from statsmodels.tsa.stattools import bds as sm_bds
         except Exception:
-            from statsmodels.stats.stattools import bds as sm_bds  # type: ignore[import-not-found]
+            from statsmodels.stats.stattools import bds as sm_bds
 
         stat, pvals = sm_bds(sample, max_dim=2, epsilon=epsilon)
         stat_arr = np.asarray(stat, dtype=np.float64).reshape(-1)

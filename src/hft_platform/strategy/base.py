@@ -133,16 +133,16 @@ class StrategyContext:
     def get_feature_set_id(self) -> Optional[str]:
         if self._feature_set_source is None:
             return None
+        try:
+            return self._feature_set_source()
+        except Exception:
+            return None
 
     def get_feature_profile_id(self) -> Optional[str]:
         if self._feature_profile_source is None:
             return None
         try:
             return self._feature_profile_source()
-        except Exception:
-            return None
-        try:
-            return self._feature_set_source()
         except Exception:
             return None
 

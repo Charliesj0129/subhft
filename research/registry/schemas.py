@@ -164,16 +164,14 @@ class Scorecard:
             walk_forward_sharpe_std=_to_optional_float(data.get("walk_forward_sharpe_std")),
             walk_forward_sharpe_min=_to_optional_float(data.get("walk_forward_sharpe_min")),
             walk_forward_consistency_pct=_to_optional_float(data.get("walk_forward_consistency_pct")),
-            stat_bh_n_survived=(
-                int(data.get("stat_bh_n_survived")) if data.get("stat_bh_n_survived") is not None else None
-            ),
+            stat_bh_n_survived=_to_optional_int(data.get("stat_bh_n_survived")),
             stat_bh_method=str(data["stat_bh_method"]) if data.get("stat_bh_method") else None,
             stat_bds_pvalue=_to_optional_float(data.get("stat_bds_pvalue")),
             cost_sensitivity_ratio=_to_optional_float(data.get("cost_sensitivity_ratio")),
             data_fingerprint=str(data["data_fingerprint"]) if data.get("data_fingerprint") else None,
-            rng_seed=(int(data.get("rng_seed")) if data.get("rng_seed") is not None else None),
+            rng_seed=_to_optional_int(data.get("rng_seed")),
             generator_script=str(data["generator_script"]) if data.get("generator_script") else None,
-            data_ul=(int(data.get("data_ul")) if data.get("data_ul") is not None else None),
+            data_ul=_to_optional_int(data.get("data_ul")),
             regime_ic={k: float(v) for k, v in dict(data.get("regime_ic", {})).items()},
         )
 
@@ -183,6 +181,15 @@ def _to_optional_float(value: Any) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 

@@ -12,6 +12,12 @@ Execute and interpret CE3-07 outage drills for WAL-first recorder resilience:
 ## Test Suite
 
 ```bash
+make verify-ce3
+```
+
+Equivalent raw command:
+
+```bash
 uv run pytest -q --no-cov tests/integration/test_wal_outage_drills.py
 ```
 
@@ -59,4 +65,3 @@ Dashboard:
 - Replay safety invariants hold under restart/crash scenarios (CE3-04)
 - WAL SLO metrics move in expected direction during outage and recovery (CE3-06)
 - Runbooks for CK down / disk pressure are sufficient for operators (CE3-07)
-

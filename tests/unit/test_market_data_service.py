@@ -3,11 +3,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import TickEvent
-from hft_platform.services.market_data import MarketDataService
+from hft_platform.services.market_data import FeedState, MarketDataService
 
 
 class TestMarketDataService(unittest.IsolatedAsyncioTestCase):
@@ -99,3 +99,22 @@ class TestMarketDataService(unittest.IsolatedAsyncioTestCase):
         book = self.service.lob.get_book("2330")
         self.assertEqual(book.bids[0][0], 1000000)
         self.assertEqual(book.asks[0][0], 1010000)
+
+    async def test_trigger_reconnect_exception_sets_disconnected(self):
+        """B6: _trigger_reconnect() must catch exceptions from asyncio.to_thread and set DISCONNECTED."""
+        self.service._last_reconnect_ts = 0.0
+        self.service.reconnect_cooldown_s = 0.0
+        # Force reconnect window open (empty strings → no window restriction)
+        self.service.reconnect_days = set()
+        self.service.reconnect_hours = ""
+        self.service.reconnect_hours_2 = ""
+
+        with patch(
+            "hft_platform.services.market_data.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=Exception("sim API token_login failed"),
+        ):
+            result = await self.service._trigger_reconnect(gap=60.0, reason="heartbeat_gap")
+
+        self.assertFalse(result)
+        self.assertEqual(self.service.state, FeedState.DISCONNECTED)

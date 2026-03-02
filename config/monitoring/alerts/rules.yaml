@@ -11,6 +11,42 @@ groups:
         summary: "Market Data Gap Detected"
         description: "No feed events for >5s during uptime."
 
+  - alert: FeedReconnectTimeoutDetected
+    expr: increase(feed_reconnect_timeout_total[5m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Feed reconnect timeout detected"
+        description: "Reconnect timed out at least once in the last 5m."
+
+  - alert: FeedReconnectExceptionDetected
+    expr: increase(feed_reconnect_exception_total[5m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Feed reconnect exception detected"
+        description: "Reconnect raised exception at least once in the last 5m."
+
+  - alert: ShioajiWatchdogThreadDown
+    expr: max_over_time(shioaji_thread_alive{thread="quote_watchdog"}[5m]) < 1
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Shioaji quote watchdog thread down"
+        description: "quote_watchdog liveness gauge has been 0 for >1m."
+
+  - alert: ShioajiPendingQuoteStall
+    expr: shioaji_quote_pending_age_seconds > 300
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Shioaji pending quote state stalled"
+        description: "pending_quote_resubscribe age > 300s for more than 5m."
+
   - alert: BusOverflowCritical
     expr: increase(bus_overflow_total[1m]) > 0
     for: 1s
@@ -95,6 +131,37 @@ groups:
     annotations:
         summary: "Quote schema mismatch rejected"
         description: "Shioaji callback payload failed quote schema guard."
+
+  # Disk Space (Host)
+  - alert: HostDiskSpaceCritical
+    expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.10
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Root filesystem < 10% free"
+        description: "Host {{ $labels.instance }} root partition has less than 10% disk space available."
+
+  - alert: HostDiskSpaceWarn
+    expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.20
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Root filesystem < 20% free"
+        description: "Host {{ $labels.instance }} root partition approaching capacity (< 20% free)."
+
+  - alert: ClickHouseSystemLogSizeCritical
+    expr: |
+      sum by (table) (
+        clickhouse_table_parts_bytes{database="system", table=~"trace_log|text_log|part_log|query_log"}
+      ) > 10 * 1024 * 1024 * 1024
+    for: 10m
+    labels:
+        severity: warning
+    annotations:
+        summary: "ClickHouse system log table > 10 GB"
+        description: "system.{{ $labels.table }} has exceeded 10 GB. TTL may not be running. Consider TRUNCATE."
 
   # CE-M3 WAL SLO
   - alert: WALReplayLagHigh

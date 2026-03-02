@@ -1,7 +1,7 @@
 # HFT Platform Makefile
 # Unified CLI for development, testing, and CI
 
-.PHONY: dev test test-all coverage lint format typecheck benchmark start stop logs swarm-start swarm-stop swarm-logs build-rust clean help recorder-status drill-ck-down drill-wal-pressure drill-loader-lag research research-optimize research-init research-converge-tools research-clean research-audit research-index research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-stamp-data-meta research-validate-data-meta
+.PHONY: dev test test-all coverage lint format typecheck benchmark start stop logs start-engine start-monitor start-maintenance swarm-start swarm-stop swarm-logs build-rust clean help recorder-status drill-ck-down drill-wal-pressure drill-loader-lag verify-ce3 wal-archive-cleanup research research-optimize research-init research-converge-tools research-clean research-audit research-index research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-stamp-data-meta research-validate-data-meta
 
 # Default target
 .DEFAULT_GOAL := help
@@ -28,6 +28,12 @@ test-all: ## Run all tests (unit + integration)
 
 test-integration: ## Run integration tests only
 	uv run pytest tests/integration -v --tb=short -m "not slow"
+
+verify-ce3: ## Verify CE3 hardening (scale-out + replay contract + outage drills)
+	uv run pytest --no-cov \
+		tests/integration/test_wal_loader_scale_out.py \
+		tests/spec/test_replay_safety_contract.py \
+		tests/integration/test_wal_outage_drills.py -q
 
 coverage: ## Run tests with coverage (70% minimum)
 	uv run pytest tests/unit \
@@ -99,6 +105,15 @@ benchmark-compare: ## Compare current benchmarks against baseline
 start: ## Start services with Docker Compose (default)
 	docker compose up -d --build
 
+start-engine: ## Start HFT engine + core infra only — single runtime (no maintenance shell)
+	docker compose up -d --build clickhouse redis hft-engine wal-loader
+
+start-monitor: ## Start observability stack only
+	docker compose up -d prometheus grafana alertmanager node-exporter
+
+start-maintenance: ## Start maintenance shell (hft-base profile, no feed runtime)
+	docker compose --profile maintenance up -d hft-base
+
 stop: ## Stop services with Docker Compose
 	docker compose down
 
@@ -166,6 +181,29 @@ drill-loader-lag: ## Drill: show WAL backlog info and instructions for lag simul
 	@echo "  4. Restore:         docker compose start clickhouse"
 	@echo ""
 	uv run hft recorder status
+
+WAL_ARCHIVE_DIR ?= .wal/archive
+WAL_KEEP_DAYS   ?= 7
+
+wal-archive-cleanup: ## Delete WAL archive files older than WAL_KEEP_DAYS (default 7). Prompts for confirmation.
+	@echo "=== WAL archive cleanup: keeping last $(WAL_KEEP_DAYS) days ==="
+	@echo "Archive dir: $(WAL_ARCHIVE_DIR)"
+	@echo ""
+	@if [ ! -d "$(WAL_ARCHIVE_DIR)" ]; then \
+		echo "Directory $(WAL_ARCHIVE_DIR) does not exist — nothing to clean."; \
+		exit 0; \
+	fi
+	@echo "Files to be deleted:"
+	@find $(WAL_ARCHIVE_DIR) -name "*.wal" -mtime +$(WAL_KEEP_DAYS) -print || true
+	@echo ""
+	@read -p "Confirm delete? [y/N] " confirm; \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+		find $(WAL_ARCHIVE_DIR) -name "*.wal" -mtime +$(WAL_KEEP_DAYS) -delete; \
+		echo "Done. Remaining files:"; \
+		find $(WAL_ARCHIVE_DIR) -name "*.wal" | wc -l; \
+	else \
+		echo "Aborted — no files deleted."; \
+	fi
 
 # ============================================================================
 # Research Factory

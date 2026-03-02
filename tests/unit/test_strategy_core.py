@@ -1,4 +1,5 @@
 import asyncio
+import os
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -274,7 +275,8 @@ def test_runner_error_handling():
         strat.handle_event.side_effect = ValueError("Fail")
 
         MockReg.return_value.instantiate.return_value = [strat]
-        runner = StrategyRunner(bus, risk_queue, config_path="dummy")
+        with patch.dict(os.environ, {"HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST": "0"}):
+            runner = StrategyRunner(bus, risk_queue, config_path="dummy")
 
         # Should not raise
         asyncio.run(runner.process_event(MagicMock()))

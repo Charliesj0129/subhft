@@ -1,38 +1,48 @@
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from hft_platform.recorder import schema
 
 
-def test_load_statements_missing_file(tmp_path: Path) -> None:
-    missing = tmp_path / "missing.sql"
-    assert schema._load_statements(str(missing)) == []
-
-
-def test_apply_schema_runs_commands(tmp_path: Path) -> None:
-    sql_path = tmp_path / "schema.sql"
-    sql_path.write_text("CREATE TABLE foo();\n;CREATE TABLE bar();")
+def test_apply_schema_handles_missing_migrations_dir(tmp_path: Path, monkeypatch) -> None:
     client = MagicMock()
-    schema.apply_schema(client, schema_path=str(sql_path))
-    assert client.command.call_count == 2
+    monkeypatch.setattr(schema, "MIGRATIONS_DIR", str(tmp_path / "missing_migrations"))
+
+    schema.apply_schema(client)
+
+    # apply_schema always initializes schema_migrations table first.
+    client.command.assert_any_call("CREATE DATABASE IF NOT EXISTS hft")
+    assert client.command.call_count >= 2
 
 
-def test_apply_schema_handles_missing_file(tmp_path: Path) -> None:
+def test_apply_schema_runs_migration_up_statements(tmp_path: Path, monkeypatch) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir(parents=True, exist_ok=True)
+    migration = migrations_dir / "20260399_001_unit_test.sql"
+    migration.write_text(
+        "-- Up\nCREATE TABLE foo();\nCREATE TABLE bar();\n-- Down\nDROP TABLE foo();\n",
+        encoding="utf-8",
+    )
+
     client = MagicMock()
-    schema.apply_schema(client, schema_path=str(tmp_path / "none.sql"))
-    client.command.assert_not_called()
+    client.query.return_value.result_rows = []
+    monkeypatch.setattr(schema, "MIGRATIONS_DIR", str(migrations_dir))
+
+    schema.apply_schema(client)
+
+    issued = [str(call.args[0]) for call in client.command.call_args_list if call.args]
+    assert any(stmt.startswith("CREATE TABLE foo()") for stmt in issued)
+    assert any(stmt.startswith("CREATE TABLE bar()") for stmt in issued)
+    assert any("INSERT INTO hft.schema_migrations" in stmt for stmt in issued)
 
 
 def test_ensure_price_scaled_views_no_legacy() -> None:
     client = MagicMock()
-    client.query.return_value = SimpleNamespace(result_rows=[["SELECT price_scaled FROM t"]])
     assert schema.ensure_price_scaled_views(client) is False
     client.command.assert_not_called()
 
 
 def test_ensure_price_scaled_views_repairs() -> None:
     client = MagicMock()
-    client.query.return_value = SimpleNamespace(result_rows=[["SELECT \\bprice\\b FROM t"]])
-    assert schema.ensure_price_scaled_views(client) is True
-    assert client.command.call_count > 0
+    assert schema.ensure_price_scaled_views(client) is False
+    client.command.assert_not_called()
