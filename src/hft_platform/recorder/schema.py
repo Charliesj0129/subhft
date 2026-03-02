@@ -84,7 +84,7 @@ def apply_schema(client, schema_path: str | None = None) -> None:
                 raise
 
         # Record successful migration
-        client.command("INSERT INTO hft.schema_migrations (version, name) VALUES", [[version, name]])
+        client.insert("hft.schema_migrations", [[version, name]], column_names=["version", "name"])
         logger.info("Migration applied successfully", version=version, name=name)
 
     logger.info("Schema migrations up to date")
