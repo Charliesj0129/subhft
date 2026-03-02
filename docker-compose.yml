@@ -33,6 +33,7 @@ x-hft-common: &hft-common
     - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
     - TZ=${TZ:-Asia/Taipei}
     - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
+    - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
     - PYTHONDONTWRITEBYTECODE=1
   volumes:
     - ./.wal:/app/.wal
@@ -78,6 +79,9 @@ services:
         limits:
           cpus: '${HFT_CPU_LIMIT:-0.50}'
           memory: ${HFT_MEM_LIMIT:-1500M}
+    depends_on:
+      - clickhouse
+      - redis
     logging:
       driver: "json-file"
       options:
