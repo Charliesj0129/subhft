@@ -80,8 +80,10 @@ services:
           cpus: '${HFT_CPU_LIMIT:-0.50}'
           memory: ${HFT_MEM_LIMIT:-1500M}
     depends_on:
-      - clickhouse
-      - redis
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_started
     logging:
       driver: "json-file"
       options:
@@ -149,15 +151,18 @@ services:
     container_name: wal-loader
     command: ["sh", "-lc", "HFT_RUNTIME_ROLE=wal_loader python -m hft_platform.recorder.loader"]
     depends_on:
-      - clickhouse
- 
+      clickhouse:
+        condition: service_healthy
+
   hft-monitor:
     <<: *hft-common
     container_name: hft-monitor
     command: ["sh", "-lc", "HFT_RUNTIME_ROLE=monitor python scripts/monitor_runtime_health.py"]
     depends_on:
-      - hft-engine
-      - clickhouse
+      hft-engine:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     environment:
       - HFT_MONITOR_METRICS_URL=http://hft-engine:9090/metrics
       - HFT_CLICKHOUSE_HOST=clickhouse
