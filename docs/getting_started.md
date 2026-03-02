@@ -65,6 +65,14 @@ docker compose up -d --build hft-engine
 docker compose up -d prometheus grafana alertmanager hft-monitor
 ```
 
+### 4.1.1 單 runtime 原則（Shioaji）
+- `hft-engine` 是唯一持有 broker session 的 runtime。
+- `hft-base` 已改為 `maintenance` profile，預設不啟動，避免與 `hft-engine` 競爭同一組 session。
+- 如需進入 maintenance 容器，請顯式啟用：
+```bash
+docker compose --profile maintenance up -d hft-base
+```
+
 ### 4.2 檢查
 ```bash
 docker compose ps

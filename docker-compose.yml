@@ -1,65 +1,76 @@
+x-hft-common: &hft-common
+  build: .
+  image: ${HFT_IMAGE:-hft-platform:latest}
+  restart: always
+  # Common Environment for all HFT services
+  environment:
+    - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
+    - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
+    - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
+    - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT}
+    - HFT_MODE=${HFT_MODE:-sim}
+    - HFT_ORDER_MODE=${HFT_ORDER_MODE:-sim}
+    - HFT_ORDER_NO_CA=${HFT_ORDER_NO_CA:-1}
+    - HFT_QUOTE_VERSION=${HFT_QUOTE_VERSION:-auto}
+    - HFT_QUOTE_NO_DATA_S=${HFT_QUOTE_NO_DATA_S:-30}
+    - HFT_QUOTE_WATCHDOG_S=${HFT_QUOTE_WATCHDOG_S:-5}
+    - HFT_QUOTE_FLAP_WINDOW_S=${HFT_QUOTE_FLAP_WINDOW_S:-60}
+    - HFT_QUOTE_FLAP_THRESHOLD=${HFT_QUOTE_FLAP_THRESHOLD:-5}
+    - HFT_QUOTE_FLAP_COOLDOWN_S=${HFT_QUOTE_FLAP_COOLDOWN_S:-300}
+    - HFT_QUOTE_FORCE_RELOGIN_S=${HFT_QUOTE_FORCE_RELOGIN_S:-15}
+    - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
+    - HFT_SYMBOLS=${HFT_SYMBOLS:-}
+    - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
+    - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
+    - HFT_CLICKHOUSE_HOST=clickhouse
+    - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
+    - HFT_CLICKHOUSE_ENABLED=1
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-changeme}
+    - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
+    - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
+    - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
+    - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
+    - TZ=${TZ:-Asia/Taipei}
+    - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
+    - PYTHONDONTWRITEBYTECODE=1
+  volumes:
+    - ./.wal:/app/.wal
+    - ./data:/app/data
+    - ./config:/app/config
+    - ./scripts:/app/scripts
+    - ./src:/app/src
+  ulimits:
+    memlock: -1
+    nofile: 65535
+  healthcheck:
+    test: ["CMD-SHELL", "python -c 'import psutil; exit(0)'"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+
 services:
   hft-base:
-    build: .
-    image: ${HFT_IMAGE:-hft-platform:latest}
-    restart: always
-    # Common Environment for all HFT services
-    environment:
-      - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
-      - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
-      - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
-      - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT}
-      - HFT_MODE=${HFT_MODE:-sim}
-      - HFT_ORDER_MODE=${HFT_ORDER_MODE:-sim}
-      - HFT_ORDER_NO_CA=${HFT_ORDER_NO_CA:-1}
-      - HFT_QUOTE_VERSION=${HFT_QUOTE_VERSION:-auto}
-      - HFT_QUOTE_NO_DATA_S=${HFT_QUOTE_NO_DATA_S:-30}
-      - HFT_QUOTE_WATCHDOG_S=${HFT_QUOTE_WATCHDOG_S:-5}
-      - HFT_QUOTE_FLAP_WINDOW_S=${HFT_QUOTE_FLAP_WINDOW_S:-60}
-      - HFT_QUOTE_FLAP_THRESHOLD=${HFT_QUOTE_FLAP_THRESHOLD:-5}
-      - HFT_QUOTE_FLAP_COOLDOWN_S=${HFT_QUOTE_FLAP_COOLDOWN_S:-300}
-      - HFT_QUOTE_FORCE_RELOGIN_S=${HFT_QUOTE_FORCE_RELOGIN_S:-15}
-      - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
-      - HFT_SYMBOLS=${HFT_SYMBOLS:-}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
-      - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
-      - HFT_CLICKHOUSE_HOST=clickhouse
-      - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
-      - HFT_CLICKHOUSE_ENABLED=1
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-changeme}
-      - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
-      - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
-      - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
-      - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
-      - TZ=${TZ:-Asia/Taipei}
-      - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
-      - PYTHONDONTWRITEBYTECODE=1
-    volumes:
-      - ./.wal:/app/.wal
-      - ./data:/app/data
-      - ./config:/app/config
-      - ./scripts:/app/scripts
-      - ./src:/app/src
-    ulimits:
-      memlock: -1
-      nofile: 65535
-    healthcheck:
-      test: ["CMD-SHELL", "python -c 'import psutil; exit(0)'"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    <<: *hft-common
+    container_name: hft-base
+    profiles: ["maintenance"]
+    command: ["sh", "-lc", "HFT_RUNTIME_ROLE=maintenance sleep infinity"]
 
   hft-engine:
-    extends: hft-base
+    <<: *hft-common
     container_name: hft-engine
-    command: ["python", "-m", "hft_platform.main"]
+    command: ["sh", "-lc", "HFT_RUNTIME_ROLE=engine python -m hft_platform.main"]
     # Network mode handling
     # Removed default network_mode: ${HFT_NETWORK_MODE:-bridge} to allow proper DNS resolution
     # network_mode: ${HFT_NETWORK_MODE:-}
     ports:
       - "${HFT_PROM_PORT:-9090}:9090"
     volumes:
+      - ./.wal:/app/.wal
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./scripts:/app/scripts
+      - ./src:/app/src
       # Hugepages mount (only works if mapped on host)
       - /dev/hugepages:/dev/hugepages
     deploy:
@@ -67,6 +78,11 @@ services:
         limits:
           cpus: '${HFT_CPU_LIMIT:-0.50}'
           memory: ${HFT_MEM_LIMIT:-1500M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.12.3
@@ -83,6 +99,8 @@ services:
     volumes:
       # Always inject storage config (it handles default paths gracefully)
       - ./config/clickhouse_storage.xml:/etc/clickhouse-server/config.d/storage.xml
+      # System log TTL + drop-size guard (prevents disk exhaustion from trace_log/text_log)
+      - ./config/clickhouse_system_logs.xml:/etc/clickhouse-server/config.d/system_logs.xml
       # Configurable Data Root (Tiered Storage)
       - ${CH_DATA_HOT:-ch_data_hot}:/var/lib/clickhouse/data/hot
       - ${CH_DATA_COLD:-ch_data_cold}:/var/lib/clickhouse/data/cold
@@ -105,7 +123,7 @@ services:
         max-file: "10" 
 
   redis:
-    image: redis:7
+    image: redis:7.2
     container_name: redis
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
     ports:
@@ -123,16 +141,16 @@ services:
         max-file: "5"
 
   wal-loader:
-    extends: hft-base
+    <<: *hft-common
     container_name: wal-loader
-    command: ["python", "-m", "hft_platform.recorder.loader"]
+    command: ["sh", "-lc", "HFT_RUNTIME_ROLE=wal_loader python -m hft_platform.recorder.loader"]
     depends_on:
       - clickhouse
  
   hft-monitor:
-    extends: hft-base
+    <<: *hft-common
     container_name: hft-monitor
-    command: ["python", "scripts/monitor_runtime_health.py"]
+    command: ["sh", "-lc", "HFT_RUNTIME_ROLE=monitor python scripts/monitor_runtime_health.py"]
     depends_on:
       - hft-engine
       - clickhouse
@@ -149,6 +167,32 @@ services:
       - HFT_MONITOR_WAL_RATE_WARN=${HFT_MONITOR_WAL_RATE_WARN:-1}
       - HFT_MONITOR_INGEST_RATE_MIN=${HFT_MONITOR_INGEST_RATE_MIN:-1}
 
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    pid: host
+    network_mode: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.10'
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
   prometheus:
     image: prom/prometheus:v2.51.0
     container_name: prometheus
@@ -159,7 +203,7 @@ services:
       - ./config/monitoring/alerts/rules.yaml:/etc/prometheus/alerts/rules.yaml:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.retention.time=7d"
+      - "--storage.tsdb.retention.time=30d"
       - "--storage.tsdb.path=/prometheus"
     depends_on:
       - hft-engine

@@ -5,12 +5,14 @@ import re
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 import yaml
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji import router as _router
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.rate_limiter import RateLimiter
 
@@ -19,350 +21,58 @@ try:
 except Exception:  # pragma: no cover - fallback when library absent
     sj = None
 
+try:
+    import fcntl
+except Exception:  # pragma: no cover - non-posix fallback
+    fcntl = None
 
 logger = get_logger("feed_adapter")
 
-# --- Global Callback Registry & Dispatcher ---
-# Using a global list to hold strong references to clients and avoid GC issues with bound methods
-CLIENT_REGISTRY: List[Any] = []
-CLIENT_REGISTRY_LOCK = threading.Lock()
-CLIENT_REGISTRY_BY_CODE: Dict[str, List[Any]] = {}
-CLIENT_REGISTRY_SNAPSHOT: tuple[Any, ...] = ()
-CLIENT_REGISTRY_BY_CODE_SNAPSHOT: Dict[str, tuple[Any, ...]] = {}
-CLIENT_REGISTRY_WILDCARD_SNAPSHOT: tuple[Any, ...] = ()
-CLIENT_DISPATCH_SNAPSHOT: tuple[Callable[..., Any], ...] = ()
-CLIENT_DISPATCH_BY_CODE_SNAPSHOT: Dict[str, tuple[Callable[..., Any], ...]] = {}
-CLIENT_DISPATCH_WILDCARD_SNAPSHOT: tuple[Callable[..., Any], ...] = ()
-TOPIC_CODE_CACHE: Dict[str, str | None] = {}
-_TOPIC_CODE_CACHE_MISS = object()
-_TOPIC_CODE_CACHE_MAX = max(128, int(os.getenv("HFT_SHIOAJI_TOPIC_CODE_CACHE_MAX", "4096")))
-_ROUTE_MISS_STRICT = os.getenv("HFT_SHIOAJI_ROUTE_MISS_STRICT", "0").strip().lower() in {"1", "true", "yes", "on"}
-_ROUTE_MISS_FALLBACK_MODE = os.getenv("HFT_SHIOAJI_ROUTE_MISS_FALLBACK", "wildcard").strip().lower()
-if _ROUTE_MISS_FALLBACK_MODE not in {"wildcard", "broadcast", "none"}:
-    _ROUTE_MISS_FALLBACK_MODE = "wildcard"
-_ROUTE_MISS_LOG_EVERY = max(1, int(os.getenv("HFT_SHIOAJI_ROUTE_MISS_LOG_EVERY", "100")))
-_ROUTE_MISS_COUNT = 0
-_ROUTE_MISS_METRIC = None
-_ROUTE_FALLBACK_METRIC = None
-_ROUTE_DROP_METRIC = None
+# Backward-compatible exports for existing tests/bench harnesses.
+CLIENT_REGISTRY = _router.CLIENT_REGISTRY
+CLIENT_REGISTRY_LOCK = _router.CLIENT_REGISTRY_LOCK
+CLIENT_REGISTRY_BY_CODE = _router.CLIENT_REGISTRY_BY_CODE
+CLIENT_REGISTRY_SNAPSHOT = _router.CLIENT_REGISTRY_SNAPSHOT
+CLIENT_REGISTRY_BY_CODE_SNAPSHOT = _router.CLIENT_REGISTRY_BY_CODE_SNAPSHOT
+CLIENT_REGISTRY_WILDCARD_SNAPSHOT = _router.CLIENT_REGISTRY_WILDCARD_SNAPSHOT
+CLIENT_DISPATCH_SNAPSHOT = _router.CLIENT_DISPATCH_SNAPSHOT
+CLIENT_DISPATCH_BY_CODE_SNAPSHOT = _router.CLIENT_DISPATCH_BY_CODE_SNAPSHOT
+CLIENT_DISPATCH_WILDCARD_SNAPSHOT = _router.CLIENT_DISPATCH_WILDCARD_SNAPSHOT
+TOPIC_CODE_CACHE = _router.TOPIC_CODE_CACHE
+_ROUTE_MISS_STRICT = _router._ROUTE_MISS_STRICT
+_ROUTE_MISS_FALLBACK_MODE = _router._ROUTE_MISS_FALLBACK_MODE
+_ROUTE_MISS_LOG_EVERY = _router._ROUTE_MISS_LOG_EVERY
+_ROUTE_MISS_COUNT = _router._ROUTE_MISS_COUNT
+_record_route_metric = _router._record_route_metric
+_extract_code_from_topic = _router._extract_code_from_topic
+_registry_snapshot = _router._registry_snapshot
 
 
-def _refresh_registry_snapshots_locked() -> None:
-    global CLIENT_REGISTRY_SNAPSHOT, CLIENT_REGISTRY_BY_CODE_SNAPSHOT
-    global CLIENT_REGISTRY_WILDCARD_SNAPSHOT
-    global CLIENT_DISPATCH_SNAPSHOT, CLIENT_DISPATCH_BY_CODE_SNAPSHOT, CLIENT_DISPATCH_WILDCARD_SNAPSHOT
-
-    def _dispatch_for(client: Any) -> Callable[..., Any] | None:
-        cb = getattr(client, "_enqueue_tick", None)
-        if cb is not None:
-            return cb
-        return getattr(client, "_process_tick", None)
-
-    client_snapshot = tuple(CLIENT_REGISTRY)
-    CLIENT_REGISTRY_SNAPSHOT = client_snapshot
-    CLIENT_REGISTRY_BY_CODE_SNAPSHOT = {
-        code: tuple(clients) for code, clients in CLIENT_REGISTRY_BY_CODE.items() if clients
-    }
-    CLIENT_DISPATCH_SNAPSHOT = tuple(cb for cb in (_dispatch_for(c) for c in client_snapshot) if cb is not None)
-    CLIENT_DISPATCH_BY_CODE_SNAPSHOT = {
-        code: tuple(cb for cb in (_dispatch_for(c) for c in clients) if cb is not None)
-        for code, clients in CLIENT_REGISTRY_BY_CODE_SNAPSHOT.items()
-        if clients
-    }
-
-    bound_client_ids = {id(c) for clients in CLIENT_REGISTRY_BY_CODE_SNAPSHOT.values() for c in clients}
-    wildcard_clients = tuple(
-        c for c in client_snapshot if bool(getattr(c, "allow_symbol_fallback", False)) or id(c) not in bound_client_ids
-    )
-    CLIENT_REGISTRY_WILDCARD_SNAPSHOT = wildcard_clients
-    CLIENT_DISPATCH_WILDCARD_SNAPSHOT = tuple(
-        cb for cb in (_dispatch_for(c) for c in wildcard_clients) if cb is not None
-    )
-
-
-def _clear_topic_code_cache_locked() -> None:
-    TOPIC_CODE_CACHE.clear()
-
-
-def _record_route_metric(kind: str) -> None:
-    global _ROUTE_MISS_METRIC, _ROUTE_FALLBACK_METRIC, _ROUTE_DROP_METRIC
-    try:
-        metrics = MetricsRegistry.get()
-        if kind == "miss":
-            if _ROUTE_MISS_METRIC is None:
-                _ROUTE_MISS_METRIC = metrics.shioaji_quote_route_total.labels(result="miss")
-            _ROUTE_MISS_METRIC.inc()
-        elif kind == "fallback":
-            if _ROUTE_FALLBACK_METRIC is None:
-                _ROUTE_FALLBACK_METRIC = metrics.shioaji_quote_route_total.labels(result="fallback")
-            _ROUTE_FALLBACK_METRIC.inc()
-        elif kind == "drop":
-            if _ROUTE_DROP_METRIC is None:
-                _ROUTE_DROP_METRIC = metrics.shioaji_quote_route_total.labels(result="drop")
-            _ROUTE_DROP_METRIC.inc()
-    except Exception:
-        pass
-
-
-def _extract_quote_code_from_obj(obj: Any) -> str | None:
-    if obj is None:
-        return None
-    if isinstance(obj, dict):
-        code = obj.get("code") or obj.get("Code")
-        if code:
-            return str(code)
-        topic = obj.get("topic") or obj.get("Topic")
-        if topic:
-            return _extract_code_from_topic(str(topic))
-        return None
-    code = getattr(obj, "code", None) or getattr(obj, "Code", None)
-    if code:
-        return str(code)
-    topic = getattr(obj, "topic", None)
-    if topic:
-        return _extract_code_from_topic(str(topic))
-    if isinstance(obj, str):
-        return _extract_code_from_topic(obj)
-    return None
-
-
-def _extract_quote_code(*args: Any, **kwargs: Any) -> str | None:
-    # Fast common shapes first: (topic, quote), (exchange, quote), kwargs["quote"].
-    if len(args) >= 2:
-        code = _extract_quote_code_from_obj(args[1])
-        if code:
-            return code
-        if isinstance(args[0], str):
-            code = _extract_code_from_topic(args[0])
-            if code:
-                return code
-    for key in ("quote", "bidask", "tick", "msg", "data"):
-        if key in kwargs:
-            code = _extract_quote_code_from_obj(kwargs.get(key))
-            if code:
-                return code
-    for item in args:
-        code = _extract_quote_code_from_obj(item)
-        if code:
-            return code
-    for item in kwargs.values():
-        code = _extract_quote_code_from_obj(item)
-        if code:
-            return code
-    return None
-
-
-def _extract_code_from_topic(topic: str) -> str | None:
-    if not topic:
-        return None
-    cached = TOPIC_CODE_CACHE.get(topic, _TOPIC_CODE_CACHE_MISS)
-    if cached is not _TOPIC_CODE_CACHE_MISS:
-        return cached
-
-    code: str | None = None
-    # Common fast paths avoid regex allocation.
-    if topic.startswith("Q/"):
-        # e.g. Q/TSE/2330
-        last = topic.rsplit("/", 1)[-1]
-        if last:
-            code = last
-    elif topic.startswith("L1:") and ":" in topic:
-        # e.g. L1:STK:2330:tick -> third token
-        parts = topic.split(":")
-        if len(parts) >= 3 and parts[2]:
-            code = parts[2]
-    elif ":" in topic:
-        # e.g. Quote:v1:BidAsk:TXFF202412
-        parts = topic.split(":")
-        for token in reversed(parts):
-            tok = token.strip()
-            if not tok:
-                continue
-            low = tok.lower()
-            if low in {"tick", "bidask", "stk", "fop", "quote", "quotes", "l1", "v1"}:
-                continue
-            if any(ch.isdigit() for ch in tok) or tok.isalpha():
-                code = tok
-                break
-    if code is None:
-        # General fallback for topic drift.
-        candidates = re.findall(r"[A-Za-z0-9_]+", topic)
-        for token in reversed(candidates):
-            low = token.lower()
-            if low in {"tick", "bidask", "stk", "fop", "quote", "quotes", "l1", "v1"}:
-                continue
-            if any(ch.isdigit() for ch in token) or token.isalpha():
-                code = token
-                break
-        if code is None:
-            for sep in ("/", ":"):
-                if sep in topic:
-                    parts = [p for p in topic.split(sep) if p]
-                    if parts:
-                        code = parts[-1]
-                        break
-
-    with CLIENT_REGISTRY_LOCK:
-        if len(TOPIC_CODE_CACHE) >= _TOPIC_CODE_CACHE_MAX:
-            # Simple coarse reset keeps O(1) behavior on hot path.
-            TOPIC_CODE_CACHE.clear()
-        TOPIC_CODE_CACHE[topic] = code
-    return code
-
-
-def _registry_snapshot(code: str | None = None) -> tuple[tuple[Any, ...], bool]:
-    if code:
-        routed = CLIENT_REGISTRY_BY_CODE_SNAPSHOT.get(str(code))
-        if routed:
-            return routed, True
-    return CLIENT_REGISTRY_SNAPSHOT, False
-
-
-def _registry_dispatch_snapshot(code: str | None = None) -> tuple[tuple[Callable[..., Any], ...], bool]:
-    if code:
-        routed = CLIENT_DISPATCH_BY_CODE_SNAPSHOT.get(str(code))
-        if routed:
-            return routed, True
-    return CLIENT_DISPATCH_SNAPSHOT, False
-
-
-def _registry_fallback_snapshot() -> tuple[Any, ...]:
-    if _ROUTE_MISS_FALLBACK_MODE == "none":
-        return ()
-    if _ROUTE_MISS_FALLBACK_MODE == "broadcast":
-        return CLIENT_REGISTRY_SNAPSHOT
-    return CLIENT_REGISTRY_WILDCARD_SNAPSHOT
-
-
-def _registry_fallback_dispatch_snapshot() -> tuple[Callable[..., Any], ...]:
-    if _ROUTE_MISS_FALLBACK_MODE == "none":
-        return ()
-    if _ROUTE_MISS_FALLBACK_MODE == "broadcast":
-        return CLIENT_DISPATCH_SNAPSHOT
-    return CLIENT_DISPATCH_WILDCARD_SNAPSHOT
+def _sync_router_route_globals() -> None:
+    _router._ROUTE_MISS_STRICT = bool(_ROUTE_MISS_STRICT)
+    _router._ROUTE_MISS_FALLBACK_MODE = str(_ROUTE_MISS_FALLBACK_MODE)
+    _router._ROUTE_MISS_LOG_EVERY = int(_ROUTE_MISS_LOG_EVERY)
+    _router._ROUTE_MISS_COUNT = int(_ROUTE_MISS_COUNT)
+    _router._record_route_metric = _record_route_metric
 
 
 def _registry_register(client: Any) -> None:
-    with CLIENT_REGISTRY_LOCK:
-        if client not in CLIENT_REGISTRY:
-            CLIENT_REGISTRY.append(client)
-            _refresh_registry_snapshots_locked()
+    _router._registry_register(client)
 
 
 def _registry_rebind_codes(client: Any, codes: list[str]) -> None:
-    with CLIENT_REGISTRY_LOCK:
-        for mapped_code, clients in list(CLIENT_REGISTRY_BY_CODE.items()):
-            if client in clients:
-                clients = [c for c in clients if c is not client]
-                if clients:
-                    CLIENT_REGISTRY_BY_CODE[mapped_code] = clients
-                else:
-                    CLIENT_REGISTRY_BY_CODE.pop(mapped_code, None)
-        for code in codes:
-            key = str(code)
-            if not key:
-                continue
-            bucket = CLIENT_REGISTRY_BY_CODE.setdefault(key, [])
-            if client not in bucket:
-                bucket.append(client)
-        _refresh_registry_snapshots_locked()
-        _clear_topic_code_cache_locked()
+    _router._registry_rebind_codes(client, codes)
 
 
 def _registry_unregister(client: Any) -> None:
-    with CLIENT_REGISTRY_LOCK:
-        if client in CLIENT_REGISTRY:
-            CLIENT_REGISTRY[:] = [c for c in CLIENT_REGISTRY if c is not client]
-        for mapped_code, clients in list(CLIENT_REGISTRY_BY_CODE.items()):
-            if client in clients:
-                clients = [c for c in clients if c is not client]
-                if clients:
-                    CLIENT_REGISTRY_BY_CODE[mapped_code] = clients
-                else:
-                    CLIENT_REGISTRY_BY_CODE.pop(mapped_code, None)
-        _refresh_registry_snapshots_locked()
-        _clear_topic_code_cache_locked()
+    _router._registry_unregister(client)
 
 
 def dispatch_tick_cb(*args, **kwargs):
-    """
-    Global static callback to dispatch ticks/bidask to all registered clients.
-    Passes through raw args to avoid signature drift across Shioaji callbacks.
-    """
-    try:
-        global _ROUTE_MISS_COUNT
-        if not args and not kwargs:
-            return
-        code = _extract_quote_code(*args, **kwargs)
-        dispatchers, routed_exact = _registry_dispatch_snapshot(code)
-        if code and not routed_exact:
-            _ROUTE_MISS_COUNT += 1
-            _record_route_metric("miss")
-            if _ROUTE_MISS_STRICT:
-                _record_route_metric("drop")
-                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                    logger.warning(
-                        "Quote route miss; dropping callback payload",
-                        code=code,
-                        strict=True,
-                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    )
-                return
-            dispatchers = _registry_fallback_dispatch_snapshot()
-            if not dispatchers:
-                _record_route_metric("drop")
-                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                    logger.warning(
-                        "Quote route miss; no fallback targets, dropping callback payload",
-                        code=code,
-                        strict=False,
-                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    )
-                return
-            _record_route_metric("fallback")
-            if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                logger.warning(
-                    "Quote route miss; falling back to snapshot",
-                    code=code,
-                    strict=False,
-                    fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    fallback_targets=len(dispatchers),
-                )
-        elif code is None and _ROUTE_MISS_STRICT:
-            _ROUTE_MISS_COUNT += 1
-            _record_route_metric("miss")
-            _record_route_metric("drop")
-            if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                logger.warning("Quote route parse miss; dropping callback payload", strict=True)
-            return
-        elif code is None:
-            _ROUTE_MISS_COUNT += 1
-            _record_route_metric("miss")
-            dispatchers = _registry_fallback_dispatch_snapshot()
-            if not dispatchers:
-                _record_route_metric("drop")
-                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                    logger.warning(
-                        "Quote route parse miss; no fallback targets, dropping callback payload",
-                        strict=False,
-                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    )
-                return
-            _record_route_metric("fallback")
-            if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                logger.warning(
-                    "Quote route parse miss; falling back to snapshot",
-                    strict=False,
-                    fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    fallback_targets=len(dispatchers),
-                )
-        for dispatch_fn in dispatchers:
-            dispatch_fn(*args, **kwargs)
-    except Exception as e:
-        logger.error("Global Dispatch Error", error=str(e))
-
-
-# ---------------------------------------------
+    global _ROUTE_MISS_COUNT
+    _sync_router_route_globals()
+    _router.dispatch_tick_cb(*args, **kwargs)
+    _ROUTE_MISS_COUNT = _router._ROUTE_MISS_COUNT
 
 
 class ShioajiClient:
@@ -462,6 +172,15 @@ class ShioajiClient:
         self._last_reconnect_ts = 0.0
         self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
         self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "600"))
+        self._login_timeout_s = float(os.getenv("HFT_SHIOAJI_LOGIN_TIMEOUT_S", "20"))
+        self._reconnect_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_TIMEOUT_S", "45"))
+        self._reconnect_subscribe_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_SUBSCRIBE_TIMEOUT_S", "30"))
+        try:
+            self._login_retry_max = max(0, int(os.getenv("HFT_SHIOAJI_LOGIN_RETRY_MAX", "1")))
+        except ValueError:
+            self._login_retry_max = 1
+        self._last_login_error: str | None = None
+        self._last_reconnect_error: str | None = None
         self.metrics = MetricsRegistry.get()
         self._api_cache: dict[str, tuple[float, Any]] = {}
         self._api_cache_lock = threading.Lock()
@@ -513,6 +232,11 @@ class ShioajiClient:
         self._quote_watchdog_running = False
         self._quote_watchdog_interval_s = float(os.getenv("HFT_QUOTE_WATCHDOG_S", "5"))
         self._quote_no_data_s = float(os.getenv("HFT_QUOTE_NO_DATA_S", "30"))
+        self._quote_watchdog_skip_off_hours = _as_bool(os.getenv("HFT_QUOTE_WATCHDOG_SKIP_OFF_HOURS", "1"))
+        self._quote_off_hours_log_interval_s = float(os.getenv("HFT_QUOTE_OFF_HOURS_LOG_INTERVAL_S", "60"))
+        self._last_quote_off_hours_log_ts = 0.0
+        self._quote_pending_stall_warn_s = float(os.getenv("HFT_QUOTE_PENDING_STALL_WARN_S", "120"))
+        self._quote_pending_stall_reported = False
         self._event_callback_registered = False
         self._event_callback_retrying = False
         self._event_callback_retry_thread: threading.Thread | None = None
@@ -570,11 +294,98 @@ class ShioajiClient:
         self._contract_refresh_resubscribe_policy = (
             os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "none").strip().lower() or "none"
         )
+        self._session_lock_enabled = _as_bool(os.getenv("HFT_SHIOAJI_SESSION_LOCK_ENABLED", "1"))
+        lock_id_raw = (
+            os.getenv("SHIOAJI_ACCOUNT") or os.getenv("SHIOAJI_PERSON_ID") or os.getenv("SHIOAJI_API_KEY") or "default"
+        )
+        lock_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(lock_id_raw).strip())[:64] or "default"
+        lock_dir = os.getenv("HFT_SHIOAJI_SESSION_LOCK_DIR", ".wal/.locks")
+        self._session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}.lock")
+        self._session_lock_fd: Any | None = None
+
+        # C2: Session policy interface — quote-side code must use this, not call
+        # self.reconnect() directly, to keep session and quote runtimes decoupled.
+        # Initialized lazily (after self is fully constructed) by ShioajiClientFacade
+        # or by calling _init_session_policy(). This avoids a circular import at
+        # module-load time while still providing the Protocol interface.
+        self._session_policy: Any | None = None
+
+        # C3: Quote event handler — centralises pending state transitions.
+        # When set (by ShioajiClientFacade), _mark_quote_pending and
+        # _clear_quote_pending delegate to this handler so the state machine
+        # is owned by QuoteEventHandler rather than scattered across the client.
+        self._quote_event_handler: Any | None = None
+
+        # C4: Domain runtimes/gateways (contracts/account/order/session/quote).
+        from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
+        from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
+        from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
+        from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
+        from hft_platform.feed_adapter.shioaji.session_runtime import SessionRuntime
+
+        self._contracts_runtime = ContractsRuntime(self)
+        self._account_gateway = AccountGateway(self)
+        self._order_gateway = OrderGateway(self)
+        self._session_runtime = SessionRuntime(self)
+        self._quote_runtime = QuoteRuntime(self)
+        # Wire decoupled interfaces (SessionPolicy + QuoteEventHandler).
+        self._session_policy = self._session_runtime
+        self._quote_event_handler = self._quote_runtime._event_handler
 
         # Register self globally (callback routing + strong ref)
         _registry_register(self)
         self._refresh_quote_routes()
         logger.info("Registered ShioajiClient in Global Registry")
+
+    def _init_session_policy(self) -> None:
+        """Ensure session_policy is wired (no-op: already set in __init__)."""
+        if self._session_policy is None:
+            self._session_policy = self._session_runtime
+
+    def _init_domain_modules(self) -> None:
+        """Lazily create contracts/order/account delegates.
+
+        Some tests construct ``ShioajiClient`` via ``__new__`` and bypass
+        ``__init__``. Keep wrappers resilient by rebuilding delegates on demand.
+        """
+        if getattr(self, "_contracts_runtime", None) is None:
+            from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
+
+            self._contracts_runtime = ContractsRuntime(self)
+        if getattr(self, "_account_gateway", None) is None:
+            from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
+
+            self._account_gateway = AccountGateway(self)
+        if getattr(self, "_order_gateway", None) is None:
+            from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
+
+            self._order_gateway = OrderGateway(self)
+
+    def _contracts(self):
+        self._init_domain_modules()
+        return self._contracts_runtime
+
+    def _accounts(self):
+        self._init_domain_modules()
+        return self._account_gateway
+
+    def _orders(self):
+        self._init_domain_modules()
+        return self._order_gateway
+
+    def _request_reconnect_via_policy(self, reason: str, force: bool = True) -> bool:
+        """Route a reconnect intent through the SessionPolicy interface.
+
+        Falls back to direct self.reconnect() when policy is not yet
+        initialized (e.g., in unit tests that construct ShioajiClient directly).
+        """
+        if self._session_policy is not None:
+            try:
+                return bool(self._session_policy.request_reconnect(reason=reason, force=force))
+            except Exception:
+                return False
+        # Fallback: direct call (only in legacy/test contexts)
+        return bool(self.reconnect(reason=reason, force=force))
 
     def _record_api_latency(self, op: str, start_ns: int, ok: bool = True) -> None:
         if not self.metrics:
@@ -616,6 +427,120 @@ class ShioajiClient:
         if len(text) > 64:
             return text[:64]
         return text
+
+    def _safe_call_with_timeout(
+        self,
+        op: str,
+        fn: Callable[[], Any],
+        timeout_s: float,
+    ) -> tuple[bool, Any | None, Exception | None, bool]:
+        """Run blocking broker SDK call with timeout in a daemon thread."""
+        if timeout_s <= 0:
+            try:
+                return True, fn(), None, False
+            except Exception as exc:
+                return False, None, exc, False
+        done = threading.Event()
+        state: dict[str, Any] = {}
+
+        def _worker() -> None:
+            try:
+                state["result"] = fn()
+            except Exception as exc:  # pragma: no cover
+                state["error"] = exc
+            finally:
+                done.set()
+
+        worker = threading.Thread(target=_worker, name=f"shioaji-{op}-guard", daemon=True)
+        worker.start()
+        if not done.wait(timeout=max(0.1, timeout_s)):
+            return False, None, TimeoutError(f"{op} timed out after {timeout_s:.1f}s"), True
+        err = state.get("error")
+        if err is not None:
+            return False, None, err, False
+        return True, state.get("result"), None, False
+
+    def _set_thread_alive_metric(self, thread_name: str, alive: bool) -> None:
+        metrics = getattr(self, "metrics", None)
+        if not metrics or not hasattr(metrics, "shioaji_thread_alive"):
+            return
+        try:
+            metrics.shioaji_thread_alive.labels(thread=thread_name).set(1 if alive else 0)
+        except Exception:
+            return
+
+    def _update_quote_pending_metrics(self) -> None:
+        if not self.metrics:
+            return
+        age_s = 0.0
+        if self._pending_quote_resubscribe and self._pending_quote_ts > 0:
+            age_s = max(0.0, timebase.now_s() - self._pending_quote_ts)
+        try:
+            if hasattr(self.metrics, "shioaji_quote_pending_age_seconds"):
+                self.metrics.shioaji_quote_pending_age_seconds.set(age_s)
+            if (
+                self._pending_quote_resubscribe
+                and age_s >= self._quote_pending_stall_warn_s
+                and not self._quote_pending_stall_reported
+                and hasattr(self.metrics, "shioaji_quote_pending_stall_total")
+            ):
+                reason = self._sanitize_metric_label(self._pending_quote_reason or "unknown", fallback="unknown")
+                self.metrics.shioaji_quote_pending_stall_total.labels(reason=reason).inc()
+                self._quote_pending_stall_reported = True
+                logger.warning(
+                    "Pending quote resubscribe appears stalled",
+                    reason=self._pending_quote_reason,
+                    age_s=round(age_s, 2),
+                )
+        except Exception:
+            return
+
+    def _ensure_session_lock(self) -> bool:
+        if not self._session_lock_enabled:
+            return True
+        if self._session_lock_fd is not None:
+            return True
+        lock_fd = None
+        try:
+            lock_path = Path(self._session_lock_path)
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_fd = open(lock_path, "a+", encoding="utf-8")
+            if fcntl is not None:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._session_lock_fd = lock_fd
+            return True
+        except Exception as exc:
+            if lock_fd is not None:
+                try:
+                    lock_fd.close()
+                except Exception:
+                    pass
+            logger.warning(
+                "Potential duplicate broker runtime detected: session lock unavailable",
+                lock_path=self._session_lock_path,
+                error=str(exc),
+            )
+            if self.metrics and hasattr(self.metrics, "shioaji_session_lock_conflicts_total"):
+                try:
+                    self.metrics.shioaji_session_lock_conflicts_total.inc()
+                except Exception:
+                    pass
+            return False
+
+    def _release_session_lock(self) -> None:
+        lock_fd = getattr(self, "_session_lock_fd", None)
+        if lock_fd is None:
+            return
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            lock_fd.close()
+        except Exception:
+            pass
+        self._session_lock_fd = None
 
     def _cache_get(self, key: str) -> Any | None:
         now = timebase.now_s()
@@ -666,6 +591,11 @@ class ShioajiClient:
                     quote_version=self._quote_version,
                     quote_version_mode=self._quote_version_mode,
                 )
+                try:
+                    if self.metrics and hasattr(self.metrics, "feed_first_quote_total"):
+                        self.metrics.feed_first_quote_total.inc()
+                except Exception:
+                    pass
             if self._pending_quote_resubscribe:
                 self._clear_quote_pending()
             if self.tick_callback:
@@ -674,59 +604,8 @@ class ShioajiClient:
             logger.error("Error processing tick", error=str(e))
 
     def _validate_quote_schema(self, *args, **kwargs) -> tuple[bool, str]:
-        """Best-effort schema guard for quote callbacks.
-
-        CE2-11 intent: when quote_version is locked to v1, reject obvious v0-style
-        callback payloads (topic string first arg) and malformed payloads.
-        """
-        if not self._quote_schema_guard:
-            return True, "disabled"
-        if self._quote_version != "v1":
-            return True, "not_v1"
-
-        if not args and not kwargs:
-            return False, "empty"
-
-        if args:
-            first = args[0]
-            # v0-style callbacks typically begin with a topic string.
-            if isinstance(first, str) and ("/" in first or ":" in first):
-                return False, "topic_string_arg_v0_shape"
-
-        payload = None
-        if len(args) >= 2:
-            payload = args[1]
-        elif len(args) == 1:
-            payload = args[0]
-        else:
-            for key in ("quote", "bidask", "tick", "msg", "data"):
-                if key in kwargs:
-                    payload = kwargs.get(key)
-                    break
-            if payload is None and kwargs:
-                payload = next(iter(kwargs.values()))
-
-        if payload is None:
-            return False, "missing_payload"
-
-        if isinstance(payload, dict):
-            if any(k in payload for k in ("code", "Code", "bid_price", "ask_price", "close")):
-                return True, "dict_payload"
-            if self._quote_schema_guard_strict:
-                return False, "dict_payload_unrecognized"
-            return True, "dict_payload_relaxed"
-
-        # v1 callbacks commonly pass typed objects with code/bid/ask/tick fields
-        if hasattr(payload, "code") or hasattr(payload, "Code"):
-            return True, "object_with_code"
-        if hasattr(payload, "bid_price") or hasattr(payload, "ask_price"):
-            return True, "object_bidask"
-        if hasattr(payload, "close") or hasattr(payload, "volume"):
-            return True, "object_tick"
-
-        if self._quote_schema_guard_strict:
-            return False, "object_unrecognized"
-        return True, "object_relaxed"
+        """Delegates to QuoteRuntime.validate_quote_schema()."""
+        return self._quote_runtime.validate_quote_schema(*args, **kwargs)
 
     def _handle_quote_schema_mismatch(self, reason: str, *args, **kwargs) -> None:
         self._quote_schema_mismatch_count += 1
@@ -892,80 +771,14 @@ class ShioajiClient:
         ca_passwd: str | None = None,
         contracts_cb=None,
     ):
-        logger.info("Logging in to Shioaji...")
-        self.ca_active = False
-        # Resolve credentials: Arg > Env
-        key = api_key or os.getenv("SHIOAJI_API_KEY")
-        secret = secret_key or os.getenv("SHIOAJI_SECRET_KEY")
-        pid = person_id or os.getenv("SHIOAJI_PERSON_ID")
-        ca_pwd = ca_passwd or os.getenv("SHIOAJI_CA_PASSWORD") or os.getenv("CA_PASSWORD")
-
-        if key and secret:
-            logger.info("Using API Key/Secret for login")
-            start_ns = time.perf_counter_ns()
-            login_fetch_contract = self.fetch_contract
-            fallback_enabled = os.getenv("HFT_LOGIN_FETCH_CONTRACT_FALLBACK", "1").lower() not in {
-                "0",
-                "false",
-                "no",
-                "off",
-            }
-
-            def _do_login(fetch_contract: bool) -> None:
-                self.api.login(
-                    api_key=key,
-                    secret_key=secret,
-                    contracts_timeout=self.contracts_timeout,
-                    contracts_cb=contracts_cb,
-                    fetch_contract=fetch_contract,
-                    subscribe_trade=self.subscribe_trade,
-                )
-
-            try:
-                _do_login(login_fetch_contract)
-                self._record_api_latency("login", start_ns, ok=True)
-            except Exception as exc:
-                self._record_api_latency("login", start_ns, ok=False)
-                if login_fetch_contract and fallback_enabled:
-                    logger.warning(
-                        "Login failed with contract fetch; retrying without contracts",
-                        error=str(exc),
-                    )
-                    start_ns = time.perf_counter_ns()
-                    _do_login(False)
-                    self._record_api_latency("login", start_ns, ok=True)
-                    login_fetch_contract = False
-                    self.fetch_contract = False
-                else:
-                    raise
-            logger.info("Login successful (API Key)")
-            if not login_fetch_contract:
-                self._ensure_contracts()
-            if self.activate_ca:
-                if not pid:
-                    logger.warning("CA activation requested but missing SHIOAJI_PERSON_ID")
-                if not self.ca_path or not ca_pwd:
-                    logger.warning("CA activation requested but missing CA_CERT_PATH/CA_PASSWORD")
-                else:
-                    try:
-                        start_ns = time.perf_counter_ns()
-                        self.api.activate_ca(ca_path=self.ca_path, ca_passwd=ca_pwd)
-                        self._record_api_latency("activate_ca", start_ns, ok=True)
-                        self.ca_active = True
-                        logger.info("CA activated")
-                    except Exception as exc:
-                        self._record_api_latency("activate_ca", start_ns, ok=False)
-                        logger.error("CA activation failed", error=str(exc))
-            self.logged_in = True
-            self._last_session_refresh_ts = timebase.now_s()
-            return
-
-        if not self.api:
-            logger.warning("Shioaji SDK not installed; cannot login. Staying in simulation mode.")
-            return
-
-        logger.warning("No API key/secret found (Args/Env). Running in simulation/anonymous mode.")
-        return
+        """Login to Shioaji broker. Delegates to SessionRuntime.login_with_retry()."""
+        return self._session_runtime.login_with_retry(
+            api_key=api_key,
+            secret_key=secret_key,
+            person_id=person_id,
+            ca_passwd=ca_passwd,
+            contracts_cb=contracts_cb,
+        )
 
     def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]):
         """
@@ -1124,82 +937,8 @@ class ShioajiClient:
         return ok_quote and ok_event
 
     def _register_quote_callbacks(self) -> bool:
-        """Register quote callbacks based on active quote version."""
-        if not self.api:
-            return False
-        supports_v1 = self._supports_quote_v1()
-        supports_v0 = self._supports_quote_v0()
-        logger.info(
-            "Registering quote callbacks",
-            quote_version=self._quote_version,
-            quote_version_mode=self._quote_version_mode,
-        )
-        ok = True
-        version = self._quote_version
-
-        def _set_v1() -> bool:
-            nonlocal ok
-            try:
-                self.api.quote.set_on_tick_stk_v1_callback(dispatch_tick_cb)
-                self.api.quote.set_on_bidask_stk_v1_callback(dispatch_tick_cb)
-                self.api.quote.set_on_tick_fop_v1_callback(dispatch_tick_cb)
-                self.api.quote.set_on_bidask_fop_v1_callback(dispatch_tick_cb)
-                return True
-            except Exception as exc:
-                logger.warning("Quote v1 callback registration failed", error=str(exc))
-                ok = False
-                return False
-
-        def _set_v0() -> bool:
-            nonlocal ok
-            if not hasattr(self.api.quote, "set_on_tick_stk_callback"):
-                logger.warning("Quote v0 callbacks not available on this Shioaji version")
-                ok = False
-                return False
-            try:
-                self.api.quote.set_on_tick_stk_callback(dispatch_tick_cb)
-                self.api.quote.set_on_bidask_stk_callback(dispatch_tick_cb)
-                if hasattr(self.api.quote, "set_on_tick_fop_callback"):
-                    self.api.quote.set_on_tick_fop_callback(dispatch_tick_cb)
-                if hasattr(self.api.quote, "set_on_bidask_fop_callback"):
-                    self.api.quote.set_on_bidask_fop_callback(dispatch_tick_cb)
-                return True
-            except Exception as exc:
-                logger.warning("Quote v0 callback registration failed", error=str(exc))
-                ok = False
-                return False
-
-        if version == "v1":
-            if supports_v1 and _set_v1():
-                return ok
-            allow_fallback = self._quote_version_mode == "auto" or (
-                self._quote_version_mode == "v1" and not self._quote_version_strict
-            )
-            if allow_fallback and supports_v0:
-                logger.warning("Falling back to quote v0 callbacks")
-                self._quote_version = "v0"
-                ok = _set_v0()
-                if ok and self.metrics:
-                    self.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
-                if not ok:
-                    self._quote_version = "v1"
-            else:
-                if not supports_v1:
-                    logger.warning("Quote v1 callbacks not available on this Shioaji version")
-                if allow_fallback and not supports_v0:
-                    logger.warning("Quote v0 callbacks not available; staying on v1")
-                self._quote_version = "v1"
-                ok = False
-        else:
-            if supports_v0:
-                ok = _set_v0()
-            else:
-                logger.warning("Quote v0 callbacks not available on this Shioaji version")
-                if supports_v1:
-                    self._quote_version = "v1"
-                ok = False
-
-        return ok
+        """Delegates to QuoteRuntime.register_quote_callbacks()."""
+        return self._quote_runtime.register_quote_callbacks()
 
     def _register_event_callback(self) -> bool:
         if not self.api:
@@ -1221,156 +960,12 @@ class ShioajiClient:
         return sj.constant.QuoteVersion.v0 if self._quote_version == "v0" else sj.constant.QuoteVersion.v1
 
     def _start_session_refresh_thread(self) -> None:
-        """Start background thread for preventive session refresh (C3).
-
-        Refreshes session before long holidays to prevent expiration.
-        When holiday-aware mode is enabled (O4), only refreshes:
-        - When approaching long holidays (days_until_trading > 1)
-        - Regular interval when on trading day or day before
-
-        This reduces unnecessary refreshes during normal trading weeks.
-        """
-        if self._session_refresh_running:
-            return
-        if self._session_refresh_interval_s <= 0:
-            return
-
-        self._session_refresh_running = True
-        logger.info(
-            "Starting session refresh thread",
-            interval_s=self._session_refresh_interval_s,
-            check_interval_s=self._session_refresh_check_interval_s,
-            holiday_aware=self._session_refresh_holiday_aware,
-        )
-
-        def _refresh_loop() -> None:
-            try:
-                from hft_platform.core.market_calendar import get_calendar
-
-                calendar = get_calendar()
-            except ImportError:
-                logger.warning("Market calendar not available for session refresh")
-                self._session_refresh_running = False
-                return
-
-            while self.api and self.logged_in and self._session_refresh_running:
-                try:
-                    time.sleep(self._session_refresh_check_interval_s)
-                    if not self._session_refresh_running:
-                        break
-
-                    now = timebase.now_s()
-                    now_dt = dt.datetime.now(calendar._tz)
-
-                    # Skip refresh during active trading hours
-                    if calendar.is_trading_hours(now_dt):
-                        continue
-
-                    days_until = calendar.days_until_trading(now_dt.date())
-                    elapsed = now - self._last_session_refresh_ts
-
-                    if self._session_refresh_holiday_aware:
-                        # Holiday-aware mode (O4):
-                        # - Refresh if approaching long holiday (days_until > 1)
-                        # - Regular refresh only on trading day or day before
-                        holiday_refresh = days_until > 1 and elapsed > 0  # Approaching holiday
-                        regular_refresh = days_until <= 1 and elapsed >= self._session_refresh_interval_s
-
-                        if not (holiday_refresh or regular_refresh):
-                            continue
-
-                        reason = "holiday" if holiday_refresh else "regular"
-                    else:
-                        # Original mode: refresh based on interval only
-                        if days_until > 1:
-                            continue
-                        if elapsed < self._session_refresh_interval_s:
-                            continue
-                        reason = "interval"
-
-                    logger.info(
-                        "Preventive session refresh",
-                        reason=reason,
-                        days_until_trading=days_until,
-                        elapsed_s=round(elapsed, 0),
-                    )
-                    self._do_session_refresh()
-                except Exception as exc:
-                    logger.warning("Session refresh check failed", error=str(exc))
-
-            self._session_refresh_running = False
-
-        self._session_refresh_thread = threading.Thread(
-            target=_refresh_loop,
-            name="shioaji-session-refresh",
-            daemon=True,
-        )
-        self._session_refresh_thread.start()
+        """Delegates to SessionRuntime.start_session_refresh_thread()."""
+        self._session_runtime.start_session_refresh_thread()
 
     def _do_session_refresh(self) -> bool:
-        """Perform session refresh via logout/login cycle.
-
-        Includes post-refresh health check (O5) to verify quotes are flowing.
-
-        Returns:
-            True if refresh succeeded
-        """
-        if not self.api:
-            return False
-
-        try:
-            logger.info("Session refresh: logging out")
-            start_ns = time.perf_counter_ns()
-            try:
-                self.api.logout()
-            except Exception as exc:
-                logger.warning("Session refresh logout failed", error=str(exc))
-
-            self.logged_in = False
-            self._callbacks_registered = False
-
-            logger.info("Session refresh: logging in")
-            self.login()
-
-            if self.logged_in:
-                self._last_session_refresh_ts = timebase.now_s()
-                self._record_api_latency("session_refresh", start_ns, ok=True)
-                logger.info("Session refresh login successful")
-
-                if self.tick_callback:
-                    self._ensure_callbacks(self.tick_callback)
-                    self._resubscribe_all()
-                    self._start_quote_watchdog()
-
-                    # Post-refresh health check (O5)
-                    if self._verify_quotes_flowing():
-                        logger.info("Session refresh completed, quotes flowing")
-                        if self.metrics:
-                            self.metrics.session_refresh_total.labels(result="ok").inc()
-                        return True
-                    else:
-                        logger.warning("Session refresh completed but quotes not flowing")
-                        if self.metrics:
-                            self.metrics.session_refresh_total.labels(result="partial").inc()
-                        # Still return True since login succeeded
-                        return True
-                else:
-                    # No tick callback means no subscriptions to verify
-                    if self.metrics:
-                        self.metrics.session_refresh_total.labels(result="ok").inc()
-                    logger.info("Session refresh completed (no subscriptions)")
-                    return True
-            else:
-                self._record_api_latency("session_refresh", start_ns, ok=False)
-                if self.metrics:
-                    self.metrics.session_refresh_total.labels(result="error").inc()
-                logger.error("Session refresh failed: login unsuccessful")
-                return False
-        except Exception as exc:
-            logger.error("Session refresh failed", error=str(exc))
-            if self.metrics:
-                self.metrics.session_refresh_total.labels(result="error").inc()
-            return False
+        """Delegates to SessionRuntime.do_session_refresh()."""
+        return self._session_runtime.do_session_refresh()
 
     def _verify_quotes_flowing(self, timeout_s: float | None = None) -> bool:
         """Verify quotes are flowing after refresh (O5).
@@ -1415,6 +1010,38 @@ class ShioajiClient:
         )
         return False
 
+    def _is_trading_hours(self) -> bool:
+        """Return True if currently within TWSE trading hours."""
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+            now_dt = dt.datetime.now(calendar._tz)
+            return calendar.is_trading_hours(now_dt)
+        except Exception:
+            # Conservative fallback: weekdays 09:00-13:30 Asia/Taipei.
+            now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+            if now_dt.weekday() >= 5:
+                return False
+            minute = now_dt.hour * 60 + now_dt.minute
+            return (9 * 60) <= minute <= (13 * 60 + 30)
+
+    def _allow_quote_recovery(self, reason: str) -> bool:
+        if not self._quote_watchdog_skip_off_hours:
+            return True
+        if self._is_trading_hours():
+            return True
+        now = timebase.now_s()
+        if now - self._last_quote_off_hours_log_ts >= self._quote_off_hours_log_interval_s:
+            logger.info("Skipping quote recovery outside trading hours", reason=reason)
+            self._last_quote_off_hours_log_ts = now
+        if self.metrics and hasattr(self.metrics, "quote_watchdog_recovery_attempts_total"):
+            try:
+                self.metrics.quote_watchdog_recovery_attempts_total.labels(action="skip_off_hours").inc()
+            except Exception:
+                pass
+        return False
+
     def _is_market_open_grace_period(self) -> bool:
         """Check if within grace period after market open (C4).
 
@@ -1452,94 +1079,31 @@ class ShioajiClient:
         return in_grace
 
     def _start_quote_watchdog(self) -> None:
-        if self._quote_watchdog_running:
-            return
-        self._quote_watchdog_running = True
-        logger.info(
-            "Starting quote watchdog",
-            interval_s=self._quote_watchdog_interval_s,
-            no_data_s=self._quote_no_data_s,
-        )
-
-        def _watch() -> None:
-            try:
-                while self.api and self.logged_in:
-                    time.sleep(self._quote_watchdog_interval_s)
-                    last = self._last_quote_data_ts
-                    if last <= 0:
-                        continue
-                    gap = timebase.now_s() - last
-                    # Use relaxed threshold during market open grace period (C4)
-                    threshold = self._quote_no_data_s
-                    if self._is_market_open_grace_period():
-                        threshold = max(threshold, self._market_open_grace_s)
-                    if gap < threshold:
-                        continue
-                    self._mark_quote_pending("no_data")
-                    downgrade_allowed = self._quote_version_mode == "auto" or (
-                        self._quote_version_mode == "v1" and not self._quote_version_strict
-                    )
-                    if downgrade_allowed and self._quote_version == "v1" and self._supports_quote_v0():
-                        logger.warning(
-                            "No quote data; switching quote version",
-                            gap_s=round(gap, 3),
-                            to_version="v0",
-                        )
-                        self._quote_version = "v0"
-                        if self.metrics:
-                            self.metrics.quote_version_switch_total.labels(direction="downgrade").inc()
-                            try:
-                                self.metrics.quote_watchdog_recovery_attempts_total.labels(
-                                    action="version_downgrade"
-                                ).inc()
-                            except Exception:
-                                pass
-                    else:
-                        if downgrade_allowed and self._quote_version == "v1" and not self._supports_quote_v0():
-                            logger.warning("Quote v0 callbacks unavailable; staying on v1")
-                        logger.warning(
-                            "No quote data; re-registering callbacks",
-                            gap_s=round(gap, 3),
-                            quote_version=self._quote_version,
-                        )
-                        if self.metrics:
-                            try:
-                                self.metrics.quote_watchdog_recovery_attempts_total.labels(
-                                    action="callback_reregister"
-                                ).inc()
-                            except Exception:
-                                pass
-                    if self.tick_callback:
-                        self._callbacks_registered = False
-                        self._ensure_callbacks(self.tick_callback)
-                        self._resubscribe_all()
-                    self._last_quote_data_ts = timebase.now_s()
-            finally:
-                self._quote_watchdog_running = False
-
-        self._quote_watchdog_thread = threading.Thread(
-            target=_watch,
-            name="shioaji-quote-watchdog",
-            daemon=True,
-        )
-        self._quote_watchdog_thread.start()
+        """Delegates to QuoteRuntime.start_quote_watchdog()."""
+        self._quote_runtime.start_quote_watchdog()
 
     def _start_callback_retry(self, cb: Callable[..., Any]) -> None:
         if self._callbacks_retrying:
             return
         self._callbacks_retrying = True
+        self._set_thread_alive_metric("callback_retry", True)
         logger.warning("Starting quote callback retry loop")
 
         def _retry_loop() -> None:
             interval = float(os.getenv("HFT_QUOTE_CB_RETRY_S", "5"))
-            while self.api and not self._callbacks_registered:
-                ok = self._register_callbacks(cb)
-                if ok:
-                    logger.info("Quote callbacks registered after retry")
-                    break
-                logger.warning("Quote callback registration retrying", interval_s=interval)
-                time.sleep(interval)
-            self._callbacks_retrying = False
+            try:
+                while self.api and not self._callbacks_registered:
+                    ok = self._register_callbacks(cb)
+                    if ok:
+                        logger.info("Quote callbacks registered after retry")
+                        break
+                    logger.warning("Quote callback registration retrying", interval_s=interval)
+                    time.sleep(interval)
+            except Exception as exc:
+                logger.error("Quote callback retry loop crashed", error=str(exc))
+            finally:
+                self._callbacks_retrying = False
+                self._set_thread_alive_metric("callback_retry", False)
 
         self._callbacks_retry_thread = threading.Thread(
             target=_retry_loop,
@@ -1552,19 +1116,25 @@ class ShioajiClient:
         if self._event_callback_retrying:
             return
         self._event_callback_retrying = True
+        self._set_thread_alive_metric("event_callback_retry", True)
         logger.warning("Starting quote event callback retry loop")
 
         def _retry_loop() -> None:
             interval = self._event_callback_retry_s
-            while self.api and not self._event_callback_registered:
-                ok = self._register_event_callback()
-                if ok:
-                    self._event_callback_registered = True
-                    logger.info("Quote event callback registered after retry")
-                    break
-                logger.warning("Quote event callback registration retrying", interval_s=interval)
-                time.sleep(interval)
-            self._event_callback_retrying = False
+            try:
+                while self.api and not self._event_callback_registered:
+                    ok = self._register_event_callback()
+                    if ok:
+                        self._event_callback_registered = True
+                        logger.info("Quote event callback registered after retry")
+                        break
+                    logger.warning("Quote event callback registration retrying", interval_s=interval)
+                    time.sleep(interval)
+            except Exception as exc:
+                logger.error("Quote event callback retry loop crashed", error=str(exc))
+            finally:
+                self._event_callback_retrying = False
+                self._set_thread_alive_metric("event_callback_retry", False)
 
         self._event_callback_retry_thread = threading.Thread(
             target=_retry_loop,
@@ -1580,18 +1150,36 @@ class ShioajiClient:
         if self._pending_quote_relogining:
             return
         self._pending_quote_relogining = True
+        self._set_thread_alive_metric("quote_relogin", True)
 
         def _relogin_after() -> None:
             try:
                 time.sleep(delay)
                 if self._pending_quote_resubscribe:
+                    if not self._allow_quote_recovery("quote_pending_timeout"):
+                        return
                     logger.warning(
                         "Quote pending too long; forcing reconnect",
                         delay_s=delay,
                     )
-                    self.reconnect(reason="quote_pending", force=True)
+                    try:
+                        # C2: route through SessionPolicy interface
+                        ok, _, err, timed_out = self._safe_call_with_timeout(
+                            "reconnect_quote_pending",
+                            lambda: self._request_reconnect_via_policy("quote_pending", force=True),
+                            self._reconnect_timeout_s,
+                        )
+                        if not ok:
+                            logger.error(
+                                "Force reconnect (quote_pending) failed",
+                                timeout=timed_out,
+                                error=str(err),
+                            )
+                    except Exception as exc:
+                        logger.error("Force reconnect (quote_pending) failed", error=str(exc))
             finally:
                 self._pending_quote_relogining = False
+                self._set_thread_alive_metric("quote_relogin", False)
 
         self._pending_quote_relogin_thread = threading.Thread(
             target=_relogin_after,
@@ -1603,13 +1191,32 @@ class ShioajiClient:
     def _start_forced_relogin(self, reason: str) -> None:
         if self._pending_quote_relogining:
             return
+        if not self._allow_quote_recovery(reason):
+            return
         self._pending_quote_relogining = True
+        self._set_thread_alive_metric("force_relogin", True)
 
         def _do_relogin() -> None:
             try:
-                self.reconnect(reason=reason, force=True)
+                try:
+                    # C2: route through SessionPolicy interface
+                    ok, _, err, timed_out = self._safe_call_with_timeout(
+                        "reconnect_force",
+                        lambda: self._request_reconnect_via_policy(reason, force=True),
+                        self._reconnect_timeout_s,
+                    )
+                    if not ok:
+                        logger.error(
+                            "Force reconnect failed",
+                            reason=reason,
+                            timeout=timed_out,
+                            error=str(err),
+                        )
+                except Exception as exc:
+                    logger.error("Force reconnect failed", reason=reason, error=str(exc))
             finally:
                 self._pending_quote_relogining = False
+                self._set_thread_alive_metric("force_relogin", False)
 
         threading.Thread(
             target=_do_relogin,
@@ -1649,15 +1256,39 @@ class ShioajiClient:
         now = timebase.now_s()
         if not self._pending_quote_resubscribe or self._pending_quote_reason != reason:
             logger.warning("Quote pending", reason=reason)
-        self._pending_quote_resubscribe = True
-        self._pending_quote_reason = reason
-        self._pending_quote_ts = now
+        if self._quote_event_handler is not None:
+            # C3: delegate state transition to QuoteEventHandler
+            try:
+                delta = self._quote_event_handler.mark_pending(reason, current_ts=now)
+                self._pending_quote_resubscribe = delta.pending
+                self._pending_quote_reason = delta.reason
+                if delta.pending and self._pending_quote_ts == 0.0:
+                    self._pending_quote_ts = delta.ts
+            except Exception:
+                # Fallback to direct assignment on handler error
+                self._pending_quote_resubscribe = True
+                self._pending_quote_reason = reason
+                self._pending_quote_ts = now
+        else:
+            self._pending_quote_resubscribe = True
+            self._pending_quote_reason = reason
+            self._pending_quote_ts = now
+        self._quote_pending_stall_reported = False
+        self._update_quote_pending_metrics()
         self._schedule_force_relogin()
 
     def _clear_quote_pending(self) -> None:
+        if self._quote_event_handler is not None:
+            # C3: delegate state transition to QuoteEventHandler
+            try:
+                self._quote_event_handler.clear_pending()
+            except Exception:
+                pass
         self._pending_quote_resubscribe = False
         self._pending_quote_reason = None
         self._pending_quote_ts = 0.0
+        self._quote_pending_stall_reported = False
+        self._update_quote_pending_metrics()
         logger.info("Quote data resumed; clearing pending")
 
     def _schedule_resubscribe(self, reason: str) -> None:
@@ -1747,29 +1378,85 @@ class ShioajiClient:
             return False
         try:
             self._last_reconnect_ts = now
+            self._last_reconnect_error = None
             logger.warning("Reconnecting Shioaji", reason=reason, force=force)
-            try:
-                self.api.logout()
-            except Exception as exc:
-                logger.warning("Logout failed during reconnect", error=str(exc))
+            ok_logout, _, err_logout, _ = self._safe_call_with_timeout(
+                "logout",
+                lambda: self.api.logout(),
+                self._reconnect_timeout_s,
+            )
+            if not ok_logout:
+                logger.warning("Logout failed during reconnect", error=str(err_logout))
+
             self.logged_in = False
             self._callbacks_registered = False
-            self._pending_quote_resubscribe = False
+            self._clear_quote_pending()
             self.subscribed_codes = set()
             self.subscribed_count = 0
             self._refresh_quote_routes()
 
-            self.login()
-            if self.logged_in and self.tick_callback:
-                self._ensure_callbacks(self.tick_callback)
-                self.subscribe_basket(self.tick_callback)
-            if self.logged_in:
-                self.metrics.feed_reconnect_total.labels(result="ok").inc()
-                self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
-            else:
-                self.metrics.feed_reconnect_total.labels(result="fail").inc()
+            login_ok = bool(self.login())
+            if not login_ok or not self.logged_in:
+                self._last_reconnect_error = self._last_login_error or "login_failed"
+                if self.metrics:
+                    self.metrics.feed_reconnect_total.labels(result="fail").inc()
                 self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._reconnect_backoff_max_s)
-            return self.logged_in
+                return False
+
+            subscribe_ok = True
+            if self.tick_callback:
+                try:
+                    self._ensure_callbacks(self.tick_callback)
+                    if not self._callbacks_registered:
+                        subscribe_ok = False
+                        self._last_reconnect_error = "callbacks_not_registered"
+                    else:
+                        ok_sub, _, err_sub, timed_out_sub = self._safe_call_with_timeout(
+                            "subscribe_basket",
+                            lambda: self.subscribe_basket(self.tick_callback),
+                            self._reconnect_subscribe_timeout_s,
+                        )
+                        if not ok_sub:
+                            subscribe_ok = False
+                            self._last_reconnect_error = str(err_sub) if err_sub is not None else "subscribe_failed"
+                            if self.metrics and timed_out_sub:
+                                try:
+                                    self.metrics.feed_reconnect_timeout_total.labels(reason="subscribe").inc()
+                                except Exception:
+                                    pass
+                            logger.error(
+                                "Subscribe basket failed after reconnect",
+                                timeout=timed_out_sub,
+                                error=self._last_reconnect_error,
+                            )
+                except Exception as exc:
+                    subscribe_ok = False
+                    self._last_reconnect_error = str(exc)
+                    logger.error("Callback/subscribe failed after reconnect login", error=str(exc))
+
+            ok = self.logged_in and subscribe_ok
+            if self.metrics:
+                self.metrics.feed_reconnect_total.labels(result="ok" if ok else "fail").inc()
+            if ok:
+                self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
+                return True
+
+            self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._reconnect_backoff_max_s)
+            return False
+        except Exception as exc:
+            self._last_reconnect_error = str(exc)
+            logger.error("Reconnect failed unexpectedly", reason=reason, error=str(exc))
+            if self.metrics:
+                self.metrics.feed_reconnect_total.labels(result="exception").inc()
+                try:
+                    self.metrics.feed_reconnect_exception_total.labels(
+                        reason=reason or "unknown",
+                        exception_type=type(exc).__name__,
+                    ).inc()
+                except Exception:
+                    pass
+            self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._reconnect_backoff_max_s)
+            return False
         finally:
             self._reconnect_lock.release()
 
@@ -1874,43 +1561,7 @@ class ShioajiClient:
             logger.warning(f"Unsubscribe failed for {code}: {e}")
 
     def reload_symbols(self) -> None:
-        old_map: dict[str, Dict[str, Any]] = {}
-        for sym in self.symbols:
-            code = sym.get("code")
-            if not code:
-                continue
-            old_map[str(code)] = sym
-        self._load_config()
-        self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
-
-        new_map: dict[str, Dict[str, Any]] = {}
-        for sym in self.symbols:
-            code = sym.get("code")
-            if not code:
-                continue
-            new_map[str(code)] = sym
-        removed = set(old_map) - set(new_map)
-        added = set(new_map) - set(old_map)
-
-        if not self.api or not self.logged_in or not self.tick_callback:
-            self.subscribed_codes = set(new_map)
-            self.subscribed_count = len(self.subscribed_codes)
-            self._refresh_quote_routes()
-            return
-
-        for code in removed:
-            self._unsubscribe_symbol(old_map[code])
-            self.subscribed_codes.discard(code)
-
-        for code in added:
-            if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
-                raise ValueError("Subscription limit reached during reload")
-            sym = new_map[code]
-            if self._subscribe_symbol(sym, self.tick_callback):
-                self.subscribed_codes.add(code)
-
-        self.subscribed_count = len(self.subscribed_codes)
-        self._refresh_quote_routes()
+        self._contracts().reload_symbols()
 
     # --- C2: Failed subscription retry thread ---
 
@@ -1919,6 +1570,7 @@ class ShioajiClient:
         if self._sub_retry_running:
             return
         self._sub_retry_running = True
+        self._set_thread_alive_metric("sub_retry", True)
         logger.info("Starting subscription retry thread", failed=len(self._failed_sub_symbols))
 
         def _retry_loop() -> None:
@@ -1950,6 +1602,7 @@ class ShioajiClient:
                     codes=[s.get("code") for s in self._failed_sub_symbols[:10]],
                 )
             self._sub_retry_running = False
+            self._set_thread_alive_metric("sub_retry", False)
 
         self._sub_retry_thread = threading.Thread(
             target=_retry_loop,
@@ -1961,312 +1614,22 @@ class ShioajiClient:
     # --- C3: Contract cache refresh thread ---
 
     def _is_contract_cache_stale(self) -> bool:
-        """Return True if contracts.json is missing, unparseable, or older than refresh interval."""
-        import datetime
-        import json
-        from pathlib import Path
-
-        path = Path(self._contract_cache_path)
-        if not path.exists():
-            return True
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            updated_at = data.get("updated_at")
-            if not updated_at:
-                return True
-            dt = datetime.datetime.fromisoformat(updated_at)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=datetime.timezone.utc)
-            age_s = (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds()
-            return age_s > self._contract_refresh_s
-        except Exception as exc:
-            logger.warning("Cannot parse contract cache for staleness check", error=str(exc))
-            return True
+        return self._contracts().is_contract_cache_stale()
 
     def _write_contract_refresh_status(self, *, result: str, error: str | None = None) -> None:
-        import json
-        from pathlib import Path
-
-        payload = {
-            "updated_at_ns": time.time_ns(),
-            "result": str(result),
-            "error": (str(error) if error else None),
-            "version": int(getattr(self, "_contract_refresh_version", 0) or 0),
-            "policy": str(getattr(self, "_contract_refresh_resubscribe_policy", "none") or "none"),
-            "thread_running": bool(getattr(self, "_contract_refresh_running", False)),
-            "thread_alive": bool(getattr(self, "_contract_refresh_thread", None).is_alive())
-            if getattr(self, "_contract_refresh_thread", None)
-            else False,
-            "lock_busy": bool(getattr(self, "_contract_refresh_lock", None).locked())
-            if getattr(self, "_contract_refresh_lock", None)
-            else False,
-            "cache_path": str(getattr(self, "_contract_cache_path", "")),
-            "refresh_interval_s": float(getattr(self, "_contract_refresh_s", 0.0) or 0.0),
-            "last_diff": dict(getattr(self, "_contract_refresh_last_diff", {}) or {}),
-        }
-        self._contract_refresh_last_status = payload
-        path = str(getattr(self, "_contract_refresh_status_path", "") or "").strip()
-        if not path:
-            return
-        try:
-            p = Path(path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(p.suffix + ".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(p)
-        except Exception:
-            # diagnostics/ops snapshot only
-            return
+        self._contracts().write_refresh_status(result=result, error=error)
 
     def get_contract_refresh_status(self) -> dict[str, Any]:
-        return {
-            "status": dict(self._contract_refresh_last_status or {}),
-            "version": int(self._contract_refresh_version),
-            "last_diff": dict(self._contract_refresh_last_diff or {}),
-            "policy": str(self._contract_refresh_resubscribe_policy or "none"),
-            "cache_path": str(self._contract_cache_path),
-            "status_path": str(self._contract_refresh_status_path or ""),
-            "thread_running": bool(self._contract_refresh_running),
-            "thread_alive": bool(self._contract_refresh_thread.is_alive()) if self._contract_refresh_thread else False,
-            "lock_busy": bool(self._contract_refresh_lock.locked()),
-        }
+        return self._contracts().refresh_status()
 
     def _refresh_contracts_and_symbols(self) -> None:
-        """Blocking: re-fetch contracts from broker API and reload symbol config."""
-        import json
-        from pathlib import Path
-
-        if not self.api:
-            return
-        if not self._contract_refresh_lock.acquire(blocking=False):
-            logger.info("contract_refresh_skipped_locked")
-            self._write_contract_refresh_status(result="skipped_locked")
-            try:
-                if self.metrics and hasattr(self.metrics, "contract_refresh_total"):
-                    self.metrics.contract_refresh_total.labels(result="skipped_locked").inc()
-            except Exception:
-                pass
-            return
-
-        # Snapshot codes before refresh for diff report
-        codes_before: set[str] = set()
-        try:
-            cache_path = Path(self._contract_cache_path)
-            if cache_path.exists():
-                old_cache = json.loads(cache_path.read_text(encoding="utf-8"))
-                codes_before = {str(c.get("code", "")) for c in old_cache.get("contracts", []) if c.get("code")}
-        except Exception:
-            pass
-
-        try:
-            self._ensure_contracts()
-            logger.info("Contract data refreshed from broker")
-        except Exception as exc:
-            logger.warning("Contract refresh fetch failed", error=str(exc))
-            self._write_contract_refresh_status(result="error", error=str(exc))
-            try:
-                if self.metrics and hasattr(self.metrics, "contract_refresh_total"):
-                    self.metrics.contract_refresh_total.labels(result="error").inc()
-            except Exception:
-                pass
-            self._contract_refresh_lock.release()
-            return
-        # R2: Rebuild symbol codes from fresh contract data (fixes stale TXO codes after expiry)
-        try:
-            from hft_platform.config.symbols import (
-                DEFAULT_LIST_PATH,
-                ContractIndex,
-                build_symbols,
-                write_contract_cache,
-                write_symbols_yaml,
-            )
-
-            raw_contracts: list[dict] = []
-
-            def _normalize(c: Any, exchange: str, kind: str) -> dict:
-                right = getattr(c, "option_right", None) or getattr(c, "right", None)
-                if right is not None:
-                    right = getattr(right, "value", right)
-                payload = {
-                    "code": getattr(c, "code", None),
-                    "symbol": getattr(c, "symbol", None),
-                    "name": getattr(c, "name", None),
-                    "exchange": exchange,
-                    "type": kind,
-                    "root": getattr(c, "category", None) or getattr(c, "symbol", None),
-                    "tick_size": getattr(c, "tick_size", None),
-                    "price_scale": getattr(c, "price_scale", None),
-                    "delivery_date": getattr(c, "delivery_date", None),
-                    "strike": getattr(c, "strike_price", None) or getattr(c, "strike", None),
-                    "right": right,
-                }
-                return {k: v for k, v in payload.items() if v is not None}
-
-            try:
-                for c in self.api.Contracts.Stocks.TSE:
-                    raw_contracts.append(_normalize(c, "TSE", "stock"))
-            except Exception:
-                pass
-            try:
-                for c in self.api.Contracts.Stocks.OTC:
-                    raw_contracts.append(_normalize(c, "OTC", "stock"))
-            except Exception:
-                pass
-            try:
-                for root in self.api.Contracts.Futures.keys():
-                    for c in self.api.Contracts.Futures[root]:
-                        raw_contracts.append(_normalize(c, "FUT", "future"))
-            except Exception:
-                pass
-            try:
-                for root in self.api.Contracts.Options.keys():
-                    for c in self.api.Contracts.Options[root]:
-                        raw_contracts.append(_normalize(c, "OPT", "option"))
-            except Exception:
-                pass
-
-            # Atomically persist fresh contracts and log diff
-            added_codes: list[str] = []
-            removed_codes: list[str] = []
-            try:
-                write_contract_cache(raw_contracts, self._contract_cache_path)
-                codes_after = {str(c.get("code", "")) for c in raw_contracts if c.get("code")}
-                added_codes = sorted(codes_after - codes_before)
-                removed_codes = sorted(codes_before - codes_after)
-                logger.info(
-                    "contract_refresh_diff",
-                    contracts_before=len(codes_before),
-                    contracts_after=len(codes_after),
-                    added_count=len(added_codes),
-                    removed_count=len(removed_codes),
-                    added_sample=added_codes[:10],
-                    removed_sample=removed_codes[:10],
-                )
-                self._contract_refresh_version += 1
-                self._contract_refresh_last_diff = {
-                    "version": self._contract_refresh_version,
-                    "added_codes": added_codes,
-                    "removed_codes": removed_codes,
-                    "contracts_before": len(codes_before),
-                    "contracts_after": len(codes_after),
-                }
-                try:
-                    if self.metrics and hasattr(self.metrics, "contract_refresh_symbols_changed_total"):
-                        if not added_codes and not removed_codes:
-                            self.metrics.contract_refresh_symbols_changed_total.labels(change="same").inc()
-                        for _ in added_codes:
-                            self.metrics.contract_refresh_symbols_changed_total.labels(change="added").inc()
-                        for _ in removed_codes:
-                            self.metrics.contract_refresh_symbols_changed_total.labels(change="removed").inc()
-                except Exception:
-                    pass
-            except Exception as exc:
-                logger.warning("Failed to persist contract cache after refresh", error=str(exc))
-
-            contract_index = ContractIndex(contracts=raw_contracts)
-            list_path = os.getenv("HFT_SYMBOLS_LIST_PATH", DEFAULT_LIST_PATH)
-            build_result = build_symbols(list_path, contract_index)
-            if build_result.symbols:
-                write_symbols_yaml(build_result.symbols, self.config_path)
-                logger.info(
-                    "Symbols rebuilt from fresh contracts",
-                    count=len(build_result.symbols),
-                    errors=len(build_result.errors),
-                )
-            if build_result.errors:
-                logger.warning("Symbol rebuild had errors", errors=build_result.errors[:5])
-        except Exception as exc:
-            logger.warning("Symbol rebuild failed, keeping existing symbols", error=str(exc))
-
-        # Reload symbol config
-        try:
-            self._load_config()
-            logger.info("Symbol config reloaded after contract refresh", symbol_count=len(self.symbols))
-        except Exception as exc:
-            logger.warning("Symbol config reload failed after contract refresh", error=str(exc))
-        finally:
-            try:
-                if self.metrics and hasattr(self.metrics, "contract_refresh_total"):
-                    self.metrics.contract_refresh_total.labels(result="ok").inc()
-            except Exception:
-                pass
-            policy = self._contract_refresh_resubscribe_policy
-            should_resub = policy == "all"
-            if policy == "diff":
-                diff = self._contract_refresh_last_diff or {}
-                should_resub = bool(diff.get("added_codes") or diff.get("removed_codes"))
-            if should_resub and self.logged_in:
-                try:
-                    logger.info("contract_refresh_resubscribe", policy=policy)
-                    self._resubscribe_all()
-                except Exception as exc:
-                    logger.warning("contract_refresh_resubscribe_failed", error=str(exc))
-            self._contract_refresh_lock.release()
-            self._write_contract_refresh_status(result="ok")
+        self._contracts().refresh_contracts_and_symbols()
 
     def _preflight_contracts(self) -> None:
-        """Advisory preflight check — never raises; logs warnings only."""
-        errors: list[str] = []
-
-        if self._is_contract_cache_stale():
-            logger.warning("preflight_contract_cache_stale", path=self._contract_cache_path)
-            errors.append("contract_cache_stale")
-
-        missing_codes: list[str] = []
-        for sym in self.symbols:
-            code = sym.get("code")
-            exchange = sym.get("exchange")
-            product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
-            if not code or not exchange:
-                continue
-            if not self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False):
-                missing_codes.append(str(code))
-        if missing_codes:
-            logger.warning(
-                "preflight_missing_contracts",
-                missing_count=len(missing_codes),
-                missing_sample=missing_codes[:10],
-            )
-            errors.append(f"missing_contracts:{len(missing_codes)}")
-
-        if len(self.symbols) > self.MAX_SUBSCRIPTIONS:
-            logger.warning(
-                "preflight_subscription_count_exceeded",
-                symbol_count=len(self.symbols),
-                limit=self.MAX_SUBSCRIPTIONS,
-            )
-            errors.append("subscription_count_exceeded")
-
-        logger.info("preflight_complete", passed_all=(len(errors) == 0), errors=errors)
+        self._contracts().preflight_contracts()
 
     def _start_contract_refresh_thread(self) -> None:
-        """Start daemon thread that immediately refreshes stale contract cache then runs on schedule."""
-        if self._contract_refresh_running:
-            return
-        self._contract_refresh_running = True
-        self._write_contract_refresh_status(result="thread_started")
-
-        def _refresh_loop() -> None:
-            if self._is_contract_cache_stale():
-                logger.info("Contract cache stale at startup; triggering immediate refresh")
-                self._refresh_contracts_and_symbols()
-            next_refresh = time.monotonic() + self._contract_refresh_s
-            while self._contract_refresh_running:
-                time.sleep(60.0)
-                if not self._contract_refresh_running:
-                    break
-                if time.monotonic() >= next_refresh:
-                    logger.info("Scheduled contract refresh starting")
-                    self._refresh_contracts_and_symbols()
-                    next_refresh = time.monotonic() + self._contract_refresh_s
-            self._contract_refresh_running = False
-
-        self._contract_refresh_thread = threading.Thread(
-            target=_refresh_loop,
-            name="shioaji-contract-refresh",
-            daemon=True,
-        )
-        self._contract_refresh_thread.start()
+        self._contracts().start_contract_refresh_thread()
 
     def close(self, logout: bool = False) -> None:
         """Best-effort client teardown for tests/services (registry cleanup + worker stop)."""
@@ -2293,26 +1656,25 @@ class ShioajiClient:
                 self.api.logout()
             except Exception as exc:
                 logger.warning("Logout failed during close", error=str(exc))
+        self._release_session_lock()
+        for name in (
+            "quote_watchdog",
+            "callback_retry",
+            "event_callback_retry",
+            "quote_relogin",
+            "force_relogin",
+            "session_refresh",
+            "sub_retry",
+            "contract_refresh",
+        ):
+            self._set_thread_alive_metric(name, False)
         self._write_contract_refresh_status(result="closed")
 
     def shutdown(self, logout: bool = False) -> None:
         self.close(logout=logout)
 
     def validate_symbols(self) -> list[str]:
-        if not self.api or not self.logged_in:
-            return []
-        invalid = []
-        for sym in self.symbols:
-            code = sym.get("code")
-            exchange = sym.get("exchange")
-            product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
-            if not code or not exchange:
-                continue
-            if not self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False):
-                invalid.append(code)
-        if invalid:
-            logger.warning("Unsubscribable symbols detected", count=len(invalid), symbols=invalid[:10])
-        return invalid
+        return self._contracts().validate_symbols()
 
     def _wrapped_tick_cb(self, *args, **kwargs):
         """Persistent callback wrapper."""
@@ -2329,294 +1691,21 @@ class ShioajiClient:
         product_type: str | None = None,
         allow_synthetic: bool = False,
     ):
-        if not self.api:
-            return None
-
-        exch = str(exchange or "").upper()
-        prod = str(product_type or "").strip().lower()
-        raw_code = str(code or "").strip().upper()
-
-        if prod in {"index", "idx"} or exch in {"IDX", "INDEX"}:
-            idx_exch = exch if exch in {"TSE", "OTC"} else self.index_exchange
-            idx_group = getattr(self.api.Contracts.Indexs, idx_exch, None)
-            return self._lookup_contract(
-                idx_group, code, allow_symbol_fallback=self.allow_symbol_fallback, label="index"
-            )
-
-        if prod in {"stock", "stk"} or exch in {"TSE", "OTC", "OES"}:
-            stocks = getattr(self.api.Contracts, "Stocks", None)
-            tse_group = getattr(stocks, "TSE", None) if stocks is not None else None
-            otc_group = getattr(stocks, "OTC", None) if stocks is not None else None
-            oes_group = getattr(stocks, "OES", None) if stocks is not None else None
-            if isinstance(stocks, dict):
-                tse_group = stocks.get("TSE", tse_group)
-                otc_group = stocks.get("OTC", otc_group)
-                oes_group = stocks.get("OES", oes_group)
-
-            if exch == "TSE" and tse_group is not None:
-                return self._lookup_contract(
-                    tse_group,
-                    code,
-                    allow_symbol_fallback=self.allow_symbol_fallback,
-                    label="stock",
-                )
-            if exch == "OTC" and otc_group is not None:
-                return self._lookup_contract(
-                    otc_group,
-                    code,
-                    allow_symbol_fallback=self.allow_symbol_fallback,
-                    label="stock",
-                )
-            if exch == "OES" and oes_group is not None:
-                return self._lookup_contract(
-                    oes_group,
-                    code,
-                    allow_symbol_fallback=self.allow_symbol_fallback,
-                    label="stock",
-                )
-
-            for group in (tse_group, otc_group, oes_group):
-                if group is None:
-                    continue
-                contract = self._lookup_contract(
-                    group,
-                    code,
-                    allow_symbol_fallback=self.allow_symbol_fallback,
-                    label="stock",
-                )
-                if contract:
-                    return contract
-
-            if stocks is not None:
-                return self._lookup_contract(
-                    stocks,
-                    code,
-                    allow_symbol_fallback=self.allow_symbol_fallback,
-                    label="stock",
-                )
-
-        if prod in {"future", "futures"} or exch in {"FUT", "FUTURES", "TAIFEX"}:
-            for candidate in self._expand_future_codes(raw_code):
-                contract = self._lookup_contract(
-                    self.api.Contracts.Futures,
-                    candidate,
-                    allow_symbol_fallback=self.allow_symbol_fallback,
-                    label="future",
-                )
-                if contract:
-                    return contract
-
-        if prod in {"option", "options"} or exch in {"OPT", "OPTIONS"}:
-            contract = self._lookup_contract(
-                self.api.Contracts.Options,
-                raw_code,
-                allow_symbol_fallback=self.allow_symbol_fallback,
-                label="option",
-            )
-            if contract:
-                return contract
-
-        if allow_synthetic and sj:
-            return self._build_synthetic_contract(exch, raw_code)
-
-        return None
-
-    def _expand_future_codes(self, code: str) -> list[str]:
-        """Expand legacy futures month codes (e.g., TXFD6) to YYYYMM form (TXF202604)."""
-        code = str(code or "").strip().upper()
-        if not code:
-            return []
-        candidates = [code]
-        # Legacy format: ROOT + month_code + year_digit (e.g., TXFD6)
-        if len(code) >= 5:
-            month_code = code[-2]
-            year_digit = code[-1]
-            month_map = {
-                "A": "01",
-                "B": "02",
-                "C": "03",
-                "D": "04",
-                "E": "05",
-                "F": "06",
-                "G": "07",
-                "H": "08",
-                "I": "09",
-                "J": "10",
-                "K": "11",
-                "L": "12",
-            }
-            if year_digit.isdigit() and month_code in month_map:
-                root = code[:-2]
-                year = self._resolve_year_from_digit(int(year_digit))
-                alt = f"{root}{year}{month_map[month_code]}"
-                if alt not in candidates:
-                    candidates.append(alt)
-        return candidates
-
-    def _resolve_year_from_digit(self, digit: int) -> int:
-        now_year = dt.datetime.now(timebase.TZINFO).year
-        base = (now_year // 10) * 10 + digit
-        # If the computed year is too far in the past, roll to next decade.
-        if base < now_year - 1:
-            base += 10
-        return base
-
-    def _lookup_contract(self, container: Any, code: str, allow_symbol_fallback: bool, label: str) -> Any | None:
-        if not container:
-            return None
-
-        try:
-            return container[code]
-        except Exception as exc:
-            logger.debug("Direct contract lookup failed", code=code, label=label, error=str(exc))
-
-        def iter_contracts(value: Any):
-            iterable = value.values() if isinstance(value, dict) else value
-            for item in iterable:
-                yield item
-                try:
-                    if hasattr(item, "__iter__") and not hasattr(item, "code"):
-                        for sub in item:
-                            yield sub
-                except Exception as exc:
-                    logger.debug("Error iterating contract sub-items", error=str(exc))
-                    continue
-
-        try:
-            for contract in iter_contracts(container):
-                if getattr(contract, "code", None) == code:
-                    return contract
-        except Exception as exc:
-            logger.warning("Error searching contracts by code", code=code, label=label, error=str(exc))
-            return None
-
-        if not allow_symbol_fallback:
-            return None
-
-        try:
-            for contract in iter_contracts(container):
-                if getattr(contract, "symbol", None) == code:
-                    logger.warning("Symbol fallback used for contract", code=code, type=label)
-                    return contract
-        except Exception as exc:
-            logger.warning("Error searching contracts by symbol fallback", code=code, label=label, error=str(exc))
-            return None
-        return None
-
-    def _build_synthetic_contract(self, exchange: str, code: str) -> Any | None:
-        try:
-            exch_obj = (
-                sj.constant.Exchange.TAIFEX if exchange in {"FUT", "FUTURES", "TAIFEX"} else sj.constant.Exchange.TSE
-            )
-            sec_type = (
-                sj.constant.SecurityType.Future
-                if exchange in {"FUT", "FUTURES", "TAIFEX"}
-                else sj.constant.SecurityType.Stock
-            )
-            cat = code[:3] if len(code) >= 3 else code
-
-            contract = sj.contracts.Contract(
-                code=code,
-                symbol=code,
-                name=code,
-                category=cat,
-                exchange=exch_obj,
-                security_type=sec_type,
-            )
-            logger.info("Constructed synthetic contract", code=code, exchange=exchange)
-            return contract
-        except Exception as exc:
-            logger.error("Failed to construct synthetic contract", error=str(exc))
-            return None
+        return self._contracts()._get_contract(
+            exchange, code, product_type=product_type, allow_synthetic=allow_synthetic
+        )
 
     def get_exchange(self, code: str) -> str | None:
-        """Resolve exchange for a code."""
-        # Try map first
-        if code in self.code_exchange_map:
-            return self.code_exchange_map[code]
-        # Heuristic fallback?
-        return None
+        return self._contracts().get_exchange(code)
 
     def get_usage(self):
-        """Usage stats from Shioaji if available."""
-        cached = self._cache_get("usage")
-        if cached is not None:
-            return cached
-        if self.api and self.logged_in and hasattr(self.api, "usage"):
-            try:
-                if not self._rate_limit_api("usage"):
-                    return cached or {"subscribed": self.subscribed_count, "bytes_used": 0}
-                start_ns = time.perf_counter_ns()
-                usage = self.api.usage()
-                self._record_api_latency("usage", start_ns, ok=True)
-                self._cache_set("usage", self._usage_cache_ttl_s, usage)
-                return usage
-            except Exception as exc:
-                self._record_api_latency("usage", start_ns, ok=False)
-                logger.warning("Failed to fetch usage", error=str(exc))
-        return {"subscribed": self.subscribed_count, "bytes_used": 0}
+        return self._accounts().get_usage()
 
     def get_positions(self) -> List[Any]:
-        """Fetch current positions from Shioaji."""
-        if self.mode == "simulation":
-            return []
-        cached = self._cache_get("positions")
-        if cached is not None:
-            return cached
-        try:
-            if not self._rate_limit_api("positions"):
-                return cached or []
-            positions: list[Any] = []
-            start_ns = time.perf_counter_ns()
-            if hasattr(self.api, "stock_account") and self.api.stock_account is not None:
-                positions.extend(self.api.list_positions(self.api.stock_account))
-            if hasattr(self.api, "futopt_account") and self.api.futopt_account is not None:
-                positions.extend(self.api.list_positions(self.api.futopt_account))
-            self._record_api_latency("positions", start_ns, ok=True)
-            self._cache_set("positions", self._positions_cache_ttl_s, positions)
-            return positions
-        except Exception:
-            self._record_api_latency("positions", start_ns, ok=False)
-            logger.warning("Failed to fetch positions")
-            return cached or []
+        return self._accounts().get_positions()
 
     def fetch_snapshots(self):
-        """Fetch snapshots for all symbols in batches <= 500."""
-        if not self.api or not self.logged_in:
-            logger.info("Simulation mode: skipping snapshot fetch")
-            return []
-
-        contracts = []
-        for sym in self.symbols:
-            code = sym.get("code")
-            exchange = sym.get("exchange")
-            product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
-            if not code or not exchange:
-                continue
-            contract = self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False)
-            if contract:
-                contracts.append(contract)
-
-        if not contracts:
-            logger.warning("No contracts resolved for snapshots")
-            return []
-
-        snapshots = []
-        batch_size = 500
-        for i in range(0, len(contracts), batch_size):
-            batch = contracts[i : i + batch_size]
-            logger.info("Requesting snapshots", batch_size=len(batch))
-            try:
-                start_ns = time.perf_counter_ns()
-                results = self.api.snapshots(batch)
-                self._record_api_latency("snapshots", start_ns, ok=True)
-                snapshots.extend(results or [])
-                time.sleep(0.11)
-            except Exception as e:
-                self._record_api_latency("snapshots", start_ns, ok=False)
-                logger.error("Snapshot fetch failed", error=str(e))
-
-        return snapshots
+        return self._accounts().fetch_snapshots()
 
     # get_positions was defined earlier. Removing duplicate.
 
@@ -2637,390 +1726,25 @@ class ShioajiClient:
         account: Any | None = None,
         price_type: str | None = None,
     ):
-        """
-        Wrapper for placing order.
-        """
-        if not self.api:
-            logger.warning("Shioaji SDK missing; mock place_order invoked.")
-            return {"seq_no": f"sim-{int(timebase.now_s() * 1000)}"}
-
-        contract = self._get_contract(exchange, contract_code, product_type=product_type, allow_synthetic=False)
-        if not contract:
-            raise ValueError(f"Contract {contract_code} not found")
-
-        # Convert simple types to Shioaji enums
-        # Action: Buy/Sell
-        act = sj.constant.Action.Buy if action == "Buy" else sj.constant.Action.Sell
-
-        if product_type:
-            return self._place_order_typed(
-                contract=contract,
-                action=act,
-                price=price,
-                qty=qty,
-                exchange=exchange,
-                product_type=product_type,
-                tif=tif,
-                order_type=order_type,
-                price_type=price_type,
-                order_cond=order_cond,
-                order_lot=order_lot,
-                oc_type=oc_type,
-                account=account,
-                custom_field=custom_field,
-            )
-
-        # Legacy fallback for tests/backward compatibility.
-        pt = sj.constant.StockPriceType.LMT
-        ot = sj.constant.OrderType.ROD
-        if tif == "IOC":
-            ot = sj.constant.OrderType.IOC
-        elif tif == "FOK":
-            ot = sj.constant.OrderType.FOK
-
-        order = sj.Order(price=price, quantity=qty, action=act, price_type=pt, order_type=ot, custom_field=custom_field)
-        start_ns = time.perf_counter_ns()
-        try:
-            result = self.api.place_order(contract, order)
-            self._record_api_latency("place_order", start_ns, ok=True)
-            return result
-        except Exception:
-            self._record_api_latency("place_order", start_ns, ok=False)
-            raise
-
-    def _place_order_typed(
-        self,
-        *,
-        contract: Any,
-        action: Any,
-        price: float,
-        qty: int,
-        exchange: str,
-        product_type: str,
-        tif: str,
-        order_type: str,
-        price_type: str | None,
-        order_cond: str | None,
-        order_lot: str | None,
-        oc_type: str | None,
-        account: Any | None,
-        custom_field: str | None,
-    ):
-        prod = str(product_type or "").strip().lower()
-        if not prod:
-            prod = "stock" if str(exchange).upper() in {"TSE", "OTC", "OES"} else "future"
-
-        resolved_account = self._resolve_account(prod, account)
-        order = None
-
-        fallback_cls = getattr(sj, "Order", None)
-        if fallback_cls is None:
-            raise RuntimeError("Shioaji Order class unavailable")
-
-        if prod in {"stock", "stk"}:
-            pt = self._map_stock_price_type(price_type)
-            ot = self._map_stock_order_type(tif or order_type)
-            cond = self._map_stock_order_cond(order_cond)
-            lot = self._map_stock_order_lot(order_lot)
-            order_cls = getattr(getattr(sj, "order", None), "StockOrder", None) or fallback_cls
-            if resolved_account is None and order_cls is not fallback_cls:
-                order_cls = fallback_cls
-            if order_cls is fallback_cls:
-                order = order_cls(
-                    price=price,
-                    quantity=qty,
-                    action=action,
-                    price_type=pt,
-                    order_type=ot,
-                    custom_field=custom_field,
-                )
-            else:
-                order = order_cls(
-                    price=price,
-                    quantity=qty,
-                    action=action,
-                    price_type=pt,
-                    order_type=ot,
-                    order_cond=cond,
-                    order_lot=lot,
-                    account=resolved_account,
-                    custom_field=custom_field,
-                )
-        else:
-            pt = self._map_futures_price_type(price_type)
-            ot = self._map_futures_order_type(tif or order_type)
-            oc = self._map_futures_oc_type(oc_type)
-            order_cls = getattr(getattr(sj, "order", None), "FuturesOrder", None) or fallback_cls
-            if resolved_account is None and order_cls is not fallback_cls:
-                order_cls = fallback_cls
-            if order_cls is fallback_cls:
-                order = order_cls(
-                    price=price,
-                    quantity=qty,
-                    action=action,
-                    price_type=pt,
-                    order_type=ot,
-                    custom_field=custom_field,
-                )
-            else:
-                order = order_cls(
-                    price=price,
-                    quantity=qty,
-                    action=action,
-                    price_type=pt,
-                    order_type=ot,
-                    octype=oc,
-                    account=resolved_account,
-                    custom_field=custom_field,
-                )
-
-        start_ns = time.perf_counter_ns()
-        try:
-            result = self.api.place_order(contract, order)
-            self._record_api_latency("place_order", start_ns, ok=True)
-            return result
-        except Exception:
-            self._record_api_latency("place_order", start_ns, ok=False)
-            raise
-
-    def _resolve_account(self, product_type: str, account: Any | None) -> Any | None:
-        if account is not None:
-            if isinstance(account, str):
-                if account == "stock" and hasattr(self.api, "stock_account"):
-                    return self.api.stock_account
-                if account in {"futopt", "future", "option"} and hasattr(self.api, "futopt_account"):
-                    return self.api.futopt_account
-            return account
-        if not self.api:
-            return None
-        if product_type in {"stock", "stk"} and hasattr(self.api, "stock_account"):
-            return self.api.stock_account
-        if product_type in {"future", "futures", "option", "options"} and hasattr(self.api, "futopt_account"):
-            return self.api.futopt_account
-        return None
-
-    def _map_stock_price_type(self, price_type: str | None) -> Any:
-        if not sj:
-            return None
-        key = str(price_type or "LMT").upper()
-        return getattr(sj.constant.StockPriceType, key, sj.constant.StockPriceType.LMT)
-
-    def _map_stock_order_type(self, order_type: str | None) -> Any:
-        if not sj:
-            return None
-        key = str(order_type or "ROD").upper()
-        return getattr(sj.constant.OrderType, key, sj.constant.OrderType.ROD)
-
-    def _map_stock_order_cond(self, order_cond: str | None) -> Any:
-        if not sj:
-            return None
-        if not order_cond:
-            return sj.constant.StockOrderCond.Cash
-        key = str(order_cond).strip().lower().replace("_", "").replace("-", "")
-        mapping = {
-            "cash": "Cash",
-            "margin": "MarginTrading",
-            "margintrading": "MarginTrading",
-            "short": "ShortSelling",
-            "shortselling": "ShortSelling",
-        }
-        name = mapping.get(key, "Cash")
-        return getattr(sj.constant.StockOrderCond, name, sj.constant.StockOrderCond.Cash)
-
-    def _map_stock_order_lot(self, order_lot: str | None) -> Any:
-        if not sj:
-            return None
-        if not order_lot:
-            return sj.constant.StockOrderLot.Common
-        key = str(order_lot).strip().lower().replace("_", "").replace("-", "")
-        mapping = {
-            "common": "Common",
-            "fixing": "Fixing",
-            "odd": "Odd",
-            "intradayodd": "IntradayOdd",
-        }
-        name = mapping.get(key, "Common")
-        return getattr(sj.constant.StockOrderLot, name, sj.constant.StockOrderLot.Common)
-
-    def _map_futures_price_type(self, price_type: str | None) -> Any:
-        if not sj:
-            return None
-        key = str(price_type or "LMT").upper()
-        return getattr(sj.constant.FuturesPriceType, key, sj.constant.FuturesPriceType.LMT)
-
-    def _map_futures_order_type(self, order_type: str | None) -> Any:
-        if not sj:
-            return None
-        key = str(order_type or "ROD").upper()
-        fut_type = getattr(sj.constant, "FuturesOrderType", None)
-        if fut_type:
-            return getattr(fut_type, key, fut_type.ROD)
-        return getattr(sj.constant.OrderType, key, sj.constant.OrderType.ROD)
-
-    def _map_futures_oc_type(self, oc_type: str | None) -> Any:
-        if not sj:
-            return None
-        if not oc_type:
-            return sj.constant.FuturesOCType.Auto
-        key = str(oc_type).strip().lower().replace("_", "").replace("-", "")
-        mapping = {"auto": "Auto", "new": "New", "close": "Close"}
-        name = mapping.get(key, "Auto")
-        return getattr(sj.constant.FuturesOCType, name, sj.constant.FuturesOCType.Auto)
+        return self._orders().place_order(
+            contract_code=contract_code,
+            exchange=exchange,
+            action=action,
+            price=price,
+            qty=qty,
+            order_type=order_type,
+            tif=tif,
+            custom_field=custom_field,
+            product_type=product_type,
+            order_cond=order_cond,
+            order_lot=order_lot,
+            oc_type=oc_type,
+            account=account,
+            price_type=price_type,
+        )
 
     def cancel_order(self, trade):
-        if not self.api:
-            logger.warning("Shioaji SDK missing; mock cancel_order invoked.")
-            return
-        if not hasattr(self.api, "cancel_order"):
-            raise RuntimeError("Shioaji API missing cancel_order")
-        try:
-            start_ns = time.perf_counter_ns()
-            result = self.api.cancel_order(trade)
-            self._record_api_latency("cancel_order", start_ns, ok=True)
-            return result
-        except Exception as exc:
-            self._record_api_latency("cancel_order", start_ns, ok=False)
-            logger.error("cancel_order failed", error=str(exc))
-            raise
+        return self._orders().cancel_order(trade)
 
     def update_order(self, trade, price: float | None = None, qty: int | None = None):
-        if not self.api:
-            logger.warning("Shioaji SDK missing; mock update_order invoked.")
-            return
-        if price is not None:
-            if hasattr(self.api, "update_order"):
-                try:
-                    start_ns = time.perf_counter_ns()
-                    result = self.api.update_order(trade=trade, price=price)
-                    self._record_api_latency("update_order", start_ns, ok=True)
-                    return result
-                except Exception as exc:
-                    self._record_api_latency("update_order", start_ns, ok=False)
-                    logger.error("update_order(price) failed", error=str(exc))
-                    raise
-            if hasattr(self.api, "update_price"):
-                try:
-                    start_ns = time.perf_counter_ns()
-                    result = self.api.update_price(trade=trade, price=price)
-                    self._record_api_latency("update_price", start_ns, ok=True)
-                    return result
-                except Exception as exc:
-                    self._record_api_latency("update_price", start_ns, ok=False)
-                    logger.error("update_price failed", error=str(exc))
-                    raise
-            raise RuntimeError("Shioaji API missing update_order/update_price")
-        if qty is not None:
-            if hasattr(self.api, "update_order"):
-                try:
-                    start_ns = time.perf_counter_ns()
-                    result = self.api.update_order(trade=trade, qty=qty)
-                    self._record_api_latency("update_order", start_ns, ok=True)
-                    return result
-                except Exception as exc:
-                    self._record_api_latency("update_order", start_ns, ok=False)
-                    logger.error("update_order(qty) failed", error=str(exc))
-                    raise
-            if hasattr(self.api, "update_qty"):
-                try:
-                    start_ns = time.perf_counter_ns()
-                    result = self.api.update_qty(trade=trade, quantity=qty)
-                    self._record_api_latency("update_qty", start_ns, ok=True)
-                    return result
-                except Exception as exc:
-                    self._record_api_latency("update_qty", start_ns, ok=False)
-                    logger.error("update_qty failed", error=str(exc))
-                    raise
-            raise RuntimeError("Shioaji API missing update_order/update_qty")
-
-    def get_account_balance(self, account=None):
-        if self.mode == "simulation":
-            return {}
-        cached = self._cache_get("account_balance")
-        if cached is not None:
-            return cached
-        try:
-            if not self._rate_limit_api("account_balance"):
-                return cached or {}
-            start_ns = time.perf_counter_ns()
-            result = None
-            if account is not None:
-                result = self.api.account_balance(account)
-            else:
-                result = self.api.account_balance()
-            self._record_api_latency("account_balance", start_ns, ok=True)
-            self._cache_set("account_balance", self._account_cache_ttl_s, result)
-            return result
-        except Exception as exc:
-            self._record_api_latency("account_balance", start_ns, ok=False)
-            logger.warning("Failed to fetch account balance", error=str(exc))
-            return cached or {}
-
-    def get_margin(self, account=None):
-        if self.mode == "simulation":
-            return {}
-        cached = self._cache_get("margin")
-        if cached is not None:
-            return cached
-        try:
-            if not self._rate_limit_api("margin"):
-                return cached or {}
-            start_ns = time.perf_counter_ns()
-            acct = account
-            if acct is None and hasattr(self.api, "futopt_account"):
-                acct = self.api.futopt_account
-            result = self.api.margin(acct)
-            self._record_api_latency("margin", start_ns, ok=True)
-            self._cache_set("margin", self._margin_cache_ttl_s, result)
-            return result
-        except Exception as exc:
-            self._record_api_latency("margin", start_ns, ok=False)
-            logger.warning("Failed to fetch margin", error=str(exc))
-            return cached or {}
-
-    def list_position_detail(self, account=None):
-        if self.mode == "simulation":
-            return []
-        cached = self._cache_get("position_detail")
-        if cached is not None:
-            return cached
-        try:
-            if not self._rate_limit_api("position_detail"):
-                return cached or []
-            start_ns = time.perf_counter_ns()
-            acct = account
-            if acct is None and hasattr(self.api, "stock_account"):
-                acct = self.api.stock_account
-            result = self.api.list_position_detail(acct) if acct is not None else self.api.list_position_detail()
-            self._record_api_latency("position_detail", start_ns, ok=True)
-            self._cache_set("position_detail", self._positions_detail_cache_ttl_s, result)
-            return result
-        except Exception as exc:
-            self._record_api_latency("position_detail", start_ns, ok=False)
-            logger.warning("Failed to fetch position detail", error=str(exc))
-            return cached or []
-
-    def list_profit_loss(self, account=None, begin_date: str | None = None, end_date: str | None = None):
-        if self.mode == "simulation":
-            return []
-        cache_key = f"profit_loss:{begin_date}:{end_date}"
-        cached = self._cache_get(cache_key)
-        if cached is not None:
-            return cached
-        try:
-            if not self._rate_limit_api("profit_loss"):
-                return cached or []
-            start_ns = time.perf_counter_ns()
-            acct = account
-            if acct is None and hasattr(self.api, "stock_account"):
-                acct = self.api.stock_account
-            if acct is not None:
-                result = self.api.list_profit_loss(acct, begin_date=begin_date, end_date=end_date)
-            else:
-                result = self.api.list_profit_loss(begin_date=begin_date, end_date=end_date)
-            self._record_api_latency("profit_loss", start_ns, ok=True)
-            self._cache_set(cache_key, self._profit_cache_ttl_s, result)
-            return result
-        except Exception as exc:
-            self._record_api_latency("profit_loss", start_ns, ok=False)
-            logger.warning("Failed to fetch profit/loss", error=str(exc))
-            return cached or []
+        return self._orders().update_order(trade=trade, price=price, qty=qty)

@@ -63,6 +63,8 @@ class MetricsRegistry:
                 "queue_depth",
                 "feed_resubscribe_total",
                 "feed_reconnect_total",
+                "feed_reconnect_timeout_total",
+                "feed_reconnect_exception_total",
                 "system_cpu_usage",
                 "system_memory_usage",
                 "event_loop_lag_ms",
@@ -119,6 +121,13 @@ class MetricsRegistry:
                 "shioaji_quote_route_total",
                 "shioaji_quote_callback_queue_depth",
                 "shioaji_quote_callback_queue_dropped_total",
+                "shioaji_thread_alive",
+                "shioaji_quote_pending_age_seconds",
+                "shioaji_quote_pending_stall_total",
+                "shioaji_session_lock_conflicts_total",
+                "feed_session_conflict_total",
+                "feed_first_quote_total",
+                "shioaji_login_fail_total",
                 "market_data_callback_parse_total",
                 "feature_plane_updates_total",
                 "feature_plane_latency_ns",
@@ -147,6 +156,16 @@ class MetricsRegistry:
         self.lob_updates_total = Counter("lob_updates_total", "LOB updates applied", ["symbol", "type"])
         self.lob_snapshots_total = Counter("lob_snapshots_total", "LOB snapshots applied", ["symbol"])
         self.feed_reconnect_total = Counter("feed_reconnect_total", "Feed reconnect attempts", ["result"])
+        self.feed_reconnect_timeout_total = Counter(
+            "feed_reconnect_timeout_total",
+            "Feed reconnect attempts that timed out",
+            ["reason"],
+        )
+        self.feed_reconnect_exception_total = Counter(
+            "feed_reconnect_exception_total",
+            "Feed reconnect attempts that raised exceptions",
+            ["reason", "exception_type"],
+        )
         self.feed_resubscribe_total = Counter("feed_resubscribe_total", "Feed resubscribe attempts", ["result"])
         self.feed_last_event_ts = Gauge("feed_last_event_ts", "Last feed event timestamp (unix seconds)", ["source"])
         self.feed_time_skew_ns = Gauge(
@@ -501,6 +520,38 @@ class MetricsRegistry:
         self.shioaji_quote_callback_queue_dropped_total = Counter(
             "shioaji_quote_callback_queue_dropped_total",
             "Dropped Shioaji callback payloads due to callback ingress queue overflow",
+        )
+        self.shioaji_thread_alive = Gauge(
+            "shioaji_thread_alive",
+            "Shioaji runtime thread liveness (1=alive, 0=down)",
+            ["thread"],
+        )
+        self.shioaji_quote_pending_age_seconds = Gauge(
+            "shioaji_quote_pending_age_seconds",
+            "Age in seconds of pending quote-resubscribe state",
+        )
+        self.shioaji_quote_pending_stall_total = Counter(
+            "shioaji_quote_pending_stall_total",
+            "Pending quote-resubscribe entered stall state",
+            ["reason"],
+        )
+        self.shioaji_session_lock_conflicts_total = Counter(
+            "shioaji_session_lock_conflicts_total",
+            "Detected potential multi-runtime broker session lock conflicts",
+        )
+        self.feed_session_conflict_total = Counter(
+            "feed_session_conflict_total",
+            "Detected another runtime holding the feed session at startup (Redis preflight)",
+            ["role"],
+        )
+        self.feed_first_quote_total = Counter(
+            "feed_first_quote_total",
+            "First live quote received since engine start",
+        )
+        self.shioaji_login_fail_total = Counter(
+            "shioaji_login_fail_total",
+            "Shioaji login attempts exhausted retries",
+            ["reason"],
         )
         self.market_data_callback_parse_total = Counter(
             "market_data_callback_parse_total",

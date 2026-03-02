@@ -37,6 +37,14 @@ def _safe_write(path: str, content: str):
 
 
 def cmd_run(args: argparse.Namespace):
+    os.environ.setdefault("HFT_RUNTIME_ROLE", "engine")
+    runtime_role = str(os.getenv("HFT_RUNTIME_ROLE", "engine")).strip().lower().replace("-", "_")
+    if runtime_role != "engine":
+        logger.warning(
+            "hft run invoked with non-engine runtime role; feed client creation may be disabled",
+            runtime_role=runtime_role,
+        )
+
     mode = args.mode or args.mode_flag or _resolve_default_mode()
     cli_overrides: Dict[str, Any] = {
         "mode": mode,

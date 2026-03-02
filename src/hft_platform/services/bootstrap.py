@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
+import threading
+import time
 from typing import Any, Dict, Optional
+
+from structlog import get_logger
 
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
@@ -14,7 +19,7 @@ from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feature.profile import load_feature_profile_registry
 from hft_platform.feature.rollout import load_feature_rollout_controller
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
-from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
@@ -24,10 +29,278 @@ from hft_platform.services.market_data import MarketDataService
 from hft_platform.services.registry import ServiceRegistry
 from hft_platform.strategy.runner import StrategyRunner
 
+logger = get_logger("bootstrap")
+
+_VALID_RUNTIME_ROLES = frozenset({"engine", "maintenance", "monitor", "wal_loader"})
+_FEED_ALLOWED_ROLES = frozenset({"engine"})
+
+
+def _encode_resp(*parts: str) -> bytes:
+    """Encode a RESP command for Redis."""
+    payload = [f"*{len(parts)}\r\n".encode("utf-8")]
+    for part in parts:
+        raw = str(part).encode("utf-8")
+        payload.append(f"${len(raw)}\r\n".encode("utf-8"))
+        payload.append(raw + b"\r\n")
+    return b"".join(payload)
+
+
+def _read_resp(stream) -> str | int | None:
+    """Read a single RESP response from a binary stream."""
+    prefix = stream.read(1)
+    if not prefix:
+        raise RuntimeError("empty redis response")
+    if prefix == b"+":
+        return stream.readline().rstrip(b"\r\n").decode("utf-8", errors="replace")
+    if prefix == b":":
+        return int(stream.readline().rstrip(b"\r\n").decode("utf-8", errors="replace"))
+    if prefix == b"$":
+        size = int(stream.readline().rstrip(b"\r\n").decode("utf-8", errors="replace"))
+        if size < 0:
+            return None
+        payload = stream.read(size)
+        stream.read(2)
+        return payload.decode("utf-8", errors="replace")
+    if prefix == b"-":
+        err = stream.readline().rstrip(b"\r\n").decode("utf-8", errors="replace")
+        raise RuntimeError(f"redis error: {err}")
+    raise RuntimeError(f"unsupported redis response prefix: {prefix!r}")
+
+
+class _RoleGuardedNoopClient:
+    """Non-trading broker client used for non-engine runtime roles."""
+
+    __slots__ = ("runtime_role", "api", "logged_in", "tick_callback")
+
+    def __init__(self, runtime_role: str) -> None:
+        self.runtime_role = runtime_role
+        self.api = None
+        self.logged_in = False
+        self.tick_callback = None
+
+    def login(self, *args, **kwargs) -> bool:
+        logger.warning("Broker login blocked by runtime role guard", role=self.runtime_role)
+        self.logged_in = False
+        return False
+
+    def reconnect(self, *args, **kwargs) -> bool:
+        logger.warning("Broker reconnect blocked by runtime role guard", role=self.runtime_role)
+        return False
+
+    def subscribe_basket(self, cb) -> None:
+        self.tick_callback = cb
+        logger.warning("Feed subscription blocked by runtime role guard", role=self.runtime_role)
+
+    def fetch_snapshots(self) -> list[Any]:
+        return []
+
+    def reload_symbols(self) -> None:
+        return None
+
+    def get_exchange(self, symbol: str) -> str:
+        return ""
+
+    def resubscribe(self) -> bool:
+        return False
+
+    def set_execution_callbacks(self, on_order, on_deal) -> None:
+        return None
+
+    def place_order(self, *args, **kwargs) -> dict[str, Any]:
+        logger.warning("Order placement blocked by runtime role guard", role=self.runtime_role)
+        return {"status": "blocked", "reason": f"runtime_role:{self.runtime_role}"}
+
+    def cancel_order(self, trade: Any) -> dict[str, Any]:
+        logger.warning("Order cancel blocked by runtime role guard", role=self.runtime_role)
+        return {"status": "blocked", "reason": f"runtime_role:{self.runtime_role}"}
+
+    def update_order(self, trade: Any, price: float | None = None, qty: int | None = None) -> dict[str, Any]:
+        logger.warning("Order update blocked by runtime role guard", role=self.runtime_role)
+        return {"status": "blocked", "reason": f"runtime_role:{self.runtime_role}"}
+
+    def get_positions(self) -> list[Any]:
+        return []
+
+    def get_account_balance(self, account: Any = None) -> dict[str, Any]:
+        return {"status": "blocked", "reason": f"runtime_role:{self.runtime_role}"}
+
+    def get_margin(self, account: Any = None) -> dict[str, Any]:
+        return {"status": "blocked", "reason": f"runtime_role:{self.runtime_role}"}
+
+    def list_position_detail(self, account: Any = None) -> list[Any]:
+        return []
+
+    def list_profit_loss(
+        self,
+        account: Any = None,
+        begin_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[Any]:
+        return []
+
+    def validate_symbols(self) -> list[str]:
+        return []
+
+    def get_contract_refresh_status(self) -> dict[str, Any]:
+        return {"status": "blocked", "reason": f"runtime_role:{self.runtime_role}"}
+
+    def close(self, logout: bool = False) -> None:
+        self.logged_in = False
+
+    def shutdown(self, logout: bool = False) -> None:
+        self.close(logout=logout)
+
 
 class SystemBootstrapper:
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         self.settings = settings or {}
+        self._lease_refresh_running: bool = False
+        self._lease_refresh_thread: Any | None = None
+        self._last_role: str = "engine"
+
+    def _get_runtime_role(self) -> str:
+        raw = os.getenv("HFT_RUNTIME_ROLE", "engine").strip().lower().replace("-", "_")
+        if raw not in _VALID_RUNTIME_ROLES:
+            logger.warning("Unknown HFT_RUNTIME_ROLE; defaulting to 'engine'", role=raw)
+            return "engine"
+        return raw
+
+    def _get_redis_lease_params(self) -> dict:
+        """Return Redis session lease connection parameters from environment."""
+        port_raw = os.getenv("HFT_REDIS_PORT")
+        if port_raw is None:
+            port_raw = os.getenv("REDIS_PORT", "6379")
+        return {
+            "host": os.getenv("HFT_REDIS_HOST") or os.getenv("REDIS_HOST", "redis"),
+            "port": int(port_raw),
+            "password": os.getenv("HFT_REDIS_PASSWORD") or os.getenv("REDIS_PASSWORD") or os.getenv("REDIS_PASS") or "",
+            "key": os.getenv("HFT_FEED_SESSION_OWNER_KEY", "feed:session:owner"),
+            "owner_id": os.getenv("HFT_RUNTIME_INSTANCE_ID") or f"{os.getenv('HOSTNAME', 'unknown')}:{os.getpid()}",
+            "ttl_s": max(30, int(os.getenv("HFT_FEED_SESSION_OWNER_TTL_S", "300"))),
+            "timeout_s": float(os.getenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.5")),
+        }
+
+    def _check_session_ownership(self, role: str) -> None:
+        """Non-blocking preflight: warn if another runtime already holds the feed session.
+
+        Checks Redis key ``feed:session:owner``. If set to a different instance
+        identifier, logs CRITICAL and increments ``feed_session_conflict_total``.
+        Failure to reach Redis is swallowed so a Redis outage never blocks startup.
+        """
+        if role not in _FEED_ALLOWED_ROLES:
+            return
+        params = self._get_redis_lease_params()
+        host = params["host"]
+        port = params["port"]
+        password = params["password"]
+        key = params["key"]
+        owner_id = params["owner_id"]
+        timeout_s = params["timeout_s"]
+        ttl_s = params["ttl_s"]
+
+        try:
+            with socket.create_connection((host, port), timeout=timeout_s) as sock:
+                sock.settimeout(timeout_s)
+                stream = sock.makefile("rb")
+
+                def _command(*parts: str) -> str | int | None:
+                    sock.sendall(_encode_resp(*parts))
+                    return _read_resp(stream)
+
+                if password:
+                    _command("AUTH", password)
+
+                owner = _command("GET", key)
+                owner_str = str(owner or "").strip()
+                if owner_str and owner_str != owner_id:
+                    logger.critical(
+                        "feed_session_conflict: another runtime already holds the broker session",
+                        role=role,
+                        owner=owner_str,
+                        my_id=owner_id,
+                    )
+                    try:
+                        from hft_platform.observability.metrics import MetricsRegistry
+
+                        m = MetricsRegistry.get()
+                        if hasattr(m, "feed_session_conflict_total"):
+                            m.feed_session_conflict_total.labels(role=role).inc()
+                    except Exception:
+                        pass
+
+                _command("SETEX", key, str(ttl_s), owner_id)
+        except Exception as exc:
+            logger.debug("session_ownership_preflight_skipped", role=role, reason=str(exc))
+
+    def _start_lease_refresh_thread(
+        self,
+        host: str,
+        port: int,
+        password: str,
+        key: str,
+        owner_id: str,
+        ttl_s: int,
+        timeout_s: float,
+    ) -> None:
+        """Daemon thread: re-SETEX every TTL/2 seconds to keep lease alive."""
+        interval_s = max(15, ttl_s // 2)
+
+        def _refresh_loop() -> None:
+            remaining = float(interval_s)
+            while self._lease_refresh_running:
+                time.sleep(0.1)
+                remaining -= 0.1
+                if remaining > 0:
+                    continue
+                remaining = float(interval_s)
+                try:
+                    with socket.create_connection((host, port), timeout=timeout_s) as sock:
+                        sock.settimeout(timeout_s)
+                        stream = sock.makefile("rb")
+
+                        def _command(*parts: str) -> str | int | None:
+                            sock.sendall(_encode_resp(*parts))
+                            return _read_resp(stream)
+
+                        if password:
+                            _command("AUTH", password)
+                        _command("SETEX", key, str(ttl_s), owner_id)
+                        logger.debug("session_lease_refreshed", key=key, ttl_s=ttl_s)
+                except Exception as exc:
+                    logger.warning("session_lease_refresh_failed", reason=str(exc))
+
+        self._lease_refresh_running = True
+        self._lease_refresh_thread = threading.Thread(
+            target=_refresh_loop,
+            name="bootstrap-lease-refresh",
+            daemon=True,
+        )
+        self._lease_refresh_thread.start()
+
+    def _stop_lease_refresh_thread(self) -> None:
+        self._lease_refresh_running = False
+
+    def teardown(self) -> None:
+        """Stop lease refresh thread and release Redis session lease on clean shutdown."""
+        self._stop_lease_refresh_thread()
+        if self._last_role not in _FEED_ALLOWED_ROLES:
+            return
+        params = self._get_redis_lease_params()
+        try:
+            with socket.create_connection((params["host"], params["port"]), timeout=params["timeout_s"]) as sock:
+                sock.settimeout(params["timeout_s"])
+                stream = sock.makefile("rb")
+
+                def _command(*parts: str) -> str | int | None:
+                    sock.sendall(_encode_resp(*parts))
+                    return _read_resp(stream)
+
+                if params["password"]:
+                    _command("AUTH", params["password"])
+                _command("DEL", params["key"])
+                logger.info("session_lease_released", key=params["key"])
+        except Exception as exc:
+            logger.debug("session_lease_release_skipped", reason=str(exc))
 
     # Default bounded queue sizes to prevent unbounded memory growth
     # These can be overridden via environment variables
@@ -37,7 +310,44 @@ class SystemBootstrapper:
     DEFAULT_ORDER_QUEUE_SIZE = 2048  # Order dispatch queue
     DEFAULT_RECORDER_QUEUE_SIZE = 16384  # Recorder/persistence queue
 
+    def _build_broker_clients(
+        self,
+        role: str,
+        symbols_path: str,
+        base_shioaji_cfg: dict[str, Any],
+    ) -> tuple[Any, Any]:
+        order_cfg = dict(base_shioaji_cfg)
+        order_mode = os.getenv("HFT_ORDER_MODE", "").strip().lower()
+        order_sim_flag = os.getenv("HFT_ORDER_SIMULATION")
+        order_no_ca = os.getenv("HFT_ORDER_NO_CA", "0").lower() in {"1", "true", "yes", "on"}
+        if order_mode:
+            order_cfg["simulation"] = order_mode in {"sim", "simulation", "paper"}
+        elif order_sim_flag is not None:
+            order_cfg["simulation"] = order_sim_flag.lower() in {"1", "true", "yes", "on", "sim"}
+        if order_no_ca or order_cfg.get("simulation") is True:
+            order_cfg["activate_ca"] = False
+
+        if role in _FEED_ALLOWED_ROLES:
+            return ShioajiClientFacade(symbols_path, base_shioaji_cfg), ShioajiClientFacade(symbols_path, order_cfg)
+
+        logger.warning("Using role-guarded no-op broker clients", role=role)
+        return _RoleGuardedNoopClient(role), _RoleGuardedNoopClient(role)
+
     def build(self) -> ServiceRegistry:
+        role = self._get_runtime_role()
+        self.settings.setdefault("runtime_role", role)
+        if role == "maintenance":
+            logger.warning("Runtime role maintenance: broker feed creation is disabled", role=role)
+        elif role not in _FEED_ALLOWED_ROLES:
+            logger.warning("Runtime role does not create feed client", role=role)
+
+        # B-OPS-03: Non-blocking preflight — warn if another runtime owns the session.
+        self._check_session_ownership(role)
+        self._last_role = role
+        if role in _FEED_ALLOWED_ROLES:
+            params = self._get_redis_lease_params()
+            self._start_lease_refresh_thread(**params)
+
         # 1. Infrastructure
         # Note: StormGuard is created below, so we set it after creation
         bus = RingBufferBus()
@@ -85,20 +395,7 @@ class SystemBootstrapper:
         price_scale_provider = SymbolMetadataPriceScaleProvider(symbol_metadata)
 
         base_shioaji_cfg = dict(self.settings.get("shioaji", {}))
-        md_client = ShioajiClient(symbols_path, base_shioaji_cfg)
-
-        order_cfg = dict(base_shioaji_cfg)
-        order_mode = os.getenv("HFT_ORDER_MODE", "").strip().lower()
-        order_sim_flag = os.getenv("HFT_ORDER_SIMULATION")
-        order_no_ca = os.getenv("HFT_ORDER_NO_CA", "0").lower() in {"1", "true", "yes", "on"}
-        if order_mode:
-            order_cfg["simulation"] = order_mode in {"sim", "simulation", "paper"}
-        elif order_sim_flag is not None:
-            order_cfg["simulation"] = order_sim_flag.lower() in {"1", "true", "yes", "on", "sim"}
-        if order_no_ca or order_cfg.get("simulation") is True:
-            order_cfg["activate_ca"] = False
-
-        order_client = ShioajiClient(symbols_path, order_cfg)
+        md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg)
 
         # 4. Services
         feature_engine = None

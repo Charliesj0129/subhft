@@ -1294,6 +1294,26 @@
     ],
     "title": "Queue Imbalance as a One-Tick-Ahead Price Predictor in a Limit Order Book"
   },
+  "126": {
+    "alphas": [
+      "ofi_execution_126"
+    ],
+    "arxiv_id": "1409.2618v2",
+    "note_file": "research/knowledge/notes/126_optimal_execution_with_dynamic_order_flow_imbalance.md",
+    "ref": "126",
+    "status": "reviewed",
+    "tags": [],
+    "title": "Optimal Execution with Dynamic Order Flow Imbalance"
+  },
+  "127": {
+    "alphas": [],
+    "arxiv_id": "2411.08382v1",
+    "note_file": "research/knowledge/notes/127_hybrid_vector_auto_regression_and_neural_network_model_for_o.md",
+    "ref": "127",
+    "status": "reviewed",
+    "tags": [],
+    "title": "Hybrid Vector Auto Regression and Neural Network Model for Order Flow Imbalance Prediction in High Frequency Trading"
+  },
   "depth_slope_ref": {
     "alphas": [
       "lob_shape"

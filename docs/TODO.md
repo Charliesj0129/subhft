@@ -22,9 +22,12 @@
 ### 2. Shioaji Broker Adapter 解耦
 
 - **現狀**: `feed_adapter/shioaji_client.py` 承載過多關注點，包含行情、連線、下單與帳戶快取。
-- **狀態**: 🔄 TODO (Pending M2)
-- **細項 TODOs**:
-  - `🔄 TODO`: 拆分為獨立模組 (`session`, `contracts`, `quote`, `order`, `account`)，並實作Facade。
+- **狀態**: 🔄 TODO（P2/P3 持續收斂中, 2026-03-02）
+- **追蹤文檔**: `docs/architecture/shioaji-client-resilience-decoupling-plan.md`
+- **剩餘技術債**:
+  - `🔄 TODO [SHIOAJI-OPS-03]`: 將 Redis session owner preflight 擴充為週期性 lease refresh + stale owner cleanup（目前為 bootstrap warn-only）。
+  - `🔄 TODO [SHIOAJI-DECOUPLE-05]`: 持續縮減 `shioaji_client.py`（目標 <1500 行）並移除剩餘 legacy shim。
+  - `🔄 TODO [SHIOAJI-CANARY-01]`: 完成 production canary 指標驗收（first quote callback / reconnect 成功率）。
 
 ### 3. Gateway Hardening (Cluster Evolution Vector 2 - CE-M2)
 
@@ -40,15 +43,17 @@
 
 ### 4. WAL-First Path Hardening (Cluster Evolution Vector 3 - CE-M3)
 
-雖然非同步冷路徑 (`HFT_RECORDER_MODE=wal_first`) 核心上線，但同屬防禦性加固的部分仍需推進：
+非同步冷路徑 (`HFT_RECORDER_MODE=wal_first`) 的 hardening 項目已落地，進入持續演練與營運監控階段：
 
-- **狀態**: 🔄 TODO (Hardening)
+- **狀態**: ✅ Implemented (2026-03-02)
 - **追蹤編號**: `docs/architecture/cluster-evolution-backlog.md`
-- **細項 TODOs**:
-  - **[CE3-03]**: 橫向擴展 (Scale-out) WAL Loader Workers，並實作 Shard 指派策略。
-  - **[CE3-04]**: 定義嚴謹的 Replay 安全合約 (包含訊息順序、去重、與 Manifest 維護)。
-  - **[CE3-06]**: 補齊 WAL 的 SLO Metrics、Alerts 與 Dashboards。
-  - **[CE3-07]**: 災難演練：實際演練 ClickHouse 停機、緩慢與 WAL 本機增長過載時的回復。
+- **已完成**:
+  - **[CE3-03]**: WAL Loader scale-out + shard claim（`FileClaimRegistry`）已實作，並有整合測試 `tests/integration/test_wal_loader_scale_out.py`。
+  - **[CE3-04]**: Replay safety contract（ordering/dedup/manifest）已落地，並有 spec 測試 `tests/spec/test_replay_safety_contract.py`。
+  - **[CE3-06]**: WAL SLO metrics + alerts + dashboard 已接線（`metrics.py`, `alerts/rules.yaml`, `dashboards/gateway_wal_slo.json`）。
+  - **[CE3-07]**: Outage drills（CH down/slow、disk pressure、stale claim recovery）已落地，含測試與 runbook `docs/runbooks/wal-first-outage-drills.md`。
+- **營運建議（非阻塞 TODO）**:
+  - 每週執行一次 `verify-ce3`（或對應 pytest 套件）以驗證 replay 安全與災難演練路徑未回歸。
 
 ---
 
@@ -57,32 +62,21 @@
 ### 1. Alpha 探索鷹架 (Alpha Scaffold)
 
 - **位置**: `research/tools/alpha_scaffold.py`, `fetch_paper.py`, 及樣板檔案 (`_templates/impl.py.tmpl`)
-- **狀態**: ✅ citation-aware + section-aware auto-fill 已落地 (2026-03-01)
-- **已完成**:
-  - `hypothesis/formula` 不再以 `TODO` placeholder 產生，改為 paper-aware 自動建議值。
-  - `data_fields` 已接上 `feature registry (lob_shared_v1)` 進行候選映射。
-  - 新增 citation-aware 映射（arXiv id profile）與 note section parser（讀 `Hypothesis`/`Formula`/`Relevant Features`）能力。
+- **狀態**: 🔄 TODO（迭代優化階段）
 - **剩餘技術債**:
   - citation profile 仍是規則表，未來可升級為 parser + embeddings 的混合檢索。
 
 ### 2. 論文與引用清理 (Notes & Citations)
 
 - **位置**: `research/knowledge/notes/` (如 `depth_slope_ref.md`)
-- **狀態**: 🟡 工具化落地、批次修復進行中 (2026-03-01)
-- **已完成**:
-  - `depth_slope_ref.md` 已補 concrete citation，並在 `paper_index.json` 補齊 `arxiv_id` 對應。
-  - 新增 `python -m research audit-note-citations` / `backfill-note-citations` 批次工具。
-  - 已執行一次 backfill：`touched_notes=119`、`touched_index_rows=26`（詳見 `outputs/research_maintenance/`）。
+- **狀態**: 🔄 TODO（批次修復中）
 - **剩餘技術債**:
   - audit after backfill 仍有 `missing_any=93`（多數為缺 arXiv/作者/發布資訊來源），需補資料源或人工校對。
 
 ### 3. Pyspy / 效能探查結果 (Benchmarking)
 
 - **位置**: `research/knowledge/reports/root_reports/*.svg` (Pyspy Flamegraphs)
-- **狀態**: ✅ 已建立 triage 基線，進入目標化優化階段
-- **已完成**:
-  - 新增 `python -m research triage-pyspy` 解析 SVG flamegraphs 並產出熱點排行。
-  - 已產生報告：`outputs/research_maintenance/pyspy_triage.json` 與 `research/knowledge/reports/root_reports/pyspy_hotspot_triage.md`。
+- **狀態**: 🔄 TODO（目標化優化階段）
 - **剩餘技術債**:
   - 依 triage 結果優先處理 `lob_engine.py` 熱點與 import/config warmup 開銷。
 

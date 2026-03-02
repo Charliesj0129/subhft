@@ -3,7 +3,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 from hft_platform.recorder.loader import WALLoaderService
 from hft_platform.recorder.writer import DataWriter
@@ -31,14 +31,17 @@ class TestDataWriter(unittest.IsolatedAsyncioTestCase):
         self.mock_ch.get_client.return_value = mock_client
 
         with (
-            patch("os.path.exists", return_value=True),
-            patch("builtins.open", mock_open(read_data="CREATE TABLE foo;")),
+            patch("hft_platform.recorder.writer.apply_schema") as mock_apply_schema,
+            patch("hft_platform.recorder.writer.ensure_price_scaled_views") as mock_ensure_views,
+            patch.object(writer, "_start_heartbeat_thread") as mock_start_heartbeat,
         ):
             writer.connect()
 
         self.assertTrue(writer.connected)
         self.mock_ch.get_client.assert_called_once()
-        mock_client.command.assert_called_with("CREATE TABLE foo")
+        mock_apply_schema.assert_called_once_with(mock_client)
+        mock_ensure_views.assert_called_once_with(mock_client)
+        mock_start_heartbeat.assert_called_once()
 
     async def test_write_clickhouse_success(self):
         writer = DataWriter(wal_dir=self.tmp_dir)

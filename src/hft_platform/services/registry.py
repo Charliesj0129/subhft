@@ -11,6 +11,7 @@ from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
 from hft_platform.execution.router import ExecutionRouter
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
+from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
@@ -18,6 +19,8 @@ from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.runner import StrategyRunner
+
+BrokerClient = ShioajiClient | ShioajiClientFacade
 
 
 @dataclass(slots=True)
@@ -34,9 +37,9 @@ class ServiceRegistry:
     storm_guard: StormGuard
     symbol_metadata: SymbolMetadata
     price_scale_provider: PriceScaleProvider
-    md_client: ShioajiClient
-    order_client: ShioajiClient
-    client: ShioajiClient
+    md_client: BrokerClient
+    order_client: BrokerClient
+    client: BrokerClient
     md_service: MarketDataService
     feature_engine: Optional[Any]
     order_adapter: OrderAdapter

@@ -484,11 +484,11 @@ def _safe_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     n = min(x.size, y.size)
     if n < 2:
         return 0.0
-    x = x[:n]
-    y = y[:n]
-    x = x - np.mean(x)
-    y = y - np.mean(y)
-    denom = float(np.sqrt(np.dot(x, x) * np.dot(y, y)))
+    x_slice = np.asarray(x[:n], dtype=np.float64).reshape(n)
+    y_slice = np.asarray(y[:n], dtype=np.float64).reshape(n)
+    x_centered = x_slice - np.mean(x_slice)
+    y_centered = y_slice - np.mean(y_slice)
+    denom = float(np.sqrt(np.dot(x_centered, x_centered) * np.dot(y_centered, y_centered)))
     if denom <= 1e-12:
         return 0.0
-    return float(np.dot(x, y) / denom)
+    return float(np.dot(x_centered, y_centered) / denom)
