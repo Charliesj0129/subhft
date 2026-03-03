@@ -63,7 +63,7 @@ services:
   hft-engine:
     <<: *hft-common
     container_name: hft-engine
-    command: ["sh", "-lc", "HFT_RUNTIME_ROLE=engine python -m hft_platform.main"]
+    command: ["sh", "-lc", "HFT_RUNTIME_ROLE=engine HFT_RECORDER_MODE=${HFT_ENGINE_RECORDER_MODE:-wal_first} python -m hft_platform.main"]
     # Network mode handling
     # Removed default network_mode: ${HFT_NETWORK_MODE:-bridge} to allow proper DNS resolution
     # network_mode: ${HFT_NETWORK_MODE:-}
