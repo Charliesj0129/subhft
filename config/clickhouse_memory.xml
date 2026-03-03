@@ -1,0 +1,5 @@
+<clickhouse>
+    <!-- CH/MV pressure tuning baseline. -->
+    <!-- Container limit: 6G; keep ~800MB headroom for allocator/OS noise. -->
+    <max_server_memory_usage>5200000000</max_server_memory_usage>
+</clickhouse>
