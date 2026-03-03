@@ -51,6 +51,13 @@ FORMAT Vertical"
 5. ClickHouse server cap: `max_server_memory_usage=5.2G`
 6. Redis persistence disabled for session-only use:
    - `--save "" --appendonly no`
+7. Engine default recorder mode switched to WAL-first:
+   - `HFT_RECORDER_MODE=wal_first` (via compose command)
+8. WAL replay pressure guard (wal-loader):
+   - `HFT_WAL_LOADER_CONCURRENCY=1`
+   - `HFT_INSERT_MAX_RETRIES=4`
+   - `HFT_INSERT_BASE_DELAY_S=0.6`
+   - `HFT_INSERT_MAX_BACKOFF_S=8.0`
 
 ## Deploy Steps
 
@@ -66,6 +73,7 @@ docker compose up -d --force-recreate redis clickhouse hft-engine wal-loader hft
 - `hft-engine` log has no:
   - `concurrent queries within the same session`
   - `session_lease_refresh_failed`
+- New errors (if any) should shift from `hft-engine` to occasional `wal-loader` retry only.
 - `market_data` still fresh:
 
 ```bash
@@ -73,6 +81,20 @@ docker exec clickhouse clickhouse-client --query "
 SELECT max(ingest_ts) AS max_ingest_ns, count() AS rows_5m
 FROM hft.market_data
 WHERE ingest_ts > toUnixTimestamp64Nano(now64()) - 300000000000
+FORMAT Vertical"
+```
+
+Optional source attribution check:
+
+```bash
+docker exec clickhouse clickhouse-client --query "
+SELECT initial_address, count() AS n
+FROM system.query_log
+WHERE event_time > now() - INTERVAL 5 MINUTE
+  AND query LIKE 'INSERT INTO hft.market_data%'
+  AND type='QueryFinish'
+GROUP BY initial_address
+ORDER BY n DESC
 FORMAT Vertical"
 ```
 
