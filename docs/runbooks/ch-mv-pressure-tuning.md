@@ -58,6 +58,7 @@ FORMAT Vertical"
    - `HFT_INSERT_MAX_RETRIES=4`
    - `HFT_INSERT_BASE_DELAY_S=0.6`
    - `HFT_INSERT_MAX_BACKOFF_S=8.0`
+   - Place these in shared compose env (`x-hft-common`) to avoid overriding `HFT_CLICKHOUSE_PORT=8123`.
 
 ## Deploy Steps
 
