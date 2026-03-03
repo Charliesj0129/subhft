@@ -98,6 +98,32 @@ def test_writer_ch_insert_builds_rows(tmp_path):
     assert kwargs["column_names"] == ["a", "b"]
 
 
+def test_writer_ch_insert_uses_heartbeat_lock(tmp_path):
+    writer = DataWriter(wal_dir=str(tmp_path))
+    writer.ch_client = MagicMock()
+    writer._ch_column_oriented = True
+
+    class _CountingLock:
+        def __init__(self) -> None:
+            self.entered = 0
+
+        def __enter__(self):
+            self.entered += 1
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    counting_lock = _CountingLock()
+    writer._ch_heartbeat_lock = counting_lock
+
+    writer._ch_insert("hft.table", [{"a": 1, "b": 2}])
+    assert counting_lock.entered == 1
+
+    writer._ch_insert_columnar_once("hft.table", ["a", "b"], [[1], [2]], 1)
+    assert counting_lock.entered == 2
+
+
 def test_writer_do_heartbeat_check(tmp_path):
     writer = DataWriter(wal_dir=str(tmp_path))
 

@@ -548,21 +548,22 @@ class DataWriter:
         if self._should_log_insert_success(self._ch_columnar_insert_count):
             logger.info("ClickHouse columnar insert start", table=table, rows=row_count)
         start_ms = time.monotonic() * 1000
-        with self._get_table_lock(table):
-            if self._ch_column_oriented:
-                try:
-                    self.ch_client.insert(
-                        table,
-                        column_data,
-                        column_names=column_names,
-                        column_oriented=True,
-                    )
-                except TypeError:
+        with self._ch_heartbeat_lock:
+            with self._get_table_lock(table):
+                if self._ch_column_oriented:
+                    try:
+                        self.ch_client.insert(
+                            table,
+                            column_data,
+                            column_names=column_names,
+                            column_oriented=True,
+                        )
+                    except TypeError:
+                        values = self._transpose_columnar_rows(column_data, row_count)
+                        self.ch_client.insert(table, values, column_names=column_names)
+                else:
                     values = self._transpose_columnar_rows(column_data, row_count)
                     self.ch_client.insert(table, values, column_names=column_names)
-            else:
-                values = self._transpose_columnar_rows(column_data, row_count)
-                self.ch_client.insert(table, values, column_names=column_names)
         elapsed_ms = time.monotonic() * 1000 - start_ms
         if elapsed_ms > self._insert_warn_ms:
             logger.warning(
@@ -670,8 +671,11 @@ class DataWriter:
 
         keys = list(data[0].keys())
         values = [[row.get(k) for k in keys] for row in data]
-        with self._get_table_lock(table):
-            self.ch_client.insert(table, values, column_names=keys)
+        # clickhouse_connect client session is not thread-safe across command/insert.
+        # Serialize heartbeat and inserts to avoid concurrent query errors.
+        with self._ch_heartbeat_lock:
+            with self._get_table_lock(table):
+                self.ch_client.insert(table, values, column_names=keys)
 
         elapsed_ms = time.monotonic() * 1000 - start_ms
         if elapsed_ms > self._insert_warn_ms:
