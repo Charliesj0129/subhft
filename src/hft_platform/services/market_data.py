@@ -1249,7 +1249,9 @@ class MarketDataService:
                     self._feed_reconnect_gap_metric_child = self.metrics_registry.feed_reconnect_total.labels(
                         result="gap"
                     )
-                self._feed_reconnect_gap_metric_child.inc()
+                gap_metric_child = self._feed_reconnect_gap_metric_child
+                if gap_metric_child is not None:
+                    gap_metric_child.inc()
             elif reason == "symbol_gap":
                 self.metrics_registry.feed_reconnect_total.labels(result="symbol_gap").inc()
         self._last_resubscribe_ts = now
