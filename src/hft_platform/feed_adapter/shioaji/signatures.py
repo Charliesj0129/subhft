@@ -21,4 +21,3 @@ def detect_crash_signature(text: str | None) -> str | None:
         if needle in payload:
             return signature
     return None
-
