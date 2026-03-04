@@ -882,9 +882,8 @@ class MarketDataService:
                     and stale_ratio >= self._symbol_gap_stale_ratio_threshold
                     and max_stale_gap >= max(self._symbol_gap_severe_gap_s, threshold)
                     and self._symbol_gap_consecutive_hits >= self._symbol_gap_consecutive_cycles
-                    and (
-                        timebase.now_s() - self._last_symbol_gap_resubscribe_ts
-                    ) >= self._symbol_gap_resubscribe_cooldown_s
+                    and (timebase.now_s() - self._last_symbol_gap_resubscribe_ts)
+                    >= self._symbol_gap_resubscribe_cooldown_s
                 ):
                     self._last_symbol_gap_resubscribe_ts = timebase.now_s()
                     await self._attempt_resubscribe(max_stale_gap, reason="symbol_gap")
