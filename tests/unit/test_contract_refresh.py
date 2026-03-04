@@ -8,23 +8,20 @@ Covers:
 - test_fresh_cache_not_stale         (C3)
 - test_missing_cache_is_stale        (C3)
 """
+
 from __future__ import annotations
 
 import json
-import os
-import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from hft_platform.feed_adapter import shioaji_client as mod
-
 
 # ---------------------------------------------------------------------------
 # Helpers: build a minimal ShioajiClient without calling __init__
 # ---------------------------------------------------------------------------
+
 
 def _bare_client() -> mod.ShioajiClient:
     """Create a ShioajiClient instance bypassing __init__ (test pattern)."""
@@ -43,6 +40,11 @@ def _bare_client() -> mod.ShioajiClient:
     client._contract_cache_path = "config/contracts.json"
     client._contract_refresh_running = False
     client._contract_refresh_thread = None
+    # Required by the retry-loop guards added for Bug-3 fix
+    client.logged_in = True
+    client._callbacks_registered = True
+    client._event_callback_registered = True
+    client.tick_callback = None
     return client
 
 
@@ -62,9 +64,7 @@ def test_dead_metric_incremented():
 
     # Patch _get_contract to return None (contract not found)
     with patch.object(client, "_get_contract", return_value=None):
-        result = client._subscribe_symbol(
-            {"code": "TXO23300B6", "exchange": "TAIFEX"}, cb=MagicMock()
-        )
+        result = client._subscribe_symbol({"code": "TXO23300B6", "exchange": "TAIFEX"}, cb=MagicMock())
 
     assert result is False
     mock_counter.labels.assert_called_once_with(code="TXO23300B6")
@@ -113,10 +113,12 @@ def test_retry_thread_resolves_symbols():
 
     client._start_sub_retry_thread(cb=MagicMock())
 
-    # Wait for the retry thread to finish (up to 3 seconds)
-    deadline = time.monotonic() + 3.0
+    # Wait for the retry thread to finish (up to 5 seconds on slower CI runners)
+    deadline = time.monotonic() + 5.0
     while client._sub_retry_running and time.monotonic() < deadline:
         time.sleep(0.05)
+    if client._sub_retry_thread is not None:
+        client._sub_retry_thread.join(timeout=0.5)
 
     assert client._failed_sub_symbols == [], "All failed subscriptions should be resolved"
     assert "TXO_RETRY" in client.subscribed_codes
