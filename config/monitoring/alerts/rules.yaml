@@ -47,6 +47,42 @@ groups:
         summary: "Shioaji pending quote state stalled"
         description: "pending_quote_resubscribe age > 300s for more than 5m."
 
+  - alert: ShioajiLoginFailuresDetected
+    expr: increase(shioaji_login_fail_total[10m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Shioaji login failures detected"
+        description: "Login attempts exhausted retries in the last 10m."
+
+  - alert: ShioajiCrashSignatureDetected
+    expr: increase(shioaji_crash_signature_total[10m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Shioaji crash precursor signature detected"
+        description: "Detected known crash signature {{ $labels.signature }} in {{ $labels.context }} path in the last 10m."
+
+  - alert: FeedSessionConflictDetected
+    expr: increase(feed_session_conflict_total[10m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Feed session ownership conflict detected"
+        description: "Another runtime owner was detected for Redis feed session lease in the last 10m."
+
+  - alert: ShioajiSessionLockConflictDetected
+    expr: increase(shioaji_session_lock_conflicts_total[10m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Shioaji session lock conflict detected"
+        description: "Potential multi-runtime broker session lock conflict detected in the last 10m."
+
   - alert: BusOverflowCritical
     expr: increase(bus_overflow_total[1m]) > 0
     for: 1s
@@ -93,6 +129,33 @@ groups:
     annotations:
         summary: "Queue Depth Spike"
         description: "Queue depth exceeded 1000 in the last 30s."
+
+  - alert: ExecutionGatewayTaskDown
+    expr: max_over_time(execution_gateway_alive[2m]) < 1
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Execution gateway task down"
+        description: "execution_gateway_alive has been 0 for more than 1 minute."
+
+  - alert: ExecutionRouterTaskDown
+    expr: max_over_time(execution_router_alive[2m]) < 1
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Execution router task down"
+        description: "execution_router_alive has been 0 for more than 1 minute."
+
+  - alert: RawQueueDropsDetected
+    expr: increase(raw_queue_dropped_total[5m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Raw queue drops detected"
+        description: "Market data callback queue dropped payloads in the last 5m."
 
   # Infra
   - alert: RecorderFailure

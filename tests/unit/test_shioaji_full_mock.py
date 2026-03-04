@@ -253,6 +253,13 @@ class TestShioajiClientFull(unittest.TestCase):
         resub.assert_called_once()
         self.assertFalse(self.client._pending_quote_resubscribe)
 
+    def test_quote_event_13_without_pending_does_not_resubscribe(self):
+        self.client.tick_callback = MagicMock()
+        self.client._pending_quote_resubscribe = False
+        with patch.object(self.client, "_resubscribe_all") as resub, patch.object(self.client, "_ensure_callbacks"):
+            self.client._on_quote_event(0, 13, "info", "event")
+        resub.assert_not_called()
+
     def test_quote_flap_forces_relogin(self):
         self.client._quote_flap_events.clear()
         self.client._last_quote_flap_relogin_ts = 0.0
@@ -280,6 +287,33 @@ class TestShioajiClientFull(unittest.TestCase):
             if self.client._quote_watchdog_thread is not None:
                 self.client._quote_watchdog_thread.join(timeout=0.2)
         mark_pending.assert_not_called()
+
+    def test_register_event_callback_uses_persistent_reference(self):
+        ok = self.client._register_event_callback()
+        self.assertTrue(ok)
+        self.mock_api_instance.quote.set_event_callback.assert_called_with(self.client._event_callback_fn)
+
+    def test_subscribe_symbol_returns_false_when_quote_api_missing(self):
+        self.client.api.quote = None
+        sym = {"code": "2330", "exchange": "TSE"}
+        ok = self.client._subscribe_symbol(sym, MagicMock())
+        self.assertFalse(ok)
+
+    def test_subscribe_symbol_records_crash_signature_metric(self):
+        sym = {"code": "2330", "exchange": "TSE"}
+        self.mock_api_instance.quote.subscribe.side_effect = AttributeError("'NoneType' object has no attribute 'subscribe'")
+        self.client.metrics.shioaji_crash_signature_total = MagicMock()
+        crash_child = MagicMock()
+        self.client.metrics.shioaji_crash_signature_total.labels.return_value = crash_child
+
+        ok = self.client._subscribe_symbol(sym, MagicMock())
+
+        self.assertFalse(ok)
+        self.client.metrics.shioaji_crash_signature_total.labels.assert_called_with(
+            signature="none_subscribe",
+            context="subscribe_symbol",
+        )
+        crash_child.inc.assert_called_once()
 
     def test_cache_expiry(self):
         self.client._cache_set("usage", -1, {"subscribed": 1})
@@ -650,3 +684,80 @@ class TestShioajiClientFull(unittest.TestCase):
 
         timeout_counter.labels.assert_called_once_with(reason="subscribe")
         timeout_counter.labels.return_value.inc.assert_called_once()
+
+    def test_subscribe_basket_defers_all_when_event_callback_not_registered(self):
+        """Bug 2: subscribe_basket defers symbols when event callback is not registered."""
+        self.client.logged_in = True
+        self.client._event_callback_registered = False
+        self.client._callbacks_registered = True
+        cb = MagicMock()
+
+        with patch.object(self.client, "_ensure_callbacks"):  # prevent side effects from setting flag
+            with patch.object(self.client, "_start_sub_retry_thread") as mock_retry:
+                with patch.object(self.client, "_start_quote_watchdog"):
+                    with patch.object(self.client, "_start_session_refresh_thread"):
+                        self.client.subscribe_basket(cb)
+
+        self.mock_api_instance.quote.subscribe.assert_not_called()
+        mock_retry.assert_called_once_with(cb)
+
+    def test_subscribe_basket_proceeds_when_event_callback_registered(self):
+        """Bug 2 complement: subscribe_basket proceeds when both callbacks are ready."""
+        self.client.logged_in = True
+        self.client._callbacks_registered = True
+        self.client._event_callback_registered = True
+        cb = MagicMock()
+
+        with patch.object(self.client, "_ensure_callbacks"):
+            with patch.object(self.client, "_start_contract_refresh_thread"):
+                with patch.object(self.client, "_start_quote_watchdog"):
+                    with patch.object(self.client, "_start_session_refresh_thread"):
+                        self.client.subscribe_basket(cb)
+
+        # 2 symbols × 2 quote types = 4 calls
+        self.assertEqual(self.mock_api_instance.quote.subscribe.call_count, 4)
+
+    def test_sub_retry_loop_skips_when_not_logged_in(self):
+        """Bug 3: retry loop does not subscribe while logged_in is False."""
+        self.client.logged_in = False
+        self.client._event_callback_registered = True
+        self.client._callbacks_registered = True
+        self.client._failed_sub_symbols = [{"code": "2330", "exchange": "TSE"}]
+        cb = MagicMock()
+
+        iteration = {"n": 0}
+
+        def fake_sleep(_s):
+            iteration["n"] += 1
+            if iteration["n"] >= 2:
+                self.client._sub_retry_running = False
+
+        with patch("hft_platform.feed_adapter.shioaji_client.time.sleep", side_effect=fake_sleep):
+            self.client._start_sub_retry_thread(cb)
+            self.client._sub_retry_thread.join(timeout=2)
+
+        self.mock_api_instance.quote.subscribe.assert_not_called()
+        self.assertEqual(len(self.client._failed_sub_symbols), 1)
+
+    def test_sub_retry_loop_skips_when_event_callback_not_registered(self):
+        """Bug 3: retry loop does not subscribe while event callback is not registered."""
+        self.client.logged_in = True
+        self.client._event_callback_registered = False
+        self.client._callbacks_registered = True
+        self.client._failed_sub_symbols = [{"code": "2330", "exchange": "TSE"}]
+        cb = MagicMock()
+
+        iteration = {"n": 0}
+
+        def fake_sleep(_s):
+            iteration["n"] += 1
+            if iteration["n"] >= 2:
+                self.client._sub_retry_running = False
+
+        with patch("hft_platform.feed_adapter.shioaji_client.time.sleep", side_effect=fake_sleep):
+            with patch.object(self.client, "_ensure_callbacks"):  # prevent it from setting the flag
+                self.client._start_sub_retry_thread(cb)
+                self.client._sub_retry_thread.join(timeout=2)
+
+        self.mock_api_instance.quote.subscribe.assert_not_called()
+        self.assertEqual(len(self.client._failed_sub_symbols), 1)

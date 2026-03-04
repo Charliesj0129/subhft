@@ -21,6 +21,7 @@ from hft_platform.feature.engine import (
 )
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
+from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
@@ -225,10 +226,13 @@ class MarketDataService:
         self.last_event_mono = time.monotonic()
         self.heartbeat_threshold_s = 5.0
         self.resubscribe_gap_s = float(os.getenv("HFT_MD_RESUBSCRIBE_GAP_S", "15"))
+        self.resubscribe_cooldown_s = float(os.getenv("HFT_MD_RESUBSCRIBE_COOLDOWN_S", "15"))
         self.reconnect_gap_s = float(os.getenv("HFT_MD_RECONNECT_GAP_S", "60"))
         self.force_reconnect_gap_s = float(os.getenv("HFT_MD_FORCE_RECONNECT_GAP_S", "300"))
         self.reconnect_cooldown_s = float(os.getenv("HFT_MD_RECONNECT_COOLDOWN_S", "60"))
         self.reconnect_timeout_s = float(os.getenv("HFT_MD_RECONNECT_TIMEOUT_S", "30"))
+        self._heartbeat_gap_metric_cooldown_s = float(os.getenv("HFT_MD_GAP_METRIC_COOLDOWN_S", "30"))
+        self._last_heartbeat_gap_metric_ts = 0.0
         self.reconnect_days = {d.strip().lower() for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",") if d.strip()}
         self.reconnect_hours = os.getenv("HFT_RECONNECT_HOURS", "")
         self.reconnect_hours_2 = os.getenv("HFT_RECONNECT_HOURS_2", "")
@@ -239,6 +243,7 @@ class MarketDataService:
             logger.warning("Invalid reconnect tz, defaulting to UTC", tz=self.reconnect_tz)
             self._reconnect_tzinfo = dt.timezone.utc
         self._last_reconnect_ts = 0.0
+        self._last_resubscribe_ts = 0.0
         self._resubscribe_attempts = 0
         self._last_rollover_reconnect_date: dt.date | None = None
         self._last_rollover_seen_date: dt.date | None = None
@@ -293,8 +298,30 @@ class MarketDataService:
 
         # Per-symbol feed gap monitoring
         self._symbol_last_tick: dict[str, float] = {}  # symbol -> monotonic timestamp
-        self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "5.0"))
+        self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "6.0"))
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
+        self._symbol_gap_min_stale_count = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_STALE_COUNT", "5")))
+        self._symbol_gap_min_active_symbols = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_ACTIVE_SYMBOLS", "24")))
+        self._symbol_gap_active_lookback_s = max(0.0, float(os.getenv("HFT_SYMBOL_GAP_ACTIVE_LOOKBACK_S", "90.0")))
+        self._symbol_gap_stale_ratio_threshold = min(
+            1.0,
+            max(0.0, float(os.getenv("HFT_SYMBOL_GAP_STALE_RATIO_THRESHOLD", "0.85"))),
+        )
+        self._symbol_gap_severe_gap_s = max(0.0, float(os.getenv("HFT_SYMBOL_GAP_SEVERE_GAP_S", "30.0")))
+        self._symbol_gap_consecutive_cycles = max(1, int(os.getenv("HFT_SYMBOL_GAP_CONSECUTIVE_CYCLES", "5")))
+        self._symbol_gap_consecutive_hits = 0
+        self._symbol_gap_resubscribe_cooldown_s = float(os.getenv("HFT_SYMBOL_GAP_RESUBSCRIBE_COOLDOWN_S", "120"))
+        self._last_symbol_gap_resubscribe_ts = 0.0
+        self._symbol_gap_metric_cooldown_s = float(os.getenv("HFT_SYMBOL_GAP_METRIC_COOLDOWN_S", "30"))
+        self._last_symbol_gap_metric_ts = 0.0
+        self._symbol_gap_skip_off_hours = os.getenv("HFT_SYMBOL_GAP_SKIP_OFF_HOURS", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        self._symbol_gap_off_hours_log_interval_s = float(os.getenv("HFT_SYMBOL_GAP_OFF_HOURS_LOG_INTERVAL_S", "300"))
+        self._last_symbol_gap_off_hours_log_ts = 0.0
         # P0-2: Inline tick update (removes per-tick task creation)
         self._symbol_tick_inline = os.getenv("HFT_SYMBOL_TICK_INLINE", "1").lower() not in {
             "0",
@@ -718,6 +745,7 @@ class MarketDataService:
                 logger.error("Callback loop missing")
 
         except Exception as e:
+            self._record_shioaji_crash_signature(str(e), context="md_callback")
             logger.error(f"Error in Shioaji callback: {e}")
 
     async def _monitor_loop(self):
@@ -751,14 +779,8 @@ class MarketDataService:
             if self.state == FeedState.CONNECTED:
                 if gap > self.heartbeat_threshold_s:
                     logger.warning("Heartbeat missing", gap=gap)
-                    if self.metrics_registry:
-                        if self._feed_reconnect_gap_metric_child is None:
-                            self._feed_reconnect_gap_metric_child = self.metrics_registry.feed_reconnect_total.labels(
-                                result="gap"
-                            )
-                        self._feed_reconnect_gap_metric_child.inc()
                 if gap > self.resubscribe_gap_s:
-                    await self._attempt_resubscribe(gap)
+                    await self._attempt_resubscribe(gap, reason="heartbeat_gap")
                 if gap > self.force_reconnect_gap_s or (gap > self.reconnect_gap_s and self._resubscribe_attempts > 2):
                     await self._request_reconnect(gap, reason="heartbeat_gap")
 
@@ -795,8 +817,17 @@ class MarketDataService:
             if self.state != FeedState.CONNECTED:
                 continue
 
+            if self._symbol_gap_skip_off_hours and not self._is_trading_hours():
+                self._symbol_gap_consecutive_hits = 0
+                now_s = timebase.now_s()
+                if now_s - self._last_symbol_gap_off_hours_log_ts >= self._symbol_gap_off_hours_log_interval_s:
+                    logger.info("Skipping symbol gap watchdog outside trading hours")
+                    self._last_symbol_gap_off_hours_log_ts = now_s
+                continue
+
             # P1-4: Lock-free snapshot (CPython dict copy is safe during iteration)
             if not self._symbol_last_tick:
+                self._symbol_gap_consecutive_hits = 0
                 continue
             try:
                 tick_snapshot = dict(self._symbol_last_tick)
@@ -805,6 +836,17 @@ class MarketDataService:
                 continue
 
             now = time.monotonic()
+            if self._symbol_gap_active_lookback_s > 0:
+                active_snapshot = {
+                    symbol: last_ts
+                    for symbol, last_ts in tick_snapshot.items()
+                    if (now - last_ts) <= self._symbol_gap_active_lookback_s
+                }
+            else:
+                active_snapshot = tick_snapshot
+            if len(active_snapshot) < self._symbol_gap_min_active_symbols:
+                self._symbol_gap_consecutive_hits = 0
+                continue
             stale_symbols: list[tuple[str, float]] = []
 
             # Use relaxed threshold during market open grace period (C4)
@@ -812,26 +854,42 @@ class MarketDataService:
             if self._is_market_open_grace_period():
                 threshold = max(threshold, self._market_open_grace_gap_threshold_s)
 
-            for symbol, last_ts in tick_snapshot.items():
+            for symbol, last_ts in active_snapshot.items():
                 gap = now - last_ts
                 if gap > threshold:
                     stale_symbols.append((symbol, gap))
 
             if stale_symbols:
+                self._symbol_gap_consecutive_hits += 1
                 symbols_str = ", ".join(f"{s}({g:.1f}s)" for s, g in stale_symbols[:5])
-                logger.warning(
-                    "Feed gap detected for symbols",
-                    stale_count=len(stale_symbols),
-                    symbols=symbols_str,
-                    threshold_s=self._symbol_gap_threshold_s,
-                )
+                active_count = len(active_snapshot)
+                stale_ratio = (len(stale_symbols) / active_count) if active_count > 0 else 0.0
+                max_stale_gap = max(g for _, g in stale_symbols)
+                if self._symbol_gap_consecutive_hits == 1 or self._symbol_gap_consecutive_hits % 10 == 0:
+                    logger.warning(
+                        "Feed gap detected for symbols",
+                        stale_count=len(stale_symbols),
+                        active_count=active_count,
+                        stale_ratio=round(stale_ratio, 3),
+                        symbols=symbols_str,
+                        threshold_s=self._symbol_gap_threshold_s,
+                        consecutive_cycles=self._symbol_gap_consecutive_hits,
+                    )
 
-                if self.metrics_registry:
-                    self.metrics_registry.feed_reconnect_total.labels(result="symbol_gap").inc()
-
-                # Trigger resubscription if multiple symbols are stale
-                if len(stale_symbols) >= 2:
-                    await self._attempt_resubscribe(max(g for _, g in stale_symbols))
+                # Trigger resubscription only when stale condition is sustained and cooldown elapsed.
+                if (
+                    len(stale_symbols) >= self._symbol_gap_min_stale_count
+                    and stale_ratio >= self._symbol_gap_stale_ratio_threshold
+                    and max_stale_gap >= max(self._symbol_gap_severe_gap_s, threshold)
+                    and self._symbol_gap_consecutive_hits >= self._symbol_gap_consecutive_cycles
+                    and (
+                        timebase.now_s() - self._last_symbol_gap_resubscribe_ts
+                    ) >= self._symbol_gap_resubscribe_cooldown_s
+                ):
+                    self._last_symbol_gap_resubscribe_ts = timebase.now_s()
+                    await self._attempt_resubscribe(max_stale_gap, reason="symbol_gap")
+            else:
+                self._symbol_gap_consecutive_hits = 0
 
     async def _publish(self, event):
         """Publish to bus and handle both async and sync publishers."""
@@ -864,6 +922,17 @@ class MarketDataService:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
+        except Exception:
+            return
+
+    def _record_shioaji_crash_signature(self, text: str | None, *, context: str) -> None:
+        if not self.metrics_registry or not hasattr(self.metrics_registry, "shioaji_crash_signature_total"):
+            return
+        signature = detect_crash_signature(text)
+        if not signature:
+            return
+        try:
+            self.metrics_registry.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
         except Exception:
             return
 
@@ -1169,15 +1238,28 @@ class MarketDataService:
             logger.info("State change", old=self.state, new=new_state)
             self.state = new_state
 
-    async def _attempt_resubscribe(self, gap: float) -> None:
+    async def _attempt_resubscribe(self, gap: float, reason: str = "heartbeat_gap") -> None:
         if not self._within_reconnect_window():
             return
+        now = timebase.now_s()
+        if now - self._last_resubscribe_ts < self.resubscribe_cooldown_s:
+            return
+        if self.metrics_registry:
+            if reason == "heartbeat_gap":
+                if self._feed_reconnect_gap_metric_child is None:
+                    self._feed_reconnect_gap_metric_child = self.metrics_registry.feed_reconnect_total.labels(
+                        result="gap"
+                    )
+                self._feed_reconnect_gap_metric_child.inc()
+            elif reason == "symbol_gap":
+                self.metrics_registry.feed_reconnect_total.labels(result="symbol_gap").inc()
+        self._last_resubscribe_ts = now
         ok = await asyncio.to_thread(self.client.resubscribe)
         if ok:
             self._resubscribe_attempts = 0
         else:
             self._resubscribe_attempts += 1
-        logger.info("Resubscribe attempt", gap=gap, ok=ok, attempts=self._resubscribe_attempts)
+        logger.info("Resubscribe attempt", gap=gap, reason=reason, ok=ok, attempts=self._resubscribe_attempts)
 
     async def _request_reconnect(self, gap: float, reason: str | None = None) -> None:
         if self._within_reconnect_window():
@@ -1336,6 +1418,20 @@ class MarketDataService:
 
         now = time.monotonic()
         return {symbol: now - last_ts for symbol, last_ts in tick_snapshot.items()}
+
+    def _is_trading_hours(self) -> bool:
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+            now_dt = dt.datetime.now(calendar._tz)
+            return calendar.is_trading_hours(now_dt)
+        except Exception:
+            now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+            if now_dt.weekday() >= 5:
+                return False
+            minute = now_dt.hour * 60 + now_dt.minute
+            return (9 * 60) <= minute <= (13 * 60 + 30)
 
     def _is_market_open_grace_period(self) -> bool:
         """Check if within grace period after market open (C4).
