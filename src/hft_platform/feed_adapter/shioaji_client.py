@@ -13,6 +13,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji import router as _router
+from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.rate_limiter import RateLimiter
 
@@ -169,6 +170,7 @@ class ShioajiClient:
             self.activate_ca = False
         self.ca_active = False
         self._reconnect_lock = threading.Lock()
+        self._callback_register_lock = threading.Lock()
         self._last_reconnect_ts = 0.0
         self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
         self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "600"))
@@ -238,6 +240,8 @@ class ShioajiClient:
         self._quote_pending_stall_warn_s = float(os.getenv("HFT_QUOTE_PENDING_STALL_WARN_S", "120"))
         self._quote_pending_stall_reported = False
         self._event_callback_registered = False
+        # Keep a strong reference to event callback to avoid SDK-side weakref GC issues.
+        self._event_callback_fn = self._on_quote_event
         self._event_callback_retrying = False
         self._event_callback_retry_thread: threading.Thread | None = None
         self._event_callback_retry_s = float(os.getenv("HFT_QUOTE_EVENT_RETRY_S", "5"))
@@ -427,6 +431,18 @@ class ShioajiClient:
         if len(text) > 64:
             return text[:64]
         return text
+
+    def _record_crash_signature(self, text: str | None, *, context: str) -> None:
+        metrics = getattr(self, "metrics", None)
+        if not metrics or not hasattr(metrics, "shioaji_crash_signature_total"):
+            return
+        signature = detect_crash_signature(text)
+        if not signature:
+            return
+        try:
+            metrics.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
+        except Exception:
+            return
 
     def _safe_call_with_timeout(
         self,
@@ -834,6 +850,15 @@ class ShioajiClient:
         except Exception as exc:
             logger.error("CA activation failed", error=str(exc))
 
+    def _quote_api(self):
+        api = self.api
+        if not api:
+            return None
+        quote = getattr(api, "quote", None)
+        if quote is None:
+            return None
+        return quote
+
     def subscribe_basket(self, cb: Callable[..., Any]):
         if not self.api:
             # If API is missing entirely (no library), skip
@@ -849,6 +874,29 @@ class ShioajiClient:
         self.tick_callback = cb
         self._start_quote_dispatch_worker()
         self._ensure_callbacks(cb)
+        if not (self._callbacks_registered and self._event_callback_registered):
+            logger.warning(
+                "Quote callbacks not ready; deferring quote subscription",
+                callbacks_registered=self._callbacks_registered,
+                event_callback_registered=self._event_callback_registered,
+            )
+            self._failed_sub_symbols = [sym for sym in self.symbols if isinstance(sym, dict)]
+            if self._failed_sub_symbols:
+                self._start_sub_retry_thread(cb)
+            self._start_quote_watchdog()
+            self._start_session_refresh_thread()
+            return
+
+        quote_api = self._quote_api()
+        if quote_api is None or not hasattr(quote_api, "subscribe"):
+            logger.warning("Quote API unavailable; deferring quote subscription")
+            self._failed_sub_symbols = [sym for sym in self.symbols if isinstance(sym, dict)]
+            if self._failed_sub_symbols:
+                self._start_sub_retry_thread(cb)
+            self._start_quote_watchdog()
+            self._start_session_refresh_thread()
+            return
+
         self._start_contract_refresh_thread()
         if self._last_quote_data_ts <= 0:
             self._last_quote_data_ts = timebase.now_s()
@@ -900,53 +948,57 @@ class ShioajiClient:
     def _register_callbacks(self, cb: Callable[..., Any]) -> bool:
         if not self.api:
             return False
-        if self._callbacks_registered and self._event_callback_registered:
-            return True
-        ok_quote = True
-        ok_event = True
-        try:
-            # Use global dispatcher to avoid weak-ref issues with bound methods.
-            ok_quote = self._register_quote_callbacks()
-        except Exception as e:
-            logger.error("Quote callback registration failed", error=str(e))
-            ok_quote = False
+        with self._callback_register_lock:
+            if self._callbacks_registered and self._event_callback_registered:
+                return True
+            ok_quote = True
+            ok_event = True
+            try:
+                # Use global dispatcher to avoid weak-ref issues with bound methods.
+                ok_quote = self._register_quote_callbacks()
+            except Exception as e:
+                logger.error("Quote callback registration failed", error=str(e))
+                ok_quote = False
 
-        ok_event = self._register_event_callback()
+            ok_event = self._register_event_callback()
 
-        self._callbacks_registered = ok_quote
-        self._event_callback_registered = ok_event
+            self._callbacks_registered = ok_quote
+            self._event_callback_registered = ok_event
 
-        if ok_quote:
-            logger.info(
-                "Quote callbacks registered",
-                quote_version=self._quote_version,
-                quote_version_mode=self._quote_version_mode,
-            )
-        else:
-            logger.warning(
-                "Quote callbacks not registered",
-                quote_version=self._quote_version,
-                quote_version_mode=self._quote_version_mode,
-            )
+            if ok_quote:
+                logger.info(
+                    "Quote callbacks registered",
+                    quote_version=self._quote_version,
+                    quote_version_mode=self._quote_version_mode,
+                )
+            else:
+                logger.warning(
+                    "Quote callbacks not registered",
+                    quote_version=self._quote_version,
+                    quote_version_mode=self._quote_version_mode,
+                )
 
-        if ok_event:
-            logger.info("Quote event callback registered")
-        else:
-            logger.warning("Quote event callback not registered")
+            if ok_event:
+                logger.info("Quote event callback registered")
+            else:
+                logger.warning("Quote event callback not registered")
 
-        return ok_quote and ok_event
+            return ok_quote and ok_event
 
     def _register_quote_callbacks(self) -> bool:
         """Delegates to QuoteRuntime.register_quote_callbacks()."""
         return self._quote_runtime.register_quote_callbacks()
 
     def _register_event_callback(self) -> bool:
-        if not self.api:
+        quote_api = self._quote_api()
+        if quote_api is None:
+            logger.warning("Quote API unavailable; event callback registration deferred")
             return False
         try:
-            self.api.quote.set_event_callback(self._on_quote_event)
+            quote_api.set_event_callback(self._event_callback_fn)
             return True
         except Exception as exc:
+            self._record_crash_signature(str(exc), context="register_event_callback")
             logger.warning("Failed quote event callback registration", error=str(exc))
             return False
 
@@ -1123,7 +1175,8 @@ class ShioajiClient:
             interval = self._event_callback_retry_s
             try:
                 while self.api and not self._event_callback_registered:
-                    ok = self._register_event_callback()
+                    with self._callback_register_lock:
+                        ok = self._register_event_callback()
                     if ok:
                         self._event_callback_registered = True
                         logger.info("Quote event callback registered after retry")
@@ -1243,14 +1296,16 @@ class ShioajiClient:
         self._start_forced_relogin("quote_flap")
 
     def _supports_quote_v0(self) -> bool:
-        if not self.api or not hasattr(self.api, "quote"):
+        quote_api = self._quote_api()
+        if quote_api is None:
             return False
-        return hasattr(self.api.quote, "set_on_tick_stk_callback")
+        return hasattr(quote_api, "set_on_tick_stk_callback")
 
     def _supports_quote_v1(self) -> bool:
-        if not self.api or not hasattr(self.api, "quote"):
+        quote_api = self._quote_api()
+        if quote_api is None:
             return False
-        return hasattr(self.api.quote, "set_on_tick_stk_v1_callback")
+        return hasattr(quote_api, "set_on_tick_stk_v1_callback")
 
     def _mark_quote_pending(self, reason: str) -> None:
         now = timebase.now_s()
@@ -1335,19 +1390,20 @@ class ShioajiClient:
                     self._callbacks_registered = False
                     self._ensure_callbacks(self.tick_callback)
             elif event_code == 13:
+                # event_13 may be regular subscribe/unsubscribe ACK; only recover when pending.
                 if self._pending_quote_resubscribe:
                     self._clear_quote_pending()
-                if self.tick_callback:
-                    self._callbacks_registered = False
-                    self._ensure_callbacks(self.tick_callback)
-                    self._resubscribe_all()
-                else:
-                    self._schedule_resubscribe("event_13")
-                try:
-                    if self.metrics:
-                        self.metrics.feed_resubscribe_total.labels(result="event_13").inc()
-                except Exception:
-                    pass
+                    if self.tick_callback:
+                        self._callbacks_registered = False
+                        self._ensure_callbacks(self.tick_callback)
+                        self._resubscribe_all()
+                    else:
+                        self._schedule_resubscribe("event_13")
+                    try:
+                        if self.metrics:
+                            self.metrics.feed_resubscribe_total.labels(result="event_13").inc()
+                    except Exception:
+                        pass
             elif event_code == 4:
                 if self._pending_quote_resubscribe:
                     self._clear_quote_pending()
@@ -1358,6 +1414,7 @@ class ShioajiClient:
                 except Exception:
                     pass
         except Exception as exc:
+            self._record_crash_signature(str(exc), context="quote_event")
             logger.error(
                 "Quote event handler failed",
                 resp_code=resp_code,
@@ -1464,6 +1521,11 @@ class ShioajiClient:
         if not self.api or not self.logged_in or not self.tick_callback:
             return
         self._ensure_callbacks(self.tick_callback)
+        if not (self._callbacks_registered and self._event_callback_registered):
+            return
+        quote_api = self._quote_api()
+        if quote_api is None or not hasattr(quote_api, "subscribe"):
+            return
         now = timebase.now_s()
         last = getattr(self, "_last_resubscribe_ts", 0.0)
         cooldown = getattr(self, "resubscribe_cooldown", 1.5)
@@ -1519,24 +1581,33 @@ class ShioajiClient:
                     pass
             return False
 
+        quote_api = self._quote_api()
+        if quote_api is None or not hasattr(quote_api, "subscribe"):
+            logger.error("Quote API unavailable during subscribe", code=code)
+            return False
+
         try:
             start_ns = time.perf_counter_ns()
             v = self._get_quote_version()
             if v is None:
-                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick)
-                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
+                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.Tick)
+                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
             else:
-                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                self.api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
+                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
             self._record_api_latency("subscribe", start_ns, ok=True)
             return True
         except Exception as e:
             self._record_api_latency("subscribe", start_ns, ok=False)
+            self._record_crash_signature(str(e), context="subscribe_symbol")
             logger.error(f"Subscription failed for {code}: {e}")
             return False
 
     def _unsubscribe_symbol(self, sym: Dict[str, Any]) -> None:
         if not self.api or not sj:
+            return
+        quote_api = self._quote_api()
+        if quote_api is None or not hasattr(quote_api, "unsubscribe"):
             return
         code = sym.get("code")
         exchange = sym.get("exchange")
@@ -1550,11 +1621,11 @@ class ShioajiClient:
             start_ns = time.perf_counter_ns()
             v = self._get_quote_version()
             if v is None:
-                self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick)
-                self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
+                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick)
+                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
             else:
-                self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                self.api.quote.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
+                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
+                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
             self._record_api_latency("unsubscribe", start_ns, ok=True)
         except Exception as e:
             self._record_api_latency("unsubscribe", start_ns, ok=False)
@@ -1579,6 +1650,18 @@ class ShioajiClient:
                 time.sleep(interval)
                 if not self._sub_retry_running:
                     break
+                if not self.logged_in:
+                    continue
+                if not (self._callbacks_registered and self._event_callback_registered):
+                    if self.tick_callback:
+                        self._ensure_callbacks(self.tick_callback)
+                    if not (self._callbacks_registered and self._event_callback_registered):
+                        logger.warning("Subscription retry waiting for quote callbacks to register")
+                        continue
+                quote_api = self._quote_api()
+                if quote_api is None or not hasattr(quote_api, "subscribe"):
+                    logger.warning("Subscription retry waiting for quote API availability")
+                    continue
                 remaining: list[Dict[str, Any]] = []
                 for sym in list(self._failed_sub_symbols):
                     if not self._sub_retry_running:

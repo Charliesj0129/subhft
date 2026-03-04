@@ -5,7 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
@@ -92,12 +92,32 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
             await self.service._attempt_resubscribe(10.0)
         self.assertEqual(self.service._resubscribe_attempts, 0)
 
+    async def test_attempt_resubscribe_heartbeat_increments_gap_metric(self):
+        self.client.resubscribe.return_value = True
+        self.service.metrics_registry = MagicMock()
+        gap_child = MagicMock()
+        self.service.metrics_registry.feed_reconnect_total.labels.return_value = gap_child
+        with patch.object(self.service, "_within_reconnect_window", return_value=True):
+            await self.service._attempt_resubscribe(10.0, reason="heartbeat_gap")
+        self.service.metrics_registry.feed_reconnect_total.labels.assert_called_with(result="gap")
+        gap_child.inc.assert_called_once()
+
     async def test_attempt_resubscribe_increments_on_fail(self):
         self.client.resubscribe.return_value = False
         self.service._resubscribe_attempts = 1
         with patch.object(self.service, "_within_reconnect_window", return_value=True):
             await self.service._attempt_resubscribe(10.0)
         self.assertEqual(self.service._resubscribe_attempts, 2)
+
+    async def test_attempt_resubscribe_symbol_gap_increments_symbol_metric(self):
+        self.client.resubscribe.return_value = True
+        self.service.metrics_registry = MagicMock()
+        symbol_child = MagicMock()
+        self.service.metrics_registry.feed_reconnect_total.labels.return_value = symbol_child
+        with patch.object(self.service, "_within_reconnect_window", return_value=True):
+            await self.service._attempt_resubscribe(10.0, reason="symbol_gap")
+        self.service.metrics_registry.feed_reconnect_total.labels.assert_called_with(result="symbol_gap")
+        symbol_child.inc.assert_called_once()
 
     async def test_attempt_resubscribe_window_block(self):
         self.client.resubscribe.return_value = True
@@ -106,6 +126,65 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
             await self.service._attempt_resubscribe(10.0)
         self.client.resubscribe.assert_not_called()
         self.assertEqual(self.service._resubscribe_attempts, 1)
+
+    async def test_attempt_resubscribe_respects_cooldown(self):
+        self.client.resubscribe.return_value = True
+        self.service.resubscribe_cooldown_s = 60.0
+        self.service._last_resubscribe_ts = 120.0
+        with (
+            patch.object(self.service, "_within_reconnect_window", return_value=True),
+            patch("hft_platform.services.market_data.timebase.now_s", return_value=160.0),
+        ):
+            await self.service._attempt_resubscribe(10.0)
+        self.client.resubscribe.assert_not_called()
+
+    async def test_watchdog_skips_symbol_gap_recovery_off_hours(self):
+        self.service.running = True
+        self.service.state = FeedState.CONNECTED
+        self.service._watchdog_interval_s = 0.001
+        self.service._symbol_gap_skip_off_hours = True
+        self.service._symbol_last_tick = {"2330": time.monotonic() - 30.0}
+
+        attempt = AsyncMock()
+        with (
+            patch.object(self.service, "_is_trading_hours", return_value=False),
+            patch.object(self.service, "_attempt_resubscribe", attempt),
+        ):
+            task = asyncio.create_task(self.service._watchdog_loop())
+            await asyncio.sleep(0.01)
+            self.service.running = False
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        attempt.assert_not_awaited()
+
+    async def test_watchdog_skips_when_active_symbols_below_floor(self):
+        self.service.running = True
+        self.service.state = FeedState.CONNECTED
+        self.service._watchdog_interval_s = 0.001
+        self.service._symbol_gap_skip_off_hours = False
+        self.service._symbol_gap_min_active_symbols = 3
+        self.service._symbol_gap_active_lookback_s = 300.0
+        self.service._symbol_last_tick = {"2330": time.monotonic() - 60.0}
+
+        attempt = AsyncMock()
+        with (
+            patch.object(self.service, "_is_trading_hours", return_value=True),
+            patch.object(self.service, "_attempt_resubscribe", attempt),
+        ):
+            task = asyncio.create_task(self.service._watchdog_loop())
+            await asyncio.sleep(0.01)
+            self.service.running = False
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        attempt.assert_not_awaited()
 
     async def test_trigger_reconnect_respects_cooldown(self):
         self.service._set_state(FeedState.CONNECTED)

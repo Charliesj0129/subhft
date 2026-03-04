@@ -128,6 +128,7 @@ class MetricsRegistry:
                 "feed_session_conflict_total",
                 "feed_first_quote_total",
                 "shioaji_login_fail_total",
+                "shioaji_crash_signature_total",
                 "market_data_callback_parse_total",
                 "feature_plane_updates_total",
                 "feature_plane_latency_ns",
@@ -552,6 +553,11 @@ class MetricsRegistry:
             "shioaji_login_fail_total",
             "Shioaji login attempts exhausted retries",
             ["reason"],
+        )
+        self.shioaji_crash_signature_total = Counter(
+            "shioaji_crash_signature_total",
+            "Detected Shioaji crash precursor signatures",
+            ["signature", "context"],
         )
         self.market_data_callback_parse_total = Counter(
             "market_data_callback_parse_total",
