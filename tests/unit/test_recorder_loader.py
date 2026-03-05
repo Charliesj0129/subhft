@@ -655,10 +655,39 @@ def test_process_files_defers_when_no_client(tmp_path):
     assert not dlq_dir.exists() or not list(dlq_dir.iterdir()), "DLQ must be empty"
 
 
-def test_tick_type_no_orderbook_warning(tmp_path, caplog):
-    """Tick-type rows must not trigger 'Missing orderbook side' warning."""
-    import logging
+def _make_wal_file(wal_dir, filename, row, age_s=10):
+    """Helper: write a single-row WAL file with mtime in the past."""
+    fpath = wal_dir / filename
+    fpath.write_text(json.dumps(row) + "\n")
+    past = time.time() - age_s
+    os.utime(fpath, (past, past))
+    return fpath
 
+
+def _run_and_capture_warnings(loader):
+    """Run process_files() and return structlog warning events via patching."""
+    warnings = []
+    original_warn = loader._logger.warning if hasattr(loader, "_logger") else None
+
+    import hft_platform.recorder.loader as loader_mod
+    captured = []
+
+    original = loader_mod.logger.warning
+
+    def capturing_warn(event, **kw):
+        captured.append({"event": event, **kw})
+        return original(event, **kw)
+
+    loader_mod.logger.warning = capturing_warn
+    try:
+        loader.process_files()
+    finally:
+        loader_mod.logger.warning = original
+    return captured
+
+
+def test_tick_type_no_orderbook_warning(tmp_path):
+    """Tick-type rows must not trigger 'Missing orderbook side' warning."""
     wal_dir = tmp_path / "wal"
     archive_dir = tmp_path / "archive"
     wal_dir.mkdir()
@@ -668,18 +697,73 @@ def test_tick_type_no_orderbook_warning(tmp_path, caplog):
                 "exch_ts": 1, "ingest_ts": 1, "price_scaled": 330000000,
                 "volume": 2, "bids_price": [], "bids_vol": [],
                 "asks_price": [], "asks_vol": [], "seq_no": 1}
-    fpath = wal_dir / "market_data_200.jsonl"
-    fpath.write_text(json.dumps(tick_row) + "\n")
-    past = time.time() - 10
-    os.utime(fpath, (past, past))
+    _make_wal_file(wal_dir, "market_data_200.jsonl", tick_row)
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
     loader.ch_client = MagicMock()
 
-    with caplog.at_level(logging.WARNING):
-        loader.process_files()
+    warnings = _run_and_capture_warnings(loader)
+    assert not any("Missing orderbook side" in w.get("event", "") for w in warnings)
 
-    assert "Missing orderbook side" not in caplog.text
+
+def test_tick_type_lowercase_no_orderbook_warning(tmp_path):
+    """Lowercase tick-type rows must not trigger orderbook-side warning."""
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    tick_row = {"symbol": "TXFC6", "exchange": "FUT", "type": "tick",
+                "exch_ts": 1, "ingest_ts": 1, "price_scaled": 330000000,
+                "volume": 2, "bids_price": [], "bids_vol": [],
+                "asks_price": [], "asks_vol": [], "seq_no": 1}
+    _make_wal_file(wal_dir, "market_data_201.jsonl", tick_row)
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+
+    warnings = _run_and_capture_warnings(loader)
+    assert not any("Missing orderbook side" in w.get("event", "") for w in warnings)
+
+
+def test_bidask_both_empty_no_orderbook_warning(tmp_path):
+    """BidAsk rows with BOTH sides empty (book-cleared at close) must not warn."""
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    row = {"symbol": "TMFC6", "exchange": "FUT", "type": "BidAsk",
+           "exch_ts": 1, "ingest_ts": 1, "price_scaled": 0,
+           "volume": 0, "bids_price": [], "bids_vol": [],
+           "asks_price": [], "asks_vol": [], "seq_no": 1}
+    _make_wal_file(wal_dir, "market_data_202.jsonl", row)
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+
+    warnings = _run_and_capture_warnings(loader)
+    assert not any("Missing orderbook side" in w.get("event", "") for w in warnings)
+
+
+def test_bidask_one_side_empty_warns(tmp_path):
+    """BidAsk rows with exactly ONE side empty must still warn (genuine gap)."""
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    row = {"symbol": "TXO32000O6", "exchange": "FUT", "type": "BidAsk",
+           "exch_ts": 1, "ingest_ts": 1, "price_scaled": 0,
+           "volume": 0, "bids_price": [320000000], "bids_vol": [5],
+           "asks_price": [], "asks_vol": [], "seq_no": 1}
+    _make_wal_file(wal_dir, "market_data_203.jsonl", row)
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+
+    warnings = _run_and_capture_warnings(loader)
+    assert any("Missing orderbook side" in w.get("event", "") for w in warnings)
 
 
 def test_replay_dlq_inserts_and_archives(tmp_path):
