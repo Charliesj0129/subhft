@@ -1284,14 +1284,19 @@ class WALLoaderService:
                         ingest_ts = ts
 
                 # Minimal validation for missing book data.
-                # Tick-type events never carry orderbook arrays by design — skip warning.
-                row_type = r.get("type", "")
-                if row_type != "Tick" and (not bids_price or not asks_price):
+                # Only warn when exactly ONE side is populated — a genuine data gap.
+                # Suppress for:
+                #   - Tick events (no orderbook by design)
+                #   - Book-cleared events (both sides empty, emitted at market close)
+                row_type = str(r.get("type") or "").strip().lower()
+                has_bids = bool(bids_price)
+                has_asks = bool(asks_price)
+                if row_type != "tick" and has_bids != has_asks:
                     logger.warning(
                         "Missing orderbook side in WAL row",
                         symbol=r.get("symbol"),
-                        has_bids=bool(bids_price),
-                        has_asks=bool(asks_price),
+                        has_bids=has_bids,
+                        has_asks=has_asks,
                     )
 
                 row_data = [
