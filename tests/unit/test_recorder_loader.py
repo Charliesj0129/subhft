@@ -237,6 +237,117 @@ def test_wal_loader_accumulation_check(tmp_path):
     assert call_args == 5
 
 
+def test_insert_with_retry_records_success_no_retry_outcome(tmp_path):
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+    loader.metrics = MagicMock()
+
+    ok = loader._insert_with_retry(
+        "hft.market_data",
+        ["symbol"],
+        [["2330"]],
+        "market_data",
+        row_count=1,
+    )
+
+    assert ok is True
+    loader.metrics.recorder_insert_batches_total.labels.assert_any_call(
+        table="market_data", result="success_no_retry"
+    )
+
+
+def test_insert_with_retry_records_success_after_retry_outcome(tmp_path):
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+    loader.ch_client.insert.side_effect = [RuntimeError("boom"), None]
+    loader.metrics = MagicMock()
+    loader._insert_max_retries = 2
+
+    with patch("time.sleep", return_value=None):
+        ok = loader._insert_with_retry(
+            "hft.market_data",
+            ["symbol"],
+            [["2330"]],
+            "market_data",
+            row_count=1,
+        )
+
+    assert ok is True
+    loader.metrics.recorder_insert_batches_total.labels.assert_any_call(
+        table="market_data", result="success_after_retry"
+    )
+    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(
+        table="market_data", result="retry"
+    )
+    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(
+        table="market_data", result="success"
+    )
+
+
+def test_insert_with_retry_records_failed_after_retry_outcome(tmp_path):
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+    loader.ch_client.insert.side_effect = RuntimeError("boom")
+    loader.metrics = MagicMock()
+    loader._insert_max_retries = 2
+
+    with patch("time.sleep", return_value=None):
+        ok = loader._insert_with_retry(
+            "hft.market_data",
+            ["symbol"],
+            [["2330"]],
+            "market_data",
+            row_count=1,
+        )
+
+    assert ok is False
+    loader.metrics.recorder_insert_batches_total.labels.assert_any_call(
+        table="market_data", result="failed_after_retry"
+    )
+    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(
+        table="market_data", result="failed"
+    )
+
+
+def test_insert_with_retry_records_failed_no_client_outcome(tmp_path):
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = None
+    loader.metrics = MagicMock()
+
+    ok = loader._insert_with_retry(
+        "hft.market_data",
+        ["symbol"],
+        [["2330"]],
+        "market_data",
+        row_count=1,
+    )
+
+    assert ok is False
+    loader.metrics.recorder_insert_batches_total.labels.assert_any_call(
+        table="market_data", result="failed_no_client"
+    )
+
+
 def test_parse_table_from_filename_handles_prefixes():
     assert WALLoaderService._parse_table_from_filename("hft.market_data_123.jsonl") == "market_data"
     assert WALLoaderService._parse_table_from_filename("market_data_123.jsonl") == "market_data"
@@ -320,6 +431,31 @@ def test_cleanup_old_corrupt_files(tmp_path):
     loader._cleanup_old_corrupt_files()
 
     assert not corrupt_file.exists()
+
+
+def test_cleanup_old_archive_files(tmp_path):
+    wal_dir = tmp_path / "wal"
+    wal_dir.mkdir()
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+
+    old_archive = archive_dir / "market_data_1.jsonl"
+    old_archive.write_text("{}\n")
+    past = time.time() - 10
+    os.utime(old_archive, (past, past))
+
+    new_archive = archive_dir / "market_data_2.jsonl"
+    new_archive.write_text("{}\n")
+    future = time.time() + 60
+    os.utime(new_archive, (future, future))
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader._archive_retention_days = 0
+    loader._last_archive_cleanup_ts = 0
+    loader._cleanup_old_archive_files()
+
+    assert not old_archive.exists()
+    assert new_archive.exists()
 
 
 def test_write_to_dlq_writes_metadata(tmp_path):
@@ -491,6 +627,117 @@ def test_process_single_file_unknown_table_skips(tmp_path):
 
     assert processed is False
     assert fpath.exists()
+
+
+def test_process_files_defers_when_no_client(tmp_path):
+    """process_files() must not write to DLQ when ch_client is None (startup race fix)."""
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    row = {"symbol": "2330", "exchange": "TSE", "type": "BidAsk", "exch_ts": 1, "ingest_ts": 1,
+           "price_scaled": 100000, "volume": 1, "bids_price": [990000], "bids_vol": [10],
+           "asks_price": [1000000], "asks_vol": [5], "seq_no": 1}
+    fpath = wal_dir / "market_data_100.jsonl"
+    fpath.write_text(json.dumps(row) + "\n")
+    past = time.time() - 10
+    os.utime(fpath, (past, past))
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    # ch_client is None — simulates pre-connection state
+
+    loader.process_files(force=True)
+
+    # File must NOT have been moved or converted to DLQ
+    assert fpath.exists(), "WAL file should remain for retry after client connects"
+    dlq_dir = wal_dir / "dlq"
+    assert not dlq_dir.exists() or not list(dlq_dir.iterdir()), "DLQ must be empty"
+
+
+def test_tick_type_no_orderbook_warning(tmp_path, caplog):
+    """Tick-type rows must not trigger 'Missing orderbook side' warning."""
+    import logging
+
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+
+    tick_row = {"symbol": "TXFC6", "exchange": "FUT", "type": "Tick",
+                "exch_ts": 1, "ingest_ts": 1, "price_scaled": 330000000,
+                "volume": 2, "bids_price": [], "bids_vol": [],
+                "asks_price": [], "asks_vol": [], "seq_no": 1}
+    fpath = wal_dir / "market_data_200.jsonl"
+    fpath.write_text(json.dumps(tick_row) + "\n")
+    past = time.time() - 10
+    os.utime(fpath, (past, past))
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+
+    with caplog.at_level(logging.WARNING):
+        loader.process_files()
+
+    assert "Missing orderbook side" not in caplog.text
+
+
+def test_replay_dlq_inserts_and_archives(tmp_path):
+    """replay_dlq() should insert DLQ rows and move files to archive."""
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    dlq_dir = wal_dir / "dlq"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+    dlq_dir.mkdir()
+
+    row = {"symbol": "2330", "exchange": "TSE", "type": "BidAsk", "exch_ts": 1, "ingest_ts": 1,
+           "price_scaled": 100000, "volume": 1, "bids_price": [990000], "bids_vol": [10],
+           "asks_price": [1000000], "asks_vol": [5], "seq_no": 1}
+    dlq_file = dlq_dir / "market_data_300.jsonl"
+    with open(dlq_file, "w") as f:
+        f.write(json.dumps({"_dlq_meta": True, "table": "market_data",
+                            "error": "insert_failed_after_retries",
+                            "timestamp": 300, "row_count": 1}) + "\n")
+        f.write(json.dumps(row) + "\n")
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+
+    result = loader.replay_dlq()
+
+    assert result["replayed"] == 1
+    assert result["failed"] == 0
+    assert not dlq_file.exists(), "DLQ file should be archived after success"
+    loader.ch_client.insert.assert_called_once()
+
+
+def test_replay_dlq_dry_run_does_not_move(tmp_path):
+    """replay_dlq(dry_run=True) logs without inserting or moving files."""
+    wal_dir = tmp_path / "wal"
+    archive_dir = tmp_path / "archive"
+    dlq_dir = wal_dir / "dlq"
+    wal_dir.mkdir()
+    archive_dir.mkdir()
+    dlq_dir.mkdir()
+
+    row = {"symbol": "2330", "exchange": "TSE", "type": "BidAsk", "exch_ts": 1, "ingest_ts": 1,
+           "price_scaled": 100000, "volume": 1, "bids_price": [990000], "bids_vol": [10],
+           "asks_price": [1000000], "asks_vol": [5], "seq_no": 1}
+    dlq_file = dlq_dir / "market_data_400.jsonl"
+    with open(dlq_file, "w") as f:
+        f.write(json.dumps({"_dlq_meta": True, "table": "market_data",
+                            "error": "test", "timestamp": 400, "row_count": 1}) + "\n")
+        f.write(json.dumps(row) + "\n")
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader.ch_client = MagicMock()
+
+    result = loader.replay_dlq(dry_run=True)
+
+    assert result["replayed"] == 1
+    assert dlq_file.exists(), "dry_run must not move files"
+    loader.ch_client.insert.assert_not_called()
 
 
 def test_compute_backoff_bounds():
