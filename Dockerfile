@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Build stage
-FROM python:3.11-slim-bookworm as builder
+FROM python:3.12-slim-bookworm as builder
 
 WORKDIR /app
 
@@ -70,7 +70,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     CARGO_NET_OFFLINE=true maturin build --release --manifest-path rust_core/Cargo.toml -o /tmp/wheels
 
 # Runtime stage
-FROM python:3.11-slim-bookworm
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
