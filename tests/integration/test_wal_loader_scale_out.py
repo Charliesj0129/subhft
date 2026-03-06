@@ -45,6 +45,9 @@ def test_two_loaders_no_duplicate_inserts_with_shard_claim(tmp_path):
     l2._loader_concurrency = 1
     l1._manifest_enabled = False
     l2._manifest_enabled = False
+    # process_files() now defers until client is ready (startup race guard).
+    l1.ch_client = object()
+    l2.ch_client = object()
 
     inserted_seq: list[int] = []
     ins_lock = threading.Lock()
@@ -69,4 +72,3 @@ def test_two_loaders_no_duplicate_inserts_with_shard_claim(tmp_path):
     assert len(inserted_seq) == 8  # no duplicate inserts
     assert not list(wal_dir.glob("*.jsonl"))
     assert len(list(archive_dir.glob("*.jsonl"))) == 8
-

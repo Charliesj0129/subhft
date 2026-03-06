@@ -1,9 +1,6 @@
 """Tests for CE2-06: GatewayPolicy FSM."""
-import os
 
-import pytest
-
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side, StormGuardState
 from hft_platform.gateway.policy import GatewayPolicy, GatewayPolicyMode
 
 

@@ -7,11 +7,10 @@ Tests cover:
 - Entry price cleared after stop-loss fires
 - No stop-loss when entry price not set
 """
+
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 
 class _FakeCore:
@@ -29,7 +28,6 @@ class _FakeCore:
 
 def _make_strategy(signal_threshold=0.3, stop_loss_ticks=10, tick_size=1.0, max_pos=5, lot_size=1):
     """Build a Strategy instance with Rust core stubbed out."""
-    import importlib
     import sys
 
     # Stub out hft_platform.rust_core so Strategy can be instantiated
@@ -55,7 +53,7 @@ def _make_strategy(signal_threshold=0.3, stop_loss_ticks=10, tick_size=1.0, max_
 
 def _make_ctx(positions=None):
     """Build a minimal StrategyContext mock."""
-    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+    from hft_platform.contracts.strategy import OrderIntent
 
     ctx = MagicMock()
     ctx.positions = positions or {}

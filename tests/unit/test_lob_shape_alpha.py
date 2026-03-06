@@ -5,17 +5,16 @@ Covers:
 - LobShapeStrategy construction and on_features() hot path
 - Feature index consistency with live registry
 """
+
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-
 # ── Gate A manifest validation ────────────────────────────────────────────────
+
 
 class TestGateAManifest:
     def test_gate_a_passes_with_correct_fields(self, tmp_path: Path) -> None:
@@ -23,10 +22,15 @@ class TestGateAManifest:
         from research.alphas.lob_shape.impl import LobShapeAlpha
 
         path = tmp_path / "feed.npy"
-        arr = np.zeros(8, dtype=[
-            ("bids", "i8"), ("asks", "i8"),
-            ("ofi_l1_ema8", "i8"), ("depth_imbalance_ema8_ppm", "i8"),
-        ])
+        arr = np.zeros(
+            8,
+            dtype=[
+                ("bids", "i8"),
+                ("asks", "i8"),
+                ("ofi_l1_ema8", "i8"),
+                ("depth_imbalance_ema8_ppm", "i8"),
+            ],
+        )
         np.save(str(path), arr)
 
         report = run_gate_a(LobShapeAlpha().manifest, [str(path)])
@@ -56,10 +60,15 @@ class TestGateAManifest:
 
         path = tmp_path / "feed.npy"
         # Use the alias "lob_bids" / "lob_asks" instead of "bids" / "asks"
-        arr = np.zeros(8, dtype=[
-            ("lob_bids", "i8"), ("lob_asks", "i8"),
-            ("ofi_l1_ema8", "i8"), ("depth_imbalance_ema8_ppm", "i8"),
-        ])
+        arr = np.zeros(
+            8,
+            dtype=[
+                ("lob_bids", "i8"),
+                ("lob_asks", "i8"),
+                ("ofi_l1_ema8", "i8"),
+                ("depth_imbalance_ema8_ppm", "i8"),
+            ],
+        )
         np.save(str(path), arr)
 
         report = run_gate_a(LobShapeAlpha().manifest, [str(path)])
@@ -77,14 +86,15 @@ class TestGateAManifest:
 
 # ── Feature index consistency ─────────────────────────────────────────────────
 
+
 def test_feature_indices_match_registry() -> None:
     """lob_shape_strategy hardcoded indices must match the live registry."""
     from hft_platform.feature.registry import build_default_lob_feature_set_v1, feature_id_to_index
     from hft_platform.strategies.alpha.lob_shape_strategy import (
-        _IDX_BEST_BID,
         _IDX_BEST_ASK,
-        _IDX_OFI_L1_EMA8,
+        _IDX_BEST_BID,
         _IDX_DEPTH_IMBALANCE_EMA8_PPM,
+        _IDX_OFI_L1_EMA8,
     )
 
     fs = build_default_lob_feature_set_v1()
@@ -96,14 +106,16 @@ def test_feature_indices_match_registry() -> None:
 
 # ── LobShapeStrategy construction ────────────────────────────────────────────
 
+
 class TestLobShapeStrategy:
     def test_strategy_init_defaults(self) -> None:
         from hft_platform.strategies.alpha.lob_shape_strategy import (
-            LobShapeStrategy,
             _LAMBDA_DEFAULT,
-            _SIGNAL_THRESHOLD_DEFAULT,
             _MAX_POSITION_DEFAULT,
+            _SIGNAL_THRESHOLD_DEFAULT,
+            LobShapeStrategy,
         )
+
         s = LobShapeStrategy("test_lob_shape")
         assert s.strategy_id == "test_lob_shape"
         assert s._lambda == _LAMBDA_DEFAULT
@@ -112,6 +124,7 @@ class TestLobShapeStrategy:
 
     def test_strategy_init_custom_params(self) -> None:
         from hft_platform.strategies.alpha.lob_shape_strategy import LobShapeStrategy
+
         s = LobShapeStrategy(
             "lob_v1",
             subscribe_symbols=["2330", "2317"],
@@ -134,9 +147,14 @@ class TestLobShapeStrategy:
         s.ctx = None
         feat_values = tuple([1_000_000, 1_000_100] + [0] * 14)
         event = FeatureUpdateEvent(
-            symbol="2330", ts=1000, local_ts=1001, seq=1,
-            feature_set_id="lob_shared_v1", schema_version=1,
-            changed_mask=0xFFFF, warmup_ready_mask=0xFFFF,
+            symbol="2330",
+            ts=1000,
+            local_ts=1001,
+            seq=1,
+            feature_set_id="lob_shared_v1",
+            schema_version=1,
+            changed_mask=0xFFFF,
+            warmup_ready_mask=0xFFFF,
             quality_flags=0,
             feature_ids=tuple(f"f{i}" for i in range(16)),
             values=feat_values,
@@ -149,7 +167,6 @@ class TestLobShapeStrategy:
         """When HFT_FEATURE_ENGINE_ENABLED=0, strategy produces no intents."""
         monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "0")
         from hft_platform.strategies.alpha.lob_shape_strategy import LobShapeStrategy
-        from hft_platform.events import FeatureUpdateEvent
 
         s = LobShapeStrategy("test")
         # enabled_flag reflects env at construction time
@@ -158,12 +175,12 @@ class TestLobShapeStrategy:
     def test_on_features_warmup_guard(self, monkeypatch) -> None:
         """Strategy ignores events where rolling features haven't warmed up."""
         monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "1")
+        import unittest.mock as mock
+
+        from hft_platform.events import FeatureUpdateEvent
         from hft_platform.strategies.alpha.lob_shape_strategy import (
             LobShapeStrategy,
-            _WARMUP_REQUIRED_MASK,
         )
-        from hft_platform.events import FeatureUpdateEvent
-        import unittest.mock as mock
 
         s = LobShapeStrategy("test")
         # _enabled_flag must be True from the env var set above — no manual override.
@@ -178,9 +195,14 @@ class TestLobShapeStrategy:
         incomplete_mask = 0  # no features warmed up
         feat_values = tuple([1_000_000, 1_000_100] + [100] * 14)
         event = FeatureUpdateEvent(
-            symbol="2330", ts=1000, local_ts=1001, seq=1,
-            feature_set_id="lob_shared_v1", schema_version=1,
-            changed_mask=0xFFFF, warmup_ready_mask=incomplete_mask,
+            symbol="2330",
+            ts=1000,
+            local_ts=1001,
+            seq=1,
+            feature_set_id="lob_shared_v1",
+            schema_version=1,
+            changed_mask=0xFFFF,
+            warmup_ready_mask=incomplete_mask,
             quality_flags=0,
             feature_ids=tuple(f"f{i}" for i in range(16)),
             values=feat_values,
@@ -191,8 +213,8 @@ class TestLobShapeStrategy:
     def test_on_book_update_caches_lob(self, monkeypatch) -> None:
         """on_book_update() stores bids/asks in _lob_cache keyed by symbol."""
         monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "1")
-        from hft_platform.strategies.alpha.lob_shape_strategy import LobShapeStrategy
         from hft_platform.events import BidAskEvent, MetaData
+        from hft_platform.strategies.alpha.lob_shape_strategy import LobShapeStrategy
 
         s = LobShapeStrategy("test")
         assert s._enabled_flag
@@ -219,21 +241,36 @@ class TestLobShapeStrategy:
         signal ≈ 0.57 >> threshold(0.05) → BUY expected.
         """
         monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "1")
-        from hft_platform.strategies.alpha.lob_shape_strategy import LobShapeStrategy
-        from hft_platform.events import BidAskEvent, FeatureUpdateEvent, MetaData
-        from hft_platform.contracts.strategy import Side
         import unittest.mock as mock
+
+        from hft_platform.contracts.strategy import Side
+        from hft_platform.events import BidAskEvent, FeatureUpdateEvent, MetaData
+        from hft_platform.strategies.alpha.lob_shape_strategy import LobShapeStrategy
 
         s = LobShapeStrategy("test")
         assert s._enabled_flag
 
         # Steep bid-side decline; gentle ask-side decline → raw_diff > 0 (bullish slope)
-        bids = np.array([
-            [1_000_000, 100], [999_900, 80], [999_800, 60], [999_700, 40], [999_600, 20],
-        ], dtype=np.int64)
-        asks = np.array([
-            [1_000_100, 10], [1_000_200, 9], [1_000_300, 8], [1_000_400, 7], [1_000_500, 6],
-        ], dtype=np.int64)
+        bids = np.array(
+            [
+                [1_000_000, 100],
+                [999_900, 80],
+                [999_800, 60],
+                [999_700, 40],
+                [999_600, 20],
+            ],
+            dtype=np.int64,
+        )
+        asks = np.array(
+            [
+                [1_000_100, 10],
+                [1_000_200, 9],
+                [1_000_300, 8],
+                [1_000_400, 7],
+                [1_000_500, 6],
+            ],
+            dtype=np.int64,
+        )
 
         meta = MetaData(seq=1, source_ts=1000, local_ts=1001)
         book_event = BidAskEvent(meta=meta, symbol="2330", bids=bids, asks=asks)
@@ -248,9 +285,14 @@ class TestLobShapeStrategy:
         mock_ctx.positions = {}  # falsy → position() returns 0
 
         feat_event = FeatureUpdateEvent(
-            symbol="2330", ts=1000, local_ts=1001, seq=2,
-            feature_set_id="lob_shared_v1", schema_version=1,
-            changed_mask=0xFFFF, warmup_ready_mask=0xFFFF,
+            symbol="2330",
+            ts=1000,
+            local_ts=1001,
+            seq=2,
+            feature_set_id="lob_shared_v1",
+            schema_version=1,
+            changed_mask=0xFFFF,
+            warmup_ready_mask=0xFFFF,
             quality_flags=0,
             feature_ids=tuple(f"f{i}" for i in range(16)),
             values=tuple(feat_values),
@@ -266,6 +308,7 @@ class TestLobShapeStrategy:
 
 
 # ── Research alpha args guard ─────────────────────────────────────────────────
+
 
 def test_update_raises_on_insufficient_args() -> None:
     """update() with <4 positional args raises ValueError (no silent defaults)."""

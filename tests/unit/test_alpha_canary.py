@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import yaml
@@ -81,12 +80,15 @@ class TestCanaryEvaluate:
         _write_canary_yaml(promo_dir / "ofi.yaml")
 
         monitor = CanaryMonitor(promotions_dir=str(promo_dir))
-        status = monitor.evaluate("ofi_mc", {
-            "slippage_bps": 1.0,
-            "drawdown_contribution": 0.005,
-            "execution_error_rate": 0.001,
-            "sessions_live": 3,
-        })
+        status = monitor.evaluate(
+            "ofi_mc",
+            {
+                "slippage_bps": 1.0,
+                "drawdown_contribution": 0.005,
+                "execution_error_rate": 0.001,
+                "sessions_live": 3,
+            },
+        )
         assert status.state == "canary"
         assert status.current_weight == 0.02
         assert "All checks passed" in status.reason
@@ -96,12 +98,15 @@ class TestCanaryEvaluate:
         _write_canary_yaml(promo_dir / "ofi.yaml", max_slippage=3.0)
 
         monitor = CanaryMonitor(promotions_dir=str(promo_dir))
-        status = monitor.evaluate("ofi_mc", {
-            "slippage_bps": 5.0,
-            "drawdown_contribution": 0.001,
-            "execution_error_rate": 0.0,
-            "sessions_live": 0,
-        })
+        status = monitor.evaluate(
+            "ofi_mc",
+            {
+                "slippage_bps": 5.0,
+                "drawdown_contribution": 0.001,
+                "execution_error_rate": 0.0,
+                "sessions_live": 0,
+            },
+        )
         assert status.state == "rolled_back"
         assert "slippage_bps" in status.reason
 
@@ -110,12 +115,15 @@ class TestCanaryEvaluate:
         _write_canary_yaml(promo_dir / "ofi.yaml", max_dd_contrib=0.02)
 
         monitor = CanaryMonitor(promotions_dir=str(promo_dir))
-        status = monitor.evaluate("ofi_mc", {
-            "slippage_bps": 1.0,
-            "drawdown_contribution": 0.05,
-            "execution_error_rate": 0.0,
-            "sessions_live": 0,
-        })
+        status = monitor.evaluate(
+            "ofi_mc",
+            {
+                "slippage_bps": 1.0,
+                "drawdown_contribution": 0.05,
+                "execution_error_rate": 0.0,
+                "sessions_live": 0,
+            },
+        )
         assert status.state == "rolled_back"
         assert "drawdown_contribution" in status.reason
 
@@ -124,12 +132,15 @@ class TestCanaryEvaluate:
         _write_canary_yaml(promo_dir / "ofi.yaml", max_error_rate=0.01)
 
         monitor = CanaryMonitor(promotions_dir=str(promo_dir))
-        status = monitor.evaluate("ofi_mc", {
-            "slippage_bps": 1.0,
-            "drawdown_contribution": 0.001,
-            "execution_error_rate": 0.05,
-            "sessions_live": 0,
-        })
+        status = monitor.evaluate(
+            "ofi_mc",
+            {
+                "slippage_bps": 1.0,
+                "drawdown_contribution": 0.001,
+                "execution_error_rate": 0.05,
+                "sessions_live": 0,
+            },
+        )
         assert status.state == "rolled_back"
         assert "execution_error_rate" in status.reason
 
@@ -141,13 +152,16 @@ class TestCanaryEvaluate:
         monitor.escalation_sessions = 10
         monitor.sharpe_ratio = 0.8
 
-        status = monitor.evaluate("ofi_mc", {
-            "slippage_bps": 1.0,
-            "drawdown_contribution": 0.001,
-            "execution_error_rate": 0.0,
-            "sessions_live": 12,
-            "sharpe_live": 1.5,  # >= 1.5 * 0.8 = 1.2
-        })
+        status = monitor.evaluate(
+            "ofi_mc",
+            {
+                "slippage_bps": 1.0,
+                "drawdown_contribution": 0.001,
+                "execution_error_rate": 0.0,
+                "sessions_live": 12,
+                "sharpe_live": 1.5,  # >= 1.5 * 0.8 = 1.2
+            },
+        )
         assert status.state == "escalated"
         assert "0.02" in status.reason
         assert "0.05" in status.reason  # next tier
@@ -160,13 +174,16 @@ class TestCanaryEvaluate:
         monitor.escalation_sessions = 10
         monitor.sharpe_ratio = 0.8
 
-        status = monitor.evaluate("ofi_mc", {
-            "slippage_bps": 1.0,
-            "drawdown_contribution": 0.001,
-            "execution_error_rate": 0.0,
-            "sessions_live": 15,
-            "sharpe_live": 1.0,  # < 2.0 * 0.8 = 1.6
-        })
+        status = monitor.evaluate(
+            "ofi_mc",
+            {
+                "slippage_bps": 1.0,
+                "drawdown_contribution": 0.001,
+                "execution_error_rate": 0.0,
+                "sessions_live": 15,
+                "sharpe_live": 1.0,  # < 2.0 * 0.8 = 1.6
+            },
+        )
         assert status.state == "canary"
 
     def test_graduation_at_max_tier(self, tmp_path: Path):
@@ -176,13 +193,16 @@ class TestCanaryEvaluate:
         monitor = CanaryMonitor(promotions_dir=str(promo_dir))
         monitor.escalation_sessions = 5
 
-        status = monitor.evaluate("ofi_mc", {
-            "slippage_bps": 1.0,
-            "drawdown_contribution": 0.001,
-            "execution_error_rate": 0.0,
-            "sessions_live": 10,
-            "sharpe_live": 2.0,
-        })
+        status = monitor.evaluate(
+            "ofi_mc",
+            {
+                "slippage_bps": 1.0,
+                "drawdown_contribution": 0.001,
+                "execution_error_rate": 0.0,
+                "sessions_live": 10,
+                "sharpe_live": 2.0,
+            },
+        )
         assert status.state == "graduated"
 
 

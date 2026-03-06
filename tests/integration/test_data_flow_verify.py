@@ -89,10 +89,7 @@ class TestDataFlowVerification:
         from hft_platform.recorder.wal import WALWriter
 
         writer = WALWriter(temp_wal_dir)
-        test_data = [
-            generate_test_tick("TEST_SYM", 1000000, i)
-            for i in range(10)
-        ]
+        test_data = [generate_test_tick("TEST_SYM", 1000000, i) for i in range(10)]
 
         # Write synchronously
         ts = int(time.time_ns())
@@ -174,9 +171,18 @@ class TestDataFlowVerification:
             ]
         ]
         cols = [
-            "symbol", "exchange", "type", "exch_ts", "ingest_ts",
-            "price_scaled", "volume", "bids_price", "bids_vol",
-            "asks_price", "asks_vol", "seq_no"
+            "symbol",
+            "exchange",
+            "type",
+            "exch_ts",
+            "ingest_ts",
+            "price_scaled",
+            "volume",
+            "bids_price",
+            "bids_vol",
+            "asks_price",
+            "asks_vol",
+            "seq_no",
         ]
 
         ch_client.insert("hft.market_data", data, column_names=cols)
@@ -213,16 +219,11 @@ class TestDataFlowVerification:
                 250,  # latency_us (Int64)
             ]
         ]
-        cols = [
-            "order_id", "strategy_id", "symbol", "side",
-            "price_scaled", "qty", "status", "ingest_ts", "latency_us"
-        ]
+        cols = ["order_id", "strategy_id", "symbol", "side", "price_scaled", "qty", "status", "ingest_ts", "latency_us"]
 
         ch_client.insert("hft.orders", data, column_names=cols)
 
-        result = ch_client.query(
-            f"SELECT price_scaled, latency_us FROM hft.orders WHERE order_id = '{test_order_id}'"
-        )
+        result = ch_client.query(f"SELECT price_scaled, latency_us FROM hft.orders WHERE order_id = '{test_order_id}'")
 
         assert len(result.result_rows) == 1
         assert result.result_rows[0][0] == 1000000

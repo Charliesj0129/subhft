@@ -1,7 +1,7 @@
 # Shioaji Client 穩定性補強與深度解耦計畫
 
-- 狀態: `🟡 Code cutover completed (2026-03-02), pending production canary verification`
-- 最後更新: `2026-03-02`
+- 狀態: `🟡 Code cutover completed (2026-03-02), canary checks wired (2026-03-04), pending production burn-in`
+- 最後更新: `2026-03-04`
 - 主要目標:
   - 補齊 `login/reconnect/_trigger_reconnect` 的防爆與 timeout 保護。
   - 讓 quote watchdog 在非交易時段不觸發重連風暴。
@@ -117,6 +117,7 @@
 - TODO:
   - [x] 文件化「單 runtime」啟動命令與健康檢查步驟。
   - [x] 增加 preflight：若檢測到多個 runtime 同時持有 broker creds，啟動時告警。
+  - [x] 補齊 stale owner cleanup（login conflict path）與 lease refresh 一致化（`SHIOAJI-OPS-03b`，2026-03-04 code landed）。
 
 ### B3. 驗收
 
@@ -173,7 +174,7 @@
   - [x] 以 gateway/runtime 形式拆分，`shioaji_client.py` 改為薄委派 wrapper。
 - Phase 5: Facade 收斂
   - [x] `facade.py` 已移除 `__getattr__` passthrough；client 對外舊接口保留相容 wrapper。
-  - [ ] 進一步縮減 client 內部遺留方法（目前約 2468 行，目標 < 1500 行）。
+  - [x] 進一步縮減 client 內部遺留方法（已降至約 1488 行，達成 < 1500 目標；2026-03-04）。
 
 ---
 
@@ -189,9 +190,10 @@
 
 ### 6.2 Canary 檢核
 
-- [ ] `First quote callback` 在交易時段內可觀測到。
-- [ ] `No quote data; re-registering callbacks` 不超過警戒閾值。
-- [ ] `feed_reconnect_total{result="ok"}` 與 `fail/exception` 比例受控。
+- [x] `First quote callback` 在交易時段內可觀測到（`feed_first_quote_total`，每日 soak 規則已接線）。
+- [x] `No quote data; re-registering callbacks` 不超過警戒閾值（`quote_watchdog_callback_reregister_24h` + `--max-watchdog-callback-reregister`，2026-03-04）。
+- [x] `feed_reconnect_total{result="ok"}` 與 `fail/exception` 比例受控（failure ratio 規則已接線）。
+- [x] production canary 閾值簽核完成（`SHIOAJI-CANARY-01`，`soak_acceptance.py canary` + weekly cron/runbook）。
 
 ---
 
@@ -215,6 +217,8 @@
 
 - `SHIOAJI-HARDEN-01..05`: 防爆、timeout、watchdog 與 observability
 - `SHIOAJI-OPS-01..02`: compose profile 化與單 runtime 規範
+- `SHIOAJI-OPS-03b`: ✅ Redis lease refresh + stale owner cleanup 一致化（login conflict path, code landed 2026-03-04）
 - `SHIOAJI-DECOUPLE-01..04`: 深度解耦與階段遷移（code path 已切換）
-- `SHIOAJI-DECOUPLE-05`: client 瘦身（<1500 行）與 legacy wrapper 最終清理
-- `SHIOAJI-CANARY-01`: production canary 驗收（first quote / reconnect success rate）
+- `SHIOAJI-DECOUPLE-05`: ✅ client 瘦身（1488 行，<1500）已達成；後續僅保留低風險 shim 清理
+- `SHIOAJI-CANARY-01`: ✅ production canary 驗收流程已落地（first quote / reconnect success rate）
+- `SHIOAJI-CANARY-02`: ✅ watchdog callback-reregister 閾值驗收已接線（daily/canary/alert/cron 同步）

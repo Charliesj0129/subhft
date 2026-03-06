@@ -22,7 +22,8 @@ class HFTSystem:
         self._recorder_seen_bidask = False
         self._md_record_direct = os.getenv("HFT_MD_RECORD_DIRECT", "1").lower() not in {"0", "false", "no", "off"}
 
-        self.registry = SystemBootstrapper(self.settings).build()
+        self.bootstrapper = SystemBootstrapper(self.settings)
+        self.registry = self.bootstrapper.build()
 
         self.bus = self.registry.bus
         self.raw_queue = self.registry.raw_queue
@@ -57,6 +58,13 @@ class HFTSystem:
             "no",
             "off",
         }
+        self._bootstrap_torn_down = False
+        self._task_restart_attempts: Dict[str, int] = {}
+        self._task_restart_until_s: Dict[str, float] = {}
+        self._task_restart_base_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_S", 1.0, min_value=0.1)
+        self._task_restart_max_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_MAX_S", 30.0, min_value=0.1)
+        self._queue_log_every_s = self._env_float("HFT_SUPERVISOR_QUEUE_LOG_EVERY_S", 30.0, min_value=1.0)
+        self._last_queue_log_s = 0.0
 
     async def run(self):
         self.running = True
@@ -94,7 +102,75 @@ class HFTSystem:
             self.stop()
 
     def _start_service(self, name, coro):
+        if name in {"exec_router", "exec_gateway"}:
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+
+                metrics = MetricsRegistry.get()
+                if name == "exec_router":
+                    metrics.execution_router_alive.set(1)
+                elif name == "exec_gateway":
+                    metrics.execution_gateway_alive.set(1)
+            except Exception:
+                pass
         self.tasks[name] = asyncio.create_task(coro)
+
+    @staticmethod
+    def _env_float(name: str, default: float, min_value: float) -> float:
+        try:
+            value = float(os.getenv(name, str(default)))
+        except Exception:
+            value = default
+        return max(min_value, value)
+
+    def _teardown_bootstrap(self) -> None:
+        if self._bootstrap_torn_down:
+            return
+        self._bootstrap_torn_down = True
+        try:
+            self.bootstrapper.teardown()
+        except Exception as exc:
+            logger.warning("Bootstrap teardown failed", error=str(exc))
+
+    def _iter_supervised_services(self) -> list[tuple[str, str, Any]]:
+        services: list[tuple[str, str, Any]] = [
+            ("md", "MarketDataService", self.md_service.run),
+            ("exec_router", "ExecutionRouter", self.exec_service.run),
+            ("order", "OrderAdapter", self.order_adapter.run),
+            ("exec_gateway", "ExecutionGateway", self.execution_gateway.run),
+            ("recon", "ReconciliationService", self.recon_service.run),
+            ("strat", "StrategyRunner", self.strategy_runner.run),
+            ("recorder", "RecorderService", self.recorder.run),
+            ("recorder_bridge", "RecorderBridge", self._recorder_bridge),
+        ]
+        if self.gateway_service is not None:
+            services.append(("gateway", "GatewayService", self.gateway_service.run))
+        else:
+            services.append(("risk", "RiskEngine", self.risk_engine.run))
+        return services
+
+    def _reset_restart_backoff_if_healthy(self, name: str, task: asyncio.Task[Any] | None) -> None:
+        if task and not task.done():
+            self._task_restart_attempts.pop(name, None)
+            self._task_restart_until_s.pop(name, None)
+
+    def _try_restart_service(self, name: str, component: str, coro_factory: Any) -> None:
+        now_s = timebase.now_s()
+        allowed_at = self._task_restart_until_s.get(name, 0.0)
+        if now_s < allowed_at:
+            return
+        attempt = self._task_restart_attempts.get(name, 0) + 1
+        delay_s = min(self._task_restart_base_delay_s * (2 ** (attempt - 1)), self._task_restart_max_delay_s)
+        self._task_restart_attempts[name] = attempt
+        self._task_restart_until_s[name] = now_s + delay_s
+        logger.warning(
+            "Restarting service task",
+            task=name,
+            component=component,
+            attempt=attempt,
+            next_retry_after_s=round(delay_s, 2),
+        )
+        self._start_service(name, coro_factory())
 
     async def _supervise(self):
         """
@@ -159,60 +235,32 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard update failed", error=str(e))
 
-            # Check Health
-            # If ExecutionGateway crashed
             t_gateway = self.tasks.get("exec_gateway")
-            t_order = self.tasks.get("order")
-            if t_gateway and t_gateway.done():
-                # Crash detected!
+            # Check Health for all critical services
+            for name, component, coro_factory in self._iter_supervised_services():
+                task = self.tasks.get(name)
+                if task is None:
+                    continue
+                self._reset_restart_backoff_if_healthy(name, task)
+                if not task.done():
+                    continue
                 try:
-                    exc = t_gateway.exception()
-                    logger.critical("ExecutionGateway Crashed!", error=str(exc))
-
-                    # Policy: Restart if not HALT?
-                    # Trigger StormGuard HALT first for safety
-                    self.storm_guard.trigger_halt("Critical Component Crash: ExecutionGateway")
-
-                    # If policy allows restart?
-                    # For now, we just log.
-                    # To fix "Zombie Mode", we simply ensure we don't ignore it.
-                    # We might want to restart:
-                    # logger.info("Attempting Restart of OrderAdapter...")
-                    # self._start_service("order", self.order_adapter.run())
-
-                    # NOTE: Chaos Test expects "System Restart" or graceful handling.
-                    # If we just leave it crashed, trading stops (Ghost).
-                    # Let's Implement Restart.
-
+                    exc = task.exception()
                 except asyncio.CancelledError:
-                    pass
-
-                # Restart logic
-                logger.warning("Restarting ExecutionGateway...")
-                self._start_service("exec_gateway", self.execution_gateway.run())
-
-            if t_order and t_order.done():
-                try:
-                    exc = t_order.exception()
-                    logger.critical("OrderAdapter Crashed!", error=str(exc))
-                    self.storm_guard.trigger_halt("Critical Component Crash: OrderAdapter")
-                except asyncio.CancelledError:
-                    pass
-                logger.warning("Restarting OrderAdapter...")
-                self._start_service("order", self.order_adapter.run())
-
-            # CE-M2: Supervise GatewayService crash
-            if self.gateway_service is not None:
-                t_gw = self.tasks.get("gateway")
-                if t_gw and t_gw.done():
-                    try:
-                        exc = t_gw.exception()
-                        logger.critical("GatewayService Crashed!", error=str(exc))
-                        self.storm_guard.trigger_halt("Critical Component Crash: GatewayService")
-                    except asyncio.CancelledError:
-                        pass
-                    logger.warning("Restarting GatewayService...")
-                    self._start_service("gateway", self.gateway_service.run())
+                    continue
+                if exc is None and not self.running:
+                    continue
+                if exc is None and name == "order" and self.storm_guard.state == StormGuardState.HALT:
+                    continue
+                logger.critical(
+                    "Critical service task stopped",
+                    task=name,
+                    component=component,
+                    error=str(exc) if exc else "task_exited_without_exception",
+                )
+                self.storm_guard.trigger_halt(f"Critical Component Crash: {component}")
+                if self.running:
+                    self._try_restart_service(name, component, coro_factory)
 
             # Update Metrics
             metrics.update_system_metrics()
@@ -222,21 +270,21 @@ class HFTSystem:
                 metrics.execution_router_alive.set(1 if exec_task and not exec_task.done() else 0)
                 metrics.execution_gateway_alive.set(1 if gateway_task and not gateway_task.done() else 0)
                 metrics.queue_depth.labels(queue="raw").set(self.raw_queue.qsize())
+                metrics.queue_depth.labels(queue="raw_exec").set(self.raw_exec_queue.qsize())
                 metrics.queue_depth.labels(queue="recorder").set(self.recorder_queue.qsize())
                 metrics.queue_depth.labels(queue="risk").set(self.risk_queue.qsize())
                 metrics.queue_depth.labels(queue="order").set(self.order_queue.qsize())
-                metrics.queue_depth.labels(queue="exec").set(self.raw_exec_queue.qsize())
-            logger.info(
-                "Queues",
-                raw=self.raw_queue.qsize(),
-                rec=self.recorder_queue.qsize(),
-                risk=self.risk_queue.qsize(),
-            )
-            metrics.queue_depth.labels(queue="raw").set(self.raw_queue.qsize())
-            metrics.queue_depth.labels(queue="raw_exec").set(self.raw_exec_queue.qsize())
-            metrics.queue_depth.labels(queue="risk").set(self.risk_queue.qsize())
-            metrics.queue_depth.labels(queue="order").set(self.order_queue.qsize())
-            metrics.queue_depth.labels(queue="recorder").set(self.recorder_queue.qsize())
+            now_s = timebase.now_s()
+            if now_s - self._last_queue_log_s >= self._queue_log_every_s:
+                self._last_queue_log_s = now_s
+                logger.info(
+                    "Queues",
+                    raw=self.raw_queue.qsize(),
+                    rec=self.recorder_queue.qsize(),
+                    risk=self.risk_queue.qsize(),
+                    order=self.order_queue.qsize(),
+                    raw_exec=self.raw_exec_queue.qsize(),
+                )
 
             now = timebase.now_s()
             t_router = self.tasks.get("exec_router")
@@ -287,6 +335,7 @@ class HFTSystem:
                     logger.error("Task cleanup error", task=name, error=str(e))
 
         self.tasks.clear()
+        self._teardown_bootstrap()
         logger.info("System stopped and tasks cleaned up")
 
     def stop(self):
@@ -298,6 +347,7 @@ class HFTSystem:
         self.recon_service.running = False
         self.strategy_runner.running = False
         self.execution_gateway.stop()  # Clean shutdown
+        self._teardown_bootstrap()
 
         # Schedule async cleanup if event loop is available
         if hasattr(self, "loop") and self.loop.is_running():
@@ -315,6 +365,7 @@ class HFTSystem:
                 except Exception as e:
                     logger.error("Task cleanup error", task=name, error=str(e))
         self.tasks.clear()
+        self._teardown_bootstrap()
 
     def _on_exec(self, topic, data):
         # This callback runs in Shioaji thread.

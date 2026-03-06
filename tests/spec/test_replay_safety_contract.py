@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import time
 import types
 from unittest.mock import MagicMock, patch
@@ -91,7 +90,9 @@ def test_replay_dedup_prevents_duplicate_insert_after_crash_before_archive(tmp_p
     loader2._dedup_enabled = True
     loader2.ch_client = MagicMock()
     insert_calls_2 = {"n": 0}
-    loader2.insert_batch = types.MethodType(lambda self, table, rows: insert_calls_2.__setitem__("n", insert_calls_2["n"] + 1) or True, loader2)
+    loader2.insert_batch = types.MethodType(
+        lambda self, table, rows: insert_calls_2.__setitem__("n", insert_calls_2["n"] + 1) or True, loader2
+    )
     loader2._is_duplicate = types.MethodType(lambda self, table, content_hash: True, loader2)
     loader2._record_dedup = types.MethodType(lambda self, table, content_hash, row_count: None, loader2)
     assert loader2._process_single_file(str(fpath), force=True) is True
@@ -110,6 +111,7 @@ def test_replay_manifest_restart_reprocesses_stuck_manifest_entry(tmp_path, monk
     # First run processes file and writes manifest.
     fpath = _write_market_file(wal_dir, seq=1, ts_suffix=321)
     loader1 = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader1.ch_client = object()
     loader1.insert_batch = types.MethodType(lambda self, table, rows: True, loader1)
     loader1.process_files(force=True)
     assert (archive_dir / fpath.name).exists()
@@ -118,6 +120,7 @@ def test_replay_manifest_restart_reprocesses_stuck_manifest_entry(tmp_path, monk
     # Simulate crash/restore: same filename appears again in WAL while manifest still marks it processed.
     restored = _write_market_file(wal_dir, seq=2, ts_suffix=321)
     loader2 = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
+    loader2.ch_client = object()
     loader2.insert_batch = types.MethodType(lambda self, table, rows: True, loader2)
     loader2._load_manifest()
     # _load_manifest should remove stuck entries still present in wal_dir.

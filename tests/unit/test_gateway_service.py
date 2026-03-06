@@ -1,4 +1,5 @@
 """Tests for CE2-03: GatewayService."""
+
 import asyncio
 from contextlib import suppress
 from unittest.mock import MagicMock
@@ -21,7 +22,9 @@ from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
 
 
-def _make_intent(intent_id: int = 1, key: str = "k1", intent_type: IntentType = IntentType.NEW, symbol: str = "TSE:2330") -> OrderIntent:
+def _make_intent(
+    intent_id: int = 1, key: str = "k1", intent_type: IntentType = IntentType.NEW, symbol: str = "TSE:2330"
+) -> OrderIntent:
     return OrderIntent(
         intent_id=intent_id,
         strategy_id="s1",
@@ -40,7 +43,9 @@ def _make_service(channel=None, approve=True, queue_full=False, exposure_store=N
         channel = LocalIntentChannel(maxsize=64, ttl_ms=0)
 
     risk_engine = MagicMock()
-    risk_engine.evaluate.return_value = RiskDecision(approved=approve, intent=MagicMock(), reason_code="OK" if approve else "TEST_REJECT")
+    risk_engine.evaluate.return_value = RiskDecision(
+        approved=approve, intent=MagicMock(), reason_code="OK" if approve else "TEST_REJECT"
+    )
 
     cmd = OrderCommand(cmd_id=1, intent=MagicMock(), deadline_ns=999, storm_guard_state=StormGuardState.NORMAL)
     risk_engine.create_command.return_value = cmd

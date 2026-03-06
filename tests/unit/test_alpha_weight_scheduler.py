@@ -8,16 +8,16 @@ Tests cover:
 - alpha_signal_events_total increments correctly
 - alpha_last_signal_ts updates on non-flat signal
 """
+
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from hft_platform.alpha.pool import AlphaPool
 from hft_platform.alpha.weight_scheduler import AlphaWeightScheduler
-
 
 # --------------------------------------------------------------------------- #
 # AlphaPool tests

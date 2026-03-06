@@ -62,6 +62,9 @@ requires dataset provenance metadata keys (`source/generator/seed/...`) in stric
 - **Role**: `planner`
 - **Skill**: `hft-backtester` (ingestion section)
 - **Checklist**: Read `.agent/skills/hft-backtester/SKILL.md` §Data Ingestion
+- **Recommended synthetic lane (UL-governed metadata)**:
+  - `make research-gen-synth-lob OUT=research/data/processed/<alpha_id>/synthetic_lob_v2_train.npy ARGS='--version v2 --rng-seed 42 --symbols TXF,MXF --split train'`
+  - `make research-validate-data-meta DATA_PATH=research/data/processed/<alpha_id>/synthetic_lob_v2_train.npy`
 - **Enforced Governance**:
   - each `.npy/.npz` dataset under `research/data/{raw,interim,processed}` must have sidecar metadata
   - generate metadata: `python -m research stamp-data-meta <dataset.npy>`
@@ -95,6 +98,11 @@ requires dataset provenance metadata keys (`source/generator/seed/...`) in stric
 - **Role**: `code-reviewer`
 - **Skill**: `paper_trader` — Digital Twin simulation
 - **Checklist**: Read `skills/paper_trader/SKILL.md`, min 5 shadow sessions (Gate E)
+- **Operational loop**:
+  - record each session: `make research-record-paper ALPHA=<alpha_id> ARGS='--trading-day 2026-03-05 --started-at 2026-03-05T01:00:00+00:00 --ended-at 2026-03-05T03:00:00+00:00 --execution-reject-rate 0.004 --reject-rate-p95 0.008 --regime trending'`
+  - summarize sessions: `make research-summarize-paper ALPHA=<alpha_id> ARGS='--out outputs/paper_summary_<alpha_id>.json'`
+  - pre-check Gate E governance: `make research-check-paper-governance ALPHA=<alpha_id> ARGS='--strict --out outputs/paper_governance_<alpha_id>.json'`
+  - promotion artifact linkage: `hft alpha promote` 會在 `research/experiments/promotions/<alpha_id>/<stamp>/` 自動輸出 `paper_governance_report.json`
 
 ### Stage 8: Live Promotion (Rust)
 

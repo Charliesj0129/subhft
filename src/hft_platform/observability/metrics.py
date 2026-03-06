@@ -58,6 +58,7 @@ class MetricsRegistry:
                 "recorder_wal_skipped_rows_total",
                 "recorder_wal_write_latency_ms",
                 "recorder_wal_fsync_latency_ms",
+                "recorder_insert_batches_total",
                 "wal_disk_available_mb",
                 "wal_disk_circuit_breaker_active",
                 "queue_depth",
@@ -119,6 +120,7 @@ class MetricsRegistry:
                 # Quote watchdog recovery metrics
                 "quote_watchdog_recovery_attempts_total",
                 "shioaji_quote_route_total",
+                "shioaji_quote_callback_ingress_latency_ns",
                 "shioaji_quote_callback_queue_depth",
                 "shioaji_quote_callback_queue_dropped_total",
                 "shioaji_thread_alive",
@@ -126,6 +128,7 @@ class MetricsRegistry:
                 "shioaji_quote_pending_stall_total",
                 "shioaji_session_lock_conflicts_total",
                 "feed_session_conflict_total",
+                "feed_session_lease_ops_total",
                 "feed_first_quote_total",
                 "shioaji_login_fail_total",
                 "shioaji_crash_signature_total",
@@ -304,7 +307,12 @@ class MetricsRegistry:
         self.recorder_insert_retry_total = Counter(
             "recorder_insert_retry_total",
             "Recorder batch insert retry count",
-            ["table", "result"],  # result: "success", "failed"
+            ["table", "result"],  # result: retry|success|failed
+        )
+        self.recorder_insert_batches_total = Counter(
+            "recorder_insert_batches_total",
+            "Recorder insert batch final outcomes",
+            ["table", "result"],  # success_no_retry|success_after_retry|failed_after_retry|failed_no_client
         )
         # Per-symbol feed gap in seconds
         self.feed_gap_by_symbol_seconds = Gauge(
@@ -514,6 +522,11 @@ class MetricsRegistry:
             "Shioaji quote callback route outcomes",
             ["result"],  # "miss" | "fallback" | "drop"
         )
+        self.shioaji_quote_callback_ingress_latency_ns = Histogram(
+            "shioaji_quote_callback_ingress_latency_ns",
+            "Shioaji callback ingress handler latency (ns), from callback entry to queue handoff/drop decision",
+            buckets=[500, 1_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000, 500_000, 1_000_000, 5_000_000],
+        )
         self.shioaji_quote_callback_queue_depth = Gauge(
             "shioaji_quote_callback_queue_depth",
             "Current Shioaji callback ingress queue depth",
@@ -544,6 +557,11 @@ class MetricsRegistry:
             "feed_session_conflict_total",
             "Detected another runtime holding the feed session at startup (Redis preflight)",
             ["role"],
+        )
+        self.feed_session_lease_ops_total = Counter(
+            "feed_session_lease_ops_total",
+            "Redis feed session lease operation outcomes",
+            ["op", "result"],  # op: preflight|refresh|stale_cleanup|teardown
         )
         self.feed_first_quote_total = Counter(
             "feed_first_quote_total",

@@ -1,7 +1,4 @@
 """Tests for CE3-01: RecorderMode enum and get_recorder_mode()."""
-import os
-
-import pytest
 
 from hft_platform.recorder.mode import RecorderMode, get_recorder_mode
 

@@ -4,12 +4,12 @@ Verifies that _build_positions_by_strategy snapshots the positions dict before
 iteration so that concurrent mutation (from broker callback threads) cannot
 cause a RuntimeError or silent data corruption.
 """
+
 from __future__ import annotations
 
 import asyncio
 import threading
 import time
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -39,6 +39,7 @@ class _PositionStore:
 
 # ─── Unit: _build_positions_by_strategy ──────────────────────────────────────
 
+
 def test_empty_position_store():
     runner = _make_runner(_PositionStore({}))
     result = runner._build_positions_by_strategy()
@@ -46,10 +47,12 @@ def test_empty_position_store():
 
 
 def test_structured_position_objects():
-    store = _PositionStore({
-        "pos:s1:2330": _FakePosition("s1", "2330", 3),
-        "pos:s2:2317": _FakePosition("s2", "2317", -1),
-    })
+    store = _PositionStore(
+        {
+            "pos:s1:2330": _FakePosition("s1", "2330", 3),
+            "pos:s2:2317": _FakePosition("s2", "2317", -1),
+        }
+    )
     runner = _make_runner(store)
     result = runner._build_positions_by_strategy()
     # Structured objects go through strategy_id/symbol branch
@@ -58,10 +61,12 @@ def test_structured_position_objects():
 
 
 def test_string_key_parsing():
-    store = _PositionStore({
-        "pos:alpha1:TSM": 5,
-        "pos:alpha2:AAPL": -2,
-    })
+    store = _PositionStore(
+        {
+            "pos:alpha1:TSM": 5,
+            "pos:alpha2:AAPL": -2,
+        }
+    )
     runner = _make_runner(store)
     result = runner._build_positions_by_strategy()
     assert result["alpha1"]["TSM"] == 5
@@ -105,6 +110,7 @@ def test_no_position_store_returns_empty():
 
 
 # ─── Race condition: dict mutation during iteration ──────────────────────────
+
 
 def test_concurrent_dict_mutation_does_not_raise():
     """Simulates a broker thread mutating positions while iteration is in progress.
@@ -152,6 +158,7 @@ def test_concurrent_dict_mutation_does_not_raise():
 
 # ─── Circuit breaker 3-state FSM ─────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_normal_to_degraded():
     """After threshold/2 consecutive failures, state transitions to 'degraded'."""
@@ -170,9 +177,14 @@ async def test_circuit_breaker_normal_to_degraded():
 
     event = TickEvent(
         meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
-        symbol="2330", price=100_000, volume=1, total_volume=1,
-        bid_side_total_vol=0, ask_side_total_vol=0,
-        is_simtrade=False, is_odd_lot=False,
+        symbol="2330",
+        price=100_000,
+        volume=1,
+        total_volume=1,
+        bid_side_total_vol=0,
+        ask_side_total_vol=0,
+        is_simtrade=False,
+        is_odd_lot=False,
     )
 
     # 3 failures → degraded (threshold // 2 = 3)
@@ -200,9 +212,14 @@ async def test_circuit_breaker_degraded_to_halted():
 
     event = TickEvent(
         meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
-        symbol="2330", price=100_000, volume=1, total_volume=1,
-        bid_side_total_vol=0, ask_side_total_vol=0,
-        is_simtrade=False, is_odd_lot=False,
+        symbol="2330",
+        price=100_000,
+        volume=1,
+        total_volume=1,
+        bid_side_total_vol=0,
+        ask_side_total_vol=0,
+        is_simtrade=False,
+        is_odd_lot=False,
     )
 
     for _ in range(4):
@@ -236,9 +253,14 @@ async def test_circuit_breaker_degraded_recovery():
 
     event = TickEvent(
         meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
-        symbol="2330", price=100_000, volume=1, total_volume=1,
-        bid_side_total_vol=0, ask_side_total_vol=0,
-        is_simtrade=False, is_odd_lot=False,
+        symbol="2330",
+        price=100_000,
+        volume=1,
+        total_volume=1,
+        bid_side_total_vol=0,
+        ask_side_total_vol=0,
+        is_simtrade=False,
+        is_odd_lot=False,
     )
 
     # 3 successes should recover to normal
@@ -247,5 +269,3 @@ async def test_circuit_breaker_degraded_recovery():
 
     assert runner._circuit_states.get(sid) == "normal"
     assert runner._failure_counts[sid] == 0
-
-

@@ -278,9 +278,10 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client._quote_watchdog_skip_off_hours = True
         self.client._last_quote_data_ts = time.time() - 10.0
 
-        with patch.object(self.client, "_is_trading_hours", return_value=False), patch.object(
-            self.client, "_mark_quote_pending"
-        ) as mark_pending:
+        with (
+            patch.object(self.client, "_is_trading_hours", return_value=False),
+            patch.object(self.client, "_mark_quote_pending") as mark_pending,
+        ):
             self.client._start_quote_watchdog()
             time.sleep(0.05)
             self.client.logged_in = False
@@ -301,7 +302,9 @@ class TestShioajiClientFull(unittest.TestCase):
 
     def test_subscribe_symbol_records_crash_signature_metric(self):
         sym = {"code": "2330", "exchange": "TSE"}
-        self.mock_api_instance.quote.subscribe.side_effect = AttributeError("'NoneType' object has no attribute 'subscribe'")
+        self.mock_api_instance.quote.subscribe.side_effect = AttributeError(
+            "'NoneType' object has no attribute 'subscribe'"
+        )
         self.client.metrics.shioaji_crash_signature_total = MagicMock()
         crash_child = MagicMock()
         self.client.metrics.shioaji_crash_signature_total.labels.return_value = crash_child
@@ -507,6 +510,7 @@ class TestShioajiClientFull(unittest.TestCase):
             def _relogin_after() -> None:
                 try:
                     import time as _t
+
                     _t.sleep(delay)
                     if self.client._pending_quote_resubscribe:
                         try:
@@ -527,6 +531,7 @@ class TestShioajiClientFull(unittest.TestCase):
         reason = "test_reason"
 
         with patch.object(self.client, "reconnect", side_effect=RuntimeError("login error")):
+
             def _do_relogin() -> None:
                 try:
                     try:

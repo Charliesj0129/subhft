@@ -1,5 +1,3 @@
-import pytest
-
 from hft_platform.recorder import writer as writer_module
 from hft_platform.recorder.writer import DataWriter
 

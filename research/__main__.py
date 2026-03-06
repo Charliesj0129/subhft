@@ -24,6 +24,7 @@ Paper commands:
 Paper-trade commands:
   record-paper --alpha-id <id> ...     Record one paper-trade session
   summarize-paper --alpha-id <id>      Summarize paper-trade sessions
+  check-paper-governance --alpha-id <id> [--strict]
 
 Data governance commands:
   stamp-data-meta <data.npy>           Create metadata sidecar
@@ -34,6 +35,7 @@ Maintenance commands:
   backfill-note-citations              Backfill normalized citation headers
   triage-pyspy                         Parse pyspy SVGs and rank hotspots
 """
+
 from __future__ import annotations
 
 import sys
@@ -43,7 +45,7 @@ _PIPELINE_CMDS = frozenset({"run", "triage"})
 _SCAFFOLD_CMD = "scaffold"
 _PAPER_CMDS = frozenset({"fetch-paper", "search-papers"})
 _PAPER_PROTO_CMD = "paper-to-prototype"
-_PAPER_TRADE_CMDS = frozenset({"record-paper", "summarize-paper"})
+_PAPER_TRADE_CMDS = frozenset({"record-paper", "summarize-paper", "check-paper-governance"})
 _DATA_GOV_CMDS = frozenset({"stamp-data-meta", "validate-data-meta"})
 _MAINT_CMDS = frozenset({"audit-note-citations", "backfill-note-citations", "triage-pyspy"})
 
@@ -55,7 +57,8 @@ Pipeline: run  | triage
 Scaffold: scaffold <alpha_id>
 Paper:    fetch-paper <arxiv_id> | search-papers <query>
 Paper-prototype: paper-to-prototype <paper_ref>
-Paper-trade: record-paper --alpha-id <id> | summarize-paper --alpha-id <id>
+Paper-trade: record-paper --alpha-id <id> | summarize-paper --alpha-id <id> |
+             check-paper-governance --alpha-id <id>
 Data-governance: stamp-data-meta <data> | validate-data-meta <data>
 Maintenance: audit-note-citations | backfill-note-citations | triage-pyspy
 

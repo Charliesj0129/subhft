@@ -180,7 +180,33 @@ class SystemBootstrapper:
             "timeout_s": float(os.getenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.5")),
         }
 
-    def _check_session_ownership(self, role: str) -> None:
+    @staticmethod
+    def _read_int_resp(value: str | int | None, default: int = -2) -> int:
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except Exception:
+            return int(default)
+
+    @staticmethod
+    def _lease_is_stale(ttl_s: int, takeover_ttl_s: int) -> bool:
+        # Redis TTL semantics:
+        # -2 = key missing, -1 = key exists without expire.
+        if ttl_s in (-2, -1):
+            return True
+        return takeover_ttl_s > 0 and ttl_s <= takeover_ttl_s
+
+    @staticmethod
+    def _record_lease_metric(op: str, result: str) -> None:
+        try:
+            from hft_platform.observability.metrics import MetricsRegistry
+
+            m = MetricsRegistry.get()
+            if hasattr(m, "feed_session_lease_ops_total"):
+                m.feed_session_lease_ops_total.labels(op=op, result=result).inc()
+        except Exception:
+            return
+
+    def _check_session_ownership(self, role: str) -> bool:
         """Non-blocking preflight: warn if another runtime already holds the feed session.
 
         Checks Redis key ``feed:session:owner``. If set to a different instance
@@ -188,7 +214,7 @@ class SystemBootstrapper:
         Failure to reach Redis is swallowed so a Redis outage never blocks startup.
         """
         if role not in _FEED_ALLOWED_ROLES:
-            return
+            return False
         params = self._get_redis_lease_params()
         host = params["host"]
         port = params["port"]
@@ -197,6 +223,7 @@ class SystemBootstrapper:
         owner_id = params["owner_id"]
         timeout_s = params["timeout_s"]
         ttl_s = params["ttl_s"]
+        stale_takeover_ttl_s = max(0, int(os.getenv("HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S", "0")))
 
         try:
             with socket.create_connection((host, port), timeout=timeout_s) as sock:
@@ -212,25 +239,52 @@ class SystemBootstrapper:
 
                 owner = _command("GET", key)
                 owner_str = str(owner or "").strip()
-                if owner_str and owner_str != owner_id:
-                    logger.critical(
-                        "feed_session_conflict: another runtime already holds the broker session",
-                        role=role,
-                        owner=owner_str,
-                        my_id=owner_id,
-                    )
-                    try:
-                        from hft_platform.observability.metrics import MetricsRegistry
+                if not owner_str or owner_str == owner_id:
+                    _command("SETEX", key, str(ttl_s), owner_id)
+                    self._record_lease_metric("preflight", "acquired" if not owner_str else "refreshed")
+                    return True
 
-                        m = MetricsRegistry.get()
-                        if hasattr(m, "feed_session_conflict_total"):
-                            m.feed_session_conflict_total.labels(role=role).inc()
-                    except Exception:
-                        pass
+                ttl_remaining = self._read_int_resp(_command("TTL", key), default=-2)
+                if self._lease_is_stale(ttl_remaining, stale_takeover_ttl_s):
+                    current_owner = str(_command("GET", key) or "").strip()
+                    if current_owner == owner_str:
+                        _command("DEL", key)
+                        owner_after_cleanup = str(_command("GET", key) or "").strip()
+                        if not owner_after_cleanup:
+                            _command("SETEX", key, str(ttl_s), owner_id)
+                            logger.warning(
+                                "feed_session_stale_owner_cleaned",
+                                role=role,
+                                stale_owner=owner_str,
+                                my_id=owner_id,
+                                ttl_remaining_s=ttl_remaining,
+                            )
+                            self._record_lease_metric("stale_cleanup", "ok")
+                            self._record_lease_metric("preflight", "acquired")
+                            return True
+                    self._record_lease_metric("stale_cleanup", "failed")
 
-                _command("SETEX", key, str(ttl_s), owner_id)
+                logger.critical(
+                    "feed_session_conflict: another runtime already holds the broker session",
+                    role=role,
+                    owner=owner_str,
+                    my_id=owner_id,
+                    ttl_remaining_s=ttl_remaining,
+                )
+                try:
+                    from hft_platform.observability.metrics import MetricsRegistry
+
+                    m = MetricsRegistry.get()
+                    if hasattr(m, "feed_session_conflict_total"):
+                        m.feed_session_conflict_total.labels(role=role).inc()
+                except Exception:
+                    pass
+                self._record_lease_metric("preflight", "conflict")
+                return False
         except Exception as exc:
             logger.debug("session_ownership_preflight_skipped", role=role, reason=str(exc))
+            self._record_lease_metric("preflight", "error")
+            return False
 
     def _start_lease_refresh_thread(
         self,
@@ -242,7 +296,7 @@ class SystemBootstrapper:
         ttl_s: int,
         timeout_s: float,
     ) -> None:
-        """Daemon thread: re-SETEX every TTL/2 seconds to keep lease alive."""
+        """Daemon thread: refresh lease only when key is still owned by this runtime."""
         interval_s = max(15, ttl_s // 2)
 
         def _refresh_loop() -> None:
@@ -264,10 +318,29 @@ class SystemBootstrapper:
 
                         if password:
                             _command("AUTH", password)
+                        owner = str(_command("GET", key) or "").strip()
+                        if owner and owner != owner_id:
+                            ttl_remaining = self._read_int_resp(_command("TTL", key), default=-2)
+                            logger.warning(
+                                "session_lease_refresh_skipped_not_owner",
+                                key=key,
+                                owner=owner,
+                                my_id=owner_id,
+                                ttl_remaining_s=ttl_remaining,
+                            )
+                            self._record_lease_metric("refresh", "lost_owner")
+                            continue
+
+                        if not owner:
+                            logger.warning("session_lease_reacquire", key=key, my_id=owner_id)
+                            self._record_lease_metric("refresh", "reacquired")
+
                         _command("SETEX", key, str(ttl_s), owner_id)
                         logger.debug("session_lease_refreshed", key=key, ttl_s=ttl_s)
+                        self._record_lease_metric("refresh", "ok")
                 except Exception as exc:
                     logger.warning("session_lease_refresh_failed", reason=str(exc))
+                    self._record_lease_metric("refresh", "error")
 
         self._lease_refresh_running = True
         self._lease_refresh_thread = threading.Thread(
@@ -279,6 +352,12 @@ class SystemBootstrapper:
 
     def _stop_lease_refresh_thread(self) -> None:
         self._lease_refresh_running = False
+        thread = self._lease_refresh_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                logger.warning("session_lease_refresh_thread_still_alive")
+        self._lease_refresh_thread = None
 
     def teardown(self) -> None:
         """Stop lease refresh thread and release Redis session lease on clean shutdown."""
@@ -297,10 +376,23 @@ class SystemBootstrapper:
 
                 if params["password"]:
                     _command("AUTH", params["password"])
+                owner = _command("GET", params["key"])
+                owner_str = str(owner or "").strip()
+                if owner_str and owner_str != params["owner_id"]:
+                    logger.warning(
+                        "session_lease_release_skipped_not_owner",
+                        key=params["key"],
+                        owner=owner_str,
+                        my_id=params["owner_id"],
+                    )
+                    self._record_lease_metric("teardown", "skip_not_owner")
+                    return
                 _command("DEL", params["key"])
                 logger.info("session_lease_released", key=params["key"])
+                self._record_lease_metric("teardown", "released")
         except Exception as exc:
             logger.debug("session_lease_release_skipped", reason=str(exc))
+            self._record_lease_metric("teardown", "error")
 
     # Default bounded queue sizes to prevent unbounded memory growth
     # These can be overridden via environment variables
@@ -342,11 +434,13 @@ class SystemBootstrapper:
             logger.warning("Runtime role does not create feed client", role=role)
 
         # B-OPS-03: Non-blocking preflight — warn if another runtime owns the session.
-        self._check_session_ownership(role)
+        lease_owned = self._check_session_ownership(role)
         self._last_role = role
-        if role in _FEED_ALLOWED_ROLES:
+        if role in _FEED_ALLOWED_ROLES and lease_owned:
             params = self._get_redis_lease_params()
             self._start_lease_refresh_thread(**params)
+        elif role in _FEED_ALLOWED_ROLES:
+            logger.warning("session_lease_refresh_not_started", role=role, reason="lease_not_owned")
 
         # 1. Infrastructure
         # Note: StormGuard is created below, so we set it after creation

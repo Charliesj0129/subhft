@@ -1,8 +1,8 @@
 """CE3-07: WAL outage drills — 4 scenarios testing resilience."""
+
 import asyncio
 import os
 import tempfile
-import threading
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,8 +13,8 @@ from hft_platform.recorder.shard_claim import FileClaimRegistry
 from hft_platform.recorder.wal import WALBatchWriter
 from hft_platform.recorder.wal_first import WALFirstWriter
 
-
 # ── Drill 1: CH down — events go to WAL, 0 CH calls ─────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_drill_ch_down_wal_first():
@@ -51,6 +51,7 @@ async def test_drill_ch_down_wal_first():
 
 # ── Drill 2: Slow CH — runtime continues unblocked ───────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_drill_slow_ch_wal_first():
     """Drill 2: CH has 5s delay; wal_first writer returns immediately (non-blocking)."""
@@ -74,6 +75,7 @@ async def test_drill_slow_ch_wal_first():
 
 
 # ── Drill 3: Disk pressure drop policy ───────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_drill_disk_pressure_drop_policy():
@@ -104,6 +106,7 @@ async def test_drill_disk_pressure_drop_policy():
 
 
 # ── Drill 4: Loader restart — stale claims recovered ─────────────────────────
+
 
 def test_drill_loader_restart_stale_claims():
     """Drill 4: Write 5 WAL files; simulate 2 stale claims; restart → all 5 processable."""

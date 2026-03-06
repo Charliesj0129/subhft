@@ -88,7 +88,7 @@ class ShioajiClientFacade:
         return self.order_gateway.place_order(*args, **kwargs)
 
     def get_exchange(self, symbol: str) -> str:
-        return self._client.get_exchange(symbol)
+        return self._client.get_exchange(symbol) or ""
 
     def cancel_order(self, trade: Any) -> Any:
         return self.order_gateway.cancel_order(trade)

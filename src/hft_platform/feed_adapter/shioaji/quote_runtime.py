@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import datetime as dt
+import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from structlog import get_logger
 
@@ -217,6 +219,10 @@ class QuoteRuntime:
         c = self._client
         if not c.api:
             return False
+        quote_api = c._quote_api()
+        if quote_api is None:
+            logger.warning("Quote API unavailable; callback registration deferred")
+            return False
 
         # Local import avoids circular dependency at module load time;
         # by call time both modules are fully initialised.
@@ -235,10 +241,10 @@ class QuoteRuntime:
         def _set_v1() -> bool:
             nonlocal ok
             try:
-                c.api.quote.set_on_tick_stk_v1_callback(dispatch_tick_cb)
-                c.api.quote.set_on_bidask_stk_v1_callback(dispatch_tick_cb)
-                c.api.quote.set_on_tick_fop_v1_callback(dispatch_tick_cb)
-                c.api.quote.set_on_bidask_fop_v1_callback(dispatch_tick_cb)
+                quote_api.set_on_tick_stk_v1_callback(dispatch_tick_cb)
+                quote_api.set_on_bidask_stk_v1_callback(dispatch_tick_cb)
+                quote_api.set_on_tick_fop_v1_callback(dispatch_tick_cb)
+                quote_api.set_on_bidask_fop_v1_callback(dispatch_tick_cb)
                 return True
             except Exception as exc:
                 logger.warning("Quote v1 callback registration failed", error=str(exc))
@@ -247,17 +253,17 @@ class QuoteRuntime:
 
         def _set_v0() -> bool:
             nonlocal ok
-            if not hasattr(c.api.quote, "set_on_tick_stk_callback"):
+            if not hasattr(quote_api, "set_on_tick_stk_callback"):
                 logger.warning("Quote v0 callbacks not available on this Shioaji version")
                 ok = False
                 return False
             try:
-                c.api.quote.set_on_tick_stk_callback(dispatch_tick_cb)
-                c.api.quote.set_on_bidask_stk_callback(dispatch_tick_cb)
-                if hasattr(c.api.quote, "set_on_tick_fop_callback"):
-                    c.api.quote.set_on_tick_fop_callback(dispatch_tick_cb)
-                if hasattr(c.api.quote, "set_on_bidask_fop_callback"):
-                    c.api.quote.set_on_bidask_fop_callback(dispatch_tick_cb)
+                quote_api.set_on_tick_stk_callback(dispatch_tick_cb)
+                quote_api.set_on_bidask_stk_callback(dispatch_tick_cb)
+                if hasattr(quote_api, "set_on_tick_fop_callback"):
+                    quote_api.set_on_tick_fop_callback(dispatch_tick_cb)
+                if hasattr(quote_api, "set_on_bidask_fop_callback"):
+                    quote_api.set_on_bidask_fop_callback(dispatch_tick_cb)
                 return True
             except Exception as exc:
                 logger.warning("Quote v0 callback registration failed", error=str(exc))
@@ -384,6 +390,404 @@ class QuoteRuntime:
             daemon=True,
         )
         c._quote_watchdog_thread.start()
+
+    # ------------------------------------------------------------------ #
+    # Quote recovery / retry lifecycle (Phase-5: moved from client)
+    # ------------------------------------------------------------------ #
+
+    def allow_quote_recovery(self, reason: str) -> bool:
+        c = self._client
+        if not c._quote_watchdog_skip_off_hours:
+            return True
+        if c._is_trading_hours():
+            return True
+        now = timebase.now_s()
+        if now - c._last_quote_off_hours_log_ts >= c._quote_off_hours_log_interval_s:
+            logger.info("Skipping quote recovery outside trading hours", reason=reason)
+            c._last_quote_off_hours_log_ts = now
+        if c.metrics and hasattr(c.metrics, "quote_watchdog_recovery_attempts_total"):
+            try:
+                c.metrics.quote_watchdog_recovery_attempts_total.labels(action="skip_off_hours").inc()
+            except Exception:
+                pass
+        return False
+
+    def is_market_open_grace_period(self) -> bool:
+        c = self._client
+        if c._market_open_grace_s <= 0:
+            return False
+
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+        except ImportError:
+            return False
+
+        now = dt.datetime.now(calendar._tz)
+        if not calendar.is_trading_day(now.date()):
+            return False
+
+        open_time = calendar.get_session_open(now.date())
+        if open_time is None:
+            return False
+
+        elapsed = (now - open_time).total_seconds()
+        in_grace = 0 <= elapsed <= c._market_open_grace_s
+        if c.metrics and in_grace != c._market_open_grace_active:
+            c.metrics.market_open_grace_active.set(1 if in_grace else 0)
+        c._market_open_grace_active = in_grace
+        return in_grace
+
+    def start_callback_retry(self, cb: Callable[..., Any]) -> None:
+        c = self._client
+        if c._callbacks_retrying:
+            return
+        c._callbacks_retrying = True
+        c._set_thread_alive_metric("callback_retry", True)
+        logger.warning("Starting quote callback retry loop")
+
+        def _retry_loop() -> None:
+            interval = float(os.getenv("HFT_QUOTE_CB_RETRY_S", "5"))
+            try:
+                while c.api and not c._callbacks_registered:
+                    ok = c._register_callbacks(cb)
+                    if ok:
+                        logger.info("Quote callbacks registered after retry")
+                        break
+                    logger.warning("Quote callback registration retrying", interval_s=interval)
+                    time.sleep(interval)
+            except Exception as exc:
+                logger.error("Quote callback retry loop crashed", error=str(exc))
+            finally:
+                c._callbacks_retrying = False
+                c._set_thread_alive_metric("callback_retry", False)
+
+        c._callbacks_retry_thread = threading.Thread(
+            target=_retry_loop,
+            name="shioaji-callback-retry",
+            daemon=True,
+        )
+        c._callbacks_retry_thread.start()
+
+    def start_event_callback_retry(self) -> None:
+        c = self._client
+        if c._event_callback_retrying:
+            return
+        c._event_callback_retrying = True
+        c._set_thread_alive_metric("event_callback_retry", True)
+        logger.warning("Starting quote event callback retry loop")
+
+        def _retry_loop() -> None:
+            interval = c._event_callback_retry_s
+            try:
+                while c.api and not c._event_callback_registered:
+                    with c._callback_register_lock:
+                        ok = c._register_event_callback()
+                    if ok:
+                        c._event_callback_registered = True
+                        logger.info("Quote event callback registered after retry")
+                        break
+                    logger.warning("Quote event callback registration retrying", interval_s=interval)
+                    time.sleep(interval)
+            except Exception as exc:
+                logger.error("Quote event callback retry loop crashed", error=str(exc))
+            finally:
+                c._event_callback_retrying = False
+                c._set_thread_alive_metric("event_callback_retry", False)
+
+        c._event_callback_retry_thread = threading.Thread(
+            target=_retry_loop,
+            name="shioaji-event-callback-retry",
+            daemon=True,
+        )
+        c._event_callback_retry_thread.start()
+
+    def schedule_force_relogin(self) -> None:
+        c = self._client
+        delay = c._quote_force_relogin_s
+        if delay <= 0:
+            return
+        if c._pending_quote_relogining:
+            return
+        c._pending_quote_relogining = True
+        c._set_thread_alive_metric("quote_relogin", True)
+
+        def _relogin_after() -> None:
+            try:
+                time.sleep(delay)
+                if c._pending_quote_resubscribe:
+                    if not c._allow_quote_recovery("quote_pending_timeout"):
+                        return
+                    logger.warning("Quote pending too long; forcing reconnect", delay_s=delay)
+                    try:
+                        ok, _, err, timed_out = c._safe_call_with_timeout(
+                            "reconnect_quote_pending",
+                            lambda: c._request_reconnect_via_policy("quote_pending", force=True),
+                            c._reconnect_timeout_s,
+                        )
+                        if not ok:
+                            logger.error(
+                                "Force reconnect (quote_pending) failed",
+                                timeout=timed_out,
+                                error=str(err),
+                            )
+                    except Exception as exc:
+                        logger.error("Force reconnect (quote_pending) failed", error=str(exc))
+            finally:
+                c._pending_quote_relogining = False
+                c._set_thread_alive_metric("quote_relogin", False)
+
+        c._pending_quote_relogin_thread = threading.Thread(
+            target=_relogin_after,
+            name="shioaji-quote-relogin",
+            daemon=True,
+        )
+        c._pending_quote_relogin_thread.start()
+
+    def start_forced_relogin(self, reason: str) -> None:
+        c = self._client
+        if c._pending_quote_relogining:
+            return
+        if not c._allow_quote_recovery(reason):
+            return
+        c._pending_quote_relogining = True
+        c._set_thread_alive_metric("force_relogin", True)
+
+        def _do_relogin() -> None:
+            try:
+                try:
+                    ok, _, err, timed_out = c._safe_call_with_timeout(
+                        "reconnect_force",
+                        lambda: c._request_reconnect_via_policy(reason, force=True),
+                        c._reconnect_timeout_s,
+                    )
+                    if not ok:
+                        logger.error(
+                            "Force reconnect failed",
+                            reason=reason,
+                            timeout=timed_out,
+                            error=str(err),
+                        )
+                except Exception as exc:
+                    logger.error("Force reconnect failed", reason=reason, error=str(exc))
+            finally:
+                c._pending_quote_relogining = False
+                c._set_thread_alive_metric("force_relogin", False)
+
+        threading.Thread(
+            target=_do_relogin,
+            name="shioaji-force-relogin",
+            daemon=True,
+        ).start()
+
+    def note_quote_flap(self, now: float) -> None:
+        c = self._client
+        if c._quote_flap_window_s <= 0 or c._quote_flap_threshold <= 0:
+            return
+        c._quote_flap_events.append(now)
+        while c._quote_flap_events and now - c._quote_flap_events[0] > c._quote_flap_window_s:
+            c._quote_flap_events.popleft()
+        if len(c._quote_flap_events) < c._quote_flap_threshold:
+            return
+        if now - c._last_quote_flap_relogin_ts < c._quote_flap_cooldown_s:
+            return
+        c._last_quote_flap_relogin_ts = now
+        logger.warning(
+            "Quote session flapping; forcing relogin",
+            count=len(c._quote_flap_events),
+            window_s=c._quote_flap_window_s,
+        )
+        c._start_forced_relogin("quote_flap")
+
+    def supports_quote_v0(self) -> bool:
+        c = self._client
+        quote_api = c._quote_api()
+        if quote_api is None:
+            return False
+        return hasattr(quote_api, "set_on_tick_stk_callback")
+
+    def supports_quote_v1(self) -> bool:
+        c = self._client
+        quote_api = c._quote_api()
+        if quote_api is None:
+            return False
+        return hasattr(quote_api, "set_on_tick_stk_v1_callback")
+
+    def mark_quote_pending(self, reason: str) -> None:
+        c = self._client
+        now = timebase.now_s()
+        if not c._pending_quote_resubscribe or c._pending_quote_reason != reason:
+            logger.warning("Quote pending", reason=reason)
+        if c._quote_event_handler is not None:
+            try:
+                delta = c._quote_event_handler.mark_pending(reason, current_ts=now)
+                c._pending_quote_resubscribe = delta.pending
+                c._pending_quote_reason = delta.reason
+                if delta.pending and c._pending_quote_ts == 0.0:
+                    c._pending_quote_ts = delta.ts
+            except Exception:
+                c._pending_quote_resubscribe = True
+                c._pending_quote_reason = reason
+                c._pending_quote_ts = now
+        else:
+            c._pending_quote_resubscribe = True
+            c._pending_quote_reason = reason
+            c._pending_quote_ts = now
+        c._quote_pending_stall_reported = False
+        c._update_quote_pending_metrics()
+        c._schedule_force_relogin()
+
+    def clear_quote_pending(self) -> None:
+        c = self._client
+        if c._quote_event_handler is not None:
+            try:
+                c._quote_event_handler.clear_pending()
+            except Exception:
+                pass
+        c._pending_quote_resubscribe = False
+        c._pending_quote_reason = None
+        c._pending_quote_ts = 0.0
+        c._quote_pending_stall_reported = False
+        c._update_quote_pending_metrics()
+        logger.info("Quote data resumed; clearing pending")
+
+    def schedule_resubscribe(self, reason: str) -> None:
+        c = self._client
+        if c._resubscribe_scheduled:
+            return
+        c._resubscribe_scheduled = True
+        delay = max(0.0, c._resubscribe_delay_s)
+
+        def _do_resubscribe() -> None:
+            try:
+                if delay > 0:
+                    time.sleep(delay)
+                if c.tick_callback:
+                    c._callbacks_registered = False
+                    c._ensure_callbacks(c.tick_callback)
+                    c._resubscribe_all()
+                logger.info("Resubscribe completed", reason=reason)
+            finally:
+                c._resubscribe_scheduled = False
+
+        c._resubscribe_thread = threading.Thread(
+            target=_do_resubscribe,
+            name="shioaji-resubscribe",
+            daemon=True,
+        )
+        c._resubscribe_thread.start()
+
+    def on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
+        c = self._client
+        try:
+            now = timebase.now_s()
+            c._last_quote_event_ts = now
+            c._event_callback_registered = True
+            if event_code in (1, 2, 3, 4, 12, 13):
+                logger.info("Quote event", resp_code=resp_code, event_code=event_code, info=info, event_name=event)
+            if event_code == 12:
+                c._note_quote_flap(now)
+                try:
+                    if c.metrics:
+                        c.metrics.shioaji_keepalive_failures_total.inc()
+                except Exception:
+                    pass
+                c._mark_quote_pending("event_12")
+                if c.tick_callback:
+                    c._callbacks_registered = False
+                    c._ensure_callbacks(c.tick_callback)
+            elif event_code == 13:
+                if c._pending_quote_resubscribe:
+                    c._clear_quote_pending()
+                    if c.tick_callback:
+                        c._callbacks_registered = False
+                        c._ensure_callbacks(c.tick_callback)
+                        c._resubscribe_all()
+                    else:
+                        c._schedule_resubscribe("event_13")
+                    try:
+                        if c.metrics:
+                            c.metrics.feed_resubscribe_total.labels(result="event_13").inc()
+                    except Exception:
+                        pass
+            elif event_code == 4:
+                if c._pending_quote_resubscribe:
+                    c._clear_quote_pending()
+                c._schedule_resubscribe("event_4")
+                try:
+                    if c.metrics:
+                        c.metrics.feed_resubscribe_total.labels(result="event_4").inc()
+                except Exception:
+                    pass
+        except Exception as exc:
+            c._record_crash_signature(str(exc), context="quote_event")
+            logger.error(
+                "Quote event handler failed",
+                resp_code=resp_code,
+                event_code=event_code,
+                info=info,
+                event_name=event,
+                error=str(exc),
+            )
+
+    def start_sub_retry_thread(self, cb: Callable[..., Any]) -> None:
+        c = self._client
+        if c._sub_retry_running:
+            return
+        c._sub_retry_running = True
+        c._set_thread_alive_metric("sub_retry", True)
+        logger.info("Starting subscription retry thread", failed=len(c._failed_sub_symbols))
+
+        def _retry_loop() -> None:
+            interval = c._contract_retry_s
+            while c._sub_retry_running and c._failed_sub_symbols:
+                time.sleep(interval)
+                if not c._sub_retry_running:
+                    break
+                if not c.logged_in:
+                    continue
+                if not (c._callbacks_registered and c._event_callback_registered):
+                    if c.tick_callback:
+                        c._ensure_callbacks(c.tick_callback)
+                    if not (c._callbacks_registered and c._event_callback_registered):
+                        logger.warning("Subscription retry waiting for quote callbacks to register")
+                        continue
+                quote_api = c._quote_api()
+                if quote_api is None or not hasattr(quote_api, "subscribe"):
+                    logger.warning("Subscription retry waiting for quote API availability")
+                    continue
+                remaining: list[dict[str, Any]] = []
+                for sym in list(c._failed_sub_symbols):
+                    if not c._sub_retry_running:
+                        remaining.append(sym)
+                        continue
+                    if c._subscribe_symbol(sym, cb):
+                        code = sym.get("code")
+                        if code:
+                            c.subscribed_codes.add(code)
+                        c.subscribed_count = len(c.subscribed_codes)
+                        logger.info("Subscription retry succeeded", code=sym.get("code"))
+                    else:
+                        remaining.append(sym)
+                c._failed_sub_symbols = remaining
+                if not c._failed_sub_symbols:
+                    logger.info("All failed subscriptions resolved")
+                    break
+                logger.warning(
+                    "Subscription retry: still pending",
+                    count=len(c._failed_sub_symbols),
+                    codes=[s.get("code") for s in c._failed_sub_symbols[:10]],
+                )
+            c._sub_retry_running = False
+            c._set_thread_alive_metric("sub_retry", False)
+
+        c._sub_retry_thread = threading.Thread(
+            target=_retry_loop,
+            name="shioaji-sub-retry",
+            daemon=True,
+        )
+        c._sub_retry_thread.start()
 
     # ------------------------------------------------------------------ #
     # Legacy pass-through helpers
