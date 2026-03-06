@@ -31,6 +31,18 @@ ROLE_DICTIONARY: set[str] = {
 }
 REQUIRED_AGENT_ROLES: set[str] = {"explorer", "worker", "default"}
 WS_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "WS-A": (
+        "ws_a/latest_burn_in_template.json",
+    ),
+    "WS-B": (
+        "ws_b/latest_mv_baseline_report.json",
+    ),
+    "WS-C": (
+        "ws_c/latest_quality_routing_report.json",
+    ),
+    "WS-F": (
+        "ws_f/latest_monthly_review_flow.json",
+    ),
     "WS-G": (
         "ws_g/latest_hotpath_matrix.json",
         "ws_g/latest_cutover_backlog.md",
@@ -481,6 +493,8 @@ def _evaluate(
                     warn_only=True,
                 )
 
+    task_ws_ids = sorted({str(task.get("ws") or "") for task in tasks if str(task.get("ws") or "")})
+
     artifact_summary: dict[str, Any] = {
         "enabled": execution_dir is not None,
         "execution_dir": str(execution_dir.resolve()) if execution_dir else "",
@@ -524,7 +538,9 @@ def _evaluate(
                     message="Execution summary overall should not be fail",
                     warn_only=True,
                 )
-                for ws in ("WS-G", "WS-H"):
+                for ws in task_ws_ids:
+                    if ws not in WS_ARTIFACTS:
+                        continue
                     ws_key = ws.lower().replace("-", "_")
                     ws_status = str((summary_payload.get(ws_key) or {}).get("status", ""))
                     add(
@@ -537,7 +553,18 @@ def _evaluate(
                         warn_only=True,
                     )
 
-            for ws, rel_paths in WS_ARTIFACTS.items():
+            for ws in task_ws_ids:
+                rel_paths = WS_ARTIFACTS.get(ws, ())
+                add(
+                    f"{ws}_artifact_profile_defined",
+                    bool(rel_paths),
+                    severity="critical",
+                    expected=sorted(WS_ARTIFACTS),
+                    current=ws,
+                    message=f"{ws} task must map to a known execution artifact set",
+                )
+                if not rel_paths:
+                    continue
                 ws_artifacts: dict[str, Any] = {}
                 for rel in rel_paths:
                     artifact_path = execution_dir / rel

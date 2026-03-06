@@ -272,7 +272,7 @@ roadmap-delivery-check: ## Validate TODO/ROADMAP governance (skills/RACI/agent r
 	python3 scripts/roadmap_delivery_executor.py --project-root . --todo docs/TODO.md --roadmap ROADMAP.md --benchmark benchmark.json --paper-index research/knowledge/paper_index.json --output-dir outputs/roadmap_execution --allow-warn-exit-zero
 	python3 scripts/roadmap_delivery_guard.py --todo docs/TODO.md --roadmap ROADMAP.md --execution-dir outputs/roadmap_execution --max-artifact-age-hours "$${MAX_ARTIFACT_AGE_HOURS:-168}" --output-dir outputs/roadmap_delivery $(if $(filter 1,$(ALLOW_WARN)),--allow-warn-exit-zero,)
 
-roadmap-delivery-execute: ## Materialize WS-G/WS-H deliverables (hotpath matrix, cutover backlog json/md, source catalog, quality, readiness)
+roadmap-delivery-execute: ## Materialize WS-A/B/C/F/G/H deliverables (burn-in/baseline/quality/review + hotpath + source catalog)
 	python3 scripts/roadmap_delivery_executor.py --project-root . --todo docs/TODO.md --roadmap ROADMAP.md --benchmark benchmark.json --pyspy-triage outputs/research_maintenance/pyspy_triage.json --perf-snapshot outputs/perf_gate_latency_snapshot.clean.json --stage-probe outputs/latency_stage_probe_custom_nonorder.json --paper-index research/knowledge/paper_index.json --runs-root research/experiments/runs --promotions-root research/experiments/promotions --output-dir outputs/roadmap_execution $(if $(filter 1,$(ALLOW_WARN)),--allow-warn-exit-zero,)
 
 ch-query-guard-check: ## Guard-check ClickHouse SQL (read-only + full-scan policy)
