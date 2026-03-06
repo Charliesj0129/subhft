@@ -17,7 +17,12 @@ def _load_module():
     return module
 
 
-def _seed_docs(tmp_path: Path, *, missing_gate_evidence: bool = False) -> tuple[Path, Path]:
+def _seed_docs(
+    tmp_path: Path,
+    *,
+    missing_gate_evidence: bool = False,
+    include_all_ws_tasks: bool = False,
+) -> tuple[Path, Path]:
     todo = tmp_path / "docs" / "TODO.md"
     roadmap = tmp_path / "ROADMAP.md"
     todo.parent.mkdir(parents=True, exist_ok=True)
@@ -52,6 +57,20 @@ def _seed_docs(tmp_path: Path, *, missing_gate_evidence: bool = False) -> tuple[
         encoding="utf-8",
     )
 
+    task_lines = (
+        "1. WS-G 任務（Owner: Rust Lead；截止: 2026-03-22；輸出: hotpath_matrix；驗收: ok）。\n"
+        "2. WS-H 任務（Owner: Research Lead；截止: 2026-03-25；輸出: source_catalog；驗收: ok）。\n"
+    )
+    if include_all_ws_tasks:
+        task_lines = (
+            "1. WS-A 任務（Owner: Ops Oncall；截止: 2026-03-12；輸出: burn-in template；驗收: ok）。\n"
+            "2. WS-B 任務（Owner: Tech Lead；截止: 2026-03-15；輸出: mv baseline report；驗收: ok）。\n"
+            "3. WS-C 任務（Owner: Data Steward；截止: 2026-03-18；輸出: quality routing report；驗收: ok）。\n"
+            "4. WS-F 任務（Owner: Ops Oncall；截止: 2026-03-20；輸出: monthly review flow；驗收: ok）。\n"
+            "5. WS-G 任務（Owner: Rust Lead；截止: 2026-03-22；輸出: hotpath_matrix；驗收: ok）。\n"
+            "6. WS-H 任務（Owner: Research Lead；截止: 2026-03-25；輸出: source_catalog；驗收: ok）。\n"
+        )
+
     roadmap.write_text(
         (
             "# ROADMAP\n"
@@ -78,21 +97,30 @@ def _seed_docs(tmp_path: Path, *, missing_gate_evidence: bool = False) -> tuple[
             "  - b\n"
             "- Gate 證據：`source_catalog`\n"
             "## 6. 接下來 30 天\n"
-            "1. WS-G 任務（Owner: Rust Lead；截止: 2026-03-22；輸出: hotpath_matrix；驗收: ok）。\n"
-            "2. WS-H 任務（Owner: Research Lead；截止: 2026-03-25；輸出: source_catalog；驗收: ok）。\n"
+            f"{task_lines}"
         ),
         encoding="utf-8",
     )
     return todo, roadmap
 
 
-def _seed_execution_artifacts(tmp_path: Path, *, stale: bool = False, missing_ws_h: bool = False) -> Path:
+def _seed_execution_artifacts(
+    tmp_path: Path,
+    *,
+    stale: bool = False,
+    missing_ws_h: bool = False,
+    include_extra_ws: bool = False,
+) -> Path:
     execution_dir = tmp_path / "outputs" / "roadmap_execution"
     now = dt.datetime.now(dt.timezone.utc)
     generated = now - dt.timedelta(days=10) if stale else now
     ts = generated.isoformat()
 
     (execution_dir / "summary").mkdir(parents=True, exist_ok=True)
+    (execution_dir / "ws_a").mkdir(parents=True, exist_ok=True)
+    (execution_dir / "ws_b").mkdir(parents=True, exist_ok=True)
+    (execution_dir / "ws_c").mkdir(parents=True, exist_ok=True)
+    (execution_dir / "ws_f").mkdir(parents=True, exist_ok=True)
     (execution_dir / "ws_g").mkdir(parents=True, exist_ok=True)
     (execution_dir / "ws_h").mkdir(parents=True, exist_ok=True)
 
@@ -101,6 +129,10 @@ def _seed_execution_artifacts(tmp_path: Path, *, stale: bool = False, missing_ws
             {
                 "generated_at": ts,
                 "result": {"overall": "pass"},
+                "ws_a": {"status": "pass"},
+                "ws_b": {"status": "pass"},
+                "ws_c": {"status": "pass"},
+                "ws_f": {"status": "pass"},
                 "ws_g": {"status": "pass"},
                 "ws_h": {"status": "pass"},
             }
@@ -127,6 +159,23 @@ def _seed_execution_artifacts(tmp_path: Path, *, stale: bool = False, missing_ws
         json.dumps({"generated_at": ts, "overall": "pass"}),
         encoding="utf-8",
     )
+    if include_extra_ws:
+        (execution_dir / "ws_a" / "latest_burn_in_template.json").write_text(
+            json.dumps({"generated_at": ts, "status": "pass"}),
+            encoding="utf-8",
+        )
+        (execution_dir / "ws_b" / "latest_mv_baseline_report.json").write_text(
+            json.dumps({"generated_at": ts, "status": "pass"}),
+            encoding="utf-8",
+        )
+        (execution_dir / "ws_c" / "latest_quality_routing_report.json").write_text(
+            json.dumps({"generated_at": ts, "status": "pass"}),
+            encoding="utf-8",
+        )
+        (execution_dir / "ws_f" / "latest_monthly_review_flow.json").write_text(
+            json.dumps({"generated_at": ts, "status": "pass"}),
+            encoding="utf-8",
+        )
     return execution_dir
 
 
@@ -234,3 +283,35 @@ def test_main_warns_when_execution_artifact_is_stale(tmp_path: Path):
     assert latest["result"]["overall"] == "warn"
     warn_ids = [c["id"] for c in latest["result"]["checks"] if c["status"] == "warn"]
     assert "WS-G_artifact_ws_g_latest_hotpath_matrix.json_fresh" in warn_ids
+
+
+def test_main_checks_ws_a_b_c_f_artifacts_when_tasks_present(tmp_path: Path):
+    mod = _load_module()
+    todo, roadmap = _seed_docs(tmp_path, include_all_ws_tasks=True)
+    execution_dir = _seed_execution_artifacts(tmp_path, include_extra_ws=True)
+    out_dir = tmp_path / "outputs" / "roadmap_delivery"
+
+    rc = mod.main(
+        [
+            "--todo",
+            str(todo),
+            "--roadmap",
+            str(roadmap),
+            "--execution-dir",
+            str(execution_dir),
+            "--output-dir",
+            str(out_dir),
+        ]
+    )
+    assert rc == 0
+
+    latest = json.loads((out_dir / "latest.json").read_text(encoding="utf-8"))
+    assert latest["result"]["overall"] == "pass"
+    assert latest["execution_board"]["task_count_by_ws"]["WS-A"] == 1
+    assert latest["execution_board"]["task_count_by_ws"]["WS-B"] == 1
+    assert latest["execution_board"]["task_count_by_ws"]["WS-C"] == 1
+    assert latest["execution_board"]["task_count_by_ws"]["WS-F"] == 1
+    assert "WS-A" in latest["execution_artifacts"]["artifacts"]
+    assert "WS-B" in latest["execution_artifacts"]["artifacts"]
+    assert "WS-C" in latest["execution_artifacts"]["artifacts"]
+    assert "WS-F" in latest["execution_artifacts"]["artifacts"]

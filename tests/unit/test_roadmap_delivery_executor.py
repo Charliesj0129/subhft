@@ -53,7 +53,22 @@ def _seed_hotpath_files(root: Path) -> None:
     )
 
 
-def _seed_common_docs(root: Path) -> None:
+def _seed_common_docs(root: Path, *, include_all_ws_tasks: bool = False) -> None:
+    if include_all_ws_tasks:
+        task_lines = (
+            "1. WS-A 任務（Owner: Ops Oncall；截止: 2026-03-12；輸出: burn-in template；驗收: ok）。\n"
+            "2. WS-B 任務（Owner: Tech Lead；截止: 2026-03-15；輸出: mv baseline report；驗收: ok）。\n"
+            "3. WS-C 任務（Owner: Data Steward；截止: 2026-03-18；輸出: quality routing report；驗收: ok）。\n"
+            "4. WS-F 任務（Owner: Ops Oncall；截止: 2026-03-20；輸出: monthly review flow；驗收: ok）。\n"
+            "5. WS-G 任務（Owner: Rust Lead；截止: 2026-03-22；輸出: hotpath_matrix；驗收: ok）。\n"
+            "6. WS-H 任務（Owner: Research Lead；截止: 2026-03-25；輸出: source_catalog；驗收: ok）。\n"
+        )
+    else:
+        task_lines = (
+            "1. WS-G 任務（Owner: Rust Lead；截止: 2026-03-22；輸出: hotpath_matrix；驗收: ok）。\n"
+            "2. WS-H 任務（Owner: Research Lead；截止: 2026-03-25；輸出: source_catalog；驗收: ok）。\n"
+        )
+
     _write(
         root / "docs/TODO.md",
         "# TODO\n"
@@ -64,8 +79,7 @@ def _seed_common_docs(root: Path) -> None:
         root / "ROADMAP.md",
         "# ROADMAP\n"
         "## 6. 接下來 30 天\n"
-        "1. WS-G 任務（Owner: Rust Lead；截止: 2026-03-22；輸出: hotpath_matrix；驗收: ok）。\n"
-        "2. WS-H 任務（Owner: Research Lead；截止: 2026-03-25；輸出: source_catalog；驗收: ok）。\n",
+        f"{task_lines}",
     )
     _write(
         root / "tests/unit/test_rust_hotpath_parity.py",
@@ -204,3 +218,38 @@ def test_main_fails_when_source_catalog_empty(tmp_path: Path) -> None:
     summary = json.loads((tmp_path / "outputs/roadmap_execution/summary/latest.json").read_text(encoding="utf-8"))
     assert summary["result"]["overall"] == "fail"
     assert summary["ws_h"]["status"] == "fail"
+
+
+def test_main_generates_ws_a_b_c_f_artifacts_when_tasks_present(tmp_path: Path) -> None:
+    mod = _load_module()
+    _seed_common_docs(tmp_path, include_all_ws_tasks=True)
+    _seed_hotpath_files(tmp_path)
+    _seed_benchmark(tmp_path)
+    _seed_paper_index(tmp_path)
+
+    rc = mod.main(
+        [
+            "--project-root",
+            str(tmp_path),
+            "--allow-warn-exit-zero",
+        ]
+    )
+    assert rc == 0
+
+    summary = json.loads((tmp_path / "outputs/roadmap_execution/summary/latest.json").read_text(encoding="utf-8"))
+    for ws in ("WS-A", "WS-B", "WS-C", "WS-F", "WS-G", "WS-H"):
+        assert summary["task_board"]["task_count_by_ws"][ws] == 1
+
+    assert summary["ws_a"]["status"] in {"pass", "warn"}
+    assert summary["ws_b"]["status"] in {"pass", "warn"}
+    assert summary["ws_c"]["status"] in {"pass", "warn"}
+    assert summary["ws_f"]["status"] in {"pass", "warn"}
+
+    ws_a_dir = tmp_path / "outputs/roadmap_execution/ws_a"
+    ws_b_dir = tmp_path / "outputs/roadmap_execution/ws_b"
+    ws_c_dir = tmp_path / "outputs/roadmap_execution/ws_c"
+    ws_f_dir = tmp_path / "outputs/roadmap_execution/ws_f"
+    assert (ws_a_dir / "latest_burn_in_template.json").exists()
+    assert (ws_b_dir / "latest_mv_baseline_report.json").exists()
+    assert (ws_c_dir / "latest_quality_routing_report.json").exists()
+    assert (ws_f_dir / "latest_monthly_review_flow.json").exists()

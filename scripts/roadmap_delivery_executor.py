@@ -15,6 +15,10 @@ STATUS_FAIL = "fail"
 
 WS_G_SKILLS: tuple[str, ...] = ("hft-strategy-dev", "rust_feature_engineering", "performance-profiling")
 WS_H_SKILLS: tuple[str, ...] = ("hft-alpha-research", "validation-gate", "clickhouse-io")
+WS_A_SKILLS: tuple[str, ...] = ("troubleshoot-metrics", "runtime-debug")
+WS_B_SKILLS: tuple[str, ...] = ("clickhouse-io", "performance-profiling")
+WS_C_SKILLS: tuple[str, ...] = ("validation-gate", "troubleshoot-metrics")
+WS_F_SKILLS: tuple[str, ...] = ("deployment-patterns", "runtime-debug")
 AGENT_ROLES: tuple[str, ...] = ("explorer", "worker", "default")
 
 HOTPATH_MODULES: tuple[dict[str, str], ...] = (
@@ -100,6 +104,35 @@ LAYER_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "execution": ("order_adapter",),
     "feed_adapter": (),
 }
+
+WS_A_METRICS: tuple[str, ...] = (
+    "feed_reconnect_total",
+    "feed_reconnect_timeout_total",
+    "feed_reconnect_exception_total",
+    "feed_gap_by_symbol_seconds",
+    "shioaji_quote_callback_ingress_latency_ns",
+    "shioaji_quote_callback_queue_dropped_total",
+    "market_data_callback_parse_total",
+    "quote_watchdog_recovery_attempts_total",
+    "quote_schema_mismatch_total",
+)
+
+WS_B_METRICS: tuple[str, ...] = (
+    "wal_backlog_files",
+    "wal_drain_eta_seconds",
+    "wal_replay_errors_total",
+    "recorder_insert_retry_total",
+    "recorder_failures_total",
+)
+
+WS_C_METRICS: tuple[str, ...] = (
+    "feature_quality_flags_total",
+    "feature_shadow_parity_mismatch_total",
+    "feature_shadow_parity_checks_total",
+    "feature_plane_latency_ns",
+    "market_data_callback_parse_total",
+    "quote_schema_mismatch_total",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +235,39 @@ def _parse_iso_dt(value: Any) -> dt.datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=dt.timezone.utc)
     return parsed.astimezone(dt.timezone.utc)
+
+
+def _extract_defined_metrics(metrics_path: Path) -> set[str]:
+    if not metrics_path.exists():
+        return set()
+    try:
+        text = metrics_path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    return set(re.findall(r'(?:Counter|Gauge|Histogram)\(\s*"([a-zA-Z0-9_]+)"', text))
+
+
+def _alert_metric_coverage(alert_rules_path: Path, metrics: tuple[str, ...]) -> dict[str, bool]:
+    if not alert_rules_path.exists():
+        return {metric: False for metric in metrics}
+    try:
+        text = alert_rules_path.read_text(encoding="utf-8")
+    except OSError:
+        return {metric: False for metric in metrics}
+    return {metric: bool(re.search(rf"\b{re.escape(metric)}\b", text)) for metric in metrics}
+
+
+def _task_for_ws(tasks: list[dict[str, str]], ws: str) -> dict[str, str]:
+    for row in tasks:
+        if str(row.get("ws") or "") == ws:
+            return {
+                "owner": str(row.get("owner") or ""),
+                "deadline": str(row.get("deadline") or ""),
+                "output": str(row.get("output") or ""),
+                "acceptance": str(row.get("acceptance") or ""),
+                "raw": str(row.get("raw") or ""),
+            }
+    return {"owner": "", "deadline": "", "output": "", "acceptance": "", "raw": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -946,8 +1012,236 @@ def _parse_30d_tasks(roadmap_text: str) -> list[dict[str, str]]:
         ws_match = re.search(r"\b(WS-[A-Z])\b", body)
         if ws_match:
             ws = ws_match.group(1)
-        tasks.append({"raw": body, "ws": ws})
+        owner = ""
+        deadline = ""
+        output = ""
+        acceptance = ""
+        detail_match = re.search(r"（(.+)）", body)
+        if detail_match:
+            detail = detail_match.group(1)
+            for part in detail.split("；"):
+                p = part.strip()
+                if p.startswith("Owner:"):
+                    owner = p.split(":", 1)[1].strip()
+                elif p.startswith("截止:"):
+                    deadline = p.split(":", 1)[1].strip()
+                elif p.startswith("輸出:"):
+                    output = p.split(":", 1)[1].strip()
+                elif p.startswith("驗收:"):
+                    acceptance = p.split(":", 1)[1].strip()
+        tasks.append(
+            {
+                "raw": body,
+                "ws": ws,
+                "owner": owner,
+                "deadline": deadline,
+                "output": output,
+                "acceptance": acceptance,
+            }
+        )
     return tasks
+
+
+def _build_ws_a_burnin_template(
+    project_root: Path,
+    *,
+    tasks: list[dict[str, str]],
+    metrics_defined: set[str],
+    alert_rules_path: Path,
+) -> tuple[dict[str, Any], str]:
+    task = _task_for_ws(tasks, "WS-A")
+    alert_coverage = _alert_metric_coverage(alert_rules_path, WS_A_METRICS)
+    metrics = []
+    missing: list[str] = []
+    for metric in WS_A_METRICS:
+        exists = metric in metrics_defined
+        if not exists:
+            missing.append(metric)
+        metrics.append(
+            {
+                "metric": metric,
+                "defined_in_metrics_py": exists,
+                "covered_by_alert_rules": bool(alert_coverage.get(metric, False)),
+            }
+        )
+
+    sources = [
+        project_root / "docs/operations/cron-setup-remote.md",
+        project_root / "docs/runbooks/old-pc-yearly-reliability.md",
+        project_root / "scripts/soak_acceptance.py",
+        project_root / "scripts/callback_latency_guard.py",
+    ]
+    status = STATUS_PASS
+    if missing:
+        status = _combine_status(status, STATUS_WARN)
+    if not all(path.exists() for path in sources):
+        status = _combine_status(status, STATUS_WARN)
+
+    payload = {
+        "schema_version": "1.0",
+        "generated_at": _now_iso(),
+        "ws": "WS-A",
+        "skills": list(WS_A_SKILLS),
+        "agent_roles": list(AGENT_ROLES),
+        "task": task,
+        "target_window_trading_days": 60,
+        "acceptance_thresholds": {
+            "reconnect_storm_signature": 0,
+            "callback_crash_signature": 0,
+            "first_quote_pass_ratio": 1.0,
+            "reconnect_failure_ratio_max": 0.2,
+            "watchdog_callback_reregister_max": 120,
+        },
+        "metric_catalog": metrics,
+        "evidence_commands": [
+            "python3 scripts/soak_acceptance.py daily --project-root . --prom-url http://localhost:9091 --output-dir outputs/soak_reports --allow-warn-exit-zero",
+            "python3 scripts/soak_acceptance.py weekly --project-root . --prom-url http://localhost:9091 --output-dir outputs/soak_reports",
+            "python3 scripts/soak_acceptance.py canary --project-root . --prom-url http://localhost:9091 --output-dir outputs/soak_reports --window-days 10 --min-trading-days 5 --min-first-quote-pass-ratio 1.0 --max-reconnect-failure-ratio 0.2 --max-watchdog-callback-reregister 120 --allow-warn-exit-zero",
+        ],
+        "sources": _source_manifest(sources),
+        "missing_metrics": missing,
+        "status": status,
+    }
+    return payload, status
+
+
+def _build_ws_b_mv_baseline_report(
+    project_root: Path,
+    *,
+    tasks: list[dict[str, str]],
+    metrics_defined: set[str],
+    benchmark_pairs: dict[str, dict[str, float]],
+) -> tuple[dict[str, Any], str]:
+    task = _task_for_ws(tasks, "WS-B")
+    metric_rows = [{"metric": metric, "defined_in_metrics_py": metric in metrics_defined} for metric in WS_B_METRICS]
+    missing_metrics = [row["metric"] for row in metric_rows if not row["defined_in_metrics_py"]]
+
+    required_paths = [
+        project_root / "docs/runbooks/ch-mv-pressure-tuning.md",
+        project_root / "config/monitoring/query_guard_suite_baseline.json",
+        project_root / "scripts/ch_query_guard.py",
+        project_root / "scripts/ch_query_guard_suite.py",
+    ]
+    missing_files = [str(path.relative_to(project_root)) for path in required_paths if not path.exists()]
+
+    status = STATUS_PASS
+    if missing_metrics or missing_files:
+        status = _combine_status(status, STATUS_WARN)
+    if not benchmark_pairs:
+        status = _combine_status(status, STATUS_WARN)
+
+    payload = {
+        "schema_version": "1.0",
+        "generated_at": _now_iso(),
+        "ws": "WS-B",
+        "skills": list(WS_B_SKILLS),
+        "agent_roles": list(AGENT_ROLES),
+        "task": task,
+        "baseline_period": "2026-03",
+        "metric_catalog": metric_rows,
+        "benchmark_pairs": benchmark_pairs,
+        "required_references": [str(path.relative_to(project_root)) for path in required_paths],
+        "missing_references": missing_files,
+        "missing_metrics": missing_metrics,
+        "commands": [
+            "make ch-query-guard-suite",
+            "make ch-query-guard-check QUERY='SELECT ... LIMIT 100'",
+            "make roadmap-delivery-check ALLOW_WARN=1",
+        ],
+        "status": status,
+    }
+    return payload, status
+
+
+def _build_ws_c_quality_routing_report(
+    project_root: Path,
+    *,
+    tasks: list[dict[str, str]],
+    metrics_defined: set[str],
+) -> tuple[dict[str, Any], str]:
+    task = _task_for_ws(tasks, "WS-C")
+    metric_rows = [{"metric": metric, "defined_in_metrics_py": metric in metrics_defined} for metric in WS_C_METRICS]
+    missing_metrics = [row["metric"] for row in metric_rows if not row["defined_in_metrics_py"]]
+
+    required_paths = [
+        project_root / "docs/runbooks/feature-plane-operations.md",
+        project_root / "docs/operations/env-vars-reference.md",
+        project_root / "scripts/feature_canary_guard.py",
+        project_root / "scripts/callback_latency_guard.py",
+    ]
+    missing_files = [str(path.relative_to(project_root)) for path in required_paths if not path.exists()]
+
+    status = STATUS_PASS
+    if missing_metrics or missing_files:
+        status = _combine_status(status, STATUS_WARN)
+
+    routing = {
+        "primary_owner": task.get("owner") or "Data Steward",
+        "backup_owner": "Ops Oncall",
+        "triage_sla_minutes": 15,
+        "close_loop": "alert -> triage -> remediation -> evidence attached to monthly review pack",
+    }
+    payload = {
+        "schema_version": "1.0",
+        "generated_at": _now_iso(),
+        "ws": "WS-C",
+        "skills": list(WS_C_SKILLS),
+        "agent_roles": list(AGENT_ROLES),
+        "task": task,
+        "metric_catalog": metric_rows,
+        "routing": routing,
+        "commands": [
+            "make feature-canary-report ALLOW_WARN=1",
+            "make callback-latency-report ALLOW_WARN=1",
+            "make reliability-monthly-pack",
+        ],
+        "required_references": [str(path.relative_to(project_root)) for path in required_paths],
+        "missing_references": missing_files,
+        "missing_metrics": missing_metrics,
+        "status": status,
+    }
+    return payload, status
+
+
+def _build_ws_f_monthly_review_flow(
+    project_root: Path,
+    *,
+    tasks: list[dict[str, str]],
+) -> tuple[dict[str, Any], str]:
+    task = _task_for_ws(tasks, "WS-F")
+    sections = [
+        "soak",
+        "backlog",
+        "drift",
+        "disk",
+        "drill",
+        "release_channel",
+        "query_guard",
+        "feature_canary",
+        "callback_latency",
+    ]
+    required_paths = [
+        project_root / "scripts/reliability_review_pack.py",
+        project_root / "docs/operations/cron-setup-remote.md",
+        project_root / "docs/operations/long-term-risk-register.md",
+    ]
+    missing_files = [str(path.relative_to(project_root)) for path in required_paths if not path.exists()]
+
+    status = STATUS_PASS if not missing_files else STATUS_WARN
+    payload = {
+        "schema_version": "1.0",
+        "generated_at": _now_iso(),
+        "ws": "WS-F",
+        "skills": list(WS_F_SKILLS),
+        "agent_roles": list(AGENT_ROLES),
+        "task": task,
+        "monthly_review_sections": sections,
+        "command": "make reliability-monthly-pack MONTH=<YYYY-MM> RUN_DRILL=0",
+        "required_references": [str(path.relative_to(project_root)) for path in required_paths],
+        "missing_references": missing_files,
+        "status": status,
+    }
+    return payload, status
 
 
 # ---------------------------------------------------------------------------
@@ -956,7 +1250,7 @@ def _parse_30d_tasks(roadmap_text: str) -> list[dict[str, str]]:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Execute TODO/ROADMAP deliverables for WS-G and WS-H.")
+    parser = argparse.ArgumentParser(description="Execute TODO/ROADMAP deliverables for WS-A/B/C/F/G/H.")
     parser.add_argument("--project-root", default=".", help="Project root directory")
     parser.add_argument("--todo", default="docs/TODO.md", help="TODO markdown path")
     parser.add_argument("--roadmap", default="ROADMAP.md", help="ROADMAP markdown path")
@@ -1025,17 +1319,25 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = (project_root / str(args.output_dir)).resolve()
     ts = _stamp()
 
+    ws_a_dir = out_dir / "ws_a"
+    ws_b_dir = out_dir / "ws_b"
+    ws_c_dir = out_dir / "ws_c"
+    ws_f_dir = out_dir / "ws_f"
     ws_g_dir = out_dir / "ws_g"
     ws_h_dir = out_dir / "ws_h"
     summary_dir = out_dir / "summary"
 
     todo_text = todo_path.read_text(encoding="utf-8") if todo_path.exists() else ""
     roadmap_text = roadmap_path.read_text(encoding="utf-8") if roadmap_path.exists() else ""
+    tasks = _parse_30d_tasks(roadmap_text)
 
     benchmark_pairs = _parse_benchmark_pairs(benchmark_path) if benchmark_path.exists() else {}
     hotspots = _load_hotspot_index(pyspy_path) if pyspy_path.exists() else {}
     perf_results = _load_perf_results(perf_snapshot_path) if perf_snapshot_path.exists() else {}
     stage_probe = _load_stage_probe_means(stage_probe_path) if stage_probe_path.exists() else {}
+    metrics_path = project_root / "src/hft_platform/observability/metrics.py"
+    alert_rules_path = project_root / "config/monitoring/alerts/rules.yaml"
+    metrics_defined = _extract_defined_metrics(metrics_path)
 
     hotpath_rows, ws_g_warnings, ws_g_data_quality_flags = _hotpath_rows(
         project_root,
@@ -1076,6 +1378,27 @@ def main(argv: list[str] | None = None) -> int:
     quality_report = _quality_report_from_catalog(source_catalog)
     factory_pipeline_md = _render_factory_pipeline_md()
     promotion_readiness = _promotion_readiness(source_catalog, quality_report)
+    ws_a_burnin_template, ws_a_status = _build_ws_a_burnin_template(
+        project_root,
+        tasks=tasks,
+        metrics_defined=metrics_defined,
+        alert_rules_path=alert_rules_path,
+    )
+    ws_b_baseline_report, ws_b_status = _build_ws_b_mv_baseline_report(
+        project_root,
+        tasks=tasks,
+        metrics_defined=metrics_defined,
+        benchmark_pairs=benchmark_pairs,
+    )
+    ws_c_quality_routing, ws_c_status = _build_ws_c_quality_routing_report(
+        project_root,
+        tasks=tasks,
+        metrics_defined=metrics_defined,
+    )
+    ws_f_monthly_flow, ws_f_status = _build_ws_f_monthly_review_flow(
+        project_root,
+        tasks=tasks,
+    )
 
     ws_g_status = STATUS_PASS
     if ws_g_warnings or ws_g_data_quality_flags:
@@ -1090,10 +1413,13 @@ def main(argv: list[str] | None = None) -> int:
     elif q_status == "yellow" or str(promotion_readiness.get("overall") or STATUS_PASS) == STATUS_WARN:
         ws_h_status = STATUS_WARN
 
-    tasks = _parse_30d_tasks(roadmap_text)
     summary_payload: dict[str, Any] = {
         "generated_at": _now_iso(),
         "skills": {
+            "ws_a": list(WS_A_SKILLS),
+            "ws_b": list(WS_B_SKILLS),
+            "ws_c": list(WS_C_SKILLS),
+            "ws_f": list(WS_F_SKILLS),
             "ws_g": list(WS_G_SKILLS),
             "ws_h": list(WS_H_SKILLS),
         },
@@ -1117,6 +1443,30 @@ def main(argv: list[str] | None = None) -> int:
                 ws: len([row for row in tasks if row.get("ws") == ws]) for ws in sorted({row.get("ws", "") for row in tasks})
             },
         },
+        "ws_a": {
+            "status": ws_a_status,
+            "deliverables": {
+                "burn_in_template": "ws_a/latest_burn_in_template.json",
+            },
+        },
+        "ws_b": {
+            "status": ws_b_status,
+            "deliverables": {
+                "mv_baseline_report": "ws_b/latest_mv_baseline_report.json",
+            },
+        },
+        "ws_c": {
+            "status": ws_c_status,
+            "deliverables": {
+                "quality_routing_report": "ws_c/latest_quality_routing_report.json",
+            },
+        },
+        "ws_f": {
+            "status": ws_f_status,
+            "deliverables": {
+                "monthly_review_flow": "ws_f/latest_monthly_review_flow.json",
+            },
+        },
         "ws_g": {
             "status": ws_g_status,
             "deliverables": {
@@ -1137,6 +1487,10 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     overall = STATUS_PASS
+    overall = _combine_status(overall, ws_a_status)
+    overall = _combine_status(overall, ws_b_status)
+    overall = _combine_status(overall, ws_c_status)
+    overall = _combine_status(overall, ws_f_status)
     overall = _combine_status(overall, ws_g_status)
     overall = _combine_status(overall, ws_h_status)
     summary_payload["result"] = {
@@ -1146,6 +1500,10 @@ def main(argv: list[str] | None = None) -> int:
     summary_payload["todo_size_bytes"] = len(todo_text.encode("utf-8"))
     summary_payload["roadmap_size_bytes"] = len(roadmap_text.encode("utf-8"))
 
+    ws_a_ts = ws_a_dir / f"burn_in_template_{ts}.json"
+    ws_b_ts = ws_b_dir / f"mv_baseline_report_{ts}.json"
+    ws_c_ts = ws_c_dir / f"quality_routing_report_{ts}.json"
+    ws_f_ts = ws_f_dir / f"monthly_review_flow_{ts}.json"
     hotpath_ts = ws_g_dir / f"hotpath_matrix_{ts}.json"
     cutover_ts = ws_g_dir / f"cutover_backlog_{ts}.md"
     cutover_json_ts = ws_g_dir / f"cutover_backlog_{ts}.json"
@@ -1155,6 +1513,10 @@ def main(argv: list[str] | None = None) -> int:
     readiness_ts = ws_h_dir / f"promotion_readiness_{ts}.json"
     summary_ts = summary_dir / f"roadmap_execution_{ts}.json"
 
+    _write_json(ws_a_ts, ws_a_burnin_template)
+    _write_json(ws_b_ts, ws_b_baseline_report)
+    _write_json(ws_c_ts, ws_c_quality_routing)
+    _write_json(ws_f_ts, ws_f_monthly_flow)
     _write_json(hotpath_ts, hotpath_matrix)
     _write_text(cutover_ts, cutover_backlog_md)
     _write_json(cutover_json_ts, cutover_backlog)
@@ -1164,6 +1526,10 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(readiness_ts, promotion_readiness)
     _write_json(summary_ts, summary_payload)
 
+    _write_latest_json(ws_a_dir / "latest_burn_in_template.json", ws_a_burnin_template)
+    _write_latest_json(ws_b_dir / "latest_mv_baseline_report.json", ws_b_baseline_report)
+    _write_latest_json(ws_c_dir / "latest_quality_routing_report.json", ws_c_quality_routing)
+    _write_latest_json(ws_f_dir / "latest_monthly_review_flow.json", ws_f_monthly_flow)
     _write_latest_json(ws_g_dir / "latest_hotpath_matrix.json", hotpath_matrix)
     _write_latest(ws_g_dir / "latest_cutover_backlog.md", cutover_ts)
     _write_latest_json(ws_g_dir / "latest_cutover_backlog.json", cutover_backlog)
