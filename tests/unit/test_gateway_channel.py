@@ -1,9 +1,10 @@
 """Tests for CE2-01 (OrderIntent fields) and CE2-02 (LocalIntentChannel)."""
+
 import asyncio
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.gateway.channel import IntentEnvelope, LocalIntentChannel
 
 
@@ -23,6 +24,7 @@ def _make_intent(intent_id: int = 1, idempotency_key: str = "", ttl_ns: int = 0)
 
 
 # CE2-01: idempotency_key / ttl_ns defaults and round-trip
+
 
 def test_order_intent_idempotency_key_default():
     intent = _make_intent()
@@ -52,6 +54,7 @@ def test_order_intent_backward_compat_positional():
 
 
 # CE2-02: LocalIntentChannel
+
 
 @pytest.mark.asyncio
 async def test_channel_submit_and_receive():
@@ -128,11 +131,13 @@ async def test_channel_dlq_bounded():
     ch = LocalIntentChannel(maxsize=100, ttl_ms=5000, dlq_maxsize=2)
     # Submit 5 stale envelopes
     for i in range(5):
-        ch._queue.put_nowait(IntentEnvelope(
-            intent=_make_intent(i),
-            enqueued_ns=0,  # epoch = expired
-            ack_token=str(i),
-        ))
+        ch._queue.put_nowait(
+            IntentEnvelope(
+                intent=_make_intent(i),
+                enqueued_ns=0,  # epoch = expired
+                ack_token=str(i),
+            )
+        )
     # Add one fresh
     ch.submit_nowait(_make_intent(99, "fresh"))
 

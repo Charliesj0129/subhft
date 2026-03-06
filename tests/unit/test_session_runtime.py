@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from hft_platform.feed_adapter.shioaji.session_runtime import (
     SessionRuntime,
     SessionStateSnapshot,
 )
-
 
 # ------------------------------------------------------------------ #
 # Phase-1 delegation tests (existing)
@@ -46,6 +45,7 @@ def test_login_with_retry_no_api_key_returns_false():
     with patch.dict("os.environ", {}, clear=False):
         # Ensure keys are not set
         import os
+
         for k in ("SHIOAJI_API_KEY", "SHIOAJI_SECRET_KEY"):
             os.environ.pop(k, None)
         result = runtime.login_with_retry()
@@ -60,6 +60,7 @@ def test_login_with_retry_no_sdk_no_key_returns_false():
 
     runtime = SessionRuntime(client)
     import os
+
     for k in ("SHIOAJI_API_KEY", "SHIOAJI_SECRET_KEY"):
         os.environ.pop(k, None)
 
@@ -242,8 +243,6 @@ def test_start_session_refresh_thread_noop_if_interval_zero():
 
 
 def test_start_session_refresh_thread_starts_thread():
-    import threading
-
     client = MagicMock()
     client._session_refresh_running = False
     client._session_refresh_interval_s = 86400

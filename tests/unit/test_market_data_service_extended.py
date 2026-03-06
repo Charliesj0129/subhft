@@ -346,7 +346,9 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
             },
             clear=False,
         ):
-            service = MarketDataService(self.bus, self.raw_queue, self.client, feature_engine=FeatureEngine(kernel_backend="python"))
+            service = MarketDataService(
+                self.bus, self.raw_queue, self.client, feature_engine=FeatureEngine(kernel_backend="python")
+            )
         self.assertIsNotNone(service._feature_shadow_engine)
         service._feature_shadow_sample_every = 1
         evt = BidAskEvent(
@@ -372,7 +374,14 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
 
     def test_on_shioaji_event_fast_path_exchange_msg(self):
         self.service.loop = MagicMock()
-        msg = {"code": "2330", "ts": 1, "bid_price": [100.0], "bid_volume": [1], "ask_price": [100.1], "ask_volume": [2]}
+        msg = {
+            "code": "2330",
+            "ts": 1,
+            "bid_price": [100.0],
+            "bid_volume": [1],
+            "ask_price": [100.1],
+            "ask_volume": [2],
+        }
 
         self.service._on_shioaji_event("TSE", msg)
 
@@ -384,7 +393,14 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
 
     def test_on_shioaji_event_unwraps_nested_kwargs_bidask(self):
         self.service.loop = MagicMock()
-        inner = {"code": "2330", "ts": 2, "bid_price": [100.0], "bid_volume": [1], "ask_price": [100.2], "ask_volume": [3]}
+        inner = {
+            "code": "2330",
+            "ts": 2,
+            "bid_price": [100.0],
+            "bid_volume": [1],
+            "ask_price": [100.2],
+            "ask_volume": [3],
+        }
         outer = {"bidask": inner}
 
         self.service._on_shioaji_event(exchange="TSE", quote=outer)

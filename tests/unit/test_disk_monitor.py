@@ -1,10 +1,8 @@
 """Tests for CE3-05: DiskPressureMonitor."""
+
 import os
 import tempfile
 import time
-from unittest.mock import patch
-
-import pytest
 
 from hft_platform.recorder.disk_monitor import DiskPressureLevel, DiskPressureMonitor
 

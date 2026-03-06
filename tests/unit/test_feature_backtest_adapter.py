@@ -1,11 +1,12 @@
 """Tests for FeatureEngine integration in HftBacktestAdapter (lob_feature mode)."""
+
 from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.strategy.base import BaseStrategy
 
-
 # --- Shared stubs ---
+
 
 class _Depth:
     best_bid = 1000000
@@ -84,6 +85,7 @@ def _patch_hftbacktest(monkeypatch):
 
 # --- Test strategies ---
 
+
 class _RecordFeaturesStrategy(BaseStrategy):
     def __init__(self, strategy_id: str, **kwargs):
         super().__init__(strategy_id, **kwargs)
@@ -104,6 +106,7 @@ class _SimpleStrategy(BaseStrategy):
 
 
 # --- Tests ---
+
 
 def test_lob_feature_mode_instantiates_lob_and_feature_engines(monkeypatch):
     _patch_hftbacktest(monkeypatch)
@@ -217,6 +220,7 @@ def test_lob_feature_mode_feature_tuple_available_via_ctx(monkeypatch):
     assert strategy.recorded_tuple is not None
     # tuple length matches default feature set
     from hft_platform.feature.registry import build_default_lob_feature_set_v1
+
     fs = build_default_lob_feature_set_v1()
     assert len(strategy.recorded_tuple) == len(fs.features)
 

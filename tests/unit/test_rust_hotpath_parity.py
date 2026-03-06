@@ -145,9 +145,7 @@ def test_scale_book_pair_stats_parity():
     asks_py = _py_scale_book(ask_prices, ask_vols, scale)
     stats_py = _py_stats(bids_py, asks_py)
 
-    bids_rs, asks_rs, stats_rs = rc.scale_book_pair_stats(
-        bid_prices, bid_vols, ask_prices, ask_vols, scale
-    )
+    bids_rs, asks_rs, stats_rs = rc.scale_book_pair_stats(bid_prices, bid_vols, ask_prices, ask_vols, scale)
     bids_rs = np.asarray(bids_rs)
     asks_rs = np.asarray(asks_rs)
 
@@ -263,10 +261,15 @@ def test_normalize_bidask_tuple_with_synth_no_asks():
     ask_vols = np.array([], dtype=np.int64)
 
     result = rc.normalize_bidask_tuple_with_synth(
-        "2330", 1700000000,
-        bid_prices, bid_vols,
-        ask_prices, ask_vols,
-        scale, tick_size_scaled, synthetic_ticks,
+        "2330",
+        1700000000,
+        bid_prices,
+        bid_vols,
+        ask_prices,
+        ask_vols,
+        scale,
+        tick_size_scaled,
+        synthetic_ticks,
     )
 
     assert result[0] == "bidask"
@@ -301,10 +304,15 @@ def test_normalize_bidask_tuple_with_synth_no_bids():
     ask_vols = np.array([5, 15], dtype=np.int64)
 
     result = rc.normalize_bidask_tuple_with_synth(
-        "2330", 1700000000,
-        bid_prices, bid_vols,
-        ask_prices, ask_vols,
-        scale, tick_size_scaled, synthetic_ticks,
+        "2330",
+        1700000000,
+        bid_prices,
+        bid_vols,
+        ask_prices,
+        ask_vols,
+        scale,
+        tick_size_scaled,
+        synthetic_ticks,
     )
 
     bids = np.asarray(result[2])
@@ -332,10 +340,15 @@ def test_normalize_bidask_tuple_with_synth_both_sides():
     ask_vols = np.array([10], dtype=np.int64)
 
     result = rc.normalize_bidask_tuple_with_synth(
-        "2330", 1700000000,
-        bid_prices, bid_vols,
-        ask_prices, ask_vols,
-        scale, 1, 1,
+        "2330",
+        1700000000,
+        bid_prices,
+        bid_vols,
+        ask_prices,
+        ask_vols,
+        scale,
+        1,
+        1,
     )
 
     bids = np.asarray(result[2])
@@ -346,9 +359,12 @@ def test_normalize_bidask_tuple_with_synth_both_sides():
 
     # Stats should match non-synth version
     rs_np = rc.normalize_bidask_tuple_np(
-        "2330", 1700000000,
-        bid_prices, bid_vols,
-        ask_prices, ask_vols,
+        "2330",
+        1700000000,
+        bid_prices,
+        bid_vols,
+        ask_prices,
+        ask_vols,
         scale,
     )
     # Compare stats fields (indices 6..12)

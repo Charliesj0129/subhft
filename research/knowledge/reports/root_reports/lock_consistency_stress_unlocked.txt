@@ -1,1 +1,0 @@
-reads=983004 inconsistencies=0 errors=0 rate=0.000000

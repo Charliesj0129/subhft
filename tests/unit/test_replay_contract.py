@@ -1,7 +1,6 @@
 """Tests for CE3-04: ReplayContract + validate_replay_preconditions()."""
-from unittest.mock import MagicMock
 
-import pytest
+from unittest.mock import MagicMock
 
 from hft_platform.recorder.replay_contract import ReplayContract, validate_replay_preconditions
 
@@ -59,7 +58,9 @@ def test_no_archive_dir_violates():
 
 
 def test_multiple_violations():
-    loader = _make_loader(strict_order=True, manifest_enabled=False, dedup_enabled=True, ch_client=None, archive_dir=None)
+    loader = _make_loader(
+        strict_order=True, manifest_enabled=False, dedup_enabled=True, ch_client=None, archive_dir=None
+    )
     violations = validate_replay_preconditions(loader)
     assert len(violations) >= 3
 

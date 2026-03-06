@@ -19,9 +19,18 @@
 - `outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json`
 - `outputs/roadmap_execution/ws_h/latest_source_catalog.json`
 - `outputs/release_converge/latest.json` / `latest.md`（發行收斂與深度清潔報告）
+- `outputs/release_converge/backups/root_reports_slim_*.json`（tracked root_reports 瘦身 manifest）
 - `reports/shioaji_api_latency.json` / `.csv`
 - `reports/e2e_latency.summary.json`
 - `reports/*.heatmap.csv`
+
+## MVP 發行補充
+
+- `make release-converge-mvp` 會使用 `mvp_release + full gate`。
+- `research/data` 只保留最小 smoke 樣本：
+  - `research/data/processed/smoke/smoke_v1.npy`
+  - `research/data/processed/smoke/smoke_v1.npy.meta.json`
+- `research/knowledge/reports/root_reports/` 會套用白名單保留，刪除紀錄寫入 `outputs/release_converge/backups/`。
 
 ## 管理建議
 1. 產物附上 `metadata`（commit hash、參數、時間）。

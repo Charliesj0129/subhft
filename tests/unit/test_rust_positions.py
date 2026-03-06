@@ -57,19 +57,14 @@ class PyPosition:
                 pnl = (price_scaled - self.avg_price_scaled) * close_qty
             self.realized_pnl_scaled += pnl
             self.net_qty += signed_fill_qty
-            if (current_sign > 0 and self.net_qty < 0) or (
-                current_sign < 0 and self.net_qty > 0
-            ):
+            if (current_sign > 0 and self.net_qty < 0) or (current_sign < 0 and self.net_qty > 0):
                 self.avg_price_scaled = price_scaled
         else:
             if self.net_qty == 0:
                 self.avg_price_scaled = price_scaled
                 self.net_qty += signed_fill_qty
             else:
-                total_val = (
-                    self.net_qty * self.avg_price_scaled
-                    + signed_fill_qty * price_scaled
-                )
+                total_val = self.net_qty * self.avg_price_scaled + signed_fill_qty * price_scaled
                 self.net_qty += signed_fill_qty
                 if self.net_qty != 0:
                     self.avg_price_scaled = total_val // self.net_qty
@@ -107,9 +102,7 @@ def _run_parity(fills):
     key = "ACC:STRAT:SYM"
 
     for side, qty, price, fee, tax in fills:
-        r_net, r_avg, r_pnl, r_fees = rust.update(
-            key, side, qty, price, fee, tax, 0
-        )
+        r_net, r_avg, r_pnl, r_fees = rust.update(key, side, qty, price, fee, tax, 0)
         py.update(side, qty, price, fee, tax)
 
         assert r_net == py.net_qty, f"net_qty mismatch: rust={r_net} py={py.net_qty}"
@@ -119,65 +112,81 @@ def _run_parity(fills):
 
 
 def test_open_long_close():
-    _run_parity([
-        (BUY, 10, 10000, 5, 0),
-        (SELL, 10, 10500, 5, 0),
-    ])
+    _run_parity(
+        [
+            (BUY, 10, 10000, 5, 0),
+            (SELL, 10, 10500, 5, 0),
+        ]
+    )
 
 
 def test_open_short_close():
-    _run_parity([
-        (SELL, 5, 20000, 0, 0),
-        (BUY, 5, 19000, 0, 0),
-    ])
+    _run_parity(
+        [
+            (SELL, 5, 20000, 0, 0),
+            (BUY, 5, 19000, 0, 0),
+        ]
+    )
 
 
 def test_increase_long_weighted_avg():
-    _run_parity([
-        (BUY, 10, 10000, 0, 0),
-        (BUY, 10, 12000, 0, 0),
-    ])
+    _run_parity(
+        [
+            (BUY, 10, 10000, 0, 0),
+            (BUY, 10, 12000, 0, 0),
+        ]
+    )
 
 
 def test_partial_close():
-    _run_parity([
-        (BUY, 10, 10000, 0, 0),
-        (SELL, 3, 10500, 0, 0),
-    ])
+    _run_parity(
+        [
+            (BUY, 10, 10000, 0, 0),
+            (SELL, 3, 10500, 0, 0),
+        ]
+    )
 
 
 def test_flip_long_to_short():
-    _run_parity([
-        (BUY, 10, 10000, 0, 0),
-        (SELL, 15, 11000, 0, 0),
-    ])
+    _run_parity(
+        [
+            (BUY, 10, 10000, 0, 0),
+            (SELL, 15, 11000, 0, 0),
+        ]
+    )
 
 
 def test_flip_short_to_long():
-    _run_parity([
-        (SELL, 10, 20000, 0, 0),
-        (BUY, 15, 19000, 0, 0),
-    ])
+    _run_parity(
+        [
+            (SELL, 10, 20000, 0, 0),
+            (BUY, 15, 19000, 0, 0),
+        ]
+    )
 
 
 def test_many_fills_round_trip():
-    _run_parity([
-        (BUY, 10, 10000, 10, 5),
-        (BUY, 5, 10200, 8, 4),
-        (SELL, 8, 10300, 12, 6),
-        (SELL, 7, 10100, 10, 5),
-        (BUY, 20, 10050, 15, 7),
-        (SELL, 20, 10400, 20, 10),
-    ])
+    _run_parity(
+        [
+            (BUY, 10, 10000, 10, 5),
+            (BUY, 5, 10200, 8, 4),
+            (SELL, 8, 10300, 12, 6),
+            (SELL, 7, 10100, 10, 5),
+            (BUY, 20, 10050, 15, 7),
+            (SELL, 20, 10400, 20, 10),
+        ]
+    )
 
 
 def test_close_to_flat_then_reopen():
-    _run_parity([
-        (BUY, 10, 10000, 0, 0),
-        (SELL, 10, 10500, 0, 0),
-        (SELL, 5, 11000, 0, 0),
-        (BUY, 5, 10800, 0, 0),
-    ])
+    _run_parity(
+        [
+            (BUY, 10, 10000, 0, 0),
+            (SELL, 10, 10500, 0, 0),
+            (SELL, 5, 11000, 0, 0),
+            (BUY, 5, 10800, 0, 0),
+        ]
+    )
 
 
 def test_rust_get_and_reset():

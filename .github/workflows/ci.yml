@@ -62,13 +62,13 @@ jobs:
         run: uv sync --dev
 
       - name: Check formatting
-        run: uv run ruff format --check src/ tests/
+        run: make format-check
 
       - name: Check linting
-        run: uv run ruff check src/ tests/
+        run: make lint
 
       - name: Enforce research factory contract
-        run: uv run python -m research.factory audit --fail-on-warning
+        run: make research-audit-strict
 
       - name: Guard env vars reference coverage
         run: make env-vars-guard
@@ -180,7 +180,7 @@ jobs:
         run: uv sync --dev
 
       - name: Run mypy
-        run: uv run mypy
+        run: make typecheck
 
   # ============================================================================
   # Stage 3: Unit Tests + Coverage Gates
@@ -228,24 +228,19 @@ jobs:
         run: uv sync --dev
 
       - name: Build Rust extension
-        run: uv run maturin develop --manifest-path rust_core/Cargo.toml
+        run: make build-rust
 
       - name: Run unit tests with coverage
-        run: |
-          uv run pytest tests/unit \
-            --cov-report=xml:coverage.xml \
-            --cov-fail-under=70 \
-            -v --tb=short
+        run: make test-unit-ci
 
       - name: Check branch coverage
-        run: |
-          uv run coverage report --fail-under=55 --show-missing
+        run: make coverage-branch-gate
 
       - name: Upload coverage to GitHub Summary
         if: always()
         run: |
           echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
-          uv run coverage report --format=markdown >> $GITHUB_STEP_SUMMARY || true
+          make coverage-markdown >> $GITHUB_STEP_SUMMARY || true
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
@@ -300,38 +295,17 @@ jobs:
         run: uv sync --dev
 
       - name: Build Rust extension
-        run: uv run maturin develop --manifest-path rust_core/Cargo.toml
+        run: make build-rust
 
       - name: Run lightweight perf regression gate (strategy/risk/gateway/research/feed/recorder)
-        run: uv run python tests/benchmark/perf_regression_gate.py
+        run: make perf-gate-default
 
       - name: Run benchmarks
-        run: |
-          set -euo pipefail
-          uv run pytest tests/benchmark \
-            -o addopts= \
-            --no-cov \
-            --benchmark-only \
-            --benchmark-json=benchmark.json \
-            --benchmark-save=ci \
-            --benchmark-save-data \
-            --benchmark-min-rounds=5 \
-            --benchmark-disable-gc \
-            -v || status=$?
-          if [ "${status:-0}" -eq 5 ]; then
-            echo "No benchmark tests collected; skipping benchmarks."
-            exit 0
-          fi
-          if [ "${status:-0}" -ne 0 ]; then
-            exit "$status"
-          fi
+        run: make benchmark-ci
 
       - name: Darwin Gate - Regression Check
         if: always() && hashFiles('benchmark.json') != ''
-        run: |
-          uv run python scripts/benchmark_gate.py \
-            --baseline tests/benchmark/.benchmark_baseline.json \
-            --current benchmark.json --threshold 0.10
+        run: make benchmark-darwin-gate
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -420,7 +394,7 @@ jobs:
         run: uv sync --dev
 
       - name: Build Rust extension
-        run: uv run maturin develop --manifest-path rust_core/Cargo.toml
+        run: make build-rust
 
       - name: Run integration tests
         env:
@@ -428,19 +402,7 @@ jobs:
           CLICKHOUSE_PORT: 8123
           REDIS_HOST: localhost
           REDIS_PORT: 6379
-        run: |
-          set -euo pipefail
-          uv run pytest tests/integration \
-            -o addopts= \
-            -v --tb=short \
-            -m "not slow" || status=$?
-          if [ "${status:-0}" -eq 5 ]; then
-            echo "No integration tests collected; skipping integration tests."
-            exit 0
-          fi
-          if [ "${status:-0}" -ne 0 ]; then
-            exit "$status"
-          fi
+        run: make test-integration-ci
 
       - name: Integration Test Summary
         if: always()
@@ -453,11 +415,7 @@ jobs:
           HFT_CLICKHOUSE_HOST: localhost
           HFT_CLICKHOUSE_PORT: 8123
           HFT_CLICKHOUSE_ENABLED: "1"
-        run: |
-          uv run pytest tests/system/test_clickhouse_writer.py \
-            -o addopts= \
-            --no-cov \
-            -q
+        run: make test-clickhouse-writer-smoke
 
   recorder-nightly-drills:
     name: 🧪 Recorder CK + WAL Drills
@@ -516,38 +474,24 @@ jobs:
         run: uv sync --dev
 
       - name: Build Rust extension
-        run: uv run maturin develop --manifest-path rust_core/Cargo.toml
+        run: make build-rust
 
       - name: Run recorder perf gate (CK + WAL stress drills)
-        env:
-          HFT_PERF_GATE_RECORDER_IO: "1"
-          HFT_CLICKHOUSE_ENABLED: "1"
-          HFT_CLICKHOUSE_HOST: localhost
-          HFT_CLICKHOUSE_PORT: 8123
-        run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-recorder-io
+        run: make perf-gate-recorder-io
 
       - name: Run gateway/WAL hardening integration drills (CE2-08/09, CE3-03/04/07)
         if: github.event_name == 'schedule' || inputs.run_recorder_drills
-        run: |
-          set -o pipefail
-          make verify-ce3 | tee gateway_wal_hardening_drills.log
-          uv run pytest -q --no-cov \
-            tests/integration/test_gateway_multi_runner.py::test_gateway_ha_failover_no_duplicate_dispatch \
-            | tee -a gateway_wal_hardening_drills.log
+        run: make drill-gateway-wal-hardening
 
       - name: Run risk/gateway perf gate (heavier drills)
-        env:
-          HFT_PERF_GATE_RISK_HEAVY: "1"
-        run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-risk-heavy --json risk_perf_gate.json
+        run: make perf-gate-risk-heavy
 
       - name: Run feature-plane perf gate (Rust parity/perf drills)
-        env:
-          HFT_PERF_GATE_FEATURE_RUST: "1"
-        run: uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-feature-rust --json feature_perf_gate.json
+        run: make perf-gate-feature-rust
 
       - name: Run research feature benchmark matrix wrapper
         if: github.event_name == 'schedule' || inputs.run_research_drills
-        run: uv run python research/tools/feature_benchmark_matrix.py --runs 1 --out research_feature_benchmark_matrix.json
+        run: make research-feature-benchmark-matrix
 
       - name: Render synthetic research promotion report artifact
         if: github.event_name == 'schedule' || inputs.run_research_drills
@@ -563,7 +507,7 @@ jobs:
           }
           Path("research_feature_promotion_smoke.json").write_text(json.dumps(payload), encoding="utf-8")
           PY
-          uv run python research/tools/render_promotion_report.py research_feature_promotion_smoke.json --out research_feature_promotion_report.md
+          make render-research-promotion-report
 
       - name: Render diagnostics timeline artifact (synthetic)
         if: github.event_name == 'schedule' || inputs.run_diagnostics_drills
@@ -580,8 +524,8 @@ jobs:
           ]
           Path("nightly_trace.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\\n" for r in rows), encoding="utf-8")
           PY
-          uv run python scripts/render_incident_timeline.py nightly_trace.jsonl --trace-id nightly:t1 --format json --out diagnostics_timeline.json
-          uv run python scripts/render_incident_timeline.py nightly_trace.jsonl --trace-id nightly:t1 --format md --out diagnostics_timeline.md
+          make render-incident-timeline-json
+          make render-incident-timeline-md
 
       - name: Upload risk nightly perf artifact
         if: always()
@@ -736,17 +680,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
-      - name: Install pip-audit
-        run: uv pip install pip-audit
-
       - name: Run pip-audit
-        run: |
-          uv run pip-audit --strict --progress-spinner off 2>&1 | tee audit-output.txt || true
-          if grep -q "No known vulnerabilities found" audit-output.txt; then
-            echo "✅ No vulnerabilities found"
-          elif grep -q "found [0-9]* known vulnerabilities" audit-output.txt; then
-            echo "::warning::Security vulnerabilities detected - see output above"
-          fi
+        run: make security-audit
 
       - name: Security Summary
         if: always()

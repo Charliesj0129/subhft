@@ -1,4 +1,5 @@
 """Tests for CE2-04: ExposureStore."""
+
 import threading
 
 import pytest

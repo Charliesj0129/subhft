@@ -97,10 +97,7 @@ class TestQueueBackpressure:
         consumer_task = asyncio.create_task(consumer())
 
         # Start multiple producers
-        producer_tasks = [
-            asyncio.create_task(producer(i, 1000))
-            for i in range(5)
-        ]
+        producer_tasks = [asyncio.create_task(producer(i, 1000)) for i in range(5)]
 
         await asyncio.gather(*producer_tasks)
         await asyncio.sleep(0.5)

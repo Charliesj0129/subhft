@@ -1,8 +1,9 @@
 """Unit tests for alpha_propagator (Sum-of-Exponentials propagator) module (T2 coverage)."""
+
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 
 numba = pytest.importorskip("numba", reason="numba required for alpha_propagator")
 
@@ -16,7 +17,7 @@ def test_module_imports():
 
 def test_propagator_initial_state():
     """PropagatorTracker should start with zero components and zero impact."""
-    from hft_platform.strategies.alpha.alpha_propagator import PropagatorTracker, K
+    from hft_platform.strategies.alpha.alpha_propagator import K, PropagatorTracker
 
     tracker = PropagatorTracker()
     np.testing.assert_allclose(tracker.components, np.zeros(K))
@@ -52,9 +53,9 @@ def test_propagator_decay_reduces_impact():
     impact_after_event = tracker.total_impact
 
     # Initialize last_ts with first update call (0 is sentinel for first call)
-    tracker.update(1_000_000_000)    # initializes last_ts
+    tracker.update(1_000_000_000)  # initializes last_ts
     # Now decay with a later timestamp
-    tracker.update(2_000_000_000)    # 1 second later — should decay
+    tracker.update(2_000_000_000)  # 1 second later — should decay
     assert abs(tracker.total_impact) < abs(impact_after_event)
 
 
@@ -72,5 +73,3 @@ def test_strategy_function_exists():
     from hft_platform.strategies.alpha.alpha_propagator import strategy
 
     assert callable(strategy)
-
-

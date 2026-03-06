@@ -19,4 +19,3 @@ def test_file_leader_lease_single_leader_and_failover():
         assert l2.is_leader() is True
 
         l2.release()
-

@@ -6,6 +6,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable, Dict, List
 
 import yaml
@@ -23,9 +24,10 @@ except Exception:  # pragma: no cover - fallback when library absent
     sj = None
 
 try:
-    import fcntl
+    import fcntl as _fcntl
 except Exception:  # pragma: no cover - non-posix fallback
-    fcntl = None
+    _fcntl = None
+fcntl: ModuleType | None = _fcntl
 
 logger = get_logger("feed_adapter")
 
@@ -706,13 +708,16 @@ class ShioajiClient:
         if not self._quote_dispatch_async or self._quote_dispatch_running:
             return
         self._quote_dispatch_queue = queue.Queue(maxsize=self._quote_dispatch_queue_size)
+        q = self._quote_dispatch_queue
+        if q is None:
+            return
         self._quote_dispatch_running = True
         batch_max = self._quote_dispatch_batch_max
 
         def _worker() -> None:
             while self._quote_dispatch_running:
                 try:
-                    item = self._quote_dispatch_queue.get(timeout=0.5)
+                    item = q.get(timeout=0.5)
                 except queue.Empty:
                     continue
                 if item is None:
@@ -730,7 +735,7 @@ class ShioajiClient:
                 batch_count += 1
                 while batch_count < batch_max and self._quote_dispatch_running:
                     try:
-                        nxt = self._quote_dispatch_queue.get_nowait()
+                        nxt = q.get_nowait()
                     except queue.Empty:
                         break
                     if nxt is None:
@@ -741,8 +746,8 @@ class ShioajiClient:
                 self._quote_dispatch_processed += batch_count
                 if self.metrics and (self._quote_dispatch_processed % self._quote_dispatch_metrics_every == 0):
                     try:
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth") and self._quote_dispatch_queue:
-                            self.metrics.shioaji_quote_callback_queue_depth.set(self._quote_dispatch_queue.qsize())
+                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth"):
+                            self.metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
                     except Exception:
                         pass
 
@@ -1181,16 +1186,17 @@ class ShioajiClient:
                 return False
 
             subscribe_ok = True
-            if self.tick_callback:
+            callback = self.tick_callback
+            if callback is not None:
                 try:
-                    self._ensure_callbacks(self.tick_callback)
+                    self._ensure_callbacks(callback)
                     if not self._callbacks_registered:
                         subscribe_ok = False
                         self._last_reconnect_error = "callbacks_not_registered"
                     else:
                         ok_sub, _, err_sub, timed_out_sub = self._safe_call_with_timeout(
                             "subscribe_basket",
-                            lambda: self.subscribe_basket(self.tick_callback),
+                            lambda: self.subscribe_basket(callback),
                             self._reconnect_subscribe_timeout_s,
                         )
                         if not ok_sub:

@@ -219,7 +219,6 @@ def test_paper_trade_session_duration_minutes_persists(tmp_path: Path):
 
 def test_paper_trade_session_legacy_json_no_minutes_field(tmp_path: Path):
     """Legacy JSON without session_duration_minutes infers it from duration_seconds."""
-    import json
 
     from hft_platform.alpha.experiments import _paper_session_from_dict
 

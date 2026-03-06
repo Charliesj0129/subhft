@@ -1,4 +1,5 @@
 """Unit tests for alpha_ofi strategy module (T2 coverage)."""
+
 from __future__ import annotations
 
 import pytest
@@ -15,8 +16,9 @@ def test_module_imports():
 
 def test_alpha_ofi_initial_state():
     """AlphaOFI should start with NaN bid/ask and zero OFI."""
-    from hft_platform.strategies.alpha.alpha_ofi import AlphaOFI
     import numpy as np
+
+    from hft_platform.strategies.alpha.alpha_ofi import AlphaOFI
 
     alpha = AlphaOFI()
     assert np.isnan(alpha.prev_bid_p)
@@ -27,8 +29,8 @@ def test_alpha_ofi_initial_state():
 
 def test_alpha_ofi_first_update_initializes():
     """First update should initialize prev prices without computing OFI."""
+
     from hft_platform.strategies.alpha.alpha_ofi import AlphaOFI
-    import numpy as np
 
     alpha = AlphaOFI()
     # jitclass methods require positional arguments
@@ -66,5 +68,3 @@ def test_strategy_function_exists():
     from hft_platform.strategies.alpha.alpha_ofi import ofi_strategy
 
     assert callable(ofi_strategy)
-
-

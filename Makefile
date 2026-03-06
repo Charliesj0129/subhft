@@ -1,7 +1,7 @@
 # HFT Platform Makefile
 # Unified CLI for development, testing, and CI
 
-.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html lint lint-fix format format-check typecheck check benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta help
+.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html lint lint-fix format format-check typecheck check benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta help
 
 PY ?= uv run python
 
@@ -29,7 +29,7 @@ test-all: ## Run all tests (unit + integration)
 	uv run pytest tests/ -v --tb=short
 
 test-integration: ## Run integration tests only
-	uv run pytest tests/integration -v --tb=short -m "not slow"
+	uv run pytest tests/integration -v --tb=short -m "not slow" --no-cov
 
 verify-ce3: ## Verify CE3 hardening (scale-out + replay contract + outage drills)
 	uv run pytest --no-cov \
@@ -71,12 +71,14 @@ check: lint typecheck ## Run all code quality checks
 
 benchmark: ## Run benchmarks (pytest-benchmark)
 	uv run pytest tests/benchmark \
+		--no-cov \
 		--benchmark-only \
 		--benchmark-json=benchmark.json \
 		-v
 
 benchmark-baseline: ## Generate benchmark baseline for Darwin Gate
 	uv run pytest tests/benchmark \
+		--no-cov \
 		--benchmark-only \
 		--benchmark-json=tests/benchmark/.benchmark_baseline.json \
 		--benchmark-min-rounds=10 \
@@ -85,6 +87,7 @@ benchmark-baseline: ## Generate benchmark baseline for Darwin Gate
 
 benchmark-compare: ## Compare current benchmarks against baseline
 	uv run pytest tests/benchmark \
+		--no-cov \
 		--benchmark-only \
 		--benchmark-json=benchmark.json \
 		-v
@@ -149,6 +152,61 @@ clean-all: clean clean-rust ## Clean everything
 # ============================================================================
 
 ci: format-check lint typecheck coverage ## Run full CI pipeline locally
+
+.PHONY: test-unit-ci coverage-branch-gate coverage-markdown test-integration-ci test-clickhouse-writer-smoke
+.PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
+.PHONY: benchmark-ci benchmark-darwin-gate drill-gateway-wal-hardening
+.PHONY: research-feature-benchmark-matrix render-research-promotion-report security-audit
+
+test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
+	uv run pytest tests/unit -q --cov=src/hft_platform --cov-branch --cov-report=term-missing --cov-report=xml
+
+coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
+	uv run coverage report --fail-under=70
+
+coverage-markdown: ## Print coverage summary in markdown-friendly text
+	uv run coverage report
+
+test-integration-ci: ## Run integration tests in CI mode (excluding slow markers)
+	uv run pytest tests/integration -v --tb=short -m "not slow" --no-cov
+
+test-clickhouse-writer-smoke: ## Smoke test ClickHouse writer roundtrip path
+	uv run pytest tests/system/test_clickhouse_writer.py::test_clickhouse_writer_roundtrip --no-cov -q
+
+perf-gate-default: ## Lightweight perf regression gate for default CI profile
+	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --json risk_perf_gate.json
+
+perf-gate-recorder-io: ## Nightly perf gate: recorder I/O heavy drills
+	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-recorder-io --json recorder_perf_gate.json
+
+perf-gate-risk-heavy: ## Nightly perf gate: risk/gateway heavy drills
+	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-risk-heavy --json risk_perf_gate.json
+
+perf-gate-feature-rust: ## Nightly perf gate: feature engine rust drills
+	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-feature-rust --json feature_perf_gate.json
+
+benchmark-ci: ## Run benchmark suite and export benchmark.json for Darwin gate
+	uv run pytest tests/benchmark --no-cov --benchmark-only --benchmark-json=benchmark.json -v
+
+benchmark-darwin-gate: ## Check benchmark regressions against baseline
+	$(PY) scripts/benchmark_gate.py --baseline tests/benchmark/.benchmark_baseline.json --current benchmark.json --threshold "$${DARWIN_GATE_THRESHOLD:-0.10}"
+
+drill-gateway-wal-hardening: verify-ce3 ## Gateway/WAL hardening integration drill bundle
+
+research-feature-benchmark-matrix: ## Research wrapper benchmark matrix artifact
+	$(PY) research/tools/feature_benchmark_matrix.py --runs "$${RUNS:-1}" --out research_feature_benchmark_matrix.json
+
+render-research-promotion-report: ## Render promotion markdown from synthetic/nightly JSON artifact
+	$(PY) research/tools/render_promotion_report.py research_feature_promotion_smoke.json --out research_feature_promotion_smoke.md
+
+security-audit: ## Dependency security scan with pip-audit fallback to pip check
+	@set -e; \
+	if uv run python -c "import pip_audit" >/dev/null 2>&1; then \
+		uv run python -m pip_audit --progress-spinner off | tee audit-output.txt; \
+	else \
+		echo "pip-audit unavailable; fallback to pip check" | tee audit-output.txt; \
+		uv run python -m pip check | tee -a audit-output.txt; \
+	fi
 
 # ============================================================================
 # Failure Simulation / Drill Targets
@@ -260,6 +318,9 @@ release-converge-clean: ## Deep clean caches/artifacts then run release gates (r
 
 release-converge: release-converge-clean ## Alias: converge repository to release-ready state
 
+release-converge-mvp: ## Aggressive MVP release convergence (full gate + minimal research sample + tracked report slimming)
+	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" --cleanup-profile mvp_release --gate-profile full --tracked-slimming-profile root_reports_minimal --seed-minimal-sample $(if $(filter 1,$(CLEAN_RUST)),--clean-rust,)
+
 reliability-monthly-pack: ## Generate monthly reliability review pack (soak/backlog/drift/disk/drill/query-guard/feature-canary/callback-latency)
 	$(PY) scripts/reliability_review_pack.py --project-root . --soak-dir outputs/soak_reports --deploy-dir outputs/deploy_guard --query-guard-dir outputs/query_guard --feature-canary-dir outputs/feature_canary --callback-latency-dir outputs/callback_latency --output-dir outputs/reliability/monthly --month "$${MONTH:-$(shell date +%Y-%m)}" --disk-path . --disk-path .wal --min-query-guard-runs "$${QUERY_GUARD_MIN_RUNS:-1}" --min-query-guard-suite-runs "$${QUERY_GUARD_MIN_SUITE_RUNS:-1}" --min-feature-canary-runs "$${FEATURE_CANARY_MIN_RUNS:-1}" --min-callback-latency-runs "$${CALLBACK_LATENCY_MIN_RUNS:-1}" $(if $(filter 1,$(RUN_DRILL)),--run-drill-suite,) --allow-warn-exit-zero
 
@@ -341,6 +402,9 @@ research-clean: ## Remove research cache artifacts (__pycache__, .pyc, numba cac
 	$(PY) -m research.factory clean
 
 research-audit: ## Audit research pipeline contract and write report
+	$(PY) -m research.factory audit
+
+research-audit-strict: ## Strict audit alias for CI compatibility
 	$(PY) -m research.factory audit
 
 research-index: ## Build machine-readable research pipeline index

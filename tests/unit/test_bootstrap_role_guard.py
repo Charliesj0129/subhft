@@ -89,9 +89,7 @@ def test_check_session_ownership_cleans_stale_owner_and_acquires():
     class _DummySock:
         def __init__(self):
             # GET -> owner, TTL -> -1(stale), GET verify owner, DEL -> :1, GET -> nil, SETEX -> +OK
-            self._stream = io.BytesIO(
-                b"$11\r\nother-owner\r\n:-1\r\n$11\r\nother-owner\r\n:1\r\n$-1\r\n+OK\r\n"
-            )
+            self._stream = io.BytesIO(b"$11\r\nother-owner\r\n:-1\r\n$11\r\nother-owner\r\n:1\r\n$-1\r\n+OK\r\n")
             self.sent: list[bytes] = []
 
         def __enter__(self):

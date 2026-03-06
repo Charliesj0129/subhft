@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from hft_platform.engine import event_bus as event_bus_mod
 from hft_platform.engine.event_bus import RingBufferBus
 

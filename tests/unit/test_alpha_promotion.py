@@ -504,8 +504,8 @@ def test_gate_e_uses_p95_reject_rate_from_summary(tmp_path: Path):
         "fills": 10,
         "pnl_bps": 1.5,
         "drift_alerts": 0,
-        "execution_reject_rate": 0.001,   # mean is fine
-        "reject_rate_p95": 0.05,          # P95 exceeds 0.01 threshold
+        "execution_reject_rate": 0.001,  # mean is fine
+        "reject_rate_p95": 0.05,  # P95 exceeds 0.01 threshold
         "notes": "",
     }
     (summary_dir / "2026-02-01_abc.json").write_text(json.dumps(session))
@@ -552,7 +552,7 @@ def test_gate_e_falls_back_to_mean_when_p95_absent(tmp_path: Path):
         "pnl_bps": 1.5,
         "drift_alerts": 0,
         "execution_reject_rate": 0.005,  # mean within threshold
-        "reject_rate_p95": None,          # no P95 → fall back to mean
+        "reject_rate_p95": None,  # no P95 → fall back to mean
         "notes": "",
     }
     (summary_dir / "2026-02-01_def.json").write_text(json.dumps(session))

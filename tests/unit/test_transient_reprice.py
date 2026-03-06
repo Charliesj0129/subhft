@@ -31,13 +31,13 @@ class TestTransientReprice:
         for i in range(n):
             cycle = i % 20
             if cycle <= 10:
-                mid[i] = 100 + cycle # 100 -> 110
+                mid[i] = 100 + cycle  # 100 -> 110
             else:
-                mid[i] = 110 - (cycle - 10) # 110 -> 100
+                mid[i] = 110 - (cycle - 10)  # 110 -> 100
 
         data = {
             "bid_prices": mid.reshape(-1, 1),
-            "ask_prices": mid.reshape(-1, 1), # mid = price
+            "ask_prices": mid.reshape(-1, 1),  # mid = price
             "bid_volumes": np.ones((n, 1)),
             "ask_volumes": np.ones((n, 1)),
         }
@@ -63,6 +63,7 @@ class TestTransientReprice:
         # Should be strongly positive
         assert res.ic > 0.8, f"Expected high positive IC for perfect reversion, got {res.ic}"
         assert res.sharpe > 5.0
+
 
 if __name__ == "__main__":
     t = TestTransientReprice()

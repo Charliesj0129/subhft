@@ -4,7 +4,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
-from hft_platform.core.pricing import FixedPriceScaleProvider
 from hft_platform.risk.validators import PriceBandValidator
 
 # Default scale factor is 10,000 (from FixedPriceScaleProvider)

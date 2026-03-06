@@ -1,4 +1,3 @@
-import asyncio
 import json
 from pathlib import Path
 
@@ -73,4 +72,3 @@ def test_deadletter_read_all_skips_bad_lines(tmp_path: Path) -> None:
     entries = dlq.read_all()
     assert len(entries) == 1
     assert entries[0].order_id == "o1"
-

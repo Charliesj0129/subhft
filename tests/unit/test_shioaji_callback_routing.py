@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from unittest.mock import MagicMock
 
 from hft_platform.feed_adapter import shioaji_client as mod
