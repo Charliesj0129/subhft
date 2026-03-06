@@ -148,6 +148,9 @@ make deploy-drift-check BASELINE=outputs/deploy_guard/snapshots/<baseline>.json
 make release-channel-gate CHANGE_ID=CHG-YYYYMMDD-XX
 make release-channel-promote CHANGE_ID=CHG-YYYYMMDD-XX ACTOR=ops
 
+# optional: single fail-closed gate for the first operational release
+HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-gate CHANGE_ID=CHG-YYYYMMDD-XX
+
 # 6) monthly reliability review pack（例行，含 query-guard / feature-canary / callback-latency 稽核）
 make reliability-monthly-pack MONTH=YYYY-MM RUN_DRILL=1 QUERY_GUARD_MIN_RUNS=1 QUERY_GUARD_MIN_SUITE_RUNS=1 FEATURE_CANARY_MIN_RUNS=1 CALLBACK_LATENCY_MIN_RUNS=1
 
