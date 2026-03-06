@@ -1,8 +1,9 @@
 """Unit tests for alpha_mhp (Multivariate Hawkes Process) module (T2 coverage)."""
+
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 
 numba = pytest.importorskip("numba", reason="numba required for alpha_mhp")
 
@@ -16,7 +17,7 @@ def test_module_imports():
 
 def test_mhp_tracker_initial_intensities():
     """MHPTracker should initialize intensities equal to mu."""
-    from hft_platform.strategies.alpha.alpha_mhp import MHPTracker, NUM_ASSETS
+    from hft_platform.strategies.alpha.alpha_mhp import MHPTracker
 
     mu = np.array([1.0, 2.0], dtype=np.float64)
     alpha = np.array([[0.5, 0.1], [0.8, 0.5]], dtype=np.float64)
@@ -38,7 +39,7 @@ def test_mhp_tracker_decay_reduces_intensity():
     tracker = MHPTracker(mu, alpha, beta)
 
     # Initialize last_ts[0] to a non-zero value (0 is first-call sentinel)
-    tracker.update_decay(0, 1_000_000_000)   # first call: sets last_ts[0]
+    tracker.update_decay(0, 1_000_000_000)  # first call: sets last_ts[0]
     # Manually elevate intensity for the actual decay test
     tracker.intensities[0] = 5.0
     # Now decay 1 second later (from 1_000_000_000)
@@ -66,5 +67,3 @@ def test_mhp_strategy_callable():
     from hft_platform.strategies.alpha.alpha_mhp import mhp_strategy
 
     assert callable(mhp_strategy)
-
-

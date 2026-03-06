@@ -2,7 +2,7 @@
 
 Date: 2026-02-21
 Scope: Vector 2 (Order/Risk Gateway) + Vector 3 (Async WAL Separation)
-Status: CE-M2 and CE-M3 core modules implemented. Hardening backlog items remain.
+Status: CE-M2 and CE-M3 hardening items implemented (evidence synced 2026-03-05).
 
 ## 1. Planning Rules
 
@@ -36,10 +36,10 @@ Exit criteria:
 | CE2-06 | Add gateway fail-safe policy (reject/degrade/halt) and config flags | P1 | 2d | CE2-03 | TBD | ✅ Implemented |
 | CE2-10 | Isolate Shioaji callbacks to enqueue-only fast path | P0 | 3d | CE2-03 | TBD | ✅ Implemented |
 | CE2-12 | ExposureStore memory bound (symbol cardinality limit + eviction) | P0 | 1d | CE2-04 | TBD | ✅ Implemented |
-| CE2-07 | Add gateway metrics/alerts/dashboard and SLO definitions | P1 | 2d | CE2-03, CE2-06 | TBD | 🔄 TODO |
-| CE2-09 | Add active/standby gateway failover and leader lease control | P0 | 4d | CE2-03, CE2-05, CE2-06 | TBD | 🔄 TODO |
-| CE2-11 | Enforce quote schema lock (`quote_version=v1`) with guardrails | P0 | 2d | CE2-10 | TBD | 🔄 TODO |
-| CE2-08 | Multi-runner integration test and chaos test for gateway outages | P0 | 3d | CE2-04, CE2-05, CE2-06, CE2-09, CE2-10, CE2-11 | TBD | 🔄 TODO |
+| CE2-07 | Add gateway metrics/alerts/dashboard and SLO definitions | P1 | 2d | CE2-03, CE2-06 | TBD | ✅ Implemented |
+| CE2-09 | Add active/standby gateway failover and leader lease control | P0 | 4d | CE2-03, CE2-05, CE2-06 | TBD | ✅ Implemented |
+| CE2-11 | Enforce quote schema lock (`quote_version=v1`) with guardrails | P0 | 2d | CE2-10 | TBD | ✅ Implemented |
+| CE2-08 | Multi-runner integration test and chaos test for gateway outages | P0 | 3d | CE2-04, CE2-05, CE2-06, CE2-09, CE2-10, CE2-11 | TBD | ✅ Implemented |
 
 ### 2.2 Issue Specs
 
@@ -252,11 +252,11 @@ Exit criteria:
 
 ## 4. Execution Order (Updated 2026-02-21)
 
-Completed steps are marked ✅; remaining steps start from first 🔄 item.
+Completed steps are marked ✅.
 
 **CE-M2** (Gateway):
 ✅ CE2-01 → ✅ CE2-02 → ✅ CE2-03 → ✅ CE2-04 → ✅ CE2-05 → ✅ CE2-06 → ✅ CE2-10 → ✅ CE2-12
-→ 🔄 CE2-07 → 🔄 CE2-09 → 🔄 CE2-11 → 🔄 CE2-08
+→ ✅ CE2-07 → ✅ CE2-09 → ✅ CE2-11 → ✅ CE2-08
 
 **CE-M3** (WAL-First):
 ✅ CE3-01 → ✅ CE3-02 → ✅ CE3-05 → ✅ CE3-04 → ✅ CE3-03 → ✅ CE3-06 → ✅ CE3-07
@@ -291,18 +291,18 @@ Use this section as the operator-facing review list during rollout.
 - [✅] [CE3-06] WAL SLO metrics + alerts + dashboard (`observability/metrics.py`, `config/monitoring/alerts/rules.yaml`, `config/monitoring/dashboards/gateway_wal_slo.json`)
 - [✅] [CE3-07] Outage drill test suite + runbook (`tests/integration/test_wal_outage_drills.py`, `docs/runbooks/wal-first-outage-drills.md`)
 
-**Still TODO**:
-- [ ] [CE2-07] Gateway metrics/SLO dashboard.
-- [ ] [CE2-09] Gateway HA controller + leader lease adapter + failover runbook.
-- [ ] [CE2-11] Quote schema guard (`v1`) + startup/runtime validation.
-- [ ] [CE2-08] Multi-runner chaos test.
+**Hardening closeout (2026-03-05)**:
+- [✅] [CE2-07] Gateway metrics/SLO dashboard (`gateway_wal_slo.json`, alerts + metrics wiring).
+- [✅] [CE2-09] Gateway HA controller + leader lease adapter + failover runbook (`gateway/leader_lease.py`, `runbooks/gateway-ha-failover.md`).
+- [✅] [CE2-11] Quote schema guard (`v1`) + startup/runtime validation (`quote_runtime.py`, `test_shioaji_full_mock.py`).
+- [✅] [CE2-08] Multi-runner chaos test (`tests/integration/test_gateway_multi_runner.py`).
 
-### 6.2 Validation (TODO)
+### 6.2 Validation (Current)
 
-- [ ] [V-GW-EXPOSURE-LIMIT] Add 10,001 unique symbols, verify `ExposureLimitError` raised after zero-balance eviction (unit test added 2026-02-21 ✅).
-- [ ] [V-GW-FAILOVER] Kill active gateway and verify standby promotes without duplicate orders.
-- [ ] [V-GW-IDEMPOTENCY] Replay same `idempotency_key` intents and verify no second broker dispatch.
-- [ ] [V-CALLBACK-LATENCY] Confirm callback thread P99 latency within budget and no heavy parsing in callback stack.
-- [ ] [V-QUOTE-V1] Inject schema mismatch payload and verify reject + alert + metric emission.
+- [x] [V-GW-EXPOSURE-LIMIT] Add 10,001 unique symbols, verify `ExposureLimitError` raised after zero-balance eviction (unit test added 2026-02-21 ✅).
+- [x] [V-GW-FAILOVER] Kill active gateway and verify standby promotes without duplicate orders.
+- [x] [V-GW-IDEMPOTENCY] Replay same `idempotency_key` intents and verify no second broker dispatch.
+- [x] [V-CALLBACK-LATENCY] Confirm callback thread P99 latency within budget and no heavy parsing in callback stack (`shioaji_quote_callback_ingress_latency_ns` + `scripts/callback_latency_guard.py` + `make callback-latency-report`).
+- [x] [V-QUOTE-V1] Inject schema mismatch payload and verify reject + alert + metric emission.
 - [x] [V-WAL-OUTAGE] Bring ClickHouse down/slow, verify runtime continues and WAL grows; restore and verify drain.
 - [x] [V-WAL-DUP] Re-run same WAL shard batch and verify dedup prevents duplicate business records.

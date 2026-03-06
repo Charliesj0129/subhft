@@ -1,8 +1,9 @@
 """Unit tests for alpha_deep_hawkes (LSTM-based Hawkes) module (T2 coverage)."""
+
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 
 numba = pytest.importorskip("numba", reason="numba required for alpha_deep_hawkes")
 
@@ -16,7 +17,7 @@ def test_module_imports():
 
 def test_lstm_tracker_initial_state():
     """LSTMTracker should initialize with zero hidden/cell state and zero intensity."""
-    from hft_platform.strategies.alpha.alpha_deep_hawkes import LSTMTracker, HIDDEN_DIM
+    from hft_platform.strategies.alpha.alpha_deep_hawkes import HIDDEN_DIM, LSTMTracker
 
     tracker = LSTMTracker()
     np.testing.assert_allclose(tracker.h, np.zeros(HIDDEN_DIM))
@@ -47,8 +48,9 @@ def test_lstm_tracker_step_produces_nonneg_intensity():
 
 def test_lstm_tracker_step_changes_state():
     """step() should change hidden state from zero."""
-    from hft_platform.strategies.alpha.alpha_deep_hawkes import LSTMTracker
     import numpy as np
+
+    from hft_platform.strategies.alpha.alpha_deep_hawkes import LSTMTracker
 
     tracker = LSTMTracker()
     tracker.update(0)
@@ -63,5 +65,3 @@ def test_strategy_function_exists():
     from hft_platform.strategies.alpha.alpha_deep_hawkes import strategy
 
     assert callable(strategy)
-
-

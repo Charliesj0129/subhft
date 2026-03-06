@@ -375,8 +375,8 @@ Not done yet (still TODO):
 - `✅ LANDED` Runtime feature-plane latency/update/quality metrics skeleton added (sampling + counters)
 - `✅ LANDED` Shadow parity metric names registered and runtime sampled compare/emit path implemented in `MarketDataService` (feature-flagged)
 - `✅ LANDED` Prototype runbook added for shadow/canary + reset/gap/schema mismatch incidents
-- `🟡 PROTOTYPE` Canary criteria are documented but not enforced by runtime/ops automation
-- `🔄 TODO` Add dashboard/alert wiring and canary decision automation
+- `✅ LANDED` Dashboard/alert wiring and canary decision automation (`feature_plane_slo.json`, feature alerts, `feature_canary_guard.py`)
+- `🟡 PROTOTYPE` Canary enforcement currently由 ops gate 執行；尚未整合為 runtime 內建強制封鎖策略
 
 ## 12. Dependency Order (Recommended Execution Sequence)
 

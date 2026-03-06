@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import time
 from unittest.mock import MagicMock, patch
 
 from hft_platform.services.bootstrap import SystemBootstrapper, _encode_resp, _read_resp
@@ -40,13 +39,13 @@ def test_runtime_role_normalization():
         assert bootstrapper._get_runtime_role() == "wal_loader"
 
 
-def test_check_session_ownership_warn_only_conflict():
+def test_check_session_ownership_conflict_does_not_override():
     bootstrapper = SystemBootstrapper({})
 
     class _DummySock:
         def __init__(self):
-            # GET -> bulk string "other-owner", SETEX -> +OK
-            self._stream = io.BytesIO(b"$11\r\nother-owner\r\n+OK\r\n")
+            # GET -> "other-owner", TTL -> 120
+            self._stream = io.BytesIO(b"$11\r\nother-owner\r\n:120\r\n")
             self.sent: list[bytes] = []
 
         def __enter__(self):
@@ -74,11 +73,50 @@ def test_check_session_ownership_warn_only_conflict():
         patch("hft_platform.services.bootstrap.socket.create_connection", return_value=dummy_sock),
         patch("hft_platform.observability.metrics.MetricsRegistry.get", return_value=metrics),
     ):
-        bootstrapper._check_session_ownership("engine")
+        owned = bootstrapper._check_session_ownership("engine")
 
-    assert len(dummy_sock.sent) == 2
+    assert owned is False
+    assert any(b"GET" in cmd for cmd in dummy_sock.sent)
+    assert any(b"TTL" in cmd for cmd in dummy_sock.sent)
+    assert not any(b"SETEX" in cmd for cmd in dummy_sock.sent)
     conflict_counter.labels.assert_called_once_with(role="engine")
     conflict_counter.labels.return_value.inc.assert_called_once()
+
+
+def test_check_session_ownership_cleans_stale_owner_and_acquires():
+    bootstrapper = SystemBootstrapper({})
+
+    class _DummySock:
+        def __init__(self):
+            # GET -> owner, TTL -> -1(stale), GET verify owner, DEL -> :1, GET -> nil, SETEX -> +OK
+            self._stream = io.BytesIO(b"$11\r\nother-owner\r\n:-1\r\n$11\r\nother-owner\r\n:1\r\n$-1\r\n+OK\r\n")
+            self.sent: list[bytes] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def settimeout(self, timeout):
+            return None
+
+        def makefile(self, mode):
+            return self._stream
+
+        def sendall(self, payload: bytes):
+            self.sent.append(payload)
+
+    dummy_sock = _DummySock()
+    with (
+        patch.dict("os.environ", {"HFT_RUNTIME_INSTANCE_ID": "self-owner"}, clear=False),
+        patch("hft_platform.services.bootstrap.socket.create_connection", return_value=dummy_sock),
+    ):
+        owned = bootstrapper._check_session_ownership("engine")
+
+    assert owned is True
+    assert any(b"DEL" in cmd for cmd in dummy_sock.sent)
+    assert any(b"SETEX" in cmd for cmd in dummy_sock.sent)
 
 
 def test_resp_module_level_helpers():
@@ -146,6 +184,7 @@ def test_lease_refresh_thread_starts_and_stops():
 
     bootstrapper._stop_lease_refresh_thread()
     assert bootstrapper._lease_refresh_running is False
+    assert bootstrapper._lease_refresh_thread is None
 
 
 def test_teardown_sends_del():
@@ -157,7 +196,7 @@ def test_teardown_sends_del():
 
     class _MockSock:
         def __init__(self):
-            self._stream = io.BytesIO(b":1\r\n")
+            self._stream = io.BytesIO(b"$10\r\ntest-owner\r\n:1\r\n")
 
         def __enter__(self):
             return self
@@ -174,7 +213,45 @@ def test_teardown_sends_del():
         def sendall(self, data):
             sent_commands.append(data)
 
-    with patch("hft_platform.services.bootstrap.socket.create_connection", return_value=_MockSock()):
+    with (
+        patch.dict("os.environ", {"HFT_RUNTIME_INSTANCE_ID": "test-owner"}, clear=False),
+        patch("hft_platform.services.bootstrap.socket.create_connection", return_value=_MockSock()),
+    ):
         bootstrapper.teardown()
 
     assert any(b"DEL" in cmd for cmd in sent_commands)
+
+
+def test_teardown_skips_del_when_not_owner():
+    bootstrapper = SystemBootstrapper({})
+    bootstrapper._last_role = "engine"
+
+    sent_commands: list[bytes] = []
+
+    class _MockSock:
+        def __init__(self):
+            self._stream = io.BytesIO(b"$11\r\nother-owner\r\n")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def settimeout(self, t):
+            pass
+
+        def makefile(self, mode):
+            return self._stream
+
+        def sendall(self, data):
+            sent_commands.append(data)
+
+    with (
+        patch.dict("os.environ", {"HFT_RUNTIME_INSTANCE_ID": "test-owner"}, clear=False),
+        patch("hft_platform.services.bootstrap.socket.create_connection", return_value=_MockSock()),
+    ):
+        bootstrapper.teardown()
+
+    assert any(b"GET" in cmd for cmd in sent_commands)
+    assert not any(b"DEL" in cmd for cmd in sent_commands)

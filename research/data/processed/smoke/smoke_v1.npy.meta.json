@@ -1,0 +1,98 @@
+{
+  "created_at": "2026-03-06T03:49:42.371513+00:00",
+  "data_file": "/home/charlie/hft_platform/research/data/processed/smoke/smoke_v1.npy",
+  "data_fingerprint": "1a69ca430f7ef4c6a26044cf7f935635390a3d1095d82e561c7fb13643fceeaf",
+  "data_ul": 5,
+  "dataset_id": "synthetic_lob_smoke_v1_seed7",
+  "fields": [
+    "bid_qty",
+    "ask_qty",
+    "bid_px",
+    "ask_px",
+    "mid_price",
+    "spread_bps",
+    "volume",
+    "local_ts"
+  ],
+  "generator": "synth_lob_gen",
+  "generator_script": "research/tools/synth_lob_gen.py",
+  "generator_version": "smoke_v1",
+  "lineage": {
+    "derived_from": "SyntheticLOBConfigV2(rng_seed=7)",
+    "parent": null
+  },
+  "model_type": "ou_hawkes_markov",
+  "owner": "release",
+  "paper_refs": [
+    "026",
+    "039",
+    "120",
+    "121",
+    "122",
+    "123"
+  ],
+  "parameters": {
+    "hawkes_baseline": [
+      8.0,
+      5.0,
+      15.0
+    ],
+    "hawkes_decay": 0.05,
+    "hawkes_excitation": 0.4,
+    "jump_rate": 0.01,
+    "jump_sigma": 0.2,
+    "n_rows": 512,
+    "ou_mu": [
+      0.15,
+      0.0,
+      0.0
+    ],
+    "ou_sigma": [
+      0.04,
+      0.025,
+      0.1
+    ],
+    "ou_theta": [
+      0.02,
+      0.15,
+      0.05
+    ],
+    "price_impact_beta": 0.08,
+    "regime_min_ticks": 50,
+    "regime_transition": [
+      [
+        0.7,
+        0.2,
+        0.1
+      ],
+      [
+        0.15,
+        0.75,
+        0.1
+      ],
+      [
+        0.1,
+        0.25,
+        0.65
+      ]
+    ],
+    "rng_seed": 7,
+    "spread_mean_bps": 5.0,
+    "spread_recovery_gamma": 0.1,
+    "tick_interval_ms": 2.0
+  },
+  "regimes_covered": [
+    "mean_reverting",
+    "trending"
+  ],
+  "rng_seed": 7,
+  "rows": 512,
+  "schema_version": 1,
+  "seed": 7,
+  "source": "synthetic_lob_gen",
+  "source_type": "synthetic",
+  "split": "smoke",
+  "symbols": [
+    "TXF"
+  ]
+}

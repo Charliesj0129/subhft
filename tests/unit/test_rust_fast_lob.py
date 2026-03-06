@@ -3,7 +3,6 @@ import math
 import numpy as np
 import pytest
 
-
 try:
     from hft_platform import rust_core as _rust_core
 except Exception:
@@ -53,13 +52,14 @@ def test_scale_book_seq_parity():
     prices = [100.0, 0.0, 99.5, 99.0]
     vols = [10, 5, 8, 6]
     scale = 100
-    expected = np.array(
-        [[int(100.0 * scale), 10], [int(99.5 * scale), 8], [int(99.0 * scale), 6]], dtype=np.int64
-    )
+    expected = np.array([[int(100.0 * scale), 10], [int(99.5 * scale), 8], [int(99.0 * scale), 6]], dtype=np.int64)
     result = _rust_core.scale_book_seq(prices, vols, scale)
     np.testing.assert_array_equal(result, expected)
 
-@pytest.mark.skipif(_rust_core is None or not hasattr(_rust_core, "scale_book_pair"), reason="rust_core scale_book_pair not available")
+
+@pytest.mark.skipif(
+    _rust_core is None or not hasattr(_rust_core, "scale_book_pair"), reason="rust_core scale_book_pair not available"
+)
 def test_scale_book_pair_parity():
     bid_prices = [100.0, 99.5, 0.0]
     bid_vols = [10, 8, 7]

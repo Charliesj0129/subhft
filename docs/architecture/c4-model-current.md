@@ -292,12 +292,12 @@ flowchart LR
 CE-M2 core implemented 2026-02-21. Enabled via `HFT_GATEWAY_ENABLED=1`.
 Issue backlog: `.agent/library/cluster-evolution-backlog.md` § 2.
 
-**Hardening TODO checklist**:
+**Hardening checklist**:
 
-- [ ] [CE2-07] Add `gateway_dispatch_latency_ns`, `gateway_reject_total`, `gateway_dedup_hits_total` to Prometheus + dashboard
-- [ ] [CE2-08] Chaos test: multi-runner + gateway outage, verify no duplicate broker dispatch
-- [ ] [CE2-09] Active/standby gateway HA with leader lease; only leader dispatches to broker
-- [ ] [CE2-11] `quote_version=v1` enforced with schema guard and reject-and-alert on mismatch
+- [x] [CE2-07] Add `gateway_dispatch_latency_ns`, `gateway_reject_total`, `gateway_dedup_hits_total` to Prometheus + dashboard
+- [x] [CE2-08] Chaos test: multi-runner + gateway outage, verify no duplicate broker dispatch
+- [x] [CE2-09] Active/standby gateway HA with leader lease; only leader dispatches to broker
+- [x] [CE2-11] `quote_version=v1` enforced with schema guard and reject-and-alert on mismatch
 
 **Implemented components**:
 
@@ -312,12 +312,12 @@ Issue backlog: `.agent/library/cluster-evolution-backlog.md` § 2.
 CE-M3 core implemented 2026-02-21. Enabled via `HFT_RECORDER_MODE=wal_first`.
 Issue backlog: `.agent/library/cluster-evolution-backlog.md` § 3.
 
-**Hardening TODO checklist**:
+**Hardening checklist**:
 
-- [ ] [CE3-03] Scale-out WAL loader workers with shard-claim protocol + integration tests (2 loaders, no dup inserts)
-- [ ] [CE3-04] Full replay safety contract tests: ordering + dedup + manifest under restart/crash
-- [ ] [CE3-06] WAL SLO metrics: backlog size, replay lag, replay throughput, drain ETA — dashboard
-- [ ] [CE3-07] Outage drills: ClickHouse down, slow, WAL disk-full, loader restart + recovery runbook
+- [x] [CE3-03] Scale-out WAL loader workers with shard-claim protocol + integration tests (2 loaders, no dup inserts)
+- [x] [CE3-04] Full replay safety contract tests: ordering + dedup + manifest under restart/crash
+- [x] [CE3-06] WAL SLO metrics: backlog size, replay lag, replay throughput, drain ETA — dashboard
+- [x] [CE3-07] Outage drills: ClickHouse down, slow, WAL disk-full, loader restart + recovery runbook
 
 **Implemented components**:
 

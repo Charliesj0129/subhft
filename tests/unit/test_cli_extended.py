@@ -84,8 +84,10 @@ def test_cmd_diag(capsys):
 def test_cmd_diag_timeline(tmp_path, capsys):
     trace_file = tmp_path / "t.jsonl"
     trace_file.write_text(
-        json.dumps({"ts_ns": 1, "stage": "md_event", "trace_id": "x", "payload": {"a": 1}}) + "\n"
-        + json.dumps({"ts_ns": 2, "stage": "risk_approve", "trace_id": "x", "payload": {"b": 2}}) + "\n",
+        json.dumps({"ts_ns": 1, "stage": "md_event", "trace_id": "x", "payload": {"a": 1}})
+        + "\n"
+        + json.dumps({"ts_ns": 2, "stage": "risk_approve", "trace_id": "x", "payload": {"b": 2}})
+        + "\n",
         encoding="utf-8",
     )
     cli.cmd_diag(
@@ -329,7 +331,9 @@ def test_cmd_run_downgrades_live(monkeypatch, capsys):
         coro.close()
 
     monkeypatch.setattr(cli, "asyncio", types.SimpleNamespace(run=_run))
-    monkeypatch.setitem(sys.modules, "prometheus_client", _types.SimpleNamespace(start_http_server=lambda *_a, **_k: None))
+    monkeypatch.setitem(
+        sys.modules, "prometheus_client", _types.SimpleNamespace(start_http_server=lambda *_a, **_k: None)
+    )
 
     args = Namespace(
         mode="live",
@@ -472,7 +476,9 @@ def test_cmd_alpha_search_random(monkeypatch, capsys, tmp_path):
             assert n_trials == 5
             return [_Result()]
 
-    monkeypatch.setitem(sys.modules, "research.combinatorial.search_engine", types.SimpleNamespace(AlphaSearchEngine=_Engine))
+    monkeypatch.setitem(
+        sys.modules, "research.combinatorial.search_engine", types.SimpleNamespace(AlphaSearchEngine=_Engine)
+    )
     args = Namespace(
         mode="random",
         data=str(path),
@@ -581,7 +587,11 @@ def test_cmd_alpha_promote(monkeypatch, capsys, tmp_path):
 
         @staticmethod
         def to_dict():
-            return {"alpha_id": "ofi_mc", "approved": True, "promotion_config_path": "config/strategy_promotions/x/ofi_mc.yaml"}
+            return {
+                "alpha_id": "ofi_mc",
+                "approved": True,
+                "promotion_config_path": "config/strategy_promotions/x/ofi_mc.yaml",
+            }
 
     def _promote_alpha(cfg):
         calls["promote_called"] = isinstance(cfg, _PromotionConfig)
@@ -633,7 +643,11 @@ def test_cmd_alpha_rl_promote(monkeypatch, capsys, tmp_path):
 
         @staticmethod
         def to_dict():
-            return {"alpha_id": "rl_ofi", "approved": True, "promotion_config_path": "config/strategy_promotions/x/rl_ofi.yaml"}
+            return {
+                "alpha_id": "rl_ofi",
+                "approved": True,
+                "promotion_config_path": "config/strategy_promotions/x/rl_ofi.yaml",
+            }
 
     def _promote_latest_rl_run(**kwargs):
         calls["kwargs"] = kwargs
@@ -806,7 +820,9 @@ def test_cmd_alpha_experiments_compare(monkeypatch, capsys, tmp_path):
             assert run_ids == ["r1", "r2"]
             return [{"run_id": "r1"}, {"run_id": "r2"}]
 
-    monkeypatch.setitem(sys.modules, "hft_platform.alpha.experiments", types.SimpleNamespace(ExperimentTracker=_Tracker))
+    monkeypatch.setitem(
+        sys.modules, "hft_platform.alpha.experiments", types.SimpleNamespace(ExperimentTracker=_Tracker)
+    )
 
     out_file = tmp_path / "compare.json"
     args = Namespace(base_dir="research/experiments", run_ids=["r1", "r2"], out=str(out_file))
@@ -830,7 +846,9 @@ def test_cmd_alpha_experiments_list(monkeypatch, capsys, tmp_path):
             assert alpha_id == "ofi_mc"
             return [_Run()]
 
-    monkeypatch.setitem(sys.modules, "hft_platform.alpha.experiments", types.SimpleNamespace(ExperimentTracker=_Tracker))
+    monkeypatch.setitem(
+        sys.modules, "hft_platform.alpha.experiments", types.SimpleNamespace(ExperimentTracker=_Tracker)
+    )
     out_file = tmp_path / "list.json"
     args = Namespace(base_dir="research/experiments", alpha_id="ofi_mc", out=str(out_file))
     cli.cmd_alpha_experiments_list(args)
@@ -851,7 +869,9 @@ def test_cmd_alpha_experiments_best(monkeypatch, capsys, tmp_path):
             assert alpha_id == "ofi_mc"
             return [{"run_id": "r2", "value": 1.5}]
 
-    monkeypatch.setitem(sys.modules, "hft_platform.alpha.experiments", types.SimpleNamespace(ExperimentTracker=_Tracker))
+    monkeypatch.setitem(
+        sys.modules, "hft_platform.alpha.experiments", types.SimpleNamespace(ExperimentTracker=_Tracker)
+    )
 
     out_file = tmp_path / "best.json"
     args = Namespace(

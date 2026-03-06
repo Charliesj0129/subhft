@@ -228,6 +228,81 @@ def test_promote_alpha_to_dict_includes_checklist(tmp_path: Path):
     assert len(d["checklist"]["items"]) == 7
 
 
+def test_promote_alpha_writes_paper_governance_artifact(tmp_path: Path):
+    scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
+    _write_scorecard(scorecard, sharpe=1.4, max_drawdown=-0.1, turnover=0.2, corr=0.2)
+
+    summary_path = tmp_path / "paper_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "alpha_id": "ofi_mc",
+                "session_count": 6,
+                "distinct_trading_days": 5,
+                "calendar_span_days": 7,
+                "min_session_duration_seconds": 3600,
+                "invalid_session_duration_count": 0,
+                "drift_alerts_total": 0,
+                "execution_reject_rate_mean": 0.001,
+                "execution_reject_rate_p95": 0.003,
+                "regimes_covered": ["trending", "mean_reverting"],
+            }
+        )
+    )
+
+    result = promote_alpha(
+        PromotionConfig(
+            alpha_id="ofi_mc",
+            owner="charlie",
+            project_root=str(tmp_path),
+            require_paper_trade_governance=True,
+            paper_trade_summary_path=str(summary_path),
+            min_shadow_sessions=5,
+            min_paper_trade_calendar_days=7,
+            min_paper_trade_trading_days=5,
+        )
+    )
+    assert result.paper_governance_report_path is not None
+    governance_path = Path(result.paper_governance_report_path)
+    assert governance_path.exists()
+    governance = json.loads(governance_path.read_text())
+    assert governance["passed"] is True
+    assert governance["checks"]["execution_reject_rate"]["source"] == "p95"
+    assert governance["checks"]["regime_span"]["pass"] is True
+
+    decision = json.loads(Path(result.promotion_decision_path).read_text())
+    assert decision["paper_governance_report_path"] == str(governance_path)
+    assert decision["paper_governance_passed"] is True
+    assert result.to_dict()["paper_governance_report_path"] == str(governance_path)
+
+
+def test_promote_alpha_writes_paper_governance_artifact_when_summary_missing(tmp_path: Path):
+    scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
+    _write_scorecard(scorecard, sharpe=1.4, max_drawdown=-0.1, turnover=0.2, corr=0.2)
+
+    result = promote_alpha(
+        PromotionConfig(
+            alpha_id="ofi_mc",
+            owner="charlie",
+            project_root=str(tmp_path),
+            require_paper_trade_governance=True,
+        )
+    )
+    assert not result.approved
+    assert result.paper_governance_report_path is not None
+
+    governance_path = Path(result.paper_governance_report_path)
+    governance = json.loads(governance_path.read_text())
+    assert governance["passed"] is False
+    assert governance["summary"] is None
+    assert governance["paper_trade_summary_source"] == "tracker"
+    assert governance["paper_trade_summary_error"] == "paper_trade_sessions_missing"
+
+    decision = json.loads(Path(result.promotion_decision_path).read_text())
+    assert decision["paper_governance_report_path"] == str(governance_path)
+    assert decision["paper_governance_passed"] is False
+
+
 def test_promote_alpha_requires_paper_trade_summary_when_governed(tmp_path: Path):
     scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
     _write_scorecard(scorecard, sharpe=1.3, max_drawdown=-0.1, turnover=0.3, corr=0.2)
@@ -429,8 +504,8 @@ def test_gate_e_uses_p95_reject_rate_from_summary(tmp_path: Path):
         "fills": 10,
         "pnl_bps": 1.5,
         "drift_alerts": 0,
-        "execution_reject_rate": 0.001,   # mean is fine
-        "reject_rate_p95": 0.05,          # P95 exceeds 0.01 threshold
+        "execution_reject_rate": 0.001,  # mean is fine
+        "reject_rate_p95": 0.05,  # P95 exceeds 0.01 threshold
         "notes": "",
     }
     (summary_dir / "2026-02-01_abc.json").write_text(json.dumps(session))
@@ -477,7 +552,7 @@ def test_gate_e_falls_back_to_mean_when_p95_absent(tmp_path: Path):
         "pnl_bps": 1.5,
         "drift_alerts": 0,
         "execution_reject_rate": 0.005,  # mean within threshold
-        "reject_rate_p95": None,          # no P95 → fall back to mean
+        "reject_rate_p95": None,  # no P95 → fall back to mean
         "notes": "",
     }
     (summary_dir / "2026-02-01_def.json").write_text(json.dumps(session))

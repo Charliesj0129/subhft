@@ -1,4 +1,3 @@
-
 import os
 import sys
 
@@ -16,6 +15,7 @@ try:
 except ImportError:
     pytest.fail("Could not import hft_platform.rust_core. Ensure maturin develop was run.")
 
+
 def test_transient_parity_rust_vs_numba():
     """
     Verify that the Rust implementation of TransientReprice
@@ -29,8 +29,8 @@ def test_transient_parity_rust_vs_numba():
     mid_price = 100.0 + np.cumsum(np.random.randn(n) * 0.1)
     spread = 0.02
 
-    bid_p = mid_price - spread/2
-    ask_p = mid_price + spread/2
+    bid_p = mid_price - spread / 2
+    ask_p = mid_price + spread / 2
 
     # Volumes (not used in this factor but passed potentially)
     bid_v = np.ones(n)
@@ -69,10 +69,12 @@ def test_transient_parity_rust_vs_numba():
     # signal initialized to zeros.
     # So both should have zeros in first k elements.
 
-    np.testing.assert_allclose(py_result[k:], rust_result[k:], rtol=1e-10, atol=1e-10,
-                               err_msg="Rust TransientReprice deviation")
+    np.testing.assert_allclose(
+        py_result[k:], rust_result[k:], rtol=1e-10, atol=1e-10, err_msg="Rust TransientReprice deviation"
+    )
 
     print("\nParity Confirmed: Python == Rust")
+
 
 if __name__ == "__main__":
     test_transient_parity_rust_vs_numba()

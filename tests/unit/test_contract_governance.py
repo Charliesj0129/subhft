@@ -133,9 +133,7 @@ def test_refresh_diff_logged(tmp_path: Path):
 
     cache_path = tmp_path / "contracts.json"
     # Seed with 2 old contracts
-    cache_path.write_text(
-        json.dumps({"cache_version": 1, "contracts": [{"code": "2330"}, {"code": "2454"}]})
-    )
+    cache_path.write_text(json.dumps({"cache_version": 1, "contracts": [{"code": "2330"}, {"code": "2454"}]}))
 
     from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 

@@ -54,6 +54,7 @@ GITKEEP_DIRS: tuple[str, ...] = (
 )
 
 ALLOWED_ROOT_DIRS: set[str] = {
+    ".benchmarks",
     "__pycache__",  # tolerated; clean command removes it
     "alphas",
     "arxiv_paper",
@@ -91,6 +92,7 @@ CORE_TOOL_FILES: set[str] = {
     "feature_benchmark_matrix.py",
     "feature_promotion_check.py",
     "fetch_paper.py",
+    "latency_profiles.py",
     "maintenance.py",
     "paper_autofill.py",
     "paper_prototype.py",
@@ -754,6 +756,117 @@ def cmd_optimize(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_gate_c(args: argparse.Namespace) -> int:
+    """Run Gate A → B → C for a single alpha and print the scorecard summary."""
+    from research.registry.alpha_registry import AlphaRegistry
+    from research.tools.latency_profiles import load_latency_profile
+    from src.hft_platform.alpha.validation import ValidationConfig, run_gate_a, run_gate_b, run_gate_c
+
+    alpha_id: str = str(args.alpha_id)
+    data_paths: list[str] = list(args.data or [])
+    oos_split: float = float(args.oos_split)
+    latency_profile_id: str = str(args.latency_profile)
+    skip_gate_b: bool = bool(getattr(args, "skip_gate_b", False))
+
+    # --- Load latency profile from versioned YAML ---
+    try:
+        latency = load_latency_profile(latency_profile_id)
+    except (KeyError, FileNotFoundError) as exc:
+        print(f"[run-gate-c] ERROR: {exc}")
+        return 1
+
+    opt_threshold_min: float = float(getattr(args, "opt_threshold_min", 0.01))
+    no_opt: bool = bool(getattr(args, "no_opt", False))
+    config = ValidationConfig(
+        alpha_id=alpha_id,
+        data_paths=data_paths,
+        is_oos_split=oos_split,
+        latency_profile_id=latency_profile_id,
+        submit_ack_latency_ms=latency["submit_ack_latency_ms"],
+        modify_ack_latency_ms=latency["modify_ack_latency_ms"],
+        cancel_ack_latency_ms=latency["cancel_ack_latency_ms"],
+        local_decision_pipeline_latency_us=latency["local_decision_pipeline_latency_us"],
+        opt_signal_threshold_min=opt_threshold_min,
+        enable_param_optimization=not no_opt,
+    )
+
+    # --- Discover alpha ---
+    registry = AlphaRegistry()
+    loaded = registry.discover(ROOT / "alphas")
+    if alpha_id not in loaded:
+        print(f"[run-gate-c] ERROR: alpha '{alpha_id}' not found in research/alphas/")
+        print(f"  Available: {sorted(loaded.keys())}")
+        return 1
+
+    alpha_instance = loaded[alpha_id]
+    manifest = alpha_instance.manifest
+
+    # Project root is one level above the research/ directory
+    project_root = ROOT.parent
+
+    # Resolve data paths relative to project root
+    resolved_paths: list[str] = []
+    for p in data_paths:
+        candidate = Path(p)
+        if not candidate.is_absolute():
+            candidate = (project_root / p).resolve()
+        resolved_paths.append(str(candidate))
+
+    print(f"\n[run-gate-c] ── {alpha_id} ────────────────────────────────────────")
+    print(f"  latency_profile : {latency_profile_id}")
+    print(f"  submit_ack_ms   : {latency['submit_ack_latency_ms']}")
+    print(f"  data_paths      : {resolved_paths}")
+
+    # --- Gate A ---
+    gate_a = run_gate_a(manifest, resolved_paths, config=config, root=project_root)
+    status_a = "PASS" if gate_a.passed else "FAIL"
+    print(f"\n[run-gate-c] Gate A → {status_a}")
+    if not gate_a.passed:
+        print(f"  details: {gate_a.details}")
+        return 1
+
+    # --- Gate B ---
+    if skip_gate_b:
+        print("[run-gate-c] Gate B → SKIPPED (--skip-gate-b)")
+    else:
+        gate_b = run_gate_b(alpha_id, project_root)
+        status_b = "PASS" if gate_b.passed else "FAIL"
+        print(f"[run-gate-c] Gate B → {status_b}")
+        if not gate_b.passed:
+            print(f"  stdout tail: {gate_b.details.get('stdout_tail', '')}")
+            print(f"  stderr tail: {gate_b.details.get('stderr_tail', '')}")
+            return 1
+
+    # --- Gate C ---
+    experiments_base = ROOT / "experiments"
+    gate_c_result = run_gate_c(alpha_instance, config, project_root, resolved_paths, experiments_base)
+    gate_c, run_id, config_hash, scorecard_path, experiment_meta_path = gate_c_result
+    status_c = "PASS" if gate_c.passed else "FAIL"
+    print(f"[run-gate-c] Gate C → {status_c}")
+    if scorecard_path:
+        print(f"  scorecard : {scorecard_path}")
+    if run_id:
+        print(f"  run_id    : {run_id}")
+
+    details = gate_c.details
+    sharpe_oos = details.get("sharpe_oos")
+    sharpe_is = details.get("sharpe_is")
+    ic = details.get("ic_mean")
+    wf = details.get("walk_forward_consistency_pct")
+    regime_sharpe = details.get("regime_sharpe", {})
+
+    print(f"\n  Sharpe IS={sharpe_is!r}  OOS={sharpe_oos!r}  IC={ic!r}  WF-consistency={wf!r}")
+    if regime_sharpe:
+        print(f"  regime Sharpe: {regime_sharpe}")
+
+    if not gate_c.passed:
+        print(f"  gate_c details: {details}")
+
+    overall = gate_c.passed
+    print(f"\n[run-gate-c] RESULT: {'PASS ✓' if overall else 'FAIL ✗'}")
+    return 0 if overall else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Research pipeline factory for layout, cleanup, audit, and indexing.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -812,6 +925,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional dataset path scope for data-governance audit during optimize.",
     )
     optimize_cmd.set_defaults(func=cmd_optimize)
+
+    gate_c_cmd = sub.add_parser(
+        "run-gate-c",
+        help="Run Gate A → B → C validation pipeline for a single alpha.",
+    )
+    gate_c_cmd.add_argument("alpha_id", help="Alpha ID (must exist under research/alphas/)")
+    gate_c_cmd.add_argument(
+        "--data",
+        nargs="+",
+        required=True,
+        metavar="PATH",
+        help="One or more .npy data file paths for backtesting.",
+    )
+    gate_c_cmd.add_argument("--oos-split", type=float, default=0.7, help="In-sample / OOS split ratio (default 0.7).")
+    gate_c_cmd.add_argument(
+        "--latency-profile",
+        default="shioaji_sim_p95_v2026-03-04",
+        help="Latency profile ID from config/research/latency_profiles.yaml.",
+    )
+    gate_c_cmd.add_argument(
+        "--skip-gate-b",
+        action="store_true",
+        help="Skip Gate B (pytest) — useful when tests were already run separately.",
+    )
+    gate_c_cmd.add_argument(
+        "--opt-threshold-min",
+        type=float,
+        default=0.01,
+        help="Minimum signal threshold for parameter optimization grid (default 0.01).",
+    )
+    gate_c_cmd.add_argument(
+        "--no-opt",
+        action="store_true",
+        help="Disable parameter optimization (useful when signal has no meaningful threshold).",
+    )
+    gate_c_cmd.set_defaults(func=cmd_run_gate_c)
+
     return parser
 
 

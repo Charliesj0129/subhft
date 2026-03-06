@@ -1,5 +1,5 @@
 """Tests for CE3-02: WALFirstWriter."""
-import asyncio
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

@@ -1,4 +1,3 @@
-
 import numpy as np
 import pytest
 
@@ -8,12 +7,13 @@ factor_registry = pytest.importorskip(
 MatchedFilterTradeFlowFactor = factor_registry.MatchedFilterTradeFlowFactor
 _compute_matched_filter_flow = factor_registry._compute_matched_filter_flow
 
+
 def test_matched_filter_logic():
     """Test that signal uses long-term volume for normalization"""
     # Create synthetic data
     n = 1000
     trade_vol = np.ones(n) * 100.0  # Constant volume
-    trade_side = np.ones(n)         # All buys
+    trade_side = np.ones(n)  # All buys
 
     # Introduce a spike in volume at t=500
     trade_vol[500] = 1000.0
@@ -41,8 +41,9 @@ def test_matched_filter_logic():
     # Matched Filter preserves the MAGNITUDE of the spike because denominator (109) < numerator (1900).
 
     val = signal[500]
-    expected = (9*100 + 1000) / ((99*100 + 1000)/100)
+    expected = (9 * 100 + 1000) / ((99 * 100 + 1000) / 100)
     assert np.isclose(val, expected)
+
 
 def test_factor_class():
     factor = MatchedFilterTradeFlowFactor(window_size=10, slow_window_ratio=10)

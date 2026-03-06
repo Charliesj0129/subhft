@@ -3,6 +3,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
 from hft_platform.order.adapter import OrderAdapter
 

@@ -786,9 +786,7 @@ def test_gate_a_data_ul_achieved_in_details_when_meta_present(tmp_path: Path):
         "parameters": {"n_rows": 8},
         "regimes_covered": ["trending", "mean_reverting"],
     }
-    path.with_suffix(path.suffix + ".meta.json").write_text(
-        json.dumps(meta), encoding="utf-8"
-    )
+    path.with_suffix(path.suffix + ".meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
     manifest = types.SimpleNamespace(
         alpha_id="test_alpha",
@@ -831,9 +829,7 @@ def test_gate_a_data_ul_warns_when_target_not_met(tmp_path: Path):
         "rows": 8,
         "fields": ["best_bid", "best_ask", "qty"],
     }
-    path.with_suffix(path.suffix + ".meta.json").write_text(
-        json.dumps(meta), encoding="utf-8"
-    )
+    path.with_suffix(path.suffix + ".meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
     manifest = types.SimpleNamespace(
         alpha_id="test_alpha",

@@ -35,4 +35,3 @@ def test_rate_limiter_update() -> None:
     assert rl.soft_cap == 3
     assert rl.hard_cap == 4
     assert rl.window_s == 5
-

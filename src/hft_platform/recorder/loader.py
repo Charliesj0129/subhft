@@ -17,7 +17,7 @@ try:
 except ImportError:
     import json
 
-    _dumps = json.dumps  # type: ignore[assignment]
+    _dumps = json.dumps
     _loads = json.loads
 
 import clickhouse_connect
@@ -93,6 +93,10 @@ class WALLoaderService:
         # Corrupt file cleanup configuration (B5)
         self._corrupt_retention_days = int(os.getenv("HFT_CORRUPT_RETENTION_DAYS", "30"))
         self._last_corrupt_cleanup_ts = 0.0
+
+        # Archive cleanup configuration (long-run stability)
+        self._archive_retention_days = int(os.getenv("HFT_ARCHIVE_RETENTION_DAYS", "14"))
+        self._last_archive_cleanup_ts = 0.0
 
         # WAL accumulation monitoring (C5)
         self._wal_size_warning_mb = float(os.getenv("HFT_WAL_SIZE_WARNING_MB", "100"))
@@ -286,6 +290,7 @@ class WALLoaderService:
                 try:
                     self._cleanup_old_dlq_files()
                     self._cleanup_old_corrupt_files()
+                    self._cleanup_old_archive_files()
                 except Exception as e:
                     logger.warning("Cleanup task failed", error=str(e))
 
@@ -410,6 +415,7 @@ class WALLoaderService:
                 try:
                     await asyncio.to_thread(self._cleanup_old_dlq_files)
                     await asyncio.to_thread(self._cleanup_old_corrupt_files)
+                    await asyncio.to_thread(self._cleanup_old_archive_files)
                 except Exception as e:
                     logger.warning("Cleanup task failed", error=str(e))
 
@@ -772,6 +778,12 @@ class WALLoaderService:
             force: If True, skip mtime check and process all files immediately.
                    Used by WAL scheduler for batch flush at market close.
         """
+        # Guard: defer processing until CK client is ready (prevents startup DLQ race
+        # where WALScheduler fires before the main loop establishes a connection).
+        if not self.ch_client:
+            logger.debug("ClickHouse client not ready, deferring WAL processing")
+            return
+
         files = self._get_new_files()
         if not files:
             return
@@ -899,6 +911,44 @@ class WALLoaderService:
         except Exception as e:
             logger.warning("Corrupt file cleanup failed", error=str(e))
 
+    def _cleanup_old_archive_files(self) -> None:
+        """Remove archived WAL files older than retention period to prevent unbounded disk growth."""
+        now = timebase.now_s()
+        if now - self._last_archive_cleanup_ts < self._dlq_cleanup_interval_s:
+            return
+        self._last_archive_cleanup_ts = now
+
+        if not os.path.isdir(self.archive_dir):
+            return
+
+        retention_seconds = self._archive_retention_days * 86400
+        cutoff_ts = now - retention_seconds
+        deleted = 0
+
+        try:
+            for fname in os.listdir(self.archive_dir):
+                if not fname.endswith(".jsonl"):
+                    continue
+                fpath = os.path.join(self.archive_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    if os.path.getmtime(fpath) >= cutoff_ts:
+                        continue
+                    os.remove(fpath)
+                    deleted += 1
+                except Exception as exc:
+                    logger.warning("Failed to clean up archive WAL file", file=fname, error=str(exc))
+
+            if deleted:
+                logger.info(
+                    "Archive file cleanup completed",
+                    deleted=deleted,
+                    retention_days=self._archive_retention_days,
+                )
+        except Exception as exc:
+            logger.warning("Archive file cleanup failed", error=str(exc))
+
     def _check_wal_accumulation(self) -> None:
         """Check WAL directory size and emit metrics (C5)."""
         now = timebase.now_s()
@@ -1001,6 +1051,116 @@ class WALLoaderService:
                     pass
         except Exception as e:
             logger.error("Failed to write to DLQ", table=table, error=str(e))
+
+    def replay_dlq(self, dry_run: bool = False, max_files: int | None = None) -> dict:
+        """Replay DLQ files back into ClickHouse.
+
+        Reads each file in the DLQ directory, strips the _dlq_meta header,
+        and re-inserts the rows.  Successfully replayed files are moved to the
+        archive directory; failures are left in place for manual inspection.
+
+        Args:
+            dry_run: If True, log what would happen but do not insert or move files.
+            max_files: Optional cap on number of DLQ files to process in this invocation.
+
+        Returns:
+            dict with keys ``replayed``, ``skipped``, ``failed``, ``errors``.
+        """
+        if not os.path.isdir(self.dlq_dir):
+            logger.info("DLQ directory does not exist, nothing to replay", dlq_dir=self.dlq_dir)
+            return {"replayed": 0, "skipped": 0, "failed": 0, "errors": []}
+
+        if not self.ch_client and not dry_run:
+            logger.error("Cannot replay DLQ: no ClickHouse client available")
+            return {"replayed": 0, "skipped": 0, "failed": 0, "errors": ["no_client"]}
+
+        replayed = 0
+        skipped = 0
+        failed = 0
+        errors: list[str] = []
+        selected = 0
+
+        file_names = sorted([f for f in os.listdir(self.dlq_dir) if f.endswith(".jsonl")])
+        if isinstance(max_files, int) and max_files > 0:
+            file_names = file_names[:max_files]
+        for fname in file_names:
+            selected += 1
+            fpath = os.path.join(self.dlq_dir, fname)
+
+            # Parse table from filename (strips _dlq_meta prefix handled below)
+            table = self._parse_table_from_filename(fname)
+            if table == "unknown":
+                logger.warning("DLQ replay: unknown table for file", file=fname)
+                skipped += 1
+                continue
+
+            try:
+                rows: list = []
+                with open(fpath, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = _loads(line)
+                        except Exception:
+                            continue
+                        # Skip the metadata header written by _write_to_dlq
+                        if isinstance(obj, dict) and obj.get("_dlq_meta"):
+                            continue
+                        rows.append(obj)
+
+                if not rows:
+                    logger.info("DLQ replay: empty file, archiving", file=fname)
+                    if not dry_run:
+                        shutil.move(fpath, os.path.join(self.archive_dir, fname))
+                    skipped += 1
+                    continue
+
+                logger.info(
+                    "DLQ replay: inserting rows",
+                    file=fname,
+                    table=table,
+                    rows=len(rows),
+                    dry_run=dry_run,
+                )
+
+                if dry_run:
+                    replayed += 1
+                    continue
+
+                success = self.insert_batch(table, rows)
+                if success:
+                    shutil.move(fpath, os.path.join(self.archive_dir, fname))
+                    logger.info("DLQ replay: success, archived", file=fname, rows=len(rows))
+                    replayed += 1
+                else:
+                    logger.error("DLQ replay: insert failed, leaving in DLQ", file=fname)
+                    failed += 1
+                    errors.append(fname)
+
+            except Exception as e:
+                logger.error("DLQ replay: unexpected error", file=fname, error=str(e))
+                failed += 1
+                errors.append(f"{fname}: {e}")
+
+        logger.info(
+            "DLQ replay complete",
+            replayed=replayed,
+            skipped=skipped,
+            failed=failed,
+            dry_run=dry_run,
+            selected=selected,
+            max_files=max_files,
+        )
+        return {
+            "replayed": replayed,
+            "skipped": skipped,
+            "failed": failed,
+            "errors": errors,
+            "selected": selected,
+            "max_files": max_files,
+        }
 
     def _compute_insert_backoff(self, attempt: int) -> float:
         """Compute backoff delay for insert retry."""
@@ -1123,13 +1283,20 @@ class WALLoaderService:
                     if ingest_ts < ts:
                         ingest_ts = ts
 
-                # Minimal validation for missing book data
-                if not bids_price or not asks_price:
+                # Minimal validation for missing book data.
+                # Only warn when exactly ONE side is populated — a genuine data gap.
+                # Suppress for:
+                #   - Tick events (no orderbook by design)
+                #   - Book-cleared events (both sides empty, emitted at market close)
+                row_type = str(r.get("type") or "").strip().lower()
+                has_bids = bool(bids_price)
+                has_asks = bool(asks_price)
+                if row_type != "tick" and has_bids != has_asks:
                     logger.warning(
                         "Missing orderbook side in WAL row",
                         symbol=r.get("symbol"),
-                        has_bids=bool(bids_price),
-                        has_asks=bool(asks_price),
+                        has_bids=has_bids,
+                        has_asks=has_asks,
                     )
 
                 row_data = [
@@ -1312,6 +1479,9 @@ class WALLoaderService:
                         self.ch_client.insert(full_table_name, data, column_names=cols)
                     logger.info("Inserted batch", table=table_alias, count=row_count)
                     if self.metrics:
+                        if hasattr(self.metrics, "recorder_insert_batches_total"):
+                            outcome = "success_no_retry" if attempt == 0 else "success_after_retry"
+                            self.metrics.recorder_insert_batches_total.labels(table=table_alias, result=outcome).inc()
                         if attempt > 0:
                             self.metrics.recorder_insert_retry_total.labels(table=table_alias, result="success").inc()
                         # CE3-06: throughput counter
@@ -1339,6 +1509,10 @@ class WALLoaderService:
                             error=str(last_error),
                         )
                         if self.metrics:
+                            if hasattr(self.metrics, "recorder_insert_batches_total"):
+                                self.metrics.recorder_insert_batches_total.labels(
+                                    table=table_alias, result="failed_after_retry"
+                                ).inc()
                             self.metrics.recorder_insert_retry_total.labels(table=table_alias, result="failed").inc()
                             self.metrics.wal_replay_errors_total.labels(type="insert_failed").inc()
                         return False
@@ -1346,6 +1520,10 @@ class WALLoaderService:
             # No client but we have data - also a "failure" for DLQ purposes
             logger.warning("No ClickHouse client available for insert", table=table_alias, count=len(data))
             if self.metrics:
+                if hasattr(self.metrics, "recorder_insert_batches_total"):
+                    self.metrics.recorder_insert_batches_total.labels(
+                        table=table_alias, result="failed_no_client"
+                    ).inc()
                 self.metrics.wal_replay_errors_total.labels(type="no_client").inc()
             return False
 

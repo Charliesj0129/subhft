@@ -69,15 +69,15 @@ class OrderAdapter:
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
         self.circuit_breaker = CircuitBreaker(threshold=5, timeout_s=60)
         self.order_id_resolver = OrderIdResolver(self.order_id_map)
-        self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))
-        self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))
+        self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))  # noqa: precision-time
+        self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))  # noqa: precision-time
         self._api_max_inflight = int(os.getenv("HFT_API_MAX_INFLIGHT", "16"))
         self._api_semaphore = asyncio.Semaphore(self._api_max_inflight)
         self._api_queue_max = int(os.getenv("HFT_API_QUEUE_MAX", "1024"))
         self._api_queue: asyncio.Queue[OrderCommand | TypedOrderCommandFrame] = asyncio.Queue(
             maxsize=self._api_queue_max
         )
-        self._api_coalesce_window_s = float(os.getenv("HFT_API_COALESCE_WINDOW_S", "0.005"))
+        self._api_coalesce_window_s = float(os.getenv("HFT_API_COALESCE_WINDOW_S", "0.005"))  # noqa: precision-time
         self._api_pending: dict[tuple, OrderCommand] = {}
         self._api_worker_task: asyncio.Task | None = None
         self._supports_typed_command_ingress = True

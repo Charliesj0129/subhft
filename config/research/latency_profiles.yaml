@@ -1,0 +1,40 @@
+# Versioned latency profiles for alpha research validation.
+# Each profile captures broker API RTT measurements at a specific date.
+# Source: docs/architecture/latency-baseline-shioaji-sim-vs-system.md
+#
+# Fields:
+#   submit_ack_latency_ms           - P95 order submit → ack RTT (ms)
+#   modify_ack_latency_ms           - P95 order modify → ack RTT (ms)
+#   cancel_ack_latency_ms           - P95 order cancel → ack RTT (ms)
+#   local_decision_pipeline_latency_us - Internal pipeline latency (μs)
+#   measurement_date                - ISO date of measurement
+#   description                     - Human-readable description
+#   source                          - Document with measurement details
+
+profiles:
+  shioaji_sim_p95_v2026-03-04:
+    description: "Shioaji sim API RTT P95 — 2026-03-04"
+    source: "docs/architecture/latency-baseline-shioaji-sim-vs-system.md"
+    submit_ack_latency_ms: 36.0
+    modify_ack_latency_ms: 43.0
+    cancel_ack_latency_ms: 47.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: "2026-03-04"
+
+  shioaji_sim_p95_v2026-02-26:
+    description: "Shioaji sim API RTT P95 — 2026-02-26 (backward compat)"
+    source: "docs/architecture/latency-baseline-shioaji-sim-vs-system.md"
+    submit_ack_latency_ms: 36.0
+    modify_ack_latency_ms: 43.0
+    cancel_ack_latency_ms: 47.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: "2026-02-26"
+
+  shioaji_sim_p95_v2026-03-01:
+    description: "Shioaji sim API RTT P95 — 2026-03-01 (backward compat)"
+    source: "docs/architecture/latency-baseline-shioaji-sim-vs-system.md"
+    submit_ack_latency_ms: 36.0
+    modify_ack_latency_ms: 43.0
+    cancel_ack_latency_ms: 47.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: "2026-03-01"

@@ -97,6 +97,23 @@ growing ~44 GB per major research round). The current strategy is manual:
 | `research/data/synthetic/` | Synthetic test datasets | Keep the latest version; delete older versions |
 | `research/experiments/runs/` | Experiment run outputs | Keep for 90 days; scorecard promoted to CK |
 
+### MVP 發行最小樣本（release-converge-mvp）
+
+為了讓第一個可發行版本可持續運作且可重現，`research/data` 採「最小 smoke 樣本」策略：
+
+- 必留檔案（tracked）：
+  - `research/data/processed/smoke/smoke_v1.npy`
+  - `research/data/processed/smoke/smoke_v1.npy.meta.json`
+- 其餘 `research/data/` 內容視為可重建產物，可由 `release-converge-mvp` 清理後重建骨架。
+- 樣本重建命令（與收斂流程一致）：
+  ```bash
+  .venv/bin/python research/tools/synth_lob_gen.py \
+    --out research/data/processed/smoke/smoke_v1.npy \
+    --version v2 --n-rows 512 --rng-seed 7 \
+    --owner release --symbols TXF --split smoke --generator-version smoke_v1
+  .venv/bin/python -m research validate-data-meta research/data/processed/smoke/smoke_v1.npy
+  ```
+
 ### Quarterly Review Procedure
 
 1. List research data by size and age:
@@ -120,6 +137,7 @@ A future improvement is to tie research data lifecycle to alpha status:
 - When an alpha is promoted past Gate E → archive raw training data (keep only processed)
 - When an alpha is retired/rejected → delete all experiment runs, keep only scorecard
 - Implement via `research/factory.py` `archive` subcommand
+- Integrate with `scripts/release_converge.py --cleanup-profile mvp_release` lifecycle hooks
 
 ---
 

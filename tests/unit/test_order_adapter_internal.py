@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, Side, StormGuardState, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
 

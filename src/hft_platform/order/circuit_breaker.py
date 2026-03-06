@@ -32,12 +32,12 @@ class CircuitBreaker:
             self._failure_count = value
 
     @property
-    def open_until(self) -> float:
+    def open_until(self) -> float:  # noqa: precision-time
         with self._lock:
             return self._open_until
 
     @open_until.setter
-    def open_until(self, value: float) -> None:
+    def open_until(self, value: float) -> None:  # noqa: precision-time
         with self._lock:
             self._open_until = value
 

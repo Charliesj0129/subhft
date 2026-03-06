@@ -7,6 +7,7 @@ Tests:
 - submit_nowait when channel full → QueueFull propagated.
 - active/standby gateway HA lease failover avoids duplicate broker dispatches.
 """
+
 import asyncio
 import os
 import tempfile
@@ -15,7 +16,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, RiskDecision, Side, StormGuardState, TIF
+from hft_platform.contracts.strategy import (
+    TIF,
+    IntentType,
+    OrderCommand,
+    OrderIntent,
+    RiskDecision,
+    Side,
+    StormGuardState,
+)
 from hft_platform.gateway.channel import LocalIntentChannel
 from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureStore
@@ -186,6 +195,7 @@ async def test_gateway_ha_failover_no_duplicate_dispatch():
 
             # Deterministic cmd_id for duplicate detection across gateways.
             for svc in (svc1, svc2):
+
                 def _create_command(intent):
                     return OrderCommand(
                         cmd_id=int(intent.intent_id),

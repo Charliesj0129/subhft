@@ -60,4 +60,3 @@ def test_infer_data_ul_reports_highest_satisfied_level() -> None:
         "regimes_covered": ["volatile"],
     }
     assert infer_data_ul(meta) == DataUL.UL4
-

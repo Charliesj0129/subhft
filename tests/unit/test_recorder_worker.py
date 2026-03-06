@@ -46,9 +46,7 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
                 pass
 
             # The worker calls batcher, batcher calls writer.write_columnar (or write)
-            self.assertTrue(
-                mock_writer_inst.write_columnar.called or mock_writer_inst.write.called
-            )
+            self.assertTrue(mock_writer_inst.write_columnar.called or mock_writer_inst.write.called)
 
     async def test_recover_wal_skips_when_disabled(self):
         queue = asyncio.Queue()
@@ -84,14 +82,10 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
             with patch("hft_platform.recorder.worker.DataWriter"):
                 worker = RecorderService(queue)
                 with patch("hft_platform.recorder.worker.asyncio.to_thread", new=fake_to_thread):
-                    with patch(
-                        "hft_platform.recorder.loader.WALLoaderService", new=DummyLoader
-                    ):
+                    with patch("hft_platform.recorder.loader.WALLoaderService", new=DummyLoader):
                         with patch("hft_platform.recorder.worker.logger.warning") as log_warn:
                             await worker.recover_wal()
-                            log_warn.assert_any_call(
-                                "Skipping WAL Recovery (No ClickHouse Connection)"
-                            )
+                            log_warn.assert_any_call("Skipping WAL Recovery (No ClickHouse Connection)")
 
     async def test_recover_wal_runs_when_connected(self):
         queue = asyncio.Queue()
@@ -114,9 +108,7 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
             with patch("hft_platform.recorder.worker.DataWriter"):
                 worker = RecorderService(queue)
                 with patch("hft_platform.recorder.worker.asyncio.to_thread", new=fake_to_thread):
-                    with patch(
-                        "hft_platform.recorder.loader.WALLoaderService", new=DummyLoader
-                    ):
+                    with patch("hft_platform.recorder.loader.WALLoaderService", new=DummyLoader):
                         with patch("hft_platform.recorder.worker.logger.info") as log_info:
                             await worker.recover_wal()
                             self.assertGreaterEqual(calls.connect, 1)
