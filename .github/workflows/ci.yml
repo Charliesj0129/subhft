@@ -69,6 +69,49 @@ jobs:
       - name: Enforce research factory contract
         run: uv run python -m research.factory audit --fail-on-warning
 
+      - name: Guard env vars reference coverage
+        run: make env-vars-guard
+
+      - name: Enforce TODO/ROADMAP delivery governance
+        run: make roadmap-delivery-check
+
+      - name: Upload roadmap delivery artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roadmap-delivery-report
+          path: |
+            outputs/roadmap_delivery/latest.json
+            outputs/roadmap_delivery/latest.md
+          if-no-files-found: warn
+
+      - name: Roadmap delivery summary
+        if: always()
+        run: |
+          echo "## 🗺️ Roadmap Delivery Guard" >> $GITHUB_STEP_SUMMARY
+          python - <<'PY' >> $GITHUB_STEP_SUMMARY || true
+          import json
+          from pathlib import Path
+
+          summary = Path("outputs/roadmap_delivery/latest.json")
+          if not summary.exists():
+              print("- report: not found")
+              raise SystemExit(0)
+
+          payload = json.loads(summary.read_text(encoding="utf-8"))
+          result = payload.get("result", {}) if isinstance(payload.get("result"), dict) else {}
+          checks = result.get("checks", []) if isinstance(result.get("checks"), list) else []
+          failed = [c for c in checks if isinstance(c, dict) and str(c.get("status")) == "fail"]
+
+          print(f"- overall: `{result.get('overall', 'unknown')}`")
+          print(f"- recommendation: `{result.get('recommendation', 'unknown')}`")
+          print(f"- checks: total={len(checks)}, failed={len(failed)}")
+          for row in failed[:10]:
+              print(f"  - `{row.get('id')}`: {row.get('message')}")
+          if len(failed) > 10:
+              print(f"  - ... and {len(failed) - 10} more failures")
+          PY
+
   # ============================================================================
   # Stage 2a: Rust Build & Lint
   # ============================================================================
@@ -489,11 +532,10 @@ jobs:
         if: github.event_name == 'schedule' || inputs.run_recorder_drills
         run: |
           set -o pipefail
+          make verify-ce3 | tee gateway_wal_hardening_drills.log
           uv run pytest -q --no-cov \
             tests/integration/test_gateway_multi_runner.py::test_gateway_ha_failover_no_duplicate_dispatch \
-            tests/integration/test_wal_loader_scale_out.py \
-            tests/spec/test_replay_safety_contract.py \
-            tests/integration/test_wal_outage_drills.py | tee gateway_wal_hardening_drills.log
+            | tee -a gateway_wal_hardening_drills.log
 
       - name: Run risk/gateway perf gate (heavier drills)
         env:

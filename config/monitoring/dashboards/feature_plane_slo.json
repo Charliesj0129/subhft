@@ -1,0 +1,110 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Feature Plane Latency (p50/p95/p99 ns)",
+      "id": 1,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum(rate(feature_plane_latency_ns_bucket[1m])) by (le))", "refId": "A", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, sum(rate(feature_plane_latency_ns_bucket[1m])) by (le))", "refId": "B", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, sum(rate(feature_plane_latency_ns_bucket[1m])) by (le))", "refId": "C", "legendFormat": "p99"}
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Feature Updates (rate by result)",
+      "id": 2,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(feature_plane_updates_total[1m])) by (result, feature_set)", "refId": "A", "legendFormat": "{{feature_set}} {{result}}"}
+      ],
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Feature Quality Flags (rate by flag)",
+      "id": 3,
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(feature_quality_flags_total[1m])) by (flag)", "refId": "A", "legendFormat": "{{flag}}"}
+      ],
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Shadow Parity Checks (rate by result)",
+      "id": 4,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(feature_shadow_parity_checks_total[1m])) by (feature_set, result)", "refId": "A", "legendFormat": "{{feature_set}} {{result}}"}
+      ],
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Shadow Parity Mismatch (rate by feature)",
+      "id": 5,
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(feature_shadow_parity_mismatch_total[1m])) by (feature_set, feature_id)", "refId": "A", "legendFormat": "{{feature_set}} {{feature_id}}"}
+      ],
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Canary Guard Ratios",
+      "id": 6,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "(sum(increase(feature_plane_updates_total{result=\"error\"}[30m])) or vector(0)) / clamp_min((sum(increase(feature_plane_updates_total{result=~\"updated|emitted|error\"}[30m])) or vector(0)), 1)",
+          "refId": "A",
+          "legendFormat": "update_error_ratio_30m"
+        },
+        {
+          "expr": "sum(increase(feature_shadow_parity_mismatch_total[30m])) or vector(0)",
+          "refId": "B",
+          "legendFormat": "shadow_mismatch_increase_30m"
+        }
+      ],
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    }
+  ],
+  "schemaVersion": 30,
+  "style": "dark",
+  "tags": ["hft", "feature-plane", "canary", "slo"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "HFT Platform / Feature Plane SLO",
+  "uid": "hft-feature-plane-slo",
+  "version": 1,
+  "weekStart": ""
+}

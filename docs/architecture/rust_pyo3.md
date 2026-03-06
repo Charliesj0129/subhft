@@ -89,10 +89,10 @@ python -c "import rust_strategy as rs; print(hasattr(rs, 'RLStrategy'))"
 
 1. No single benchmark gate currently asserts Rust path parity for all fallback paths.
 2. Some modules rely on dynamic import flags and env toggles; operational defaults should stay documented in runbooks.
-3. 🔄 TODO: No standardized Feature Engine / Feature ABI boundary exists yet for shared LOB-derived feature kernels (research/backtest/live parity).
-4. 🔄 TODO: No parity gate currently validates Python reference feature kernels vs future Rust feature kernels.
+3. 🟡 Feature Engine / Feature ABI boundary has landed in prototype scope (`TypedFeatureFrameV1` + feature registry), but packed/zero-copy transport finalization remains open.
+4. 🟡 Python reference parity gates exist for current feature kernels; production-grade Rust kernel promotion/parity hardening remains open.
 
-## 7. Planned Boundary Extension (TODO): Feature Plane / FeatureEngine
+## 7. Boundary Extension: Feature Plane / FeatureEngine (Prototype Landed)
 
 Reference spec: `docs/architecture/feature-engine-lob-research-unification-spec.md`
 

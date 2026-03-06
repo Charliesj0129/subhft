@@ -36,6 +36,19 @@ Pass criteria:
 - No duplicate broker dispatches across failover (`cmd_id` uniqueness)
 - Standby takes over after leader task/process termination
 
+## Callback Latency Guard (V-CALLBACK-LATENCY)
+
+Run callback ingress guard from Prometheus:
+
+```bash
+make callback-latency-report PROM_URL=http://localhost:9091 WINDOW=30m ALLOW_WARN=1
+```
+
+Pass criteria:
+- `shioaji_quote_callback_ingress_latency_ns` p99 within budget (default `<= 100us`)
+- `shioaji_quote_callback_queue_dropped_total` increase stays `0`
+- callback parse miss (`market_data_callback_parse_total{result="miss"}`) increase stays `0`
+
 ## Rollback
 
 Disable HA lease gating:
@@ -45,4 +58,3 @@ export HFT_GATEWAY_HA_ENABLED=0
 ```
 
 Restart gateway service(s). This returns to single-instance semantics.
-

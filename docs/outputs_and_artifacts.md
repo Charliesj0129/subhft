@@ -14,6 +14,11 @@
 - `outputs/contract_refresh_status.json`
 - `outputs/feature_rollout_state.json`
 - `outputs/decision_traces/*.jsonl`
+- `outputs/roadmap_delivery/latest.json` / `latest.md`（TODO/ROADMAP 治理檢查）
+- `outputs/roadmap_execution/summary/latest.json`（WS-G/WS-H 交付物執行摘要）
+- `outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json`
+- `outputs/roadmap_execution/ws_h/latest_source_catalog.json`
+- `outputs/release_converge/latest.json` / `latest.md`（發行收斂與深度清潔報告）
 - `reports/shioaji_api_latency.json` / `.csv`
 - `reports/e2e_latency.summary.json`
 - `reports/*.heatmap.csv`

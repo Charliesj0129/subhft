@@ -24,7 +24,7 @@ Then paste the entries below (adjust paths as needed for your deployment root).
 # =============================================================================
 # HFT Platform — Remote Machine Maintenance Crontab
 # Deployment root: /home/charl/subhft
-# Last updated: 2026-03-02
+# Last updated: 2026-03-05
 # =============================================================================
 
 # --- WAL Archive Cleanup ---
@@ -44,6 +44,47 @@ Then paste the entries below (adjust paths as needed for your deployment root).
 # Logs current disk usage so you can review trends via /tmp/disk_check.log.
 # Alert fires via Prometheus/Alertmanager at <20% free (HostDiskSpaceWarn).
 0 6 * * * df -h / >> /tmp/disk_check.log 2>&1
+
+# --- Daily Soak Acceptance Report ---
+# Generates baseline report (service liveness/reconnect/WAL/session conflicts) every day.
+# Output: /home/charl/subhft/outputs/soak_reports/daily/YYYY-MM-DD.{json,md}
+10 16 * * 1-5 cd /home/charl/subhft && python3 scripts/soak_acceptance.py daily --project-root /home/charl/subhft --prom-url http://localhost:9091 --output-dir /home/charl/subhft/outputs/soak_reports --allow-warn-exit-zero >> /tmp/hft_soak_daily.log 2>&1
+
+# --- Weekly Soak Summary ---
+# Aggregates latest 7 daily reports and emits weekly summary.
+# Output: /home/charl/subhft/outputs/soak_reports/weekly/week_*.{json,md}
+20 16 * * 5 cd /home/charl/subhft && python3 scripts/soak_acceptance.py weekly --project-root /home/charl/subhft --prom-url http://localhost:9091 --output-dir /home/charl/subhft/outputs/soak_reports >> /tmp/hft_soak_weekly.log 2>&1
+
+# --- Feed Canary Acceptance ---
+# Signs off SHIOAJI-CANARY-01/02 using first-quote + reconnect-failure-ratio
+# + watchdog callback_reregister thresholds.
+# Output: /home/charl/subhft/outputs/soak_reports/canary/canary_*.{json,md}
+30 16 * * 5 cd /home/charl/subhft && python3 scripts/soak_acceptance.py canary --project-root /home/charl/subhft --prom-url http://localhost:9091 --output-dir /home/charl/subhft/outputs/soak_reports --window-days 10 --min-trading-days 5 --min-first-quote-pass-ratio 1.0 --max-reconnect-failure-ratio 0.2 --max-watchdog-callback-reregister 120 --allow-warn-exit-zero >> /tmp/hft_soak_canary.log 2>&1
+
+# --- Feature Plane Canary Guard ---
+# Evaluates shadow parity / quality flags / latency / update error ratio.
+# Output: /home/charl/subhft/outputs/feature_canary/feature_canary_*.{json,md}
+35 16 * * 5 cd /home/charl/subhft && make feature-canary-report ALLOW_WARN=1 PROM_URL=http://localhost:9091 WINDOW=1h >> /tmp/hft_feature_canary.log 2>&1
+
+# --- Callback Latency Guard ---
+# Evaluates callback ingress p99 / queue drop / parser fallback+miss.
+# Output: /home/charl/subhft/outputs/callback_latency/callback_latency_*.{json,md}
+36 16 * * 5 cd /home/charl/subhft && make callback-latency-report ALLOW_WARN=1 PROM_URL=http://localhost:9091 WINDOW=30m >> /tmp/hft_callback_latency.log 2>&1
+
+# --- Daily Query Guard Baseline Suite ---
+# Runs guarded diagnostic query suite and records suite/check/run artifacts.
+# Output: /home/charl/subhft/outputs/query_guard/{checks,runs,suites}
+40 16 * * 1-5 cd /home/charl/subhft && make ch-query-guard-suite >> /tmp/hft_query_guard_suite.log 2>&1
+
+# --- Daily WAL DLQ Status Snapshot ---
+# Records DLQ file count/size/age for early data-loss risk detection.
+# Output: /home/charl/subhft/outputs/wal_dlq/status/*.json
+45 16 * * 1-5 cd /home/charl/subhft && WAL_ALLOW_WARN=1 make wal-dlq-status >> /tmp/hft_wal_dlq_status.log 2>&1
+
+# --- Monthly Reliability Review Pack ---
+# Builds previous-month review package (soak/backlog/drift/disk/drill/query-guard/feature-canary/callback-latency).
+# Output: /home/charl/subhft/outputs/reliability/monthly/monthly_<YYYY-MM>_*.{json,md}
+10 19 1 * * cd /home/charl/subhft && MONTH=$(date -d '1 month ago' +\%Y-\%m) RUN_DRILL=1 QUERY_GUARD_MIN_RUNS=5 QUERY_GUARD_MIN_SUITE_RUNS=5 FEATURE_CANARY_MIN_RUNS=4 CALLBACK_LATENCY_MIN_RUNS=4 make reliability-monthly-pack >> /tmp/hft_reliability_monthly.log 2>&1
 
 # --- SSD Health Snapshot (requires smartmontools) ---
 # Install: sudo apt install smartmontools
@@ -91,6 +132,26 @@ ls -lh /home/charl/subhft/.wal/archive/ | tail -20
 
 # Check disk usage trend
 tail -50 /tmp/disk_check.log
+
+# Check soak report logs
+tail -50 /tmp/hft_soak_daily.log
+tail -50 /tmp/hft_soak_weekly.log
+tail -50 /tmp/hft_soak_canary.log
+tail -50 /tmp/hft_feature_canary.log
+tail -50 /tmp/hft_callback_latency.log
+tail -50 /tmp/hft_query_guard_suite.log
+tail -50 /tmp/hft_wal_dlq_status.log
+tail -50 /tmp/hft_reliability_monthly.log
+
+# Check generated reports
+ls -lh /home/charl/subhft/outputs/soak_reports/daily/ | tail -20
+ls -lh /home/charl/subhft/outputs/soak_reports/weekly/ | tail -20
+ls -lh /home/charl/subhft/outputs/soak_reports/canary/ | tail -20
+ls -lh /home/charl/subhft/outputs/feature_canary/ | tail -20
+ls -lh /home/charl/subhft/outputs/callback_latency/ | tail -20
+ls -lh /home/charl/subhft/outputs/query_guard/suites/ | tail -20
+ls -lh /home/charl/subhft/outputs/wal_dlq/status/ | tail -20
+ls -lh /home/charl/subhft/outputs/reliability/monthly/ | tail -20
 ```
 
 ## Related Runbooks
@@ -98,3 +159,4 @@ tail -50 /tmp/disk_check.log
 - `docs/runbooks/disk-crisis-sop.md` — emergency disk recovery procedure
 - `docs/runbooks/recorder-wal-disk-pressure.md` — WAL pressure handling
 - `docs/operations/data-retention-policy.md` — full retention policy decisions
+- `docs/runbooks/old-pc-yearly-reliability.md` — yearly reliability baseline and acceptance criteria

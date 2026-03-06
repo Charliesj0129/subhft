@@ -129,6 +129,40 @@ git pull
 docker compose up -d --build hft-engine
 ```
 
+### 7.1 受控變更（建議用於 production）
+
+```bash
+# 1) pre-sync 產物（備份 + rollback + manifest）
+make deploy-pre-sync-template CHANGE_ID=CHG-YYYYMMDD-XX
+
+# 2) drift check（部署前）
+make deploy-drift-check BASELINE=outputs/deploy_guard/snapshots/<baseline>.json
+
+# 3) 部署
+docker compose up -d --build hft-engine
+
+# 4) drift check（部署後）
+make deploy-drift-check BASELINE=outputs/deploy_guard/snapshots/<baseline>.json
+
+# 5) release channel gate / promote
+make release-channel-gate CHANGE_ID=CHG-YYYYMMDD-XX
+make release-channel-promote CHANGE_ID=CHG-YYYYMMDD-XX ACTOR=ops
+
+# 6) monthly reliability review pack（例行，含 query-guard / feature-canary / callback-latency 稽核）
+make reliability-monthly-pack MONTH=YYYY-MM RUN_DRILL=1 QUERY_GUARD_MIN_RUNS=1 QUERY_GUARD_MIN_SUITE_RUNS=1 FEATURE_CANARY_MIN_RUNS=1 CALLBACK_LATENCY_MIN_RUNS=1
+
+# 7) ClickHouse 線上診斷查詢先經 guard
+make ch-query-guard-check QUERY='SELECT ... LIMIT 1000'
+
+# 8) 每日批次 query-guard 基線查詢（供月度審查包稽核）
+make ch-query-guard-suite
+
+# 9) 若發生 WAL DLQ，先 dry-run 再小批回補
+make wal-dlq-status
+make wal-dlq-replay-dry-run MAX_FILES=50
+make wal-dlq-replay MAX_FILES=50
+```
+
 ## 8. 相關文件
 - `docs/runbooks.md`
 - `docs/troubleshooting.md`
