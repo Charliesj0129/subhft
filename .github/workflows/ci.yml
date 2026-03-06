@@ -27,6 +27,7 @@ on:
 
 env:
   PYTHONPATH: src
+  PYTHON_VERSION: "3.12"
   UV_CACHE_DIR: ~/.cache/uv
 
 jobs:
@@ -45,7 +46,7 @@ jobs:
           version: "latest"
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${PYTHON_VERSION}
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -163,7 +164,7 @@ jobs:
           version: "latest"
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${PYTHON_VERSION}
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -197,7 +198,7 @@ jobs:
           version: "latest"
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${PYTHON_VERSION}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -232,9 +233,6 @@ jobs:
       - name: Run unit tests with coverage
         run: |
           uv run pytest tests/unit \
-            --cov=src/hft_platform \
-            --cov-branch \
-            --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
             --cov-fail-under=70 \
             -v --tb=short
@@ -272,7 +270,7 @@ jobs:
           version: "latest"
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${PYTHON_VERSION}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -392,7 +390,7 @@ jobs:
           version: "latest"
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${PYTHON_VERSION}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -488,7 +486,7 @@ jobs:
           version: "latest"
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${PYTHON_VERSION}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -723,7 +721,7 @@ jobs:
           version: "latest"
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${PYTHON_VERSION}
 
       - name: Cache dependencies
         uses: actions/cache@v4
