@@ -1,4 +1,3 @@
-
 import os
 import sys
 
@@ -16,6 +15,7 @@ try:
 except ImportError:
     pytest.fail("Could not import hft_platform.rust_core. Ensure maturin develop was run.")
 
+
 def test_ofi_parity_rust_vs_numba():
     """
     Verify that the Rust implementation of OFI produces identical results
@@ -29,8 +29,8 @@ def test_ofi_parity_rust_vs_numba():
     mid_price = 100.0 + np.cumsum(np.random.randn(n) * 0.1)
     spread = 0.02
 
-    bid_p = mid_price - spread/2
-    ask_p = mid_price + spread/2
+    bid_p = mid_price - spread / 2
+    ask_p = mid_price + spread / 2
 
     # Quantize to ticks (0.01) to simulate real market
     bid_p = np.round(bid_p, 2)
@@ -72,10 +72,16 @@ def test_ofi_parity_rust_vs_numba():
     # Rust implementation: return ofi
 
     # So we expect py_result == -rust_result
-    np.testing.assert_allclose(py_result, -rust_result, rtol=1e-10, atol=1e-10,
-                               err_msg="Rust OFI does not match Python OFI (sign inverted check)")
+    np.testing.assert_allclose(
+        py_result,
+        -rust_result,
+        rtol=1e-10,
+        atol=1e-10,
+        err_msg="Rust OFI does not match Python OFI (sign inverted check)",
+    )
 
     print("\nParity Confirmed: Python(Inverted) == -1 * Rust(Raw)")
+
 
 if __name__ == "__main__":
     test_ofi_parity_rust_vs_numba()

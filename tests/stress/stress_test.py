@@ -36,9 +36,7 @@ def _build_gateway_pipeline(queue_size: int = 4096):
     channel = LocalIntentChannel(maxsize=queue_size, ttl_ms=0)
 
     risk_engine = MagicMock()
-    risk_engine.evaluate.return_value = RiskDecision(
-        approved=True, intent=MagicMock(), reason_code="OK"
-    )
+    risk_engine.evaluate.return_value = RiskDecision(approved=True, intent=MagicMock(), reason_code="OK")
     risk_engine.create_command.side_effect = lambda intent: OrderCommand(
         cmd_id=id(intent),
         intent=intent,
@@ -133,9 +131,7 @@ async def main() -> None:
     n_intents = 10_000
     logger.info("Starting gateway pipeline stress test", n_intents=n_intents)
 
-    monitor_task = asyncio.create_task(
-        monitor_resources(os.getpid(), duration=15)
-    )
+    monitor_task = asyncio.create_task(monitor_resources(os.getpid(), duration=15))
 
     result = await _run_gateway_stress(n_intents=n_intents, timeout_s=10.0)
 

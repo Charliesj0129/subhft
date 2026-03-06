@@ -45,8 +45,8 @@ class RiskValidator:
 class PriceBandValidator(RiskValidator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))
-        self._tick_size_raw = float(self.defaults.get("tick_size", 0.01))
+        self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))  # noqa: precision-config
+        self._tick_size_raw = float(self.defaults.get("tick_size", 0.01))  # noqa: precision-config
         self._max_price_scaled_cache: Dict[str, int] = {}
         self._tick_size_scaled_cache: Dict[str, int] = {}
         self._band_ticks_cache: Dict[str, int] = {}
@@ -157,10 +157,10 @@ class StormGuardFSM:
         self.warm = sg_cfg.get("warm_threshold", -200_000)
         self.storm = sg_cfg.get("storm_threshold", -500_000)
         self.halt = sg_cfg.get("halt_threshold", -1_000_000)
-        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))
+        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # noqa: precision-time
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._de_escalate_count: int = 0
-        self._storm_entry_ts: float = 0.0
+        self._storm_entry_ts: float = 0.0  # noqa: precision-time
 
     def update_pnl(self, pnl: int):
         self.pnl_drawdown = pnl

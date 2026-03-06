@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import threading
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, cast
 
 from structlog import get_logger
 
@@ -146,7 +146,7 @@ def _extract_code_from_topic(topic: str) -> str | None:
         return None
     cached = TOPIC_CODE_CACHE.get(topic, _TOPIC_CODE_CACHE_MISS)
     if cached is not _TOPIC_CODE_CACHE_MISS:
-        return cached
+        return cast(str | None, cached)
 
     code: str | None = None
     # Common fast paths avoid regex allocation.

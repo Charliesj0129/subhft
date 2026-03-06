@@ -21,28 +21,28 @@ if str(REPO_ROOT) not in sys.path:
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side, StormGuardState
+from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
 from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feed_adapter import shioaji_client as shio_mod
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
-from hft_platform.recorder.batcher import Batcher
-from hft_platform.recorder.mapper import map_event_to_record
-from hft_platform.recorder.wal import WALWriter
-from hft_platform.recorder.worker import MARKET_DATA_COLUMNS, _extract_market_data
-from hft_platform.recorder.writer import DataWriter
-from hft_platform.services.market_data import MarketDataService
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskDecision, Side, StormGuardState
 from hft_platform.gateway.channel import IntentEnvelope, LocalIntentChannel, TypedIntentEnvelope
 from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
+from hft_platform.recorder.batcher import Batcher
+from hft_platform.recorder.mapper import map_event_to_record
+from hft_platform.recorder.wal import WALWriter
+from hft_platform.recorder.worker import MARKET_DATA_COLUMNS, _extract_market_data
+from hft_platform.recorder.writer import DataWriter
 from hft_platform.risk.engine import RiskEngine
+from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.base import BaseStrategy
 from hft_platform.strategy.runner import StrategyRunner
-from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from research.backtest.hbt_runner import BacktestConfig, ResearchBacktestRunner
 from research.combinatorial.search_engine import AlphaSearchEngine
 from research.registry.schemas import AlphaManifest
@@ -250,7 +250,7 @@ async def _run_real_ck_columnar_once(rows: int = 2000) -> float:
             t1 = time.perf_counter()
             # connect_async includes schema init; benchmark insert separately.
             _ = t1 - t0
-            symbols = [f"CK_PERF_{i%8}" for i in range(rows)]
+            symbols = [f"CK_PERF_{i % 8}" for i in range(rows)]
             now_ns = time.time_ns()
             cols = [
                 "symbol",
@@ -429,8 +429,10 @@ async def _run_risk_engine_once(kind: str, n: int) -> float:
             intent = _make_risk_intent(price=0, qty=1)
         else:
             intent = _make_risk_intent(price=1_000_000, qty=1)
-        with patch("hft_platform.risk.engine.logger.warning"), patch("hft_platform.risk.engine.logger.info"), patch(
-            "hft_platform.risk.engine.logger.exception"
+        with (
+            patch("hft_platform.risk.engine.logger.warning"),
+            patch("hft_platform.risk.engine.logger.info"),
+            patch("hft_platform.risk.engine.logger.exception"),
         ):
             task = asyncio.create_task(engine.run())
             await asyncio.sleep(0)
@@ -620,7 +622,14 @@ def bench_market_data_callback_parse(iters: int = 100_000) -> float:
     svc.loop = _DummyLoop()
     svc._raw_first_seen = True
     svc._raw_first_parsed = True
-    payload = {"code": "2330", "ts": 1, "bid_price": [100.0], "bid_volume": [1], "ask_price": [100.1], "ask_volume": [1]}
+    payload = {
+        "code": "2330",
+        "ts": 1,
+        "bid_price": [100.0],
+        "bid_volume": [1],
+        "ask_price": [100.1],
+        "ask_volume": [1],
+    }
     for _ in range(2000):
         svc._on_shioaji_event("TSE", payload)
     t0 = time.perf_counter()
@@ -630,7 +639,9 @@ def bench_market_data_callback_parse(iters: int = 100_000) -> float:
     return (t1 - t0) / iters * 1e6
 
 
-def _feature_bench_event_stats(seq: int, bid_px: int, bid_qty: int, ask_px: int, ask_qty: int) -> tuple[BidAskEvent, LOBStatsEvent]:
+def _feature_bench_event_stats(
+    seq: int, bid_px: int, bid_qty: int, ask_px: int, ask_qty: int
+) -> tuple[BidAskEvent, LOBStatsEvent]:
     evt = BidAskEvent(
         meta=MetaData(seq=seq, topic="bidask", source_ts=seq, local_ts=seq),
         symbol="2330",
@@ -982,12 +993,14 @@ def _multi_sample(bench_fn, n_runs: int = 3) -> tuple[float, float]:
     samples = [bench_fn() for _ in range(n_runs)]
     mean = sum(samples) / len(samples)
     variance = sum((s - mean) ** 2 for s in samples) / max(1, len(samples) - 1)
-    std = variance ** 0.5
+    std = variance**0.5
     return mean, std
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Lightweight perf regression gate for strategy/research/feed/recorder hot paths.")
+    parser = argparse.ArgumentParser(
+        description="Lightweight perf regression gate for strategy/research/feed/recorder hot paths."
+    )
     parser.add_argument("--baseline", default="tests/benchmark/perf_baselines.json")
     parser.add_argument("--json", default="")
     parser.add_argument(
@@ -1027,7 +1040,9 @@ def main() -> int:
     cb_soak_calls_mean, cb_soak_calls_std = _multi_sample(bench_shioaji_callback_soak_calls_per_dispatch, n_runs)
     feature_stats_mean, feature_stats_std = _multi_sample(bench_feature_engine_lob_stats, n_runs)
     feature_l1_mean, feature_l1_std = _multi_sample(bench_feature_engine_lob_update, n_runs)
-    feature_parity_mean, feature_parity_std = _multi_sample(bench_feature_engine_parity_mismatch_rate, max(1, min(n_runs, 2)))
+    feature_parity_mean, feature_parity_std = _multi_sample(
+        bench_feature_engine_parity_mismatch_rate, max(1, min(n_runs, 2))
+    )
     risk_eval_mean, risk_eval_std = _multi_sample(bench_risk_evaluate, n_runs)
     risk_eval_typed_mean, risk_eval_typed_std = _multi_sample(bench_risk_evaluate_typed_frame, n_runs)
     risk_run_approve_mean, risk_run_approve_std = _multi_sample(bench_risk_run_approve, max(1, min(n_runs, 2)))
@@ -1037,14 +1052,20 @@ def main() -> int:
     rec_batcher_mean, rec_batcher_std = _multi_sample(bench_recorder_batcher_add, n_runs)
     rec_tick_mean, rec_tick_std = _multi_sample(bench_recorder_map_tick, n_runs)
     rec_bidask_mean, rec_bidask_std = _multi_sample(bench_recorder_map_bidask, n_runs)
-    include_recorder_io = bool(args.include_recorder_io or os.getenv("HFT_PERF_GATE_RECORDER_IO", "0") in {"1", "true", "yes", "on"})
-    include_risk_heavy = bool(args.include_risk_heavy or os.getenv("HFT_PERF_GATE_RISK_HEAVY", "0") in {"1", "true", "yes", "on"})
+    include_recorder_io = bool(
+        args.include_recorder_io or os.getenv("HFT_PERF_GATE_RECORDER_IO", "0") in {"1", "true", "yes", "on"}
+    )
+    include_risk_heavy = bool(
+        args.include_risk_heavy or os.getenv("HFT_PERF_GATE_RISK_HEAVY", "0") in {"1", "true", "yes", "on"}
+    )
     include_feature_rust = bool(
         args.include_feature_rust or os.getenv("HFT_PERF_GATE_FEATURE_RUST", "0") in {"1", "true", "yes", "on"}
     )
     if include_recorder_io:
         rec_ck_mean, rec_ck_std = _multi_sample(bench_recorder_ck_columnar_write_ms, max(1, min(n_runs, 2)))
-        rec_wal_stress_mean, rec_wal_stress_std = _multi_sample(bench_recorder_wal_atomic_stress_ratio, max(1, min(n_runs, 2)))
+        rec_wal_stress_mean, rec_wal_stress_std = _multi_sample(
+            bench_recorder_wal_atomic_stress_ratio, max(1, min(n_runs, 2))
+        )
     else:
         rec_ck_mean = rec_ck_std = rec_wal_stress_mean = rec_wal_stress_std = None
     if include_risk_heavy:
@@ -1060,7 +1081,9 @@ def main() -> int:
         risk_create_from_typed_mean = risk_create_from_typed_std = None
         risk_gw_typed_ratio_mean = risk_gw_typed_ratio_std = None
     if include_feature_rust:
-        feature_rust_mean, feature_rust_std = _multi_sample(bench_feature_engine_lob_update_rust, max(1, min(n_runs, 2)))
+        feature_rust_mean, feature_rust_std = _multi_sample(
+            bench_feature_engine_lob_update_rust, max(1, min(n_runs, 2))
+        )
         feature_py_rust_parity_mean, feature_py_rust_parity_std = _multi_sample(
             bench_feature_engine_python_vs_rust_parity_mismatch_rate, max(1, min(n_runs, 2))
         )

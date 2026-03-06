@@ -1,8 +1,7 @@
 """Tests for CE2-05: IdempotencyStore."""
+
 import os
 import tempfile
-
-import pytest
 
 from hft_platform.gateway.dedup import IdempotencyStore
 

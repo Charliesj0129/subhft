@@ -256,9 +256,7 @@ def test_insert_with_retry_records_success_no_retry_outcome(tmp_path):
     )
 
     assert ok is True
-    loader.metrics.recorder_insert_batches_total.labels.assert_any_call(
-        table="market_data", result="success_no_retry"
-    )
+    loader.metrics.recorder_insert_batches_total.labels.assert_any_call(table="market_data", result="success_no_retry")
 
 
 def test_insert_with_retry_records_success_after_retry_outcome(tmp_path):
@@ -286,12 +284,8 @@ def test_insert_with_retry_records_success_after_retry_outcome(tmp_path):
     loader.metrics.recorder_insert_batches_total.labels.assert_any_call(
         table="market_data", result="success_after_retry"
     )
-    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(
-        table="market_data", result="retry"
-    )
-    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(
-        table="market_data", result="success"
-    )
+    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(table="market_data", result="retry")
+    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(table="market_data", result="success")
 
 
 def test_insert_with_retry_records_failed_after_retry_outcome(tmp_path):
@@ -319,9 +313,7 @@ def test_insert_with_retry_records_failed_after_retry_outcome(tmp_path):
     loader.metrics.recorder_insert_batches_total.labels.assert_any_call(
         table="market_data", result="failed_after_retry"
     )
-    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(
-        table="market_data", result="failed"
-    )
+    loader.metrics.recorder_insert_retry_total.labels.assert_any_call(table="market_data", result="failed")
 
 
 def test_insert_with_retry_records_failed_no_client_outcome(tmp_path):
@@ -343,9 +335,7 @@ def test_insert_with_retry_records_failed_no_client_outcome(tmp_path):
     )
 
     assert ok is False
-    loader.metrics.recorder_insert_batches_total.labels.assert_any_call(
-        table="market_data", result="failed_no_client"
-    )
+    loader.metrics.recorder_insert_batches_total.labels.assert_any_call(table="market_data", result="failed_no_client")
 
 
 def test_parse_table_from_filename_handles_prefixes():
@@ -636,9 +626,20 @@ def test_process_files_defers_when_no_client(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
-    row = {"symbol": "2330", "exchange": "TSE", "type": "BidAsk", "exch_ts": 1, "ingest_ts": 1,
-           "price_scaled": 100000, "volume": 1, "bids_price": [990000], "bids_vol": [10],
-           "asks_price": [1000000], "asks_vol": [5], "seq_no": 1}
+    row = {
+        "symbol": "2330",
+        "exchange": "TSE",
+        "type": "BidAsk",
+        "exch_ts": 1,
+        "ingest_ts": 1,
+        "price_scaled": 100000,
+        "volume": 1,
+        "bids_price": [990000],
+        "bids_vol": [10],
+        "asks_price": [1000000],
+        "asks_vol": [5],
+        "seq_no": 1,
+    }
     fpath = wal_dir / "market_data_100.jsonl"
     fpath.write_text(json.dumps(row) + "\n")
     past = time.time() - 10
@@ -670,6 +671,7 @@ def _run_and_capture_warnings(loader):
     original_warn = loader._logger.warning if hasattr(loader, "_logger") else None
 
     import hft_platform.recorder.loader as loader_mod
+
     captured = []
 
     original = loader_mod.logger.warning
@@ -693,10 +695,20 @@ def test_tick_type_no_orderbook_warning(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
-    tick_row = {"symbol": "TXFC6", "exchange": "FUT", "type": "Tick",
-                "exch_ts": 1, "ingest_ts": 1, "price_scaled": 330000000,
-                "volume": 2, "bids_price": [], "bids_vol": [],
-                "asks_price": [], "asks_vol": [], "seq_no": 1}
+    tick_row = {
+        "symbol": "TXFC6",
+        "exchange": "FUT",
+        "type": "Tick",
+        "exch_ts": 1,
+        "ingest_ts": 1,
+        "price_scaled": 330000000,
+        "volume": 2,
+        "bids_price": [],
+        "bids_vol": [],
+        "asks_price": [],
+        "asks_vol": [],
+        "seq_no": 1,
+    }
     _make_wal_file(wal_dir, "market_data_200.jsonl", tick_row)
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
@@ -713,10 +725,20 @@ def test_tick_type_lowercase_no_orderbook_warning(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
-    tick_row = {"symbol": "TXFC6", "exchange": "FUT", "type": "tick",
-                "exch_ts": 1, "ingest_ts": 1, "price_scaled": 330000000,
-                "volume": 2, "bids_price": [], "bids_vol": [],
-                "asks_price": [], "asks_vol": [], "seq_no": 1}
+    tick_row = {
+        "symbol": "TXFC6",
+        "exchange": "FUT",
+        "type": "tick",
+        "exch_ts": 1,
+        "ingest_ts": 1,
+        "price_scaled": 330000000,
+        "volume": 2,
+        "bids_price": [],
+        "bids_vol": [],
+        "asks_price": [],
+        "asks_vol": [],
+        "seq_no": 1,
+    }
     _make_wal_file(wal_dir, "market_data_201.jsonl", tick_row)
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
@@ -733,10 +755,20 @@ def test_bidask_both_empty_no_orderbook_warning(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
-    row = {"symbol": "TMFC6", "exchange": "FUT", "type": "BidAsk",
-           "exch_ts": 1, "ingest_ts": 1, "price_scaled": 0,
-           "volume": 0, "bids_price": [], "bids_vol": [],
-           "asks_price": [], "asks_vol": [], "seq_no": 1}
+    row = {
+        "symbol": "TMFC6",
+        "exchange": "FUT",
+        "type": "BidAsk",
+        "exch_ts": 1,
+        "ingest_ts": 1,
+        "price_scaled": 0,
+        "volume": 0,
+        "bids_price": [],
+        "bids_vol": [],
+        "asks_price": [],
+        "asks_vol": [],
+        "seq_no": 1,
+    }
     _make_wal_file(wal_dir, "market_data_202.jsonl", row)
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
@@ -753,10 +785,20 @@ def test_bidask_one_side_empty_warns(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
-    row = {"symbol": "TXO32000O6", "exchange": "FUT", "type": "BidAsk",
-           "exch_ts": 1, "ingest_ts": 1, "price_scaled": 0,
-           "volume": 0, "bids_price": [320000000], "bids_vol": [5],
-           "asks_price": [], "asks_vol": [], "seq_no": 1}
+    row = {
+        "symbol": "TXO32000O6",
+        "exchange": "FUT",
+        "type": "BidAsk",
+        "exch_ts": 1,
+        "ingest_ts": 1,
+        "price_scaled": 0,
+        "volume": 0,
+        "bids_price": [320000000],
+        "bids_vol": [5],
+        "asks_price": [],
+        "asks_vol": [],
+        "seq_no": 1,
+    }
     _make_wal_file(wal_dir, "market_data_203.jsonl", row)
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
@@ -775,14 +817,34 @@ def test_replay_dlq_inserts_and_archives(tmp_path):
     archive_dir.mkdir()
     dlq_dir.mkdir()
 
-    row = {"symbol": "2330", "exchange": "TSE", "type": "BidAsk", "exch_ts": 1, "ingest_ts": 1,
-           "price_scaled": 100000, "volume": 1, "bids_price": [990000], "bids_vol": [10],
-           "asks_price": [1000000], "asks_vol": [5], "seq_no": 1}
+    row = {
+        "symbol": "2330",
+        "exchange": "TSE",
+        "type": "BidAsk",
+        "exch_ts": 1,
+        "ingest_ts": 1,
+        "price_scaled": 100000,
+        "volume": 1,
+        "bids_price": [990000],
+        "bids_vol": [10],
+        "asks_price": [1000000],
+        "asks_vol": [5],
+        "seq_no": 1,
+    }
     dlq_file = dlq_dir / "market_data_300.jsonl"
     with open(dlq_file, "w") as f:
-        f.write(json.dumps({"_dlq_meta": True, "table": "market_data",
-                            "error": "insert_failed_after_retries",
-                            "timestamp": 300, "row_count": 1}) + "\n")
+        f.write(
+            json.dumps(
+                {
+                    "_dlq_meta": True,
+                    "table": "market_data",
+                    "error": "insert_failed_after_retries",
+                    "timestamp": 300,
+                    "row_count": 1,
+                }
+            )
+            + "\n"
+        )
         f.write(json.dumps(row) + "\n")
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
@@ -805,13 +867,26 @@ def test_replay_dlq_dry_run_does_not_move(tmp_path):
     archive_dir.mkdir()
     dlq_dir.mkdir()
 
-    row = {"symbol": "2330", "exchange": "TSE", "type": "BidAsk", "exch_ts": 1, "ingest_ts": 1,
-           "price_scaled": 100000, "volume": 1, "bids_price": [990000], "bids_vol": [10],
-           "asks_price": [1000000], "asks_vol": [5], "seq_no": 1}
+    row = {
+        "symbol": "2330",
+        "exchange": "TSE",
+        "type": "BidAsk",
+        "exch_ts": 1,
+        "ingest_ts": 1,
+        "price_scaled": 100000,
+        "volume": 1,
+        "bids_price": [990000],
+        "bids_vol": [10],
+        "asks_price": [1000000],
+        "asks_vol": [5],
+        "seq_no": 1,
+    }
     dlq_file = dlq_dir / "market_data_400.jsonl"
     with open(dlq_file, "w") as f:
-        f.write(json.dumps({"_dlq_meta": True, "table": "market_data",
-                            "error": "test", "timestamp": 400, "row_count": 1}) + "\n")
+        f.write(
+            json.dumps({"_dlq_meta": True, "table": "market_data", "error": "test", "timestamp": 400, "row_count": 1})
+            + "\n"
+        )
         f.write(json.dumps(row) + "\n")
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
@@ -824,8 +899,13 @@ def test_replay_dlq_dry_run_does_not_move(tmp_path):
     loader.ch_client.insert.assert_not_called()
 
 
-def test_compute_backoff_bounds():
-    loader = WALLoaderService(wal_dir=".wal", archive_dir=".wal/archive")
+def test_compute_backoff_bounds(tmp_path):
+    wal_dir = tmp_path / "wal"
+    archive_dir = wal_dir / "archive"
+    wal_dir.mkdir()
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
 
     with patch("random.random", return_value=0.0):
         delay = loader._compute_connect_backoff(0)

@@ -47,7 +47,14 @@ def test_main_fails_when_cleanup_step_fails(monkeypatch, tmp_path: Path) -> None
     mod = _load_module()
     (tmp_path / "README.md").write_text("x\n", encoding="utf-8")
 
-    def _bad_steps(*, clean_rust: bool, cleanup_flags: dict[str, bool]):
+    def _bad_steps(
+        *,
+        clean_rust: bool,
+        cleanup_flags: dict[str, bool],
+        cleanup_profile: str,
+        seed_minimal_sample: bool,
+        tracked_slimming_profile: str,
+    ):
         return [
             {
                 "step": "bad",
@@ -134,7 +141,9 @@ def test_main_guard_no_tracked_path_blocks_cleanup(tmp_path: Path) -> None:
 
     payload = json.loads((tmp_path / "outputs/release_converge/latest.json").read_text(encoding="utf-8"))
     assert payload["cleanup_status"] == "fail"
-    guard_rows = [row for row in payload["cleanup_steps"] if str(row.get("step", "")).startswith("guard_no_tracked_path:")]
+    guard_rows = [
+        row for row in payload["cleanup_steps"] if str(row.get("step", "")).startswith("guard_no_tracked_path:")
+    ]
     assert guard_rows
     assert any(int(row.get("returncode", 0)) != 0 for row in guard_rows)
     blocked_rows = [row for row in payload["cleanup_steps"] if row.get("step") == "clean_outputs"]
@@ -154,7 +163,9 @@ def test_safe_prune_untracked_keeps_tracked_files(tmp_path: Path) -> None:
     tracked_keep.write_text("", encoding="utf-8")
     tracked_prof = tmp_path / "tracked.prof"
     tracked_prof.write_text("tracked\n", encoding="utf-8")
-    subprocess.run(["git", "add", ".benchmarks/.gitkeep", "tracked.prof"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", ".benchmarks/.gitkeep", "tracked.prof"], cwd=tmp_path, check=True, capture_output=True
+    )
     subprocess.run(["git", "commit", "-m", "seed"], cwd=tmp_path, check=True, capture_output=True)
 
     (tmp_path / ".benchmarks" / "junk.bin").write_bytes(b"junk")
@@ -171,3 +182,68 @@ def test_safe_prune_untracked_keeps_tracked_files(tmp_path: Path) -> None:
     assert (tmp_path / "untracked.prof").exists() is False
     assert tracked_keep.exists() is True
     assert tracked_prof.exists() is True
+
+
+def test_resolve_cleanup_flags_mvp_release_defaults() -> None:
+    mod = _load_module()
+    flags = mod._resolve_cleanup_flags(
+        cleanup_profile=mod.CLEANUP_PROFILE_MVP_RELEASE,
+        clean_outputs=False,
+        clean_reports=False,
+        clean_state=False,
+        clean_venv=False,
+        clean_wal=False,
+        clean_data=False,
+    )
+    assert flags["clean_outputs"] is True
+    assert flags["clean_reports"] is True
+    assert flags["clean_state"] is True
+    assert flags["clean_wal"] is True
+    assert flags["clean_data"] is True
+    assert flags["clean_venv"] is False
+
+
+def test_slim_tracked_root_reports_removes_non_keep(tmp_path: Path) -> None:
+    mod = _load_module()
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "tester"], cwd=tmp_path, check=True, capture_output=True)
+
+    base = tmp_path / "research" / "knowledge" / "reports" / "root_reports"
+    base.mkdir(parents=True, exist_ok=True)
+    keep_files = [
+        "README.md",
+        "pyspy_hotspot_triage.md",
+        "e2e_latency.summary.json",
+        "latency_e2e.json",
+    ]
+    for name in keep_files:
+        (base / name).write_text("keep\n", encoding="utf-8")
+    removable = base / "old_profile.svg"
+    removable.write_text("old\n", encoding="utf-8")
+
+    subprocess.run(
+        ["git", "add", "research/knowledge/reports/root_reports"], cwd=tmp_path, check=True, capture_output=True
+    )
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=tmp_path, check=True, capture_output=True)
+
+    tracked = mod._tracked_paths(tmp_path)
+    summary = mod._slim_tracked_root_reports(
+        root=tmp_path,
+        tracked=tracked,
+        output_dir=tmp_path / "outputs" / "release_converge",
+        keep_rel_paths=set(mod.ROOT_REPORTS_MINIMAL_KEEP_PATHS),
+        dry_run=False,
+    )
+    assert summary["removed_files"] == 1
+    assert removable.exists() is False
+    for name in keep_files:
+        assert (base / name).exists() is True
+    assert Path(summary["manifest"]).exists() is True
+
+
+def test_gitignore_contract_keeps_latency_profile_and_smoke_sample() -> None:
+    gitignore = (Path(__file__).resolve().parents[2] / ".gitignore").read_text(encoding="utf-8")
+    assert "!research/tools/latency_profiles.py" in gitignore
+    assert "!research/data/processed/smoke/smoke_v1.npy" in gitignore
+    assert "!research/data/processed/smoke/smoke_v1.npy.meta.json" in gitignore

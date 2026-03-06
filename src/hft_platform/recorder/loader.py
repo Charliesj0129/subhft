@@ -17,7 +17,7 @@ try:
 except ImportError:
     import json
 
-    _dumps = json.dumps  # type: ignore[assignment]
+    _dumps = json.dumps
     _loads = json.loads
 
 import clickhouse_connect

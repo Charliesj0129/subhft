@@ -6,7 +6,6 @@ Tests the full StormGuard lifecycle including:
 - Metrics updates
 """
 
-import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
 

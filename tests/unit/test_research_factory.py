@@ -145,9 +145,8 @@ def test_alpha_manifest_roles_skills_roundtrip() -> None:
 
 def test_factory_audit_warns_when_alpha_has_no_skills(monkeypatch, tmp_path: Path) -> None:
     """Factory audit warns when a governed alpha's manifest has empty skills_used."""
-    import types
     import research.factory as fct
-    from research.registry.schemas import AlphaManifest, AlphaStatus
+    from research.registry.schemas import AlphaManifest
 
     root = tmp_path / "research"
     _bootstrap_research_root(root)
@@ -195,9 +194,7 @@ def test_factory_audit_warns_when_alpha_has_no_skills(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(_ar_mod, "AlphaRegistry", _StubRegistry)
     monkeypatch.setattr(fct, "ROOT", root)
     out = tmp_path / "audit_skills.json"
-    rc = fct.cmd_audit(
-        argparse.Namespace(out=str(out), fail_on_warning=False, data=[])
-    )
+    rc = fct.cmd_audit(argparse.Namespace(out=str(out), fail_on_warning=False, data=[]))
     payload = json.loads(out.read_text(encoding="utf-8"))
     contract = payload["details"]["alpha_contract"]
     assert "dummy_alpha" in contract["alphas_missing_skills"]
@@ -252,4 +249,3 @@ def test_feature_set_version_constant_matches_default_set() -> None:
 
     fs = build_default_lob_feature_set_v1()
     assert fs.feature_set_id == FEATURE_SET_VERSION
-

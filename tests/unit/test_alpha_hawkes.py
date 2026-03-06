@@ -3,6 +3,7 @@
 Tests are guarded with pytest.importorskip for numba so CI doesn't fail
 when numba is unavailable.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -50,9 +51,9 @@ def test_hawkes_tracker_event_jump():
 
     tracker = HawkesTracker(1.0, 0.5, 10.0)
     # last_ts==0 is the sentinel for "first call" — use non-zero ts to init
-    tracker.update(1_000_000_000, False)    # initializes last_ts
+    tracker.update(1_000_000_000, False)  # initializes last_ts
     # Second call with event: very small dt → minimal decay, intensity should rise
-    tracker.update(1_001_000_000, True)    # 1ms later with event
+    tracker.update(1_001_000_000, True)  # 1ms later with event
     assert tracker.intensity > 1.0
 
 
@@ -61,12 +62,12 @@ def test_hawkes_tracker_decay():
     from hft_platform.strategies.alpha.alpha_hawkes import HawkesTracker
 
     tracker = HawkesTracker(1.0, 2.0, 10.0)
-    tracker.update(1_000_000_000, False)   # initialize ts
+    tracker.update(1_000_000_000, False)  # initialize ts
     # Spike with an event
-    tracker.update(1_001_000_000, True)    # 1ms later + event
+    tracker.update(1_001_000_000, True)  # 1ms later + event
     spiked = tracker.intensity
     # Long gap without event — should decay back toward mu
-    tracker.update(2_001_000_000, False)   # 1s later, no event
+    tracker.update(2_001_000_000, False)  # 1s later, no event
     assert tracker.intensity < spiked
     assert tracker.intensity >= tracker.mu - 1e-9
 
@@ -76,5 +77,3 @@ def test_strategy_function_exists():
     from hft_platform.strategies.alpha.alpha_hawkes import hawkes_strategy
 
     assert callable(hawkes_strategy)
-
-

@@ -314,6 +314,8 @@ class ContractsRuntime:
             return True
 
     def write_refresh_status(self, *, result: str, error: str | None = None) -> None:
+        refresh_thread = getattr(self._client, "_contract_refresh_thread", None)
+        refresh_lock = getattr(self._client, "_contract_refresh_lock", None)
         payload = {
             "updated_at_ns": time.time_ns(),
             "result": str(result),
@@ -321,12 +323,8 @@ class ContractsRuntime:
             "version": int(getattr(self._client, "_contract_refresh_version", 0) or 0),
             "policy": str(getattr(self._client, "_contract_refresh_resubscribe_policy", "none") or "none"),
             "thread_running": bool(getattr(self._client, "_contract_refresh_running", False)),
-            "thread_alive": bool(getattr(self._client, "_contract_refresh_thread", None).is_alive())
-            if getattr(self._client, "_contract_refresh_thread", None)
-            else False,
-            "lock_busy": bool(getattr(self._client, "_contract_refresh_lock", None).locked())
-            if getattr(self._client, "_contract_refresh_lock", None)
-            else False,
+            "thread_alive": bool(refresh_thread.is_alive()) if refresh_thread is not None else False,
+            "lock_busy": bool(refresh_lock.locked()) if refresh_lock is not None else False,
             "cache_path": str(getattr(self._client, "_contract_cache_path", "")),
             "refresh_interval_s": float(getattr(self._client, "_contract_refresh_s", 0.0) or 0.0),
             "last_diff": dict(getattr(self._client, "_contract_refresh_last_diff", {}) or {}),

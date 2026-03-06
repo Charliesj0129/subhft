@@ -90,7 +90,9 @@ def test_replay_dedup_prevents_duplicate_insert_after_crash_before_archive(tmp_p
     loader2._dedup_enabled = True
     loader2.ch_client = MagicMock()
     insert_calls_2 = {"n": 0}
-    loader2.insert_batch = types.MethodType(lambda self, table, rows: insert_calls_2.__setitem__("n", insert_calls_2["n"] + 1) or True, loader2)
+    loader2.insert_batch = types.MethodType(
+        lambda self, table, rows: insert_calls_2.__setitem__("n", insert_calls_2["n"] + 1) or True, loader2
+    )
     loader2._is_duplicate = types.MethodType(lambda self, table, content_hash: True, loader2)
     loader2._record_dedup = types.MethodType(lambda self, table, content_hash, row_count: None, loader2)
     assert loader2._process_single_file(str(fpath), force=True) is True

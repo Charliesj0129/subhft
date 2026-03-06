@@ -9,19 +9,18 @@ Covers:
 - test_trigger_halt_bypasses_hysteresis
 - test_stormguard_fsm_hysteresis
 """
+
 import os
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard, StormGuardState
 from hft_platform.risk.validators import StormGuardFSM
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_storm_guard(cooldown_s: float = 30.0, de_n: int = 5) -> StormGuard:
     """Create a StormGuard with test-friendly hysteresis params via env vars."""
@@ -123,7 +122,7 @@ def test_cooldown_elapsed_allows_recovery():
     for i in range(3):
         state = sg.update()
         if i < 2:
-            assert state == StormGuardState.STORM, f"Should still be STORM after {i+1} clears"
+            assert state == StormGuardState.STORM, f"Should still be STORM after {i + 1} clears"
 
     assert sg.state == StormGuardState.NORMAL
 
@@ -170,7 +169,7 @@ def test_stormguard_fsm_hysteresis():
     # 3 recovery updates (PnL back to normal) — should still be STORM
     for i in range(3):
         fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.STORM, f"Should still be STORM after {i+1} recovery evals"
+        assert fsm.state == StormGuardState.STORM, f"Should still be STORM after {i + 1} recovery evals"
 
     # 4th recovery update — should transition
     fsm.update_pnl(0)

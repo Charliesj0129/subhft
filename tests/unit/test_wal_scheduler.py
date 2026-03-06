@@ -2,10 +2,7 @@
 
 import datetime as dt
 import os
-import time
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 def test_wal_scheduler_initialization():

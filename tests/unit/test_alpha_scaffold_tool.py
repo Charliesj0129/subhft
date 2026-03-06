@@ -4,9 +4,7 @@ import research.tools.alpha_scaffold as alpha_scaffold
 
 
 def test_normalize_data_fields_supports_csv_and_dedup() -> None:
-    fields = alpha_scaffold._normalize_data_fields(
-        ["ofi_l1_ema8, spread_scaled", "spread_scaled", "l1_bid_qty"]
-    )
+    fields = alpha_scaffold._normalize_data_fields(["ofi_l1_ema8, spread_scaled", "spread_scaled", "l1_bid_qty"])
     assert fields == ("ofi_l1_ema8", "spread_scaled", "l1_bid_qty")
 
 

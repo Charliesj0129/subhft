@@ -8,10 +8,10 @@ from hft_platform.feature.rollout import FeatureRolloutController
 
 
 def test_feature_profile_registry_load_and_apply(tmp_path: Path):
-    path = tmp_path / 'feature_profiles.yaml'
+    path = tmp_path / "feature_profiles.yaml"
     path.write_text(
-        'default_profile_id: p1\nprofiles:\n  - profile_id: p1\n    feature_set_id: lob_shared_v1\n    schema_version: 1\n    enabled: true\n    state: active\n    params:\n      ema_window: 5\n',
-        encoding='utf-8',
+        "default_profile_id: p1\nprofiles:\n  - profile_id: p1\n    feature_set_id: lob_shared_v1\n    schema_version: 1\n    enabled: true\n    state: active\n    params:\n      ema_window: 5\n",
+        encoding="utf-8",
     )
     reg = FeatureProfileRegistry.from_file(path)
     assert reg.validate() == []
@@ -19,8 +19,8 @@ def test_feature_profile_registry_load_and_apply(tmp_path: Path):
     prof = reg.get_active_for_set(fe.feature_set_id())
     assert prof is not None
     fe.apply_profile(prof)
-    assert fe.active_profile_id() == 'p1'
-    assert fe.profile_params().get('ema_window') == 5
+    assert fe.active_profile_id() == "p1"
+    assert fe.profile_params().get("ema_window") == 5
 
 
 def test_feature_rollout_controller_roundtrip_and_rollback(tmp_path: Path):

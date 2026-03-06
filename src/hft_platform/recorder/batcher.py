@@ -535,9 +535,9 @@ class Batcher:
                     if cols and data:
                         await self.writer.write_columnar(self.table_name, cols, data, flush_buf.row_count)
                 else:
-                    data = flush_buf.to_row_dicts()
-                    if data:
-                        await self.writer.write(self.table_name, data)
+                    rows = flush_buf.to_row_dicts()
+                    if rows:
+                        await self.writer.write(self.table_name, rows)
             except asyncio.TimeoutError:
                 logger.error(
                     "Write timeout - data written to WAL",

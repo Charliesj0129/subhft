@@ -71,15 +71,11 @@ def _seed_common_docs(root: Path, *, include_all_ws_tasks: bool = False) -> None
 
     _write(
         root / "docs/TODO.md",
-        "# TODO\n"
-        "### 1.4 熱路徑 Rust 化擴編（P0）\n"
-        "### 2.4 研究與分析工廠擴容（P1）\n",
+        "# TODO\n### 1.4 熱路徑 Rust 化擴編（P0）\n### 2.4 研究與分析工廠擴容（P1）\n",
     )
     _write(
         root / "ROADMAP.md",
-        "# ROADMAP\n"
-        "## 6. 接下來 30 天\n"
-        f"{task_lines}",
+        f"# ROADMAP\n## 6. 接下來 30 天\n{task_lines}",
     )
     _write(
         root / "tests/unit/test_rust_hotpath_parity.py",

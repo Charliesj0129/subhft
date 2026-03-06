@@ -1,7 +1,7 @@
 import builtins
 import sys
 
-from prometheus_client import Counter, REGISTRY
+from prometheus_client import REGISTRY, Counter
 
 from hft_platform.observability.metrics import MetricsRegistry, _unregister_metric_prefixes
 

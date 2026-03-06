@@ -1,9 +1,8 @@
 """Tests for CE3-03: FileClaimRegistry."""
+
 import os
 import tempfile
 import threading
-
-import pytest
 
 from hft_platform.recorder.shard_claim import FileClaimRegistry
 

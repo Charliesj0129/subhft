@@ -24,6 +24,20 @@ ROLES_USED: tuple[str, ...] = (
     "code-reviewer",
 )
 
+CLEANUP_PROFILE_SAFE = "safe"
+CLEANUP_PROFILE_EXTENDED = "extended"
+CLEANUP_PROFILE_MVP_RELEASE = "mvp_release"
+
+TRACKED_SLIMMING_NONE = "none"
+TRACKED_SLIMMING_ROOT_REPORTS_MINIMAL = "root_reports_minimal"
+
+ROOT_REPORTS_MINIMAL_KEEP_PATHS: tuple[str, ...] = (
+    "research/knowledge/reports/root_reports/README.md",
+    "research/knowledge/reports/root_reports/pyspy_hotspot_triage.md",
+    "research/knowledge/reports/root_reports/e2e_latency.summary.json",
+    "research/knowledge/reports/root_reports/latency_e2e.json",
+)
+
 
 def _now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
@@ -167,6 +181,71 @@ def _safe_prune_untracked(root: Path, *, tracked: set[str], tracked_dirs: set[st
     }
 
 
+def _slim_tracked_root_reports(
+    *,
+    root: Path,
+    tracked: set[str],
+    output_dir: Path,
+    keep_rel_paths: set[str],
+    dry_run: bool,
+) -> dict[str, Any]:
+    base_rel = "research/knowledge/reports/root_reports"
+    base_dir = root / base_rel
+    if not base_dir.exists():
+        return {
+            "base_dir": base_rel,
+            "dry_run": bool(dry_run),
+            "removed_files": 0,
+            "removed_bytes": 0,
+            "kept_files": len(keep_rel_paths),
+            "manifest": "",
+            "skipped": "base_dir_missing",
+        }
+
+    tracked_in_base = sorted(
+        rel
+        for rel in tracked
+        if rel == base_rel or rel.startswith(base_rel + "/")
+    )
+    candidates = [rel for rel in tracked_in_base if rel not in keep_rel_paths]
+
+    removed: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for rel in candidates:
+        path = root / rel
+        if not path.exists() or not path.is_file():
+            missing.append(rel)
+            continue
+        size = int(path.stat().st_size)
+        if not dry_run:
+            path.unlink(missing_ok=True)
+        removed.append({"path": rel, "size_bytes": size})
+
+    removed_bytes = int(sum(int(row["size_bytes"]) for row in removed))
+    manifest_path = output_dir / "backups" / f"root_reports_slim_{_stamp()}.json"
+    manifest = {
+        "generated_at": _now_iso(),
+        "base_dir": base_rel,
+        "dry_run": bool(dry_run),
+        "keep_paths": sorted(keep_rel_paths),
+        "removed": removed,
+        "missing": missing,
+        "removed_files": len(removed),
+        "removed_bytes": removed_bytes,
+    }
+    _write_json(manifest_path, manifest)
+
+    return {
+        "base_dir": base_rel,
+        "dry_run": bool(dry_run),
+        "removed_files": len(removed),
+        "removed_bytes": removed_bytes,
+        "kept_files": len(keep_rel_paths),
+        "missing_files": len(missing),
+        "manifest": str(manifest_path),
+    }
+
+
 def _write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -253,18 +332,26 @@ def _resolve_cleanup_flags(
     clean_wal: bool,
     clean_data: bool,
 ) -> dict[str, bool]:
-    extended = cleanup_profile == "extended"
+    extended = cleanup_profile == CLEANUP_PROFILE_EXTENDED
+    mvp_release = cleanup_profile == CLEANUP_PROFILE_MVP_RELEASE
     return {
-        "clean_outputs": bool(clean_outputs or extended),
-        "clean_reports": bool(clean_reports or extended),
-        "clean_state": bool(clean_state or extended),
+        "clean_outputs": bool(clean_outputs or extended or mvp_release),
+        "clean_reports": bool(clean_reports or extended or mvp_release),
+        "clean_state": bool(clean_state or extended or mvp_release),
         "clean_venv": bool(clean_venv or extended),
-        "clean_wal": bool(clean_wal),
-        "clean_data": bool(clean_data),
+        "clean_wal": bool(clean_wal or mvp_release),
+        "clean_data": bool(clean_data or mvp_release),
     }
 
 
-def _cleanup_steps(*, clean_rust: bool, cleanup_flags: dict[str, bool]) -> list[dict[str, Any]]:
+def _cleanup_steps(
+    *,
+    clean_rust: bool,
+    cleanup_flags: dict[str, bool],
+    cleanup_profile: str,
+    seed_minimal_sample: bool,
+    tracked_slimming_profile: str,
+) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = [
         {
             "step": "make_clean",
@@ -317,6 +404,55 @@ def _cleanup_steps(*, clean_rust: bool, cleanup_flags: dict[str, bool]) -> list[
                 "destructive": True,
                 "targets": [target],
                 "risk": "high" if step in {"clean_wal", "clean_data"} else "medium",
+            }
+        )
+
+    if cleanup_profile == CLEANUP_PROFILE_MVP_RELEASE:
+        steps.extend(
+            [
+                {
+                    "step": "mvp_research_gitclean",
+                    "command": "git clean -fdX research/data research/knowledge research/experiments research/logs research/results",
+                    "destructive": True,
+                    "targets": [],
+                    "risk": "high",
+                },
+                {
+                    "step": "mvp_research_init",
+                    "command": "(.venv/bin/python -m research.factory init 2>/dev/null || python3 -m research.factory init)",
+                    "destructive": True,
+                    "targets": [],
+                    "risk": "medium",
+                },
+            ]
+        )
+        if seed_minimal_sample:
+            steps.append(
+                {
+                    "step": "mvp_seed_minimal_sample",
+                    "command": "mkdir -p research/data/processed/smoke && ((.venv/bin/python research/tools/synth_lob_gen.py --out research/data/processed/smoke/smoke_v1.npy --version v2 --n-rows 512 --rng-seed 7 --owner release --symbols TXF --split smoke --generator-version smoke_v1 2>/dev/null) || (python3 research/tools/synth_lob_gen.py --out research/data/processed/smoke/smoke_v1.npy --version v2 --n-rows 512 --rng-seed 7 --owner release --symbols TXF --split smoke --generator-version smoke_v1)) && ((.venv/bin/python -m research validate-data-meta research/data/processed/smoke/smoke_v1.npy 2>/dev/null) || (python3 -m research validate-data-meta research/data/processed/smoke/smoke_v1.npy))",
+                    "destructive": True,
+                    "targets": [],
+                    "risk": "medium",
+                }
+            )
+        if tracked_slimming_profile == TRACKED_SLIMMING_ROOT_REPORTS_MINIMAL:
+            steps.append(
+                {
+                    "step": "mvp_tracked_slim_root_reports",
+                    "command": "__slim_tracked_root_reports__",
+                    "destructive": True,
+                    "targets": [],
+                    "risk": "high",
+                }
+            )
+        steps.append(
+            {
+                "step": "mvp_research_clean",
+                "command": "(.venv/bin/python -m research.factory clean 2>/dev/null || python3 -m research.factory clean)",
+                "destructive": True,
+                "targets": [],
+                "risk": "low",
             }
         )
     return steps
@@ -513,13 +649,29 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-clean", action="store_true", help="Skip cleanup steps")
     p.add_argument("--skip-gate", action="store_true", help="Skip release gate checks")
     p.add_argument("--dry-run", action="store_true", help="Do not execute destructive cleanup steps")
-    p.add_argument("--cleanup-profile", choices=("safe", "extended"), default="safe", help="Cleanup profile")
+    p.add_argument(
+        "--cleanup-profile",
+        choices=(CLEANUP_PROFILE_SAFE, CLEANUP_PROFILE_EXTENDED, CLEANUP_PROFILE_MVP_RELEASE),
+        default=CLEANUP_PROFILE_SAFE,
+        help="Cleanup profile",
+    )
     p.add_argument("--clean-outputs", action="store_true", help="Remove outputs/ directory")
     p.add_argument("--clean-reports", action="store_true", help="Remove reports/ directory")
     p.add_argument("--clean-state", action="store_true", help="Remove .state/ directory")
     p.add_argument("--clean-venv", action="store_true", help="Remove .venv/ directory")
     p.add_argument("--clean-wal", action="store_true", help="High-risk cleanup: remove .wal/ directory")
     p.add_argument("--clean-data", action="store_true", help="High-risk cleanup: remove data/ directory")
+    p.add_argument(
+        "--seed-minimal-sample",
+        action="store_true",
+        help="Seed minimal research smoke dataset under research/data/processed/smoke/",
+    )
+    p.add_argument(
+        "--tracked-slimming-profile",
+        choices=(TRACKED_SLIMMING_NONE, TRACKED_SLIMMING_ROOT_REPORTS_MINIMAL),
+        default=TRACKED_SLIMMING_NONE,
+        help="Tracked artifact slimming policy",
+    )
     p.add_argument(
         "--guard-no-tracked-path",
         action="append",
@@ -550,6 +702,12 @@ def main(argv: list[str] | None = None) -> int:
     is_git_repo = _is_git_repo(root)
     tracked = _tracked_paths(root) if is_git_repo else set()
     tracked_dirs = _tracked_dirs(tracked)
+    cleanup_profile = str(args.cleanup_profile)
+    tracked_slimming_profile = str(args.tracked_slimming_profile)
+    if cleanup_profile == CLEANUP_PROFILE_MVP_RELEASE and tracked_slimming_profile == TRACKED_SLIMMING_NONE:
+        tracked_slimming_profile = TRACKED_SLIMMING_ROOT_REPORTS_MINIMAL
+    seed_minimal_sample = bool(args.seed_minimal_sample or cleanup_profile == CLEANUP_PROFILE_MVP_RELEASE)
+
     cleanup_flags = _resolve_cleanup_flags(
         cleanup_profile=str(args.cleanup_profile),
         clean_outputs=bool(args.clean_outputs),
@@ -559,7 +717,13 @@ def main(argv: list[str] | None = None) -> int:
         clean_wal=bool(args.clean_wal),
         clean_data=bool(args.clean_data),
     )
-    cleanup_plan = _cleanup_steps(clean_rust=bool(args.clean_rust), cleanup_flags=cleanup_flags)
+    cleanup_plan = _cleanup_steps(
+        clean_rust=bool(args.clean_rust),
+        cleanup_flags=cleanup_flags,
+        cleanup_profile=cleanup_profile,
+        seed_minimal_sample=seed_minimal_sample,
+        tracked_slimming_profile=tracked_slimming_profile,
+    )
     guard_targets = _unique_paths(list(args.guard_no_tracked_path or [])) or _default_guard_targets(cleanup_plan)
 
     cleanup_rows: list[dict[str, Any]] = []
@@ -652,6 +816,30 @@ def main(argv: list[str] | None = None) -> int:
                     "stderr_tail": "",
                     "summary": summary,
                 }
+            elif cmd == "__slim_tracked_root_reports__":
+                started = time.perf_counter()
+                keep_paths = set(ROOT_REPORTS_MINIMAL_KEEP_PATHS)
+                summary = _slim_tracked_root_reports(
+                    root=root,
+                    tracked=tracked,
+                    output_dir=out_dir,
+                    keep_rel_paths=keep_paths,
+                    dry_run=bool(args.dry_run),
+                )
+                elapsed = time.perf_counter() - started
+                summary_json = json.dumps(summary, ensure_ascii=False)
+                row = {
+                    "step": step,
+                    "command": cmd,
+                    "returncode": 0,
+                    "duration_s": round(elapsed, 3),
+                    "stdout": summary_json,
+                    "stderr": "",
+                    "stdout_tail": summary_json,
+                    "stderr_tail": "",
+                    "summary": summary,
+                    "tracked_slimming_profile": tracked_slimming_profile,
+                }
             else:
                 row = _run_shell(cmd, cwd=root)
                 row["step"] = step
@@ -689,7 +877,7 @@ def main(argv: list[str] | None = None) -> int:
             "skip_clean": bool(args.skip_clean),
             "skip_gate": bool(args.skip_gate),
             "dry_run": bool(args.dry_run),
-            "cleanup_profile": str(args.cleanup_profile),
+            "cleanup_profile": cleanup_profile,
             "gate_profile": str(args.gate_profile),
             "continue_on_error": bool(args.continue_on_error),
             "clean_rust": bool(args.clean_rust),
@@ -699,6 +887,8 @@ def main(argv: list[str] | None = None) -> int:
             "clean_venv": bool(cleanup_flags.get("clean_venv", False)),
             "clean_wal": bool(cleanup_flags.get("clean_wal", False)),
             "clean_data": bool(cleanup_flags.get("clean_data", False)),
+            "seed_minimal_sample": seed_minimal_sample,
+            "tracked_slimming_profile": tracked_slimming_profile,
             "guard_no_tracked_path": guard_targets,
         },
         "skills_used": list(SKILLS_USED),

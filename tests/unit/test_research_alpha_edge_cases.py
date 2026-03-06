@@ -2,17 +2,19 @@
 
 Tests NaN/inf inputs, empty arrays, reset behaviour, and OFI batch validation.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-
 # ─── OFIMCAlpha edge cases ────────────────────────────────────────────────────
+
 
 class TestOFIMCAlphaEdgeCases:
     def _make(self):
         from research.alphas.ofi_mc.impl import OFIMCAlpha
+
         return OFIMCAlpha()
 
     def test_first_call_returns_zero(self):
@@ -50,6 +52,7 @@ class TestOFIMCAlphaEdgeCases:
 
     def test_update_batch_missing_required_field_raises(self):
         from research.alphas.ofi_mc.impl import OFIMCAlpha
+
         alpha = OFIMCAlpha()
         # Structured array missing bid_px / best_bid / bid_price entirely
         dt = np.dtype([("close", "f8"), ("volume", "f8")])
@@ -59,11 +62,16 @@ class TestOFIMCAlphaEdgeCases:
 
     def test_update_batch_with_aliases(self):
         alpha = self._make()
-        dt = np.dtype([
-            ("best_bid", "f8"), ("best_ask", "f8"),
-            ("bid_depth", "f8"), ("ask_depth", "f8"),
-            ("qty", "f8"), ("mid", "f8"),
-        ])
+        dt = np.dtype(
+            [
+                ("best_bid", "f8"),
+                ("best_ask", "f8"),
+                ("bid_depth", "f8"),
+                ("ask_depth", "f8"),
+                ("qty", "f8"),
+                ("mid", "f8"),
+            ]
+        )
         arr = np.zeros(4, dtype=dt)
         arr["best_bid"] = 100.0
         arr["best_ask"] = 101.0
@@ -78,9 +86,11 @@ class TestOFIMCAlphaEdgeCases:
 
 # ─── OFIMCFactor extreme-value tests ─────────────────────────────────────────
 
+
 class TestOFIMCFactorExtremes:
     def _make(self):
         from research.alphas.ofi_mc.impl import OFIMCFactor
+
         return OFIMCFactor()
 
     def test_large_bid_qty(self):
@@ -100,9 +110,11 @@ class TestOFIMCFactorExtremes:
 
 # ─── GARCH vol alpha edge cases ───────────────────────────────────────────────
 
+
 class TestGARCHVolEdgeCases:
     def _make(self):
         from research.alphas.garch_vol.impl import GARCHVolAlpha
+
         return GARCHVolAlpha()
 
     def test_manifest_id(self):
@@ -132,9 +144,11 @@ class TestGARCHVolEdgeCases:
 
 # ─── KL Regime alpha edge cases ───────────────────────────────────────────────
 
+
 class TestKLRegimeEdgeCases:
     def _make(self):
         from research.alphas.kl_regime.impl import KLRegimeAlpha
+
         return KLRegimeAlpha()
 
     def test_manifest_id(self):
@@ -159,5 +173,3 @@ class TestKLRegimeEdgeCases:
         sig = alpha.get_signal()
         assert np.isfinite(sig)
         assert sig == pytest.approx(0.0)
-
-

@@ -58,6 +58,8 @@ class FeatureEngine:
     - Exposes latest per-symbol values + emits `FeatureUpdateEvent`
     """
 
+    _feature_profile: FeatureProfile | None
+
     __slots__ = (
         "_registry",
         "_feature_set",

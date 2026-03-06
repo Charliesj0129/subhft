@@ -1,6 +1,6 @@
 # Release Convergence Runbook
 
-更新日期：2026-03-05
+更新日期：2026-03-06
 
 ## 目標
 
@@ -37,10 +37,27 @@ make release-converge
 make release-converge CLEAN_RUST=1
 ```
 
+### 4) MVP 發行收斂（激進，含 tracked 瘦身 + full gate）
+
+```bash
+make release-converge-mvp
+# 或：
+make release-converge-mvp CLEAN_RUST=1
+```
+
+此模式會使用 `cleanup_profile=mvp_release`，預設行為：
+- 清理高風險目錄（如 `.wal/`、`data/`、`outputs/`、`reports/`、`.state/`）
+- 對 `research/knowledge/reports/root_reports/` 做 tracked 瘦身（保留最小白名單）
+- 重建 `research/` 骨架並補種最小 smoke 樣本：
+  - `research/data/processed/smoke/smoke_v1.npy`
+  - `research/data/processed/smoke/smoke_v1.npy.meta.json`
+- 以 `--gate-profile full` 作為發行 gate
+
 ## 產物
 
 - `outputs/release_converge/latest.json`
 - `outputs/release_converge/latest.md`
+- `outputs/release_converge/backups/root_reports_slim_*.json`（tracked 瘦身 manifest）
 
 欄位重點：
 - `before/after.sizes`：清潔前後容量快照。
@@ -55,5 +72,10 @@ make release-converge CLEAN_RUST=1
 
 ## 注意事項
 
-- 深度清潔預設僅刪除 cache/暫存/coverage/prof 檔案，不刪除 tracked source。
-- 大型 runtime 資料（如 `.wal`、`data/`）不在預設刪除範圍，避免誤刪營運資料。
+- `release-converge`（safe/extended）預設不刪 tracked source。
+- `release-converge-mvp` 會刪除部分 tracked 歷史報告（依白名單保留），執行前應確認備份策略。
+- `root_reports` 最小保留白名單：
+  - `README.md`
+  - `pyspy_hotspot_triage.md`
+  - `e2e_latency.summary.json`
+  - `latency_e2e.json`
