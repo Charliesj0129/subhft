@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from research.tools.synth_lob_gen import SyntheticLOBConfig, generate_lob_data
+from research.tools.synth_lob_gen import (
+    SyntheticLOBConfig,
+    SyntheticLOBConfigV2,
+    generate_lob_data,
+    generate_lob_data_v2,
+)
 from research.tools.vm_ul import DataUL, validate_meta_ul
 
 
@@ -23,6 +28,10 @@ def test_generate_lob_data_shape_and_fields() -> None:
     )
     assert meta["rows"] == 512
     assert meta["data_ul"] == 5
+    assert meta["generator"] == "synth_lob_gen"
+    assert meta["seed"] == 42
+    assert meta["symbols"] == []
+    assert meta["split"] == "full"
 
 
 def test_generate_lob_data_ul5_meta_compliance() -> None:
@@ -44,3 +53,12 @@ def test_generate_lob_data_rng_seed_deterministic() -> None:
     assert np.array_equal(arr1, arr2)
     assert meta1["data_fingerprint"] == meta2["data_fingerprint"]
 
+
+def test_generate_lob_data_v2_contains_governance_alias_fields() -> None:
+    cfg = SyntheticLOBConfigV2(n_rows=256, rng_seed=19)
+    _arr, meta = generate_lob_data_v2(cfg)
+
+    assert meta["generator"] == "synth_lob_gen"
+    assert meta["seed"] == 19
+    assert meta["symbols"] == []
+    assert meta["split"] == "full"

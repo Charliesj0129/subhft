@@ -6,7 +6,7 @@ Companion target document: `.agent/library/target-architecture.md`.
 Companion C4 diagrams: `.agent/library/c4-model-current.md`.
 Companion research execution plan: `.agent/library/research_pipeline_execution_plan.md`.
 Companion Rust boundary note: `.agent/library/rust_pyo3.md`.
-Companion planned feature unification spec (TODO): `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+Companion feature unification spec (prototype landed): `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 ## 1. Architecture Slices (As-Built)
@@ -43,7 +43,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping.
 - `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events (Python/Rust paths).
 - `src/hft_platform/feed_adapter/lob_engine.py`: per-symbol LOB + stats.
-- 🔄 TODO (planned): add a separate `FeatureEngine` / Feature Plane after `LOBEngine` for shared LOB-derived feature kernels (research/backtest/live parity). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+- 🟡 Prototype landed: optional `FeatureEngine` / Feature Plane after `LOBEngine` for shared LOB-derived feature kernels (research/backtest/live parity). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 
 3. Decision plane
 
@@ -86,7 +86,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - Shioaji callback -> `raw_queue`
 - `MarketDataService`: normalize -> LOB update -> publish events to bus
 - optional direct recorder mapping to `recorder_queue`
-- 🔄 TODO (planned): `LOBEngine -> FeatureEngine -> StrategyRunner` path for shared microstructure features (feature plane not implemented in as-built baseline)
+- 🟡 Prototype path available (feature-flagged): `LOBEngine -> FeatureEngine -> StrategyRunner` for shared microstructure features
 
 4. Strategy:
 
@@ -147,7 +147,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `hft alpha experiments list|compare|best` reads `research/experiments/runs/*/meta.json`.
 - RL bridge in `research/rl/lifecycle.py` logs RL runs and can promote latest run via Gate D-E (`hft alpha rl-promote`).
 
-## 4A. Planned Research/Runtime Feature Unification (TODO, Not Yet Implemented)
+## 4A. Research/Runtime Feature Unification (Prototype Landed, Production Backlog Open)
 
 Reference spec: `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 
@@ -160,9 +160,9 @@ Planned direction:
 
 Status:
 
-- 🔄 TODO `FeatureEngine` runtime component
-- 🔄 TODO `HftBacktestAdapter` feature-first mode (`lob_feature`)
-- 🔄 TODO Feature ABI/versioning/parity gates (Python reference vs Rust kernels)
+- ✅ `FeatureEngine` runtime component and strategy pull APIs landed (feature-flagged rollout)
+- ✅ `HftBacktestAdapter` feature-first mode (`lob_feature`) landed (L1 synthesized compatibility path)
+- 🟡 Feature ABI/versioning/parity gates landed in prototype scope; Rust transport/production kernel promotion remains backlog
 
 ## 5. Module Inventory (Current)
 
@@ -246,7 +246,7 @@ Status:
 4. Contract surfaces (`events.py`, `contracts/*`) are cross-module boundaries.
 5. Recorder durability must preserve data under ClickHouse outages (WAL fallback).
 6. HALT state must block new order progression.
-7. 🔄 TODO (planned invariant for feature plane): shared promoted microstructure features must preserve parity across research replay, `hftbacktest`, and live runtime for the same feature set/version.
+7. Feature-plane rollout invariant: shared promoted microstructure features must preserve parity across research replay, `hftbacktest`, and live runtime for the same feature set/version.
 
 ## 9. Observed Drift and Risks
 
@@ -269,14 +269,14 @@ Status:
 
 - Previously, legacy SQL files remained. This was rectified by centralizing DDL into `src/hft_platform/migrations/clickhouse/` and removing the old `schemas/` folder.
 
-5. Research/live feature drift risk for shared microstructure factors (PLANNED mitigation, TODO)
+5. Research/live feature drift risk for shared microstructure factors (mitigation landed in prototype; production hardening ongoing)
 
 - Current architecture allows equivalent features to be implemented separately in research and strategy/runtime code.
 - Planned mitigation: Feature Plane + shared feature ABI/kernels (see `docs/architecture/feature-engine-lob-research-unification-spec.md`).
 
 ## 10. Cluster Evolution (Vector 2 and 3)
 
-Status: CE-M2 and CE-M3 core modules implemented (2026-02-21). Hardening backlog open.
+Status: CE-M2 and CE-M3 hardening checklist implemented (latest evidence sync 2026-03-05); periodic drill/ops evidence collection remains ongoing.
 Detailed milestone/issue backlog: `.agent/library/cluster-evolution-backlog.md`.
 C4 diagrams: `.agent/library/c4-model-current.md`.
 Design review artifacts: `.agent/library/design-review-artifacts.md`.

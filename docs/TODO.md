@@ -1,88 +1,127 @@
-# 技術債與 TODO 總覽 (Tech Debt & TODOs)
+# 技術債與 TODO（僅保留未完成項）
 
-這份文件盤點了 codebase (`docs/`, `research/`) 中所有已知標記的 TODO 與潛在的架構技術債，協助未來的開發迭代與排程。
+更新日期：2026-03-05
 
----
+> 本文件只追蹤「尚未落地」項目。已完成事項不再保留於此，請改查 git 歷史與對應 runbook / architecture 文檔。
 
-## 🏗 架構與核心路徑 (Architecture & Core)
+> WS-G / WS-H 治理欄位標準：`技能`、`RACI`、`Agent 角色`、`KPI`、`風險與緩解`、`依賴`、`Gate 證據`。
+> 固定角色字典：`Rust Lead`、`Tech Lead`、`Strategy Owner`、`Ops Oncall`、`Research Lead`、`Head of Research`、`Data Steward`、`Trading Runtime Owner`。
 
-### 1. Feature Plane Unification (特徵平面統一)
+## 1. 架構與核心路徑
 
-目前研究環境 (Research) 與實盤交易 (Runtime) 在「微結構特徵」的計算上有潛在的「特徵飄移風險」。現階段的目標是要引入統一的 **FeatureEngine (特徵平面)** 來解決此問題。
+### 1.1 Feature Plane Productionization（P0）
+- 狀態：進行中（prototype 已有，production 化未完成）
+- 追蹤文件：`docs/architecture/feature-engine-lob-research-unification-spec.md`
+- 待辦：
+  - 定稿 Python/Rust typed feature frame 邊界（packed/zero-copy transport contract）。
+  - 將 Rust feature kernel 從 prototype 提升到 production-ready（先聚焦已 promoted 的 feature family）。
+- 驗收標準：
+  - research/replay/live 三條路徑 feature schema 與 warmup/reset 規則一致。
+  - parity 測試與回歸測試可在 CI 穩定通過。
 
-- **狀態**: 🔄 TODO (Planning Phase)
-- **相關追蹤文檔**: `docs/architecture/feature-engine-lob-research-unification-spec.md`
-- **細項 TODOs**:
-  - `🔄 TODO`: 於 Runtime 中新增獨立的 `FeatureEngine` 組件 (介於 `LOBEngine` 與 `StrategyRunner` 之間)。
-  - `🔄 TODO`: 針對回測模組開發 `HftBacktestAdapter` 的特徵優先模式 (`lob_feature` mode)。
-  - `🔄 TODO`: 確保 Feature ABI/Versioning 在 Python Reference 與 Rust 實作之間的對齊機制。
-  - `🔄 TODO`: 確認特徵傳輸的架構邊界 (Packed / Zero-copy 資料交換)。
-  - `🔄 TODO`: 將目前屬於 Prototype 的特定 Rust Feature Kernels 推廣至 Production 狀態。
+### 1.2 Shioaji Adapter 後續收斂（P1）
+- 狀態：進行中（code cutover 完成，待 production burn-in）
+- 追蹤文件：`docs/architecture/shioaji-client-resilience-decoupling-plan.md`
+- 待辦：
+  - 完成 production burn-in 觀測窗口（連續交易日穩定性證據）。
+  - 收斂殘留 low-risk legacy shim，降低 facade 層長期維護成本。
+- 驗收標準：
+  - 連續觀測期內無 reconnect storm / callback crash signature。
+  - 相關 SLO 與告警在月度審查包內可稽核。
 
-### 2. Shioaji Broker Adapter 解耦
+### 1.3 CE2/CE3 營運化追蹤（P1）
+- 狀態：持續營運
+- 追蹤文件：`docs/architecture/cluster-evolution-backlog.md`
+- 待辦：
+  - 按季度執行 gateway / wal-first chaos 子集並附掛證據到 reliability review。
+  - 針對 backlog/replay 健康度維持月度趨勢審核（非一次性開發項）。
 
-- **現狀**: `feed_adapter/shioaji_client.py` 承載過多關注點，包含行情、連線、下單與帳戶快取。
-- **狀態**: 🔄 TODO（P2/P3 持續收斂中, 2026-03-02）
-- **追蹤文檔**: `docs/architecture/shioaji-client-resilience-decoupling-plan.md`
-- **剩餘技術債**:
-  - `🔄 TODO [SHIOAJI-OPS-03]`: 將 Redis session owner preflight 擴充為週期性 lease refresh + stale owner cleanup（目前為 bootstrap warn-only）。
-  - `🔄 TODO [SHIOAJI-DECOUPLE-05]`: 持續縮減 `shioaji_client.py`（目標 <1500 行）並移除剩餘 legacy shim。
-  - `🔄 TODO [SHIOAJI-CANARY-01]`: 完成 production canary 指標驗收（first quote callback / reconnect 成功率）。
+### 1.4 熱路徑 Rust 化擴編（P0）
+- 狀態：規劃中（已有 `rust_core` 基礎，尚未覆蓋更多 execution hotpath）
+- 追蹤文件：`docs/architecture/rust_pyo3.md`, `docs/architecture/rust_pyo3_typed_ring_migration.md`
+- 技能：`hft-strategy-dev`、`rust_feature_engineering`、`performance-profiling`
+- RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall
+- Agent 角色：`explorer`（profiling/baseline，輸出 `hotpath_matrix`）→ `worker`（Rust cutover/CI，輸出 `cutover_patch+ci_report`）→ `default`（整合驗收，輸出 `gate_summary`）
+- KPI：
+  - end-to-end `p95 latency` 較 2026-03 基線下降 >= 20%。
+  - `FFI copy ratio` <= 5%，`alloc/tick` 較基線下降 >= 30%。
+  - `parity pass rate = 100%`（核心契約：`int x10000`）。
+  - 連續 30 天 soak 期間 `parity_critical=0`。
+- 風險與緩解：
+  - 風險：Python↔Rust 邊界產生隱性拷貝，導致尾延遲惡化。
+  - 緩解：先完成 typed frame/zero-copy contract 掃描，再允許 cutover 進 CI gate。
+  - 風險：價格精度或事件語義回歸。
+  - 緩解：強制 parity test + replay regression，違反即 block promote。
+  - 風險：Rust kernel 佔用 GIL 或引發 CPU 競爭。
+  - 緩解：在 profiling 報告中納入 GIL 與 core contention 指標，未達標不進 soak。
+- 依賴：
+  - 流程依賴：`profiling matrix -> kernel cutover -> CI parity/perf gate -> soak`。
+  - 工作流依賴：依賴 WS-A 的 burn-in 量測輸出與 WS-B 的 recorder 吞吐基線。
+- Gate 證據：
+  - `hotpath_matrix`、before/after latency 報表、FFI/alloc 指標、parity 測試報告、30 天 soak 摘要、RACI owner 簽核紀錄。
+- 待辦：
+  - 建立 tick→intent→order→fill 全鏈路 hotpath profiling matrix，定義分批 Rust 化優先序。
+  - 第一批切分 `strategy/risk/order/execution` 純計算熱點為 Rust kernels，並保留 typed binding 邊界一致性。
+  - 增設 Python↔Rust FFI latency/alloc guardrail 與 parity gate（CI + soak 測試）。
+- 驗收標準：
+  - 目標熱路徑的 end-to-end p95 latency 較基線下降 >= 20%。
+  - 連續 soak 期間無價格精度/事件語義回歸（`int x10000` 契約不破壞）。
 
-### 3. Gateway Hardening (Cluster Evolution Vector 2 - CE-M2)
+## 2. 研究與分析工廠
 
-雖然 Gateway 的核心功能已經上線 (`HFT_GATEWAY_ENABLED=1`)，但仍有幾項基礎設施加固 (Hardening Backlog) 等待補齊：
+### 2.1 Alpha Scaffold 檢索能力升級（P2）
+- 位置：`research/tools/alpha_scaffold.py`, `research/tools/fetch_paper.py`
+- 待辦：
+  - citation profile 由規則表升級為 parser + embedding 的混合檢索流程。
 
-- **狀態**: 🔄 TODO (Hardening)
-- **追蹤編號**: `docs/architecture/cluster-evolution-backlog.md`
-- **細項 TODOs**:
-  - **[CE2-07]**: 補齊 Gateway 的 Metrics / Alerts Dashboard 與 SLO 定義。
-  - **[CE2-08]**: 多結點 (Multi-runner) 整合測試與 Gateway 斷線的 Chaos Test。
-  - **[CE2-09]**: 實作 Active/Standby 的 Gateway 容災切換與 Leader Lease 控制機制。
-  - **[CE2-11]**: 針對報價強制實施 Schema 鎖 (`quote_version=v1`) 與防護網。
+### 2.2 論文引用資料補齊（P2）
+- 位置：`research/knowledge/notes/`
+- 待辦：
+  - 修復 citation audit 缺漏（目前仍有 `missing_any=93` 類型缺口）。
+  - 補齊 arXiv/作者/發佈資訊來源並建立批次校驗流程。
 
-### 4. WAL-First Path Hardening (Cluster Evolution Vector 3 - CE-M3)
+### 2.3 熱點效能優化（P2）
+- 位置：`research/knowledge/reports/root_reports/*.svg`
+- 待辦：
+  - 依 pyspy triage 優先處理 `lob_engine.py` 熱點。
+  - 收斂 import/config warmup 開銷並提供 before/after 量測證據。
 
-非同步冷路徑 (`HFT_RECORDER_MODE=wal_first`) 的 hardening 項目已落地，進入持續演練與營運監控階段：
+### 2.4 研究與分析工廠擴容（P1）
+- 位置：`research/`, `research/knowledge/`, `research/tools/`
+- 技能：`hft-alpha-research`、`validation-gate`、`clickhouse-io`
+- RACI：R=Research Lead、A=Head of Research、C=Data Steward、I=Trading Runtime Owner
+- Agent 角色：`explorer`（source inventory，輸出 `source_catalog`）→ `worker`（pipeline/quality gate，輸出 `factory_pipeline+quality_report`）→ `default`（報告與 promotion 整合，輸出 `promotion_readiness`）
+- KPI：
+  - 每週候選研究處理量 >= 50 篇，引用完整率 >= 98%。
+  - 去重命中率 >= 95%，research->alpha scaffold 中位 lead time <= 2 天。
+  - promotion 前 quality gate 通過率（月）>= 90%。
+- 風險與緩解：
+  - 風險：來源 metadata 品質不穩，導致引用與去重失真。
+  - 緩解：建立來源分級與抽樣稽核，未達門檻來源先隔離。
+  - 風險：批次分析失敗堆積，產能下降。
+  - 緩解：建立 batch retry 上限與 backlog 告警，超閾值切入人工 triage。
+  - 風險：hypothesis queue 品質波動造成 promotion 噪音。
+  - 緩解：在 promotion 前增加 quality gate（可重現性/時效性）與 RACI A 角色簽核。
+- 依賴：
+  - 流程依賴：`source inventory -> metadata/dedup -> batch analysis -> hypothesis queue -> promotion pre-check`。
+  - 工作流依賴：依賴 WS-C 的資料品質稽核輸出與 Gate A-E 驗證管線。
+- Gate 證據：
+  - `source_catalog`、每週 throughput/quality 報表、dedup/citation audit、lead time 趨勢、promotion pre-check 結果、RACI owner 簽核紀錄。
+- 待辦：
+  - 擴充多來源研究輸入（論文/技術文章/實務報告）並統一 metadata 與去重規則。
+  - 建立批次化分析管線（topic clustering、citation graph、alpha hypothesis queue）。
+  - 建立工廠產能儀表（每週處理量、引用完整率、research→alpha lead time）與固定週報輸出。
+  - 將 research quality gate 併入 promotion 前置檢核（引用完整性、可重現性、資料時效）。
 
-- **狀態**: ✅ Implemented (2026-03-02)
-- **追蹤編號**: `docs/architecture/cluster-evolution-backlog.md`
-- **已完成**:
-  - **[CE3-03]**: WAL Loader scale-out + shard claim（`FileClaimRegistry`）已實作，並有整合測試 `tests/integration/test_wal_loader_scale_out.py`。
-  - **[CE3-04]**: Replay safety contract（ordering/dedup/manifest）已落地，並有 spec 測試 `tests/spec/test_replay_safety_contract.py`。
-  - **[CE3-06]**: WAL SLO metrics + alerts + dashboard 已接線（`metrics.py`, `alerts/rules.yaml`, `dashboards/gateway_wal_slo.json`）。
-  - **[CE3-07]**: Outage drills（CH down/slow、disk pressure、stale claim recovery）已落地，含測試與 runbook `docs/runbooks/wal-first-outage-drills.md`。
-- **營運建議（非阻塞 TODO）**:
-  - 每週執行一次 `verify-ce3`（或對應 pytest 套件）以驗證 replay 安全與災難演練路徑未回歸。
+## 3. Ops 與長期治理
 
----
+### 3.1 三年運維固定檢核自動化（P1）
+- 追蹤文件：`docs/operations/long-term-risk-register.md`
+- 待辦：
+  - 將月度/季度例行檢核（TTL、research data retention、SMART、Prometheus storage、OS updates）逐步自動化。
+  - 將檢核結果統一附掛到月度可靠性審查包。
 
-## 🔬 研究與分析工廠 (Research & Analytics)
-
-### 1. Alpha 探索鷹架 (Alpha Scaffold)
-
-- **位置**: `research/tools/alpha_scaffold.py`, `fetch_paper.py`, 及樣板檔案 (`_templates/impl.py.tmpl`)
-- **狀態**: 🔄 TODO（迭代優化階段）
-- **剩餘技術債**:
-  - citation profile 仍是規則表，未來可升級為 parser + embeddings 的混合檢索。
-
-### 2. 論文與引用清理 (Notes & Citations)
-
-- **位置**: `research/knowledge/notes/` (如 `depth_slope_ref.md`)
-- **狀態**: 🔄 TODO（批次修復中）
-- **剩餘技術債**:
-  - audit after backfill 仍有 `missing_any=93`（多數為缺 arXiv/作者/發布資訊來源），需補資料源或人工校對。
-
-### 3. Pyspy / 效能探查結果 (Benchmarking)
-
-- **位置**: `research/knowledge/reports/root_reports/*.svg` (Pyspy Flamegraphs)
-- **狀態**: 🔄 TODO（目標化優化階段）
-- **剩餘技術債**:
-  - 依 triage 結果優先處理 `lob_engine.py` 熱點與 import/config warmup 開銷。
-
----
-
-## 🔧 營運與其他瑣碎項目 (Ops & Observability)
-
-- `🔄 TODO`: 針對 Feature Plane 導入 Dashboard / Alert wiring 以及 Canary 決策自動化機制 (`feature-engine-lob-research-unification-spec.md`)。
-- 其他見於 Runbooks (`feature-plane-operations.md`, `incident-diagnostics.md`) 中的空白或未補齊的 SOP TODO 項目。
+### 3.2 Runbook 空白 SOP 收斂（P2）
+- 位置：`docs/runbooks/`
+- 待辦：
+  - 補齊仍需人工判斷的操作步驟，降低輪值人員依賴口耳傳承。

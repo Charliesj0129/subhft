@@ -1314,6 +1314,17 @@
     "tags": [],
     "title": "Hybrid Vector Auto Regression and Neural Network Model for Order Flow Imbalance Prediction in High Frequency Trading"
   },
+  "128": {
+    "alphas": [
+      "hf_exec_sop_demo"
+    ],
+    "arxiv_id": "1710.03870v3",
+    "note_file": "research/knowledge/notes/128_a_high_frequency_trade_execution_model_for_supervised_learni.md",
+    "ref": "128",
+    "status": "reviewed",
+    "tags": [],
+    "title": "A High Frequency Trade Execution Model for Supervised Learning"
+  },
   "depth_slope_ref": {
     "alphas": [
       "lob_shape"

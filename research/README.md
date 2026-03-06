@@ -41,6 +41,16 @@ Strict Gate A enforces:
 - dataset must carry metadata sidecar (`.meta.json` / `.metadata.json`)
 - metadata contract keys and row-count consistency
 
+### Synthetic Data Fast Path (OU-Hawkes-Markov v2)
+
+```bash
+make research-gen-synth-lob OUT=research/data/processed/queue_imbalance/synthetic_qi_v2_train.npy \
+  ARGS='--version v2 --rng-seed 42 --symbols TXF,MXF --split train'
+make research-validate-data-meta DATA_PATH=research/data/processed/queue_imbalance/synthetic_qi_v2_train.npy
+```
+
+This generator writes a sidecar with provenance fields (`source`, `generator`, `seed`, `symbols`, `split`) plus UL metadata.
+
 ## One Entrance
 
 ```bash
@@ -116,6 +126,18 @@ make research-triage ALPHA=<alpha_id> OWNER=<owner> DATA='<path.npy>' ARGS='--sk
 ```
 
 Outputs from `triage` are always non-promotable.
+
+## Paper-Trade Governance Fast Path
+
+```bash
+make research-record-paper ALPHA=queue_imbalance ARGS='--trading-day 2026-03-05 --execution-reject-rate 0.004 --reject-rate-p95 0.008 --regime trending'
+make research-summarize-paper ALPHA=queue_imbalance ARGS='--out outputs/paper_summary_queue_imbalance.json'
+make research-check-paper-governance ALPHA=queue_imbalance ARGS='--strict --out outputs/paper_governance_queue_imbalance.json'
+```
+
+Use `research-check-paper-governance` before promotion to fail fast on Gate E readiness.
+During `hft alpha promote` / `research.pipeline run`, promotion artifacts now also include
+`paper_governance_report.json` under `research/experiments/promotions/<alpha_id>/<stamp>/`.
 
 ## Governance Rules
 

@@ -1,0 +1,20 @@
+{
+  "profile_id": "baseline_v1",
+  "queries": [
+    {
+      "id": "market_data_recent_5m_count",
+      "description": "Recent market_data ingest volume sanity check",
+      "sql": "SELECT count() AS rows_5m FROM hft.market_data WHERE ingest_ts > now64() - 300000000000 LIMIT 1000"
+    },
+    {
+      "id": "orders_recent_count",
+      "description": "orders table quick-count sanity check",
+      "sql": "SELECT count() AS orders_total FROM hft.orders LIMIT 1000"
+    },
+    {
+      "id": "fills_side_mix",
+      "description": "fills table side distribution snapshot",
+      "sql": "SELECT side, count() AS n FROM hft.fills GROUP BY side ORDER BY n DESC LIMIT 50"
+    }
+  ]
+}

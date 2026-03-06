@@ -8,6 +8,8 @@
 - `feed_interarrival_ns` (histogram)
 - `feed_last_event_ts{source=...}`
 - `feed_reconnect_total{result=...}`
+- `feed_first_quote_total`
+- `quote_watchdog_recovery_attempts_total{action=...}`
 - `feed_resubscribe_total{result=...}`
 - `normalization_errors_total{type=...}`
 
@@ -30,6 +32,7 @@
 
 ## 5) Recorder / ClickHouse
 - `recorder_failures_total`
+- `recorder_insert_batches_total{table=...,result=...}`
 - `recorder_batches_flushed_total{table=...}`
 - `recorder_rows_flushed_total{table=...}`
 - `recorder_wal_writes_total{table=...}`
@@ -41,9 +44,13 @@
 
 ## 7) Baseline Alerts
 - Feed Gap: `time() - feed_last_event_ts > 15s`（持續 1m）
+- Reconnect 失敗比例：`(fail+exception)/(ok+fail+exception) > 0.2`（持續 10m）
+- Quote watchdog callback re-register：`increase(quote_watchdog_recovery_attempts_total{action="callback_reregister"}[1h]) > 10`（持續 10m）
 - Latency P99 異常
 - Queue backlog 持續上升
 - `increase(recorder_failures_total[5m]) > 0`
+- Insert failed ratio（24h）：`failed_after_retry|failed_no_client / total > 0.005`（持續 15m）
+- Insert retry ratio（24h）：`success_after_retry|failed_after_retry / total > 0.05`（持續 15m）
 - `event_loop_lag_ms` 長時間超標
 
 ## 8) 最小健康檢查流程

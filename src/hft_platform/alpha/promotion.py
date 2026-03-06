@@ -5,7 +5,8 @@
   2. Evaluates Gate D (quantitative thresholds: Sharpe, drawdown, turnover, correlation).
   3. Evaluates Gate E (paper-trade governance: 1-week span, drift, rejection quality).
   4. Evaluates Gate F (Rust readiness: manifest + parity tests [+ optional perf gate]).
-  5. Writes ``integration_report.json`` and ``promotion_decision.json`` under experiments promotions.
+  5. Writes ``integration_report.json``, ``paper_governance_report.json``, and
+     ``promotion_decision.json`` under experiments promotions.
   6. On approval, writes a YAML promotion config under ``config/strategy_promotions/``.
   7. Best-effort audit logs to ClickHouse (guarded by ``HFT_ALPHA_AUDIT_ENABLED``).
 """
@@ -104,6 +105,7 @@ class PromotionResult:
     promotion_decision_path: str
     promotion_config_path: str | None
     reasons: list[str]
+    paper_governance_report_path: str | None = None
     checklist: PromotionChecklist | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -164,6 +166,10 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
     integration_report_path = artifact_dir / "integration_report.json"
     _write_json(integration_report_path, integration_report)
 
+    paper_governance_report = _build_paper_governance_report(config, gate_e_checks)
+    paper_governance_report_path = artifact_dir / "paper_governance_report.json"
+    _write_json(paper_governance_report_path, paper_governance_report)
+
     decision_payload = {
         "alpha_id": config.alpha_id,
         "gate_d_passed": gate_d_passed,
@@ -176,6 +182,8 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
         "forced": forced,
         "reasons": reasons,
         "canary_weight": weight,
+        "paper_governance_report_path": str(paper_governance_report_path),
+        "paper_governance_passed": bool(paper_governance_report.get("passed", False)),
         "timestamp": now.isoformat(),
     }
     decision_path = artifact_dir / "promotion_decision.json"
@@ -207,6 +215,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
         canary_weight=weight,
         integration_report_path=str(integration_report_path),
         promotion_decision_path=str(decision_path),
+        paper_governance_report_path=str(paper_governance_report_path),
         promotion_config_path=str(promotion_config_path) if promotion_config_path else None,
         reasons=reasons,
         checklist=checklist,
@@ -519,6 +528,83 @@ def _evaluate_gate_f(config: PromotionConfig, root: Path) -> tuple[bool, dict[st
 
     passed = all(bool(v.get("pass", False)) for v in checks.values())
     return passed, {"checks": checks, "rust_module": rust_module}
+
+
+def _build_paper_governance_report(
+    config: PromotionConfig,
+    gate_e_checks: dict[str, Any],
+) -> dict[str, Any]:
+    gate_e_map_raw = gate_e_checks.get("checks", {})
+    gate_e_map = gate_e_map_raw if isinstance(gate_e_map_raw, dict) else {}
+    summary_raw = gate_e_checks.get("paper_trade_summary")
+    summary = summary_raw if isinstance(summary_raw, dict) else {}
+
+    shadow_check = gate_e_map.get("shadow_sessions", {})
+    drift_check = gate_e_map.get("drift_alerts", {})
+    reject_check = gate_e_map.get("execution_reject_rate", {})
+
+    session_count = int(summary.get("session_count", shadow_check.get("value", 0)))
+    calendar_days = int(summary.get("calendar_span_days", 0))
+    trading_days = int(summary.get("distinct_trading_days", 0))
+    min_session_seconds = int(summary.get("min_session_duration_seconds", 0))
+    invalid_duration_count = int(summary.get("invalid_session_duration_count", session_count))
+    drift_alerts_total = int(summary.get("drift_alerts_total", drift_check.get("value", 0)))
+    reject_rate = _to_float(reject_check.get("value")) or 0.0
+    reject_rate_source = str(reject_check.get("source") or "mean")
+    regimes_covered_raw = summary.get("regimes_covered", [])
+    regimes_covered = [str(x) for x in regimes_covered_raw] if isinstance(regimes_covered_raw, list) else []
+    required_session_seconds = max(60, int(config.min_paper_trade_session_minutes) * 60)
+    min_required_regimes = 2
+
+    checks: dict[str, dict[str, Any]] = {
+        "shadow_sessions": {
+            "value": session_count,
+            "min": int(config.min_shadow_sessions),
+            "pass": session_count >= int(config.min_shadow_sessions),
+        },
+        "calendar_span_days": {
+            "value": calendar_days,
+            "min": int(config.min_paper_trade_calendar_days),
+            "pass": calendar_days >= int(config.min_paper_trade_calendar_days),
+        },
+        "trading_days": {
+            "value": trading_days,
+            "min": int(config.min_paper_trade_trading_days),
+            "pass": trading_days >= int(config.min_paper_trade_trading_days),
+        },
+        "session_duration": {
+            "value": min_session_seconds,
+            "min_seconds": required_session_seconds,
+            "invalid_session_duration_count": invalid_duration_count,
+            "pass": (invalid_duration_count == 0 and min_session_seconds >= required_session_seconds),
+        },
+        "drift_alerts": {
+            "value": drift_alerts_total,
+            "max": 0,
+            "pass": drift_alerts_total <= 0,
+        },
+        "execution_reject_rate": {
+            "value": reject_rate,
+            "max": float(config.max_execution_reject_rate),
+            "source": reject_rate_source,
+            "pass": reject_rate <= float(config.max_execution_reject_rate),
+        },
+        "regime_span": {
+            "value": len(regimes_covered),
+            "covered": regimes_covered,
+            "min": min_required_regimes,
+            "pass": len(regimes_covered) >= min_required_regimes,
+        },
+    }
+    passed = all(bool(item.get("pass", False)) for item in checks.values())
+    return {
+        "alpha_id": config.alpha_id,
+        "passed": passed,
+        "checks": checks,
+        "summary": (summary if summary else None),
+        "paper_trade_summary_source": gate_e_checks.get("paper_trade_summary_source"),
+        "paper_trade_summary_error": gate_e_checks.get("paper_trade_summary_error"),
+    }
 
 
 def _resolve_paper_trade_summary(

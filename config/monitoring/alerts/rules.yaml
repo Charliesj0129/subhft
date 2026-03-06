@@ -29,6 +29,29 @@ groups:
         summary: "Feed reconnect exception detected"
         description: "Reconnect raised exception at least once in the last 5m."
 
+  - alert: FeedReconnectFailureRatioHigh
+    expr: |
+      (
+        (sum(increase(feed_reconnect_total{result=~"fail|exception"}[1h])) or vector(0))
+        /
+        clamp_min((sum(increase(feed_reconnect_total{result=~"ok|fail|exception"}[1h])) or vector(0)), 1)
+      ) > 0.2
+    for: 10m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Feed reconnect failure ratio high"
+        description: "Reconnect fail+exception ratio exceeded 20% over the last 1h."
+
+  - alert: QuoteWatchdogCallbackReregisterHigh
+    expr: increase(quote_watchdog_recovery_attempts_total{action="callback_reregister"}[1h]) > 10
+    for: 10m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Quote watchdog callback re-register spikes"
+        description: "No quote data callback re-register attempts exceeded threshold in the last 1h."
+
   - alert: ShioajiWatchdogThreadDown
     expr: max_over_time(shioaji_thread_alive{thread="quote_watchdog"}[5m]) < 1
     for: 1m
@@ -157,6 +180,24 @@ groups:
         summary: "Raw queue drops detected"
         description: "Market data callback queue dropped payloads in the last 5m."
 
+  - alert: ShioajiCallbackIngressLatencyP99High
+    expr: histogram_quantile(0.99, sum(rate(shioaji_quote_callback_ingress_latency_ns_bucket[5m])) by (le)) > 1e5
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Shioaji callback ingress latency high"
+        description: "Callback ingress latency p99 exceeded 100us for 2m."
+
+  - alert: CallbackParseMissDetected
+    expr: increase(market_data_callback_parse_total{result="miss"}[10m]) > 0
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "Callback parser miss detected"
+        description: "market_data callback parser miss increased in the last 10m."
+
   # Infra
   - alert: RecorderFailure
     expr: increase(recorder_failures_total[5m]) > 0
@@ -166,6 +207,34 @@ groups:
     annotations:
         summary: "Recorder Write Failed"
         description: "ClickHouse ingestion failing."
+
+  - alert: RecorderInsertFailedRatioHigh
+    expr: |
+      (
+        (sum(increase(recorder_insert_batches_total{result=~"failed_after_retry|failed_no_client"}[24h])) or vector(0))
+        /
+        clamp_min((sum(increase(recorder_insert_batches_total{result=~"success_no_retry|success_after_retry|failed_after_retry|failed_no_client"}[24h])) or vector(0)), 1)
+      ) > 0.005
+    for: 15m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Recorder insert failed ratio high"
+        description: "24h insert failed ratio exceeded 0.5% SLO."
+
+  - alert: RecorderInsertRetryRatioHigh
+    expr: |
+      (
+        (sum(increase(recorder_insert_batches_total{result=~"success_after_retry|failed_after_retry"}[24h])) or vector(0))
+        /
+        clamp_min((sum(increase(recorder_insert_batches_total{result=~"success_no_retry|success_after_retry|failed_after_retry|failed_no_client"}[24h])) or vector(0)), 1)
+      ) > 0.05
+    for: 15m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Recorder insert retry ratio high"
+        description: "24h insert retry ratio exceeded 5% guardrail."
 
   # CE-M2 Gateway SLO / schema guard
   - alert: GatewayDispatchLatencyP99High
@@ -194,6 +263,48 @@ groups:
     annotations:
         summary: "Quote schema mismatch rejected"
         description: "Shioaji callback payload failed quote schema guard."
+
+  # Feature Plane canary / parity SLO
+  - alert: FeatureShadowParityMismatchDetected
+    expr: increase(feature_shadow_parity_mismatch_total[10m]) > 0
+    for: 2m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Feature shadow parity mismatch detected"
+        description: "Feature shadow parity mismatches occurred in the last 10m."
+
+  - alert: FeaturePlaneLatencyP99High
+    expr: histogram_quantile(0.99, sum(rate(feature_plane_latency_ns_bucket[5m])) by (le)) > 5e4
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Feature plane latency p99 high"
+        description: "feature_plane_latency_ns p99 exceeded 50us for 5m."
+
+  - alert: FeatureQualityFlagsSpike
+    expr: sum(increase(feature_quality_flags_total{flag=~"gap|out_of_order|partial"}[10m])) > 0
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Feature quality flags spike"
+        description: "Feature quality flags (gap/out_of_order/partial) increased in the last 10m."
+
+  - alert: FeaturePlaneUpdateErrorRatioHigh
+    expr: |
+      (
+        (sum(increase(feature_plane_updates_total{result="error"}[30m])) or vector(0))
+        /
+        clamp_min((sum(increase(feature_plane_updates_total{result=~"updated|emitted|error"}[30m])) or vector(0)), 1)
+      ) > 0.01
+    for: 10m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Feature plane update error ratio high"
+        description: "Feature update error ratio exceeded 1% over the last 30m."
 
   # Disk Space (Host)
   - alert: HostDiskSpaceCritical
