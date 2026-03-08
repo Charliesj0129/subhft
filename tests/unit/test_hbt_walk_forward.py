@@ -10,7 +10,6 @@ from research.backtest.hft_native_runner import HftNativeRunner
 from research.backtest.types import BacktestConfig, WalkForwardConfig
 from research.registry.schemas import AlphaManifest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
