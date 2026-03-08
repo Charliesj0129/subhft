@@ -1,4 +1,5 @@
 """Unit tests for research/backtest/hft_native_runner.py."""
+
 from __future__ import annotations
 
 import os
@@ -20,12 +21,18 @@ from research.backtest.hft_native_runner import (
 from research.backtest.types import BacktestConfig
 
 # Standard research.npy dtype (from synth_lob_gen._DTYPE)
-_RESEARCH_DTYPE = np.dtype([
-    ("bid_qty", "f8"), ("ask_qty", "f8"),
-    ("bid_px", "f8"), ("ask_px", "f8"),
-    ("mid_price", "f8"), ("spread_bps", "f8"),
-    ("volume", "f8"), ("local_ts", "i8"),
-])
+_RESEARCH_DTYPE = np.dtype(
+    [
+        ("bid_qty", "f8"),
+        ("ask_qty", "f8"),
+        ("bid_px", "f8"),
+        ("ask_px", "f8"),
+        ("mid_price", "f8"),
+        ("spread_bps", "f8"),
+        ("volume", "f8"),
+        ("local_ts", "i8"),
+    ]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -34,10 +41,18 @@ _RESEARCH_DTYPE = np.dtype([
 def _make_event_array(n: int = 100) -> np.ndarray:
     """Create a minimal synthetic array that _split_npz can load."""
     # Use simple float64 2D array as stand-in; _split_npz only needs indexing
-    dt = np.dtype([
-        ("ev", "i8"), ("exch_ts", "i8"), ("local_ts", "i8"),
-        ("px", "f8"), ("qty", "f8"), ("a", "i4"), ("b", "i4"), ("c", "f8"),
-    ])
+    dt = np.dtype(
+        [
+            ("ev", "i8"),
+            ("exch_ts", "i8"),
+            ("local_ts", "i8"),
+            ("px", "f8"),
+            ("qty", "f8"),
+            ("a", "i4"),
+            ("b", "i4"),
+            ("c", "f8"),
+        ]
+    )
     arr = np.zeros(n, dtype=dt)
     arr["exch_ts"] = np.arange(n) * 1_000_000  # 1ms steps
     arr["local_ts"] = arr["exch_ts"]
@@ -186,8 +201,8 @@ class TestForwardReturns:
         prices = np.array([100.0, 101.0, 100.5, 102.0])
         fwd = _forward_returns(prices)
         assert fwd.shape == prices.shape
-        assert fwd[0] == pytest.approx(0.01)   # (101-100)/100
-        assert fwd[-1] == pytest.approx(0.0)    # last is zero
+        assert fwd[0] == pytest.approx(0.01)  # (101-100)/100
+        assert fwd[-1] == pytest.approx(0.0)  # last is zero
 
     def test_zero_price_no_nan(self):
         prices = np.array([0.0, 100.0, 101.0])
@@ -215,8 +230,10 @@ class TestHftNativeRunnerImportError:
         runner = HftNativeRunner(alpha, config)
 
         # Patch both availability flags to False
-        with patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", False), \
-             patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", False):
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", False),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", False),
+        ):
             with pytest.raises(ImportError, match="hftbacktest"):
                 runner.run()
 
@@ -235,8 +252,10 @@ class TestHftNativeRunnerEmpty:
         runner = HftNativeRunner(alpha, config)
 
         # Patch to simulate hftbacktest available but no hftbt.npz found
-        with patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True), \
-             patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True):
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+        ):
             result = runner.run()
 
         assert result.sharpe_is == pytest.approx(0.0)
@@ -246,6 +265,7 @@ class TestHftNativeRunnerEmpty:
     def test_has_hftbt_data_false_when_no_sibling(self, tmp_path):
         paths = [str(tmp_path / "research.npy")]
         from research.backtest.hft_native_runner import has_hftbt_data
+
         assert has_hftbt_data(paths) is False
 
 
@@ -255,6 +275,7 @@ class TestHftNativeRunnerEmpty:
 class TestValidationHasHftbtData:
     def test_helper_in_validation(self, tmp_path):
         from hft_platform.alpha.validation import _has_hftbt_data
+
         # No file
         assert _has_hftbt_data([str(tmp_path / "x.npy")]) is False
         # Create sibling
@@ -263,11 +284,13 @@ class TestValidationHasHftbtData:
 
     def test_use_hft_native_default_true(self):
         from hft_platform.alpha.validation import ValidationConfig
+
         cfg = ValidationConfig(alpha_id="test", data_paths=[])
         assert cfg.use_hft_native is True
 
     def test_use_hft_native_can_be_disabled(self):
         from hft_platform.alpha.validation import ValidationConfig
+
         cfg = ValidationConfig(alpha_id="test", data_paths=[], use_hft_native=False)
         assert cfg.use_hft_native is False
 
@@ -276,8 +299,8 @@ class TestValidationHasHftbtData:
 # ensure_hftbt_npz
 # ---------------------------------------------------------------------------
 
-def _make_research_npy(path: str, n: int = 100, *, include_local_ts: bool = True,
-                        zero_prices: bool = False) -> None:
+
+def _make_research_npy(path: str, n: int = 100, *, include_local_ts: bool = True, zero_prices: bool = False) -> None:
     """Create a minimal research.npy with _RESEARCH_DTYPE."""
     arr = np.zeros(n, dtype=_RESEARCH_DTYPE)
     if not zero_prices:
@@ -387,12 +410,17 @@ class TestEnsureHftbtNpz:
     def test_fallback_ts_when_no_local_ts_field(self, tmp_path):
         """When local_ts field is absent, uses 0,1ms,2ms... fallback timestamps."""
         # Build array without local_ts
-        no_ts_dt = np.dtype([
-            ("bid_qty", "f8"), ("ask_qty", "f8"),
-            ("bid_px", "f8"), ("ask_px", "f8"),
-            ("mid_price", "f8"), ("spread_bps", "f8"),
-            ("volume", "f8"),
-        ])
+        no_ts_dt = np.dtype(
+            [
+                ("bid_qty", "f8"),
+                ("ask_qty", "f8"),
+                ("bid_px", "f8"),
+                ("ask_px", "f8"),
+                ("mid_price", "f8"),
+                ("spread_bps", "f8"),
+                ("volume", "f8"),
+            ]
+        )
         arr = np.zeros(10, dtype=no_ts_dt)
         arr["bid_px"] = 99.9
         arr["ask_px"] = 100.1

@@ -576,6 +576,7 @@ def bench_research_backtest(rows: int = 40_000) -> float:
         return eq, sig, mid, pos
 
     import research.backtest.hft_native_runner as _hnr_mod
+
     with NamedTemporaryFile(suffix=".npz") as fp:
         np.savez(fp.name, data=arr)
         runner = HftNativeRunner(_DummyAlpha(), BacktestConfig(data_paths=[fp.name]))

@@ -15,12 +15,21 @@ from research.registry.schemas import AlphaManifest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_feed(path: Path, n: int, *, seed: int = 7) -> None:
     """Create a minimal hftbt.npz for HftNativeRunner walk-forward tests."""
-    dt = np.dtype([
-        ("ev", "i8"), ("exch_ts", "i8"), ("local_ts", "i8"),
-        ("px", "f8"), ("qty", "f8"), ("a", "i4"), ("b", "i4"), ("c", "f8"),
-    ])
+    dt = np.dtype(
+        [
+            ("ev", "i8"),
+            ("exch_ts", "i8"),
+            ("local_ts", "i8"),
+            ("px", "f8"),
+            ("qty", "f8"),
+            ("a", "i4"),
+            ("b", "i4"),
+            ("c", "f8"),
+        ]
+    )
     rng = np.random.default_rng(seed)
     arr = np.zeros(n, dtype=dt)
     arr["exch_ts"] = np.arange(n) * 1_000_000
@@ -90,6 +99,7 @@ def mock_adapter_slice(monkeypatch):
 # ---------------------------------------------------------------------------
 # Walk-forward tests
 # ---------------------------------------------------------------------------
+
 
 def test_walk_forward_n_folds(tmp_path: Path, mock_adapter_slice) -> None:
     path = tmp_path / "hftbt.npz"
@@ -172,9 +182,7 @@ def test_backtest_config_auto_regime_split_default_true() -> None:
     assert cfg.auto_regime_split is True
 
 
-def test_backtest_run_auto_regime_split_populates_regime_metrics(
-    tmp_path: Path, mock_adapter_slice
-) -> None:
+def test_backtest_run_auto_regime_split_populates_regime_metrics(tmp_path: Path, mock_adapter_slice) -> None:
     """With auto_regime_split=True, regime_metrics populated via HftNativeRunner."""
     path = tmp_path / "hftbt.npz"
     _make_feed(path, n=120, seed=77)
@@ -192,6 +200,7 @@ def test_backtest_run_auto_regime_split_populates_regime_metrics(
         return equity, signals, mid, pos
 
     import unittest.mock as mock
+
     with mock.patch("research.backtest.hft_native_runner._run_adapter_slice", _fake_regime):
         cfg = BacktestConfig(
             data_paths=[str(path)],
@@ -210,9 +219,7 @@ def test_backtest_run_auto_regime_split_populates_regime_metrics(
     assert "high_vol" in result.regime_metrics or "low_vol" in result.regime_metrics
 
 
-def test_backtest_run_auto_regime_split_false_skips_regime(
-    tmp_path: Path, mock_adapter_slice
-) -> None:
+def test_backtest_run_auto_regime_split_false_skips_regime(tmp_path: Path, mock_adapter_slice) -> None:
     """With auto_regime_split=False, regime_metrics is empty."""
     path = tmp_path / "hftbt.npz"
     _make_feed(path, n=120, seed=88)

@@ -1,4 +1,5 @@
 """Unit tests for research/tools/parquet_to_research.py."""
+
 from __future__ import annotations
 
 import json
@@ -32,6 +33,7 @@ class _Row:
     NOTE: __getattr__ must raise AttributeError for missing keys so that
     getattr(row, col, default) works correctly.
     """
+
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
 
@@ -62,6 +64,7 @@ class TestColVal:
 
     def test_col_val_nan(self):
         import math
+
         row = _Row(price=float("nan"))
         assert _col_val(row, "price", -1.0) == pytest.approx(-1.0)
 
@@ -79,8 +82,7 @@ class TestColVal:
 # ---------------------------------------------------------------------------
 class TestDetectColumns:
     def test_detects_standard_columns(self):
-        cols = ["symbol", "exch_ts", "type", "bid_price", "ask_price",
-                "bid_qty", "ask_qty", "price", "volume"]
+        cols = ["symbol", "exch_ts", "type", "bid_price", "ask_price", "bid_qty", "ask_qty", "price", "volume"]
         mapping = detect_columns(cols)
         assert mapping["exch_ts"] == "exch_ts"
         assert mapping["type"] == "type"
@@ -122,13 +124,24 @@ class TestConvertSymbolBidAsk:
         df = _make_df_stub(rows)
         # Monkey-patch to use our stub iteration
         import research.tools.legacy.parquet_to_research as mod
+
         orig_iter = mod.convert_symbol.__code__
         # Use convert_symbol directly with stub rows via a wrapper
         return _convert_with_stub(df, self._BASE_COLUMNS)
 
     def test_valid_bidask_passes_through(self):
-        rows = [_Row(type="BidAsk", exch_ts=1_000_000_000, bid_price=99.9, ask_price=100.1,
-                     bid_qty=10.0, ask_qty=5.0, price=0.0, volume=0.0)]
+        rows = [
+            _Row(
+                type="BidAsk",
+                exch_ts=1_000_000_000,
+                bid_price=99.9,
+                ask_price=100.1,
+                bid_qty=10.0,
+                ask_qty=5.0,
+                price=0.0,
+                volume=0.0,
+            )
+        ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert len(research_rows) == 1
         assert stats.bid_ask_defect_dropped == 0
@@ -136,18 +149,44 @@ class TestConvertSymbolBidAsk:
         assert mid == pytest.approx(100.0)
 
     def test_both_zero_is_dropped(self):
-        rows = [_Row(type="BidAsk", exch_ts=1_000_000_000, bid_price=0.0, ask_price=0.0,
-                     bid_qty=0.0, ask_qty=0.0, price=0.0, volume=0.0)]
+        rows = [
+            _Row(
+                type="BidAsk",
+                exch_ts=1_000_000_000,
+                bid_price=0.0,
+                ask_price=0.0,
+                bid_qty=0.0,
+                ask_qty=0.0,
+                price=0.0,
+                volume=0.0,
+            )
+        ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert len(research_rows) == 0
         assert stats.bid_ask_defect_dropped == 1
 
     def test_bid_zero_ask_positive_recovers(self):
         rows = [
-            _Row(type="BidAsk", exch_ts=1_000_000_000, bid_price=50.0, ask_price=51.0,
-                 bid_qty=5.0, ask_qty=5.0, price=0.0, volume=0.0),
-            _Row(type="BidAsk", exch_ts=2_000_000_000, bid_price=0.0, ask_price=51.5,
-                 bid_qty=0.0, ask_qty=3.0, price=0.0, volume=0.0),
+            _Row(
+                type="BidAsk",
+                exch_ts=1_000_000_000,
+                bid_price=50.0,
+                ask_price=51.0,
+                bid_qty=5.0,
+                ask_qty=5.0,
+                price=0.0,
+                volume=0.0,
+            ),
+            _Row(
+                type="BidAsk",
+                exch_ts=2_000_000_000,
+                bid_price=0.0,
+                ask_price=51.5,
+                bid_qty=0.0,
+                ask_qty=3.0,
+                price=0.0,
+                volume=0.0,
+            ),
         ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert stats.bid_recovered == 1
@@ -157,26 +196,62 @@ class TestConvertSymbolBidAsk:
 
     def test_ask_zero_bid_positive_recovers(self):
         rows = [
-            _Row(type="BidAsk", exch_ts=1_000_000_000, bid_price=50.0, ask_price=51.0,
-                 bid_qty=5.0, ask_qty=5.0, price=0.0, volume=0.0),
-            _Row(type="BidAsk", exch_ts=2_000_000_000, bid_price=50.2, ask_price=0.0,
-                 bid_qty=5.0, ask_qty=0.0, price=0.0, volume=0.0),
+            _Row(
+                type="BidAsk",
+                exch_ts=1_000_000_000,
+                bid_price=50.0,
+                ask_price=51.0,
+                bid_qty=5.0,
+                ask_qty=5.0,
+                price=0.0,
+                volume=0.0,
+            ),
+            _Row(
+                type="BidAsk",
+                exch_ts=2_000_000_000,
+                bid_price=50.2,
+                ask_price=0.0,
+                bid_qty=5.0,
+                ask_qty=0.0,
+                price=0.0,
+                volume=0.0,
+            ),
         ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert stats.ask_recovered == 1
         assert research_rows[1][3] == pytest.approx(51.0)
 
     def test_snapshot_is_skipped(self):
-        rows = [_Row(type="Snapshot", exch_ts=1_000_000_000, bid_price=50.0, ask_price=51.0,
-                     bid_qty=5.0, ask_qty=5.0, price=0.0, volume=0.0)]
+        rows = [
+            _Row(
+                type="Snapshot",
+                exch_ts=1_000_000_000,
+                bid_price=50.0,
+                ask_price=51.0,
+                bid_qty=5.0,
+                ask_qty=5.0,
+                price=0.0,
+                volume=0.0,
+            )
+        ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert len(research_rows) == 0
         assert stats.snapshots_skipped == 1
 
     def test_local_ts_equals_exch_ts(self):
         """ingest_ts is invalid — local_ts must equal exch_ts."""
-        rows = [_Row(type="BidAsk", exch_ts=999_000_000_000, bid_price=50.0, ask_price=51.0,
-                     bid_qty=1.0, ask_qty=1.0, price=0.0, volume=0.0)]
+        rows = [
+            _Row(
+                type="BidAsk",
+                exch_ts=999_000_000_000,
+                bid_price=50.0,
+                ask_price=51.0,
+                bid_qty=1.0,
+                ask_qty=1.0,
+                price=0.0,
+                volume=0.0,
+            )
+        ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert research_rows[0][7] == 999_000_000_000  # local_ts = exch_ts
 
@@ -196,10 +271,26 @@ class TestConvertSymbolTick:
 
     def test_valid_tick_passes_through(self):
         rows = [
-            _Row(type="BidAsk", exch_ts=1_000_000_000, bid_price=50.0, ask_price=51.0,
-                 bid_qty=5.0, ask_qty=5.0, price=0.0, volume=0.0),
-            _Row(type="Tick", exch_ts=2_000_000_000, bid_price=0.0, ask_price=0.0,
-                 bid_qty=0.0, ask_qty=0.0, price=50.5, volume=100.0),
+            _Row(
+                type="BidAsk",
+                exch_ts=1_000_000_000,
+                bid_price=50.0,
+                ask_price=51.0,
+                bid_qty=5.0,
+                ask_qty=5.0,
+                price=0.0,
+                volume=0.0,
+            ),
+            _Row(
+                type="Tick",
+                exch_ts=2_000_000_000,
+                bid_price=0.0,
+                ask_price=0.0,
+                bid_qty=0.0,
+                ask_qty=0.0,
+                price=50.5,
+                volume=100.0,
+            ),
         ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert stats.tick_defect_dropped == 0
@@ -208,12 +299,36 @@ class TestConvertSymbolTick:
 
     def test_tick_price_zero_volume_positive_ffill(self):
         rows = [
-            _Row(type="BidAsk", exch_ts=1_000_000_000, bid_price=50.0, ask_price=51.0,
-                 bid_qty=5.0, ask_qty=5.0, price=0.0, volume=0.0),
-            _Row(type="Tick", exch_ts=2_000_000_000, bid_price=0.0, ask_price=0.0,
-                 bid_qty=0.0, ask_qty=0.0, price=50.5, volume=100.0),
-            _Row(type="Tick", exch_ts=3_000_000_000, bid_price=0.0, ask_price=0.0,
-                 bid_qty=0.0, ask_qty=0.0, price=0.0, volume=50.0),
+            _Row(
+                type="BidAsk",
+                exch_ts=1_000_000_000,
+                bid_price=50.0,
+                ask_price=51.0,
+                bid_qty=5.0,
+                ask_qty=5.0,
+                price=0.0,
+                volume=0.0,
+            ),
+            _Row(
+                type="Tick",
+                exch_ts=2_000_000_000,
+                bid_price=0.0,
+                ask_price=0.0,
+                bid_qty=0.0,
+                ask_qty=0.0,
+                price=50.5,
+                volume=100.0,
+            ),
+            _Row(
+                type="Tick",
+                exch_ts=3_000_000_000,
+                bid_price=0.0,
+                ask_price=0.0,
+                bid_qty=0.0,
+                ask_qty=0.0,
+                price=0.0,
+                volume=50.0,
+            ),
         ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert stats.tick_price_ffill == 1
@@ -222,8 +337,18 @@ class TestConvertSymbolTick:
         assert tick_row[4] == pytest.approx(50.5)  # mid_price = ffill price
 
     def test_tick_price_zero_volume_zero_dropped(self):
-        rows = [_Row(type="Tick", exch_ts=1_000_000_000, bid_price=0.0, ask_price=0.0,
-                     bid_qty=0.0, ask_qty=0.0, price=0.0, volume=0.0)]
+        rows = [
+            _Row(
+                type="Tick",
+                exch_ts=1_000_000_000,
+                bid_price=0.0,
+                ask_price=0.0,
+                bid_qty=0.0,
+                ask_qty=0.0,
+                price=0.0,
+                volume=0.0,
+            )
+        ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert len(research_rows) == 0
         assert stats.tick_defect_dropped == 1
@@ -243,10 +368,7 @@ class TestWriters:
         assert loaded["bid_px"][0] == pytest.approx(99.0)
 
     def test_write_defect_report(self, tmp_path):
-        stats = DefectStats(
-            total_input=100, bid_ask_defect_dropped=1, bid_recovered=2,
-            output_rows=97
-        )
+        stats = DefectStats(total_input=100, bid_ask_defect_dropped=1, bid_recovered=2, output_rows=97)
         out = tmp_path / "defect_report.json"
         _write_defect_report(stats, "TXFB6", out)
         data = json.loads(out.read_text())
