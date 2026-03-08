@@ -4,12 +4,11 @@ from structlog import get_logger
 try:
     from hftbacktest import (
         BacktestAsset,
-        ConstantLatency,
         HashMapMarketDepthBacktest,
-        LinearAsset,
-        PowerProbQueueModel,
     )
-    from hftbacktest.order import IOC, ROD, Limit
+
+    # v2.x uses integer constants; GTC replaces ROD, LIMIT replaces Limit class
+    from hftbacktest.order import GTC, IOC, LIMIT
 
     HFTBACKTEST_AVAILABLE = True
 except ImportError:
@@ -47,6 +46,10 @@ class HftBacktestAdapter:
         partial_fill: bool = True,
         feature_mode: str = "stats_only",
         dispatch_feature_events: bool = False,
+        queue_model: str = "PowerProbQueueModel(3.0)",
+        latency_model: str = "ConstantLatency",
+        exchange_model: str = "NoPartialFillExchange",
+        latency_data_path: str | None = None,
     ):
         if not HFTBACKTEST_AVAILABLE:
             raise ImportError("hftbacktest not installed")
@@ -82,20 +85,39 @@ class HftBacktestAdapter:
             except Exception:
                 pass
 
-        # Setup HftBacktest
-        # 1. Asset
-        self.asset = LinearAsset(1.0)  # Tick size 1.0 or whatever
-
-        # 2. Latency Model
-        self.latency = ConstantLatency(latency_us * 1000)  # ns
-
-        # 3. Queue Model
-        self.queue_model = PowerProbQueueModel(3.0)  # Standard assumption
-
-        # 4. Engine
+        # Setup HftBacktest (v2.x builder pattern)
         asset_builder = BacktestAsset().data([data_path]).linear_asset(1.0)
-        asset_builder = _call_if_exists(asset_builder, "constant_latency", latency_us * 1000, latency_us * 1000)
-        asset_builder = _call_if_exists(asset_builder, "power_prob_queue_model", 3.0)
+
+        # -- Latency model selection --
+        latency_model_lower = str(latency_model).strip().lower()
+        if latency_model_lower == "intporderlatency" and latency_data_path:
+            asset_builder = _call_if_exists(asset_builder, "intp_order_latency", latency_data_path)
+        elif latency_model_lower == "feedlatency":
+            asset_builder = _call_if_exists(
+                asset_builder, "constant_order_latency", latency_us * 1000, latency_us * 1000
+            )
+        else:
+            # Default: ConstantLatency (renamed constant_order_latency in v2.x)
+            asset_builder = _call_if_exists(
+                asset_builder, "constant_order_latency", latency_us * 1000, latency_us * 1000
+            )
+
+        # -- Queue model selection --
+        queue_model_lower = str(queue_model).strip().lower()
+        if "riskadverse" in queue_model_lower or "risk_adverse" in queue_model_lower:
+            asset_builder = _call_if_exists(asset_builder, "risk_adverse_queue_model")
+        elif "logprob" in queue_model_lower:
+            asset_builder = _call_if_exists(asset_builder, "log_prob_queue_model")
+        elif "l3fifo" in queue_model_lower:
+            asset_builder = _call_if_exists(asset_builder, "l3_fifo_queue_model")
+        else:
+            # Default: PowerProbQueueModel — extract exponent if specified
+            import re
+
+            m = re.search(r"[\d.]+", str(queue_model))
+            exponent = float(m.group()) if m else 3.0
+            asset_builder = _call_if_exists(asset_builder, "power_prob_queue_model", exponent)
+
         if tick_size is not None:
             asset_builder = _call_if_exists(asset_builder, "tick_size", float(tick_size))
         if lot_size is not None:
@@ -107,7 +129,12 @@ class HftBacktestAdapter:
                 float(maker_fee),
                 float(taker_fee),
             )
-        if partial_fill:
+
+        # -- Exchange model selection --
+        exchange_model_lower = str(exchange_model).strip().lower()
+        if "partialfill" in exchange_model_lower and "no" not in exchange_model_lower:
+            asset_builder = _call_if_exists(asset_builder, "partial_fill_exchange")
+        elif partial_fill and "nopartialfill" not in exchange_model_lower:
             asset_builder = _call_if_exists(asset_builder, "partial_fill_exchange")
         else:
             asset_builder = _call_if_exists(asset_builder, "no_partial_fill_exchange")
@@ -139,11 +166,8 @@ class HftBacktestAdapter:
         # Strategy expects on_book(ctx, event)
         # We need to bridge the loop.
 
-        # HftBacktest loop
-        while self.hbt.run():
-            if not self.hbt.elapse(1):  # Granularity?
-                continue
-
+        # HftBacktest v2.x loop: advance to each feed event
+        while self.hbt.wait_next_feed(True, -1) == 0:
             # Current LOB State
             # We construct a mock event for the strategy
             # Efficiently accessing hbt depth
@@ -151,7 +175,7 @@ class HftBacktestAdapter:
             dp = self.hbt.depth(0)
             best_bid = dp.best_bid
             best_ask = dp.best_ask
-            if best_bid == 0 or best_ask == 2147483647:
+            if not (best_bid == best_bid) or not (best_ask == best_ask) or best_bid <= 0 or best_ask >= 2147483647:
                 continue
 
             ts_ns = int(self.hbt.current_timestamp)
@@ -262,13 +286,13 @@ class HftBacktestAdapter:
         order_id = intent.intent_id
         price = self.price_codec.descale(intent.symbol, intent.price)
         qty = intent.qty
-        tif = ROD if intent.tif == TIF.LIMIT else IOC  # Mapping
+        tif = GTC if intent.tif == TIF.LIMIT else IOC  # GTC = Rest-of-Day (v2.x)
 
         if intent.intent_type == IntentType.NEW:
             if intent.side == Side.BUY:
-                self.hbt.submit_buy_order(asset_id, order_id, price, qty, tif, Limit)
+                self.hbt.submit_buy_order(asset_id, order_id, price, qty, tif, LIMIT)
             else:
-                self.hbt.submit_sell_order(asset_id, order_id, price, qty, tif, Limit)
+                self.hbt.submit_sell_order(asset_id, order_id, price, qty, tif, LIMIT)
 
         elif intent.intent_type == IntentType.CANCEL:
             self.hbt.cancel(asset_id, int(intent.target_order_id))

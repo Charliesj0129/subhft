@@ -43,8 +43,8 @@ from hft_platform.risk.engine import RiskEngine
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.base import BaseStrategy
 from hft_platform.strategy.runner import StrategyRunner
-from research.backtest.types import BacktestConfig
 from research.backtest.hft_native_runner import HftNativeRunner
+from research.backtest.types import BacktestConfig
 from research.combinatorial.search_engine import AlphaSearchEngine
 from research.registry.schemas import AlphaManifest
 

@@ -492,8 +492,8 @@ def run_gate_c(
 ) -> tuple[GateReport, str, str, str, str]:
     _ensure_project_root_on_path(root)
     from hft_platform.alpha.experiments import ExperimentTracker
-    from research.backtest.types import BacktestConfig, WalkForwardConfig
     from research.backtest.hft_native_runner import HftNativeRunner, ensure_hftbt_npz
+    from research.backtest.types import BacktestConfig, WalkForwardConfig
     from research.registry.scorecard import compute_scorecard
 
     alpha_id = alpha.manifest.alpha_id
