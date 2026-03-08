@@ -114,10 +114,10 @@ def _subprocess_env() -> dict[str, str]:
 def _build_research_input(path: Path, rows: int = 96) -> None:
     dtype = np.dtype(
         [
-            ("best_bid", np.float64),
-            ("best_ask", np.float64),
-            ("bid_depth", np.float64),
-            ("ask_depth", np.float64),
+            ("bid_px", np.float64),
+            ("ask_px", np.float64),
+            ("bid_qty", np.float64),
+            ("ask_qty", np.float64),
             ("qty", np.float64),
             ("mid", np.float64),
         ]
@@ -128,10 +128,10 @@ def _build_research_input(path: Path, rows: int = 96) -> None:
     for i in range(rows):
         bid = base + i * 0.02
         ask = bid + 0.04
-        data["best_bid"][i] = bid
-        data["best_ask"][i] = ask
-        data["bid_depth"][i] = 100 + (i % 11)
-        data["ask_depth"][i] = 90 + (i % 7)
+        data["bid_px"][i] = bid
+        data["ask_px"][i] = ask
+        data["bid_qty"][i] = 100 + (i % 11)
+        data["ask_qty"][i] = 90 + (i % 7)
         data["qty"][i] = 1 + (i % 3)
         data["mid"][i] = (bid + ask) / 2.0
 
@@ -340,7 +340,7 @@ def test_research_path_hbt_runner_cli_api_first(tmp_path):
         [
             sys.executable,
             "-m",
-            "research.backtest.hbt_runner",
+            "research.backtest.hft_native_runner",
             "--alpha",
             "ofi_mc",
             "--data",
