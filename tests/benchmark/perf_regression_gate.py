@@ -43,7 +43,8 @@ from hft_platform.risk.engine import RiskEngine
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.base import BaseStrategy
 from hft_platform.strategy.runner import StrategyRunner
-from research.backtest.hbt_runner import BacktestConfig, ResearchBacktestRunner
+from research.backtest.types import BacktestConfig
+from research.backtest.hft_native_runner import HftNativeRunner
 from research.combinatorial.search_engine import AlphaSearchEngine
 from research.registry.schemas import AlphaManifest
 
@@ -566,12 +567,22 @@ def bench_research_backtest(rows: int = 40_000) -> float:
     arr["mid"] = 100 + np.cumsum(rng.normal(0, 0.02, size=rows))
     arr["ofi"] = rng.normal(0, 1.0, size=rows)
     arr["qty"] = rng.integers(1, 50, size=rows)
+    eq = np.linspace(1_000_000, 1_010_000, rows, dtype=np.float64)
+    sig = rng.uniform(-1, 1, size=rows)
+    mid = arr["mid"].astype(np.float64)
+    pos = np.zeros(rows, dtype=np.float64)
+
+    def _fake_adapter_slice(alpha, npz_path, config, symbol="ASSET"):
+        return eq, sig, mid, pos
+
+    import research.backtest.hft_native_runner as _hnr_mod
     with NamedTemporaryFile(suffix=".npz") as fp:
         np.savez(fp.name, data=arr)
-        runner = ResearchBacktestRunner(_DummyAlpha(), BacktestConfig(data_paths=[fp.name]))
-        t0 = time.perf_counter()
-        runner.run()
-        t1 = time.perf_counter()
+        runner = HftNativeRunner(_DummyAlpha(), BacktestConfig(data_paths=[fp.name]))
+        with patch.object(_hnr_mod, "_run_adapter_slice", side_effect=_fake_adapter_slice):
+            t0 = time.perf_counter()
+            runner.run()
+            t1 = time.perf_counter()
     return (t1 - t0) / rows * 1e6
 
 

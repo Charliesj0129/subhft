@@ -15,7 +15,7 @@ from hft_platform.alpha.validation import (
     run_gate_b,
     run_gate_c,
 )
-from research.backtest.hbt_runner import BacktestConfig
+from research.backtest.types import BacktestConfig
 from research.registry.schemas import Scorecard
 
 
@@ -449,7 +449,8 @@ def test_gate_c_walk_forward_fail(monkeypatch, tmp_path: Path):
             del kwargs
             return self.base_dir / "meta.json"
 
-    monkeypatch.setattr("research.backtest.hbt_runner.ResearchBacktestRunner", _FakeRunner)
+    monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", _FakeRunner)
+    monkeypatch.setattr("research.backtest.hft_native_runner.ensure_hftbt_npz", lambda p: p)
     monkeypatch.setattr("hft_platform.alpha.experiments.ExperimentTracker", _FakeTracker)
     monkeypatch.setattr(
         "hft_platform.alpha.validation._evaluate_oos_statistical_tests",
@@ -522,7 +523,8 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
             del kwargs
             return self.base_dir / "meta.json"
 
-    monkeypatch.setattr("research.backtest.hbt_runner.ResearchBacktestRunner", _FakeRunner)
+    monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", _FakeRunner)
+    monkeypatch.setattr("research.backtest.hft_native_runner.ensure_hftbt_npz", lambda p: p)
     monkeypatch.setattr("hft_platform.alpha.experiments.ExperimentTracker", _FakeTracker)
     monkeypatch.setattr(
         "hft_platform.alpha.validation._evaluate_oos_statistical_tests",
