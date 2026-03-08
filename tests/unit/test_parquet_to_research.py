@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 import json
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pytest
 
 # Import under test
 from research.tools.legacy.parquet_to_research import (
-    DefectStats,
     _RESEARCH_DTYPE,
+    DefectStats,
     _col_val,
     _col_val_str,
     _write_defect_report,
     _write_meta,
     _write_research_npy,
-    convert_symbol,
     detect_columns,
 )
 
@@ -63,8 +59,6 @@ class TestColVal:
         assert _col_val(row, "price") == pytest.approx(12345.0)
 
     def test_col_val_nan(self):
-        import math
-
         row = _Row(price=float("nan"))
         assert _col_val(row, "price", -1.0) == pytest.approx(-1.0)
 
@@ -121,13 +115,7 @@ class TestConvertSymbolBidAsk:
     }
 
     def _run(self, rows):
-        df = _make_df_stub(rows)
-        # Monkey-patch to use our stub iteration
-        import research.tools.legacy.parquet_to_research as mod
-
-        orig_iter = mod.convert_symbol.__code__
-        # Use convert_symbol directly with stub rows via a wrapper
-        return _convert_with_stub(df, self._BASE_COLUMNS)
+        return _call_convert(rows, self._BASE_COLUMNS)
 
     def test_valid_bidask_passes_through(self):
         rows = [
