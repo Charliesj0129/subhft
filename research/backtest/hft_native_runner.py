@@ -14,18 +14,18 @@ Data flow:
         AlphaStrategyBridge.signal_log         → signals + mid_prices
     Metrics computed with research/backtest/metrics.py (same as ResearchBacktestRunner)
 """
+
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import tempfile
 import uuid
-from dataclasses import dataclass
-from math import ceil
 from pathlib import Path
-from typing import Any
 
 import numpy as np
+
 
 # Ensure project root is on sys.path (mirrors hbt_runner.py pattern)
 def _ensure_project_root_on_path() -> None:
@@ -35,17 +35,10 @@ def _ensure_project_root_on_path() -> None:
         if root_str not in sys.path:
             sys.path.insert(0, root_str)
 
+
 _ensure_project_root_on_path()
 
 from research.backtest.alpha_strategy_bridge import AlphaStrategyBridge, signal_log_to_arrays  # noqa: E402
-from research.backtest.types import (  # noqa: E402
-    BacktestConfig,
-    BacktestResult,
-    WalkForwardConfig,
-    WalkForwardFoldResult,
-    WalkForwardResult,
-    _hash_config,
-)
 from research.backtest.metrics import (  # noqa: E402
     compute_capacity,
     compute_cvar,
@@ -57,16 +50,26 @@ from research.backtest.metrics import (  # noqa: E402
     compute_sortino,
     compute_turnover,
 )
+from research.backtest.types import (  # noqa: E402
+    BacktestConfig,
+    BacktestResult,
+    WalkForwardConfig,
+    WalkForwardFoldResult,
+    WalkForwardResult,
+    _hash_config,
+)
 from research.registry.schemas import AlphaProtocol  # noqa: E402
 
 try:
     from hft_platform.backtest.adapter import HftBacktestAdapter
+
     _ADAPTER_AVAILABLE = True
 except ImportError:
     _ADAPTER_AVAILABLE = False
 
 try:
     from hftbacktest.types import event_dtype as _HBT_EVENT_DTYPE
+
     _HFTBT_AVAILABLE = True
 except ImportError:
     _HBT_EVENT_DTYPE = None
@@ -143,19 +146,20 @@ def ensure_hftbt_npz(data_path: str) -> str:
 
     # Conversion requires hftbacktest
     if not _HFTBT_AVAILABLE:
-        raise ImportError(
-            "ensure_hftbt_npz requires hftbacktest. Install with: pip install hftbacktest"
-        )
+        raise ImportError("ensure_hftbt_npz requires hftbacktest. Install with: pip install hftbacktest")
 
-    from hftbacktest.types import (  # type: ignore[import]
+    from hftbacktest.types import (
         BUY_EVENT,
         DEPTH_EVENT,
         EXCH_EVENT,
         LOCAL_EVENT,
         SELL_EVENT,
         TRADE_EVENT,
+    )
+    from hftbacktest.types import (
         event_dtype as _evt_dtype,
     )
+
     from hft_platform.backtest.convert import _build_event  # reuse tuple format
 
     # Load research.npy / npz
@@ -169,9 +173,7 @@ def ensure_hftbt_npz(data_path: str) -> str:
     has_bid = "bid_px" in names
     has_ask = "ask_px" in names
     if not (has_bid or has_ask):
-        raise ValueError(
-            f"Data at '{data_path}' has no recognisable price fields (bid_px, ask_px)."
-        )
+        raise ValueError(f"Data at '{data_path}' has no recognisable price fields (bid_px, ask_px).")
 
     n = len(arr)
     zeros_f = np.zeros(n, dtype=np.float64)
@@ -210,9 +212,7 @@ def ensure_hftbt_npz(data_path: str) -> str:
             events.append(_build_event(trade_ev_code, ts, ts, mid, vol))
 
     if not events:
-        raise ValueError(
-            f"No valid events generated from '{data_path}' — all rows had zero prices."
-        )
+        raise ValueError(f"No valid events generated from '{data_path}' — all rows had zero prices.")
 
     event_arr = np.array(events, dtype=_evt_dtype)
     out_path = Path(data_path).parent / "hftbt.npz"
@@ -239,14 +239,10 @@ def _run_adapter_slice(
     """
     if not _ADAPTER_AVAILABLE:
         raise ImportError(
-            "hft_platform.backtest.adapter.HftBacktestAdapter not available. "
-            "Ensure hftbacktest is installed."
+            "hft_platform.backtest.adapter.HftBacktestAdapter not available. Ensure hftbacktest is installed."
         )
 
-    latency_us = int(
-        (config.local_decision_pipeline_latency_us
-         + config.submit_ack_latency_ms * 1000)
-    )
+    latency_us = int((config.local_decision_pipeline_latency_us + config.submit_ack_latency_ms * 1000))
     bridge = AlphaStrategyBridge(
         alpha=alpha,
         max_position=config.max_position,
@@ -262,7 +258,7 @@ def _run_adapter_slice(
         latency_us=latency_us,
         maker_fee=float(config.maker_fee_bps) / 10_000.0,
         taker_fee=float(config.taker_fee_bps) / 10_000.0,
-        equity_sample_ns=1_000_000,   # 1ms equity samples
+        equity_sample_ns=1_000_000,  # 1ms equity samples
         feature_mode="stats_only",
         queue_model=getattr(config, "queue_model", "PowerProbQueueModel(3.0)"),
         latency_model=getattr(config, "latency_model", "ConstantLatency"),
@@ -310,14 +306,14 @@ def _forward_returns(mid_prices: np.ndarray) -> np.ndarray:
 def _regime_metrics(signals: np.ndarray, fwd_returns: np.ndarray) -> dict[str, float]:
     if signals.size < 8:
         return {}
-    vol = np.abs(fwd_returns[:signals.size])
+    vol = np.abs(fwd_returns[: signals.size])
     median = float(np.median(vol))
     out: dict[str, float] = {}
     for name, mask in (("high_vol", vol >= median), ("low_vol", vol < median)):
         count = int(np.count_nonzero(mask))
         if count < 4:
             continue
-        masked = fwd_returns[:signals.size][mask] * signals[mask]
+        masked = fwd_returns[: signals.size][mask] * signals[mask]
         std = float(np.std(masked))
         if std > 0:
             out[name] = float(np.mean(masked) / std * np.sqrt(252.0))
@@ -348,10 +344,7 @@ class HftNativeRunner:
 
     def run(self) -> BacktestResult:
         if not _ADAPTER_AVAILABLE or not _HFTBT_AVAILABLE:
-            raise ImportError(
-                "HftNativeRunner requires hftbacktest. "
-                "Install with: pip install hftbacktest"
-            )
+            raise ImportError("HftNativeRunner requires hftbacktest. Install with: pip install hftbacktest")
 
         latency_profile = {
             "latency_profile_id": self.config.latency_profile_id,
@@ -389,12 +382,8 @@ class HftNativeRunner:
                 is_path, oos_path = _split_npz(hbt_path, self.config.is_oos_split)
                 tmp_paths.extend([is_path, oos_path])
 
-                is_eq, is_sig, is_mid, is_pos = _run_adapter_slice(
-                    self.alpha, is_path, self.config, self.symbol
-                )
-                oos_eq, oos_sig, oos_mid, oos_pos = _run_adapter_slice(
-                    self.alpha, oos_path, self.config, self.symbol
-                )
+                is_eq, is_sig, is_mid, is_pos = _run_adapter_slice(self.alpha, is_path, self.config, self.symbol)
+                oos_eq, oos_sig, oos_mid, oos_pos = _run_adapter_slice(self.alpha, oos_path, self.config, self.symbol)
 
                 is_equities.append(is_eq)
                 oos_equities.append(oos_eq)
@@ -478,11 +467,7 @@ class HftNativeRunner:
         sortino = compute_sortino(oos_equity) if oos_equity.size >= 2 else 0.0
         cvar_5 = compute_cvar(oos_equity, alpha=0.05) if oos_equity.size >= 2 else 0.0
         capacity = compute_capacity(all_pos, all_volume)
-        regime = (
-            _regime_metrics(oos_signals, oos_fwd_returns)
-            if self.config.auto_regime_split
-            else {}
-        )
+        regime = _regime_metrics(oos_signals, oos_fwd_returns) if self.config.auto_regime_split else {}
 
         return BacktestResult(
             signals=all_signals,
@@ -574,23 +559,23 @@ class HftNativeRunner:
                 np.savez_compressed(test_path, data=test)
                 tmp_paths.append(test_path)
 
-                eq, sig, mid, pos = _run_adapter_slice(
-                    alpha, test_path, self.config, self.symbol
-                )
+                eq, sig, mid, pos = _run_adapter_slice(alpha, test_path, self.config, self.symbol)
                 fwd = _forward_returns(mid)
                 sharpe = compute_sharpe(eq) if eq.size >= 2 else 0.0
                 ic_mean, _, _ = compute_ic(sig, fwd)
                 max_dd = compute_max_drawdown(eq)
                 to = compute_turnover(pos)
-                folds.append(WalkForwardFoldResult(
-                    fold_idx=fold_idx,
-                    train_size=len(train),
-                    test_size=len(test),
-                    sharpe=float(sharpe),
-                    ic_mean=float(ic_mean),
-                    max_drawdown=float(max_dd),
-                    turnover=float(to),
-                ))
+                folds.append(
+                    WalkForwardFoldResult(
+                        fold_idx=fold_idx,
+                        train_size=len(train),
+                        test_size=len(test),
+                        sharpe=float(sharpe),
+                        ic_mean=float(ic_mean),
+                        max_drawdown=float(max_dd),
+                        turnover=float(to),
+                    )
+                )
         finally:
             for p in tmp_paths:
                 try:
@@ -642,8 +627,7 @@ def has_hftbt_data(data_paths: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 # CLI entrypoint (python -m research.backtest.hft_native_runner)
 # ---------------------------------------------------------------------------
-def _parse_args() -> "argparse.Namespace":
-    import argparse
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run standardized research backtest via hftbacktest.")
     parser.add_argument("--alpha", required=True, help="alpha_id registered under research/alphas")
     parser.add_argument("--data", required=True, nargs="+", help="Path(s) to npy/npz data file(s)")
