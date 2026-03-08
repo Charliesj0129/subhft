@@ -53,17 +53,37 @@ make release-converge-mvp CLEAN_RUST=1
   - `research/data/processed/smoke/smoke_v1.npy.meta.json`
 - 以 `--gate-profile full` 作為發行 gate
 
+### 5) 第一個可長期運營發布 gate（不清潔，fail-closed）
+
+```bash
+HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-gate CHANGE_ID=CHG-YYYYMMDD-XX
+# gate pass 後：
+HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-promote CHANGE_ID=CHG-YYYYMMDD-XX ACTOR=ops
+```
+
+此模式不做 cleanup，改以發布準入證據為主：
+- 執行 `release_converge --skip-clean --skip-gate`，先落盤非破壞性盤點快照。
+- strict `roadmap_delivery_executor` / `roadmap_delivery_guard`，`warn` 視為阻擋。
+- release 關鍵 unit tests + `ruff` + `mypy`。
+- `release_channel_guard gate`，確認 pre-sync manifest、canary、drift 證據。
+- strict `reliability_review_pack`，確認月度運營證據可形成 go/no-go 決策。
+- 前置要求 `HFT_ALPHA_AUDIT_ENABLED=1`。
+- 若任何子步驟執行期間產生未預期 tracked 變更，整體直接 fail。
+
 ## 產物
 
 - `outputs/release_converge/latest.json`
 - `outputs/release_converge/latest.md`
 - `outputs/release_converge/backups/root_reports_slim_*.json`（tracked 瘦身 manifest）
+- `outputs/release_first_ops/latest.json`
+- `outputs/release_first_ops/latest.md`
 
 欄位重點：
 - `before/after.sizes`：清潔前後容量快照。
 - `cleanup_steps`：每個清潔步驟的 return code 與耗時。
 - `gate_steps`：ROADMAP/TODO gate + 目標測試與 lint 結果。
 - `result.overall`：`pass`/`fail`（`fail` 一律阻擋發行）。
+- `outputs/release_first_ops/latest.*`：單一發布 go/no-go 決策，彙總 converge / channel / reliability 子報告。
 
 ## 判定規則
 
@@ -74,6 +94,8 @@ make release-converge-mvp CLEAN_RUST=1
 
 - `release-converge`（safe/extended）預設不刪 tracked source。
 - `release-converge-mvp` 會刪除部分 tracked 歷史報告（依白名單保留），執行前應確認備份策略。
+- `release-first-ops-gate` 不負責生成 pre-sync 產物；執行前仍需先跑 `make deploy-pre-sync-template CHANGE_ID=...`。
+- `release-first-ops-gate` 會要求 `HFT_ALPHA_AUDIT_ENABLED=1`；若未設置，直接阻擋。
 - `root_reports` 最小保留白名單：
   - `README.md`
   - `pyspy_hotspot_triage.md`

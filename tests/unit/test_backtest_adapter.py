@@ -17,10 +17,13 @@ class _Hbt:
         self.current_timestamp = 123
         self.submitted = []
 
-    def run(self):
+    def wait_next_feed(self, *_args, **_kwargs):
         if self._ran:
-            return False
+            return 1
         self._ran = True
+        return 0
+
+    def run(self):
         return True
 
     def elapse(self, *_args, **_kwargs):

@@ -19,6 +19,7 @@
 - `outputs/roadmap_execution/ws_g/latest_hotpath_matrix.json`
 - `outputs/roadmap_execution/ws_h/latest_source_catalog.json`
 - `outputs/release_converge/latest.json` / `latest.md`（發行收斂與深度清潔報告）
+- `outputs/release_first_ops/latest.json` / `latest.md`（第一個可長期運營發布 gate 彙總決策）
 - `outputs/release_converge/backups/root_reports_slim_*.json`（tracked root_reports 瘦身 manifest）
 - `reports/shioaji_api_latency.json` / `.csv`
 - `reports/e2e_latency.summary.json`
@@ -27,6 +28,7 @@
 ## MVP 發行補充
 
 - `make release-converge-mvp` 會使用 `mvp_release + full gate`。
+- `HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-gate CHANGE_ID=...` 會聚合 `release_converge --skip-clean --skip-gate`、strict roadmap delivery、`release_channel_guard gate`、`reliability_review_pack`。
 - `research/data` 只保留最小 smoke 樣本：
   - `research/data/processed/smoke/smoke_v1.npy`
   - `research/data/processed/smoke/smoke_v1.npy.meta.json`

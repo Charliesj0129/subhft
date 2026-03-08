@@ -1,3 +1,6 @@
+# RETIRED in v1.1 — 僅供歷史參考
+# Types: research/backtest/types.py
+# Runner: research/backtest/hft_native_runner.py
 from __future__ import annotations
 
 import argparse
@@ -60,6 +63,11 @@ class BacktestConfig:
     # breakdown on every backtest run. Disable only for ultra-short datasets
     # (<8 bars) or when calling from walk-forward inner loops.
     auto_regime_split: bool = True
+    backtest_engine: str = "hftbacktest_v2"
+    queue_model: str = "PowerProbQueueModel(3.0)"
+    latency_model: str = "IntpOrderLatency"
+    exchange_model: str = "NoPartialFillExchange"
+    min_queue_survival_rate: float = 0.3
 
 
 @dataclass(frozen=True)
@@ -118,6 +126,14 @@ class WalkForwardResult:
 
 class ResearchBacktestRunner:
     def __init__(self, alpha: AlphaProtocol, config: BacktestConfig):
+        import warnings
+        warnings.warn(
+            "ResearchBacktestRunner is deprecated. "
+            "Use HftNativeRunner (research.backtest.hft_native_runner). "
+            "Custom numpy simulation will be removed in v1.2.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.alpha = _maybe_wrap_batch_alpha(alpha)
         self.config = config
         self._last_run_returns: np.ndarray | None = None
@@ -814,7 +830,10 @@ def main() -> int:
         max_position=int(args.max_position),
         is_oos_split=float(args.is_oos_split),
     )
-    result = ResearchBacktestRunner(alpha, config).run()
+    from research.backtest.hft_native_runner import HftNativeRunner, ensure_hftbt_npz
+    for p in config.data_paths:
+        ensure_hftbt_npz(p)
+    result = HftNativeRunner(alpha, config).run()
     summary = {
         "alpha_id": alpha.manifest.alpha_id,
         "run_id": result.run_id,

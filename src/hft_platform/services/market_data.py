@@ -1421,18 +1421,23 @@ class MarketDataService:
         return {symbol: now - last_ts for symbol, last_ts in tick_snapshot.items()}
 
     def _is_trading_hours(self) -> bool:
+        # Use the broadest product-type session window so the symbol-gap watchdog
+        # stays active during futures/options hours (08:45–13:45 + night session).
+        # Configurable via HFT_WATCHDOG_PRODUCT_TYPE (default: "future").
+        product_type = os.getenv("HFT_WATCHDOG_PRODUCT_TYPE", "future")
         try:
             from hft_platform.core.market_calendar import get_calendar
 
             calendar = get_calendar()
             now_dt = dt.datetime.now(calendar._tz)
-            return calendar.is_trading_hours(now_dt)
+            return calendar.is_trading_hours(now_dt, product_type=product_type)
         except Exception:
             now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
                 return False
             minute = now_dt.hour * 60 + now_dt.minute
-            return (9 * 60) <= minute <= (13 * 60 + 30)
+            # Fallback: futures day session 08:45–13:45
+            return (8 * 60 + 45) <= minute <= (13 * 60 + 45)
 
     def _is_market_open_grace_period(self) -> bool:
         """Check if within grace period after market open (C4).

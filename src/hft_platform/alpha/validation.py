@@ -66,10 +66,16 @@ class ValidationConfig:
     required_data_provenance_fields: tuple[str, ...] = ()
     data_ul: int = 2
     bootstrap_samples: int = 1000
+    use_hft_native: bool = True
     stress_latency_multiplier: float = 1.5
     stress_fee_multiplier: float = 1.5
     min_stress_sharpe_ratio: float = 0.5
     stress_drawdown_limit_multiplier: float = 1.25
+    backtest_engine: str = "hftbacktest_v2"
+    queue_model: str = "PowerProbQueueModel(3.0)"
+    latency_model: str = "IntpOrderLatency"
+    exchange_model: str = "NoPartialFillExchange"
+    min_queue_survival_rate: float = 0.3
 
 
 @dataclass(frozen=True)
@@ -241,6 +247,7 @@ def run_gate_a(
     required = [str(field) for field in getattr(manifest, "data_fields", ())]
     available_fields_union: set[str] = set()
     missing_fields_by_path: dict[str, list[str]] = {}
+    invalid_data_formats: dict[str, list[str]] = {}
 
     for path in data_paths:
         data_fields = _load_data_fields(path)
@@ -248,6 +255,14 @@ def run_gate_a(
         missing = [field for field in required if not _field_available(field, data_fields)]
         if missing:
             missing_fields_by_path[path] = missing
+
+        # V2 AOS format validation — only blocking when data governance is enforced
+        enforce_dg = bool(config.enforce_data_governance) if config is not None else False
+        backtest_engine = str(getattr(config, "backtest_engine", "")) if config is not None else ""
+        if enforce_dg or backtest_engine == "hftbacktest_v2":
+            fmt_errors = _check_hftbacktest_v2_data_format(path)
+            if fmt_errors:
+                invalid_data_formats[path] = fmt_errors
 
     if not data_paths and required:
         missing_fields_by_path["<no_data_paths>"] = list(required)
@@ -337,9 +352,12 @@ def run_gate_a(
                     problems.extend(f"missing_provenance:{key}" for key in missing)
                 if problems:
                     invalid_data_metadata[str(data_path)] = problems
+
     data_governance_passed = (not enforce_data_governance) or (
         not invalid_data_roots and (not require_data_meta or (not missing_data_metadata and not invalid_data_metadata))
     )
+    # Note: invalid_data_formats is advisory in Gate A (reported in details).
+    # V2 format enforcement is handled at Gate C by HftNativeRunner/ensure_hftbt_npz.
 
     # Skills / roles attribution governance (warn-only, non-blocking).
     roles_used = list(str(r) for r in getattr(manifest, "roles_used", ()))
@@ -408,6 +426,7 @@ def run_gate_a(
                 "required_data_provenance_fields": list(required_data_provenance_fields),
                 "allowed_data_roots": allowed_roots,
                 "invalid_data_roots": invalid_data_roots,
+                "invalid_data_formats": invalid_data_formats,
                 "missing_data_metadata": missing_data_metadata,
                 "invalid_data_metadata": invalid_data_metadata,
                 "passed": data_governance_passed,
@@ -474,7 +493,8 @@ def run_gate_c(
 ) -> tuple[GateReport, str, str, str, str]:
     _ensure_project_root_on_path(root)
     from hft_platform.alpha.experiments import ExperimentTracker
-    from research.backtest.hbt_runner import BacktestConfig, ResearchBacktestRunner, WalkForwardConfig
+    from research.backtest.hft_native_runner import HftNativeRunner, ensure_hftbt_npz
+    from research.backtest.types import BacktestConfig, WalkForwardConfig
     from research.registry.scorecard import compute_scorecard
 
     alpha_id = alpha.manifest.alpha_id
@@ -491,15 +511,26 @@ def run_gate_c(
         modify_ack_latency_ms=float(config.modify_ack_latency_ms),
         cancel_ack_latency_ms=float(config.cancel_ack_latency_ms),
         live_uplift_factor=float(config.live_uplift_factor),
+        backtest_engine=str(config.backtest_engine),
+        queue_model=str(config.queue_model),
+        latency_model=str(config.latency_model),
+        exchange_model=str(config.exchange_model),
+        min_queue_survival_rate=float(config.min_queue_survival_rate),
     )
-    runner = ResearchBacktestRunner(alpha, backtest_cfg)
+    backtest_engine_key = str(config.backtest_engine).lower()
+    if backtest_engine_key == "research":
+        raise ValueError("backtest_engine='research' 已於 v1.1 移除。請使用 'hftbacktest_v2'。")
+    for dp in resolved_data_paths:
+        ensure_hftbt_npz(dp)  # auto-convert research.npy → hftbt.npz; idempotent
+    runner: Any = HftNativeRunner(alpha, backtest_cfg)
     base_result = runner.run()
+    _runner_cls = type(runner)
     optimization_eval = _optimize_parameters(
         alpha=alpha,
         base_cfg=backtest_cfg,
         base_result=base_result,
         config=config,
-        runner_cls=ResearchBacktestRunner,
+        runner_cls=_runner_cls,
     )
     optimization_gate_passed = bool(optimization_eval.get("passed", True))
 
@@ -517,7 +548,7 @@ def run_gate_c(
     if selected_cfg.signal_threshold == backtest_cfg.signal_threshold:
         result = base_result
     else:
-        runner = ResearchBacktestRunner(alpha, selected_cfg)
+        runner = _runner_cls(alpha, selected_cfg)
         result = runner.run()
 
     oos_returns = _compute_oos_returns(result.equity_curve, config.is_oos_split)
@@ -563,13 +594,13 @@ def run_gate_c(
         base_cfg=selected_cfg,
         base_result=result,
         config=config,
-        runner_cls=ResearchBacktestRunner,
+        runner_cls=_runner_cls,
     )
     robustness_eval = _evaluate_parameter_robustness(
         alpha=alpha,
         base_cfg=selected_cfg,
         base_result=result,
-        runner_cls=ResearchBacktestRunner,
+        runner_cls=_runner_cls,
     )
     scorecard_extra = {
         "walk_forward_sharpe_mean": (float(wf_result.fold_sharpe_mean) if wf_result is not None else None),
@@ -1279,6 +1310,57 @@ def _load_data_fields(path: str) -> set[str]:
     return set()
 
 
+def _check_hftbacktest_v2_data_format(path: str) -> list[str]:
+    errors = []
+    if not path.endswith(".npz"):
+        errors.append("File is not a .npz archive, hftbacktest V2 requires AOS .npz format")
+
+    try:
+        source = np.load(path, allow_pickle=False)
+        try:
+            if isinstance(source, np.lib.npyio.NpzFile):
+                if "data" not in source:
+                    return errors + ["Missing 'data' array in .npz"]
+                arr = np.asarray(source["data"])
+            else:
+                arr = np.asarray(source)
+        finally:
+            if hasattr(source, "close"):
+                source.close()
+
+        names = arr.dtype.names
+        if not names:
+            errors.append("Dataset is not a structured array (AOS format required)")
+            return errors
+
+        for field in ["exch_ts", "local_ts"]:
+            if field in names:
+                if arr.dtype[field].kind not in ("i", "u") or arr.dtype[field].itemsize != 8:
+                    errors.append(f"'{field}' must be int64/uint64 nanoseconds")
+            else:
+                errors.append(f"Missing required field '{field}'")
+
+        if "ev" in names:
+            if arr.dtype["ev"].kind not in ("i", "u"):
+                errors.append("'ev' flag must be an integer field")
+            elif len(arr) > 0:
+                try:
+                    from hftbacktest import DEPTH_SNAPSHOT_EVENT
+
+                    first_ev = int(arr[0]["ev"])
+                    if not (first_ev & DEPTH_SNAPSHOT_EVENT):
+                        errors.append("First event is not DEPTH_SNAPSHOT_EVENT")
+                except ImportError:
+                    pass
+        else:
+            errors.append("Missing required field 'ev'")
+
+    except Exception as e:
+        errors.append(f"Failed to load numpy array: {e}")
+
+    return errors
+
+
 def _field_available(field: str, available: set[str]) -> bool:
     if field == "current_mid":
         if ("best_bid" in available and "best_ask" in available) or ("bid_px" in available and "ask_px" in available):
@@ -1360,6 +1442,17 @@ def _load_dataset_metadata(data_path: Path) -> tuple[dict[str, Any] | None, Path
             return None, meta_path, "invalid_format"
         return payload, meta_path, None
     return None, None, "missing_meta_file"
+
+
+def _has_hftbt_data(data_paths: list[str]) -> bool:
+    """Return True if at least one data path has a sibling hftbt.npz file."""
+    for path_str in data_paths:
+        p = Path(path_str)
+        if p.name == "hftbt.npz" and p.exists():
+            return True
+        if (p.parent / "hftbt.npz").exists():
+            return True
+    return False
 
 
 def _resolve_first_data_meta_path(data_paths: list[str]) -> str | None:

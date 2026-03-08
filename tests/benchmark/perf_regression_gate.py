@@ -43,7 +43,8 @@ from hft_platform.risk.engine import RiskEngine
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.base import BaseStrategy
 from hft_platform.strategy.runner import StrategyRunner
-from research.backtest.hbt_runner import BacktestConfig, ResearchBacktestRunner
+from research.backtest.hft_native_runner import HftNativeRunner
+from research.backtest.types import BacktestConfig
 from research.combinatorial.search_engine import AlphaSearchEngine
 from research.registry.schemas import AlphaManifest
 
@@ -562,16 +563,32 @@ def bench_risk_gateway_typed_ratio_heavy() -> float:
 
 def bench_research_backtest(rows: int = 40_000) -> float:
     rng = np.random.default_rng(7)
-    arr = np.zeros(rows, dtype=[("mid", "f8"), ("ofi", "f8"), ("qty", "i8")])
-    arr["mid"] = 100 + np.cumsum(rng.normal(0, 0.02, size=rows))
-    arr["ofi"] = rng.normal(0, 1.0, size=rows)
-    arr["qty"] = rng.integers(1, 50, size=rows)
-    with NamedTemporaryFile(suffix=".npz") as fp:
-        np.savez(fp.name, data=arr)
-        runner = ResearchBacktestRunner(_DummyAlpha(), BacktestConfig(data_paths=[fp.name]))
-        t0 = time.perf_counter()
-        runner.run()
-        t1 = time.perf_counter()
+    # Use canonical field names required by ensure_hftbt_npz
+    _DTYPE = [("bid_px", "f8"), ("ask_px", "f8"), ("bid_qty", "f8"), ("ask_qty", "f8"), ("volume", "f8")]
+    arr = np.zeros(rows, dtype=_DTYPE)
+    mid = 100 + np.cumsum(rng.normal(0, 0.02, size=rows))
+    half_spread = 0.05
+    arr["bid_px"] = mid - half_spread
+    arr["ask_px"] = mid + half_spread
+    arr["bid_qty"] = rng.integers(1, 50, size=rows).astype(np.float64)
+    arr["ask_qty"] = rng.integers(1, 50, size=rows).astype(np.float64)
+    arr["volume"] = rng.integers(0, 10, size=rows).astype(np.float64)
+    eq = np.linspace(1_000_000, 1_010_000, rows, dtype=np.float64)
+    sig = rng.uniform(-1, 1, size=rows)
+    pos = np.zeros(rows, dtype=np.float64)
+
+    def _fake_adapter_slice(alpha, npz_path, config, symbol="ASSET"):
+        return eq, sig, mid, pos
+
+    import research.backtest.hft_native_runner as _hnr_mod
+
+    with NamedTemporaryFile(suffix=".npy") as fp:
+        np.save(fp.name, arr)
+        runner = HftNativeRunner(_DummyAlpha(), BacktestConfig(data_paths=[fp.name]))
+        with patch.object(_hnr_mod, "_run_adapter_slice", side_effect=_fake_adapter_slice):
+            t0 = time.perf_counter()
+            runner.run()
+            t1 = time.perf_counter()
     return (t1 - t0) / rows * 1e6
 
 
