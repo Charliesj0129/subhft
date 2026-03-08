@@ -54,6 +54,31 @@ make release-channel-promote CHANGE_ID=CHG-YYYYMMDD-XX ACTOR=ops
 - 最新 canary 報告整體為 `pass`（預設策略）。
 - 最新 drift check 整體為 `pass`（預設策略）。
 
+若要把「代碼 gate + 發布證據 + 月度運營證據」合併成單一 go/no-go 入口，使用：
+
+```bash
+HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-gate CHANGE_ID=CHG-YYYYMMDD-XX
+```
+
+此指令會聚合：
+- `release_converge --skip-clean --skip-gate`
+- strict `roadmap_delivery_executor` / `roadmap_delivery_guard`
+- release 關鍵 unit tests + `ruff` + `mypy`
+- `release_channel_guard gate`
+- `reliability_review_pack`
+
+輸出：
+- `outputs/release_first_ops/release_first_ops_*.json`
+- `outputs/release_first_ops/release_first_ops_*.md`
+- `outputs/release_first_ops/latest.json`
+- `outputs/release_first_ops/latest.md`
+
+只有 `release-first-ops-gate` 通過後，才應執行：
+
+```bash
+HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-promote CHANGE_ID=CHG-YYYYMMDD-XX ACTOR=ops
+```
+
 輸出證據：
 - `outputs/deploy_guard/release_channel/decisions/release_gate_*.json`
 - `outputs/deploy_guard/release_channel/decisions/release_gate_*.md`
