@@ -339,6 +339,8 @@ class HftNativeRunner:
       - hftbt.npz directly
     """
 
+    __slots__ = ("alpha", "config", "symbol")
+
     def __init__(self, alpha: AlphaProtocol, config: BacktestConfig, symbol: str = "ASSET"):
         self.alpha = alpha
         self.config = config
@@ -699,6 +701,7 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, indent=2, sort_keys=True))
     else:
+        # CLI stdout: print JSON directly (structlog would break parseable output)
         print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
