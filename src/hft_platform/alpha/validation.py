@@ -66,6 +66,7 @@ class ValidationConfig:
     required_data_provenance_fields: tuple[str, ...] = ()
     data_ul: int = 2
     bootstrap_samples: int = 1000
+    use_hft_native: bool = True
     stress_latency_multiplier: float = 1.5
     stress_fee_multiplier: float = 1.5
     min_stress_sharpe_ratio: float = 0.5
