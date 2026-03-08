@@ -351,10 +351,9 @@ def run_gate_a(
                     problems.extend(f"missing_provenance:{key}" for key in missing)
                 if problems:
                     invalid_data_metadata[str(data_path)] = problems
-                    
+
     data_governance_passed = (not enforce_data_governance) or (
-        not invalid_data_roots
-        and (not require_data_meta or (not missing_data_metadata and not invalid_data_metadata))
+        not invalid_data_roots and (not require_data_meta or (not missing_data_metadata and not invalid_data_metadata))
     )
     # Note: invalid_data_formats is advisory in Gate A (reported in details).
     # V2 format enforcement is handled at Gate C by HftNativeRunner/ensure_hftbt_npz.
@@ -519,9 +518,7 @@ def run_gate_c(
     )
     backtest_engine_key = str(config.backtest_engine).lower()
     if backtest_engine_key == "research":
-        raise ValueError(
-            "backtest_engine='research' 已於 v1.1 移除。請使用 'hftbacktest_v2'。"
-        )
+        raise ValueError("backtest_engine='research' 已於 v1.1 移除。請使用 'hftbacktest_v2'。")
     for dp in resolved_data_paths:
         ensure_hftbt_npz(dp)  # auto-convert research.npy → hftbt.npz; idempotent
     runner: Any = HftNativeRunner(alpha, backtest_cfg)
@@ -1316,7 +1313,7 @@ def _check_hftbacktest_v2_data_format(path: str) -> list[str]:
     errors = []
     if not path.endswith(".npz"):
         errors.append("File is not a .npz archive, hftbacktest V2 requires AOS .npz format")
-        
+
     try:
         source = np.load(path, allow_pickle=False)
         try:
@@ -1329,25 +1326,26 @@ def _check_hftbacktest_v2_data_format(path: str) -> list[str]:
         finally:
             if hasattr(source, "close"):
                 source.close()
-                
+
         names = arr.dtype.names
         if not names:
             errors.append("Dataset is not a structured array (AOS format required)")
             return errors
-            
+
         for field in ["exch_ts", "local_ts"]:
             if field in names:
                 if arr.dtype[field].kind not in ("i", "u") or arr.dtype[field].itemsize != 8:
                     errors.append(f"'{field}' must be int64/uint64 nanoseconds")
             else:
                 errors.append(f"Missing required field '{field}'")
-                
+
         if "ev" in names:
             if arr.dtype["ev"].kind not in ("i", "u"):
                 errors.append("'ev' flag must be an integer field")
             elif len(arr) > 0:
                 try:
                     from hftbacktest import DEPTH_SNAPSHOT_EVENT
+
                     first_ev = int(arr[0]["ev"])
                     if not (first_ev & DEPTH_SNAPSHOT_EVENT):
                         errors.append("First event is not DEPTH_SNAPSHOT_EVENT")
@@ -1355,10 +1353,10 @@ def _check_hftbacktest_v2_data_format(path: str) -> list[str]:
                     pass
         else:
             errors.append("Missing required field 'ev'")
-            
+
     except Exception as e:
         errors.append(f"Failed to load numpy array: {e}")
-        
+
     return errors
 
 
