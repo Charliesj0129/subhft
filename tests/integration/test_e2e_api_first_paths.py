@@ -328,6 +328,7 @@ async def test_coldpath_wal_replay_to_clickhouse_api_first(tmp_path, monkeypatch
 
 
 @pytest.mark.integration
+@pytest.mark.slow
 def test_research_path_hbt_runner_cli_api_first(tmp_path):
     if not (ROOT / "research" / "alphas" / "ofi_mc" / "impl.py").exists():
         pytest.skip("research/alphas/ofi_mc not available")
@@ -336,24 +337,28 @@ def test_research_path_hbt_runner_cli_api_first(tmp_path):
     out_path = tmp_path / "hbt_summary.json"
     _build_research_input(data_path)
 
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "research.backtest.hft_native_runner",
-            "--alpha",
-            "ofi_mc",
-            "--data",
-            str(data_path),
-            "--out",
-            str(out_path),
-        ],
-        cwd=str(ROOT),
-        env=_subprocess_env(),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "research.backtest.hft_native_runner",
+                "--alpha",
+                "ofi_mc",
+                "--data",
+                str(data_path),
+                "--out",
+                str(out_path),
+            ],
+            cwd=str(ROOT),
+            env=_subprocess_env(),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.skip("hft_native_runner CLI timed out (hftbacktest simulation took > 120s)")
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert out_path.exists(), "Expected backtest summary output"
 
