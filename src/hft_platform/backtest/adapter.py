@@ -318,23 +318,15 @@ class HftBacktestAdapter:
 
         if bid_depth is not None and hasattr(bid_depth, "__getitem__"):
             # Depth object exposes a dict/mapping: bid_depth[price] -> qty
-            filled_bids = self._fill_from_mapping(
-                bid_depth, best_bid_raw, tick_size, self._bid_buf, descending=True
-            )
+            filled_bids = self._fill_from_mapping(bid_depth, best_bid_raw, tick_size, self._bid_buf, descending=True)
         elif tick_size is not None and tick_size > 0:
             # Step from best price by tick_size, probing depth object
-            filled_bids = self._fill_by_stepping(
-                depth_obj, best_bid_raw, tick_size, self._bid_buf, side="bid"
-            )
+            filled_bids = self._fill_by_stepping(depth_obj, best_bid_raw, tick_size, self._bid_buf, side="bid")
 
         if ask_depth is not None and hasattr(ask_depth, "__getitem__"):
-            filled_asks = self._fill_from_mapping(
-                ask_depth, best_ask_raw, tick_size, self._ask_buf, descending=False
-            )
+            filled_asks = self._fill_from_mapping(ask_depth, best_ask_raw, tick_size, self._ask_buf, descending=False)
         elif tick_size is not None and tick_size > 0:
-            filled_asks = self._fill_by_stepping(
-                depth_obj, best_ask_raw, tick_size, self._ask_buf, side="ask"
-            )
+            filled_asks = self._fill_by_stepping(depth_obj, best_ask_raw, tick_size, self._ask_buf, side="ask")
 
         # Fallback: at least populate L1 from best_bid/best_ask attrs
         if filled_bids == 0:

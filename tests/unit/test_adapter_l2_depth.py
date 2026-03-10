@@ -12,6 +12,7 @@ from hft_platform.strategy.base import BaseStrategy
 # Stub / mock objects
 # ---------------------------------------------------------------------------
 
+
 class _BacktestAsset:
     def data(self, *a, **kw):
         return self
@@ -136,6 +137,7 @@ class _NoopStrategy(BaseStrategy):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def _patch_hbt(monkeypatch):
     """Patch hftbacktest imports so we can construct HftBacktestAdapter without the real lib."""
@@ -162,6 +164,7 @@ def _make_adapter(depth_levels: int = 1, price_scale: int = 10_000, tick_size: f
 # ---------------------------------------------------------------------------
 # Tests: pre-allocated buffer setup
 # ---------------------------------------------------------------------------
+
 
 class TestPreAllocatedBuffers:
     def test_buffers_allocated_with_correct_shape_l1(self, _patch_hbt):
@@ -216,6 +219,7 @@ class TestPreAllocatedBuffers:
 # Tests: L1 backward compatibility
 # ---------------------------------------------------------------------------
 
+
 class TestL1BackwardCompat:
     def test_l1_build_produces_correct_shape(self, _patch_hbt):
         adapter = _make_adapter(depth_levels=1)
@@ -260,6 +264,7 @@ class TestL1BackwardCompat:
 # ---------------------------------------------------------------------------
 # Tests: L2 depth building
 # ---------------------------------------------------------------------------
+
 
 class TestL2DepthBuild:
     def test_l2_full_5_levels_from_mapping(self, _patch_hbt):
@@ -349,6 +354,7 @@ class TestL2DepthBuild:
 # ---------------------------------------------------------------------------
 # Tests: run() loop dispatches correct builder
 # ---------------------------------------------------------------------------
+
 
 class TestRunLoopDispatch:
     def test_run_with_depth_levels_1_uses_l1(self, _patch_hbt):
