@@ -14,7 +14,6 @@ const APPROVED: i8 = 1;
 
 #[derive(Clone)]
 struct DedupRecord {
-    key: String,
     approved: i8, // -1=reserved, 0=rejected, 1=approved
     reason_code: String,
     cmd_id: i64,
@@ -61,7 +60,6 @@ impl RustDedupStore {
         // Miss: reserve
         self.order_counter += 1;
         let rec = DedupRecord {
-            key: key.to_string(),
             approved: RESERVED,
             reason_code: String::new(),
             cmd_id: 0,
@@ -92,7 +90,6 @@ impl RustDedupStore {
             self.records.insert(
                 key.to_string(),
                 DedupRecord {
-                    key: key.to_string(),
                     approved: approved_val,
                     reason_code: reason_code.to_string(),
                     cmd_id,
