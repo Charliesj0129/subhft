@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import os
 import re
 import time
@@ -18,6 +19,22 @@ from hft_platform.strategy.compat import check_strategy_feature_compat
 from hft_platform.strategy.registry import StrategyRegistry
 
 logger = get_logger("strategy_runner")
+
+_RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
+try:
+    try:
+        _rust_core = importlib.import_module("hft_platform.rust_core")
+    except Exception:
+        _rust_core = importlib.import_module("rust_core")
+    _RustCircuitBreaker = getattr(_rust_core, "RustCircuitBreaker", None)
+except Exception:
+    _RustCircuitBreaker = None
 
 
 def _get_trace_sampler():
@@ -118,6 +135,17 @@ class StrategyRunner:
         self._circuit_states: dict[str, str] = {}  # "normal" | "degraded" | "halted"
         self._circuit_success_counts: dict[str, int] = {}
         self._circuit_halted_at_ns: dict[str, int] = {}
+        # Rust-accelerated circuit breaker (replaces 5 dict lookups with 1 HashMap lookup)
+        self._rust_circuit: Any = None
+        if _RUST_CIRCUIT_ENABLED and _RustCircuitBreaker is not None:
+            try:
+                self._rust_circuit = _RustCircuitBreaker(
+                    self._circuit_threshold,
+                    self._circuit_recovery_threshold,
+                    self._circuit_cooldown_ns,
+                )
+            except Exception:
+                pass
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
         self._feature_compat_fail_fast = os.getenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "1").lower() not in {
@@ -418,7 +446,15 @@ class StrategyRunner:
             if not strategy.enabled:
                 # S4: Check if halted strategy is eligible for cooldown recovery
                 sid = strategy.strategy_id
-                if self._circuit_states.get(sid) == "halted":
+                rc = self._rust_circuit
+                if rc is not None:
+                    should_reenable, _new_state = rc.check_cooldown(sid, timebase.now_ns())
+                    if should_reenable:
+                        strategy.enabled = True
+                        logger.info("Strategy circuit cooldown elapsed — re-enabling in degraded", id=sid)
+                    else:
+                        continue
+                elif self._circuit_states.get(sid) == "halted":
                     halted_at = self._circuit_halted_at_ns.get(sid, 0)
                     if halted_at and timebase.now_ns() - halted_at >= self._circuit_cooldown_ns:
                         self._circuit_states[sid] = "degraded"
@@ -472,36 +508,55 @@ class StrategyRunner:
                         ).inc()
                 # S4: Circuit breaker 3-state FSM (normal → degraded → halted)
                 sid = strategy.strategy_id
-                self._circuit_success_counts[sid] = 0
-                failures = self._failure_counts.get(sid, 0) + 1
-                self._failure_counts[sid] = failures
-                state = self._circuit_states.get(sid, "normal")
-                half_threshold = max(1, self._circuit_threshold // 2)
-                if state == "normal" and failures >= half_threshold:
-                    self._circuit_states[sid] = "degraded"
-                    logger.warning("Strategy circuit degraded", id=sid, failures=failures)
-                if failures >= self._circuit_threshold and state != "halted":
-                    self._circuit_states[sid] = "halted"
-                    strategy.enabled = False
-                    self._circuit_halted_at_ns[sid] = timebase.now_ns()
-                    logger.error(
-                        "Strategy circuit breaker halted",
-                        id=sid,
-                        failures=failures,
-                        threshold=self._circuit_threshold,
-                    )
+                rc = self._rust_circuit
+                if rc is not None:
+                    new_state, should_disable = rc.record_failure(sid, timebase.now_ns())
+                    if should_disable:
+                        strategy.enabled = False
+                        logger.error(
+                            "Strategy circuit breaker halted",
+                            id=sid,
+                            threshold=self._circuit_threshold,
+                        )
+                    elif new_state == 1:  # DEGRADED
+                        logger.warning("Strategy circuit degraded", id=sid)
+                else:
+                    self._circuit_success_counts[sid] = 0
+                    failures = self._failure_counts.get(sid, 0) + 1
+                    self._failure_counts[sid] = failures
+                    state = self._circuit_states.get(sid, "normal")
+                    half_threshold = max(1, self._circuit_threshold // 2)
+                    if state == "normal" and failures >= half_threshold:
+                        self._circuit_states[sid] = "degraded"
+                        logger.warning("Strategy circuit degraded", id=sid, failures=failures)
+                    if failures >= self._circuit_threshold and state != "halted":
+                        self._circuit_states[sid] = "halted"
+                        strategy.enabled = False
+                        self._circuit_halted_at_ns[sid] = timebase.now_ns()
+                        logger.error(
+                            "Strategy circuit breaker halted",
+                            id=sid,
+                            failures=failures,
+                            threshold=self._circuit_threshold,
+                        )
             else:
                 # S4: Gradual recovery: in degraded state, require N consecutive successes
                 sid = strategy.strategy_id
-                state = self._circuit_states.get(sid, "normal")
-                if state == "degraded":
-                    sc = self._circuit_success_counts.get(sid, 0) + 1
-                    self._circuit_success_counts[sid] = sc
-                    if sc >= self._circuit_recovery_threshold:
-                        self._circuit_states[sid] = "normal"
-                        self._failure_counts[sid] = 0
-                        self._circuit_success_counts[sid] = 0
+                rc = self._rust_circuit
+                if rc is not None:
+                    _new_state, recovered = rc.record_success(sid)
+                    if recovered:
                         logger.info("Strategy circuit recovered to normal", id=sid)
+                else:
+                    state = self._circuit_states.get(sid, "normal")
+                    if state == "degraded":
+                        sc = self._circuit_success_counts.get(sid, 0) + 1
+                        self._circuit_success_counts[sid] = sc
+                        if sc >= self._circuit_recovery_threshold:
+                            self._circuit_states[sid] = "normal"
+                            self._failure_counts[sid] = 0
+                            self._circuit_success_counts[sid] = 0
+                            logger.info("Strategy circuit recovered to normal", id=sid)
 
             duration = time.perf_counter_ns() - start
             self._emit_trace(
