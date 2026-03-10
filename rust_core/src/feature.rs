@@ -266,8 +266,7 @@ impl LobFeatureKernelV1Inner {
                 self.ofi_l1_cum += ofi_raw;
                 let alpha = 2.0 / 9.0;
                 self.ofi_l1_ema8 = (1.0 - alpha) * self.ofi_l1_ema8 + alpha * ofi_raw as f64;
-                self.spread_ema8 =
-                    (1.0 - alpha) * self.spread_ema8 + alpha * spread_scaled as f64;
+                self.spread_ema8 = (1.0 - alpha) * self.spread_ema8 + alpha * spread_scaled as f64;
                 self.imbalance_ema8_ppm =
                     (1.0 - alpha) * self.imbalance_ema8_ppm + alpha * l1_imbalance_ppm as f64;
 

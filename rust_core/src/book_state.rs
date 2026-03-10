@@ -108,9 +108,7 @@ impl RustBookState {
     /// Low-allocation stats tuple matching Python BookState.get_stats_tuple().
     /// Returns: (symbol, exch_ts, mid_price_x2, spread, imbalance,
     ///           best_bid, best_ask, bid_depth_total, ask_depth_total)
-    pub fn get_stats_tuple(
-        &self,
-    ) -> (String, i64, i64, i64, f64, i64, i64, i64, i64) {
+    pub fn get_stats_tuple(&self) -> (String, i64, i64, i64, f64, i64, i64, i64, i64) {
         let best_bid = self._best_bid();
         let best_ask = self._best_ask();
         (
@@ -206,11 +204,7 @@ impl RustBookState {
 }
 
 impl RustBookState {
-    fn _ingest_sides(
-        &mut self,
-        bids: &PyReadonlyArray2<i64>,
-        asks: &PyReadonlyArray2<i64>,
-    ) {
+    fn _ingest_sides(&mut self, bids: &PyReadonlyArray2<i64>, asks: &PyReadonlyArray2<i64>) {
         let bids_arr = bids.as_array();
         let asks_arr = asks.as_array();
 

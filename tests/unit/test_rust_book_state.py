@@ -3,6 +3,7 @@
 Validates that the Rust-accelerated book state produces identical results
 to the pure-Python fallback for all hot-path operations.
 """
+
 import os
 
 import numpy as np
@@ -141,9 +142,13 @@ class TestRustBookState:
     def test_apply_update_with_stats(self, sample_bids, sample_asks):
         bs = RustBookState("STATS")
         result = bs.apply_update_with_stats(
-            sample_bids, sample_asks, 1000,
-            best_bid=100_0000, best_ask=101_0000,
-            bid_depth=100, ask_depth=80,
+            sample_bids,
+            sample_asks,
+            1000,
+            best_bid=100_0000,
+            best_ask=101_0000,
+            bid_depth=100,
+            ask_depth=80,
             imbalance=0.111,
         )
         assert result is True
