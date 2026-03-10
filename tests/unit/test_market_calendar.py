@@ -495,3 +495,177 @@ def test_days_until_trading_default_date():
     calendar = MarketCalendar("XTAI")
     with patch.object(calendar, "is_trading_day", return_value=True):
         assert calendar.days_until_trading() == 0
+
+
+# ---------------------------------------------------------------------------
+# product_type-aware is_trading_hours tests
+# ---------------------------------------------------------------------------
+
+
+def _make_cal_forced_trading_day(is_trading: bool):
+    """Return a MarketCalendar (no xcals) with is_trading_day patched."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    cal = MarketCalendar("XTAI")
+    cal._cal = None  # force fallback
+    cal.is_trading_day = lambda date=None: is_trading
+    return cal
+
+
+# ── stock (default) ──────────────────────────────────────────────────────────
+
+
+def test_is_trading_hours_stock_default_no_product_type():
+    """None product_type → stock session (09:00–13:30)."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    cal = MarketCalendar("XTAI")
+    cal._cal = None
+    tz = cal._tz
+
+    monday = dt.date(2026, 3, 10)  # known trading weekday
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 10, 0, tzinfo=tz)) is True
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 8, 59, tzinfo=tz)) is False
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 13, 31, tzinfo=tz)) is False
+    _ = monday  # suppress unused-var
+
+
+def test_is_trading_hours_stock_explicit():
+    """product_type='stock' → same as default (09:00–13:30)."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    cal = MarketCalendar("XTAI")
+    cal._cal = None
+    tz = cal._tz
+
+    ts_in = dt.datetime(2026, 3, 10, 11, 0, tzinfo=tz)
+    ts_before = dt.datetime(2026, 3, 10, 8, 44, tzinfo=tz)
+    ts_after = dt.datetime(2026, 3, 10, 13, 31, tzinfo=tz)
+
+    assert cal.is_trading_hours(ts_in, product_type="stock") is True
+    assert cal.is_trading_hours(ts_before, product_type="stock") is False
+    assert cal.is_trading_hours(ts_after, product_type="stock") is False
+
+
+# ── futures day session ──────────────────────────────────────────────────────
+
+
+def test_is_trading_hours_future_day_session_boundaries():
+    """Futures day session: 08:45–13:45 on a trading day."""
+    cal = _make_cal_forced_trading_day(True)
+    tz = cal._tz
+
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 8, 45, tzinfo=tz), product_type="future") is True
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 13, 45, tzinfo=tz), product_type="future") is True
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 8, 44, tzinfo=tz), product_type="future") is False
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 13, 46, tzinfo=tz), product_type="future") is False
+
+
+def test_is_trading_hours_future_day_not_trading_day():
+    """Futures day session: False when not a trading day (weekend)."""
+    cal = _make_cal_forced_trading_day(False)
+    tz = cal._tz
+
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 7, 10, 0, tzinfo=tz), product_type="future") is False
+
+
+def test_is_trading_hours_future_gap_14_to_15():
+    """14:00–14:59 is between day and night sessions → False."""
+    cal = _make_cal_forced_trading_day(True)
+    tz = cal._tz
+
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 14, 0, tzinfo=tz), product_type="future") is False
+    assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 14, 59, tzinfo=tz), product_type="future") is False
+
+
+# ── futures night session ────────────────────────────────────────────────────
+
+
+def test_is_trading_hours_future_night_session_evening():
+    """15:00–23:59 on a trading day → night session True."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    cal = MarketCalendar("XTAI")
+    cal._cal = None
+    tz = cal._tz
+
+    # Monday 15:00 – should be in night session (Monday is trading day)
+    ts = dt.datetime(2026, 3, 10, 15, 0, tzinfo=tz)
+    assert cal.is_trading_hours(ts, product_type="future") is True
+
+    ts_late = dt.datetime(2026, 3, 10, 23, 59, tzinfo=tz)
+    assert cal.is_trading_hours(ts_late, product_type="future") is True
+
+
+def test_is_trading_hours_future_night_session_early_morning():
+    """00:00–05:00 on Tuesday when Monday was a trading day → True."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    cal = MarketCalendar("XTAI")
+    cal._cal = None
+    tz = cal._tz
+
+    # Tuesday 04:00 → previous day (Monday) is a trading day
+    ts = dt.datetime(2026, 3, 11, 4, 0, tzinfo=tz)
+    assert cal.is_trading_hours(ts, product_type="future") is True
+
+    # Boundary at exactly 05:00
+    ts_boundary = dt.datetime(2026, 3, 11, 5, 0, tzinfo=tz)
+    assert cal.is_trading_hours(ts_boundary, product_type="future") is True
+
+    # 05:01 – outside session
+    ts_after = dt.datetime(2026, 3, 11, 5, 1, tzinfo=tz)
+    assert cal.is_trading_hours(ts_after, product_type="future") is False
+
+
+def test_is_trading_hours_future_night_session_weekend():
+    """Saturday 15:00 → no night session (Saturday is not a trading day)."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    cal = MarketCalendar("XTAI")
+    cal._cal = None
+    tz = cal._tz
+
+    # Saturday 16:00
+    ts = dt.datetime(2026, 3, 7, 16, 0, tzinfo=tz)
+    assert cal.is_trading_hours(ts, product_type="future") is False
+
+
+def test_is_trading_hours_future_night_session_sunday_early():
+    """Sunday 03:00 → previous day is Saturday (not trading) → False."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    cal = MarketCalendar("XTAI")
+    cal._cal = None
+    tz = cal._tz
+
+    ts = dt.datetime(2026, 3, 8, 3, 0, tzinfo=tz)
+    assert cal.is_trading_hours(ts, product_type="future") is False
+
+
+def test_is_trading_hours_future_friday_night_into_saturday():
+    """Friday night session continues into Saturday morning 05:00."""
+    from hft_platform.core.market_calendar import MarketCalendar
+
+    cal = MarketCalendar("XTAI")
+    cal._cal = None
+    tz = cal._tz
+
+    # Saturday 04:00 → previous day (Friday) is a trading day
+    ts = dt.datetime(2026, 3, 7, 4, 0, tzinfo=tz)
+    assert cal.is_trading_hours(ts, product_type="future") is True
+
+
+# ── option aliases future ────────────────────────────────────────────────────
+
+
+def test_is_trading_hours_option_same_as_future():
+    """product_type='option' uses the same TAIFEX session window as future."""
+    cal = _make_cal_forced_trading_day(True)
+    tz = cal._tz
+
+    ts_day = dt.datetime(2026, 3, 10, 9, 0, tzinfo=tz)
+    ts_night = dt.datetime(2026, 3, 10, 20, 0, tzinfo=tz)
+
+    assert cal.is_trading_hours(ts_day, product_type="option") is True
+    assert cal.is_trading_hours(ts_night, product_type="option") is True
