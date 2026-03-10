@@ -9,13 +9,17 @@ mod alpha_pressure;
 mod alpha_reversal;
 mod alpha_transient;
 mod bus;
+mod dedup;
+mod exposure;
 mod fast_lob;
 mod feature;
 pub mod ipc;
 mod lob;
 mod positions;
 pub mod risk;
+mod risk_validator;
 mod strategy; // New Strategy
+mod timeutil;
 
 /// The HFT Platform Rust Core Module
 #[pymodule]
@@ -37,6 +41,11 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<feature::LobFeatureKernelV1>()?;
     m.add_class::<ipc::ShmRingBuffer>()?;
     m.add_class::<risk::FastGate>()?;
+    m.add_class::<risk_validator::RustRiskValidator>()?;
+    m.add_class::<exposure::RustExposureStore>()?;
+    m.add_class::<dedup::RustDedupStore>()?;
+    m.add_function(wrap_pyfunction!(timeutil::coerce_ns_int, m)?)?;
+    m.add_function(wrap_pyfunction!(timeutil::coerce_ns_float, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::scale_book, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::scale_book_seq, m)?)?;
     m.add_function(wrap_pyfunction!(fast_lob::scale_book_pair, m)?)?;
