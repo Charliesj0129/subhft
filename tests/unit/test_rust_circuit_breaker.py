@@ -3,6 +3,7 @@
 Validates the 3-state FSM (normal → degraded → halted → cooldown → degraded → normal)
 produces identical transitions as the Python implementation in StrategyRunner.
 """
+
 import pytest
 
 try:

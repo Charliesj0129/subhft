@@ -431,8 +431,11 @@ class FeatureEngine:
         """Get or create a RustFeaturePipelineV1 for the given symbol."""
         pipeline = self._rust_pipelines.get(symbol)
         if pipeline is None:
+            cls = _RUST_FEATURE_PIPELINE_V1
+            if cls is None:
+                return None
             thresholds = [int(spec.warmup_min_events) for spec in self._feature_set.features]
-            pipeline = _RUST_FEATURE_PIPELINE_V1(thresholds)
+            pipeline = cls(thresholds)
             self._rust_pipelines[symbol] = pipeline
         return pipeline
 
@@ -457,8 +460,14 @@ class FeatureEngine:
 
             pipeline = self._get_rust_pipeline(symbol)
             values_list, changed_mask, warmup_mask = pipeline.process(
-                best_bid, best_ask, mid_price_x2, spread_scaled,
-                bid_depth, ask_depth, l1_bid_qty, l1_ask_qty,
+                best_bid,
+                best_ask,
+                mid_price_x2,
+                spread_scaled,
+                bid_depth,
+                ask_depth,
+                l1_bid_qty,
+                l1_ask_qty,
                 warm_count,
             )
             return (tuple(int(v) for v in values_list), int(changed_mask), int(warmup_mask))

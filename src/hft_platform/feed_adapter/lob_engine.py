@@ -155,11 +155,7 @@ class BookState:
             if not _STATS_NONE:
                 # Rust fast path: delegate entire recompute to RustBookState
                 rs = self._rust_state
-                if (
-                    rs is not None
-                    and isinstance(self.bids, np.ndarray)
-                    and isinstance(self.asks, np.ndarray)
-                ):
+                if rs is not None and isinstance(self.bids, np.ndarray) and isinstance(self.asks, np.ndarray):
                     try:
                         bids_2d = self.bids.reshape(-1, 2) if self.bids.ndim == 1 else self.bids
                         asks_2d = self.asks.reshape(-1, 2) if self.asks.ndim == 1 else self.asks

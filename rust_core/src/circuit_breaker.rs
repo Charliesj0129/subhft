@@ -56,10 +56,7 @@ impl RustCircuitBreaker {
     ///   - STATE_NORMAL=0, STATE_DEGRADED=1, STATE_HALTED=2
     ///   - should_disable=true means caller should set strategy.enabled=False
     pub fn record_failure(&mut self, strategy_id: &str, now_ns: i64) -> (u8, bool) {
-        let cs = self
-            .states
-            .entry(strategy_id.to_string())
-            .or_default();
+        let cs = self.states.entry(strategy_id.to_string()).or_default();
 
         cs.success_count = 0;
         cs.failure_count += 1;
@@ -82,10 +79,7 @@ impl RustCircuitBreaker {
     /// Record a success for a strategy.
     /// Returns: (new_state: u8, recovered_to_normal: bool)
     pub fn record_success(&mut self, strategy_id: &str) -> (u8, bool) {
-        let cs = self
-            .states
-            .entry(strategy_id.to_string())
-            .or_default();
+        let cs = self.states.entry(strategy_id.to_string()).or_default();
 
         if cs.state != STATE_DEGRADED {
             return (cs.state, false);

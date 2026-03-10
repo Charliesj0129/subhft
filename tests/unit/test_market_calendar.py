@@ -501,6 +501,7 @@ def test_days_until_trading_default_date():
 # product_type-aware is_trading_hours tests
 # ---------------------------------------------------------------------------
 
+
 def _make_cal_forced_trading_day(is_trading: bool):
     """Return a MarketCalendar (no xcals) with is_trading_day patched."""
     from hft_platform.core.market_calendar import MarketCalendar
@@ -512,6 +513,7 @@ def _make_cal_forced_trading_day(is_trading: bool):
 
 
 # ── stock (default) ──────────────────────────────────────────────────────────
+
 
 def test_is_trading_hours_stock_default_no_product_type():
     """None product_type → stock session (09:00–13:30)."""
@@ -547,6 +549,7 @@ def test_is_trading_hours_stock_explicit():
 
 # ── futures day session ──────────────────────────────────────────────────────
 
+
 def test_is_trading_hours_future_day_session_boundaries():
     """Futures day session: 08:45–13:45 on a trading day."""
     cal = _make_cal_forced_trading_day(True)
@@ -576,6 +579,7 @@ def test_is_trading_hours_future_gap_14_to_15():
 
 
 # ── futures night session ────────────────────────────────────────────────────
+
 
 def test_is_trading_hours_future_night_session_evening():
     """15:00–23:59 on a trading day → night session True."""
@@ -653,6 +657,7 @@ def test_is_trading_hours_future_friday_night_into_saturday():
 
 
 # ── option aliases future ────────────────────────────────────────────────────
+
 
 def test_is_trading_hours_option_same_as_future():
     """product_type='option' uses the same TAIFEX session window as future."""
