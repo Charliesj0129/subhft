@@ -1,6 +1,11 @@
 """Market calendar integration using exchange_calendars.
 
 Provides trading day and hours checks for Taiwan market (XTAI).
+
+Product-type session windows (TST = UTC+8):
+  stock:          09:00–13:30  (TWSE day session)
+  future/option:  08:45–13:45  (TAIFEX day session)
+                  15:00–05:00  (TAIFEX night session, crosses midnight)
 """
 
 from __future__ import annotations
@@ -164,29 +169,63 @@ class MarketCalendar:
             logger.debug("is_trading_day check failed", date=str(date), error=str(exc))
             return date.weekday() < 5
 
-    def is_trading_hours(self, ts: dt.datetime | None = None) -> bool:
-        """Check if timestamp is within trading hours.
+    # ------------------------------------------------------------------ #
+    # TAIFEX session boundaries (minutes from midnight, TST)             #
+    # Day session:   08:45–13:45                                         #
+    # Night session: 15:00–(next day)05:00  (cross-midnight)             #
+    # ------------------------------------------------------------------ #
+    _FUT_DAY_OPEN_MIN: int = 8 * 60 + 45   # 08:45
+    _FUT_DAY_CLOSE_MIN: int = 13 * 60 + 45  # 13:45
+    _FUT_NIGHT_OPEN_MIN: int = 15 * 60      # 15:00
+    _FUT_NIGHT_CLOSE_MIN: int = 5 * 60      # 05:00 (next calendar day)
+
+    def _is_futures_night_session(self, ts: dt.datetime) -> bool:
+        """Return True if *ts* falls inside the TAIFEX night session.
+
+        Night session: 15:00 on a trading day → 05:00 the following calendar day.
+        Cross-midnight logic:
+          • 15:00–23:59  → today must be a trading day
+          • 00:00–05:00  → yesterday must be a trading day
+        """
+        current_min = ts.hour * 60 + ts.minute
+        if current_min >= self._FUT_NIGHT_OPEN_MIN:
+            return self.is_trading_day(ts.date())
+        if current_min <= self._FUT_NIGHT_CLOSE_MIN:
+            return self.is_trading_day(ts.date() - dt.timedelta(days=1))
+        return False
+
+    def is_trading_hours(
+        self,
+        ts: dt.datetime | None = None,
+        product_type: str | None = None,
+    ) -> bool:
+        """Check if timestamp is within trading hours for the given product type.
 
         Args:
-            ts: Timestamp to check (default: now)
+            ts:           Timestamp to check (default: now in local TZ).
+            product_type: One of ``"stock"``, ``"future"``, ``"option"``, or
+                          ``None``.  When ``None`` or ``"stock"`` the TWSE
+                          day-session window (09:00–13:30) is used.  When
+                          ``"future"`` or ``"option"`` the broader TAIFEX
+                          windows are used: 08:45–13:45 day and 15:00–05:00
+                          night session.
 
         Returns:
-            True if within trading hours
+            True if within the relevant trading session.
         """
         if ts is None:
             ts = dt.datetime.now(self._tz)
 
+        if product_type in ("future", "option"):
+            return self._is_futures_trading_hours(ts)
+
+        # ---- stock / default: TWSE 09:00–13:30 -------------------------
         if not self.is_trading_day(ts.date()):
             return False
 
         if not self._cal:
-            # Fallback: 09:00-13:30 TST
-            hour = ts.hour
-            minute = ts.minute
-            start = 9 * 60  # 09:00
-            end = 13 * 60 + 30  # 13:30
-            current = hour * 60 + minute
-            return start <= current <= end
+            current = ts.hour * 60 + ts.minute
+            return 9 * 60 <= current <= 13 * 60 + 30
 
         try:
             import pandas as pd
@@ -194,11 +233,22 @@ class MarketCalendar:
             session = pd.Timestamp(ts.date())
             open_time = self._cal.session_open(session)
             close_time = self._cal.session_close(session)
-            ts_pd = pd.Timestamp(ts)
-            return open_time <= ts_pd <= close_time
+            return open_time <= pd.Timestamp(ts) <= close_time
         except Exception as exc:
             logger.debug("is_trading_hours check failed", ts=str(ts), error=str(exc))
             return False
+
+    def _is_futures_trading_hours(self, ts: dt.datetime) -> bool:
+        """Return True if *ts* is within any TAIFEX session (day or night)."""
+        current_min = ts.hour * 60 + ts.minute
+        # Day session: 08:45–13:45 on a trading day
+        if (
+            self._FUT_DAY_OPEN_MIN <= current_min <= self._FUT_DAY_CLOSE_MIN
+            and self.is_trading_day(ts.date())
+        ):
+            return True
+        # Night session: 15:00–(next day)05:00
+        return self._is_futures_night_session(ts)
 
     def get_session_open(self, date: dt.date | None = None) -> dt.datetime | None:
         """Get market open time for a trading day.
