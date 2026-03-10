@@ -174,10 +174,10 @@ class MarketCalendar:
     # Day session:   08:45–13:45                                         #
     # Night session: 15:00–(next day)05:00  (cross-midnight)             #
     # ------------------------------------------------------------------ #
-    _FUT_DAY_OPEN_MIN: int = 8 * 60 + 45   # 08:45
+    _FUT_DAY_OPEN_MIN: int = 8 * 60 + 45  # 08:45
     _FUT_DAY_CLOSE_MIN: int = 13 * 60 + 45  # 13:45
-    _FUT_NIGHT_OPEN_MIN: int = 15 * 60      # 15:00
-    _FUT_NIGHT_CLOSE_MIN: int = 5 * 60      # 05:00 (next calendar day)
+    _FUT_NIGHT_OPEN_MIN: int = 15 * 60  # 15:00
+    _FUT_NIGHT_CLOSE_MIN: int = 5 * 60  # 05:00 (next calendar day)
 
     def _is_futures_night_session(self, ts: dt.datetime) -> bool:
         """Return True if *ts* falls inside the TAIFEX night session.
@@ -242,10 +242,7 @@ class MarketCalendar:
         """Return True if *ts* is within any TAIFEX session (day or night)."""
         current_min = ts.hour * 60 + ts.minute
         # Day session: 08:45–13:45 on a trading day
-        if (
-            self._FUT_DAY_OPEN_MIN <= current_min <= self._FUT_DAY_CLOSE_MIN
-            and self.is_trading_day(ts.date())
-        ):
+        if self._FUT_DAY_OPEN_MIN <= current_min <= self._FUT_DAY_CLOSE_MIN and self.is_trading_day(ts.date()):
             return True
         # Night session: 15:00–(next day)05:00
         return self._is_futures_night_session(ts)

@@ -95,9 +95,7 @@ class ExposureStore:
         self._rust_store = self._init_rust_store(_gmax, self._max_symbols, self._limits)
 
     @staticmethod
-    def _init_rust_store(
-        global_max: int, max_symbols: int, limits: dict[str, ExposureLimits]
-    ):
+    def _init_rust_store(global_max: int, max_symbols: int, limits: dict[str, ExposureLimits]):
         if os.getenv("HFT_EXPOSURE_RUST", "0").strip().lower() not in {"1", "true", "yes", "on"}:
             return None
         cls = _load_rust_exposure()
@@ -202,8 +200,12 @@ class ExposureStore:
         rs = self._rust_store
         if rs is not None:
             ok, code = rs.check_and_update(
-                key.account, key.strategy_id, key.symbol,
-                int(intent_type), int(price), int(qty),
+                key.account,
+                key.strategy_id,
+                key.symbol,
+                int(intent_type),
+                int(price),
+                int(qty),
             )
             if not ok:
                 reason = rs.reason_str(code)

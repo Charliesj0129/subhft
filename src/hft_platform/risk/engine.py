@@ -277,9 +277,7 @@ class RiskEngine:
                 )
                 if not ok:
                     reason = self._rust_validator_reason_map.get(int(code), "RUST_VALIDATOR_REJECT")
-                    self._emit_trace(
-                        "risk_reject", intent, {"stage": "rust_validator", "reason": reason}
-                    )
+                    self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
                     return RiskDecision(False, intent, reason)
             except Exception as exc:
                 logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
@@ -288,7 +286,8 @@ class RiskEngine:
                     ok, reason = v.check(intent)
                     if not ok:
                         self._emit_trace(
-                            "risk_reject", intent,
+                            "risk_reject",
+                            intent,
                             {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                         )
                         return RiskDecision(False, intent, reason)
@@ -297,7 +296,8 @@ class RiskEngine:
                 ok, reason = v.check(intent)
                 if not ok:
                     self._emit_trace(
-                        "risk_reject", intent,
+                        "risk_reject",
+                        intent,
                         {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                     )
                     return RiskDecision(False, intent, reason)

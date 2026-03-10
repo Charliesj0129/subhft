@@ -82,10 +82,10 @@ class TestParityWithPython:
         ci, _ = _get_funcs()
         test_values = [
             0,
-            1_700_000_000,               # seconds
-            1_700_000_000_000,            # milliseconds
-            1_700_000_000_000_000,        # microseconds
-            1_700_000_000_000_000_000,    # nanoseconds
+            1_700_000_000,  # seconds
+            1_700_000_000_000,  # milliseconds
+            1_700_000_000_000_000,  # microseconds
+            1_700_000_000_000_000_000,  # nanoseconds
         ]
         for val in test_values:
             py_result = coerce_ns(val)

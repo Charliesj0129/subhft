@@ -31,7 +31,7 @@ class TestRustRiskValidator:
     def _make(
         self,
         max_price_cap=50_000_000,  # 5000 * 10000
-        tick_size=100,             # 0.01 * 10000
+        tick_size=100,  # 0.01 * 10000
         band_ticks=20,
         max_notional=100_000_000_000,  # 10M * 10000
     ):
@@ -143,7 +143,7 @@ class TestRustRiskValidator:
         """Rust check should match Python PriceBandValidator logic."""
         v = self._make(
             max_price_cap=50_000_000,  # 5000 * 10000
-            tick_size=100,              # 0.01 * 10000
+            tick_size=100,  # 0.01 * 10000
             band_ticks=20,
         )
         mid = 1_500_000  # mid_price scaled
