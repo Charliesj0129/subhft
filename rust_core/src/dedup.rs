@@ -15,10 +15,10 @@ const APPROVED: i8 = 1;
 #[derive(Clone)]
 struct DedupRecord {
     key: String,
-    approved: i8,       // -1=reserved, 0=rejected, 1=approved
+    approved: i8, // -1=reserved, 0=rejected, 1=approved
     reason_code: String,
     cmd_id: i64,
-    order: u64,         // insertion/access order for LRU
+    order: u64, // insertion/access order for LRU
 }
 
 #[pyclass]
