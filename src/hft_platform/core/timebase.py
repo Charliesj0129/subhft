@@ -12,6 +12,33 @@ from structlog import get_logger
 
 logger = get_logger("core.timebase")
 
+# Rust fast-path for coerce_ns (int/float branches)
+_coerce_ns_int = None
+_coerce_ns_float = None
+_rust_coerce_loaded = False
+
+
+def _load_rust_coerce():
+    global _coerce_ns_int, _coerce_ns_float, _rust_coerce_loaded
+    if _rust_coerce_loaded:
+        return
+    _rust_coerce_loaded = True
+    if os.getenv("HFT_TIMEBASE_RUST_COERCE", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    try:
+        from hft_platform.rust_core import coerce_ns_float, coerce_ns_int  # type: ignore[attr-defined]
+
+        _coerce_ns_int = coerce_ns_int
+        _coerce_ns_float = coerce_ns_float
+    except ImportError:
+        try:
+            from rust_core import coerce_ns_float, coerce_ns_int  # type: ignore[assignment]
+
+            _coerce_ns_int = coerce_ns_int
+            _coerce_ns_float = coerce_ns_float
+        except ImportError:
+            pass
+
 
 def _resolve_tz() -> tuple[str, dt.tzinfo]:
     tz_name = os.getenv("HFT_TS_TZ") or os.getenv("HFT_TS_ASSUME_TZ") or "Asia/Taipei"
@@ -51,6 +78,7 @@ def coerce_ns(ts_val: Any) -> int:
     Rules:
     - datetime without tzinfo is assumed to be in HFT_TS_TZ.
     - ints/floats are interpreted by magnitude (s/ms/us/ns).
+    - Uses Rust fast-path for int/float when available (HFT_TIMEBASE_RUST_COERCE=1).
     """
     if ts_val is None:
         return 0
@@ -60,7 +88,10 @@ def coerce_ns(ts_val: Any) -> int:
             if tzinfo is None:
                 ts_val = ts_val.replace(tzinfo=TZINFO)
             return int(ts_val.timestamp() * 1e9)
+        _load_rust_coerce()
         if isinstance(ts_val, int):
+            if _coerce_ns_int is not None:
+                return _coerce_ns_int(ts_val)
             abs_ts = abs(float(ts_val))
             if abs_ts < 1e11:
                 return ts_val * 1_000_000_000
@@ -70,6 +101,8 @@ def coerce_ns(ts_val: Any) -> int:
                 return ts_val * 1_000
             return ts_val
         if isinstance(ts_val, float):
+            if _coerce_ns_float is not None:
+                return _coerce_ns_float(ts_val)
             abs_ts = abs(float(ts_val))
             if abs_ts < 1e11:
                 return int(ts_val * 1e9)
