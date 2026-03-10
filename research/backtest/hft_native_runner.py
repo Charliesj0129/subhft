@@ -77,6 +77,42 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# L2 (multi-level depth) field name resolution
+# ---------------------------------------------------------------------------
+_L2_DEPTH_LEVELS = 5
+
+_L2_BID_PRICE_FIELDS: tuple[tuple[str, ...], ...] = tuple(
+    (f"bid_px_{lvl}",) for lvl in range(1, _L2_DEPTH_LEVELS + 1)
+)
+_L2_BID_QTY_FIELDS: tuple[tuple[str, ...], ...] = tuple(
+    (f"bid_qty_{lvl}",) for lvl in range(1, _L2_DEPTH_LEVELS + 1)
+)
+_L2_ASK_PRICE_FIELDS: tuple[tuple[str, ...], ...] = tuple(
+    (f"ask_px_{lvl}",) for lvl in range(1, _L2_DEPTH_LEVELS + 1)
+)
+_L2_ASK_QTY_FIELDS: tuple[tuple[str, ...], ...] = tuple(
+    (f"ask_qty_{lvl}",) for lvl in range(1, _L2_DEPTH_LEVELS + 1)
+)
+
+_L2_DETECT_FIELDS: frozenset[str] = frozenset(
+    f"bid_px_{lvl}" for lvl in range(1, _L2_DEPTH_LEVELS + 1)
+)
+
+
+def _has_l2_fields(names: tuple[str, ...]) -> bool:
+    """Return True if dtype names contain any L2 depth fields."""
+    return bool(_L2_DETECT_FIELDS.intersection(names))
+
+
+def _resolve_field(names: tuple[str, ...], candidates: tuple[str, ...]) -> str | None:
+    """Return the first matching field name from candidates, or None."""
+    for name in candidates:
+        if name in names:
+            return name
+    return None
+
+
+# ---------------------------------------------------------------------------
 # NPZ splitting helper
 # ---------------------------------------------------------------------------
 def _split_npz(path: str, split: float = 0.7) -> tuple[str, str]:
@@ -170,17 +206,16 @@ def ensure_hftbt_npz(data_path: str) -> str:
         arr = np.asarray(raw)
 
     names: tuple[str, ...] = arr.dtype.names or ()
+    l2_mode = _has_l2_fields(names)
+
     has_bid = "bid_px" in names
     has_ask = "ask_px" in names
-    if not (has_bid or has_ask):
+    if not (has_bid or has_ask) and not l2_mode:
         raise ValueError(f"Data at '{data_path}' has no recognisable price fields (bid_px, ask_px).")
 
     n = len(arr)
     zeros_f = np.zeros(n, dtype=np.float64)
-    bid_px = arr["bid_px"].astype(np.float64) if has_bid else zeros_f.copy()
-    ask_px = arr["ask_px"].astype(np.float64) if has_ask else zeros_f.copy()
-    bid_qty = arr["bid_qty"].astype(np.float64) if "bid_qty" in names else np.ones(n, dtype=np.float64)
-    ask_qty = arr["ask_qty"].astype(np.float64) if "ask_qty" in names else np.ones(n, dtype=np.float64)
+
     volume = arr["volume"].astype(np.float64) if "volume" in names else zeros_f.copy()
 
     if "local_ts" in names:
@@ -193,23 +228,83 @@ def ensure_hftbt_npz(data_path: str) -> str:
     trade_ev_code = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT)
 
     events: list[tuple] = []
-    for i in range(n):
-        bp = float(bid_px[i])
-        ap = float(ask_px[i])
-        bq = float(bid_qty[i])
-        aq = float(ask_qty[i])
-        vol = float(volume[i])
-        ts = int(local_ts[i])
 
-        # Skip rows where both prices are zero
-        if bp == 0.0 and ap == 0.0:
-            continue
+    if l2_mode:
+        from hftbacktest.types import DEPTH_SNAPSHOT_EVENT
 
-        events.append(_build_event(bid_ev_code, ts, ts, bp, bq))
-        events.append(_build_event(ask_ev_code, ts, ts, ap, aq))
-        if vol > 0.0:
-            mid = (bp + ap) / 2.0
-            events.append(_build_event(trade_ev_code, ts, ts, mid, vol))
+        snap_bid_code = int(DEPTH_SNAPSHOT_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
+        snap_ask_code = int(DEPTH_SNAPSHOT_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
+
+        # Resolve L2 field names for each level
+        bid_px_fields: list[str | None] = []
+        bid_qty_fields: list[str | None] = []
+        ask_px_fields: list[str | None] = []
+        ask_qty_fields: list[str | None] = []
+        for lvl in range(_L2_DEPTH_LEVELS):
+            bid_px_fields.append(_resolve_field(names, _L2_BID_PRICE_FIELDS[lvl]))
+            bid_qty_fields.append(_resolve_field(names, _L2_BID_QTY_FIELDS[lvl]))
+            ask_px_fields.append(_resolve_field(names, _L2_ASK_PRICE_FIELDS[lvl]))
+            ask_qty_fields.append(_resolve_field(names, _L2_ASK_QTY_FIELDS[lvl]))
+
+        # Pairs: (px_fields, qty_fields, snap_code, depth_code)
+        sides: tuple[tuple[list[str | None], list[str | None], int, int], ...] = (
+            (bid_px_fields, bid_qty_fields, snap_bid_code, bid_ev_code),
+            (ask_px_fields, ask_qty_fields, snap_ask_code, ask_ev_code),
+        )
+
+        for i in range(n):
+            ts = int(local_ts[i])
+            is_first = i == 0
+            row_has_any = False
+
+            for px_fields, qty_fields, snap_code, depth_code in sides:
+                for lvl in range(_L2_DEPTH_LEVELS):
+                    px_field = px_fields[lvl]
+                    qty_field = qty_fields[lvl]
+                    if px_field is None:
+                        continue
+                    px = float(arr[px_field][i])
+                    if px == 0.0:
+                        continue
+                    qty = float(arr[qty_field][i]) if qty_field is not None else 1.0
+                    code = snap_code if is_first else depth_code
+                    events.append(_build_event(code, ts, ts, px, qty))
+                    row_has_any = True
+
+            # Trade event (same as L1)
+            if row_has_any:
+                vol = float(volume[i])
+                if vol > 0.0:
+                    bp1_field = bid_px_fields[0]
+                    ap1_field = ask_px_fields[0]
+                    bp1 = float(arr[bp1_field][i]) if bp1_field else 0.0
+                    ap1 = float(arr[ap1_field][i]) if ap1_field else 0.0
+                    mid = (bp1 + ap1) / 2.0
+                    events.append(_build_event(trade_ev_code, ts, ts, mid, vol))
+    else:
+        # L1 path (original behavior)
+        bid_px = arr["bid_px"].astype(np.float64) if has_bid else zeros_f.copy()
+        ask_px = arr["ask_px"].astype(np.float64) if has_ask else zeros_f.copy()
+        bid_qty = arr["bid_qty"].astype(np.float64) if "bid_qty" in names else np.ones(n, dtype=np.float64)
+        ask_qty = arr["ask_qty"].astype(np.float64) if "ask_qty" in names else np.ones(n, dtype=np.float64)
+
+        for i in range(n):
+            bp = float(bid_px[i])
+            ap = float(ask_px[i])
+            bq = float(bid_qty[i])
+            aq = float(ask_qty[i])
+            vol = float(volume[i])
+            ts = int(local_ts[i])
+
+            # Skip rows where both prices are zero
+            if bp == 0.0 and ap == 0.0:
+                continue
+
+            events.append(_build_event(bid_ev_code, ts, ts, bp, bq))
+            events.append(_build_event(ask_ev_code, ts, ts, ap, aq))
+            if vol > 0.0:
+                mid = (bp + ap) / 2.0
+                events.append(_build_event(trade_ev_code, ts, ts, mid, vol))
 
     if not events:
         raise ValueError(f"No valid events generated from '{data_path}' — all rows had zero prices.")
