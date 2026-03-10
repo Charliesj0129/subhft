@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 
 from hft_platform.contracts.strategy import OrderIntent, Side, TIF
-from hft_platform.events import LOBStatsEvent
+from hft_platform.events import BidAskEvent, LOBStatsEvent
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
 _PRICE_SCALE = 10_000  # platform default
@@ -52,10 +52,12 @@ class AlphaStrategyBridge(BaseStrategy):
         self._price_scale = int(price_scale)
         self._symbol = symbol
         self._signal_log: list[tuple[int, float, float]] = []  # (ts_ns, signal, mid_price)
+        self._last_bidask: BidAskEvent | None = None
 
     def reset(self) -> None:
         """Reset alpha state and clear signal log."""
         self._signal_log.clear()
+        self._last_bidask = None
         try:
             self._alpha.reset()
         except Exception:
@@ -98,6 +100,11 @@ class AlphaStrategyBridge(BaseStrategy):
             "local_ts": ts_ns,
         }
 
+        # Attach L2 depth arrays from cached BidAskEvent
+        if self._last_bidask is not None:
+            payload["bids"] = self._last_bidask.bids  # np.ndarray shape=(N,2)
+            payload["asks"] = self._last_bidask.asks  # np.ndarray shape=(N,2)
+
         try:
             signal = float(self._alpha.update(**payload))
         except TypeError:
@@ -121,6 +128,12 @@ class AlphaStrategyBridge(BaseStrategy):
     def handle_event(self, ctx: StrategyContext, event: Any) -> list[OrderIntent]:
         self.ctx = ctx
         self._generated_intents.clear()
+
+        if isinstance(event, BidAskEvent):
+            # Cache L2 depth for next LOBStatsEvent
+            if not self._symbol or event.symbol == self._symbol:
+                self._last_bidask = event
+            return []
 
         if isinstance(event, LOBStatsEvent):
             # Apply symbol filter if configured
