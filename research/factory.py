@@ -758,59 +758,16 @@ def cmd_optimize(args: argparse.Namespace) -> int:
 
 def cmd_run_gate_c(args: argparse.Namespace) -> int:
     """Run Gate A → B → C for a single alpha and print the scorecard summary."""
-    from research.registry.alpha_registry import AlphaRegistry
-    from research.tools.latency_profiles import load_latency_profile
-    from src.hft_platform.alpha.validation import ValidationConfig, run_gate_a, run_gate_b, run_gate_c
+    from src.hft_platform.alpha.validation import run_gate_a, run_gate_b, run_gate_c
 
-    alpha_id: str = str(args.alpha_id)
-    data_paths: list[str] = list(args.data or [])
-    oos_split: float = float(args.oos_split)
-    latency_profile_id: str = str(args.latency_profile)
-    skip_gate_b: bool = bool(getattr(args, "skip_gate_b", False))
-
-    # --- Load latency profile from versioned YAML ---
-    try:
-        latency = load_latency_profile(latency_profile_id)
-    except (KeyError, FileNotFoundError) as exc:
-        print(f"[run-gate-c] ERROR: {exc}")
+    resolved = _resolve_gate_cli_args(args, "run-gate-c")
+    if resolved is None:
         return 1
+    alpha_id, data_paths, latency_profile_id, latency, alpha_instance, config, resolved_paths = resolved
 
-    opt_threshold_min: float = float(getattr(args, "opt_threshold_min", 0.01))
-    no_opt: bool = bool(getattr(args, "no_opt", False))
-    config = ValidationConfig(
-        alpha_id=alpha_id,
-        data_paths=data_paths,
-        is_oos_split=oos_split,
-        latency_profile_id=latency_profile_id,
-        submit_ack_latency_ms=latency["submit_ack_latency_ms"],
-        modify_ack_latency_ms=latency["modify_ack_latency_ms"],
-        cancel_ack_latency_ms=latency["cancel_ack_latency_ms"],
-        local_decision_pipeline_latency_us=latency["local_decision_pipeline_latency_us"],
-        opt_signal_threshold_min=opt_threshold_min,
-        enable_param_optimization=not no_opt,
-    )
-
-    # --- Discover alpha ---
-    registry = AlphaRegistry()
-    loaded = registry.discover(ROOT / "alphas")
-    if alpha_id not in loaded:
-        print(f"[run-gate-c] ERROR: alpha '{alpha_id}' not found in research/alphas/")
-        print(f"  Available: {sorted(loaded.keys())}")
-        return 1
-
-    alpha_instance = loaded[alpha_id]
     manifest = alpha_instance.manifest
-
-    # Project root is one level above the research/ directory
     project_root = ROOT.parent
-
-    # Resolve data paths relative to project root
-    resolved_paths: list[str] = []
-    for p in data_paths:
-        candidate = Path(p)
-        if not candidate.is_absolute():
-            candidate = (project_root / p).resolve()
-        resolved_paths.append(str(candidate))
+    skip_gate_b: bool = bool(getattr(args, "skip_gate_b", False))
 
     print(f"\n[run-gate-c] ── {alpha_id} ────────────────────────────────────────")
     print(f"  latency_profile : {latency_profile_id}")
@@ -865,6 +822,225 @@ def cmd_run_gate_c(args: argparse.Namespace) -> int:
     overall = gate_c.passed
     print(f"\n[run-gate-c] RESULT: {'PASS ✓' if overall else 'FAIL ✗'}")
     return 0 if overall else 1
+
+
+def _resolve_gate_cli_args(
+    args: argparse.Namespace,
+    label: str,
+) -> tuple[str, list[str], str, dict[str, Any], Any, Any, list[str]] | None:
+    """Shared setup for run-gate-c and run-gate-all: parse args, load latency,
+    discover alpha, resolve data paths.
+
+    Returns (alpha_id, data_paths, latency_profile_id, latency, alpha_instance,
+    ValidationConfig, resolved_paths) or None on error (already printed).
+    """
+    from research.registry.alpha_registry import AlphaRegistry
+    from research.tools.latency_profiles import load_latency_profile
+    from src.hft_platform.alpha.validation import ValidationConfig
+
+    alpha_id: str = str(args.alpha_id)
+    data_paths: list[str] = list(args.data or [])
+    oos_split: float = float(args.oos_split)
+    latency_profile_id: str = str(args.latency_profile)
+
+    try:
+        latency = load_latency_profile(latency_profile_id)
+    except (KeyError, FileNotFoundError) as exc:
+        print(f"[{label}] ERROR: {exc}")
+        return None
+
+    opt_threshold_min: float = float(getattr(args, "opt_threshold_min", 0.01))
+    no_opt: bool = bool(getattr(args, "no_opt", False))
+    config = ValidationConfig(
+        alpha_id=alpha_id,
+        data_paths=data_paths,
+        is_oos_split=oos_split,
+        latency_profile_id=latency_profile_id,
+        submit_ack_latency_ms=latency["submit_ack_latency_ms"],
+        modify_ack_latency_ms=latency["modify_ack_latency_ms"],
+        cancel_ack_latency_ms=latency["cancel_ack_latency_ms"],
+        local_decision_pipeline_latency_us=latency["local_decision_pipeline_latency_us"],
+        opt_signal_threshold_min=opt_threshold_min,
+        enable_param_optimization=not no_opt,
+    )
+
+    registry = AlphaRegistry()
+    loaded = registry.discover(ROOT / "alphas")
+    if alpha_id not in loaded:
+        print(f"[{label}] ERROR: alpha '{alpha_id}' not found in research/alphas/")
+        print(f"  Available: {sorted(loaded.keys())}")
+        return None
+
+    alpha_instance = loaded[alpha_id]
+    project_root = ROOT.parent
+
+    resolved_paths: list[str] = []
+    for p in data_paths:
+        candidate = Path(p)
+        if not candidate.is_absolute():
+            candidate = (project_root / p).resolve()
+        resolved_paths.append(str(candidate))
+
+    return (alpha_id, data_paths, latency_profile_id, latency, alpha_instance, config, resolved_paths)
+
+
+def cmd_run_gate_all(args: argparse.Namespace) -> int:
+    """Run Gate A -> B -> C -> D -> E sequentially for a single alpha."""
+    from src.hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_d, _evaluate_gate_e
+    from src.hft_platform.alpha.validation import run_gate_a, run_gate_b, run_gate_c
+
+    resolved = _resolve_gate_cli_args(args, "run-gate-all")
+    if resolved is None:
+        return 1
+    alpha_id, data_paths, latency_profile_id, latency, alpha_instance, config, resolved_paths = resolved
+
+    manifest = alpha_instance.manifest
+    project_root = ROOT.parent
+    skip_gate_b: bool = bool(getattr(args, "skip_gate_b", False))
+    skip_gate_e: bool = bool(getattr(args, "skip_gate_e", False))
+    shadow_sessions: int = int(getattr(args, "shadow_sessions", 5))
+
+    print(f"\n=== Alpha Pipeline: {alpha_id} ===")
+    print(f"  latency_profile : {latency_profile_id}")
+    print(f"  data_paths      : {resolved_paths}")
+
+    gate_results: dict[str, dict[str, Any]] = {}
+    run_id: str | None = None
+    failed = False
+
+    # --- Gate A ---
+    gate_a = run_gate_a(manifest, resolved_paths, config=config, root=project_root)
+    gate_results["Gate A"] = {
+        "passed": gate_a.passed,
+        "detail": "manifest valid, data governance OK" if gate_a.passed else str(gate_a.details),
+    }
+    if not gate_a.passed:
+        failed = True
+
+    # --- Gate B ---
+    if not failed:
+        if skip_gate_b:
+            gate_results["Gate B"] = {"passed": True, "detail": "SKIPPED (--skip-gate-b)"}
+        else:
+            gate_b = run_gate_b(alpha_id, project_root)
+            detail_b = (
+                f"{gate_b.details.get('tests_passed', '?')} tests passed"
+                if gate_b.passed
+                else str(gate_b.details.get("stderr_tail", ""))
+            )
+            gate_results["Gate B"] = {"passed": gate_b.passed, "detail": detail_b}
+            if not gate_b.passed:
+                failed = True
+
+    # --- Gate C ---
+    scorecard_path: str | None = None
+    if not failed:
+        experiments_base = ROOT / "experiments"
+        gate_c_result = run_gate_c(alpha_instance, config, project_root, resolved_paths, experiments_base)
+        gate_c, run_id, _config_hash, scorecard_path, _experiment_meta_path = gate_c_result
+        details_c = gate_c.details
+        detail_c = (
+            f"Sharpe OOS={details_c.get('sharpe_oos')}, IC={details_c.get('ic_mean')}, drawdown={details_c.get('max_drawdown')}"
+            if gate_c.passed
+            else str(details_c)
+        )
+        gate_results["Gate C"] = {"passed": gate_c.passed, "detail": detail_c, "scorecard_path": scorecard_path, "run_id": run_id}
+        if not gate_c.passed:
+            failed = True
+
+    # --- Gate D ---
+    if not failed:
+        if not scorecard_path or not Path(scorecard_path).exists():
+            gate_results["Gate D"] = {"passed": False, "detail": "scorecard not found after Gate C"}
+            failed = True
+        else:
+            scorecard = json.loads(Path(scorecard_path).read_text())
+            promo_config = PromotionConfig(
+                alpha_id=alpha_id,
+                owner="research-cli",
+                project_root=str(project_root),
+                scorecard_path=scorecard_path,
+                shadow_sessions=shadow_sessions,
+                manifest_feature_set_version=getattr(manifest, "feature_set_version", None),
+                write_promotion_config=False,
+            )
+            gate_d_passed, gate_d_checks = _evaluate_gate_d(scorecard, promo_config)
+            gate_results["Gate D"] = {
+                "passed": gate_d_passed,
+                "detail": "meets promotion thresholds" if gate_d_passed else str(gate_d_checks),
+                "checks": gate_d_checks,
+            }
+            if not gate_d_passed:
+                failed = True
+
+    # --- Gate E ---
+    if not failed:
+        if skip_gate_e:
+            gate_results["Gate E"] = {"passed": True, "detail": "SKIPPED (--skip-gate-e)"}
+        else:
+            gate_e_passed, gate_e_checks = _evaluate_gate_e(promo_config, project_root)  # type: ignore[possibly-undefined]
+            gate_results["Gate E"] = {
+                "passed": gate_e_passed,
+                "detail": "shadow sessions OK" if gate_e_passed else str(gate_e_checks),
+                "checks": gate_e_checks,
+            }
+            if not gate_e_passed:
+                failed = True
+
+    _print_gate_all_summary(alpha_id, gate_results, skip_gate_e=skip_gate_e)
+    _save_gate_all_report(alpha_id, gate_results, run_id)
+    return 1 if failed else 0
+
+
+def _print_gate_all_summary(
+    alpha_id: str,
+    gate_results: dict[str, dict[str, Any]],
+    *,
+    skip_gate_e: bool = False,
+) -> None:
+    """Print a human-readable summary table for all gates."""
+    print(f"\n=== Alpha Pipeline: {alpha_id} ===")
+    all_gates = ("Gate A", "Gate B", "Gate C", "Gate D", "Gate E")
+    all_passed = True
+    for gate in all_gates:
+        if gate not in gate_results:
+            if gate == "Gate E" and skip_gate_e:
+                print(f"  {gate}: SKIP  (--skip-gate-e)")
+            else:
+                print(f"  {gate}: --    (not reached)")
+                all_passed = False
+            continue
+        result = gate_results[gate]
+        passed = result["passed"]
+        if not passed:
+            all_passed = False
+        detail_display = str(result.get("detail", ""))[:120]
+        status = "PASS" if passed else "FAIL"
+        print(f"  {gate}: {status}  ({detail_display})")
+
+    print("\nResult: APPROVED for canary" if all_passed else "\nResult: REJECTED")
+
+
+def _save_gate_all_report(
+    alpha_id: str,
+    gate_results: dict[str, dict[str, Any]],
+    run_id: str | None,
+) -> None:
+    """Save full gate results to a JSON report under experiments/runs/."""
+    report_run_id = run_id or f"gate_all_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{alpha_id}"
+    report_dir = ROOT / "experiments" / "runs" / report_run_id
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / "gate_all_report.json"
+
+    payload = {
+        "alpha_id": alpha_id,
+        "run_id": report_run_id,
+        "timestamp": _now_iso(),
+        "gates": gate_results,
+        "overall_passed": all(r["passed"] for r in gate_results.values()),
+    }
+    _write_json(report_path, payload)
+    print(f"\n[run-gate-all] report saved: {report_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -961,6 +1137,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable parameter optimization (useful when signal has no meaningful threshold).",
     )
     gate_c_cmd.set_defaults(func=cmd_run_gate_c)
+
+    gate_all_cmd = sub.add_parser(
+        "run-gate-all",
+        help="Run Gate A -> B -> C -> D -> E end-to-end validation pipeline for a single alpha.",
+    )
+    gate_all_cmd.add_argument("alpha_id", help="Alpha ID (must exist under research/alphas/)")
+    gate_all_cmd.add_argument(
+        "--data",
+        nargs="+",
+        required=True,
+        metavar="PATH",
+        help="One or more .npy data file paths for backtesting.",
+    )
+    gate_all_cmd.add_argument("--oos-split", type=float, default=0.7, help="In-sample / OOS split ratio (default 0.7).")
+    gate_all_cmd.add_argument(
+        "--latency-profile",
+        default="shioaji_sim_p95_v2026-03-04",
+        help="Latency profile ID from config/research/latency_profiles.yaml.",
+    )
+    gate_all_cmd.add_argument(
+        "--skip-gate-b",
+        action="store_true",
+        help="Skip Gate B (pytest) — useful when tests were already run separately.",
+    )
+    gate_all_cmd.add_argument(
+        "--opt-threshold-min",
+        type=float,
+        default=0.01,
+        help="Minimum signal threshold for parameter optimization grid (default 0.01).",
+    )
+    gate_all_cmd.add_argument(
+        "--no-opt",
+        action="store_true",
+        help="Disable parameter optimization (useful when signal has no meaningful threshold).",
+    )
+    gate_all_cmd.add_argument(
+        "--skip-gate-e",
+        action="store_true",
+        help="Skip Gate E (paper trading simulation).",
+    )
+    gate_all_cmd.add_argument(
+        "--shadow-sessions",
+        type=int,
+        default=5,
+        help="Number of simulated paper-trade sessions for Gate E (default 5).",
+    )
+    gate_all_cmd.set_defaults(func=cmd_run_gate_all)
 
     return parser
 
