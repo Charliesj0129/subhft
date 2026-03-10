@@ -7,7 +7,6 @@ from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.events import BidAskEvent
 from hft_platform.strategy.base import BaseStrategy
 
-
 # ---------------------------------------------------------------------------
 # Stub / mock objects
 # ---------------------------------------------------------------------------
