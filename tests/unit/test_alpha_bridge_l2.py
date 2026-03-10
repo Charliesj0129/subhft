@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData
 from research.backtest.alpha_strategy_bridge import AlphaStrategyBridge
-
 
 # ---------------------------------------------------------------------------
 # Helpers

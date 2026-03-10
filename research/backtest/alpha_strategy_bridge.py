@@ -6,13 +6,14 @@ The bridge extracts L1 LOB data from LOBStatsEvent, calls alpha.update(**payload
 records (ts_ns, signal, mid_price) in signal_log, and returns empty OrderIntents
 (position management is handled by HftNativeRunner from the signal log).
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 import numpy as np
 
-from hft_platform.contracts.strategy import OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import OrderIntent
 from hft_platform.events import BidAskEvent, LOBStatsEvent
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
@@ -110,12 +111,14 @@ class AlphaStrategyBridge(BaseStrategy):
         except TypeError:
             # Some alphas only accept positional-style; try positional via keyword subset
             try:
-                signal = float(self._alpha.update(
-                    bid_px=best_bid,
-                    ask_px=best_ask,
-                    bid_qty=bid_depth,
-                    ask_qty=ask_depth,
-                ))
+                signal = float(
+                    self._alpha.update(
+                        bid_px=best_bid,
+                        ask_px=best_ask,
+                        bid_qty=bid_depth,
+                        ask_qty=ask_depth,
+                    )
+                )
             except Exception:
                 signal = 0.0
         except Exception:
