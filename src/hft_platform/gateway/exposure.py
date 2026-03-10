@@ -32,12 +32,12 @@ def _load_rust_exposure():
         return _RustExposureStore
     _rust_exposure_loaded = True
     try:
-        from hft_platform.rust_core import RustExposureStore  # type: ignore[attr-defined]
+        from hft_platform.rust_core import RustExposureStore
 
         _RustExposureStore = RustExposureStore
     except ImportError:
         try:
-            from rust_core import RustExposureStore  # type: ignore[assignment]
+            from rust_core import RustExposureStore
 
             _RustExposureStore = RustExposureStore
         except ImportError:

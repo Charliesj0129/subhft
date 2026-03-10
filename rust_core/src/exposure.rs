@@ -33,7 +33,8 @@ impl RustExposureStore {
 
     /// Set per-strategy max notional limit.
     pub fn set_limit(&mut self, strategy_id: &str, max_notional_scaled: i64) {
-        self.limits.insert(strategy_id.to_string(), max_notional_scaled);
+        self.limits
+            .insert(strategy_id.to_string(), max_notional_scaled);
     }
 
     /// Atomic check-and-update.
@@ -70,7 +71,11 @@ impl RustExposureStore {
         // Per-strategy limit
         if let Some(&limit) = self.limits.get(strategy_id) {
             if limit > 0 {
-                let key = (account.to_string(), strategy_id.to_string(), symbol.to_string());
+                let key = (
+                    account.to_string(),
+                    strategy_id.to_string(),
+                    symbol.to_string(),
+                );
                 let current = self.exposure.get(&key).copied().unwrap_or(0);
                 if current + notional > limit {
                     return (false, 2);
@@ -79,7 +84,11 @@ impl RustExposureStore {
         }
 
         // Symbol cardinality bound
-        let key = (account.to_string(), strategy_id.to_string(), symbol.to_string());
+        let key = (
+            account.to_string(),
+            strategy_id.to_string(),
+            symbol.to_string(),
+        );
         let is_new = !self.exposure.contains_key(&key);
         if is_new && self.exposure.len() >= self.max_symbols {
             // Evict zero entries
@@ -112,7 +121,11 @@ impl RustExposureStore {
         }
         let notional = price * qty;
         self.global_notional = (self.global_notional - notional).max(0);
-        let key = (account.to_string(), strategy_id.to_string(), symbol.to_string());
+        let key = (
+            account.to_string(),
+            strategy_id.to_string(),
+            symbol.to_string(),
+        );
         if let Some(v) = self.exposure.get_mut(&key) {
             *v = (*v - notional).max(0);
         }
@@ -120,7 +133,11 @@ impl RustExposureStore {
 
     /// Get current exposure for a specific key.
     pub fn get_exposure(&self, account: &str, strategy_id: &str, symbol: &str) -> i64 {
-        let key = (account.to_string(), strategy_id.to_string(), symbol.to_string());
+        let key = (
+            account.to_string(),
+            strategy_id.to_string(),
+            symbol.to_string(),
+        );
         self.exposure.get(&key).copied().unwrap_or(0)
     }
 

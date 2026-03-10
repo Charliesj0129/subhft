@@ -26,13 +26,13 @@ def _load_rust_coerce():
     if os.getenv("HFT_TIMEBASE_RUST_COERCE", "1").strip().lower() in {"0", "false", "no", "off"}:
         return
     try:
-        from hft_platform.rust_core import coerce_ns_float, coerce_ns_int  # type: ignore[attr-defined]
+        from hft_platform.rust_core import coerce_ns_float, coerce_ns_int
 
         _coerce_ns_int = coerce_ns_int
         _coerce_ns_float = coerce_ns_float
     except ImportError:
         try:
-            from rust_core import coerce_ns_float, coerce_ns_int  # type: ignore[assignment]
+            from rust_core import coerce_ns_float, coerce_ns_int
 
             _coerce_ns_int = coerce_ns_int
             _coerce_ns_float = coerce_ns_float

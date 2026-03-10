@@ -25,12 +25,12 @@ def _load_rust_risk_validator():
     if _RustRiskValidator is not None:
         return _RustRiskValidator
     try:
-        from hft_platform.rust_core import RustRiskValidator  # type: ignore[attr-defined]
+        from hft_platform.rust_core import RustRiskValidator
 
         _RustRiskValidator = RustRiskValidator
     except ImportError:
         try:
-            from rust_core import RustRiskValidator  # type: ignore[assignment]
+            from rust_core import RustRiskValidator
 
             _RustRiskValidator = RustRiskValidator
         except ImportError:
@@ -266,7 +266,9 @@ class RiskEngine:
                 mid_price = 0
                 lob = getattr(self.validators[0], "lob", None) if self.validators else None
                 if lob is not None:
-                    mid_price = int(self.validators[0]._get_mid_price(getattr(intent, "symbol", "")) or 0)
+                    _get_mid = getattr(self.validators[0], "_get_mid_price", None)
+                    if callable(_get_mid):
+                        mid_price = int(_get_mid(getattr(intent, "symbol", "")) or 0)
                 ok, code = rv.check(
                     int(getattr(intent, "intent_type", 0)),
                     int(getattr(intent, "price", 0)),

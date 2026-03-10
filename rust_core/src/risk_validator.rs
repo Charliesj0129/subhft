@@ -56,13 +56,16 @@ impl RustRiskValidator {
 
     /// Configure band_ticks for a specific strategy.
     pub fn set_band_ticks(&mut self, strategy_id: &str, band_ticks: i64) {
-        self.band_ticks_cache.insert(strategy_id.to_string(), band_ticks);
+        self.band_ticks_cache
+            .insert(strategy_id.to_string(), band_ticks);
     }
 
     /// Configure max_notional for a specific (strategy, symbol) pair.
     pub fn set_max_notional(&mut self, strategy_id: &str, symbol: &str, max_notional_scaled: i64) {
-        self.max_notional_cache
-            .insert((strategy_id.to_string(), symbol.to_string()), max_notional_scaled);
+        self.max_notional_cache.insert(
+            (strategy_id.to_string(), symbol.to_string()),
+            max_notional_scaled,
+        );
     }
 
     /// Fused check: PriceBand + MaxNotional in one call.

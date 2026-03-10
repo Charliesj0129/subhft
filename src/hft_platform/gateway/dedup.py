@@ -30,12 +30,12 @@ def _load_rust_dedup():
         return _RustDedupStore
     _rust_dedup_loaded = True
     try:
-        from hft_platform.rust_core import RustDedupStore  # type: ignore[attr-defined]
+        from hft_platform.rust_core import RustDedupStore
 
         _RustDedupStore = RustDedupStore
     except ImportError:
         try:
-            from rust_core import RustDedupStore  # type: ignore[assignment]
+            from rust_core import RustDedupStore
 
             _RustDedupStore = RustDedupStore
         except ImportError:
