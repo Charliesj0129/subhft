@@ -8,7 +8,9 @@ mod alpha_ofi;
 mod alpha_pressure;
 mod alpha_reversal;
 mod alpha_transient;
+mod book_state;
 mod bus;
+mod circuit_breaker;
 mod fast_lob;
 mod feature;
 pub mod ipc;
@@ -53,5 +55,8 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_class::<strategy::AlphaStrategy>()?;
     m.add_class::<positions::RustPositionTracker>()?;
+    m.add_class::<book_state::RustBookState>()?;
+    m.add_class::<circuit_breaker::RustCircuitBreaker>()?;
+    m.add_class::<feature::RustFeaturePipelineV1>()?;
     Ok(())
 }

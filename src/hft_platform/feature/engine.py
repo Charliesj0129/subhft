@@ -15,8 +15,10 @@ try:
     except Exception:
         _rust_core = importlib.import_module("rust_core")
     _RUST_LOB_FEATURE_KERNEL_V1 = getattr(_rust_core, "LobFeatureKernelV1", None)
+    _RUST_FEATURE_PIPELINE_V1 = getattr(_rust_core, "RustFeaturePipelineV1", None)
 except Exception:
     _RUST_LOB_FEATURE_KERNEL_V1 = None
+    _RUST_FEATURE_PIPELINE_V1 = None
 
 
 QUALITY_FLAG_GAP = 1 << 0
@@ -68,6 +70,7 @@ class FeatureEngine:
         "_states",
         "_lob_kernel_states",
         "_rust_kernels",
+        "_rust_pipelines",
         "_kernel_backend",
         "_seq",
         "_emit_events",
@@ -93,6 +96,7 @@ class FeatureEngine:
         self._states: dict[str, _FeatureState] = {}
         self._lob_kernel_states: dict[str, _LobKernelState] = {}
         self._rust_kernels: dict[str, Any] = {}
+        self._rust_pipelines: dict[str, Any] = {}
         self._seq = 0
         if emit_events is None:
             emit_events = os.getenv("HFT_FEATURE_ENGINE_EMIT_EVENTS", "1").strip().lower() not in {
@@ -184,6 +188,14 @@ class FeatureEngine:
                     reset()
             except Exception:
                 pass
+        pipeline = self._rust_pipelines.pop(symbol, None)
+        if pipeline is not None:
+            try:
+                reset = getattr(pipeline, "reset", None)
+                if callable(reset):
+                    reset()
+            except Exception:
+                pass
         self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
 
     def reset_all(self) -> None:
@@ -192,6 +204,7 @@ class FeatureEngine:
         self._states.clear()
         self._lob_kernel_states.clear()
         self._rust_kernels.clear()
+        self._rust_pipelines.clear()
 
     def get_feature(self, symbol: str, feature_id: str) -> int | float | None:
         state = self._states.get(str(symbol))
@@ -247,11 +260,20 @@ class FeatureEngine:
         source_ts_ns = int(getattr(stats, "ts", 0) or 0)
         local_ts_ns = int(source_ts_ns if local_ts_ns is None else local_ts_ns)
 
-        values = self._compute_values(symbol, event, stats)
         prev = self._states.get(symbol)
-        changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
         warm_count = (prev.warm_count + 1) if prev else 1
-        warmup_ready_mask = self._compute_warmup_ready_mask(warm_count)
+
+        # Fused Rust pipeline: compute values + changed_mask + warmup_mask in one call
+        fused = None
+        if self._kernel_backend == "rust":
+            fused = self._compute_fused_rust(symbol, event, stats, warm_count)
+
+        if fused is not None:
+            values, changed_mask, warmup_ready_mask = fused
+        else:
+            values = self._compute_values(symbol, event, stats)
+            changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
+            warmup_ready_mask = self._compute_warmup_ready_mask(warm_count)
         qflags = int(self._quality_flags_next.pop(symbol, 0))
         if prev is not None and source_ts_ns and source_ts_ns < prev.source_ts_ns:
             qflags |= QUALITY_FLAG_OUT_OF_ORDER
@@ -404,6 +426,44 @@ class FeatureEngine:
         if not isinstance(out, tuple):
             out = tuple(out)
         return tuple(int(v) for v in out)
+
+    def _get_rust_pipeline(self, symbol: str) -> Any:
+        """Get or create a RustFeaturePipelineV1 for the given symbol."""
+        pipeline = self._rust_pipelines.get(symbol)
+        if pipeline is None:
+            thresholds = [int(spec.warmup_min_events) for spec in self._feature_set.features]
+            pipeline = _RUST_FEATURE_PIPELINE_V1(thresholds)
+            self._rust_pipelines[symbol] = pipeline
+        return pipeline
+
+    def _compute_fused_rust(
+        self,
+        symbol: str,
+        event: object | None,
+        stats: LOBStatsEvent,
+        warm_count: int,
+    ) -> tuple[tuple[int, ...], int, int] | None:
+        """Fused Rust pipeline: returns (values, changed_mask, warmup_ready_mask) or None."""
+        if _RUST_FEATURE_PIPELINE_V1 is None:
+            return None
+        try:
+            best_bid = int(getattr(stats, "best_bid", 0) or 0)
+            best_ask = int(getattr(stats, "best_ask", 0) or 0)
+            mid_price_x2 = int(getattr(stats, "mid_price_x2", 0) or 0)
+            spread_scaled = int(getattr(stats, "spread_scaled", 0) or 0)
+            bid_depth = int(getattr(stats, "bid_depth", 0) or 0)
+            ask_depth = int(getattr(stats, "ask_depth", 0) or 0)
+            l1_bid_qty, l1_ask_qty = self._extract_l1_qty(event, bid_depth, ask_depth)
+
+            pipeline = self._get_rust_pipeline(symbol)
+            values_list, changed_mask, warmup_mask = pipeline.process(
+                best_bid, best_ask, mid_price_x2, spread_scaled,
+                bid_depth, ask_depth, l1_bid_qty, l1_ask_qty,
+                warm_count,
+            )
+            return (tuple(int(v) for v in values_list), int(changed_mask), int(warmup_mask))
+        except Exception:
+            return None
 
     def _extract_l1_qty(
         self, event: object | None, bid_depth_fallback: int, ask_depth_fallback: int
