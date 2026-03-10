@@ -1,4 +1,5 @@
 """Tests for AlphaStrategyBridge L2 depth payload pass-through."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from research.backtest.alpha_strategy_bridge import AlphaStrategyBridge
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_meta() -> MetaData:
     return MetaData(seq=0, source_ts=1_000_000, local_ts=1_000_100)
