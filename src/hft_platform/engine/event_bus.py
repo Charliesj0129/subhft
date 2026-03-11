@@ -18,6 +18,12 @@ _USE_TYPED_TICK_RING = os.getenv("HFT_BUS_TYPED_TICK_RING", "0").lower() not in 
 _USE_TYPED_BOOK_RINGS = os.getenv("HFT_BUS_TYPED_BOOK_RINGS", "0").lower() not in {"0", "false", "no", "off"}
 _TYPED_BIDASK_PACKED_LEVELS = max(1, int(os.getenv("HFT_BUS_TYPED_BIDASK_PACKED_LEVELS", "5")))
 
+# --- HFT_BUS_MODE: tri-mode resolution ---
+# Priority: HFT_BUS_MODE (explicit) > legacy HFT_BUS_RUST > default "python"
+_BUS_MODE: str = os.environ.get("HFT_BUS_MODE", "")
+if not _BUS_MODE:
+    _BUS_MODE = "rust_pyobj" if os.environ.get("HFT_BUS_RUST", "0") == "1" else "python"
+
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
@@ -29,10 +35,30 @@ try:
     _RUST_BIDASK_RING_FACTORY: Optional[Callable[[int], Any]] = getattr(_rust_core, "FastBidAskRingBuffer", None)
     _RUST_LOBSTATS_RING_FACTORY: Optional[Callable[[int], Any]] = getattr(_rust_core, "FastLOBStatsRingBuffer", None)
 except Exception:
+    _rust_core = None  # type: ignore[assignment]
     _RUST_RING_FACTORY = None
     _RUST_TICK_RING_FACTORY = None
     _RUST_BIDASK_RING_FACTORY = None
     _RUST_LOBSTATS_RING_FACTORY = None
+
+# --- FastTypedRingBuffer import (rust_typed mode) ---
+_FastTypedRingBuffer: Optional[type] = None
+if _BUS_MODE == "rust_typed":
+    try:
+        _FastTypedRingBuffer = getattr(_rust_core, "FastTypedRingBuffer", None) if _rust_core else None
+        if _FastTypedRingBuffer is None:
+            raise ImportError("FastTypedRingBuffer not found in rust_core")
+    except Exception:
+        logger.warning("FastTypedRingBuffer unavailable, falling back to python mode")
+        _BUS_MODE = "python"
+        _FastTypedRingBuffer = None
+
+# Event kind constants for typed ring mapping
+_KIND_TICK: int = 1
+_KIND_BIDASK: int = 2
+_KIND_TRADE: int = 3
+_KIND_LOBSTATS: int = 4
+_KIND_OTHER: int = 0
 
 
 class _PyFastTickRingBuffer:
@@ -269,6 +295,7 @@ class RingBufferBus:
 
     def __init__(self, size: int = 65536, storm_guard: Any = None):
         self.size = size
+        self._bus_mode: str = _BUS_MODE
         self._use_rust = _RUST_ENABLED and _USE_RUST_BUS and _RUST_RING_FACTORY is not None
         ring_factory = _RUST_RING_FACTORY
         self._ring = ring_factory(size) if self._use_rust and ring_factory is not None else None
@@ -283,6 +310,10 @@ class RingBufferBus:
         self._kind_ring: list[int] | None = (
             [0] * size if (self._use_typed_tick_ring or self._use_typed_book_rings) else None
         )
+        # rust_typed mode: pre-allocate FastTypedRingBuffer
+        self._typed_ring: Any = None
+        if self._bus_mode == "rust_typed" and _FastTypedRingBuffer is not None:
+            self._typed_ring = _FastTypedRingBuffer(size)
         self.buffer: List[Any] | None = None if self._use_rust else [None] * size
         self.cursor: int = -1  # Writing cursor
         self.single_writer = os.getenv("HFT_BUS_SINGLE_WRITER", "1").lower() not in {
@@ -309,8 +340,55 @@ class RingBufferBus:
         """Set StormGuard reference for overflow HALT triggering."""
         self._storm_guard = storm_guard
 
+    def _store_fallback(self, seq: int, event: Any) -> None:
+        """Write event to the generic fallback buffer (Rust PyObj ring or Python list)."""
+        if self._use_rust and self._ring is not None:
+            self._ring.set(seq, event)
+        else:
+            buffer = self.buffer
+            if buffer is None:
+                buffer = [None] * self.size
+                self.buffer = buffer
+            buffer[seq % self.size] = event
+
     def _publish_unlocked(self, event: Any) -> None:
         next_seq = self.cursor + 1
+
+        # rust_typed fast path: delegate entirely to FastTypedRingBuffer
+        if self._typed_ring is not None:
+            kind, flags, symbol_id, exch_ts_ns, local_ts_ns = _KIND_OTHER, 0, 0, 0, 0
+            price0 = price1 = qty0 = qty1 = aux0 = aux1 = 0
+            ratio0 = 0.0
+            if isinstance(event, tuple) and len(event) >= 2:
+                tag = event[0]
+                if tag == "tick" and len(event) >= 8:
+                    kind = _KIND_TICK
+                    exch_ts_ns = int(event[7])
+                    price0 = int(event[2])
+                    qty0 = int(event[3])
+                    qty1 = int(event[4])
+                    flags = (int(bool(event[5])) << 1) | int(bool(event[6]))
+                elif tag == "bidask" and len(event) >= 6:
+                    kind = _KIND_BIDASK
+                    exch_ts_ns = int(event[4])
+                    if len(event) >= 13:
+                        price0 = int(event[6])   # best_bid
+                        price1 = int(event[7])   # best_ask
+                        qty0 = int(event[8])     # bid_depth
+                        qty1 = int(event[9])     # ask_depth
+                        ratio0 = float(event[12])  # imbalance
+                elif tag == "trade":
+                    kind = _KIND_TRADE
+            self._typed_ring.publish(
+                kind, flags, symbol_id, exch_ts_ns, local_ts_ns,
+                price0, price1, qty0, qty1, aux0, aux1, ratio0,
+            )
+            # Also store in fallback buffer so consume() can read PyObject events
+            self._store_fallback(next_seq, event)
+            self.cursor = next_seq
+            self._notify_counter += 1
+            return
+
         handled_by_typed_ring = False
         if (
             self._use_typed_tick_ring
@@ -431,14 +509,7 @@ class RingBufferBus:
         if not handled_by_typed_ring:
             if self._kind_ring is not None:
                 self._kind_ring[next_seq % self.size] = 0
-            if self._use_rust and self._ring is not None:
-                self._ring.set(next_seq, event)
-            else:
-                buffer = self.buffer
-                if buffer is None:
-                    buffer = [None] * self.size
-                    self.buffer = buffer
-                buffer[next_seq % self.size] = event
+            self._store_fallback(next_seq, event)
         self.cursor = next_seq
         self._notify_counter += 1
 
