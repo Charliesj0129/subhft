@@ -18,6 +18,15 @@ from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
 _PRICE_SCALE = 10_000  # platform default
 
+# FeatureEngine tuple keys (lob_shared_v1, 16 values)
+_FE_KEYS: tuple[str, ...] = (
+    "fe_best_bid", "fe_best_ask", "fe_mid_x2", "fe_spread",
+    "fe_bid_depth", "fe_ask_depth", "fe_imbalance_ppm", "fe_microprice_x2",
+    "fe_l1_bid_qty", "fe_l1_ask_qty", "fe_l1_imbalance_ppm",
+    "fe_ofi_l1_raw", "fe_ofi_l1_cum", "fe_ofi_l1_ema8",
+    "fe_spread_ema8", "fe_imbalance_ema8_ppm",
+)
+
 
 class AlphaStrategyBridge(BaseStrategy):
     """Wraps AlphaProtocol as a BaseStrategy for HftBacktestAdapter.
@@ -97,6 +106,16 @@ class AlphaStrategyBridge(BaseStrategy):
             "imbalance": imbalance,
             "local_ts": ts_ns,
         }
+
+        # Enrich with FeatureEngine values if available
+        try:
+            if hasattr(self, "ctx") and self.ctx is not None:
+                ft = self.ctx.get_feature_tuple(self._symbol)
+                if ft is not None and len(ft) >= len(_FE_KEYS):
+                    for k, v in zip(_FE_KEYS, ft):
+                        payload[k] = v
+        except Exception:
+            pass  # Graceful degradation — FeatureEngine may not be wired
 
         try:
             signal = float(self._alpha.update(**payload))

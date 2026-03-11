@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from research.backtest.alpha_strategy_bridge import (
+    _FE_KEYS,
     AlphaStrategyBridge,
     signal_log_to_arrays,
 )
@@ -205,6 +206,117 @@ class TestAlphaStrategyBridgeOnStats:
         bridge.on_stats(event)
         _, signal, _ = bridge.signal_log[0]
         assert signal == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# FeatureEngine enrichment tests
+# ---------------------------------------------------------------------------
+class _CapturingAlpha:
+    """Alpha that captures kwargs for inspection."""
+
+    def __init__(self):
+        self.last_kwargs: dict = {}
+
+    @property
+    def manifest(self):
+        m = MagicMock()
+        m.alpha_id = "capturing"
+        m.data_fields = ("bid_px", "ask_px")
+        return m
+
+    def reset(self):
+        self.last_kwargs.clear()
+
+    def update(self, **kwargs) -> float:
+        self.last_kwargs = dict(kwargs)
+        return 0.0
+
+
+class TestFeatureEngineEnrichment:
+    """Tests for fe_* payload enrichment from FeatureEngine."""
+
+    def test_fe_keys_merged_when_ctx_has_feature_tuple(self):
+        """When ctx.get_feature_tuple returns a 16-tuple, payload gets fe_* keys."""
+        alpha = _CapturingAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+
+        # Wire a mock ctx with a 16-value feature tuple
+        fake_tuple = tuple(float(i) for i in range(16))
+        ctx = MagicMock()
+        ctx.get_feature_tuple.return_value = fake_tuple
+        bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
+
+        # Alpha should have received all 16 fe_* keys
+        for i, key in enumerate(_FE_KEYS):
+            assert key in alpha.last_kwargs, f"Missing key: {key}"
+            assert alpha.last_kwargs[key] == float(i)
+
+    def test_fe_keys_not_present_without_ctx(self):
+        """Without handle_event (no ctx), fe_* keys should not appear."""
+        alpha = _CapturingAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+        # Call on_stats directly — no ctx set
+        bridge.on_stats(_make_lob_event())
+        for key in _FE_KEYS:
+            assert key not in alpha.last_kwargs
+
+    def test_fe_graceful_when_feature_tuple_none(self):
+        """If get_feature_tuple returns None, no fe_* keys and no crash."""
+        alpha = _CapturingAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+
+        ctx = MagicMock()
+        ctx.get_feature_tuple.return_value = None
+        bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
+
+        for key in _FE_KEYS:
+            assert key not in alpha.last_kwargs
+
+    def test_fe_graceful_when_ctx_raises(self):
+        """If get_feature_tuple raises, bridge should not crash."""
+        alpha = _CapturingAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+
+        ctx = MagicMock()
+        ctx.get_feature_tuple.side_effect = RuntimeError("boom")
+        bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
+
+        # Should still record a signal (0.0)
+        assert len(bridge.signal_log) == 1
+        for key in _FE_KEYS:
+            assert key not in alpha.last_kwargs
+
+    def test_fe_keys_count_matches_constant(self):
+        """_FE_KEYS should have exactly 16 entries matching lob_shared_v1."""
+        assert len(_FE_KEYS) == 16
+
+    def test_fe_short_tuple_ignored(self):
+        """A tuple shorter than 16 should not merge partial fe_* keys."""
+        alpha = _CapturingAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+
+        ctx = MagicMock()
+        ctx.get_feature_tuple.return_value = (1.0, 2.0, 3.0)  # only 3 values
+        bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
+
+        for key in _FE_KEYS:
+            assert key not in alpha.last_kwargs
+
+    def test_base_payload_preserved_with_fe(self):
+        """Base 10-field payload should still be present when fe_* is merged."""
+        alpha = _CapturingAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+
+        fake_tuple = tuple(float(i) for i in range(16))
+        ctx = MagicMock()
+        ctx.get_feature_tuple.return_value = fake_tuple
+        bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
+
+        base_keys = {"bid_px", "ask_px", "bid_qty", "ask_qty", "mid_price",
+                      "current_mid", "spread_bps", "volume", "trade_vol",
+                      "imbalance", "local_ts"}
+        for key in base_keys:
+            assert key in alpha.last_kwargs, f"Missing base key: {key}"
 
 
 # ---------------------------------------------------------------------------
