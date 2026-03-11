@@ -14,7 +14,6 @@ from hft_platform.feed_adapter.broker_registry import (
 )
 from hft_platform.feed_adapter.shioaji.factory import ShioajiBrokerFactory
 
-
 # ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
