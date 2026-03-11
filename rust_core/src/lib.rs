@@ -88,6 +88,8 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(normalizer_tick::normalize_tick_v2, m)?)?;
     m.add_class::<columnar_buffer::RustColumnarBuffer>()?;
     m.add_class::<book_state::RustBookState>()?;
+    m.add_class::<circuit_breaker::RustCircuitBreaker>()?;
+    m.add_class::<feature::RustFeaturePipelineV1>()?;
     m.add_class::<feature_engine::RustFeatureEngineV2>()?;
     m.add_class::<metrics_sampler::RustMetricsSampler>()?;
     // Wave 4 classes
@@ -97,4 +99,3 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<normalizer_lob_fused::RustNormalizerLobFused>()?;
     Ok(())
 }
-# CI trigger 1773195228

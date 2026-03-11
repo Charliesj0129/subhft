@@ -30,6 +30,13 @@ _STATS_TUPLE = _STATS_MODE in {"tuple", "raw"}
 _STATS_NONE = _STATS_MODE in {"none", "off", "disabled"}
 _FORCE_NUMPY = os.getenv("HFT_LOB_FORCE_NUMPY", "1").lower() not in {"0", "false", "no", "off"}
 
+_RUST_BOOK_STATE_ENABLED = os.getenv("HFT_LOB_RUST_BOOKSTATE", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
@@ -37,12 +44,14 @@ try:
         _rust_core = importlib.import_module("rust_core")
 
     _RUST_COMPUTE_STATS = _rust_core.compute_book_stats
+    _RustBookState = getattr(_rust_core, "RustBookState", None)
 except Exception as exc:
     logger.warning(
         "Rust compute_book_stats unavailable - using pure Python fallback",
         error=str(exc),
     )
     _RUST_COMPUTE_STATS = None
+    _RustBookState = None
 
 
 class _NoopLock:
@@ -73,6 +82,7 @@ class BookState:
         "last_volume",
         "bid_depth_total",
         "ask_depth_total",
+        "_rust_state",
     )
 
     def __init__(self, symbol: str):
@@ -95,6 +105,14 @@ class BookState:
         self.last_volume: int = 0
         self.bid_depth_total: int = 0
         self.ask_depth_total: int = 0
+
+        # Rust-accelerated book state (opt-in)
+        self._rust_state: Any = None
+        if _RUST_BOOK_STATE_ENABLED and _RustBookState is not None:
+            try:
+                self._rust_state = _RustBookState(symbol)
+            except Exception:
+                pass
 
     def apply_update(self, bids: Union[np.ndarray, list], asks: Union[np.ndarray, list], exch_ts: int):
         """Atomic update (Snapshot style full-replace for Top-N streams)."""
@@ -135,6 +153,22 @@ class BookState:
                 self.asks = []
 
             if not _STATS_NONE:
+                # Rust fast path: delegate entire recompute to RustBookState
+                rs = self._rust_state
+                if rs is not None and isinstance(self.bids, np.ndarray) and isinstance(self.asks, np.ndarray):
+                    try:
+                        bids_2d = self.bids.reshape(-1, 2) if self.bids.ndim == 1 else self.bids
+                        asks_2d = self.asks.reshape(-1, 2) if self.asks.ndim == 1 else self.asks
+                        rs.apply_update(bids_2d, asks_2d, exch_ts)
+                        self.mid_price_x2 = rs.mid_price_x2
+                        self.spread = rs.spread
+                        self.imbalance = rs.imbalance
+                        self.bid_depth_total = rs.bid_depth_total
+                        self.ask_depth_total = rs.ask_depth_total
+                        self.version += 1
+                        return
+                    except Exception:
+                        pass
                 self._recompute()
             self.version += 1
 
@@ -254,6 +288,12 @@ class BookState:
 
     def get_stats_tuple(self) -> tuple:
         with self.lock:
+            rs = self._rust_state
+            if rs is not None:
+                try:
+                    return rs.get_stats_tuple()
+                except Exception:
+                    pass
             if isinstance(self.bids, np.ndarray):
                 best_bid = int(self.bids[0, 0]) if self.bids.size > 0 else 0
             else:
@@ -548,6 +588,12 @@ class LOBEngine:
 
         lock_ctx = book.lock if _READ_LOCKS_ENABLED else _NoopLock()
         with lock_ctx:
+            rs = book._rust_state
+            if rs is not None:
+                try:
+                    return rs.get_l1_scaled()
+                except Exception:
+                    pass
             if isinstance(book.bids, np.ndarray):
                 best_bid = int(book.bids[0, 0]) if book.bids.size > 0 else 0
             else:
