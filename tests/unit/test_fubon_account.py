@@ -1,4 +1,5 @@
 """Tests for Fubon account gateway — AccountProvider protocol conformance."""
+
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
@@ -83,23 +84,17 @@ class TestProtocolConformance:
 # get_positions
 # ---------------------------------------------------------------------------
 class TestGetPositions:
-    def test_returns_list_from_inventories(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_list_from_inventories(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         mock_sdk.accounting.inventories.return_value = MagicMock(data=["pos1", "pos2"])
         result = gateway.get_positions()
         assert result == ["pos1", "pos2"]
         mock_sdk.accounting.inventories.assert_called_once()
 
-    def test_returns_empty_on_none_result(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_empty_on_none_result(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         mock_sdk.accounting.inventories.return_value = None
         assert gateway.get_positions() == []
 
-    def test_returns_empty_on_exception(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_empty_on_exception(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         mock_sdk.accounting.inventories.side_effect = RuntimeError("network")
         assert gateway.get_positions() == []
 
@@ -108,19 +103,13 @@ class TestGetPositions:
 # get_account_balance
 # ---------------------------------------------------------------------------
 class TestGetAccountBalance:
-    def test_returns_settlement_data(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
-        mock_sdk.accounting.query_settlement.return_value = MagicMock(
-            data={"balance": 100_000}
-        )
+    def test_returns_settlement_data(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
+        mock_sdk.accounting.query_settlement.return_value = MagicMock(data={"balance": 100_000})
         result = gateway.get_account_balance()
         assert result == {"balance": 100_000}
         mock_sdk.accounting.query_settlement.assert_called_once()
 
-    def test_returns_none_on_exception(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_none_on_exception(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         mock_sdk.accounting.query_settlement.side_effect = RuntimeError("timeout")
         assert gateway.get_account_balance() is None
 
@@ -139,21 +128,15 @@ class TestGetAccountBalance:
 # get_margin
 # ---------------------------------------------------------------------------
 class TestGetMargin:
-    def test_returns_none_when_maintenance_missing(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_none_when_maintenance_missing(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         del mock_sdk.accounting.maintenance
         assert gateway.get_margin() is None
 
-    def test_returns_margin_data(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_margin_data(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         mock_sdk.accounting.maintenance.return_value = MagicMock(data={"margin": 50})
         assert gateway.get_margin() == {"margin": 50}
 
-    def test_returns_none_on_exception(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_none_on_exception(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         mock_sdk.accounting.maintenance.side_effect = RuntimeError("fail")
         assert gateway.get_margin() is None
 
@@ -162,18 +145,12 @@ class TestGetMargin:
 # list_position_detail
 # ---------------------------------------------------------------------------
 class TestListPositionDetail:
-    def test_returns_inventory_data(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
-        mock_sdk.accounting.inventories.return_value = MagicMock(
-            data=[{"symbol": "2330", "qty": 1}]
-        )
+    def test_returns_inventory_data(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
+        mock_sdk.accounting.inventories.return_value = MagicMock(data=[{"symbol": "2330", "qty": 1}])
         result = gateway.list_position_detail()
         assert result == [{"symbol": "2330", "qty": 1}]
 
-    def test_returns_empty_on_exception(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_empty_on_exception(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         mock_sdk.accounting.inventories.side_effect = RuntimeError("err")
         assert gateway.list_position_detail() == []
 
@@ -182,18 +159,12 @@ class TestListPositionDetail:
 # list_profit_loss
 # ---------------------------------------------------------------------------
 class TestListProfitLoss:
-    def test_returns_unrealized_pnl(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
-        mock_sdk.accounting.unrealized_gains_and_loses.return_value = MagicMock(
-            data=[{"pnl": 500}]
-        )
+    def test_returns_unrealized_pnl(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
+        mock_sdk.accounting.unrealized_gains_and_loses.return_value = MagicMock(data=[{"pnl": 500}])
         result = gateway.list_profit_loss()
         assert result == [{"pnl": 500}]
 
-    def test_returns_empty_on_exception(
-        self, gateway: FubonAccountGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_returns_empty_on_exception(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         mock_sdk.accounting.unrealized_gains_and_loses.side_effect = RuntimeError("x")
         assert gateway.list_profit_loss() == []
 
@@ -203,8 +174,6 @@ class TestListProfitLoss:
         mock_sdk: MagicMock,
     ) -> None:
         alt = MagicMock(name="alt_acc")
-        mock_sdk.accounting.unrealized_gains_and_loses.return_value = MagicMock(
-            data=[]
-        )
+        mock_sdk.accounting.unrealized_gains_and_loses.return_value = MagicMock(data=[])
         gateway.list_profit_loss(account=alt)
         mock_sdk.accounting.unrealized_gains_and_loses.assert_called_once_with(alt)
