@@ -169,8 +169,8 @@ class RiskEngine:
             return None
         try:
             defaults = self.config.get("global_defaults", {})
-            max_price_cap_raw = float(defaults.get("max_price_cap", 5000.0))  # noqa: precision-config
-            tick_size_raw = float(defaults.get("tick_size", 0.01))  # noqa: precision-config
+            max_price_cap_raw = float(defaults.get("max_price_cap", 5000.0))  # precision-config
+            tick_size_raw = float(defaults.get("tick_size", 0.01))  # precision-config
             band_ticks = int(defaults.get("price_band_ticks", 20))
             max_notional_raw = defaults.get("max_notional", 10_000_000)
             # Use default scale factor (10000) for the validator
