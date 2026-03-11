@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 
-
 # ------------------------------------------------------------------
 # _process_tick callback routing
 # ------------------------------------------------------------------
