@@ -328,6 +328,7 @@ class ShioajiClient:
         from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
         from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
         from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
+        from hft_platform.feed_adapter.shioaji.reconnect_orchestrator import ReconnectOrchestrator
         from hft_platform.feed_adapter.shioaji.session_runtime import SessionRuntime
 
         self._contracts_runtime = ContractsRuntime(self)
@@ -335,6 +336,7 @@ class ShioajiClient:
         self._order_gateway = OrderGateway(self)
         self._session_runtime = SessionRuntime(self)
         self._quote_runtime = QuoteRuntime(self)
+        self._reconnect_orchestrator = ReconnectOrchestrator(self)
         # Wire decoupled interfaces (SessionPolicy + QuoteEventHandler).
         self._session_policy = self._session_runtime
         self._quote_event_handler = self._quote_runtime._event_handler
@@ -393,19 +395,16 @@ class ShioajiClient:
         self._init_quote_runtime()
         return self._quote_runtime
 
-    def _request_reconnect_via_policy(self, reason: str, force: bool = True) -> bool:
-        """Route a reconnect intent through the SessionPolicy interface.
+    def _reconnect_orch(self):
+        if getattr(self, "_reconnect_orchestrator", None) is None:
+            from hft_platform.feed_adapter.shioaji.reconnect_orchestrator import ReconnectOrchestrator
 
-        Falls back to direct self.reconnect() when policy is not yet
-        initialized (e.g., in unit tests that construct ShioajiClient directly).
-        """
-        if self._session_policy is not None:
-            try:
-                return bool(self._session_policy.request_reconnect(reason=reason, force=force))
-            except Exception:
-                return False
-        # Fallback: direct call (only in legacy/test contexts)
-        return bool(self.reconnect(reason=reason, force=force))
+            self._reconnect_orchestrator = ReconnectOrchestrator(self)
+        return self._reconnect_orchestrator
+
+    def _request_reconnect_via_policy(self, reason: str, force: bool = True) -> bool:
+        """Delegates to ReconnectOrchestrator.request_reconnect_via_policy()."""
+        return self._reconnect_orch().request_reconnect_via_policy(reason=reason, force=force)
 
     def _record_api_latency(self, op: str, start_ns: int, ok: bool = True) -> None:
         if not self.metrics:
@@ -640,25 +639,8 @@ class ShioajiClient:
         return self._quotes().validate_quote_schema(*args, **kwargs)
 
     def _handle_quote_schema_mismatch(self, reason: str, *args, **kwargs) -> None:
-        self._quote_schema_mismatch_count += 1
-        try:
-            if self.metrics and hasattr(self.metrics, "quote_schema_mismatch_total"):
-                key = ("v1", reason)
-                child = self._quote_schema_mismatch_metric_cache.get(key)
-                if child is None:
-                    child = self.metrics.quote_schema_mismatch_total.labels(expected="v1", reason=reason)
-                    self._quote_schema_mismatch_metric_cache[key] = child
-                child.inc()
-        except Exception:
-            pass
-        if self._quote_schema_mismatch_count % self._quote_schema_mismatch_log_every == 1:
-            logger.error(
-                "Quote schema guard rejected callback payload",
-                expected_version="v1",
-                reason=reason,
-                arg0_type=(type(args[0]).__name__ if args else None),
-                kwargs_keys=sorted(kwargs.keys())[:8],
-            )
+        """Delegates to ReconnectOrchestrator.handle_quote_schema_mismatch()."""
+        self._reconnect_orch().handle_quote_schema_mismatch(reason, *args, **kwargs)
 
     def _enqueue_tick(self, *args, **kwargs) -> None:
         """Non-blocking callback ingress: callback thread enqueues, worker executes."""
@@ -1032,13 +1014,8 @@ class ShioajiClient:
             return False
 
     def _get_quote_version(self):
-        if not sj or not hasattr(sj.constant, "QuoteVersion"):
-            return None
-        if self._quote_version == "v0" and not self._supports_quote_v0():
-            if self._supports_quote_v1():
-                return sj.constant.QuoteVersion.v1
-            return None
-        return sj.constant.QuoteVersion.v0 if self._quote_version == "v0" else sj.constant.QuoteVersion.v1
+        """Delegates to ReconnectOrchestrator.get_quote_version()."""
+        return self._reconnect_orch().get_quote_version()
 
     def _start_session_refresh_thread(self) -> None:
         """Delegates to SessionRuntime.start_session_refresh_thread()."""
@@ -1049,63 +1026,12 @@ class ShioajiClient:
         return self._session_runtime.do_session_refresh()
 
     def _verify_quotes_flowing(self, timeout_s: float | None = None) -> bool:
-        """Verify quotes are flowing after refresh (O5).
-
-        Waits for new quote data to arrive within timeout period.
-
-        Args:
-            timeout_s: Timeout in seconds (default: HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S)
-
-        Returns:
-            True if new quote data received within timeout
-        """
-        if not self.logged_in or not self.subscribed_count:
-            # No subscriptions to verify
-            return True
-
-        if timeout_s is None:
-            timeout_s = self._session_refresh_verify_timeout_s
-
-        start_ts = self._last_quote_data_ts
-        deadline = timebase.now_s() + timeout_s
-
-        logger.debug(
-            "Verifying quotes flowing",
-            timeout_s=timeout_s,
-            subscribed_count=self.subscribed_count,
-        )
-
-        while timebase.now_s() < deadline:
-            if self._last_quote_data_ts > start_ts:
-                logger.debug(
-                    "Quotes flowing verified",
-                    elapsed_s=round(timebase.now_s() - (deadline - timeout_s), 2),
-                )
-                return True
-            time.sleep(0.5)
-
-        logger.warning(
-            "Quote verification timeout",
-            timeout_s=timeout_s,
-            subscribed_count=self.subscribed_count,
-        )
-        return False
+        """Delegates to ReconnectOrchestrator.verify_quotes_flowing()."""
+        return self._reconnect_orch().verify_quotes_flowing(timeout_s=timeout_s)
 
     def _is_trading_hours(self) -> bool:
-        """Return True if currently within TWSE trading hours."""
-        try:
-            from hft_platform.core.market_calendar import get_calendar
-
-            calendar = get_calendar()
-            now_dt = dt.datetime.now(calendar._tz)
-            return calendar.is_trading_hours(now_dt)
-        except Exception:
-            # Conservative fallback: weekdays 09:00-13:30 Asia/Taipei.
-            now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
-            if now_dt.weekday() >= 5:
-                return False
-            minute = now_dt.hour * 60 + now_dt.minute
-            return (9 * 60) <= minute <= (13 * 60 + 30)
+        """Delegates to ReconnectOrchestrator.is_trading_hours()."""
+        return self._reconnect_orch().is_trading_hours()
 
     def _allow_quote_recovery(self, reason: str) -> bool:
         return self._quotes().allow_quote_recovery(reason)
@@ -1151,98 +1077,8 @@ class ShioajiClient:
         self._quotes().on_quote_event(resp_code, event_code, info, event)
 
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
-        if not self.api:
-            return False
-        now = timebase.now_s()
-        cooldown = float(os.getenv("HFT_RECONNECT_COOLDOWN", "30"))
-        if not force and now - self._last_reconnect_ts < max(cooldown, self._reconnect_backoff_s):
-            return False
-        if not self._reconnect_lock.acquire(blocking=False):
-            return False
-        try:
-            self._last_reconnect_ts = now
-            self._last_reconnect_error = None
-            logger.warning("Reconnecting Shioaji", reason=reason, force=force)
-            ok_logout, _, err_logout, _ = self._safe_call_with_timeout(
-                "logout",
-                lambda: self.api.logout(),
-                self._reconnect_timeout_s,
-            )
-            if not ok_logout:
-                logger.warning("Logout failed during reconnect", error=str(err_logout))
-
-            self.logged_in = False
-            self._callbacks_registered = False
-            self._clear_quote_pending()
-            self.subscribed_codes = set()
-            self.subscribed_count = 0
-            self._refresh_quote_routes()
-
-            login_ok = bool(self.login())
-            if not login_ok or not self.logged_in:
-                self._last_reconnect_error = self._last_login_error or "login_failed"
-                if self.metrics:
-                    self.metrics.feed_reconnect_total.labels(result="fail").inc()
-                self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._reconnect_backoff_max_s)
-                return False
-
-            subscribe_ok = True
-            callback = self.tick_callback
-            if callback is not None:
-                try:
-                    self._ensure_callbacks(callback)
-                    if not self._callbacks_registered:
-                        subscribe_ok = False
-                        self._last_reconnect_error = "callbacks_not_registered"
-                    else:
-                        ok_sub, _, err_sub, timed_out_sub = self._safe_call_with_timeout(
-                            "subscribe_basket",
-                            lambda: self.subscribe_basket(callback),
-                            self._reconnect_subscribe_timeout_s,
-                        )
-                        if not ok_sub:
-                            subscribe_ok = False
-                            self._last_reconnect_error = str(err_sub) if err_sub is not None else "subscribe_failed"
-                            if self.metrics and timed_out_sub:
-                                try:
-                                    self.metrics.feed_reconnect_timeout_total.labels(reason="subscribe").inc()
-                                except Exception:
-                                    pass
-                            logger.error(
-                                "Subscribe basket failed after reconnect",
-                                timeout=timed_out_sub,
-                                error=self._last_reconnect_error,
-                            )
-                except Exception as exc:
-                    subscribe_ok = False
-                    self._last_reconnect_error = str(exc)
-                    logger.error("Callback/subscribe failed after reconnect login", error=str(exc))
-
-            ok = self.logged_in and subscribe_ok
-            if self.metrics:
-                self.metrics.feed_reconnect_total.labels(result="ok" if ok else "fail").inc()
-            if ok:
-                self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
-                return True
-
-            self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._reconnect_backoff_max_s)
-            return False
-        except Exception as exc:
-            self._last_reconnect_error = str(exc)
-            logger.error("Reconnect failed unexpectedly", reason=reason, error=str(exc))
-            if self.metrics:
-                self.metrics.feed_reconnect_total.labels(result="exception").inc()
-                try:
-                    self.metrics.feed_reconnect_exception_total.labels(
-                        reason=reason or "unknown",
-                        exception_type=type(exc).__name__,
-                    ).inc()
-                except Exception:
-                    pass
-            self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._reconnect_backoff_max_s)
-            return False
-        finally:
-            self._reconnect_lock.release()
+        """Delegates to ReconnectOrchestrator.reconnect()."""
+        return self._reconnect_orch().reconnect(reason=reason, force=force)
 
     def _resubscribe_all(self) -> None:
         if not self.api or not self.logged_in or not self.tick_callback:
