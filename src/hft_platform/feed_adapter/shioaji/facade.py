@@ -5,6 +5,7 @@ from typing import Any
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
+from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
 
@@ -23,6 +24,7 @@ class ShioajiClientFacade:
         "contracts_runtime",
         "order_gateway",
         "account_gateway",
+        "subscription_manager",
     )
 
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None) -> None:
@@ -35,6 +37,7 @@ class ShioajiClientFacade:
         self.contracts_runtime = ContractsRuntime(client)
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
+        self.subscription_manager = client._subscription_manager
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
         client._quote_event_handler = self.quote_runtime._event_handler
@@ -70,7 +73,7 @@ class ShioajiClientFacade:
         return self.session_runtime.request_reconnect(reason=reason, force=force)
 
     def subscribe_basket(self, cb) -> None:
-        self._client.subscribe_basket(cb)
+        self.subscription_manager.subscribe_basket(cb)
 
     def fetch_snapshots(self) -> list[Any]:
         return self._client.fetch_snapshots()
@@ -79,10 +82,10 @@ class ShioajiClientFacade:
         self.contracts_runtime.reload_symbols()
 
     def resubscribe(self) -> bool:
-        return self.quote_runtime.resubscribe()
+        return self.subscription_manager.resubscribe()
 
     def set_execution_callbacks(self, on_order, on_deal) -> None:
-        self._client.set_execution_callbacks(on_order=on_order, on_deal=on_deal)
+        self.subscription_manager.set_execution_callbacks(on_order=on_order, on_deal=on_deal)
 
     def place_order(self, *args, **kwargs) -> Any:
         return self.order_gateway.place_order(*args, **kwargs)
