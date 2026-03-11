@@ -76,6 +76,7 @@ class ValidationConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
+    feature_mode: str = "stats_only"
 
 
 @dataclass(frozen=True)
@@ -516,6 +517,7 @@ def run_gate_c(
         latency_model=str(config.latency_model),
         exchange_model=str(config.exchange_model),
         min_queue_survival_rate=float(config.min_queue_survival_rate),
+        feature_mode=str(config.feature_mode),
     )
     backtest_engine_key = str(config.backtest_engine).lower()
     if backtest_engine_key == "research":

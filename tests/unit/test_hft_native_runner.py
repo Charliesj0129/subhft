@@ -497,3 +497,66 @@ class TestBrokerRTTInjection:
 
         assert "effective_broker_rtt_ms" in result.latency_profile
         assert result.latency_profile["effective_broker_rtt_ms"] == 47.0
+
+
+# ---------------------------------------------------------------------------
+# feature_mode passthrough
+# ---------------------------------------------------------------------------
+class TestFeatureMode:
+    def test_backtest_config_default_feature_mode(self):
+        """BacktestConfig defaults to 'stats_only'."""
+        config = BacktestConfig(data_paths=[])
+        assert config.feature_mode == "stats_only"
+
+    def test_backtest_config_accepts_lob_feature(self):
+        """BacktestConfig accepts 'lob_feature' feature_mode."""
+        config = BacktestConfig(data_paths=[], feature_mode="lob_feature")
+        assert config.feature_mode == "lob_feature"
+
+    def test_feature_mode_affects_config_hash(self):
+        """Different feature_mode produces different config hash."""
+        from research.backtest.types import _hash_config
+
+        c1 = BacktestConfig(data_paths=[], feature_mode="stats_only")
+        c2 = BacktestConfig(data_paths=[], feature_mode="lob_feature")
+        assert _hash_config(c1) != _hash_config(c2)
+
+    def test_run_adapter_slice_passes_feature_mode(self, tmp_path):
+        """_run_adapter_slice forwards config.feature_mode to HftBacktestAdapter."""
+        from research.backtest.hft_native_runner import _run_adapter_slice
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        config = BacktestConfig(data_paths=[], feature_mode="lob_feature")
+
+        mock_adapter = MagicMock()
+        mock_adapter.equity_values = np.array([1.0, 1.01])
+
+        mock_bridge = MagicMock()
+        mock_bridge.signal_log = []
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner.HftBacktestAdapter", return_value=mock_adapter) as mock_cls,
+            patch("research.backtest.hft_native_runner.AlphaStrategyBridge", return_value=mock_bridge),
+            patch("research.backtest.hft_native_runner.signal_log_to_arrays", return_value=(np.array([]), np.array([]), np.array([]))),
+        ):
+            _run_adapter_slice(alpha, str(tmp_path / "test.npz"), config)
+
+        # Verify HftBacktestAdapter was called with feature_mode="lob_feature"
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["feature_mode"] == "lob_feature"
+
+    def test_validation_config_default_feature_mode(self):
+        """ValidationConfig defaults to 'stats_only'."""
+        from hft_platform.alpha.validation import ValidationConfig
+
+        cfg = ValidationConfig(alpha_id="test", data_paths=[])
+        assert cfg.feature_mode == "stats_only"
+
+    def test_validation_config_accepts_lob_feature(self):
+        """ValidationConfig accepts 'lob_feature' feature_mode."""
+        from hft_platform.alpha.validation import ValidationConfig
+
+        cfg = ValidationConfig(alpha_id="test", data_paths=[], feature_mode="lob_feature")
+        assert cfg.feature_mode == "lob_feature"

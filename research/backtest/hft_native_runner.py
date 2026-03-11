@@ -283,7 +283,7 @@ def _run_adapter_slice(
         maker_fee=float(config.maker_fee_bps) / 10_000.0,
         taker_fee=float(config.taker_fee_bps) / 10_000.0,
         equity_sample_ns=1_000_000,  # 1ms equity samples
-        feature_mode="stats_only",
+        feature_mode=config.feature_mode,
         queue_model=getattr(config, "queue_model", "PowerProbQueueModel(3.0)"),
         latency_model=getattr(config, "latency_model", "ConstantLatency"),
         exchange_model=getattr(config, "exchange_model", "NoPartialFillExchange"),

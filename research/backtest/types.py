@@ -37,6 +37,7 @@ class BacktestConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
+    feature_mode: str = "stats_only"
 
 
 @dataclass(frozen=True)
