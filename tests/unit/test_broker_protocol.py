@@ -12,6 +12,7 @@ from hft_platform.feed_adapter.protocol import BrokerClientProtocol, BrokerOrder
 # Minimal conforming stubs
 # ---------------------------------------------------------------------------
 
+
 class _CompliantBrokerStub:
     """Minimal class that satisfies BrokerClientProtocol."""
 
@@ -62,6 +63,7 @@ class _CompliantCodecStub:
 # Non-conforming stubs (missing methods)
 # ---------------------------------------------------------------------------
 
+
 class _MissingPlaceOrder:
     """Missing ``place_order`` — must NOT satisfy BrokerClientProtocol."""
 
@@ -101,6 +103,7 @@ class _MissingEncodeSide:
 # Tests — compliant stubs
 # ---------------------------------------------------------------------------
 
+
 class TestCompliantStubs:
     def test_compliant_broker_passes_isinstance(self) -> None:
         stub = _CompliantBrokerStub()
@@ -114,6 +117,7 @@ class TestCompliantStubs:
 # ---------------------------------------------------------------------------
 # Tests — non-conforming stubs
 # ---------------------------------------------------------------------------
+
 
 class TestNonConformingStubs:
     def test_missing_place_order_fails_isinstance(self) -> None:
@@ -134,6 +138,7 @@ class TestNonConformingStubs:
 # ---------------------------------------------------------------------------
 # Tests — ShioajiClientFacade structural conformance
 # ---------------------------------------------------------------------------
+
 
 class TestShioajiFacadeConformance:
     """Verify the existing ShioajiClientFacade satisfies BrokerClientProtocol.
