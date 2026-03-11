@@ -22,6 +22,8 @@
 - **Callback Parsing**: `_try_fast_extract_callback_payload()` handles Shioaji API signature drift across versions. Always `_unwrap_md()` to handle nested `{"tick": {...}}` payloads.
 - **GOTCHA**: `_on_shioaji_event` runs in a **broker thread**, not the event loop. Must use `loop.call_soon_threadsafe()` to enqueue.
 - **P0-2 Optimization**: Per-symbol tick timestamp is updated inline (CPython dict assignment is GIL-atomic) instead of creating an asyncio task per tick.
+- **Crash Detector Injection**: `crash_detector: Callable` is an optional `__init__` dependency. Shioaji injects `detect_crash_signature`; non-Shioaji brokers may leave it unset.
+- **Renamed Broker Hooks**: Multi-broker support renamed `_on_shioaji_event`→`_on_broker_event` and `_record_shioaji_crash_signature`→`_record_broker_crash_signature`. Metric name is now `broker_crash_signature_total`.
 
 ## recorder/worker.py (296 lines)
 
@@ -58,6 +60,14 @@
 - **Rust Fast Path**: `normalize_bidask_tuple_with_synth()` or `normalize_bidask_tuple_np()` from `rust_core.fast_lob`. Falls back to Python if Rust unavailable.
 - **SymbolMetadata**: Loaded from `config/symbols.yaml`. Contains `price_scale`, `tick_size`, `tags[]` per symbol. Supports hot-reload via `reload_if_changed()`.
 - **GOTCHA**: Normalizer caches `price_scale` lookups. If symbols.yaml changes, `SymbolMetadata.reload_if_changed()` must be called (market_data_service handles this).
+- **One-sided LOB**: Snapshots can arrive with only bid or only ask side populated. Guard each side independently instead of assuming a full book.
+- **NormalizerFieldMap**: Broker-specific field names live in a frozen dataclass. Keep `_is_default_map=True` for Shioaji to preserve Rust fast paths.
+
+## feed_adapter/shioaji_client.py
+
+- **WebSocket Thread**: All Shioaji callbacks run in a broker-owned thread, not the asyncio event loop. Use `loop.call_soon_threadsafe()` to hand off work safely.
+- **Quote Version**: `HFT_QUOTE_VERSION=auto` probes SDK capabilities at runtime. Pin the version to avoid repeated probe overhead when debugging login/session issues.
+- **Session Refresh**: Background token renewal is blocking I/O. Never call `sdk.renew_token()` from the asyncio loop.
 
 ## feed_adapter/lob_engine.py (554 lines)
 
@@ -88,3 +98,21 @@
 - **Batch orders**: Supported — can place/cancel/amend multiple orders in one API call
 - **Rate limits**: Different from Shioaji — check `config/base/brokers/fubon.yaml`
 - **Gotcha**: WebSocket reconnect logic differs from Shioaji quote watchdog — separate implementation needed
+
+## feed_adapter/broker_registry.py
+
+- **Module-Level Registry**: `_BROKER_REGISTRY` is populated by broker package import side effects. Import order matters during bootstrap.
+- **Factory Lookup**: `get_broker_factory(name)` raises `ValueError` for unknown or unavailable brokers. Catch it at the boundary and emit a broker-specific message.
+- **Default Broker**: `HFT_BROKER` defaults to `"shioaji"` when unset, so tests and bootstrap paths will silently select Shioaji unless overridden.
+- **GOTCHA**: If a broker package import fails because its SDK is missing, registration is skipped and the failure only surfaces later at factory lookup time.
+
+## feed_adapter/fubon/ (broker package)
+
+- **SDK Import Guard**: Guard every `import fubon_neo` with `try/except ImportError`; the SDK is delivered as a platform-specific wheel and is not guaranteed to exist in CI/dev.
+- **WebSocket Thread**: Fubon callbacks run in a broker thread just like Shioaji. Always bridge into the loop with `loop.call_soon_threadsafe()`.
+- **Pre-allocated Buffers**: Quote/runtime handlers reuse fixed numpy buffers for 5-level books. Do not allocate fresh arrays per message.
+- **Price Conversion**: Fubon price payloads often arrive as strings such as `"523.00"`. Convert with `Decimal(str) * 10000`, never `float()`.
+- **Book Format**: Incoming levels arrive as `bids[{price, size}]` / `asks[{price, size}]`. Flatten to SoA arrays immediately to preserve cache-friendly downstream handling.
+- **Account Object**: `sdk.login()` returns an `accounts` wrapper whose primary account is usually `accounts.data[0]`, not the wrapper itself.
+- **Response Unwrapping**: Many SDK calls return wrapped payloads. Use `_unwrap_list()` / `_unwrap_scalar()` helpers rather than reaching through response objects ad hoc.
+- **GOTCHA**: Dependency metadata uses `fubon-neo` while the import name is `fubon_neo`; this mismatch is easy to miss during packaging/debugging.
