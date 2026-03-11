@@ -1,6 +1,5 @@
 import datetime as dt
 import os
-import queue
 import re
 import threading
 import time
@@ -1332,9 +1331,7 @@ class ShioajiClient:
 
     def _wrapped_tick_cb(self, *args, **kwargs):
         """Delegates to TickDispatcher.wrapped_tick_cb()."""
-        TickDispatcher.wrapped_tick_cb(
-            getattr(self, "tick_callback", None), *args, **kwargs
-        )
+        TickDispatcher.wrapped_tick_cb(getattr(self, "tick_callback", None), *args, **kwargs)
 
     def _get_contract(
         self,
