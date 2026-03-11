@@ -187,3 +187,107 @@ class AccountGateway:
             self._client._record_api_latency("profit_loss", start_ns, ok=False)
             logger.warning("Failed to fetch profit/loss", error=str(exc))
             return cached or []
+
+    def get_settlements(self, account: Any = None) -> list[Any]:
+        if self._client.mode == "simulation":
+            return []
+        cached = self._client._cache_get("settlements")
+        if cached is not None:
+            return cached
+        start_ns = time.perf_counter_ns()
+        try:
+            if not self._client._rate_limit_api("settlements"):
+                return cached or []
+            acct = account
+            if acct is None and hasattr(self._client.api, "stock_account"):
+                acct = self._client.api.stock_account
+            result = self._client.api.settlements(acct)
+            self._client._record_api_latency("settlements", start_ns, ok=True)
+            self._client._cache_set("settlements", self._client._account_cache_ttl_s, result)
+            return result
+        except Exception as exc:
+            self._client._record_api_latency("settlements", start_ns, ok=False)
+            logger.warning("Failed to fetch settlements", error=str(exc))
+            return cached or []
+
+    def get_trading_limits(self, account: Any = None) -> Any:
+        if self._client.mode == "simulation":
+            return {}
+        cached = self._client._cache_get("trading_limits")
+        if cached is not None:
+            return cached
+        start_ns = time.perf_counter_ns()
+        try:
+            if not self._client._rate_limit_api("trading_limits"):
+                return cached or {}
+            acct = account
+            if acct is None and hasattr(self._client.api, "stock_account"):
+                acct = self._client.api.stock_account
+            result = self._client.api.trading_limits(account=acct)
+            self._client._record_api_latency("trading_limits", start_ns, ok=True)
+            self._client._cache_set("trading_limits", self._client._account_cache_ttl_s, result)
+            return result
+        except Exception as exc:
+            self._client._record_api_latency("trading_limits", start_ns, ok=False)
+            logger.warning("Failed to fetch trading limits", error=str(exc))
+            return cached or {}
+
+    def list_profit_loss_summary(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> list[Any]:
+        if self._client.mode == "simulation":
+            return []
+        cache_key = f"profit_loss_summary:{begin_date}:{end_date}"
+        cached = self._client._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        start_ns = time.perf_counter_ns()
+        try:
+            if not self._client._rate_limit_api("profit_loss_summary"):
+                return cached or []
+            acct = account
+            if acct is None and hasattr(self._client.api, "stock_account"):
+                acct = self._client.api.stock_account
+            if acct is not None:
+                result = self._client.api.list_profit_loss_summary(acct, begin_date=begin_date, end_date=end_date)
+            else:
+                result = self._client.api.list_profit_loss_summary(begin_date=begin_date, end_date=end_date)
+            self._client._record_api_latency("profit_loss_summary", start_ns, ok=True)
+            self._client._cache_set(cache_key, self._client._profit_cache_ttl_s, result)
+            return result
+        except Exception as exc:
+            self._client._record_api_latency("profit_loss_summary", start_ns, ok=False)
+            logger.warning("Failed to fetch profit/loss summary", error=str(exc))
+            return cached or []
+
+    def list_trades(self) -> list[Any]:
+        if self._client.mode == "simulation":
+            return []
+        cached = self._client._cache_get("trades")
+        if cached is not None:
+            return cached
+        start_ns = time.perf_counter_ns()
+        try:
+            if not self._client._rate_limit_api("trades"):
+                return cached or []
+            result = self._client.api.list_trades()
+            self._client._record_api_latency("trades", start_ns, ok=True)
+            self._client._cache_set("trades", 5.0, result)
+            return result
+        except Exception as exc:
+            self._client._record_api_latency("trades", start_ns, ok=False)
+            logger.warning("Failed to fetch trades", error=str(exc))
+            return cached or []
+
+    def update_status(self, trade: Any) -> Any:
+        if self._client.mode == "simulation":
+            return None
+        start_ns = time.perf_counter_ns()
+        try:
+            if not self._client._rate_limit_api("update_status"):
+                return None
+            result = self._client.api.update_status(trade)
+            self._client._record_api_latency("update_status", start_ns, ok=True)
+            return result
+        except Exception as exc:
+            self._client._record_api_latency("update_status", start_ns, ok=False)
+            logger.warning("Failed to update trade status", error=str(exc))
+            return None
