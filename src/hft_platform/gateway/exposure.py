@@ -21,6 +21,29 @@ from hft_platform.contracts.strategy import IntentType, OrderIntent
 
 logger = get_logger("gateway.exposure")
 
+# Lazy import for Rust exposure store
+_RustExposureStore = None
+_rust_exposure_loaded = False
+
+
+def _load_rust_exposure():
+    global _RustExposureStore, _rust_exposure_loaded
+    if _rust_exposure_loaded:
+        return _RustExposureStore
+    _rust_exposure_loaded = True
+    try:
+        from hft_platform.rust_core import RustExposureStore
+
+        _RustExposureStore = RustExposureStore
+    except ImportError:
+        try:
+            from rust_core import RustExposureStore
+
+            _RustExposureStore = RustExposureStore
+        except ImportError:
+            pass
+    return _RustExposureStore
+
 
 class ExposureLimitError(RuntimeError):
     """Raised when ExposureStore cannot admit a new symbol entry after eviction."""
@@ -68,6 +91,26 @@ class ExposureStore:
         self._global_notional: int = 0
         self._lock = threading.Lock()
         self._limits: dict[str, ExposureLimits] = limits or {}
+        # Rust fast-path (HFT_EXPOSURE_RUST=1)
+        self._rust_store = self._init_rust_store(_gmax, self._max_symbols, self._limits)
+
+    @staticmethod
+    def _init_rust_store(global_max: int, max_symbols: int, limits: dict[str, ExposureLimits]):
+        if os.getenv("HFT_EXPOSURE_RUST", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+            return None
+        cls = _load_rust_exposure()
+        if cls is None:
+            return None
+        try:
+            rs = cls(global_max, max_symbols)
+            for strat_id, el in limits.items():
+                if el.max_notional_scaled > 0:
+                    rs.set_limit(strat_id, el.max_notional_scaled)
+            logger.info("RustExposureStore enabled", global_max=global_max, max_symbols=max_symbols)
+            return rs
+        except Exception as exc:
+            logger.warning("RustExposureStore init failed", error=str(exc))
+            return None
 
     # ── Hot path ──────────────────────────────────────────────────────────
 
@@ -154,6 +197,26 @@ class ExposureStore:
         qty: int,
     ) -> tuple[bool, str]:
         """Typed fast-path variant using primitive fields (avoids OrderIntent materialization)."""
+        rs = self._rust_store
+        if rs is not None:
+            ok, code = rs.check_and_update(
+                key.account,
+                key.strategy_id,
+                key.symbol,
+                int(intent_type),
+                int(price),
+                int(qty),
+            )
+            if not ok:
+                reason = rs.reason_str(code)
+                if code == 3:
+                    raise ExposureLimitError(
+                        f"ExposureStore symbol limit ({self._max_symbols}) reached; "
+                        f"cannot admit ({key.account}, {key.strategy_id}, {key.symbol})"
+                    )
+                return False, reason
+            return True, "OK"
+
         if int(intent_type) == int(IntentType.CANCEL):
             return True, "OK"
 
@@ -219,6 +282,10 @@ class ExposureStore:
         price: int,
         qty: int,
     ) -> None:
+        rs = self._rust_store
+        if rs is not None:
+            rs.release(key.account, key.strategy_id, key.symbol, int(intent_type), int(price), int(qty))
+            return
         if int(intent_type) == int(IntentType.CANCEL):
             return
         notional = int(price) * int(qty)

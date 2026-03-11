@@ -16,6 +16,27 @@ from hft_platform.risk.validators import MaxNotionalValidator, PriceBandValidato
 
 logger = get_logger("risk_engine")
 
+# Lazy import for Rust risk validator
+_RustRiskValidator = None
+
+
+def _load_rust_risk_validator():
+    global _RustRiskValidator
+    if _RustRiskValidator is not None:
+        return _RustRiskValidator
+    try:
+        from hft_platform.rust_core import RustRiskValidator
+
+        _RustRiskValidator = RustRiskValidator
+    except ImportError:
+        try:
+            from rust_core import RustRiskValidator
+
+            _RustRiskValidator = RustRiskValidator
+        except ImportError:
+            _RustRiskValidator = None
+    return _RustRiskValidator
+
 
 def _obs_policy() -> str:
     value = str(os.getenv("HFT_RISK_OBS_POLICY", os.getenv("HFT_OBS_POLICY", ""))).strip().lower()
@@ -68,6 +89,13 @@ class RiskEngine:
             if hasattr(validator, "_shared_scale_cache"):
                 validator._shared_scale_cache = shared_scale_cache
         self.storm_guard = StormGuardFSM(self.config)
+        self._rust_validator = self._init_rust_validator(price_scale_provider)
+        self._rust_validator_reason_map = {
+            1: "PRICE_ZERO_OR_NEG",
+            2: "PRICE_EXCEEDS_CAP",
+            3: "PRICE_OUTSIDE_BAND",
+            4: "MAX_NOTIONAL_EXCEEDED",
+        }
         self._cmd_id_lock_enabled = self._bool_env(os.getenv("HFT_RISK_CMD_ID_LOCK", "0"), default=False)
         self._cmd_id_lock = threading.Lock() if self._cmd_id_lock_enabled else None
         self._monotonic_cmd_id = 0
@@ -111,7 +139,7 @@ class RiskEngine:
             scale = int(os.getenv("HFT_RISK_FAST_GATE_PRICE_SCALE", "10000"))
         except ValueError:
             scale = 10_000
-        max_price_cap = float(defaults.get("max_price_cap", 5000.0))  # noqa: precision-config
+        max_price_cap = float(defaults.get("max_price_cap", 5000.0))  # precision-config
         max_price_scaled = int(max_price_cap * max(1, scale))
         max_qty = int(
             os.getenv(
@@ -131,6 +159,45 @@ class RiskEngine:
             return gate
         except Exception as exc:  # pragma: no cover - environment dependent
             logger.warning("FastGate init failed; disabling", error=str(exc))
+            return None
+
+    def _init_rust_validator(self, price_scale_provider: PriceScaleProvider | None = None):
+        if not self._bool_env(os.getenv("HFT_RISK_RUST_VALIDATOR", "0"), default=False):
+            return None
+        cls = _load_rust_risk_validator()
+        if cls is None:
+            return None
+        try:
+            defaults = self.config.get("global_defaults", {})
+            max_price_cap_raw = float(defaults.get("max_price_cap", 5000.0))  # noqa: precision-config
+            tick_size_raw = float(defaults.get("tick_size", 0.01))  # noqa: precision-config
+            band_ticks = int(defaults.get("price_band_ticks", 20))
+            max_notional_raw = defaults.get("max_notional", 10_000_000)
+            # Use default scale factor (10000) for the validator
+            scale = 10_000
+            if price_scale_provider is not None:
+                try:
+                    from hft_platform.core.pricing import PriceCodec
+
+                    codec = PriceCodec(price_scale_provider)
+                    scale = int(codec.scale_factor("default")) or 10_000
+                except Exception:
+                    pass
+            max_price_cap_scaled = int(max_price_cap_raw * scale)
+            tick_size_scaled = int(tick_size_raw * scale)
+            max_notional_scaled = int(max_notional_raw * scale)
+            rv = cls(max_price_cap_scaled, tick_size_scaled, band_ticks, max_notional_scaled)
+            # Populate per-strategy configs
+            for strat_id, strat_cfg in self.config.get("strategies", {}).items():
+                if "price_band_ticks" in strat_cfg:
+                    rv.set_band_ticks(strat_id, int(strat_cfg["price_band_ticks"]))
+                if "max_notional" in strat_cfg:
+                    # Per-strategy notional needs symbol info; use default symbol scale
+                    rv.set_max_notional(strat_id, "*", int(strat_cfg["max_notional"]) * scale)
+            logger.info("RustRiskValidator enabled", max_price_cap_scaled=max_price_cap_scaled)
+            return rv
+        except Exception as exc:
+            logger.warning("RustRiskValidator init failed; disabling", error=str(exc))
             return None
 
     def load_config(self):
@@ -181,23 +248,61 @@ class RiskEngine:
                         reason = self._fast_gate_reason_map.get(int(code), "FASTGATE_REJECT")
                         self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": reason})
                         return RiskDecision(False, intent, reason)
-            except Exception:
-                # FastGate is an optional optimization; never fail closed due to integration issue.
-                pass
+            except Exception as exc:
+                # FastGate failure must fail-closed: reject order when risk gate errors.
+                logger.error("FastGate check error — rejecting order (fail-closed)", error=str(exc))
+                self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": "FASTGATE_ERROR"})
+                return RiskDecision(False, intent, "FASTGATE_ERROR")
         # 1. StormGuard Check
         ok, reason = self.storm_guard.validate(intent)
         if not ok:
             self._emit_trace("risk_reject", intent, {"stage": "storm_guard", "reason": reason})
             return RiskDecision(False, intent, reason)
 
-        # 2. Hard Validators
-        for v in self.validators:
-            ok, reason = v.check(intent)
-            if not ok:
-                self._emit_trace(
-                    "risk_reject", intent, {"stage": "validator", "reason": reason, "validator": type(v).__name__}
+        # 2. Hard Validators — Rust fast path or Python fallback
+        rv = self._rust_validator
+        if rv is not None:
+            try:
+                mid_price = 0
+                lob = getattr(self.validators[0], "lob", None) if self.validators else None
+                if lob is not None:
+                    _get_mid = getattr(self.validators[0], "_get_mid_price", None)
+                    if callable(_get_mid):
+                        mid_price = int(_get_mid(getattr(intent, "symbol", "")) or 0)
+                ok, code = rv.check(
+                    int(getattr(intent, "intent_type", 0)),
+                    int(getattr(intent, "price", 0)),
+                    int(getattr(intent, "qty", 0)),
+                    str(getattr(intent, "strategy_id", "")),
+                    str(getattr(intent, "symbol", "")),
+                    mid_price,
                 )
-                return RiskDecision(False, intent, reason)
+                if not ok:
+                    reason = self._rust_validator_reason_map.get(int(code), "RUST_VALIDATOR_REJECT")
+                    self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
+                    return RiskDecision(False, intent, reason)
+            except Exception as exc:
+                logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
+                # Fall through to Python validators on error
+                for v in self.validators:
+                    ok, reason = v.check(intent)
+                    if not ok:
+                        self._emit_trace(
+                            "risk_reject",
+                            intent,
+                            {"stage": "validator", "reason": reason, "validator": type(v).__name__},
+                        )
+                        return RiskDecision(False, intent, reason)
+        else:
+            for v in self.validators:
+                ok, reason = v.check(intent)
+                if not ok:
+                    self._emit_trace(
+                        "risk_reject",
+                        intent,
+                        {"stage": "validator", "reason": reason, "validator": type(v).__name__},
+                    )
+                    return RiskDecision(False, intent, reason)
 
         self._emit_trace("risk_approve", intent, {"stage": "evaluate"})
         return RiskDecision(True, intent)

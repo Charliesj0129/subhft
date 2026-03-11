@@ -3,7 +3,7 @@
 ## 🏦 System Identity
 
 - **Project**: `hft-platform` — 事件驅動高頻交易平台
-- **Broker**: Shioaji (永豐金證券 API) — TWSE/OTC 股票 + 期貨
+- **Broker**: Shioaji (永豐金證券 API) / Fubon (富邦證券 API) — TWSE/OTC 股票 + 期貨; selected via `broker:` key in config or `HFT_BROKER` env var
 - **Stack**: Python 3.12 + Rust (PyO3 via `rust_core`) + ClickHouse + Prometheus
 - **Entry CLI**: `hft run sim|live` → `src/hft_platform/cli.py`
 
@@ -44,9 +44,11 @@
 ### Runtime Pipeline
 
 ```
-Exchange → ShioajiClient → Normalizer → LOBEngine → RingBufferBus → StrategyRunner → RiskEngine → OrderAdapter → Broker
-                                                            ↘ RecorderService → WAL / ClickHouse
+Exchange → BrokerFacade(Shioaji|Fubon) → Normalizer → LOBEngine → RingBufferBus → StrategyRunner → RiskEngine → OrderAdapter → BrokerFacade
+                                                                          ↘ RecorderService → WAL / ClickHouse
 ```
+
+> **Multi-broker**: The `BrokerFacade` is a polymorphic adapter selected at startup by `config.broker` / `HFT_BROKER`. Each implementation exposes identical `login()`, `subscribe()`, `place_order()`, `cancel_order()` interfaces. See `docs/architecture/multi-broker-support.md` for the ADR.
 
 Planned (TODO, not implemented yet): insert a **Feature Plane / FeatureEngine** between `LOBEngine` and `StrategyRunner` for shared microstructure feature computation and research/live parity. See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 
@@ -165,6 +167,10 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_RECORDER_MODE`        | `direct`    | `wal_first` = WAL-only write path (CE-M3) |
 | `HFT_CLICKHOUSE_HOST`      | `localhost` | ClickHouse host                           |
 | `HFT_EXPOSURE_MAX_SYMBOLS` | `10000`     | ExposureStore cardinality bound           |
+| `HFT_BROKER`               | `shioaji`   | Broker backend: `shioaji` / `fubon`       |
+| `HFT_FUBON_CERT_PATH`      | —           | Fubon API certificate file path           |
+| `HFT_FUBON_ACCOUNT`        | —           | Fubon trading account ID                  |
+| `HFT_FUBON_PASSWORD`       | —           | Fubon account password (use secret mgr)   |
 
 ## 🎨 Coding Style (Strict)
 
