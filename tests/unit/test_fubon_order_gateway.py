@@ -100,9 +100,7 @@ class TestFubonOrderGatewayFutopt:
         gw = FubonOrderGateway(sdk)
 
         with pytest.raises(ConnectionError, match="timeout"):
-            gw.place_futopt_order(
-                symbol="TXFA4", price=200000000, qty=1, side="Buy"
-            )
+            gw.place_futopt_order(symbol="TXFA4", price=200000000, qty=1, side="Buy")
 
 
 class TestFubonOrderGatewayCancel:
