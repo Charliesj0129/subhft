@@ -5,7 +5,6 @@ from typing import Any
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
-from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
 
