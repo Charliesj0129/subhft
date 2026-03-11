@@ -20,6 +20,94 @@ STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 STATUS_UNKNOWN = "unknown"
 
+try:
+    from scripts.report_narrative import (
+        compute_risk_score,
+        diagnose_checks,
+        executive_summary,
+        format_status_icon,
+        recommend_actions,
+        render_trend_section,
+    )
+    _HAS_NARRATIVE = True
+except ImportError:
+    _HAS_NARRATIVE = False
+
+
+# -- Inline narrative helpers (fallback when report_narrative unavailable) --
+
+def _format_icon(status: str) -> str:
+    return {"pass": "\u2705", "warn": "\u26a0\ufe0f", "fail": "\u274c"}.get(status, "\u2753")
+
+
+def _compute_risk_score_inline(checks: list[dict[str, Any]]) -> int:
+    score = 0
+    for c in checks:
+        st, sev = c.get("status", STATUS_UNKNOWN), c.get("severity", "warning")
+        if st == STATUS_FAIL:
+            score += 15 if sev == "critical" else 8
+        elif st == STATUS_WARN:
+            score += 5 if sev == "critical" else 3
+        elif st == STATUS_UNKNOWN:
+            score += 2
+    return min(score, 100)
+
+
+def _risk_label(score: int) -> str:
+    if score <= 10:
+        return "low"
+    if score <= 35:
+        return "moderate"
+    return "high" if score <= 65 else "critical"
+
+
+def _executive_summary_inline(
+    checks: list[dict[str, Any]], services: list[dict[str, Any]], overall: str,
+) -> str:
+    total, fail_n = len(checks), sum(1 for c in checks if c.get("status") == STATUS_FAIL)
+    warn_n = sum(1 for c in checks if c.get("status") == STATUS_WARN)
+    pass_n = sum(1 for c in checks if c.get("status") == STATUS_PASS)
+    svc_up = sum(1 for s in services if s.get("state") == "running")
+    return (
+        f"Overall status: **{overall}**. "
+        f"{pass_n}/{total} checks passed, {warn_n} warnings, {fail_n} failures. "
+        f"{svc_up}/{len(services)} services running."
+    )
+
+
+def _diagnose_checks_inline(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for c in checks:
+        st = c.get("status", STATUS_PASS)
+        if st in (STATUS_FAIL, STATUS_WARN, STATUS_UNKNOWN):
+            results.append({
+                "id": c.get("id", "unknown"), "status": st,
+                "severity": c.get("severity", "warning"),
+                "diagnosis": c.get("message") or f"Check returned {st}",
+            })
+    sev_order = {"critical": 0, "warning": 1}
+    st_order = {STATUS_FAIL: 0, STATUS_WARN: 1, STATUS_UNKNOWN: 2}
+    results.sort(key=lambda d: (sev_order.get(d["severity"], 2), st_order.get(d["status"], 3)))
+    return results
+
+
+def _recommend_actions_inline(diagnosed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"priority": "immediate" if d["severity"] == "critical" else "next-window",
+         "action": f"Investigate {d['id']}: {d['diagnosis']}"}
+        for d in diagnosed
+    ]
+
+
+def _weekly_trend_arrow(prev_overall: str | None, cur_overall: str) -> str:
+    if prev_overall is None:
+        return "\u2192"
+    rank = {STATUS_PASS: 0, STATUS_WARN: 1, STATUS_UNKNOWN: 2, STATUS_FAIL: 3}
+    prev_r, cur_r = rank.get(prev_overall, 2), rank.get(cur_overall, 2)
+    if cur_r < prev_r:
+        return "\u2191"
+    return "\u2193" if cur_r > prev_r else "\u2192"
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -850,8 +938,16 @@ def _evaluate_canary_window(
     }
 
 
-def _write_daily_markdown(report: dict[str, Any], path: Path) -> None:
-    lines = []
+def _write_daily_markdown(
+    report: dict[str, Any],
+    path: Path,
+    output_dir: Path | None = None,
+) -> None:
+    checks = report["checks"]
+    services = report.get("docker", {}).get("services", [])
+    overall = report["summary"]["overall"]
+
+    lines: list[str] = []
     lines.append("# Daily Soak Acceptance Report")
     lines.append("")
     lines.append(f"- generated_at: `{report['generated_at']}`")
@@ -863,34 +959,118 @@ def _write_daily_markdown(report: dict[str, Any], path: Path) -> None:
     lines.append(
         f"- counts: pass={counts['pass']}, warn={counts['warn']}, fail={counts['fail']}, unknown={counts['unknown']}"
     )
+
+    # --- Narrative: Executive Summary ---
+    lines.append("")
+    lines.append("## Executive Summary")
+    lines.append("")
+    if _HAS_NARRATIVE:
+        lines.append(executive_summary(
+            checks, services, overall,
+            report.get("scope_date", ""), report.get("expect_trading_day", True),
+        ))
+        risk = compute_risk_score(checks)
+    else:
+        lines.append(_executive_summary_inline(checks, services, overall))
+        risk = _compute_risk_score_inline(checks)
+    lines.append("")
+    lines.append(f"Risk Score: {risk}/100 ({_risk_label(risk)})")
+
+    # --- Narrative: Trend Analysis ---
+    if output_dir is not None:
+        if _HAS_NARRATIVE:
+            trend_text = render_trend_section(output_dir / "daily", report.get("scope_date", ""))
+            if trend_text:
+                lines.extend(["", "## Trend Analysis", "", trend_text])
+        else:
+            lines.extend(_render_trend_inline(output_dir / "daily", report.get("scope_date", ""), counts))
+
+    # --- Narrative: Issues & Root Cause ---
+    diagnosed = diagnose_checks(checks) if _HAS_NARRATIVE else _diagnose_checks_inline(checks)
+    icon_fn = format_status_icon if _HAS_NARRATIVE else _format_icon
+    if diagnosed:
+        lines.extend(["", "## Issues & Root Cause", ""])
+        for d in diagnosed:
+            lines.append(f"- {icon_fn(d['status'])} **{d['id']}** ({d['severity']}): {d['diagnosis']}")
+
     lines.append("")
     lines.append("## Checks")
     lines.append("")
     lines.append("| id | status | severity | value | threshold | message |")
     lines.append("|---|---|---|---:|---|---|")
-    for c in report["checks"]:
+    for c in checks:
         val = c.get("value")
         if isinstance(val, (int, float)):
             val_s = _fmt_float(float(val))
         else:
             val_s = str(val)
+        status_display = f"{icon_fn(c['status'])} {c['status']}"
         lines.append(
-            f"| `{c['id']}` | `{c['status']}` | `{c['severity']}` | `{val_s}` | `{c.get('threshold', '')}` | {c.get('message', '')} |"
+            f"| `{c['id']}` | `{status_display}` | `{c['severity']}` | `{val_s}` | `{c.get('threshold', '')}` | {c.get('message', '')} |"
         )
     lines.append("")
     lines.append("## Services")
     lines.append("")
     lines.append("| service | state | health | restart_count |")
     lines.append("|---|---|---|---:|")
-    for s in report.get("docker", {}).get("services", []):
+    for s in services:
         lines.append(
             f"| `{s['service']}` | `{s['state']}` | `{s['health']}` | `{s['restart_count']}` |"
         )
+
+    # --- Narrative: Recommendations ---
+    recs = (recommend_actions(diagnosed) if _HAS_NARRATIVE else _recommend_actions_inline(diagnosed)) if diagnosed else []
+    if recs:
+        lines.append("")
+        lines.append("## Recommendations")
+        lines.append("")
+        for i, rec in enumerate(recs, 1):
+            lines.append(f"{i}. **[{rec['priority']}]** {rec['action']}")
+
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _render_trend_inline(
+    daily_dir: Path, scope_date: str, cur_counts: dict[str, Any],
+) -> list[str]:
+    """Render a simple trend section comparing today vs yesterday."""
+    try:
+        current = dt.date.fromisoformat(scope_date)
+    except (ValueError, TypeError):
+        return []
+    prev_path = daily_dir / f"{(current - dt.timedelta(days=1)).isoformat()}.json"
+    if not prev_path.exists():
+        return []
+    try:
+        prev_counts = json.loads(prev_path.read_text(encoding="utf-8")).get("summary", {}).get("counts", {})
+    except Exception:
+        return []
+    lines = ["", "## Trend Analysis", ""]
+    for key in ("pass", "warn", "fail"):
+        cur_v, prev_v = int(cur_counts.get(key, 0)), int(prev_counts.get(key, 0))
+        delta = cur_v - prev_v
+        arrow = "\u2191" if delta > 0 else ("\u2193" if delta < 0 else "\u2192")
+        lines.append(f"- {key}: {cur_v} {arrow} (delta: {delta:+d} vs previous day)")
+    return lines
+
+
+def _canary_promotion_verdict(result: dict[str, Any]) -> tuple[str, str]:
+    """Return (verdict, justification) for canary promotion assessment."""
+    overall = result.get("overall", STATUS_UNKNOWN)
+    reasons = result.get("reasons") or []
+    reason_text = "; ".join(reasons[:3]) if reasons else ""
+    if overall == STATUS_PASS:
+        return ("RECOMMEND PROMOTION",
+                "All canary thresholds satisfied. Feed connectivity, quote delivery, and watchdog stability are within bounds.")
+    if overall == STATUS_FAIL:
+        return ("BLOCK \u2014 critical failures",
+                f"Promotion blocked: {reason_text or 'threshold violations detected'}. Resolve before re-evaluation.")
+    return ("HOLD \u2014 issues detected",
+            f"Marginal results: {reason_text or 'marginal metrics detected'}. Monitor for another window.")
+
+
 def _write_canary_markdown(report: dict[str, Any], path: Path) -> None:
-    lines = []
+    lines: list[str] = []
     lines.append("# Feed Canary Acceptance Report")
     lines.append("")
     lines.append(f"- generated_at: `{report['generated_at']}`")
@@ -899,43 +1079,28 @@ def _write_canary_markdown(report: dict[str, Any], path: Path) -> None:
         f"- window_days: `{report['window_days']}` (daily reports considered: `{report['considered_days']}`)"
     )
     lines.append(f"- overall: `{report['result']['overall']}`")
-    lines.append("")
-    lines.append("## Thresholds")
-    lines.append("")
-    lines.append(f"- min_trading_days: `{report['thresholds']['min_trading_days']}`")
-    lines.append(
-        f"- min_first_quote_pass_ratio: `{report['thresholds']['min_first_quote_pass_ratio']}`"
-    )
-    lines.append(
-        f"- max_reconnect_failure_ratio: `{report['thresholds']['max_reconnect_failure_ratio']}`"
-    )
-    lines.append(
-        "- max_watchdog_callback_reregister: "
-        + f"`{report['thresholds']['max_watchdog_callback_reregister']}`"
-    )
-    lines.append("")
-    lines.append("## Result")
-    lines.append("")
+
+    # --- Narrative: Promotion Assessment ---
     result = report["result"]
-    lines.append(f"- trading_days: `{result['trading_days']}`")
-    lines.append(f"- first_quote_pass_days: `{result['first_quote_pass_days']}`")
-    lines.append(f"- first_quote_pass_ratio: `{_fmt_float(result['first_quote_pass_ratio'])}`")
-    lines.append(
-        "- reconnect_failure_ratio_max: "
-        + f"`{_fmt_float(result['reconnect_failure_ratio_max'])}`"
-    )
-    lines.append(
-        "- reconnect_failure_ratio_p95: "
-        + f"`{_fmt_float(result['reconnect_failure_ratio_p95'])}`"
-    )
-    lines.append(
-        "- watchdog_callback_reregister_max: "
-        + f"`{_fmt_float(result['watchdog_callback_reregister_max'])}`"
-    )
-    lines.append(
-        "- watchdog_callback_reregister_p95: "
-        + f"`{_fmt_float(result['watchdog_callback_reregister_p95'])}`"
-    )
+    verdict, justification = _canary_promotion_verdict(result)
+    risk = _compute_risk_score_inline([{"status": result["overall"], "severity": "critical"}])
+    lines.extend(["", "## Promotion Assessment", "",
+                   f"**{verdict}**", "", justification, "",
+                   f"Risk Score: {risk}/100 ({_risk_label(risk)})"])
+    th = report["thresholds"]
+    lines.extend(["", "## Thresholds", "",
+                   f"- min_trading_days: `{th['min_trading_days']}`",
+                   f"- min_first_quote_pass_ratio: `{th['min_first_quote_pass_ratio']}`",
+                   f"- max_reconnect_failure_ratio: `{th['max_reconnect_failure_ratio']}`",
+                   f"- max_watchdog_callback_reregister: `{th['max_watchdog_callback_reregister']}`"])
+    lines.extend(["", "## Result", "",
+                   f"- trading_days: `{result['trading_days']}`",
+                   f"- first_quote_pass_days: `{result['first_quote_pass_days']}`",
+                   f"- first_quote_pass_ratio: `{_fmt_float(result['first_quote_pass_ratio'])}`",
+                   f"- reconnect_failure_ratio_max: `{_fmt_float(result['reconnect_failure_ratio_max'])}`",
+                   f"- reconnect_failure_ratio_p95: `{_fmt_float(result['reconnect_failure_ratio_p95'])}`",
+                   f"- watchdog_callback_reregister_max: `{_fmt_float(result['watchdog_callback_reregister_max'])}`",
+                   f"- watchdog_callback_reregister_p95: `{_fmt_float(result['watchdog_callback_reregister_p95'])}`"])
     lines.append("")
     lines.append("## Reasons")
     lines.append("")
@@ -1042,7 +1207,7 @@ def _run_daily(args: argparse.Namespace) -> int:
     json_path = output_daily_dir / f"{day.isoformat()}.json"
     md_path = output_daily_dir / f"{day.isoformat()}.md"
     json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    _write_daily_markdown(report, md_path)
+    _write_daily_markdown(report, md_path, output_dir=output_dir)
 
     print(f"[soak] daily json: {json_path}")
     print(f"[soak] daily md  : {md_path}")
@@ -1112,7 +1277,7 @@ def _run_weekly(args: argparse.Namespace) -> int:
     md_path = weekly_dir / f"{basename}.md"
     json_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    lines = []
+    lines: list[str] = []
     lines.append("# Weekly Soak Summary")
     lines.append("")
     lines.append(f"- generated_at: `{summary['generated_at']}`")
@@ -1120,15 +1285,28 @@ def _run_weekly(args: argparse.Namespace) -> int:
     lines.append(
         f"- days: `{summary['days']}` (pass={summary['pass_days']}, warn={summary['warn_days']}, fail={summary['fail_days']})"
     )
+
+    # --- Narrative summary ---
+    healthy = summary["pass_days"]
+    lines.append("")
+    lines.append(
+        f"This week: {healthy}/{summary['days']} days healthy, "
+        f"{summary['warn_days']} warnings, {summary['fail_days']} failures."
+    )
+
     lines.append("")
     lines.append("## Daily Overview")
     lines.append("")
-    lines.append("| day | overall | pass | warn | fail | unknown |")
-    lines.append("|---|---|---:|---:|---:|---:|")
+    lines.append("| day | trend | overall | pass | warn | fail | unknown |")
+    lines.append("|---|---|---|---:|---:|---:|---:|")
+    prev_overall: str | None = None
     for d, payload in rows:
         c = payload.get("summary", {}).get("counts", {})
+        cur_overall = payload.get("summary", {}).get("overall", STATUS_UNKNOWN)
+        arrow = _weekly_trend_arrow(prev_overall, cur_overall)
+        prev_overall = cur_overall
         lines.append(
-            f"| `{d.isoformat()}` | `{payload.get('summary', {}).get('overall', STATUS_UNKNOWN)}` | "
+            f"| `{d.isoformat()}` | {arrow} | `{cur_overall}` | "
             f"{int(c.get('pass', 0))} | {int(c.get('warn', 0))} | {int(c.get('fail', 0))} | {int(c.get('unknown', 0))} |"
         )
     lines.append("")
@@ -1141,6 +1319,25 @@ def _run_weekly(args: argparse.Namespace) -> int:
             lines.append(f"| `{cid}` | {count} |")
     else:
         lines.append("No failing checks in this window.")
+
+    # --- Top Issues Analysis ---
+    if per_check_fail:
+        lines.append("")
+        lines.append("## Top Issues Analysis")
+        lines.append("")
+        recurring = [
+            (cid, cnt) for cid, cnt in sorted(per_check_fail.items(), key=lambda x: -x[1])
+            if cnt >= 2
+        ][:5]
+        if recurring:
+            for cid, cnt in recurring:
+                lines.append(
+                    f"- **{cid}**: failed {cnt}/{summary['days']} days "
+                    f"\u2014 recurring issue, investigate root cause"
+                )
+        else:
+            lines.append("No recurring failures (all failures were single-day occurrences).")
+
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     print(f"[soak] weekly json: {json_path}")
