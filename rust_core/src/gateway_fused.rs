@@ -35,6 +35,12 @@ pub struct RustGatewayFusedCheck {
 
 unsafe impl Send for RustGatewayFusedCheck {}
 
+impl Default for RustGatewayFusedCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[pymethods]
 impl RustGatewayFusedCheck {
     #[new]

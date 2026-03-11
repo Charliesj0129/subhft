@@ -34,6 +34,7 @@ pub fn map_tick_record(
 
 /// Map a bid/ask event to a ClickHouse record dict.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn map_bidask_record(
     py: Python<'_>,
     symbol: &str,
