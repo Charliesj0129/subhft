@@ -14,7 +14,19 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji import router as _router
-from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
+from hft_platform.feed_adapter.shioaji._infra import (
+    cache_get as _cache_get_impl,
+    cache_set as _cache_set_impl,
+    ensure_session_lock as _ensure_session_lock_impl,
+    rate_limit_api as _rate_limit_api_impl,
+    record_api_latency as _record_api_latency_impl,
+    record_crash_signature as _record_crash_signature_impl,
+    release_session_lock as _release_session_lock_impl,
+    safe_call_with_timeout as _safe_call_with_timeout_impl,
+    sanitize_metric_label as _sanitize_metric_label_impl,
+    set_thread_alive_metric as _set_thread_alive_metric_impl,
+    update_quote_pending_metrics as _update_quote_pending_metrics_impl,
+)
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.rate_limiter import RateLimiter
 
@@ -408,57 +420,15 @@ class ShioajiClient:
         return bool(self.reconnect(reason=reason, force=force))
 
     def _record_api_latency(self, op: str, start_ns: int, ok: bool = True) -> None:
-        if not self.metrics:
-            return
-        now_ns = time.perf_counter_ns()
-        try:
-            start_ns_int = int(start_ns)
-        except (TypeError, ValueError):
-            start_ns_int = now_ns
-        latency_ms = max(0.0, (now_ns - start_ns_int) / 1e6)
-        op_label = self._sanitize_metric_label(op, fallback="unknown")
-        result = "ok" if bool(ok) else "error"
-        self.metrics.shioaji_api_latency_ms.labels(op=op_label, result=result).observe(latency_ms)
-        last = self._api_last_latency_ms.get(op_label)
-        if last is not None:
-            jitter = abs(latency_ms - last)
-            self.metrics.shioaji_api_jitter_ms.labels(op=op_label).set(jitter)
-            if hasattr(self.metrics, "shioaji_api_jitter_ms_hist"):
-                self.metrics.shioaji_api_jitter_ms_hist.labels(op=op_label).observe(jitter)
-        self._api_last_latency_ms[op_label] = latency_ms
-        if not ok:
-            self.metrics.shioaji_api_errors_total.labels(op=op_label).inc()
+        _record_api_latency_impl(self.metrics, self._api_last_latency_ms, op, start_ns, ok)
 
     @staticmethod
     def _sanitize_metric_label(value: Any, *, fallback: str) -> str:
         """Ensure Prometheus label values are always strings with stable cardinality."""
-        if isinstance(value, str):
-            text = value
-        elif isinstance(value, bytes):
-            text = value.decode("utf-8", errors="replace")
-        elif isinstance(value, type):
-            text = value.__name__
-        else:
-            name = getattr(value, "__name__", None)
-            text = str(name) if name else type(value).__name__
-        text = text.strip()
-        if not text:
-            return fallback
-        if len(text) > 64:
-            return text[:64]
-        return text
+        return _sanitize_metric_label_impl(value, fallback=fallback)
 
     def _record_crash_signature(self, text: str | None, *, context: str) -> None:
-        metrics = getattr(self, "metrics", None)
-        if not metrics or not hasattr(metrics, "shioaji_crash_signature_total"):
-            return
-        signature = detect_crash_signature(text)
-        if not signature:
-            return
-        try:
-            metrics.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
-        except Exception:
-            return
+        _record_crash_signature_impl(getattr(self, "metrics", None), text, context=context)
 
     def _safe_call_with_timeout(
         self,
@@ -467,146 +437,44 @@ class ShioajiClient:
         timeout_s: float,
     ) -> tuple[bool, Any | None, Exception | None, bool]:
         """Run blocking broker SDK call with timeout in a daemon thread."""
-        if timeout_s <= 0:
-            try:
-                return True, fn(), None, False
-            except Exception as exc:
-                return False, None, exc, False
-        done = threading.Event()
-        state: dict[str, Any] = {}
-
-        def _worker() -> None:
-            try:
-                state["result"] = fn()
-            except Exception as exc:  # pragma: no cover
-                state["error"] = exc
-            finally:
-                done.set()
-
-        worker = threading.Thread(target=_worker, name=f"shioaji-{op}-guard", daemon=True)
-        worker.start()
-        if not done.wait(timeout=max(0.1, timeout_s)):
-            return False, None, TimeoutError(f"{op} timed out after {timeout_s:.1f}s"), True
-        err = state.get("error")
-        if err is not None:
-            return False, None, err, False
-        return True, state.get("result"), None, False
+        return _safe_call_with_timeout_impl(op, fn, timeout_s)
 
     def _set_thread_alive_metric(self, thread_name: str, alive: bool) -> None:
-        metrics = getattr(self, "metrics", None)
-        if not metrics or not hasattr(metrics, "shioaji_thread_alive"):
-            return
-        try:
-            metrics.shioaji_thread_alive.labels(thread=thread_name).set(1 if alive else 0)
-        except Exception:
-            return
+        _set_thread_alive_metric_impl(getattr(self, "metrics", None), thread_name, alive)
 
     def _update_quote_pending_metrics(self) -> None:
-        if not self.metrics:
-            return
-        age_s = 0.0
-        if self._pending_quote_resubscribe and self._pending_quote_ts > 0:
-            age_s = max(0.0, timebase.now_s() - self._pending_quote_ts)
-        try:
-            if hasattr(self.metrics, "shioaji_quote_pending_age_seconds"):
-                self.metrics.shioaji_quote_pending_age_seconds.set(age_s)
-            if (
-                self._pending_quote_resubscribe
-                and age_s >= self._quote_pending_stall_warn_s
-                and not self._quote_pending_stall_reported
-                and hasattr(self.metrics, "shioaji_quote_pending_stall_total")
-            ):
-                reason = self._sanitize_metric_label(self._pending_quote_reason or "unknown", fallback="unknown")
-                self.metrics.shioaji_quote_pending_stall_total.labels(reason=reason).inc()
-                self._quote_pending_stall_reported = True
-                logger.warning(
-                    "Pending quote resubscribe appears stalled",
-                    reason=self._pending_quote_reason,
-                    age_s=round(age_s, 2),
-                )
-        except Exception:
-            return
+        self._quote_pending_stall_reported = _update_quote_pending_metrics_impl(
+            self.metrics,
+            self._pending_quote_resubscribe,
+            self._pending_quote_ts,
+            self._quote_pending_stall_warn_s,
+            self._quote_pending_stall_reported,
+            self._pending_quote_reason,
+        )
 
     def _ensure_session_lock(self) -> bool:
-        if not self._session_lock_enabled:
-            return True
-        if self._session_lock_fd is not None:
-            return True
-        lock_fd = None
-        try:
-            lock_path = Path(self._session_lock_path)
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            lock_fd = open(lock_path, "a+", encoding="utf-8")
-            if fcntl is not None:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self._session_lock_fd = lock_fd
-            return True
-        except Exception as exc:
-            if lock_fd is not None:
-                try:
-                    lock_fd.close()
-                except Exception:
-                    pass
-            logger.warning(
-                "Potential duplicate broker runtime detected: session lock unavailable",
-                lock_path=self._session_lock_path,
-                error=str(exc),
-            )
-            if self.metrics and hasattr(self.metrics, "shioaji_session_lock_conflicts_total"):
-                try:
-                    self.metrics.shioaji_session_lock_conflicts_total.inc()
-                except Exception:
-                    pass
-            return False
+        acquired, fd = _ensure_session_lock_impl(
+            self._session_lock_enabled,
+            self._session_lock_fd,
+            self._session_lock_path,
+            self.metrics,
+            fcntl,
+        )
+        self._session_lock_fd = fd
+        return acquired
 
     def _release_session_lock(self) -> None:
-        lock_fd = getattr(self, "_session_lock_fd", None)
-        if lock_fd is None:
-            return
-        try:
-            if fcntl is not None:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        try:
-            lock_fd.close()
-        except Exception:
-            pass
+        _release_session_lock_impl(getattr(self, "_session_lock_fd", None), fcntl)
         self._session_lock_fd = None
 
     def _cache_get(self, key: str) -> Any | None:
-        now = timebase.now_s()
-        with self._api_cache_lock:
-            entry = self._api_cache.get(key)
-            if not entry:
-                return None
-            expires_at, value = entry
-            if now >= expires_at:
-                self._api_cache.pop(key, None)
-                return None
-            return value
+        return _cache_get_impl(self._api_cache, self._api_cache_lock, key)
 
     def _cache_set(self, key: str, ttl_s: float, value: Any) -> None:
-        expires_at = timebase.now_s() + max(0.0, ttl_s)
-        with self._api_cache_lock:
-            # Evict expired entries if cache is at limit
-            if len(self._api_cache) >= self._api_cache_max_size:
-                now = timebase.now_s()
-                expired_keys = [k for k, (exp, _) in self._api_cache.items() if now >= exp]
-                for k in expired_keys:
-                    del self._api_cache[k]
-                # If still at limit, remove oldest entry
-                if len(self._api_cache) >= self._api_cache_max_size:
-                    oldest_key = min(self._api_cache.keys(), key=lambda k: self._api_cache[k][0])
-                    del self._api_cache[oldest_key]
-            self._api_cache[key] = (expires_at, value)
+        _cache_set_impl(self._api_cache, self._api_cache_lock, self._api_cache_max_size, key, ttl_s, value)
 
     def _rate_limit_api(self, op: str) -> bool:
-        if not self._api_rate_limiter.check():
-            logger.warning("API rate limit hit", op=op)
-            return False
-        self._api_rate_limiter.record()
-        return True
+        return _rate_limit_api_impl(self._api_rate_limiter, op)
 
     def _process_tick(self, *args, **kwargs):
         """Internal method called by global dispatcher."""
