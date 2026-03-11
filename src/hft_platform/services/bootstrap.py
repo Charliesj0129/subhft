@@ -19,7 +19,7 @@ from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feature.profile import load_feature_profile_registry
 from hft_platform.feature.rollout import load_feature_rollout_controller
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
-from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
+from hft_platform.feed_adapter.broker_registry import get_broker_factory
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
@@ -408,22 +408,39 @@ class SystemBootstrapper:
         symbols_path: str,
         base_shioaji_cfg: dict[str, Any],
     ) -> tuple[Any, Any]:
-        order_cfg = dict(base_shioaji_cfg)
-        order_mode = os.getenv("HFT_ORDER_MODE", "").strip().lower()
-        order_sim_flag = os.getenv("HFT_ORDER_SIMULATION")
-        order_no_ca = os.getenv("HFT_ORDER_NO_CA", "0").lower() in {"1", "true", "yes", "on"}
-        if order_mode:
-            order_cfg["simulation"] = order_mode in {"sim", "simulation", "paper"}
-        elif order_sim_flag is not None:
-            order_cfg["simulation"] = order_sim_flag.lower() in {"1", "true", "yes", "on", "sim"}
-        if order_no_ca or order_cfg.get("simulation") is True:
-            order_cfg["activate_ca"] = False
+        if role not in _FEED_ALLOWED_ROLES:
+            logger.warning("Using role-guarded no-op broker clients", role=role)
+            return _RoleGuardedNoopClient(role), _RoleGuardedNoopClient(role)
 
-        if role in _FEED_ALLOWED_ROLES:
-            return ShioajiClientFacade(symbols_path, base_shioaji_cfg), ShioajiClientFacade(symbols_path, order_cfg)
+        broker_name = os.getenv("HFT_BROKER", "shioaji")
+        try:
+            factory = get_broker_factory(broker_name)
+            return factory.create_clients(symbols_path, base_shioaji_cfg)
+        except ValueError:
+            # Fallback to direct Shioaji for backward compatibility
+            # when no broker factory has been registered yet.
+            logger.warning("broker_factory_not_registered_fallback", broker=broker_name)
+            from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 
-        logger.warning("Using role-guarded no-op broker clients", role=role)
-        return _RoleGuardedNoopClient(role), _RoleGuardedNoopClient(role)
+            order_cfg = dict(base_shioaji_cfg)
+            order_mode = os.getenv("HFT_ORDER_MODE", "").strip().lower()
+            order_sim_flag = os.getenv("HFT_ORDER_SIMULATION")
+            order_no_ca = os.getenv("HFT_ORDER_NO_CA", "0").lower() in {
+                "1", "true", "yes", "on",
+            }
+            if order_mode:
+                order_cfg["simulation"] = order_mode in {"sim", "simulation", "paper"}
+            elif order_sim_flag is not None:
+                order_cfg["simulation"] = order_sim_flag.lower() in {
+                    "1", "true", "yes", "on", "sim",
+                }
+            if order_no_ca or order_cfg.get("simulation") is True:
+                order_cfg["activate_ca"] = False
+
+            return (
+                ShioajiClientFacade(symbols_path, base_shioaji_cfg),
+                ShioajiClientFacade(symbols_path, order_cfg),
+            )
 
     def build(self) -> ServiceRegistry:
         role = self._get_runtime_role()

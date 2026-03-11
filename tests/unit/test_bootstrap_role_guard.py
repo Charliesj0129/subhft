@@ -6,12 +6,15 @@ from unittest.mock import MagicMock, patch
 from hft_platform.services.bootstrap import SystemBootstrapper, _encode_resp, _read_resp
 
 
-def test_build_broker_clients_engine_uses_facade(tmp_path):
+def test_build_broker_clients_engine_uses_facade_fallback(tmp_path):
+    """When no broker factory is registered, falls back to ShioajiClientFacade."""
     cfg = tmp_path / "symbols.yaml"
     cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n", encoding="utf-8")
     bootstrapper = SystemBootstrapper({})
 
-    with patch("hft_platform.services.bootstrap.ShioajiClientFacade") as facade_cls:
+    with patch(
+        "hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade"
+    ) as facade_cls:
         md_client, order_client = bootstrapper._build_broker_clients("engine", str(cfg), {})
 
     assert facade_cls.call_count == 2
@@ -19,15 +22,49 @@ def test_build_broker_clients_engine_uses_facade(tmp_path):
     assert order_client is facade_cls.return_value
 
 
+def test_build_broker_clients_engine_uses_registered_factory(tmp_path):
+    """When a broker factory is registered, uses it instead of fallback."""
+    from hft_platform.feed_adapter.broker_registry import (
+        _BROKER_REGISTRY,
+        register_broker,
+    )
+
+    cfg = tmp_path / "symbols.yaml"
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n", encoding="utf-8")
+    bootstrapper = SystemBootstrapper({})
+
+    sentinel_md = MagicMock(name="md_client")
+    sentinel_order = MagicMock(name="order_client")
+
+    class _FakeFactory:
+        def create_clients(self, symbols_path, broker_config):
+            return sentinel_md, sentinel_order
+
+    register_broker("shioaji", _FakeFactory())
+    try:
+        md_client, order_client = bootstrapper._build_broker_clients("engine", str(cfg), {})
+        assert md_client is sentinel_md
+        assert order_client is sentinel_order
+    finally:
+        _BROKER_REGISTRY.pop("shioaji", None)
+
+
+def test_get_broker_factory_unknown_broker_raises():
+    """get_broker_factory raises ValueError for unregistered broker names."""
+    import pytest
+    from hft_platform.feed_adapter.broker_registry import get_broker_factory
+
+    with pytest.raises(ValueError, match="Unknown broker"):
+        get_broker_factory("nonexistent_broker_xyz")
+
+
 def test_build_broker_clients_maintenance_uses_noop(tmp_path):
     cfg = tmp_path / "symbols.yaml"
     cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n", encoding="utf-8")
     bootstrapper = SystemBootstrapper({})
 
-    with patch("hft_platform.services.bootstrap.ShioajiClientFacade") as facade_cls:
-        md_client, order_client = bootstrapper._build_broker_clients("maintenance", str(cfg), {})
+    md_client, order_client = bootstrapper._build_broker_clients("maintenance", str(cfg), {})
 
-    assert facade_cls.call_count == 0
     assert md_client.login() is False
     assert order_client.get_exchange("2330") == ""
     assert md_client.place_order("2330", "TSE", "Buy", 100.0, 1)["status"] == "blocked"
