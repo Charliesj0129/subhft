@@ -9,11 +9,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fake fubon_neo module hierarchy so we can import FubonOrderGateway without
 # the real SDK installed.
 # ---------------------------------------------------------------------------
+
 
 def _install_fake_fubon_neo() -> types.ModuleType:
     """Create and register a minimal fake ``fubon_neo`` package."""
@@ -71,10 +71,10 @@ _install_fake_fubon_neo()
 
 from hft_platform.feed_adapter.fubon.order_gateway import FubonOrderGateway  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # OrderExecutor protocol (mirror of the spec)
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class OrderExecutor(Protocol):
@@ -92,9 +92,7 @@ class OrderExecutor(Protocol):
 
     def cancel_order(self, trade: Any) -> Any: ...
 
-    def update_order(
-        self, trade: Any, price: float | None = None, qty: int | None = None
-    ) -> Any: ...
+    def update_order(self, trade: Any, price: float | None = None, qty: int | None = None) -> Any: ...
 
     def get_exchange(self, symbol: str) -> str: ...
 
@@ -108,6 +106,7 @@ class OrderExecutor(Protocol):
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def mock_sdk() -> MagicMock:
@@ -163,9 +162,7 @@ class TestPlaceOrder:
         assert order_obj.quantity == 2000
         assert order_obj.buy_sell == "BUY"
 
-    def test_converts_scaled_int_price_to_string(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_converts_scaled_int_price_to_string(self, gateway: FubonOrderGateway, mock_sdk: MagicMock) -> None:
         gateway.place_order(
             contract_code="2881",
             exchange="TSE",
@@ -178,9 +175,7 @@ class TestPlaceOrder:
         order_obj = mock_sdk.stock.place_order.call_args[0][1]
         assert order_obj.price == "66.5"
 
-    def test_integer_price_no_trailing_zeros(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_integer_price_no_trailing_zeros(self, gateway: FubonOrderGateway, mock_sdk: MagicMock) -> None:
         """660000 / 10000 = 66, should produce '66'."""
         gateway.place_order(
             contract_code="2881",
@@ -195,9 +190,7 @@ class TestPlaceOrder:
         # Decimal('66') renders as '66'
         assert order_obj.price == "66"
 
-    def test_market_order_price_none(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_market_order_price_none(self, gateway: FubonOrderGateway, mock_sdk: MagicMock) -> None:
         gateway.place_order(
             contract_code="2881",
             exchange="TSE",
@@ -210,9 +203,7 @@ class TestPlaceOrder:
         order_obj = mock_sdk.stock.place_order.call_args[0][1]
         assert order_obj.price is None
 
-    def test_sell_action(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_sell_action(self, gateway: FubonOrderGateway, mock_sdk: MagicMock) -> None:
         gateway.place_order(
             contract_code="2881",
             exchange="TSE",
@@ -225,9 +216,7 @@ class TestPlaceOrder:
         order_obj = mock_sdk.stock.place_order.call_args[0][1]
         assert order_obj.buy_sell == "SELL"
 
-    def test_custom_user_def(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_custom_user_def(self, gateway: FubonOrderGateway, mock_sdk: MagicMock) -> None:
         gateway.place_order(
             contract_code="2881",
             exchange="TSE",
@@ -241,9 +230,7 @@ class TestPlaceOrder:
         order_obj = mock_sdk.stock.place_order.call_args[0][1]
         assert order_obj.user_def == "CUSTOM"
 
-    def test_default_user_def_is_hft(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock
-    ) -> None:
+    def test_default_user_def_is_hft(self, gateway: FubonOrderGateway, mock_sdk: MagicMock) -> None:
         gateway.place_order(
             contract_code="2881",
             exchange="TSE",
@@ -258,9 +245,7 @@ class TestPlaceOrder:
 
 
 class TestCancelOrder:
-    def test_delegates_to_sdk(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock, mock_account: MagicMock
-    ) -> None:
+    def test_delegates_to_sdk(self, gateway: FubonOrderGateway, mock_sdk: MagicMock, mock_account: MagicMock) -> None:
         trade = MagicMock(name="trade_to_cancel")
         result = gateway.cancel_order(trade)
         assert result == {"order_no": "F001", "status": "cancelled"}
@@ -268,26 +253,18 @@ class TestCancelOrder:
 
 
 class TestUpdateOrder:
-    def test_modify_price(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock, mock_account: MagicMock
-    ) -> None:
+    def test_modify_price(self, gateway: FubonOrderGateway, mock_sdk: MagicMock, mock_account: MagicMock) -> None:
         trade = MagicMock(name="existing_trade")
         result = gateway.update_order(trade, price=675000)  # 67.5
         mock_sdk.stock.make_modify_price_obj.assert_called_once_with(trade, "67.5")
-        mock_sdk.stock.modify_price.assert_called_once_with(
-            mock_account, "modify_price_obj"
-        )
+        mock_sdk.stock.modify_price.assert_called_once_with(mock_account, "modify_price_obj")
         assert result == {"order_no": "F001", "status": "modified"}
 
-    def test_modify_qty(
-        self, gateway: FubonOrderGateway, mock_sdk: MagicMock, mock_account: MagicMock
-    ) -> None:
+    def test_modify_qty(self, gateway: FubonOrderGateway, mock_sdk: MagicMock, mock_account: MagicMock) -> None:
         trade = MagicMock(name="existing_trade")
         result = gateway.update_order(trade, qty=500)
         mock_sdk.stock.make_modify_volume_obj.assert_called_once_with(trade, 500)
-        mock_sdk.stock.modify_volume.assert_called_once_with(
-            mock_account, "modify_vol_obj"
-        )
+        mock_sdk.stock.modify_volume.assert_called_once_with(mock_account, "modify_vol_obj")
         assert result == {"order_no": "F001", "status": "modified"}
 
     def test_no_change_returns_none(self, gateway: FubonOrderGateway) -> None:
