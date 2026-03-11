@@ -40,7 +40,6 @@ impl Default for RustGatewayFusedCheck {
         Self::new()
     }
 }
-
 #[pymethods]
 impl RustGatewayFusedCheck {
     #[new]
