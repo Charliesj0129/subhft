@@ -20,6 +20,7 @@
 | `validation-gate` | Alpha validation gates |
 | `fubon-tradeapi` | Fubon TradeAPI reference: auth, SDK, endpoints, order types, env vars, failure modes |
 | `multi-broker-ops` | Multi-broker operational procedures: broker switching, failover, dual-broker routing |
+| `soak-report-analysis` | Analyze soak test reports, identify degradation trends, and generate operational insights. Trigger on "soak report", "daily report", "health check", "operational status". |
 
 ## Python & Rust
 
