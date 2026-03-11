@@ -10,12 +10,31 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 STATUS_PASS = "pass"
 STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 STATUS_UNKNOWN = "unknown"
+
+_STATUS_ICON: dict[str, str] = {
+    STATUS_PASS: "\u2705",
+    STATUS_WARN: "\u26a0\ufe0f",
+    STATUS_FAIL: "\u274c",
+    STATUS_UNKNOWN: "\u2753",
+}
+
+_SUBSYSTEM_LABELS: dict[str, str] = {
+    "soak": "Soak Testing",
+    "backlog": "WAL Backlog",
+    "drift": "Configuration Drift",
+    "disk": "Disk Usage",
+    "drill": "Outage Drills",
+    "release_channel": "Release Channel",
+    "query_guard": "Query Guard",
+    "feature_canary": "Feature Canary",
+    "callback_latency": "Callback Latency",
+}
 
 
 def _now_utc() -> dt.datetime:
@@ -42,49 +61,480 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _subsystem_status(
+    checks: list[dict[str, Any]], prefix: str,
+) -> str:
+    """Derive overall status for a subsystem from its check IDs."""
+    status = STATUS_PASS
+    for c in checks:
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id", ""))
+        if cid.startswith(prefix):
+            status = _combine_status(status, str(c.get("status", STATUS_UNKNOWN)))
+    return status
+
+
+def _subsystem_verdict(status: str) -> str:
+    """One-line verdict string for a subsystem status."""
+    if status == STATUS_PASS:
+        return "Healthy"
+    if status == STATUS_WARN:
+        return "Warning -- review recommended"
+    if status == STATUS_FAIL:
+        return "Failed -- action required"
+    return "Unknown"
+
+
+def _render_soak(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for soak testing subsystem."""
+    icon = _STATUS_ICON.get(status, "")
+    days = section.get("daily_days", 0)
+    counts = section.get("daily_overall_counts", {})
+    fail_days = counts.get(STATUS_FAIL, 0)
+    warn_days = counts.get(STATUS_WARN, 0)
+    weekly = (section.get("reports_in_month") or {}).get("weekly", 0)
+    canary = (section.get("reports_in_month") or {}).get("canary", 0)
+    lines = [
+        f"{icon} {_subsystem_verdict(status)}",
+        "",
+        f"- Daily reports collected: **{days}**",
+        f"- Fail days: **{fail_days}** | Warn days: **{warn_days}**",
+        f"- Weekly reports this month: **{weekly}** | Canary reports: **{canary}**",
+    ]
+    if fail_days > 0:
+        lines.append("")
+        lines.append("**Action**: Investigate failing soak days; check system stability logs.")
+    return lines
+
+
+def _render_backlog(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for WAL backlog subsystem."""
+    icon = _STATUS_ICON.get(status, "")
+    samples = section.get("samples", 0)
+    peak = section.get("peak")
+    avg = section.get("avg")
+    p95 = section.get("p95")
+    p99 = section.get("p99")
+    lines = [
+        f"{icon} {_subsystem_verdict(status)}",
+        "",
+        f"- Samples: **{samples}**",
+        f"- Peak: **{_fmt_float(peak)}** | Avg: **{_fmt_float(avg)}**",
+        f"- P95: **{_fmt_float(p95)}** | P99: **{_fmt_float(p99)}**",
+    ]
+    if status in {STATUS_WARN, STATUS_FAIL}:
+        lines.append("")
+        lines.append(
+            "**Action**: WAL backlog elevated; check ClickHouse write throughput "
+            "and disk I/O."
+        )
+    return lines
+
+
+def _render_drift(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for configuration drift subsystem."""
+    icon = _STATUS_ICON.get(status, "")
+    checks_count = section.get("checks_in_month", 0)
+    latest_overall = section.get("latest_overall", "n/a")
+    counts = section.get("overall_counts", {})
+    lines = [
+        f"{icon} {_subsystem_verdict(status)}",
+        "",
+        f"- Drift checks this month: **{checks_count}**",
+        f"- Latest check: **{latest_overall}**",
+        f"- Pass: {counts.get(STATUS_PASS, 0)} | Warn: {counts.get(STATUS_WARN, 0)} "
+        f"| Fail: {counts.get(STATUS_FAIL, 0)}",
+    ]
+    if status in {STATUS_WARN, STATUS_FAIL}:
+        lines.append("")
+        lines.append(
+            "**Action**: Configuration drift detected; reconcile deployed config "
+            "with source of truth."
+        )
+    return lines
+
+
+def _render_disk(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for disk usage subsystem."""
+    icon = _STATUS_ICON.get(status, "")
+    paths = section.get("paths", [])
+    lines = [f"{icon} {_subsystem_verdict(status)}", ""]
+    for p in paths:
+        if not isinstance(p, dict):
+            continue
+        path_str = p.get("path", "?")
+        avail = p.get("available_gb")
+        used_pct = p.get("used_pct")
+        avail_s = f"{avail:.1f} GB" if avail is not None else "n/a"
+        pct_s = f"{used_pct:.0f}%" if used_pct is not None else "n/a"
+        lines.append(f"- `{path_str}`: {avail_s} free ({pct_s} used)")
+    if status in {STATUS_WARN, STATUS_FAIL}:
+        lines.append("")
+        lines.append(
+            "**Action**: Disk space low; clean old WAL archives, rotate research data, "
+            "or expand volume."
+        )
+    return lines
+
+
+def _render_drill(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for outage drills subsystem."""
+    icon = _STATUS_ICON.get(status, "")
+    ran = section.get("ran", False)
+    latest = section.get("latest")
+    drill_status = "n/a"
+    if isinstance(latest, dict) and isinstance(latest.get("report"), dict):
+        drill_status = str(latest["report"].get("status", "n/a"))
+    lines = [
+        f"{icon} {_subsystem_verdict(status)}",
+        "",
+        f"- Drill ran this session: **{'yes' if ran else 'no'}**",
+        f"- Latest drill status: **{drill_status}**",
+    ]
+    if status in {STATUS_WARN, STATUS_FAIL}:
+        lines.append("")
+        lines.append(
+            "**Action**: Drill evidence missing or failing; run with --run-drill-suite."
+        )
+    return lines
+
+
+def _render_release_channel(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for release channel subsystem."""
+    icon = _STATUS_ICON.get(status, "")
+    decisions = section.get("decisions_in_month", 0)
+    promotions = section.get("promotions_in_month", 0)
+    counts = section.get("decision_overall_counts", {})
+    lines = [
+        f"{icon} {_subsystem_verdict(status)}",
+        "",
+        f"- Release decisions this month: **{decisions}**",
+        f"- Promotions to stable: **{promotions}**",
+        f"- Decision pass: {counts.get(STATUS_PASS, 0)} | warn: {counts.get(STATUS_WARN, 0)} "
+        f"| fail: {counts.get(STATUS_FAIL, 0)}",
+    ]
+    return lines
+
+
+def _render_query_guard(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for query guard subsystem."""
+    icon = _STATUS_ICON.get(status, "")
+    runs = section.get("runs_in_month", 0)
+    blocked = section.get("blocked_runs_in_month", 0)
+    suites = section.get("suites_in_month", 0)
+    run_counts = section.get("run_status_counts", {})
+    lines = [
+        f"{icon} {_subsystem_verdict(status)}",
+        "",
+        f"- Query runs this month: **{runs}** (blocked: **{blocked}**)",
+        f"- Suite runs: **{suites}**",
+        f"- Run pass: {run_counts.get(STATUS_PASS, 0)} | fail: {run_counts.get(STATUS_FAIL, 0)}",
+    ]
+    if status in {STATUS_WARN, STATUS_FAIL}:
+        lines.append("")
+        lines.append(
+            "**Action**: Query guard issues detected; review blocked queries "
+            "and adjust cost thresholds if needed."
+        )
+    return lines
+
+
+def _render_report_count_subsystem(
+    section: dict[str, Any],
+    status: str,
+    *,
+    report_label: str,
+    action_text: str,
+) -> list[str]:
+    """Render narrative for subsystems with reports_in_month / overall_counts shape."""
+    icon = _STATUS_ICON.get(status, "")
+    reports = section.get("reports_in_month", 0)
+    latest_overall = section.get("latest_overall", "n/a")
+    counts = section.get("overall_counts", {})
+    lines = [
+        f"{icon} {_subsystem_verdict(status)}",
+        "",
+        f"- {report_label} this month: **{reports}**",
+        f"- Latest overall: **{latest_overall}**",
+        f"- Pass: {counts.get(STATUS_PASS, 0)} | Fail: {counts.get(STATUS_FAIL, 0)}",
+    ]
+    if status in {STATUS_WARN, STATUS_FAIL}:
+        lines.append("")
+        lines.append(f"**Action**: {action_text}")
+    return lines
+
+
+def _render_feature_canary(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for feature canary subsystem."""
+    return _render_report_count_subsystem(
+        section, status,
+        report_label="Canary reports",
+        action_text=(
+            "Feature canary regression detected; check feature parity "
+            "between engine versions."
+        ),
+    )
+
+
+def _render_callback_latency(section: dict[str, Any], status: str) -> list[str]:
+    """Render narrative for callback latency subsystem."""
+    return _render_report_count_subsystem(
+        section, status,
+        report_label="Latency reports",
+        action_text=(
+            "Callback latency regressions detected; check for GC pauses, "
+            "CPU contention, or Shioaji schema changes."
+        ),
+    )
+
+
+def _fmt_float(val: float | None, precision: int = 2) -> str:
+    """Format a float for display, returning 'n/a' for None."""
+    if val is None:
+        return "n/a"
+    return f"{val:.{precision}f}"
+
+
+_SubsystemRenderer = Callable[[dict[str, Any], str], list[str]]
+
+_SUBSYSTEM_RENDERERS: dict[str, _SubsystemRenderer] = {
+    "soak": _render_soak,
+    "backlog": _render_backlog,
+    "drift": _render_drift,
+    "disk": _render_disk,
+    "drill": _render_drill,
+    "release_channel": _render_release_channel,
+    "query_guard": _render_query_guard,
+    "feature_canary": _render_feature_canary,
+    "callback_latency": _render_callback_latency,
+}
+
+_SUBSYSTEM_CHECK_PREFIXES: dict[str, str] = {
+    "soak": "soak_",
+    "backlog": "backlog_",
+    "drift": "drift_",
+    "disk": "disk_",
+    "drill": "drill_",
+    "release_channel": "release_",
+    "query_guard": "query_guard_",
+    "feature_canary": "feature_canary_",
+    "callback_latency": "callback_latency_",
+}
+
+
+def _build_cross_subsystem_insights(
+    subsystem_statuses: dict[str, str],
+) -> list[str]:
+    """Detect correlations between subsystem issues."""
+    lines: list[str] = ["## Cross-Subsystem Insights", ""]
+    found = False
+
+    backlog_bad = subsystem_statuses.get("backlog", STATUS_PASS) in {STATUS_WARN, STATUS_FAIL}
+    disk_bad = subsystem_statuses.get("disk", STATUS_PASS) in {STATUS_WARN, STATUS_FAIL}
+    if backlog_bad and disk_bad:
+        lines.append(
+            "- WAL backlog issues coincide with disk pressure; "
+            "ClickHouse write latency may be caused by low disk space."
+        )
+        found = True
+
+    soak_bad = subsystem_statuses.get("soak", STATUS_PASS) in {STATUS_WARN, STATUS_FAIL}
+    cb_bad = subsystem_statuses.get("callback_latency", STATUS_PASS) in {STATUS_WARN, STATUS_FAIL}
+    if soak_bad and cb_bad:
+        lines.append(
+            "- Soak test failures correlate with callback latency issues; "
+            "investigate shared infrastructure bottlenecks."
+        )
+        found = True
+
+    drift_bad = subsystem_statuses.get("drift", STATUS_PASS) in {STATUS_WARN, STATUS_FAIL}
+    fc_bad = subsystem_statuses.get("feature_canary", STATUS_PASS) in {STATUS_WARN, STATUS_FAIL}
+    if drift_bad and fc_bad:
+        lines.append(
+            "- Config drift detected alongside feature canary regressions; "
+            "config changes may have caused feature parity issues."
+        )
+        found = True
+
+    if not found:
+        lines.append("No cross-subsystem correlations detected.")
+
+    lines.append("")
+    return lines
+
+
+def _build_prioritized_actions(
+    checks: list[dict[str, Any]],
+) -> list[str]:
+    """Build a prioritized action list from all failed/warned checks."""
+    action_checks = [
+        c for c in checks
+        if isinstance(c, dict) and c.get("status") in {STATUS_WARN, STATUS_FAIL}
+    ]
+    if not action_checks:
+        return []
+
+    severity_order = {"critical": 0, "warning": 1}
+    status_order = {STATUS_FAIL: 0, STATUS_WARN: 1}
+    sorted_checks = sorted(
+        action_checks,
+        key=lambda c: (
+            status_order.get(str(c.get("status", "")), 2),
+            severity_order.get(str(c.get("severity", "")), 2),
+        ),
+    )
+
+    lines: list[str] = ["## Prioritized Action List", ""]
+    for i, c in enumerate(sorted_checks, 1):
+        sev = str(c.get("severity", "warning"))
+        cid = str(c.get("id", "unknown"))
+        msg = str(c.get("message", ""))
+        lines.append(f"{i}. **[{sev}]** `{cid}`: {msg}")
+    lines.append("")
+    return lines
+
+
+def _load_previous_monthly_report(output_dir: Path, current_path: Path) -> dict[str, Any] | None:
+    """Load the most recent monthly JSON report before the current one."""
+    try:
+        candidates = sorted(output_dir.glob("monthly_*.json"), reverse=True)
+        for p in candidates:
+            if p.resolve() == current_path.resolve():
+                continue
+            text = p.read_text(encoding="utf-8")
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    return None
+
+
+def _build_monthly_trend(
+    checks: list[dict[str, Any]],
+    current_overall: str,
+    previous: dict[str, Any] | None,
+) -> list[str]:
+    """Compare current month with previous monthly report."""
+    lines: list[str] = ["## Monthly Trend", ""]
+    if previous is None:
+        lines.append("No previous monthly report found for comparison.")
+        lines.append("")
+        return lines
+
+    prev_month = previous.get("month", "unknown")
+    prev_result = previous.get("result", {}) if isinstance(previous.get("result"), dict) else {}
+    prev_checks = prev_result.get("checks", []) if isinstance(prev_result.get("checks"), list) else []
+    prev_overall = str(prev_result.get("overall", STATUS_UNKNOWN))
+
+    prev_map: dict[str, str] = {}
+    for c in prev_checks:
+        if isinstance(c, dict):
+            prev_map[str(c.get("id", ""))] = str(c.get("status", STATUS_UNKNOWN))
+
+    improved = 0
+    degraded = 0
+    order = {STATUS_PASS: 0, STATUS_WARN: 1, STATUS_FAIL: 2}
+    for c in checks:
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id", ""))
+        cur_status = str(c.get("status", STATUS_UNKNOWN))
+        prev_status = prev_map.get(cid)
+        if prev_status is None:
+            continue
+        if order.get(cur_status, 1) < order.get(prev_status, 1):
+            improved += 1
+        elif order.get(cur_status, 1) > order.get(prev_status, 1):
+            degraded += 1
+
+    lines.append(f"Compared with **{prev_month}** (overall: {prev_overall}):")
+    lines.append(f"- Current overall: **{current_overall}**")
+    lines.append(f"- Checks improved: **{improved}** | Checks degraded: **{degraded}**")
+    lines.append("")
+    return lines
+
+
 def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     result = report.get("result", {}) if isinstance(report.get("result"), dict) else {}
     checks = result.get("checks", []) if isinstance(result.get("checks"), list) else []
     sections = report.get("sections", {}) if isinstance(report.get("sections"), dict) else {}
+    overall = str(result.get("overall", STATUS_UNKNOWN))
+    month_str = str(report.get("month", "unknown"))
 
     lines: list[str] = []
     lines.append("# Monthly Reliability Review Pack")
     lines.append("")
     lines.append(f"- generated_at: `{report.get('generated_at')}`")
-    lines.append(f"- month: `{report.get('month')}`")
-    lines.append(f"- overall: `{result.get('overall')}`")
+    lines.append(f"- month: `{month_str}`")
+    lines.append(f"- overall: {_STATUS_ICON.get(overall, '')} `{overall}`")
     lines.append("")
 
+    # Executive Summary
+    subsystem_names = list(_SUBSYSTEM_LABELS.keys())
+    subsystem_statuses: dict[str, str] = {}
+    for name in subsystem_names:
+        prefix = _SUBSYSTEM_CHECK_PREFIXES.get(name, f"{name}_")
+        subsystem_statuses[name] = _subsystem_status(checks, prefix)
+
+    healthy_count = sum(1 for s in subsystem_statuses.values() if s == STATUS_PASS)
+    total_count = len(subsystem_statuses)
+    lines.append("## Executive Summary")
+    lines.append("")
+    lines.append(
+        f"Monthly reliability review for **{month_str}**. "
+        f"Overall: {healthy_count}/{total_count} subsystems healthy."
+    )
+    lines.append("")
+    for name in subsystem_names:
+        label = _SUBSYSTEM_LABELS[name]
+        status = subsystem_statuses[name]
+        icon = _STATUS_ICON.get(status, "")
+        lines.append(f"- {icon} **{label}**: {_subsystem_verdict(status)}")
+    lines.append("")
+
+    # Gate Checks table
     lines.append("## Gate Checks")
     lines.append("")
-    lines.append("| id | status | severity | message |")
-    lines.append("|---|---|---|---|")
+    lines.append("| | id | status | severity | message |")
+    lines.append("|---|---|---|---|---|")
     for check in checks:
         if not isinstance(check, dict):
             continue
+        status = str(check.get("status", STATUS_UNKNOWN))
+        icon = _STATUS_ICON.get(status, "")
         lines.append(
-            f"| `{check.get('id')}` | `{check.get('status')}` | `{check.get('severity')}` | {check.get('message')} |"
+            f"| {icon} | `{check.get('id')}` | `{status}` "
+            f"| `{check.get('severity')}` | {check.get('message')} |"
         )
     lines.append("")
 
-    for name in [
-        "soak",
-        "backlog",
-        "drift",
-        "disk",
-        "drill",
-        "release_channel",
-        "query_guard",
-        "feature_canary",
-        "callback_latency",
-    ]:
-        payload = sections.get(name)
-        lines.append(f"## {name}")
+    # Per-Subsystem narrative sections
+    for name in subsystem_names:
+        label = _SUBSYSTEM_LABELS[name]
+        section_data = sections.get(name, {})
+        if not isinstance(section_data, dict):
+            section_data = {}
+        status = subsystem_statuses[name]
+        lines.append(f"### {label}")
         lines.append("")
-        lines.append("```json")
-        lines.append(json.dumps(payload, indent=2, ensure_ascii=False))
-        lines.append("```")
+        renderer = _SUBSYSTEM_RENDERERS.get(name)
+        if renderer is not None:
+            lines.extend(renderer(section_data, status))
+        else:
+            lines.append(f"{_STATUS_ICON.get(status, '')} {_subsystem_verdict(status)}")
         lines.append("")
+
+    # Cross-Subsystem Insights
+    lines.extend(_build_cross_subsystem_insights(subsystem_statuses))
+
+    # Prioritized Action List
+    lines.extend(_build_prioritized_actions(checks))
+
+    # Monthly Trend
+    previous = _load_previous_monthly_report(path.parent, path)
+    lines.extend(_build_monthly_trend(checks, overall, previous))
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

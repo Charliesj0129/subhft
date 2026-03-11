@@ -15,6 +15,36 @@ STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 STATUS_UNKNOWN = "unknown"
 
+_STATUS_ICON: dict[str, str] = {
+    STATUS_PASS: "\u2705",
+    STATUS_WARN: "\u26a0\ufe0f",
+    STATUS_FAIL: "\u274c",
+    STATUS_UNKNOWN: "\u2753",
+}
+
+_DIAGNOSIS_MAP: dict[str, str] = {
+    "callback_ingress_latency_p99_ns": (
+        "P99 callback latency exceeded threshold; "
+        "check for GC pauses, CPU contention, or increased tick rate"
+    ),
+    "callback_queue_dropped_increase": (
+        "Queue drops detected; consider increasing queue size "
+        "or optimizing consumer throughput"
+    ),
+    "callback_queue_depth_p99": (
+        "Queue depth elevated; consider increasing queue size "
+        "or optimizing consumer throughput"
+    ),
+    "callback_parse_fallback_ratio": (
+        "Parser fallback rate elevated; "
+        "check quote schema changes from Shioaji"
+    ),
+    "callback_parse_miss_increase": (
+        "Parser miss rate elevated; "
+        "unrecognized quote formats arriving"
+    ),
+}
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -40,31 +70,141 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _load_previous_report(output_dir: Path, current_path: Path) -> dict[str, Any] | None:
+    """Load the most recent JSON report before the current one."""
+    try:
+        candidates = sorted(output_dir.glob("callback_latency_*.json"), reverse=True)
+        for p in candidates:
+            if p.resolve() == current_path.resolve():
+                continue
+            text = p.read_text(encoding="utf-8")
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+    return None
+
+
+def _build_executive_summary(checks: list[dict[str, Any]], overall: str) -> list[str]:
+    """Build executive summary lines from check results."""
+    total = len(checks)
+    passed = sum(1 for c in checks if isinstance(c, dict) and c.get("status") == STATUS_PASS)
+    lines: list[str] = ["## Executive Summary", ""]
+    slo_msg = "P99 latency is within SLO" if overall == STATUS_PASS else "P99 latency exceeds SLO threshold"
+    lines.append(f"Callback latency check: {passed}/{total} rules passed. {slo_msg}.")
+    lines.append("")
+
+    critical_failures = [
+        c for c in checks
+        if isinstance(c, dict) and c.get("status") == STATUS_FAIL and c.get("severity") == "critical"
+    ]
+    if critical_failures:
+        details = ", ".join(str(c.get("id", "unknown")) for c in critical_failures)
+        lines.append(f"**ALERT**: Critical latency issues detected -- {details}.")
+        lines.append("")
+    return lines
+
+
+def _build_trend_context(
+    checks: list[dict[str, Any]], previous: dict[str, Any] | None,
+) -> list[str]:
+    """Compare current checks with previous report to show trends."""
+    lines: list[str] = ["## Trend Context", ""]
+    if previous is None:
+        lines.append("No previous report found for comparison.")
+        lines.append("")
+        return lines
+
+    prev_result = previous.get("result", {}) if isinstance(previous.get("result"), dict) else {}
+    prev_checks = prev_result.get("checks", []) if isinstance(prev_result.get("checks"), list) else []
+    prev_map: dict[str, str] = {}
+    for c in prev_checks:
+        if isinstance(c, dict):
+            prev_map[str(c.get("id", ""))] = str(c.get("status", STATUS_UNKNOWN))
+
+    improved = 0
+    degraded = 0
+    order = {STATUS_PASS: 0, STATUS_UNKNOWN: 1, STATUS_WARN: 2, STATUS_FAIL: 3}
+    for c in checks:
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id", ""))
+        cur_status = str(c.get("status", STATUS_UNKNOWN))
+        prev_status = prev_map.get(cid)
+        if prev_status is None:
+            continue
+        cur_rank = order.get(cur_status, 1)
+        prev_rank = order.get(prev_status, 1)
+        if cur_rank < prev_rank:
+            improved += 1
+        elif cur_rank > prev_rank:
+            degraded += 1
+
+    lines.append(f"vs previous: {improved} rules improved, {degraded} degraded.")
+    lines.append("")
+    return lines
+
+
+def _build_action_items(checks: list[dict[str, Any]]) -> list[str]:
+    """Build recommended actions for failed/warned rules."""
+    action_checks = [
+        c for c in checks
+        if isinstance(c, dict) and c.get("status") in {STATUS_WARN, STATUS_FAIL}
+    ]
+    if not action_checks:
+        return []
+
+    lines: list[str] = ["## Action Items", ""]
+    default_action = "Rule threshold exceeded; investigate metric in Grafana"
+    for c in action_checks:
+        cid = str(c.get("id", "unknown"))
+        icon = _STATUS_ICON.get(str(c.get("status", "")), "")
+        diagnosis = _DIAGNOSIS_MAP.get(cid, default_action)
+        lines.append(f"- {icon} **{cid}**: {diagnosis}")
+    lines.append("")
+    return lines
+
+
 def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     result = report.get("result", {}) if isinstance(report.get("result"), dict) else {}
     checks = result.get("checks", []) if isinstance(result.get("checks"), list) else []
+    overall = str(result.get("overall", STATUS_UNKNOWN))
+
     lines: list[str] = []
     lines.append("# Callback Latency Guard Report")
     lines.append("")
     lines.append(f"- generated_at: `{report.get('generated_at')}`")
     lines.append(f"- window: `{report.get('window')}`")
     lines.append(f"- prom_url: `{report.get('prom_url')}`")
-    lines.append(f"- overall: `{result.get('overall')}`")
+    lines.append(f"- overall: {_STATUS_ICON.get(overall, '')} `{overall}`")
     lines.append(f"- recommendation: `{result.get('recommendation')}`")
     lines.append("")
+
+    lines.extend(_build_executive_summary(checks, overall))
+
+    previous = _load_previous_report(path.parent, path)
+    lines.extend(_build_trend_context(checks, previous))
+
     lines.append("## Checks")
     lines.append("")
-    lines.append("| id | status | severity | value | threshold | message |")
-    lines.append("|---|---|---|---:|---:|---|")
+    lines.append("| | id | status | severity | value | threshold | message |")
+    lines.append("|---|---|---|---|---:|---:|---|")
     for row in checks:
         if not isinstance(row, dict):
             continue
         value = row.get("value")
         val_s = "n/a" if value is None else f"{float(value):.6g}"
+        status = str(row.get("status", STATUS_UNKNOWN))
+        icon = _STATUS_ICON.get(status, "")
         lines.append(
-            f"| `{row.get('id')}` | `{row.get('status')}` | `{row.get('severity')}` | "
+            f"| {icon} | `{row.get('id')}` | `{status}` | `{row.get('severity')}` | "
             f"`{val_s}` | `{row.get('threshold')}` | {row.get('message')} |"
         )
+    lines.append("")
+
+    lines.extend(_build_action_items(checks))
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
