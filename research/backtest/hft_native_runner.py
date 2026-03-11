@@ -22,6 +22,7 @@ import os
 import sys
 import tempfile
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -90,7 +91,7 @@ def _split_npz(path: str, split: float = 0.7) -> tuple[str, str]:
         (is_path, oos_path) — paths to temporary NPZ files.
         Caller must clean up these files after use.
     """
-    data = np.load(path, allow_pickle=False)
+    data = np.load(path, allow_pickle=False, mmap_mode="r")
     if isinstance(data, np.lib.npyio.NpzFile):
         arr = np.asarray(data["data"])
     else:
@@ -127,11 +128,29 @@ def _resolve_hftbt_path(data_path: str) -> str | None:
     return None
 
 
+_HFTBT_CACHE_MAX = 32
+_hftbt_cache: OrderedDict[tuple[str, float], str] = OrderedDict()
+
+
+def _hftbt_cache_clear() -> None:
+    """Clear the hftbt path cache (for testing)."""
+    _hftbt_cache.clear()
+
+
+def _hftbt_cache_put(key: tuple[str, float], value: str) -> None:
+    """Insert a value into the LRU cache, evicting oldest if at capacity."""
+    _hftbt_cache[key] = value
+    if len(_hftbt_cache) > _HFTBT_CACHE_MAX:
+        _hftbt_cache.popitem(last=False)
+
+
 def ensure_hftbt_npz(data_path: str) -> str:
     """Auto-convert research.npy → hftbt.npz if not already present.
 
     Idempotent: if a sibling hftbt.npz already exists, returns its path immediately
     without requiring hftbacktest to be installed.
+
+    Results are cached by (abs_path, mtime) with LRU eviction (max 32 entries).
 
     Raises ImportError if hftbacktest is not installed and conversion is needed.
     Raises ValueError if data has no recognisable price fields or all rows are zero.
@@ -139,9 +158,23 @@ def ensure_hftbt_npz(data_path: str) -> str:
 
     Returns: absolute path to the hftbt.npz file.
     """
+    abs_path = os.path.abspath(data_path)
+    cache_key: tuple[str, float] | None = None
+    try:
+        mtime = os.path.getmtime(abs_path)
+        cache_key = (abs_path, mtime)
+    except OSError:
+        pass  # File may not exist yet; skip cache lookup
+
+    if cache_key is not None and cache_key in _hftbt_cache:
+        _hftbt_cache.move_to_end(cache_key)  # LRU touch
+        return _hftbt_cache[cache_key]
+
     # Fast path: sibling hftbt.npz already exists — no import needed
     hbt_path = _resolve_hftbt_path(data_path)
     if hbt_path is not None:
+        if cache_key is not None:
+            _hftbt_cache_put(cache_key, hbt_path)
         return hbt_path
 
     # Conversion requires hftbacktest
@@ -226,7 +259,10 @@ def ensure_hftbt_npz(data_path: str) -> str:
     event_arr = np.array(events[:w], dtype=_evt_dtype)
     out_path = Path(data_path).parent / "hftbt.npz"
     np.savez_compressed(str(out_path), data=event_arr)
-    return str(out_path)
+    result = str(out_path)
+    if cache_key is not None:
+        _hftbt_cache_put(cache_key, result)
+    return result
 
 
 def _effective_broker_rtt_ms(config: BacktestConfig) -> float:
@@ -566,7 +602,7 @@ class HftNativeRunner:
         # Load all events to compute fold boundaries
         chunks = []
         for p in hbt_paths:
-            d = np.load(p, allow_pickle=False)
+            d = np.load(p, allow_pickle=False, mmap_mode="r")
             arr = np.asarray(d["data"]) if isinstance(d, np.lib.npyio.NpzFile) else np.asarray(d)
             chunks.append(arr)
         full = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]

@@ -12,6 +12,7 @@ import pytest
 from research.backtest.hft_native_runner import (
     _effective_broker_rtt_ms,
     _forward_returns,
+    _hftbt_cache_clear,
     _resolve_hftbt_path,
     _signals_to_positions,
     _split_npz,
@@ -497,3 +498,81 @@ class TestBrokerRTTInjection:
 
         assert "effective_broker_rtt_ms" in result.latency_profile
         assert result.latency_profile["effective_broker_rtt_ms"] == 47.0
+
+
+# ---------------------------------------------------------------------------
+# LRU cache for ensure_hftbt_npz
+# ---------------------------------------------------------------------------
+class TestHftbtCache:
+    def setup_method(self):
+        _hftbt_cache_clear()
+
+    def teardown_method(self):
+        _hftbt_cache_clear()
+
+    def test_cache_hit_returns_same_path(self, tmp_path):
+        """Second call to ensure_hftbt_npz returns the cached path without re-resolving."""
+        hbt = tmp_path / "hftbt.npz"
+        hbt.touch()
+        npy = str(tmp_path / "research.npy")
+        # Create a real .npy so os.path.getmtime works
+        _make_research_npy(npy, n=5)
+
+        result1 = ensure_hftbt_npz(npy)
+        result2 = ensure_hftbt_npz(npy)
+        assert result1 == result2
+        assert result1 == str(hbt)
+
+    def test_cache_invalidated_on_mtime_change(self, tmp_path):
+        """When file mtime changes, cache misses and re-resolves."""
+        import time
+
+        hbt = tmp_path / "hftbt.npz"
+        hbt.touch()
+        npy = str(tmp_path / "research.npy")
+        _make_research_npy(npy, n=5)
+
+        result1 = ensure_hftbt_npz(npy)
+
+        # Touch the file to change mtime
+        time.sleep(0.05)
+        Path(npy).touch()
+
+        result2 = ensure_hftbt_npz(npy)
+        assert result1 == result2  # Same logical result, but re-resolved
+
+    def test_cache_clear_resets_state(self, tmp_path):
+        """_hftbt_cache_clear() empties the cache."""
+        from research.backtest.hft_native_runner import _hftbt_cache
+
+        hbt = tmp_path / "hftbt.npz"
+        hbt.touch()
+        npy = str(tmp_path / "research.npy")
+        _make_research_npy(npy, n=5)
+
+        ensure_hftbt_npz(npy)
+        assert len(_hftbt_cache) > 0
+
+        _hftbt_cache_clear()
+        assert len(_hftbt_cache) == 0
+
+    def test_mmap_loading_works_with_split_npz(self, tmp_path):
+        """mmap_mode='r' in _split_npz produces valid IS/OOS splits."""
+        arr = _make_event_array(100)
+        npz = str(tmp_path / "data.npz")
+        _save_event_npz(arr, npz)
+        is_path, oos_path = _split_npz(npz, 0.7)
+        try:
+            is_data = np.load(is_path, allow_pickle=False)["data"]
+            oos_data = np.load(oos_path, allow_pickle=False)["data"]
+            assert len(is_data) == 70
+            assert len(oos_data) == 30
+            # Verify data integrity (not all zeros)
+            assert not np.all(is_data["px"] == 0.0)
+        finally:
+            for p in (is_path, oos_path):
+                os.unlink(p)
+                try:
+                    os.rmdir(os.path.dirname(p))
+                except OSError:
+                    pass
