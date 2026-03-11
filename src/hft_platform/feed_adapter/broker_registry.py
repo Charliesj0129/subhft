@@ -55,9 +55,7 @@ def get_broker_factory(name: str | None = None) -> BrokerFactory:
     factory = _BROKER_REGISTRY.get(key)
     if factory is None:
         registered = sorted(_BROKER_REGISTRY)
-        raise ValueError(
-            f"Unknown broker {key!r}. Registered brokers: {registered}"
-        )
+        raise ValueError(f"Unknown broker {key!r}. Registered brokers: {registered}")
     return factory
 
 
