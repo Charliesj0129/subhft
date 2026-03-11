@@ -11,7 +11,6 @@ from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
 from hft_platform.execution.router import ExecutionRouter
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
-from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
 from hft_platform.risk.engine import RiskEngine
@@ -19,8 +18,8 @@ from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.runner import StrategyRunner
 
-# All external consumers should use ShioajiClientFacade; ShioajiClient is internal.
-BrokerClient = ShioajiClientFacade
+# TODO: replace with BrokerClientProtocol once WU-1 merges
+BrokerClient = Any
 
 
 @dataclass(slots=True)
@@ -37,6 +36,7 @@ class ServiceRegistry:
     storm_guard: StormGuard
     symbol_metadata: SymbolMetadata
     price_scale_provider: PriceScaleProvider
+    broker_id: str
     md_client: BrokerClient
     order_client: BrokerClient
     client: BrokerClient

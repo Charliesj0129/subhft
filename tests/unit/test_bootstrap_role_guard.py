@@ -12,7 +12,7 @@ def test_build_broker_clients_engine_uses_facade(tmp_path):
     bootstrapper = SystemBootstrapper({})
 
     with patch("hft_platform.services.bootstrap.ShioajiClientFacade") as facade_cls:
-        md_client, order_client = bootstrapper._build_broker_clients("engine", str(cfg), {})
+        md_client, order_client = bootstrapper._build_broker_clients("engine", str(cfg), {}, broker_id="shioaji")
 
     assert facade_cls.call_count == 2
     assert md_client is facade_cls.return_value
@@ -25,7 +25,7 @@ def test_build_broker_clients_maintenance_uses_noop(tmp_path):
     bootstrapper = SystemBootstrapper({})
 
     with patch("hft_platform.services.bootstrap.ShioajiClientFacade") as facade_cls:
-        md_client, order_client = bootstrapper._build_broker_clients("maintenance", str(cfg), {})
+        md_client, order_client = bootstrapper._build_broker_clients("maintenance", str(cfg), {}, broker_id="shioaji")
 
     assert facade_cls.call_count == 0
     assert md_client.login() is False
