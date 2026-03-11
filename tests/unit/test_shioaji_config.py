@@ -18,6 +18,7 @@ from hft_platform.feed_adapter.shioaji._config import (
 # _as_bool helper
 # ---------------------------------------------------------------------------
 
+
 class TestAsBool:
     def test_none_returns_false(self) -> None:
         assert _as_bool(None) is False
@@ -40,6 +41,7 @@ class TestAsBool:
 # ---------------------------------------------------------------------------
 # ShioajiClientConfig dataclass
 # ---------------------------------------------------------------------------
+
 
 class TestShioajiClientConfig:
     def test_is_frozen(self) -> None:
@@ -65,14 +67,11 @@ class TestShioajiClientConfig:
 # load_shioaji_config
 # ---------------------------------------------------------------------------
 
+
 class TestLoadShioajiConfig:
     def test_defaults_no_env(self) -> None:
         """With no env vars set, defaults should be sensible."""
-        env_patch = {
-            k: v
-            for k, v in os.environ.items()
-            if not k.startswith(("HFT_", "SHIOAJI_", "CA_", "SYMBOLS_"))
-        }
+        env_patch = {k: v for k, v in os.environ.items() if not k.startswith(("HFT_", "SHIOAJI_", "CA_", "SYMBOLS_"))}
         with mock.patch.dict(os.environ, env_patch, clear=True):
             cfg = load_shioaji_config()
         assert cfg.simulation is False
@@ -94,11 +93,13 @@ class TestLoadShioajiConfig:
 
     def test_ca_from_settings_dict(self) -> None:
         with mock.patch.dict(os.environ, {"HFT_MODE": "real"}, clear=False):
-            cfg = load_shioaji_config(settings={
-                "activate_ca": "1",
-                "ca_path": "/tmp/cert.p12",
-                "ca_password": "secret",
-            })
+            cfg = load_shioaji_config(
+                settings={
+                    "activate_ca": "1",
+                    "ca_path": "/tmp/cert.p12",
+                    "ca_password": "secret",
+                }
+            )
         assert cfg.activate_ca is True
         assert cfg.ca_path == "/tmp/cert.p12"
         assert cfg.ca_password == "secret"
@@ -130,20 +131,28 @@ class TestLoadShioajiConfig:
         assert cfg.config_path == "/env/symbols.yaml"
 
     def test_env_int_parsing(self) -> None:
-        with mock.patch.dict(os.environ, {
-            "HFT_SHIOAJI_API_SOFT_CAP": "50",
-            "HFT_SHIOAJI_API_HARD_CAP": "60",
-            "HFT_SHIOAJI_API_WINDOW_S": "10",
-        }, clear=False):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "HFT_SHIOAJI_API_SOFT_CAP": "50",
+                "HFT_SHIOAJI_API_HARD_CAP": "60",
+                "HFT_SHIOAJI_API_WINDOW_S": "10",
+            },
+            clear=False,
+        ):
             cfg = load_shioaji_config()
         assert cfg.api_soft_cap == 50
         assert cfg.api_hard_cap == 60
         assert cfg.api_window_s == 10
 
     def test_env_float_parsing(self) -> None:
-        with mock.patch.dict(os.environ, {
-            "HFT_RECONNECT_BACKOFF_S": "5.5",
-        }, clear=False):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "HFT_RECONNECT_BACKOFF_S": "5.5",
+            },
+            clear=False,
+        ):
             cfg = load_shioaji_config()
         assert cfg.reconnect_backoff_s == 5.5
 
