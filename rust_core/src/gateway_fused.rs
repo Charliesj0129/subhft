@@ -35,6 +35,11 @@ pub struct RustGatewayFusedCheck {
 
 unsafe impl Send for RustGatewayFusedCheck {}
 
+impl Default for RustGatewayFusedCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 #[pymethods]
 impl RustGatewayFusedCheck {
     #[new]
@@ -110,7 +115,8 @@ impl RustGatewayFusedCheck {
             // deviation * 10000 / reference_price > price_band_bps
             // Rearranged to avoid division: deviation * 10000 > price_band_bps * reference_price
             if self.price_band_bps > 0
-                && deviation.saturating_mul(10_000) > self.price_band_bps.saturating_mul(reference_price)
+                && deviation.saturating_mul(10_000)
+                    > self.price_band_bps.saturating_mul(reference_price)
             {
                 return (false, REASON_PRICE_BAND);
             }
@@ -139,8 +145,7 @@ impl RustGatewayFusedCheck {
         }
 
         // All checks passed: update state
-        self.dedup
-            .insert(idempotency_key.to_string(), now_ns);
+        self.dedup.insert(idempotency_key.to_string(), now_ns);
         *self.symbol_exposure.entry(symbol.to_string()).or_insert(0) += notional;
         self.global_exposure += notional;
 
@@ -182,8 +187,7 @@ impl RustGatewayFusedCheck {
 impl RustGatewayFusedCheck {
     /// Evict dedup entries older than TTL.
     fn evict_expired(&mut self, now_ns: u64) {
-        self.dedup.retain(|_key, &mut ts| {
-            now_ns.wrapping_sub(ts) < self.dedup_ttl_ns
-        });
+        self.dedup
+            .retain(|_key, &mut ts| now_ns.wrapping_sub(ts) < self.dedup_ttl_ns);
     }
 }
