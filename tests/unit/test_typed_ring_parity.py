@@ -58,9 +58,18 @@ class TestPublishAndGet:
         ratio0: float = 0.5,
     ) -> int:
         return ring.publish(
-            kind, flags, symbol_id,
-            exch_ts_ns, local_ts_ns,
-            price0, price1, qty0, qty1, aux0, aux1, ratio0,
+            kind,
+            flags,
+            symbol_id,
+            exch_ts_ns,
+            local_ts_ns,
+            price0,
+            price1,
+            qty0,
+            qty1,
+            aux0,
+            aux1,
+            ratio0,
         )
 
     def test_publish_single_and_get(self) -> None:
@@ -72,9 +81,20 @@ class TestPublishAndGet:
         assert frame is not None
         # Unpack 14-element tuple
         (
-            kind, flags, reserved, symbol_id, ret_seq,
-            exch_ts_ns, local_ts_ns,
-            price0, price1, qty0, qty1, aux0, aux1, ratio0,
+            kind,
+            flags,
+            reserved,
+            symbol_id,
+            ret_seq,
+            exch_ts_ns,
+            local_ts_ns,
+            price0,
+            price1,
+            qty0,
+            qty1,
+            aux0,
+            aux1,
+            ratio0,
         ) = frame
         assert kind == 1
         assert flags == 2
@@ -96,8 +116,18 @@ class TestPublishAndGet:
         seqs = []
         for i in range(5):
             seq = ring.publish(
-                i + 1, 0, i, i * 100, i * 200,
-                i * 1000, i * 2000, i, i, i, i, float(i),
+                i + 1,
+                0,
+                i,
+                i * 100,
+                i * 200,
+                i * 1000,
+                i * 2000,
+                i,
+                i,
+                i,
+                i,
+                float(i),
             )
             seqs.append(seq)
 
@@ -105,7 +135,7 @@ class TestPublishAndGet:
             frame = ring.get(seq)
             assert frame is not None
             assert frame[0] == i + 1  # kind
-            assert frame[3] == i      # symbol_id
+            assert frame[3] == i  # symbol_id
 
 
 class TestCursorAdvancement:
@@ -184,8 +214,18 @@ class TestBulkPublish:
         total = 1000
         for i in range(1, total + 1):
             ring.publish(
-                1, 0, i, i * 10, i * 20,
-                i * 100, i * 200, i, i, i, i, float(i),
+                1,
+                0,
+                i,
+                i * 10,
+                i * 20,
+                i * 100,
+                i * 200,
+                i,
+                i,
+                i,
+                i,
+                float(i),
             )
 
         assert ring.cursor() == total + 1
