@@ -104,7 +104,8 @@ class TestFubonOrderGatewayFutopt:
 
 
 class TestFubonOrderGatewayCancel:
-    def test_cancel_order(self) -> None:
+    def test_cancel_order_with_string_order_id(self) -> None:
+        """Backward compat: pass raw order_id string."""
         sdk = MagicMock()
         sdk.stock.cancel_order.return_value = {"status": "cancelled"}
         gw = FubonOrderGateway(sdk)
@@ -113,6 +114,38 @@ class TestFubonOrderGatewayCancel:
 
         sdk.stock.cancel_order.assert_called_once_with(order_id="ORD-001")
         assert result == {"status": "cancelled"}
+
+    def test_cancel_order_with_trade_object(self) -> None:
+        """BrokerProtocol compatible: pass trade object with order_id attr."""
+        sdk = MagicMock()
+        sdk.stock.cancel_order.return_value = {"status": "cancelled"}
+        gw = FubonOrderGateway(sdk)
+        trade = MagicMock()
+        trade.order_id = "ORD-002"
+
+        result = gw.cancel_order(trade)
+
+        sdk.stock.cancel_order.assert_called_once_with(order_id="ORD-002")
+        assert result == {"status": "cancelled"}
+
+    def test_cancel_order_none_raises_type_error(self) -> None:
+        """Passing None should raise TypeError, not reach SDK."""
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+
+        with pytest.raises(TypeError, match="cannot extract order_id"):
+            gw.cancel_order(None)
+
+        sdk.stock.cancel_order.assert_not_called()
+
+    def test_cancel_order_object_without_order_id_raises(self) -> None:
+        """Trade object missing order_id attribute should raise TypeError."""
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+        trade = MagicMock(spec=[])  # no attributes
+
+        with pytest.raises(TypeError, match="cannot extract order_id"):
+            gw.cancel_order(trade)
 
     def test_cancel_order_exception(self) -> None:
         sdk = MagicMock()
@@ -124,7 +157,8 @@ class TestFubonOrderGatewayCancel:
 
 
 class TestFubonOrderGatewayUpdate:
-    def test_update_order(self) -> None:
+    def test_update_order_with_string_order_id(self) -> None:
+        """Backward compat: pass raw order_id string."""
         sdk = MagicMock()
         sdk.stock.modify_order.return_value = {"status": "modified"}
         gw = FubonOrderGateway(sdk)
@@ -137,6 +171,67 @@ class TestFubonOrderGatewayUpdate:
             quantity=3,
         )
         assert result == {"status": "modified"}
+
+    def test_update_order_with_trade_object(self) -> None:
+        """BrokerProtocol compatible: pass trade object with order_id attr."""
+        sdk = MagicMock()
+        sdk.stock.modify_order.return_value = {"status": "modified"}
+        gw = FubonOrderGateway(sdk)
+        trade = MagicMock()
+        trade.order_id = "ORD-003"
+
+        result = gw.update_order(trade, price=7000000, qty=5)
+
+        sdk.stock.modify_order.assert_called_once_with(
+            order_id="ORD-003",
+            price=7000000 / PRICE_SCALE,
+            quantity=5,
+        )
+        assert result == {"status": "modified"}
+
+    def test_update_order_price_only(self) -> None:
+        """Only price provided — qty should not be passed to SDK."""
+        sdk = MagicMock()
+        sdk.stock.modify_order.return_value = {"status": "modified"}
+        gw = FubonOrderGateway(sdk)
+
+        gw.update_order("ORD-001", price=6000000)
+
+        sdk.stock.modify_order.assert_called_once_with(
+            order_id="ORD-001",
+            price=6000000 / PRICE_SCALE,
+        )
+
+    def test_update_order_qty_only(self) -> None:
+        """Only qty provided — price should not be passed to SDK."""
+        sdk = MagicMock()
+        sdk.stock.modify_order.return_value = {"status": "modified"}
+        gw = FubonOrderGateway(sdk)
+
+        gw.update_order("ORD-001", qty=10)
+
+        sdk.stock.modify_order.assert_called_once_with(
+            order_id="ORD-001",
+            quantity=10,
+        )
+
+    def test_update_order_no_changes_returns_none(self) -> None:
+        """No price or qty provided — should log warning and return None."""
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+
+        result = gw.update_order("ORD-001")
+
+        assert result is None
+        sdk.stock.modify_order.assert_not_called()
+
+    def test_update_order_none_trade_raises_type_error(self) -> None:
+        """Passing None as trade with valid price should raise TypeError."""
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+
+        with pytest.raises(TypeError, match="cannot extract order_id"):
+            gw.update_order(None, price=6000000)
 
     def test_update_order_exception(self) -> None:
         sdk = MagicMock()
