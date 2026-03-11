@@ -68,6 +68,8 @@ def generate_lob_data(config: SyntheticLOBConfig) -> tuple[np.ndarray, dict[str,
     base_mid = 100.0
     tick_size = 0.01
     q = 0.0
+    ar_coef = float(config.queue_ar_coef)
+    spread_mean = float(config.spread_mean_bps)
 
     i = 0
     regimes_covered: set[str] = set()
@@ -76,55 +78,96 @@ def generate_lob_data(config: SyntheticLOBConfig) -> tuple[np.ndarray, dict[str,
         regime_to_idx = {"trending": 0, "mean_reverting": 1, "volatile": 2}
     regime_names = tuple(regime_to_idx.keys())
 
+    # Pre-allocate scratch buffers once (reused across blocks, Allocator Law)
+    max_block = max(config.regime_block_max, 1) + 1
+    q_buf = np.empty(max_block, dtype=np.float64)
+    mid_buf = np.empty(max_block, dtype=np.float64)
+    spread_rng_buf = np.empty(max_block, dtype=np.float64)
+    depth_rng_buf = np.empty(max_block, dtype=np.float64)
+    volume_buf = np.empty(max_block, dtype=np.float64)
+
+    # Pre-compute timestamps (avoids per-block np.arange allocation)
+    all_ts = np.arange(n_rows, dtype=np.int64) * tick_ns
+
+    _directions = np.asarray([-1.0, 1.0], dtype=np.float64)
+
     while i < n_rows:
         block = int(rng.integers(max(1, config.regime_block_min), max(config.regime_block_max, 1) + 1))
         regime = regime_names[int(rng.integers(0, len(regime_names)))]
         regimes_covered.add(regime)
-        trend_dir = float(rng.choice(np.asarray([-1.0, 1.0], dtype=np.float64)))
+        trend_dir = float(rng.choice(_directions))
 
         end = min(n_rows, i + block)
-        for row_idx in range(i, end):
+        block_len = end - i
+
+        # Determine regime-constant parameters
+        if regime == "trending":
+            spread_mult = 1.0
+            vol_scale = 0.8
+        elif regime == "mean_reverting":
+            spread_mult = 0.8
+            vol_scale = 0.6
+        else:
+            spread_mult = 2.0
+            vol_scale = 1.6
+
+        # --- Phase 1: Sequential q + base_mid (AR(1) data dependency) ---
+        # Must draw RNG per-tick in original order to preserve determinism.
+        # Per tick draws: eps_q, [volatile: drift_rng], px_noise, spread_rng, depth_rng, volume
+        for k in range(block_len):
             eps_q = float(rng.normal(0.0, 0.03))
             if regime == "trending":
                 regime_drift = 0.02 * trend_dir
-                spread_mult = 1.0
-                vol_scale = 0.8
             elif regime == "mean_reverting":
                 regime_drift = -0.10 * q
-                spread_mult = 0.8
-                vol_scale = 0.6
             else:
                 regime_drift = float(rng.normal(0.0, 0.015))
-                spread_mult = 2.0
-                vol_scale = 1.6
 
-            q = (float(config.queue_ar_coef) * q) + regime_drift + eps_q
-            q = _clip(q, -0.99, 0.99)
+            q = ar_coef * q + regime_drift + eps_q
+            q = max(-0.99, min(0.99, q))
 
             px_noise = float(rng.normal(0.0, 0.03 * vol_scale))
             impact = 0.08 * q
             base_mid = max(1.0, base_mid + (impact + px_noise) * tick_size)
 
-            spread_noise = 1.0 + abs(q) * 0.25 + abs(float(rng.normal(0.0, 0.08)))
-            spread_bps = max(0.5, float(config.spread_mean_bps) * spread_mult * spread_noise)
-            half_spread = (base_mid * spread_bps / 10_000.0) / 2.0
-            bid_px = max(0.01, base_mid - half_spread)
-            ask_px = max(bid_px + 0.0001, base_mid + half_spread)
+            # Store sequential results + RNG draws for vectorized phase 2
+            q_buf[k] = q
+            mid_buf[k] = base_mid
+            spread_rng_buf[k] = float(rng.normal(0.0, 0.08))
+            depth_rng_buf[k] = float(rng.normal(0.0, 0.12))
+            volume_buf[k] = float(rng.gamma(shape=2.0, scale=4.0 * (1.0 + vol_scale)))
 
-            total_depth = max(10.0, 1800.0 * (1.0 + 0.35 * abs(q) + abs(float(rng.normal(0.0, 0.12)))))
-            bid_qty = max(1.0, total_depth * (1.0 + q) / 2.0)
-            ask_qty = max(1.0, total_depth * (1.0 - q) / 2.0)
+        # --- Phase 2: Vectorized derived-field computation (Cache Law) ---
+        q_blk = q_buf[:block_len]
+        mid_blk = mid_buf[:block_len]
 
-            volume = max(1.0, float(rng.gamma(shape=2.0, scale=4.0 * (1.0 + vol_scale))))
+        # Spread
+        spread_noise_blk = 1.0 + np.abs(q_blk) * 0.25 + np.abs(spread_rng_buf[:block_len])
+        spread_bps_blk = np.maximum(0.5, spread_mean * spread_mult * spread_noise_blk)
+        half_spread_blk = (mid_blk * spread_bps_blk / 10_000.0) / 2.0
 
-            arr[row_idx]["bid_qty"] = bid_qty
-            arr[row_idx]["ask_qty"] = ask_qty
-            arr[row_idx]["bid_px"] = bid_px
-            arr[row_idx]["ask_px"] = ask_px
-            arr[row_idx]["mid_price"] = (bid_px + ask_px) / 2.0
-            arr[row_idx]["spread_bps"] = spread_bps
-            arr[row_idx]["volume"] = volume
-            arr[row_idx]["local_ts"] = row_idx * tick_ns
+        # Prices
+        bid_px_blk = np.maximum(0.01, mid_blk - half_spread_blk)
+        ask_px_blk = np.maximum(bid_px_blk + 0.0001, mid_blk + half_spread_blk)
+
+        # Depth
+        abs_q = np.abs(q_blk)
+        total_depth_blk = np.maximum(10.0, 1800.0 * (1.0 + 0.35 * abs_q + np.abs(depth_rng_buf[:block_len])))
+        bid_qty_blk = np.maximum(1.0, total_depth_blk * (1.0 + q_blk) / 2.0)
+        ask_qty_blk = np.maximum(1.0, total_depth_blk * (1.0 - q_blk) / 2.0)
+
+        # Volume
+        vol_blk = np.maximum(1.0, volume_buf[:block_len])
+
+        # --- Block assignment (contiguous write, Cache Law) ---
+        arr["bid_qty"][i:end] = bid_qty_blk
+        arr["ask_qty"][i:end] = ask_qty_blk
+        arr["bid_px"][i:end] = bid_px_blk
+        arr["ask_px"][i:end] = ask_px_blk
+        arr["mid_price"][i:end] = (bid_px_blk + ask_px_blk) / 2.0
+        arr["spread_bps"][i:end] = spread_bps_blk
+        arr["volume"][i:end] = vol_blk
+        arr["local_ts"][i:end] = all_ts[i:end]
 
         i = end
 
