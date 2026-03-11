@@ -333,7 +333,7 @@ def cmd_feature_rollout_status(args: argparse.Namespace):
     reg = load_feature_profile_registry(getattr(args, "profiles", None))
     ctrl = load_feature_rollout_controller(getattr(args, "state_path", None))
     fsid = str(getattr(args, "feature_set", "") or "").strip() or None
-    payload = {
+    payload: dict[str, Any] = {
         "feature_profiles_path": reg.path,
         "rollout_state_path": ctrl.path,
         "rollout_version": ctrl.version,
@@ -718,7 +718,7 @@ def cmd_alpha_search(args: argparse.Namespace):
         print("--feature-fields is required (comma separated)")
         sys.exit(2)
 
-    features: dict[str, np.ndarray] = {}
+    features: dict[str, Any] = {}
     if arr.dtype.names:
         for field in field_names:
             if field not in arr.dtype.names:
@@ -999,7 +999,8 @@ def cmd_alpha_pool(args: argparse.Namespace):
         sys.exit(1)
 
     pool_cmd = getattr(args, "pool_cmd", "matrix")
-    threshold = float(getattr(args, "threshold", None) if getattr(args, "threshold", None) is not None else 0.7)
+    _threshold_raw = getattr(args, "threshold", None)
+    threshold = float(_threshold_raw) if _threshold_raw is not None else 0.7
     method = str(getattr(args, "method", "equal_weight"))
     ridge_alpha = float(getattr(args, "ridge_alpha", 0.1))
     min_uplift = float(getattr(args, "min_uplift", 0.05))
@@ -1051,7 +1052,7 @@ def cmd_recorder_status(args: argparse.Namespace):
     import time
     import urllib.request
 
-    wal_dir = getattr(args, "wal_dir", None) or os.getenv("HFT_WAL_DIR", "data/wal")
+    wal_dir: str = getattr(args, "wal_dir", None) or os.getenv("HFT_WAL_DIR", "data/wal")  # type: ignore[assignment]
     ck_host = getattr(args, "ck_host", None) or os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
     ck_port = int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
     recorder_mode = os.getenv("HFT_RECORDER_MODE", "direct")
@@ -1101,7 +1102,7 @@ def cmd_recorder_status(args: argparse.Namespace):
     # WAL guard status
     try:
         guard_threshold_mb = int(wal_disk_min_mb)
-        disk_free_mb_val = st_vfs.f_frsize * st_vfs.f_bavail / 1024 / 1024  # type: ignore[possibly-undefined]
+        disk_free_mb_val = st_vfs.f_frsize * st_vfs.f_bavail / 1024 / 1024
         guard_active = disk_free_mb_val < guard_threshold_mb
         guard_str = "ACTIVE" if guard_active else "OFF"
     except Exception:
@@ -1235,8 +1236,8 @@ def cmd_alpha_ab_compare(args: argparse.Namespace):
         val_a = run_a.get(key)
         val_b = run_b.get(key)
         try:
-            fa = float(val_a) if val_a is not None else None  # type: ignore[arg-type]
-            fb = float(val_b) if val_b is not None else None  # type: ignore[arg-type]
+            fa = float(val_a) if val_a is not None else None
+            fb = float(val_b) if val_b is not None else None
         except (TypeError, ValueError):
             fa = fb = None
         if fa is None and fb is None:

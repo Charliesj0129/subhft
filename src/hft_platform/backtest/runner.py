@@ -3,7 +3,7 @@ import json
 import os
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import List
+from typing import Any, List
 
 # from hftbacktest import BacktestAsset, HashMapMarketDepthBacktest
 # Assuming hftbacktest API usage. For this prototype, we'll mock the loop if deps missing.
@@ -50,7 +50,7 @@ class HftBacktestRunner:
         self.strategy_name = "demo"  # todo: extract from args or cfg if added
         self.date = "20241215"
         self.symbol = cfg.symbols[0] if cfg.symbols else "2330"
-        self.strategy_instance = None
+        self.strategy_instance: Any = None
 
     def run(self) -> HftBacktestRunResult | None:
         logger.info("Initializing Backtest", symbol=self.symbol)
