@@ -64,9 +64,7 @@ def test_duplicate_rejection():
 def test_duplicate_allowed_after_ttl():
     g = _make_gate(ttl_ns=TTL_NS)
     g.check_intent("key1", 0, "2330", PRICE_100, QTY_10, "s1", 0, NOW_NS)
-    ok, code = g.check_intent(
-        "key1", 0, "2330", PRICE_100, QTY_10, "s1", 0, NOW_NS + TTL_NS + 1
-    )
+    ok, code = g.check_intent("key1", 0, "2330", PRICE_100, QTY_10, "s1", 0, NOW_NS + TTL_NS + 1)
     assert ok is True
     assert code == 0
 
