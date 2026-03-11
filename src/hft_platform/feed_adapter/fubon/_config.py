@@ -72,13 +72,9 @@ def load_fubon_config(settings: dict[str, Any] | None = None) -> FubonClientConf
         user_id=os.getenv("FUBON_ID", fubon_cfg.get("user_id", "")),
         password=os.getenv("FUBON_PASSWORD", fubon_cfg.get("password", "")),
         cert_path=os.getenv("FUBON_CERT_PATH", fubon_cfg.get("cert_path", "")),
-        cert_password=os.getenv(
-            "FUBON_CERT_PASSWORD", fubon_cfg.get("cert_password", "")
-        ),
+        cert_password=os.getenv("FUBON_CERT_PASSWORD", fubon_cfg.get("cert_password", "")),
         simulation=_env_bool("FUBON_SIMULATION", str(fubon_cfg.get("simulation", True))),
-        realtime_mode=os.getenv(
-            "FUBON_REALTIME_MODE", fubon_cfg.get("realtime_mode", "Speed")
-        ),
+        realtime_mode=os.getenv("FUBON_REALTIME_MODE", fubon_cfg.get("realtime_mode", "Speed")),
         order_rate_limit=_env_int(
             "FUBON_ORDER_RATE_LIMIT",
             int(fubon_cfg.get("order_rate_limit", 10)),

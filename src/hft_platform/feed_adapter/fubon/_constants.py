@@ -68,6 +68,4 @@ def resolve_fubon_enum(module_name: str, enum_name: str, value: str) -> Any:
         enum_cls = getattr(mod, enum_name)
         return getattr(enum_cls, value)
     except (ImportError, AttributeError) as e:
-        raise RuntimeError(
-            f"Cannot resolve Fubon enum {module_name}.{enum_name}.{value}: {e}"
-        ) from e
+        raise RuntimeError(f"Cannot resolve Fubon enum {module_name}.{enum_name}.{value}: {e}") from e

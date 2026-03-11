@@ -8,7 +8,6 @@ from unittest import mock
 import pytest
 
 from hft_platform.feed_adapter.fubon._config import (
-    FubonClientConfig,
     load_fubon_config,
 )
 from hft_platform.feed_adapter.fubon._constants import (
@@ -131,16 +130,12 @@ class TestLoadFubonConfig:
             assert cfg.simulation is False, f"Expected False for FUBON_SIMULATION={val}"
 
     def test_int_parse_error_falls_back(self) -> None:
-        with mock.patch.dict(
-            os.environ, {"FUBON_ORDER_RATE_LIMIT": "not_a_number"}, clear=True
-        ):
+        with mock.patch.dict(os.environ, {"FUBON_ORDER_RATE_LIMIT": "not_a_number"}, clear=True):
             cfg = load_fubon_config()
         assert cfg.order_rate_limit == 10  # default
 
     def test_float_parse_error_falls_back(self) -> None:
-        with mock.patch.dict(
-            os.environ, {"FUBON_RECONNECT_BACKOFF_S": "bad"}, clear=True
-        ):
+        with mock.patch.dict(os.environ, {"FUBON_RECONNECT_BACKOFF_S": "bad"}, clear=True):
             cfg = load_fubon_config()
         assert cfg.reconnect_backoff_s == 2.0  # default
 
