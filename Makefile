@@ -1,7 +1,7 @@
 # HFT Platform Makefile
 # Unified CLI for development, testing, and CI
 
-.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html lint lint-fix format format-check typecheck check benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta help
+.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html lint lint-fix format format-check typecheck check benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-digital-twin research-gen-synth-lob research-stamp-data-meta research-validate-data-meta help
 
 PY ?= uv run python
 
@@ -502,6 +502,13 @@ research-check-paper-governance: ## Check Gate-E paper-trade governance readines
 		exit 2; \
 	fi
 	$(PY) -m research check-paper-governance --alpha-id "$(ALPHA)" $(ARGS)
+
+research-digital-twin: ## Generate digital twin PaperTradeSessions from backtest equity curve
+	@if [ -z "$(ALPHA)" ] || [ -z "$(DATA)" ]; then \
+		echo "Usage: make research-digital-twin ALPHA=<alpha_id> DATA=<path> [ARGS='--n-sessions 7 --latency-profile shioaji_sim_p95_v2026-03-04']"; \
+		exit 2; \
+	fi
+	$(PY) -m research digital-twin --alpha-id "$(ALPHA)" --data "$(DATA)" $(ARGS)
 
 research-gen-synth-lob: ## Generate synthetic LOB dataset + metadata sidecar
 	@if [ -z "$(OUT)" ]; then \

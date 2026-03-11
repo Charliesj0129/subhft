@@ -26,6 +26,9 @@ Paper-trade commands:
   summarize-paper --alpha-id <id>      Summarize paper-trade sessions
   check-paper-governance --alpha-id <id> [--strict]
 
+Digital twin commands:
+  digital-twin --alpha-id <id> --data <path> [--n-sessions 5] [--latency-profile <id>]
+
 Data governance commands:
   stamp-data-meta <data.npy>           Create metadata sidecar
   validate-data-meta <data.npy>        Validate metadata sidecar
@@ -46,6 +49,7 @@ _SCAFFOLD_CMD = "scaffold"
 _PAPER_CMDS = frozenset({"fetch-paper", "search-papers"})
 _PAPER_PROTO_CMD = "paper-to-prototype"
 _PAPER_TRADE_CMDS = frozenset({"record-paper", "summarize-paper", "check-paper-governance"})
+_DIGITAL_TWIN_CMD = "digital-twin"
 _DATA_GOV_CMDS = frozenset({"stamp-data-meta", "validate-data-meta"})
 _MAINT_CMDS = frozenset({"audit-note-citations", "backfill-note-citations", "triage-pyspy"})
 
@@ -59,6 +63,7 @@ Paper:    fetch-paper <arxiv_id> | search-papers <query>
 Paper-prototype: paper-to-prototype <paper_ref>
 Paper-trade: record-paper --alpha-id <id> | summarize-paper --alpha-id <id> |
              check-paper-governance --alpha-id <id>
+Digital-twin: digital-twin --alpha-id <id> --data <path>
 Data-governance: stamp-data-meta <data> | validate-data-meta <data>
 Maintenance: audit-note-citations | backfill-note-citations | triage-pyspy
 
@@ -104,6 +109,11 @@ def main() -> int:
         from research.tools.paper_trade import main as _paper_trade_main
 
         return int(_paper_trade_main())
+
+    if cmd == _DIGITAL_TWIN_CMD:
+        from research.tools.digital_twin import cmd_digital_twin
+
+        return int(cmd_digital_twin())
 
     if cmd in _DATA_GOV_CMDS:
         from research.tools.data_governance import main as _data_gov_main
