@@ -15,17 +15,7 @@ class FubonOrderCodec:
     __slots__ = ()
 
     def encode_side(self, side: str) -> Any:
-        """Map canonical side to Fubon BSAction enum.
-
-        Args:
-            side: "Buy" or "Sell".
-
-        Returns:
-            BSAction enum value.
-
-        Raises:
-            ValueError: If side is not recognized.
-        """
+        """Map canonical side to Fubon BSAction enum."""
         from fubon_neo.constant import BSAction
 
         mapping = {"Buy": BSAction.Buy, "Sell": BSAction.Sell}
@@ -34,17 +24,7 @@ class FubonOrderCodec:
         return mapping[side]
 
     def encode_tif(self, tif: str) -> Any:
-        """Map canonical TIF to Fubon TimeInForce enum.
-
-        Args:
-            tif: "ROD", "IOC", or "FOK".
-
-        Returns:
-            TimeInForce enum value.
-
-        Raises:
-            ValueError: If tif is not recognized.
-        """
+        """Map canonical TIF to Fubon TimeInForce enum."""
         from fubon_neo.constant import TimeInForce
 
         mapping = {
@@ -57,17 +37,7 @@ class FubonOrderCodec:
         return mapping[tif]
 
     def encode_price_type(self, price_type: str) -> Any:
-        """Map canonical price type to Fubon PriceType enum.
-
-        Args:
-            price_type: "LMT" or "MKT".
-
-        Returns:
-            PriceType enum value.
-
-        Raises:
-            ValueError: If price_type is not recognized.
-        """
+        """Map canonical price type to Fubon PriceType enum."""
         from fubon_neo.constant import PriceType
 
         mapping = {"LMT": PriceType.Limit, "MKT": PriceType.Market}
@@ -76,17 +46,7 @@ class FubonOrderCodec:
         return mapping[price_type]
 
     def encode_order_type(self, order_type: str) -> Any:
-        """Map canonical order type to Fubon OrderType enum.
-
-        Args:
-            order_type: "Stock", "DayTrade", or "Margin".
-
-        Returns:
-            OrderType enum value.
-
-        Raises:
-            ValueError: If order_type is not recognized.
-        """
+        """Map canonical order type to Fubon OrderType enum."""
         from fubon_neo.constant import OrderType
 
         mapping = {

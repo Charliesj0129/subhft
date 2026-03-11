@@ -1,0 +1,183 @@
+"""Fubon (富邦) session lifecycle: login, retry, refresh, logout.
+
+Mirrors the Shioaji SessionRuntime pattern but adapted for fubon_neo SDK.
+All fubon_neo imports are lazy to avoid hard dependency at import time.
+"""
+
+from __future__ import annotations
+
+import os
+import threading
+import time
+from typing import Any
+
+from structlog import get_logger
+
+from hft_platform.core import timebase
+
+logger = get_logger("feed_adapter.fubon.session_runtime")
+
+_ENV_PERSONAL_ID = "FUBON_PERSONAL_ID"
+_ENV_PASS_VAR = "FUBON_PASSWORD"
+_ENV_KEY_VAR = "FUBON_API_KEY"
+_ENV_CERT_PATH = "FUBON_CERT_PATH"
+_ENV_CERT_PASS_VAR = "FUBON_CERT_PASS"
+
+
+class FubonSessionRuntime:
+    """Manages Fubon broker session lifecycle."""
+
+    __slots__ = (
+        "_sdk",
+        "_logged_in",
+        "_personal_id",
+        "_password",
+        "_api_key",
+        "_cert_path",
+        "_cert_pass",
+        "_last_login_error",
+        "_session_refresh_running",
+        "_session_refresh_thread",
+        "_session_refresh_interval_s",
+        "_last_session_refresh_ns",
+    )
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        cfg = config or {}
+        self._sdk: Any = None
+        self._logged_in: bool = False
+        self._personal_id: str = str(cfg.get("personal_id") or os.getenv(_ENV_PERSONAL_ID, ""))
+        self._password: str = str(cfg.get("password") or os.getenv(_ENV_PASS_VAR, ""))
+        self._api_key: str = str(cfg.get("api_key") or os.getenv(_ENV_KEY_VAR, ""))
+        self._cert_path: str = str(cfg.get("cert_path") or os.getenv(_ENV_CERT_PATH, ""))
+        self._cert_pass: str = str(cfg.get("cert_pass") or os.getenv(_ENV_CERT_PASS_VAR, ""))
+        self._last_login_error: str | None = None
+        self._session_refresh_running: bool = False
+        self._session_refresh_thread: threading.Thread | None = None
+        self._session_refresh_interval_s: float = float(cfg.get("session_refresh_interval_s", 3600))
+        self._last_session_refresh_ns: int = 0
+
+    def _ensure_sdk(self) -> Any:
+        if self._sdk is None:
+            from fubon_neo.sdk import FubonSDK
+
+            self._sdk = FubonSDK()
+        return self._sdk
+
+    @property
+    def sdk(self) -> Any:
+        return self._ensure_sdk()
+
+    def login(self) -> bool:
+        if not self._personal_id:
+            raise ValueError(f"Missing required credential: {_ENV_PERSONAL_ID}")
+        if not self._api_key and not self._password:
+            raise ValueError(f"Missing credentials: set {_ENV_KEY_VAR} or {_ENV_PASS_VAR}")
+
+        sdk = self._ensure_sdk()
+        self._logged_in = False
+        self._last_login_error = None
+
+        try:
+            if self._api_key:
+                logger.info("Fubon login via API key", personal_id=self._personal_id[:4] + "***")
+                sdk.apikey_login(
+                    self._personal_id,
+                    self._api_key,
+                    self._cert_path or None,
+                    self._cert_pass or None,
+                )
+            else:
+                logger.info("Fubon login via password", personal_id=self._personal_id[:4] + "***")
+                sdk.login(
+                    self._personal_id,
+                    self._password,
+                    self._cert_path or None,
+                    self._cert_pass or None,
+                    account_list=[],
+                )
+            self._logged_in = True
+            self._last_session_refresh_ns = timebase.now_ns()
+            logger.info("Fubon login successful")
+            return True
+        except Exception as exc:
+            self._last_login_error = str(exc)
+            logger.error("Fubon login failed", error=self._last_login_error)
+            return False
+
+    def login_with_retry(self, max_retries: int = 3) -> bool:
+        attempts = max(1, max_retries)
+        for attempt in range(1, attempts + 1):
+            if self.login():
+                return True
+            if attempt < attempts:
+                backoff_s = float(2 ** (attempt - 1))
+                logger.warning(
+                    "Fubon login retry",
+                    attempt=attempt,
+                    backoff_s=backoff_s,
+                    error=self._last_login_error,
+                )
+                time.sleep(backoff_s)
+
+        logger.error(
+            "Fubon login retries exhausted",
+            attempts=attempts,
+            error=self._last_login_error,
+        )
+        return False
+
+    def logout(self) -> None:
+        if self._sdk is not None:
+            try:
+                self._sdk.logout()
+                logger.info("Fubon logout successful")
+            except Exception as exc:
+                logger.warning("Fubon logout error", error=str(exc))
+        self._logged_in = False
+
+    def start_session_refresh_thread(self) -> None:
+        if self._session_refresh_running:
+            return
+        if self._session_refresh_interval_s <= 0:
+            return
+
+        self._session_refresh_running = True
+        logger.info(
+            "Starting Fubon session refresh thread",
+            interval_s=self._session_refresh_interval_s,
+        )
+
+        def _refresh_loop() -> None:
+            while self._session_refresh_running and self._logged_in:
+                time.sleep(self._session_refresh_interval_s)
+                if not self._session_refresh_running:
+                    break
+                logger.info("Fubon session refresh: re-authenticating")
+                try:
+                    self.logout()
+                    if self.login():
+                        logger.info("Fubon session refresh completed")
+                    else:
+                        logger.error("Fubon session refresh login failed")
+                except Exception as exc:
+                    logger.error("Fubon session refresh error", error=str(exc))
+            self._session_refresh_running = False
+
+        self._session_refresh_thread = threading.Thread(
+            target=_refresh_loop,
+            name="fubon-session-refresh",
+            daemon=True,
+        )
+        self._session_refresh_thread.start()
+
+    def stop_session_refresh_thread(self) -> None:
+        self._session_refresh_running = False
+
+    @property
+    def logged_in(self) -> bool:
+        return self._logged_in
+
+    @property
+    def last_login_error(self) -> str | None:
+        return self._last_login_error

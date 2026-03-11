@@ -22,11 +22,7 @@ class FubonAccountGateway:
         self.log = logger
 
     def get_inventories(self) -> list[Any]:
-        """Get stock inventories.
-
-        Returns:
-            List of inventory items from the SDK.
-        """
+        """Get stock inventories."""
         try:
             result = self._sdk.stock.inventories()
             self.log.info("fubon_get_inventories", count=len(result))
@@ -36,11 +32,7 @@ class FubonAccountGateway:
             raise
 
     def get_accounting(self) -> Any:
-        """Get account balance info.
-
-        Returns:
-            Account balance data from the SDK.
-        """
+        """Get account balance info."""
         try:
             result = self._sdk.accounting()
             self.log.info("fubon_get_accounting")
@@ -50,11 +42,7 @@ class FubonAccountGateway:
             raise
 
     def get_margin(self) -> Any:
-        """Get margin info for futures/options.
-
-        Returns:
-            Margin data from the SDK.
-        """
+        """Get margin info for futures/options."""
         try:
             result = self._sdk.futopt_accounting()
             self.log.info("fubon_get_margin")
@@ -64,11 +52,7 @@ class FubonAccountGateway:
             raise
 
     def get_settlements(self) -> list[Any]:
-        """Get settlement information.
-
-        Returns:
-            List of settlement records.
-        """
+        """Get settlement information."""
         try:
             result = self._sdk.settlements()
             self.log.info("fubon_get_settlements", count=len(result))

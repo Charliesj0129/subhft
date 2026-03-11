@@ -1,4 +1,4 @@
-"""Fubon TradeAPI adapter submodules."""
+"""Fubon TradeAPI adapter package."""
 
 from __future__ import annotations
 

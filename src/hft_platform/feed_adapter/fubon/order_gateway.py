@@ -74,7 +74,6 @@ class FubonOrderGateway:
         time_in_force = self._codec.encode_tif(tif)
         pt = self._codec.encode_price_type(price_type)
         ot = self._codec.encode_order_type(order_type)
-
         start_ns = time.perf_counter_ns()
         try:
             result = sdk.stock.place_order(
