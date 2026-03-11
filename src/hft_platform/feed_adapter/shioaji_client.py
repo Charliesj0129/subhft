@@ -187,6 +187,7 @@ class ShioajiClient:
             self._login_retry_max = max(0, int(os.getenv("HFT_SHIOAJI_LOGIN_RETRY_MAX", "1")))
         except ValueError:
             self._login_retry_max = 1
+        self._receive_window: int | None = int(os.environ.get("HFT_SHIOAJI_RECEIVE_WINDOW", "0")) or None
         self._last_login_error: str | None = None
         self._last_reconnect_error: str | None = None
         self.metrics = MetricsRegistry.get()

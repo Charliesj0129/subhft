@@ -78,7 +78,9 @@ class TestShioajiClientFull(unittest.TestCase):
             _, kwargs = self.mock_api_instance.login.call_args
             self.assertEqual(kwargs["api_key"], "TESTKEY")
             self.assertEqual(kwargs["secret_key"], "TESTSECRET")
-            self.assertIsNone(kwargs.get("contracts_cb"))
+            # Default contracts_cb is now provided by SessionRuntime
+            from hft_platform.feed_adapter.shioaji.session_runtime import SessionRuntime
+            self.assertIs(kwargs.get("contracts_cb"), SessionRuntime._default_contracts_cb)
             self.assertTrue(self.client.logged_in)
 
     def test_login_fallback_failure_does_not_raise(self):

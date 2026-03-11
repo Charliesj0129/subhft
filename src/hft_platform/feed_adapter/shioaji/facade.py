@@ -113,6 +113,9 @@ class ShioajiClientFacade:
     def list_profit_loss(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> Any:
         return self.account_gateway.list_profit_loss(account=account, begin_date=begin_date, end_date=end_date)
 
+    def list_accounts(self) -> list[Any]:
+        return self.session_runtime.list_accounts()
+
     def validate_symbols(self) -> list[str]:
         return self.contracts_runtime.validate_symbols()
 

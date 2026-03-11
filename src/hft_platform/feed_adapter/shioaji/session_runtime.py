@@ -97,6 +97,11 @@ class SessionRuntime:
         """Public entrypoint — calls login_with_retry."""
         return self.login_with_retry(*args, **kwargs)
 
+    @staticmethod
+    def _default_contracts_cb(security_type: Any) -> None:
+        """Default callback logged when contract fetch completes."""
+        logger.info("contract_fetch_complete", security_type=str(security_type))
+
     def login_with_retry(
         self,
         api_key: str | None = None,
@@ -115,6 +120,8 @@ class SessionRuntime:
         c.ca_active = False
         c.logged_in = False
         c._last_login_error = None
+
+        effective_contracts_cb = contracts_cb or self._default_contracts_cb
 
         key = api_key or os.getenv("SHIOAJI_API_KEY")
         secret = secret_key or os.getenv("SHIOAJI_SECRET_KEY")
@@ -135,15 +142,20 @@ class SessionRuntime:
             }
             attempts_total = max(1, c._login_retry_max + 1)
 
+            receive_window = c._receive_window
+
             def _do_login(fetch_contract: bool) -> None:
-                c.api.login(
-                    api_key=key,
-                    secret_key=secret,
-                    contracts_timeout=c.contracts_timeout,
-                    contracts_cb=contracts_cb,
-                    fetch_contract=fetch_contract,
-                    subscribe_trade=c.subscribe_trade,
-                )
+                login_kwargs: dict[str, Any] = {
+                    "api_key": key,
+                    "secret_key": secret,
+                    "contracts_timeout": c.contracts_timeout,
+                    "contracts_cb": effective_contracts_cb,
+                    "fetch_contract": fetch_contract,
+                    "subscribe_trade": c.subscribe_trade,
+                }
+                if receive_window is not None:
+                    login_kwargs["receive_window"] = receive_window
+                c.api.login(**login_kwargs)
 
             for attempt in range(1, attempts_total + 1):
                 login_fetch_contract = c.fetch_contract
@@ -236,6 +248,24 @@ class SessionRuntime:
 
         logger.warning("No API key/secret found (Args/Env). Running in simulation/anonymous mode.")
         return False
+
+    # ------------------------------------------------------------------ #
+    # Account queries
+    # ------------------------------------------------------------------ #
+
+    def list_accounts(self) -> list[Any]:
+        """Return broker accounts, or [] if not logged in or on error."""
+        if not self._client.api or not self._client.logged_in:
+            return []
+        start_ns = time.perf_counter_ns()
+        try:
+            result = self._client.api.list_accounts()
+            self._client._record_api_latency("list_accounts", start_ns, ok=True)
+            return result if result else []
+        except Exception as exc:
+            self._client._record_api_latency("list_accounts", start_ns, ok=False)
+            logger.warning("list_accounts_failed", error=str(exc))
+            return []
 
     # ------------------------------------------------------------------ #
     # Session refresh (Phase-2: owned here, not in ShioajiClient)
