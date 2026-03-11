@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_sdk() -> MagicMock:
     """Return a mock Fubon SDK with the expected WebSocket API surface."""
     sdk = MagicMock()
@@ -111,14 +112,16 @@ class TestBookCallback:
 
         def capture(d: dict) -> None:
             # Deep-copy lists so mutations don't affect our snapshot
-            received.append({
-                "code": d["code"],
-                "bid_price": list(d["bid_price"]),
-                "bid_volume": list(d["bid_volume"]),
-                "ask_price": list(d["ask_price"]),
-                "ask_volume": list(d["ask_volume"]),
-                "ts": d["ts"],
-            })
+            received.append(
+                {
+                    "code": d["code"],
+                    "bid_price": list(d["bid_price"]),
+                    "bid_volume": list(d["bid_volume"]),
+                    "ask_price": list(d["ask_price"]),
+                    "ask_volume": list(d["ask_volume"]),
+                    "ts": d["ts"],
+                }
+            )
 
         rt.register_quote_callbacks(on_tick=MagicMock(), on_bidask=capture)
 
@@ -147,12 +150,14 @@ class TestBookCallback:
         received: list[dict[str, Any]] = []
 
         def capture(d: dict) -> None:
-            received.append({
-                "bid_price": list(d["bid_price"]),
-                "bid_volume": list(d["bid_volume"]),
-                "ask_price": list(d["ask_price"]),
-                "ask_volume": list(d["ask_volume"]),
-            })
+            received.append(
+                {
+                    "bid_price": list(d["bid_price"]),
+                    "bid_volume": list(d["bid_volume"]),
+                    "ask_price": list(d["ask_price"]),
+                    "ask_volume": list(d["ask_volume"]),
+                }
+            )
 
         rt.register_quote_callbacks(on_tick=MagicMock(), on_bidask=capture)
 
@@ -175,7 +180,9 @@ class TestBookCallback:
 
     def test_book_no_callback_noop(self) -> None:
         rt = _make_runtime()
-        rt._on_fubon_book({"symbol": "2330", "bid_prices": [], "bid_sizes": [], "ask_prices": [], "ask_sizes": [], "datetime": 0})
+        rt._on_fubon_book(
+            {"symbol": "2330", "bid_prices": [], "bid_sizes": [], "ask_prices": [], "ask_sizes": [], "datetime": 0}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -354,14 +361,16 @@ class TestPriceScaling:
 
         rt.register_quote_callbacks(on_tick=MagicMock(), on_bidask=capture)
 
-        rt._on_fubon_book({
-            "symbol": "2330",
-            "bid_prices": [100.5, 100.4, 100.3, 100.2, 100.1],
-            "bid_sizes": [1, 1, 1, 1, 1],
-            "ask_prices": [100.6, 100.7, 100.8, 100.9, 101.0],
-            "ask_sizes": [1, 1, 1, 1, 1],
-            "datetime": 0,
-        })
+        rt._on_fubon_book(
+            {
+                "symbol": "2330",
+                "bid_prices": [100.5, 100.4, 100.3, 100.2, 100.1],
+                "bid_sizes": [1, 1, 1, 1, 1],
+                "ask_prices": [100.6, 100.7, 100.8, 100.9, 101.0],
+                "ask_sizes": [1, 1, 1, 1, 1],
+                "datetime": 0,
+            }
+        )
 
         assert received[0]["bid_price"][0] == 1_005_000  # 100.5 * 10000
         assert received[0]["ask_price"][4] == 1_010_000  # 101.0 * 10000
