@@ -18,8 +18,8 @@ from hft_platform.execution.router import ExecutionRouter
 from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feature.profile import load_feature_profile_registry
 from hft_platform.feature.rollout import load_feature_rollout_controller
-from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.broker_registry import get_broker_factory
+from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
@@ -426,13 +426,20 @@ class SystemBootstrapper:
             order_mode = os.getenv("HFT_ORDER_MODE", "").strip().lower()
             order_sim_flag = os.getenv("HFT_ORDER_SIMULATION")
             order_no_ca = os.getenv("HFT_ORDER_NO_CA", "0").lower() in {
-                "1", "true", "yes", "on",
+                "1",
+                "true",
+                "yes",
+                "on",
             }
             if order_mode:
                 order_cfg["simulation"] = order_mode in {"sim", "simulation", "paper"}
             elif order_sim_flag is not None:
                 order_cfg["simulation"] = order_sim_flag.lower() in {
-                    "1", "true", "yes", "on", "sim",
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                    "sim",
                 }
             if order_no_ca or order_cfg.get("simulation") is True:
                 order_cfg["activate_ca"] = False

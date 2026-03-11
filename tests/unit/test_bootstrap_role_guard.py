@@ -12,9 +12,7 @@ def test_build_broker_clients_engine_uses_facade_fallback(tmp_path):
     cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n", encoding="utf-8")
     bootstrapper = SystemBootstrapper({})
 
-    with patch(
-        "hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade"
-    ) as facade_cls:
+    with patch("hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade") as facade_cls:
         md_client, order_client = bootstrapper._build_broker_clients("engine", str(cfg), {})
 
     assert facade_cls.call_count == 2
@@ -52,6 +50,7 @@ def test_build_broker_clients_engine_uses_registered_factory(tmp_path):
 def test_get_broker_factory_unknown_broker_raises():
     """get_broker_factory raises ValueError for unregistered broker names."""
     import pytest
+
     from hft_platform.feed_adapter.broker_registry import get_broker_factory
 
     with pytest.raises(ValueError, match="Unknown broker"):

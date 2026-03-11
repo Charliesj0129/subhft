@@ -1,4 +1,5 @@
 """Broker-agnostic factory registry for multi-broker support."""
+
 from __future__ import annotations
 
 import os
@@ -18,9 +19,7 @@ class BrokerFactory(Protocol):
     a pair of clients: (market_data_client, order_client).
     """
 
-    def create_clients(
-        self, symbols_path: str, broker_config: dict[str, Any]
-    ) -> tuple[Any, Any]: ...
+    def create_clients(self, symbols_path: str, broker_config: dict[str, Any]) -> tuple[Any, Any]: ...
 
 
 _BROKER_REGISTRY: dict[str, BrokerFactory] = {}
@@ -45,9 +44,7 @@ def get_broker_factory(name: str | None = None) -> BrokerFactory:
     factory = _BROKER_REGISTRY.get(key)
     if factory is None:
         registered = sorted(_BROKER_REGISTRY)
-        raise ValueError(
-            f"Unknown broker {key!r}. Registered brokers: {registered}"
-        )
+        raise ValueError(f"Unknown broker {key!r}. Registered brokers: {registered}")
     return factory
 
 
