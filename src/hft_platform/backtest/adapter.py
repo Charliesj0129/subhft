@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import numpy as np
 from structlog import get_logger
 
@@ -319,7 +321,7 @@ class HftBacktestAdapter:
             target_order_id=target_order_id,
         )
 
-    def _scale_price(self, symbol: str, price: float) -> int:
+    def _scale_price(self, symbol: str, price: int | float | Decimal) -> int:
         return self.price_codec.scale(symbol, price)
 
     def _sync_positions(self):
