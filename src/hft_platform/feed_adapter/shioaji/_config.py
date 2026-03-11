@@ -211,9 +211,7 @@ def load_shioaji_config(
     session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}.lock")
 
     # --- Contract refresh status ---
-    contract_refresh_status_path = os.getenv(
-        "HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json"
-    )
+    contract_refresh_status_path = os.getenv("HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json")
     contract_refresh_resubscribe_policy = (
         os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "none").strip().lower() or "none"
     )
