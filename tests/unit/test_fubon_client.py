@@ -81,20 +81,18 @@ class TestFubonClientMethodsRaise:
 
 class TestFubonSessionRuntime:
     def test_fubon_session_runtime_init(self) -> None:
-        runtime = FubonSessionRuntime(client=None)
-        assert runtime._client is None
+        runtime = FubonSessionRuntime(sdk=None)
+        assert runtime._sdk is None
+        assert runtime.is_logged_in is False
 
     def test_fubon_session_runtime_has_slots(self) -> None:
         assert hasattr(FubonSessionRuntime, "__slots__")
 
-    def test_fubon_session_methods_raise(self) -> None:
-        runtime = FubonSessionRuntime(client=None)
-        with pytest.raises(NotImplementedError):
-            runtime.login()
-        with pytest.raises(NotImplementedError):
-            runtime.refresh_token()
-        with pytest.raises(NotImplementedError):
-            runtime.logout()
+    def test_fubon_session_runtime_snapshot(self) -> None:
+        runtime = FubonSessionRuntime(sdk=None)
+        snap = runtime.snapshot()
+        assert snap["logged_in"] is False
+        assert snap["account"] is None
 
 
 class TestFubonQuoteRuntime:
