@@ -1,7 +1,7 @@
-/// MdEventFrame — cache-line-friendly 128-byte market data event struct.
-///
-/// All price fields are i64 scaled x10000 per the Precision Law.
-/// Layout is `#[repr(C)]` for deterministic memory ordering.
+//! MdEventFrame — cache-line-friendly 128-byte market data event struct.
+//!
+//! All price fields are i64 scaled x10000 per the Precision Law.
+//! Layout is `#[repr(C)]` for deterministic memory ordering.
 
 /// Event type discriminator constants.
 #[allow(dead_code)]
@@ -28,6 +28,8 @@ pub struct MdEventFrame {
     pub aux0: i64,
     pub aux1: i64,
     pub ratio0: f64,
+    /// Padding to 128 bytes (2 cache lines) for contiguous buffer layout.
+    pub _pad: [u8; 40],
 }
 
 // Compile-time size assertion.
@@ -50,17 +52,31 @@ impl Default for MdEventFrame {
             aux0: 0,
             aux1: 0,
             ratio0: 0.0,
+            _pad: [0u8; 40],
         }
     }
 }
 
 impl MdEventFrame {
     /// Return all fields as a tuple (useful for Python boundary).
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, dead_code)]
     pub fn as_tuple(
         &self,
     ) -> (
-        u8, u8, u16, u32, u64, u64, u64, i64, i64, i64, i64, i64, i64, f64,
+        u8,
+        u8,
+        u16,
+        u32,
+        u64,
+        u64,
+        u64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        f64,
     ) {
         (
             self.kind,
@@ -115,6 +131,7 @@ mod tests {
             aux0: 30,
             aux1: 40,
             ratio0: 0.5,
+            _pad: [0u8; 40],
         };
         let t = f.as_tuple();
         assert_eq!(t.0, 1);

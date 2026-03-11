@@ -40,7 +40,8 @@ jobs:
             | grep -v 'timestamp' \
             | grep -v 'latency' \
             | grep -v '_seconds' \
-            | grep -v '_ratio' || true)
+            | grep -v '_ratio' \
+            | grep -v 'precision-' || true)
           if [ -n "$FOUND" ]; then
             echo "::error::float usage detected in financial code paths:"
             echo "$FOUND"

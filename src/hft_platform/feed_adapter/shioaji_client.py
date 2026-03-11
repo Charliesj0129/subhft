@@ -23,6 +23,7 @@ try:
 except Exception:  # pragma: no cover - fallback when library absent
     sj = None
 
+_fcntl: ModuleType | None
 try:
     import fcntl as _fcntl
 except Exception:  # pragma: no cover - non-posix fallback

@@ -1,0 +1,24 @@
+broker:
+  name: shioaji
+  display_name: "永豐金證券 (Sinopac)"
+  auth:
+    method: cert
+    env_api_key: SHIOAJI_API_KEY
+    env_secret_key: SHIOAJI_SECRET_KEY
+    requires_ca_cert: true
+  transport:
+    protocol: proprietary
+    sdk_package: shioaji
+  rate_limits:
+    soft_cap: 180
+    hard_cap: 250
+    window_seconds: 10
+  capabilities:
+    batch_orders: false
+    smart_orders: false
+    l2_depth: true
+    max_custom_field_len: 6
+  latency_profile:
+    place_order_p95_ms: 35.2
+    update_order_p95_ms: 42.4
+    cancel_order_p95_ms: 46.1
