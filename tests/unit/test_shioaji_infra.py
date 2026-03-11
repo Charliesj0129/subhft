@@ -21,7 +21,6 @@ from hft_platform.feed_adapter.shioaji._infra import (
     update_quote_pending_metrics,
 )
 
-
 # ---------------------------------------------------------------------------
 # sanitize_metric_label
 # ---------------------------------------------------------------------------
@@ -167,9 +166,7 @@ class TestSafeCallWithTimeout:
         assert timed_out is False
 
     def test_no_timeout_exception(self) -> None:
-        ok, result, err, timed_out = safe_call_with_timeout(
-            "op", lambda: 1 / 0, 0
-        )
+        ok, result, err, timed_out = safe_call_with_timeout("op", lambda: 1 / 0, 0)
         assert ok is False
         assert isinstance(err, ZeroDivisionError)
         assert timed_out is False
@@ -184,9 +181,7 @@ class TestSafeCallWithTimeout:
     def test_with_timeout_times_out(self) -> None:
         import time as _time
 
-        ok, result, err, timed_out = safe_call_with_timeout(
-            "op", lambda: _time.sleep(10), 0.1
-        )
+        ok, result, err, timed_out = safe_call_with_timeout("op", lambda: _time.sleep(10), 0.1)
         assert ok is False
         assert isinstance(err, TimeoutError)
         assert timed_out is True
@@ -245,9 +240,7 @@ class TestUpdateQuotePendingMetrics:
             shioaji_quote_pending_stall_total=stall_counter,
         )
         # pending_ts far in the past -> large age -> stall
-        result = update_quote_pending_metrics(
-            metrics, True, 0.001, 0.001, False, "test_reason"
-        )
+        result = update_quote_pending_metrics(metrics, True, 0.001, 0.001, False, "test_reason")
         assert result is True
         stall_counter.labels.assert_called_once()
 
