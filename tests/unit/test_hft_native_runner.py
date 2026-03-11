@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from research.backtest.hft_native_runner import (
+    _effective_broker_rtt_ms,
     _forward_returns,
     _resolve_hftbt_path,
     _signals_to_positions,
@@ -438,3 +439,61 @@ class TestEnsureHftbtNpz:
         # Timestamps should be monotonically non-decreasing
         ts_field = "local_ts" if "local_ts" in events.dtype.names else "exch_ts"
         assert np.all(np.diff(events[ts_field]) >= 0)
+
+
+# ---------------------------------------------------------------------------
+# Broker RTT injection — effective_broker_rtt_ms
+# ---------------------------------------------------------------------------
+class TestBrokerRTTInjection:
+    def test_effective_rtt_uses_worst_case_cancel(self):
+        """When cancel_ack_latency_ms > submit_ack_latency_ms, effective latency uses cancel value."""
+        config = BacktestConfig(
+            data_paths=[],
+            submit_ack_latency_ms=36.0,
+            modify_ack_latency_ms=43.0,
+            cancel_ack_latency_ms=47.0,
+        )
+        assert _effective_broker_rtt_ms(config) == 47.0
+
+    def test_effective_rtt_when_submit_is_largest(self):
+        """When submit_ack_latency_ms is largest, effective uses submit value."""
+        config = BacktestConfig(
+            data_paths=[],
+            submit_ack_latency_ms=50.0,
+            modify_ack_latency_ms=43.0,
+            cancel_ack_latency_ms=47.0,
+        )
+        assert _effective_broker_rtt_ms(config) == 50.0
+
+    def test_effective_rtt_when_modify_is_largest(self):
+        """When modify_ack_latency_ms is largest, effective uses modify value."""
+        config = BacktestConfig(
+            data_paths=[],
+            submit_ack_latency_ms=36.0,
+            modify_ack_latency_ms=55.0,
+            cancel_ack_latency_ms=47.0,
+        )
+        assert _effective_broker_rtt_ms(config) == 55.0
+
+    def test_latency_profile_includes_effective_broker_rtt_ms(self, tmp_path):
+        """HftNativeRunner.run() includes effective_broker_rtt_ms in latency_profile."""
+        from research.backtest.hft_native_runner import HftNativeRunner
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        config = BacktestConfig(
+            data_paths=[str(tmp_path / "research.npy")],
+            submit_ack_latency_ms=36.0,
+            modify_ack_latency_ms=43.0,
+            cancel_ack_latency_ms=47.0,
+        )
+        runner = HftNativeRunner(alpha, config)
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+        ):
+            result = runner.run()
+
+        assert "effective_broker_rtt_ms" in result.latency_profile
+        assert result.latency_profile["effective_broker_rtt_ms"] == 47.0

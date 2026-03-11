@@ -1,7 +1,5 @@
-"""Fubon (富邦) broker adapter submodules.
+"""Fubon TradeAPI adapter submodules."""
 
-Import concrete classes from their dedicated modules, e.g.:
-`from hft_platform.feed_adapter.fubon.quote_runtime import FubonQuoteRuntime`.
-"""
+from __future__ import annotations
 
 __all__: list[str] = []

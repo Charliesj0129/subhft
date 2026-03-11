@@ -19,6 +19,30 @@ from structlog import get_logger
 
 logger = get_logger("gateway.dedup")
 
+# Lazy import for Rust dedup store
+_RustDedupStore = None
+_rust_dedup_loaded = False
+
+
+def _load_rust_dedup():
+    global _RustDedupStore, _rust_dedup_loaded
+    if _rust_dedup_loaded:
+        return _RustDedupStore
+    _rust_dedup_loaded = True
+    try:
+        from hft_platform.rust_core import RustDedupStore
+
+        _RustDedupStore = RustDedupStore
+    except ImportError:
+        try:
+            from rust_core import RustDedupStore
+
+            _RustDedupStore = RustDedupStore
+        except ImportError:
+            pass
+    return _RustDedupStore
+
+
 try:
     import orjson
 
@@ -76,6 +100,22 @@ class IdempotencyStore:
             else os.getenv("HFT_DEDUP_PERSIST_PATH", ".state/dedup_window.jsonl")
         )
         self._records: OrderedDict[str, IdempotencyRecord] = OrderedDict()
+        # Rust fast-path (HFT_DEDUP_RUST=1)
+        self._rust_store = self._init_rust_store()
+
+    def _init_rust_store(self):
+        if os.getenv("HFT_DEDUP_RUST", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+            return None
+        cls = _load_rust_dedup()
+        if cls is None:
+            return None
+        try:
+            rs = cls(self._window_size)
+            logger.info("RustDedupStore enabled", window_size=self._window_size)
+            return rs
+        except Exception as exc:
+            logger.warning("RustDedupStore init failed", error=str(exc))
+            return None
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -106,7 +146,18 @@ class IdempotencyStore:
         return None
 
     def check_or_reserve_typed(self, key: str) -> Optional[IdempotencyRecord]:
-        """Typed fast-path alias (string key already extracted upstream)."""
+        """Typed fast-path alias — delegates to Rust when available."""
+        rs = self._rust_store
+        if rs is not None:
+            is_hit, approved, reason, cmd_id = rs.check_or_reserve(key)
+            if is_hit:
+                return IdempotencyRecord(
+                    key=key,
+                    approved=True if approved == 1 else (False if approved == 0 else None),
+                    reason_code=reason,
+                    cmd_id=cmd_id,
+                )
+            return None  # miss — reserved in Rust
         return self.check_or_reserve(key)
 
     def commit(
@@ -135,7 +186,11 @@ class IdempotencyStore:
         reason_code: str,
         cmd_id: int,
     ) -> None:
-        """Typed fast-path alias for consistency with gateway typed path."""
+        """Typed fast-path alias — delegates to Rust when available."""
+        rs = self._rust_store
+        if rs is not None:
+            rs.commit(key, approved, reason_code, cmd_id)
+            return
         self.commit(key, approved, reason_code, cmd_id)
 
     def persist(self) -> None:

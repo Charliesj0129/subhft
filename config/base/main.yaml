@@ -1,3 +1,5 @@
+broker: shioaji  # shioaji | fubon — selects BrokerFacade implementation
+
 mode: sim
 symbols:
   - "2330"
