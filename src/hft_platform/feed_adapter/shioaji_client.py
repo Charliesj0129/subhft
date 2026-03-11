@@ -332,12 +332,14 @@ class ShioajiClient:
         from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
         from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
         from hft_platform.feed_adapter.shioaji.session_runtime import SessionRuntime
+        from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
 
         self._contracts_runtime = ContractsRuntime(self)
         self._account_gateway = AccountGateway(self)
         self._order_gateway = OrderGateway(self)
         self._session_runtime = SessionRuntime(self)
         self._quote_runtime = QuoteRuntime(self)
+        self._subscription_manager = SubscriptionManager(self)
         # Wire decoupled interfaces (SessionPolicy + QuoteEventHandler).
         self._session_policy = self._session_runtime
         self._quote_event_handler = self._quote_runtime._event_handler
@@ -380,6 +382,13 @@ class ShioajiClient:
         if getattr(self, "_quote_event_handler", None) is None:
             self._quote_event_handler = self._quote_runtime._event_handler
 
+    def _init_subscription_manager(self) -> None:
+        """Lazily create subscription manager for __new__-constructed tests."""
+        if getattr(self, "_subscription_manager", None) is None:
+            from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
+
+            self._subscription_manager = SubscriptionManager(self)
+
     def _contracts(self):
         self._init_domain_modules()
         return self._contracts_runtime
@@ -395,6 +404,10 @@ class ShioajiClient:
     def _quotes(self):
         self._init_quote_runtime()
         return self._quote_runtime
+
+    def _subscriptions(self):
+        self._init_subscription_manager()
+        return self._subscription_manager
 
     def _request_reconnect_via_policy(self, reason: str, force: bool = True) -> bool:
         """Route a reconnect intent through the SessionPolicy interface.
@@ -829,32 +842,8 @@ class ShioajiClient:
         )
 
     def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]):
-        """
-        Register low-latency callbacks.
-        Note: These run on Shioaji threads.
-        """
-        if not self.api:
-            logger.warning("Shioaji SDK missing; execution callbacks not registered (sim mode).")
-            return
-        order_state = getattr(sj.constant, "OrderState", None) if sj else None
-        deal_states = set()
-        if order_state:
-            for name in ("StockDeal", "FuturesDeal"):
-                state = getattr(order_state, name, None)
-                if state is not None:
-                    deal_states.add(state)
-
-        def _order_cb(stat, msg):
-            try:
-                if stat in deal_states:
-                    on_deal(msg)
-                else:
-                    on_order(stat, msg)
-            except Exception as exc:
-                logger.error("Execution callback failed", error=str(exc))
-
-        self._order_callback = _order_cb
-        self.api.set_order_callback(self._order_callback)
+        """Delegates to SubscriptionManager.set_execution_callbacks()."""
+        self._subscriptions().set_execution_callbacks(on_order=on_order, on_deal=on_deal)
 
     def _ensure_contracts(self) -> None:
         if not self.api or not hasattr(self.api, "fetch_contracts"):
@@ -892,79 +881,8 @@ class ShioajiClient:
         return quote
 
     def subscribe_basket(self, cb: Callable[..., Any]):
-        if not self.api:
-            # If API is missing entirely (no library), skip
-            logger.info("Shioaji lib missing: skipping real subscription")
-            return
-
-        # In Sim mode with valid login, we CAN subscribe.
-        if not self.logged_in:
-            logger.warning("Not logged in; skipping subscription.")
-            return
-
-        # Store callback permanently for binding (fix GC issues)
-        self.tick_callback = cb
-        self._start_quote_dispatch_worker()
-        self._ensure_callbacks(cb)
-        if not (self._callbacks_registered and self._event_callback_registered):
-            logger.warning(
-                "Quote callbacks not ready; deferring quote subscription",
-                callbacks_registered=self._callbacks_registered,
-                event_callback_registered=self._event_callback_registered,
-            )
-            self._failed_sub_symbols = [sym for sym in self.symbols if isinstance(sym, dict)]
-            if self._failed_sub_symbols:
-                self._start_sub_retry_thread(cb)
-            self._start_quote_watchdog()
-            self._start_session_refresh_thread()
-            return
-
-        quote_api = self._quote_api()
-        if quote_api is None or not hasattr(quote_api, "subscribe"):
-            logger.warning("Quote API unavailable; deferring quote subscription")
-            self._failed_sub_symbols = [sym for sym in self.symbols if isinstance(sym, dict)]
-            if self._failed_sub_symbols:
-                self._start_sub_retry_thread(cb)
-            self._start_quote_watchdog()
-            self._start_session_refresh_thread()
-            return
-
-        self._start_contract_refresh_thread()
-        if self._last_quote_data_ts <= 0:
-            self._last_quote_data_ts = timebase.now_s()
-
-        if os.getenv("HFT_CONTRACT_PREFLIGHT", "1") == "1":
-            self._preflight_contracts()
-
-        logger.info(
-            "Subscribing quote basket",
-            count=len(self.symbols),
-            mode=self.mode,
-            quote_version=self._quote_version,
-            quote_version_mode=self._quote_version_mode,
-        )
-        for sym in self.symbols:
-            if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
-                logger.error("Subscription limit reached", limit=self.MAX_SUBSCRIPTIONS)
-                break
-            if self._subscribe_symbol(sym, cb):
-                code = sym.get("code")
-                if code:
-                    self.subscribed_codes.add(code)
-                self.subscribed_count = len(self.subscribed_codes)
-            else:
-                self._failed_sub_symbols.append(sym)
-        self._refresh_quote_routes()
-        logger.info("Quote subscription completed", subscribed=self.subscribed_count)
-        if self._failed_sub_symbols:
-            logger.warning(
-                "Failed subscriptions queued for retry",
-                count=len(self._failed_sub_symbols),
-                codes=[s.get("code") for s in self._failed_sub_symbols[:10]],
-            )
-            self._start_sub_retry_thread(cb)
-        self._start_quote_watchdog()
-        self._start_session_refresh_thread()
+        """Delegates to SubscriptionManager.subscribe_basket()."""
+        self._subscriptions().subscribe_basket(cb)
 
     def _ensure_callbacks(self, cb: Callable[..., Any]) -> None:
         if not self.api:
@@ -1248,118 +1166,20 @@ class ShioajiClient:
             self._reconnect_lock.release()
 
     def _resubscribe_all(self) -> None:
-        if not self.api or not self.logged_in or not self.tick_callback:
-            return
-        self._ensure_callbacks(self.tick_callback)
-        if not (self._callbacks_registered and self._event_callback_registered):
-            return
-        quote_api = self._quote_api()
-        if quote_api is None or not hasattr(quote_api, "subscribe"):
-            return
-        now = timebase.now_s()
-        last = getattr(self, "_last_resubscribe_ts", 0.0)
-        cooldown = getattr(self, "resubscribe_cooldown", 1.5)
-        if now - last < cooldown:
-            return
-        self._last_resubscribe_ts = now
-        self.subscribed_codes = set()
-        self.subscribed_count = 0
-        for sym in self.symbols:
-            if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
-                logger.error("Subscription limit reached during resubscribe", limit=self.MAX_SUBSCRIPTIONS)
-                break
-            if self._subscribe_symbol(sym, self.tick_callback):
-                code = sym.get("code")
-                if code:
-                    self.subscribed_codes.add(code)
-                self.subscribed_count = len(self.subscribed_codes)
-        self._refresh_quote_routes()
+        """Delegates to SubscriptionManager._resubscribe_all()."""
+        self._subscriptions()._resubscribe_all()
 
     def resubscribe(self) -> bool:
-        if not self.api or not self.logged_in or not self.tick_callback:
-            self.metrics.feed_resubscribe_total.labels(result="skip").inc()
-            return False
-        try:
-            self._resubscribe_all()
-            self.metrics.feed_resubscribe_total.labels(result="ok").inc()
-            return True
-        except Exception as exc:
-            logger.error("Resubscribe failed", error=str(exc))
-            self.metrics.feed_resubscribe_total.labels(result="error").inc()
-            return False
+        """Delegates to SubscriptionManager.resubscribe()."""
+        return self._subscriptions().resubscribe()
 
     def _subscribe_symbol(self, sym: Dict[str, Any], cb: Callable[..., Any]) -> bool:
-        code = sym.get("code")
-        exchange = sym.get("exchange")
-        product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
-        if not code or not exchange:
-            logger.error("Invalid symbol entry", symbol=sym)
-            return False
-
-        contract = self._get_contract(
-            exchange,
-            code,
-            product_type=product_type,
-            allow_synthetic=self.allow_synthetic_contracts,
-        )
-        if not contract:
-            logger.error("Contract not found", code=code)
-            if hasattr(self.metrics, "shioaji_contract_lookup_errors_total"):
-                try:
-                    self.metrics.shioaji_contract_lookup_errors_total.labels(code=str(code)).inc()
-                except Exception:
-                    pass
-            return False
-
-        quote_api = self._quote_api()
-        if quote_api is None or not hasattr(quote_api, "subscribe"):
-            logger.error("Quote API unavailable during subscribe", code=code)
-            return False
-
-        try:
-            start_ns = time.perf_counter_ns()
-            v = self._get_quote_version()
-            if v is None:
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.Tick)
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
-            else:
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
-            self._record_api_latency("subscribe", start_ns, ok=True)
-            return True
-        except Exception as e:
-            self._record_api_latency("subscribe", start_ns, ok=False)
-            self._record_crash_signature(str(e), context="subscribe_symbol")
-            logger.error(f"Subscription failed for {code}: {e}")
-            return False
+        """Delegates to SubscriptionManager._subscribe_symbol()."""
+        return self._subscriptions()._subscribe_symbol(sym, cb)
 
     def _unsubscribe_symbol(self, sym: Dict[str, Any]) -> None:
-        if not self.api or not sj:
-            return
-        quote_api = self._quote_api()
-        if quote_api is None or not hasattr(quote_api, "unsubscribe"):
-            return
-        code = sym.get("code")
-        exchange = sym.get("exchange")
-        product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
-        if not code or not exchange:
-            return
-        contract = self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False)
-        if not contract:
-            return
-        try:
-            start_ns = time.perf_counter_ns()
-            v = self._get_quote_version()
-            if v is None:
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick)
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
-            else:
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
-            self._record_api_latency("unsubscribe", start_ns, ok=True)
-        except Exception as e:
-            self._record_api_latency("unsubscribe", start_ns, ok=False)
-            logger.warning(f"Unsubscribe failed for {code}: {e}")
+        """Delegates to SubscriptionManager._unsubscribe_symbol()."""
+        self._subscriptions()._unsubscribe_symbol(sym)
 
     def reload_symbols(self) -> None:
         self._contracts().reload_symbols()
