@@ -567,6 +567,11 @@ class SystemBootstrapper:
                 except Exception:
                     feature_profile = None
 
+        try:
+            from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature as _detect_crash
+        except ImportError:
+            _detect_crash = None
+
         md_service = MarketDataService(
             bus,
             raw_queue,
@@ -574,6 +579,7 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
             recorder_queue=recorder_queue,
             feature_engine=feature_engine,
+            crash_detector=_detect_crash,
         )
         order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map)
         execution_gateway = ExecutionGateway(order_adapter)

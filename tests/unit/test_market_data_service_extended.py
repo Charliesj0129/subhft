@@ -372,7 +372,7 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(service._feature_shadow_checks_metric_children)
         self.assertFalse(service._feature_shadow_mismatch_metric_children)
 
-    def test_on_shioaji_event_fast_path_exchange_msg(self):
+    def test_on_broker_event_fast_path_exchange_msg(self):
         self.service.loop = MagicMock()
         msg = {
             "code": "2330",
@@ -383,7 +383,7 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
             "ask_volume": [2],
         }
 
-        self.service._on_shioaji_event("TSE", msg)
+        self.service._on_broker_event("TSE", msg)
 
         self.service.loop.call_soon_threadsafe.assert_called_once()
         fn, exchange, payload = self.service.loop.call_soon_threadsafe.call_args[0]
@@ -391,7 +391,7 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exchange, "TSE")
         self.assertIs(payload, msg)
 
-    def test_on_shioaji_event_unwraps_nested_kwargs_bidask(self):
+    def test_on_broker_event_unwraps_nested_kwargs_bidask(self):
         self.service.loop = MagicMock()
         inner = {
             "code": "2330",
@@ -403,7 +403,7 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         }
         outer = {"bidask": inner}
 
-        self.service._on_shioaji_event(exchange="TSE", quote=outer)
+        self.service._on_broker_event(exchange="TSE", quote=outer)
 
         self.service.loop.call_soon_threadsafe.assert_called_once()
         _, exchange, payload = self.service.loop.call_soon_threadsafe.call_args[0]

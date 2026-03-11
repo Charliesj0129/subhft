@@ -132,6 +132,7 @@ class MetricsRegistry:
                 "feed_first_quote_total",
                 "shioaji_login_fail_total",
                 "shioaji_crash_signature_total",
+                "broker_crash_signature_total",
                 "market_data_callback_parse_total",
                 "feature_plane_updates_total",
                 "feature_plane_latency_ns",
@@ -577,9 +578,14 @@ class MetricsRegistry:
             "Detected Shioaji crash precursor signatures",
             ["signature", "context"],
         )
+        self.broker_crash_signature_total = Counter(
+            "broker_crash_signature_total",
+            "Detected broker crash precursor signatures (broker-agnostic)",
+            ["signature", "context"],
+        )
         self.market_data_callback_parse_total = Counter(
             "market_data_callback_parse_total",
-            "MarketDataService Shioaji callback parser outcomes",
+            "MarketDataService broker callback parser outcomes",
             ["result"],  # "fast" | "fallback" | "miss"
         )
         self.feature_plane_updates_total = Counter(

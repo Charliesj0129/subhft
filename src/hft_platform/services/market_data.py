@@ -2,6 +2,7 @@ import asyncio
 import datetime as dt
 import os
 import time
+from collections.abc import Callable
 from enum import Enum
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -21,7 +22,6 @@ from hft_platform.feature.engine import (
 )
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
-from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
@@ -202,12 +202,14 @@ class MarketDataService:
         symbol_metadata: SymbolMetadata | None = None,
         recorder_queue: asyncio.Queue | None = None,
         feature_engine: FeatureEngine | None = None,
+        crash_detector: Callable[[str | None], str | None] | None = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
         self.client = client
         self.publish_full_events = publish_full_events
         self.recorder_queue = recorder_queue
+        self._crash_detector = crash_detector
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
@@ -658,16 +660,16 @@ class MarketDataService:
                 except Exception as exc:
                     logger.warning("Snapshot normalize failed; skipping", error=str(exc))
 
-            await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
+            await self._call_client(self.client.subscribe_basket, self._on_broker_event)
             self._set_state(FeedState.CONNECTED)
 
         except Exception as e:
             logger.error("Connect failed", error=str(e))
             self._set_state(FeedState.DISCONNECTED)
 
-    def _on_shioaji_event(self, *args, **kwargs):
+    def _on_broker_event(self, *args, **kwargs):
         """
-        Unified callback for Shioaji events.
+        Unified callback for broker market data events.
         Signature can vary: (exchange, msg) or (topic, msg, ...)
         """
         try:
@@ -745,8 +747,8 @@ class MarketDataService:
                 logger.error("Callback loop missing")
 
         except Exception as e:
-            self._record_shioaji_crash_signature(str(e), context="md_callback")
-            logger.error(f"Error in Shioaji callback: {e}")
+            self._record_broker_crash_signature(str(e), context="md_callback")
+            logger.error("Error in broker callback", error=str(e))
 
     async def _monitor_loop(self):
         while self.running:
@@ -924,14 +926,16 @@ class MarketDataService:
         except Exception:
             return
 
-    def _record_shioaji_crash_signature(self, text: str | None, *, context: str) -> None:
-        if not self.metrics_registry or not hasattr(self.metrics_registry, "shioaji_crash_signature_total"):
+    def _record_broker_crash_signature(self, text: str | None, *, context: str) -> None:
+        if self._crash_detector is None:
             return
-        signature = detect_crash_signature(text)
+        if not self.metrics_registry or not hasattr(self.metrics_registry, "broker_crash_signature_total"):
+            return
+        signature = self._crash_detector(text)
         if not signature:
             return
         try:
-            self.metrics_registry.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
+            self.metrics_registry.broker_crash_signature_total.labels(signature=signature, context=context).inc()
         except Exception:
             return
 

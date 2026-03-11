@@ -648,10 +648,10 @@ def bench_market_data_callback_parse(iters: int = 100_000) -> float:
         "ask_volume": [1],
     }
     for _ in range(2000):
-        svc._on_shioaji_event("TSE", payload)
+        svc._on_broker_event("TSE", payload)
     t0 = time.perf_counter()
     for _ in range(iters):
-        svc._on_shioaji_event("TSE", payload)
+        svc._on_broker_event("TSE", payload)
     t1 = time.perf_counter()
     return (t1 - t0) / iters * 1e6
 
