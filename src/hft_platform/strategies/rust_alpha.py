@@ -16,7 +16,7 @@ except ImportError:
 try:
     from hft_platform.observability.metrics import MetricsRegistry as _MetricsRegistry
 except Exception:
-    _MetricsRegistry = None  # type: ignore[assignment]
+    _MetricsRegistry = None  # type: ignore[misc,assignment]
 
 logger = get_logger("rust_alpha")
 
