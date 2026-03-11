@@ -1,4 +1,5 @@
 """Tests for scripts/report_narrative.py — report quality utilities."""
+
 from __future__ import annotations
 
 import json
@@ -29,6 +30,7 @@ from report_narrative import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_check(
     check_id: str,
@@ -94,6 +96,7 @@ def _make_daily_report(
 # executive_summary
 # ===================================================================
 
+
 class TestExecutiveSummary:
     def test_all_pass(self) -> None:
         checks = [_make_check("c1"), _make_check("c2")]
@@ -126,7 +129,10 @@ class TestExecutiveSummary:
         checks = [_make_check("c1")]
         services = [_make_service("hft-engine")]
         result = executive_summary(
-            checks, services, STATUS_PASS, expect_trading_day=False,
+            checks,
+            services,
+            STATUS_PASS,
+            expect_trading_day=False,
         )
         assert "Non-trading day" in result
         assert "Reduced activity expected" in result
@@ -135,7 +141,10 @@ class TestExecutiveSummary:
         checks = [_make_check("c1")]
         services = []
         result = executive_summary(
-            checks, services, STATUS_PASS, scope_date="2026-03-10",
+            checks,
+            services,
+            STATUS_PASS,
+            scope_date="2026-03-10",
         )
         assert "2026-03-10" in result
 
@@ -143,6 +152,7 @@ class TestExecutiveSummary:
 # ===================================================================
 # compute_risk_score
 # ===================================================================
+
 
 class TestComputeRiskScore:
     def test_all_pass(self) -> None:
@@ -167,10 +177,7 @@ class TestComputeRiskScore:
         assert score == 17
 
     def test_capped_at_100(self) -> None:
-        checks = [
-            _make_check(f"stormguard_{i}", status=STATUS_FAIL, severity="critical")
-            for i in range(10)
-        ]
+        checks = [_make_check(f"stormguard_{i}", status=STATUS_FAIL, severity="critical") for i in range(10)]
         assert compute_risk_score(checks) == 100
 
     def test_empty_checks(self) -> None:
@@ -180,6 +187,7 @@ class TestComputeRiskScore:
 # ===================================================================
 # trend_delta
 # ===================================================================
+
 
 class TestTrendDelta:
     def test_with_previous(self, tmp_path: Path) -> None:
@@ -245,6 +253,7 @@ class TestTrendDelta:
 # sparkline
 # ===================================================================
 
+
 class TestSparkline:
     def test_basic(self) -> None:
         result = sparkline([0.0, 0.5, 1.0])
@@ -273,6 +282,7 @@ class TestSparkline:
 # ===================================================================
 # diagnose_checks
 # ===================================================================
+
 
 class TestDiagnoseChecks:
     def test_restart_check(self) -> None:
@@ -324,6 +334,7 @@ class TestDiagnoseChecks:
 # recommend_actions
 # ===================================================================
 
+
 class TestRecommendActions:
     def test_critical_fail(self) -> None:
         diagnosed = [
@@ -369,6 +380,7 @@ class TestRecommendActions:
 # format_status_icon
 # ===================================================================
 
+
 class TestFormatStatusIcon:
     def test_icon_pass(self) -> None:
         assert format_status_icon(STATUS_PASS) == "\u2705"
@@ -389,6 +401,7 @@ class TestFormatStatusIcon:
 # ===================================================================
 # group_checks_by_category
 # ===================================================================
+
 
 class TestGroupChecksByCategory:
     def test_service_checks(self) -> None:
@@ -424,6 +437,7 @@ class TestGroupChecksByCategory:
 # render_trend_section
 # ===================================================================
 
+
 class TestRenderTrendSection:
     def test_with_history(self, tmp_path: Path) -> None:
         daily_dir = tmp_path / "daily"
@@ -433,7 +447,8 @@ class TestRenderTrendSection:
             date_str = f"2026-03-0{i + 1}"
             report = _make_daily_report(date_str, pass_count=5)
             (daily_dir / f"{date_str}.json").write_text(
-                json.dumps(report), encoding="utf-8",
+                json.dumps(report),
+                encoding="utf-8",
             )
 
         result = render_trend_section(daily_dir, "2026-03-03")

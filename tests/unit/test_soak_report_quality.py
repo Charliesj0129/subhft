@@ -4,6 +4,7 @@ Validates that daily/canary/weekly reports include narrative sections,
 risk scores, recommendations, and status icons while maintaining
 backward compatibility with existing report structure.
 """
+
 from __future__ import annotations
 
 import sys
@@ -28,6 +29,7 @@ from soak_acceptance import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_check(
     check_id: str,
@@ -123,6 +125,7 @@ def _build_canary_report(
 # ===================================================================
 # Daily markdown report tests
 # ===================================================================
+
 
 class TestDailyMarkdownBackwardCompatible:
     """Existing sections must remain present in daily reports."""
@@ -234,6 +237,7 @@ class TestDailyMarkdownOverallStatus:
 # Canary markdown report tests
 # ===================================================================
 
+
 class TestCanaryMarkdown:
     def test_has_header(self, tmp_path: Path) -> None:
         report = _build_canary_report()
@@ -280,6 +284,7 @@ class TestCanaryMarkdown:
 # Weekly markdown report (inline in _run_weekly, test via structure)
 # ===================================================================
 
+
 class TestWeeklyReportStructure:
     """Test the weekly report data structure used for markdown generation."""
 
@@ -300,11 +305,7 @@ class TestWeeklyReportStructure:
             )
         )
 
-        fail_days = sum(
-            1
-            for p in daily_payloads
-            if p["summary"]["overall"] == STATUS_FAIL
-        )
+        fail_days = sum(1 for p in daily_payloads if p["summary"]["overall"] == STATUS_FAIL)
         assert fail_days == 1
 
     def test_top_failing_checks_extraction(self) -> None:
@@ -355,6 +356,7 @@ class TestWeeklyReportStructure:
 # ===================================================================
 # _summary helper tests
 # ===================================================================
+
 
 class TestSummaryHelper:
     def test_all_pass(self) -> None:
