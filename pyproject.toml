@@ -56,6 +56,10 @@ research = [
     "statsmodels>=0.14.0",  # BDS independence test (lazy import in validation.py)
 ]
 
+[project.optional-dependencies]
+shioaji-broker = ["shioaji[speed]"]  # Shioaji (SinoPac) broker SDK
+fubon = ["fubon-neo>=2.2.7"]  # Fubon broker SDK (not on PyPI; install from Fubon's index)
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -170,3 +174,14 @@ files = [
 namespace_packages = true
 explicit_package_bases = true
 mypy_path = ["src"]
+
+[tool.uv]
+# Broker SDKs are mutually exclusive extras.
+conflicts = [
+    [{ extra = "shioaji-broker" }, { extra = "fubon" }],
+]
+
+# fubon-neo is not on PyPI (distributed via Fubon's private index).
+# Override it to an empty constraint so the lockfile resolver succeeds.
+# Users install fubon-neo manually: pip install fubon-neo>=2.2.7
+override-dependencies = ["fubon-neo>=0.0.0; python_version == '0'"]
