@@ -5,6 +5,7 @@ from typing import Any
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
+from hft_platform.feed_adapter.shioaji.risk_screening import RiskScreeningGateway
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
 
@@ -23,6 +24,7 @@ class ShioajiClientFacade:
         "contracts_runtime",
         "order_gateway",
         "account_gateway",
+        "risk_screening",
         "subscription_manager",
     )
 
@@ -36,6 +38,7 @@ class ShioajiClientFacade:
         self.contracts_runtime = ContractsRuntime(client)
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
+        self.risk_screening = RiskScreeningGateway(client)
         self.subscription_manager = client._subscription_manager
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
@@ -112,6 +115,18 @@ class ShioajiClientFacade:
 
     def list_profit_loss(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> Any:
         return self.account_gateway.list_profit_loss(account=account, begin_date=begin_date, end_date=end_date)
+
+    def get_punish_stocks(self) -> Any:
+        return self.risk_screening.get_punish_stocks()
+
+    def get_notice_stocks(self) -> Any:
+        return self.risk_screening.get_notice_stocks()
+
+    def get_credit_enquiries(self, contracts: list[Any]) -> list[Any]:
+        return self.risk_screening.get_credit_enquiries(contracts)
+
+    def get_short_stock_sources(self, contracts: list[Any]) -> list[Any]:
+        return self.risk_screening.get_short_stock_sources(contracts)
 
     def validate_symbols(self) -> list[str]:
         return self.contracts_runtime.validate_symbols()
