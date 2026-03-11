@@ -22,9 +22,7 @@ def _get_sdk_class() -> Any:
 
         return FubonSDK
     except ImportError as e:
-        raise RuntimeError(
-            "fubon-neo package not installed. Install with: pip install fubon-neo"
-        ) from e
+        raise RuntimeError("fubon-neo package not installed. Install with: pip install fubon-neo") from e
 
 
 class FubonSessionRuntime:

@@ -27,12 +27,8 @@ def load_fubon_config(settings: dict | None = None) -> FubonClientConfig:
         user_id=os.getenv("FUBON_ID", fubon_cfg.get("user_id", "")),
         password=os.getenv("FUBON_PASSWORD", fubon_cfg.get("password", "")),
         cert_path=os.getenv("FUBON_CERT_PATH", fubon_cfg.get("cert_path", "")),
-        cert_password=os.getenv(
-            "FUBON_CERT_PASSWORD", fubon_cfg.get("cert_password", "")
-        ),
-        simulation=os.getenv(
-            "FUBON_SIMULATION", str(fubon_cfg.get("simulation", True))
-        ).lower()
+        cert_password=os.getenv("FUBON_CERT_PASSWORD", fubon_cfg.get("cert_password", "")),
+        simulation=os.getenv("FUBON_SIMULATION", str(fubon_cfg.get("simulation", True))).lower()
         in ("1", "true", "yes"),
         reconnect_max_retries=int(
             os.getenv(

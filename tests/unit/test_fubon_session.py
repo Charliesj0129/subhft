@@ -9,7 +9,6 @@ import pytest
 from hft_platform.feed_adapter.fubon._config import FubonClientConfig, load_fubon_config
 from hft_platform.feed_adapter.fubon.session_runtime import FubonSessionRuntime
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────
 
 
@@ -67,9 +66,7 @@ class TestBrokerSessionProtocol:
 
 
 class TestLogin:
-    def test_login_success(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_login_success(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             result = runtime.login()
@@ -77,14 +74,10 @@ class TestLogin:
         assert runtime.logged_in is True
         assert runtime.account is not None
         assert runtime.sdk is not None
-        mock_sdk.login.assert_called_once_with(
-            "A123456789", "secret", "/path/to/cert", "certpw"
-        )
+        mock_sdk.login.assert_called_once_with("A123456789", "secret", "/path/to/cert", "certpw")
         assert result is mock_sdk.login.return_value
 
-    def test_login_kwargs_override(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_login_kwargs_override(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             runtime.login(user_id="B999", password="pw2")
@@ -92,18 +85,14 @@ class TestLogin:
         mock_sdk.login.assert_called_once_with("B999", "pw2", "/path/to/cert", "certpw")
         assert runtime.logged_in is True
 
-    def test_login_failure_raises(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_login_failure_raises(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         mock_sdk.login.side_effect = ConnectionError("network error")
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk), pytest.raises(ConnectionError, match="network error"):
             runtime.login()
         assert runtime.logged_in is False
 
-    def test_login_no_accounts_raises(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_login_no_accounts_raises(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         mock_sdk.login.return_value.data = []
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk), pytest.raises(RuntimeError, match="no accounts"):
@@ -122,9 +111,7 @@ class TestLogin:
         with pytest.raises(ValueError, match="user_id and password"):
             runtime.login()
 
-    def test_login_count_increments(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_login_count_increments(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             runtime.login()
@@ -136,9 +123,7 @@ class TestLogin:
 
 
 class TestReconnect:
-    def test_reconnect_success(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_reconnect_success(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             runtime.login()
@@ -147,9 +132,7 @@ class TestReconnect:
         assert result is True
         assert runtime.logged_in is True
 
-    def test_reconnect_exhausts_retries(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_reconnect_exhausts_retries(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         mock_sdk.login.side_effect = ConnectionError("fail")
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
@@ -158,9 +141,7 @@ class TestReconnect:
         assert result is False
         assert runtime.logged_in is False
 
-    def test_reconnect_succeeds_after_failures(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_reconnect_succeeds_after_failures(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         ok_result = MagicMock()
         ok_result.data = [MagicMock()]
         # Fail twice, then succeed
@@ -181,9 +162,7 @@ class TestReconnect:
 
 
 class TestCloseShutdown:
-    def test_close_sets_logged_in_false(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_close_sets_logged_in_false(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             runtime.login()
@@ -191,27 +170,21 @@ class TestCloseShutdown:
         runtime.close()
         assert runtime.logged_in is False
 
-    def test_close_with_logout_calls_sdk_logout(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_close_with_logout_calls_sdk_logout(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             runtime.login()
         runtime.close(logout=True)
         mock_sdk.logout.assert_called_once()
 
-    def test_close_without_logout_skips_sdk_logout(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_close_without_logout_skips_sdk_logout(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             runtime.login()
         runtime.close(logout=False)
         mock_sdk.logout.assert_not_called()
 
-    def test_shutdown_clears_sdk_and_account(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_shutdown_clears_sdk_and_account(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             runtime.login()
@@ -223,9 +196,7 @@ class TestCloseShutdown:
         assert runtime.account is None
         assert runtime.logged_in is False
 
-    def test_shutdown_with_logout(
-        self, config: FubonClientConfig, mock_sdk: MagicMock
-    ) -> None:
+    def test_shutdown_with_logout(self, config: FubonClientConfig, mock_sdk: MagicMock) -> None:
         runtime = FubonSessionRuntime(config)
         with _patch_sdk(mock_sdk):
             runtime.login()
@@ -256,9 +227,7 @@ class TestInitialState:
 
 class TestFubonConfig:
     def test_load_from_dict(self) -> None:
-        cfg = load_fubon_config(
-            {"fubon": {"user_id": "X123", "password": "pw", "simulation": False}}
-        )
+        cfg = load_fubon_config({"fubon": {"user_id": "X123", "password": "pw", "simulation": False}})
         assert cfg.user_id == "X123"
         assert cfg.password == "pw"
         assert cfg.simulation is False
