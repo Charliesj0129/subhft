@@ -16,9 +16,7 @@ DEFAULT_BROKER = "shioaji"
 class BrokerFactory(Protocol):
     """Protocol that each broker factory must satisfy."""
 
-    def create_clients(
-        self, symbols_path: str, broker_config: dict[str, Any]
-    ) -> tuple[Any, Any]: ...
+    def create_clients(self, symbols_path: str, broker_config: dict[str, Any]) -> tuple[Any, Any]: ...
 
 
 _BROKER_REGISTRY: dict[str, BrokerFactory] = {}
@@ -35,9 +33,7 @@ def get_broker_factory(name: str | None = None) -> BrokerFactory:
     key = (name or os.getenv("HFT_BROKER", DEFAULT_BROKER)).lower()
     factory = _BROKER_REGISTRY.get(key)
     if factory is None:
-        raise ValueError(
-            f"Unknown broker {key!r}. Registered: {sorted(_BROKER_REGISTRY)}"
-        )
+        raise ValueError(f"Unknown broker {key!r}. Registered: {sorted(_BROKER_REGISTRY)}")
     return factory
 
 

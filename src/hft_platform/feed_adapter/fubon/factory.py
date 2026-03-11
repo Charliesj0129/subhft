@@ -18,9 +18,7 @@ class FubonBrokerFactory:
 
     __slots__ = ()
 
-    def create_clients(
-        self, symbols_path: str, broker_config: dict[str, Any]
-    ) -> tuple[Any, Any]:
+    def create_clients(self, symbols_path: str, broker_config: dict[str, Any]) -> tuple[Any, Any]:
         """Return (market_data_client, order_client) for Fubon."""
         from hft_platform.feed_adapter.fubon.facade import FubonClientFacade
 

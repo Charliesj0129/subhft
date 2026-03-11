@@ -14,9 +14,7 @@ class FubonOrderGateway:
 
     __slots__ = ("_sdk", "_account", "_symbols_meta", "_on_order_cb", "_on_deal_cb")
 
-    def __init__(
-        self, sdk: Any, account: Any, symbols_meta: dict | None = None
-    ) -> None:
+    def __init__(self, sdk: Any, account: Any, symbols_meta: dict | None = None) -> None:
         self._sdk = sdk
         self._account = account
         self._symbols_meta = symbols_meta or {}
@@ -41,9 +39,7 @@ class FubonOrderGateway:
         """Cancel an existing order (stub)."""
         return None
 
-    def update_order(
-        self, trade: Any, price: float | None = None, qty: int | None = None
-    ) -> Any:
+    def update_order(self, trade: Any, price: float | None = None, qty: int | None = None) -> Any:
         """Modify an existing order (stub)."""
         return None
 
@@ -51,9 +47,7 @@ class FubonOrderGateway:
         """Resolve exchange for a symbol."""
         return self._symbols_meta.get(symbol, {}).get("exchange", "TSE")
 
-    def set_execution_callbacks(
-        self, on_order: Callable[..., Any], on_deal: Callable[..., Any]
-    ) -> None:
+    def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]) -> None:
         """Wire order/deal event callbacks."""
         self._on_order_cb = on_order
         self._on_deal_cb = on_deal

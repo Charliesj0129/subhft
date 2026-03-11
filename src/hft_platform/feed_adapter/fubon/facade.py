@@ -55,9 +55,7 @@ class FubonClientFacade:
             with open(config_path) as f:
                 data = yaml.safe_load(f) or {}
             symbols = data.get("symbols", [])
-            return [
-                s.get("code", s) if isinstance(s, dict) else str(s) for s in symbols
-            ]
+            return [s.get("code", s) if isinstance(s, dict) else str(s) for s in symbols]
         except Exception:
             logger.warning("fubon_symbols_load_failed", path=config_path)
             return []
@@ -137,9 +135,7 @@ class FubonClientFacade:
             return None
         return self._order_gateway.cancel_order(trade)
 
-    def update_order(
-        self, trade: Any, price: float | None = None, qty: int | None = None
-    ) -> Any:
+    def update_order(self, trade: Any, price: float | None = None, qty: int | None = None) -> Any:
         if not self._order_gateway:
             return None
         return self._order_gateway.update_order(trade, price=price, qty=qty)
@@ -149,9 +145,7 @@ class FubonClientFacade:
             return "TSE"
         return self._order_gateway.get_exchange(symbol)
 
-    def set_execution_callbacks(
-        self, on_order: Callable[..., Any], on_deal: Callable[..., Any]
-    ) -> None:
+    def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]) -> None:
         self._ensure_gateways()
         assert self._order_gateway is not None
         self._order_gateway.set_execution_callbacks(on_order, on_deal)

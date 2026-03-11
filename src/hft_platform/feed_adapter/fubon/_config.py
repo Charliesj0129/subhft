@@ -32,8 +32,5 @@ def load_fubon_config(settings: dict | None = None) -> FubonClientConfig:
         password=os.getenv("FUBON_PASSWORD", fc.get("password", "")),
         cert_path=os.getenv("FUBON_CERT_PATH", fc.get("cert_path", "")),
         cert_password=os.getenv("FUBON_CERT_PASSWORD", fc.get("cert_password", "")),
-        simulation=os.getenv(
-            "FUBON_SIMULATION", str(fc.get("simulation", True))
-        ).lower()
-        in ("1", "true", "yes"),
+        simulation=os.getenv("FUBON_SIMULATION", str(fc.get("simulation", True))).lower() in ("1", "true", "yes"),
     )

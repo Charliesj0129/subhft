@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -40,9 +39,7 @@ def facade(_patch_fubon_sdk: Any) -> Any:
     """Return a FubonClientFacade with mocked SDK."""
     from hft_platform.feed_adapter.fubon.facade import FubonClientFacade
 
-    return FubonClientFacade(
-        broker_config={"fubon": {"user_id": "test", "password": "pw"}}
-    )
+    return FubonClientFacade(broker_config={"fubon": {"user_id": "test", "password": "pw"}})
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +129,7 @@ class TestFacadeInit:
     def test_init_no_config_path(self, _patch_fubon_sdk: Any) -> None:
         from hft_platform.feed_adapter.fubon.facade import FubonClientFacade
 
-        f = FubonClientFacade(
-            broker_config={"fubon": {"user_id": "t", "password": "p"}}
-        )
+        f = FubonClientFacade(broker_config={"fubon": {"user_id": "t", "password": "p"}})
         assert not f.logged_in
         assert f._market_data is None
 
@@ -274,9 +269,7 @@ class TestFubonBrokerFactory:
         from hft_platform.feed_adapter.fubon.factory import FubonBrokerFactory
 
         factory = FubonBrokerFactory()
-        md, order = factory.create_clients(
-            "", {"fubon": {"user_id": "u", "password": "p"}}
-        )
+        md, order = factory.create_clients("", {"fubon": {"user_id": "u", "password": "p"}})
         from hft_platform.feed_adapter.fubon.facade import FubonClientFacade
 
         assert isinstance(md, FubonClientFacade)
@@ -300,9 +293,7 @@ class TestBrokerRegistry:
         class _DummyFactory:
             __slots__ = ()
 
-            def create_clients(
-                self, symbols_path: str, broker_config: dict[str, Any]
-            ) -> tuple[Any, Any]:
+            def create_clients(self, symbols_path: str, broker_config: dict[str, Any]) -> tuple[Any, Any]:
                 return (None, None)
 
         assert isinstance(_DummyFactory(), BrokerFactory)
