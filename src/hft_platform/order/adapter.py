@@ -347,9 +347,7 @@ class OrderAdapter:
                 tif_str = self._broker_codec.encode_tif(intent.tif)
 
                 # Broker-specific price type encoding + validation
-                price_type = self._broker_codec.encode_price_type(
-                    str(order_params.get("price_type", "LMT"))
-                )
+                price_type = self._broker_codec.encode_price_type(str(order_params.get("price_type", "LMT")))
                 if price_type in {"MKT", "MKP"} and tif_str == "ROD":
                     logger.error(
                         "Rejecting invalid order type",

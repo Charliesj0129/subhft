@@ -67,8 +67,5 @@ class ShioajiOrderCodec:
         """
         normalised = price_type.strip().upper()
         if normalised not in _PRICE_TYPE_CANONICAL:
-            raise ValueError(
-                f"Unknown price_type: {price_type!r} "
-                f"(expected one of {sorted(_PRICE_TYPE_CANONICAL)})"
-            )
+            raise ValueError(f"Unknown price_type: {price_type!r} (expected one of {sorted(_PRICE_TYPE_CANONICAL)})")
         return normalised
