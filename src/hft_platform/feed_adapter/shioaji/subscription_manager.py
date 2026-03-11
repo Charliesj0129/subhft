@@ -246,9 +246,7 @@ class SubscriptionManager:
             c.metrics.feed_resubscribe_total.labels(result="error").inc()
             return False
 
-    def set_execution_callbacks(
-        self, on_order: Callable[..., Any], on_deal: Callable[..., Any]
-    ) -> None:
+    def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]) -> None:
         """Register low-latency order/deal callbacks on the Shioaji API.
 
         Note: These run on Shioaji threads.
