@@ -22,6 +22,18 @@ class OrderGateway:
         self._client = client
 
     @staticmethod
+    def _timeout_kwargs(timeout: int | None) -> dict[str, Any]:
+        """Build SDK kwargs dict for optional timeout parameter."""
+        if timeout is not None:
+            return {"timeout": timeout}
+        return {}
+
+    @staticmethod
+    def _op_label(base: str, timeout: int | None) -> str:
+        """Return metric label, appending ``_nb`` when *timeout* is 0."""
+        return f"{base}_nb" if timeout == 0 else base
+
+    @staticmethod
     def _sdk() -> Any | None:
         # Keep test patching backward compatible by reading SDK handle
         # from shioaji_client module-level symbol.
@@ -48,6 +60,7 @@ class OrderGateway:
         oc_type: str | None = None,
         account: Any | None = None,
         price_type: str | None = None,
+        timeout: int | None = None,
     ) -> Any:
         sdk = self._sdk()
         if not self._client.api:
@@ -77,6 +90,7 @@ class OrderGateway:
                 oc_type=oc_type,
                 account=account,
                 custom_field=custom_field,
+                timeout=timeout,
             )
 
         pt = sdk.constant.StockPriceType.LMT
@@ -93,13 +107,14 @@ class OrderGateway:
             order_type=ot,
             custom_field=custom_field,
         )
+        label = self._op_label("place_order", timeout)
         start_ns = time.perf_counter_ns()
         try:
-            result = self._client.api.place_order(contract, order)
-            self._client._record_api_latency("place_order", start_ns, ok=True)
+            result = self._client.api.place_order(contract, order, **self._timeout_kwargs(timeout))
+            self._client._record_api_latency(label, start_ns, ok=True)
             return result
         except Exception:
-            self._client._record_api_latency("place_order", start_ns, ok=False)
+            self._client._record_api_latency(label, start_ns, ok=False)
             raise
 
     def _place_order_typed(
@@ -119,6 +134,7 @@ class OrderGateway:
         oc_type: str | None,
         account: Any | None,
         custom_field: str | None,
+        timeout: int | None = None,
     ) -> Any:
         sdk = self._sdk()
         if sdk is None:
@@ -188,13 +204,14 @@ class OrderGateway:
                     custom_field=custom_field,
                 )
 
+        label = self._op_label("place_order", timeout)
         start_ns = time.perf_counter_ns()
         try:
-            result = self._client.api.place_order(contract, order)
-            self._client._record_api_latency("place_order", start_ns, ok=True)
+            result = self._client.api.place_order(contract, order, **self._timeout_kwargs(timeout))
+            self._client._record_api_latency(label, start_ns, ok=True)
             return result
         except Exception:
-            self._client._record_api_latency("place_order", start_ns, ok=False)
+            self._client._record_api_latency(label, start_ns, ok=False)
             raise
 
     def _resolve_account(self, product_type: str, account: Any | None) -> Any | None:
@@ -288,67 +305,79 @@ class OrderGateway:
         name = mapping.get(key, "Auto")
         return getattr(sdk.constant.FuturesOCType, name, sdk.constant.FuturesOCType.Auto)
 
-    def cancel_order(self, trade: Any) -> Any:
+    def cancel_order(self, trade: Any, timeout: int | None = None) -> Any:
         if not self._client.api:
             logger.warning("Shioaji SDK missing; mock cancel_order invoked.")
             return None
         if not hasattr(self._client.api, "cancel_order"):
             raise RuntimeError("Shioaji API missing cancel_order")
+        label = self._op_label("cancel_order", timeout)
         start_ns = time.perf_counter_ns()
         try:
-            result = self._client.api.cancel_order(trade)
-            self._client._record_api_latency("cancel_order", start_ns, ok=True)
+            result = self._client.api.cancel_order(trade, **self._timeout_kwargs(timeout))
+            self._client._record_api_latency(label, start_ns, ok=True)
             return result
         except Exception as exc:
-            self._client._record_api_latency("cancel_order", start_ns, ok=False)
+            self._client._record_api_latency(label, start_ns, ok=False)
             logger.error("cancel_order failed", error=str(exc))
             raise
 
-    def update_order(self, trade: Any, price: float | None = None, qty: int | None = None) -> Any:
+    def update_order(
+        self,
+        trade: Any,
+        price: float | None = None,
+        qty: int | None = None,
+        timeout: int | None = None,
+    ) -> Any:
         if not self._client.api:
             logger.warning("Shioaji SDK missing; mock update_order invoked.")
             return None
+        tk = self._timeout_kwargs(timeout)
         if price is not None:
             if hasattr(self._client.api, "update_order"):
+                label = self._op_label("update_order", timeout)
                 start_ns = time.perf_counter_ns()
                 try:
-                    result = self._client.api.update_order(trade=trade, price=price)
-                    self._client._record_api_latency("update_order", start_ns, ok=True)
+                    result = self._client.api.update_order(trade=trade, price=price, **tk)
+                    self._client._record_api_latency(label, start_ns, ok=True)
                     return result
                 except Exception as exc:
-                    self._client._record_api_latency("update_order", start_ns, ok=False)
+                    self._client._record_api_latency(label, start_ns, ok=False)
                     logger.error("update_order(price) failed", error=str(exc))
                     raise
             if hasattr(self._client.api, "update_price"):
+                label = self._op_label("update_price", timeout)
                 start_ns = time.perf_counter_ns()
                 try:
-                    result = self._client.api.update_price(trade=trade, price=price)
-                    self._client._record_api_latency("update_price", start_ns, ok=True)
+                    result = self._client.api.update_price(trade=trade, price=price, **tk)
+                    self._client._record_api_latency(label, start_ns, ok=True)
                     return result
                 except Exception as exc:
-                    self._client._record_api_latency("update_price", start_ns, ok=False)
+                    self._client._record_api_latency(label, start_ns, ok=False)
                     logger.error("update_price failed", error=str(exc))
                     raise
             raise RuntimeError("Shioaji API missing update_order/update_price")
         if qty is not None:
             if hasattr(self._client.api, "update_order"):
+                label = self._op_label("update_order", timeout)
                 start_ns = time.perf_counter_ns()
                 try:
-                    result = self._client.api.update_order(trade=trade, qty=qty)
-                    self._client._record_api_latency("update_order", start_ns, ok=True)
+                    result = self._client.api.update_order(trade=trade, qty=qty, **tk)
+                    self._client._record_api_latency(label, start_ns, ok=True)
                     return result
                 except Exception as exc:
-                    self._client._record_api_latency("update_order", start_ns, ok=False)
+                    self._client._record_api_latency(label, start_ns, ok=False)
                     logger.error("update_order(qty) failed", error=str(exc))
                     raise
             if hasattr(self._client.api, "update_qty"):
+                label = self._op_label("update_qty", timeout)
                 start_ns = time.perf_counter_ns()
                 try:
-                    result = self._client.api.update_qty(trade=trade, quantity=qty)
-                    self._client._record_api_latency("update_qty", start_ns, ok=True)
+                    result = self._client.api.update_qty(trade=trade, quantity=qty, **tk)
+                    self._client._record_api_latency(label, start_ns, ok=True)
                     return result
                 except Exception as exc:
-                    self._client._record_api_latency("update_qty", start_ns, ok=False)
+                    self._client._record_api_latency(label, start_ns, ok=False)
                     logger.error("update_qty failed", error=str(exc))
                     raise
             raise RuntimeError("Shioaji API missing update_order/update_qty")

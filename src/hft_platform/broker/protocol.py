@@ -59,6 +59,7 @@ class BrokerCapabilities:
     name: str
     supports_batch_order: bool = False
     supports_smart_order: bool = False
+    supports_nonblocking_order: bool = False
     supports_l2_depth: bool = True
     max_custom_field_len: int = 6
     auth_method: str = "cert"  # "cert" | "apikey"
@@ -69,6 +70,7 @@ SHIOAJI_CAPABILITIES = BrokerCapabilities(
     name="shioaji",
     supports_batch_order=False,
     supports_smart_order=False,
+    supports_nonblocking_order=True,
     supports_l2_depth=True,
     max_custom_field_len=6,
     auth_method="cert",
