@@ -20,6 +20,8 @@ from hft_platform.feature.profile import load_feature_profile_registry
 from hft_platform.feature.rollout import load_feature_rollout_controller
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
+
+_VALID_BROKERS = frozenset({"shioaji", "fubon"})
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
@@ -402,11 +404,22 @@ class SystemBootstrapper:
     DEFAULT_ORDER_QUEUE_SIZE = 2048  # Order dispatch queue
     DEFAULT_RECORDER_QUEUE_SIZE = 16384  # Recorder/persistence queue
 
+    @staticmethod
+    def _resolve_broker_id() -> str:
+        """Read HFT_BROKER env var and validate against known broker IDs."""
+        broker_id = os.environ.get("HFT_BROKER", "shioaji").strip().lower()
+        if broker_id not in _VALID_BROKERS:
+            raise ValueError(
+                f"Unknown HFT_BROKER={broker_id!r}; valid options: {sorted(_VALID_BROKERS)}"
+            )
+        return broker_id
+
     def _build_broker_clients(
         self,
         role: str,
         symbols_path: str,
         base_shioaji_cfg: dict[str, Any],
+        broker_id: str,
     ) -> tuple[Any, Any]:
         order_cfg = dict(base_shioaji_cfg)
         order_mode = os.getenv("HFT_ORDER_MODE", "").strip().lower()
@@ -419,11 +432,18 @@ class SystemBootstrapper:
         if order_no_ca or order_cfg.get("simulation") is True:
             order_cfg["activate_ca"] = False
 
-        if role in _FEED_ALLOWED_ROLES:
-            return ShioajiClientFacade(symbols_path, base_shioaji_cfg), ShioajiClientFacade(symbols_path, order_cfg)
+        if role not in _FEED_ALLOWED_ROLES:
+            logger.warning("Using role-guarded no-op broker clients", role=role)
+            return _RoleGuardedNoopClient(role), _RoleGuardedNoopClient(role)
 
-        logger.warning("Using role-guarded no-op broker clients", role=role)
-        return _RoleGuardedNoopClient(role), _RoleGuardedNoopClient(role)
+        if broker_id == "fubon":
+            from hft_platform.feed_adapter.fubon.facade import FubonClientFacade  # lazy import
+
+            logger.info("Instantiating Fubon broker clients", broker_id=broker_id)
+            return FubonClientFacade(symbols_path, base_shioaji_cfg), FubonClientFacade(symbols_path, order_cfg)
+
+        # Default: shioaji
+        return ShioajiClientFacade(symbols_path, base_shioaji_cfg), ShioajiClientFacade(symbols_path, order_cfg)
 
     def build(self) -> ServiceRegistry:
         role = self._get_runtime_role()
@@ -488,8 +508,9 @@ class SystemBootstrapper:
         symbol_metadata = SymbolMetadata(symbols_path)
         price_scale_provider = SymbolMetadataPriceScaleProvider(symbol_metadata)
 
+        broker_id = self._resolve_broker_id()
         base_shioaji_cfg = dict(self.settings.get("shioaji", {}))
-        md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg)
+        md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg, broker_id)
 
         # 4. Services
         feature_engine = None
@@ -638,6 +659,7 @@ class SystemBootstrapper:
             storm_guard=storm_guard,
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
+            broker_id=broker_id,
             md_client=md_client,
             order_client=order_client,
             client=md_client,
