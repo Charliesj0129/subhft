@@ -1,0 +1,27 @@
+broker:
+  name: fubon
+  display_name: "富邦證券 (Fubon)"
+  auth:
+    method: apikey
+    env_api_key: HFT_FUBON_API_KEY
+    env_password: HFT_FUBON_PASSWORD
+    requires_ca_cert: false
+  transport:
+    protocol: http_ws
+    sdk_package: fubon_neo
+    ws_url: "wss://api.fbs.com.tw/ws/v2"
+    rest_url: "https://api.fbs.com.tw/api/v2"
+    timeout_s: 3.0
+  rate_limits:
+    soft_cap: 100
+    hard_cap: 150
+    window_seconds: 10
+  capabilities:
+    batch_orders: true
+    smart_orders: true
+    l2_depth: true
+    max_custom_field_len: 32
+  latency_profile:
+    place_order_p95_ms: null  # TBD — must measure
+    update_order_p95_ms: null
+    cancel_order_p95_ms: null

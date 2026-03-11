@@ -13,6 +13,12 @@ pub struct LobFeatureKernelV1 {
     initialized: bool,
 }
 
+impl Default for LobFeatureKernelV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 unsafe impl Send for LobFeatureKernelV1 {}
 
 #[pymethods]

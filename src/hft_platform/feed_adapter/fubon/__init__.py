@@ -1,1 +1,5 @@
-"""Fubon (富邦) broker adapter package."""
+"""Fubon TradeAPI adapter package."""
+
+from __future__ import annotations
+
+__all__: list[str] = []

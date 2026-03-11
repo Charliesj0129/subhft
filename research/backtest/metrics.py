@@ -23,17 +23,11 @@ def compute_sharpe(equity_curve: Iterable[float], annualization_factor: float = 
     return float(np.mean(returns) / std * np.sqrt(annualization_factor))
 
 
-def _pearson(s: np.ndarray, r: np.ndarray) -> float:
-    """Single-pass Pearson correlation — avoids np.corrcoef 2×n matrix allocation."""
-    sx = s - s.mean()
-    rx = r - r.mean()
-    denom = float(np.sqrt((sx @ sx) * (rx @ rx)))
-    if denom < 1e-12:
-        return float("nan")
-    return float(sx @ rx) / denom
-
-
-def compute_ic(signals: Iterable[float], forward_returns: Iterable[float], buckets: int = 20) -> tuple[float, float, np.ndarray]:
+def compute_ic(
+    signals: Iterable[float],
+    forward_returns: Iterable[float],
+    buckets: int = 20,
+) -> tuple[float, float, np.ndarray]:
     sig = np.asarray(list(signals), dtype=np.float64)
     fut = np.asarray(list(forward_returns), dtype=np.float64)
     n = min(sig.size, fut.size)
@@ -43,18 +37,32 @@ def compute_ic(signals: Iterable[float], forward_returns: Iterable[float], bucke
     sig = sig[:n]
     fut = fut[:n]
     chunk = max(8, n // max(buckets, 1))
-    ic_values: list[float] = []
-    for start in range(0, n - chunk + 1, chunk):
-        s = sig[start : start + chunk]
-        r = fut[start : start + chunk]
-        corr = _pearson(s, r)
-        if np.isfinite(corr):
-            ic_values.append(corr)
-
-    if not ic_values:
+    n_chunks = (n - chunk) // chunk + 1
+    if n_chunks < 1:
         return 0.0, 0.0, np.asarray([], dtype=np.float64)
 
-    series = np.asarray(ic_values, dtype=np.float64)
+    # Reshape into (n_chunks, chunk) — contiguous, no per-chunk allocation
+    n_usable = n_chunks * chunk
+    sig_chunks = sig[:n_usable].reshape(n_chunks, chunk)
+    fut_chunks = fut[:n_usable].reshape(n_chunks, chunk)
+
+    # Vectorized Pearson across all chunks simultaneously (axis=1)
+    sig_centered = sig_chunks - sig_chunks.mean(axis=1, keepdims=True)
+    fut_centered = fut_chunks - fut_chunks.mean(axis=1, keepdims=True)
+    num = np.einsum("ij,ij->i", sig_centered, fut_centered)
+    sig_ss = np.einsum("ij,ij->i", sig_centered, sig_centered)
+    fut_ss = np.einsum("ij,ij->i", fut_centered, fut_centered)
+    denom = np.sqrt(sig_ss * fut_ss)
+    # Where denom < 1e-12, result is nan (consistent with Pearson undefined case)
+    zero_mask = denom < 1e-12
+    safe_denom = np.where(zero_mask, 1.0, denom)  # avoid divide-by-zero warning
+    ic_all = np.where(zero_mask, np.nan, num / safe_denom)
+
+    # Filter non-finite values
+    series = ic_all[np.isfinite(ic_all)]
+    if series.size == 0:
+        return 0.0, 0.0, np.asarray([], dtype=np.float64)
+
     return float(np.mean(series)), float(np.std(series)), series
 
 
@@ -90,11 +98,23 @@ def compute_ic_halflife(signals: np.ndarray, max_lag: int = 50) -> int:
     var = float(np.var(arr))
     if var < 1e-15:
         return 0
-    for lag in range(1, min(max_lag + 1, n // 2)):
-        cov = float(np.mean((arr[:-lag] - mean) * (arr[lag:] - mean)))
-        acf = cov / var
-        if acf < 0.5:
-            return lag
+
+    # Vectorized autocovariance for all lags at once via np.correlate
+    centered = arr - mean
+    n_lags = min(max_lag, n // 2 - 1)
+    if n_lags < 1:
+        return max_lag
+    # Full autocorrelation via np.correlate; extract positive lags 1..n_lags
+    full_corr = np.correlate(centered, centered, mode="full")
+    # full_corr has length 2*n-1; midpoint is lag=0 at index n-1
+    # Lags 1..n_lags are at indices n, n+1, ..., n+n_lags-1
+    lag_covs = full_corr[n : n + n_lags] / n  # mean covariance (divide by n, matching np.mean)
+    acf = lag_covs / var
+
+    # Find first lag where ACF < 0.5
+    below = np.where(acf < 0.5)[0]
+    if below.size > 0:
+        return int(below[0]) + 1  # +1 because lag indices are 0-based (lag=1 is index 0)
     return max_lag
 
 
