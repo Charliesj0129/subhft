@@ -25,8 +25,12 @@ logger = get_logger("hbt_adapter")
 
 
 class HftBacktestAdapter:
-    """
-    Runs a BaseStrategy instance inside HftBacktest engine.
+    """Runs a BaseStrategy instance inside HftBacktest engine.
+
+    Note: ``modify_latency_us`` and ``cancel_latency_us`` are stored for future
+    hftbacktest versions that support per-operation latency.  The current
+    ``constant_order_latency`` builder applies a single ``latency_us`` to all
+    order types.
     """
 
     def __init__(
@@ -50,6 +54,8 @@ class HftBacktestAdapter:
         latency_model: str = "ConstantLatency",
         exchange_model: str = "NoPartialFillExchange",
         latency_data_path: str | None = None,
+        modify_latency_us: int = 0,
+        cancel_latency_us: int = 0,
     ):
         if not HFTBACKTEST_AVAILABLE:
             raise ImportError("hftbacktest not installed")
@@ -63,6 +69,8 @@ class HftBacktestAdapter:
         self.strategy = strategy
         self.symbol = asset_symbol
         self.data_path = data_path
+        self.modify_latency_us = int(modify_latency_us)
+        self.cancel_latency_us = int(cancel_latency_us)
         self.price_scale = price_scale
         self.price_codec = PriceCodec(FixedPriceScaleProvider(price_scale))
         self._intent_seq = 0

@@ -156,3 +156,28 @@ def test_strategy_hbt_adapter_uses_strategy_class(monkeypatch):
 
     assert adapter.run() is True
     assert adapter.adapter is stub_adapter
+
+
+def test_backtest_adapter_accepts_modify_cancel_latency(monkeypatch):
+    """HftBacktestAdapter stores modify_latency_us and cancel_latency_us for future use."""
+    monkeypatch.setattr(hbt_adapter, "HFTBACKTEST_AVAILABLE", True, raising=False)
+    monkeypatch.setattr(hbt_adapter, "HashMapMarketDepthBacktest", _Hbt, raising=False)
+    monkeypatch.setattr(hbt_adapter, "BacktestAsset", _BacktestAsset, raising=False)
+    monkeypatch.setattr(hbt_adapter, "LinearAsset", _Noop, raising=False)
+    monkeypatch.setattr(hbt_adapter, "ConstantLatency", _Noop, raising=False)
+    monkeypatch.setattr(hbt_adapter, "PowerProbQueueModel", _Noop, raising=False)
+    monkeypatch.setattr(hbt_adapter, "IOC", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "ROD", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "Limit", object(), raising=False)
+
+    strategy = _SimpleStrategy("demo")
+    adapter = hbt_adapter.HftBacktestAdapter(
+        strategy=strategy,
+        asset_symbol="AAA",
+        data_path="dummy",
+        latency_us=100,
+        modify_latency_us=43000,
+        cancel_latency_us=47000,
+    )
+    assert adapter.modify_latency_us == 43000
+    assert adapter.cancel_latency_us == 47000
