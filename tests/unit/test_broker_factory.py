@@ -41,9 +41,7 @@ class TestBrokerFactory:
         result = BrokerFactory.create_from_env({"x": 1})
         assert result == {"broker": "another", "x": 1}
 
-    def test_create_from_env_default_shioaji(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_create_from_env_default_shioaji(self, monkeypatch: pytest.MonkeyPatch) -> None:
         BrokerFactory.register("shioaji", _mock_constructor)
         monkeypatch.delenv("HFT_BROKER", raising=False)
         result = BrokerFactory.create_from_env({})

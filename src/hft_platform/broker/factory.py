@@ -38,9 +38,7 @@ class BrokerFactory:
         """Create a broker client by name."""
         if name not in cls._registry:
             available = sorted(cls._registry.keys())
-            raise ValueError(
-                f"Unknown broker '{name}'. Available: {available}"
-            )
+            raise ValueError(f"Unknown broker '{name}'. Available: {available}")
         logger.info("broker_factory.creating", broker=name)
         return cls._registry[name](config)
 
