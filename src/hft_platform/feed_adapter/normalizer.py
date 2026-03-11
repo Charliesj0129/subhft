@@ -2,6 +2,7 @@ import importlib
 import os
 import re
 import sys
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional, cast
 
 from structlog import get_logger
@@ -92,6 +93,26 @@ except Exception as exc:
     _RUST_NORMALIZE_BIDASK = None
     _RUST_NORMALIZE_BIDASK_NP = None
     _RUST_NORMALIZE_BIDASK_SYNTH = None
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizerFieldMap:
+    """Field-name mapping for broker-specific tick/bidask data formats.
+
+    Default values correspond to Shioaji field names.
+    """
+
+    symbol_key: str = "code"
+    price_key: str = "close"
+    volume_key: str = "volume"
+    ts_key: str = "ts"
+    bid_price_key: str = "bid_price"
+    ask_price_key: str = "ask_price"
+    bid_volume_key: str = "bid_volume"
+    ask_volume_key: str = "ask_volume"
+    total_volume_key: str = "total_volume"
+    simtrade_key: str = "simtrade"
+    odd_lot_key: str = "intraday_odd"
 
 
 class SymbolMetadata:
@@ -279,6 +300,8 @@ class MarketDataNormalizer:
         "metadata",
         "price_codec",
         "metrics",
+        "_field_map",
+        "_is_default_map",
         "_last_symbol",
         "_last_scale",
         "_last_local_ts_ns",
@@ -290,12 +313,19 @@ class MarketDataNormalizer:
         "_fixed5_ask_vols_np",
     )
 
-    def __init__(self, config_path: Optional[str] = None, metadata: SymbolMetadata | None = None):
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        metadata: SymbolMetadata | None = None,
+        field_map: NormalizerFieldMap | None = None,
+    ):
         import itertools
 
         self._seq_gen = itertools.count(1)
         # self._lock = Lock() # Removed
         self.metadata = metadata or SymbolMetadata(config_path)
+        self._field_map = field_map or NormalizerFieldMap()
+        self._is_default_map = self._field_map == NormalizerFieldMap()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
         self._last_symbol: str | None = None
@@ -414,24 +444,25 @@ class MarketDataNormalizer:
 
     def normalize_tick(self, payload: Any) -> Optional[TickEvent | tuple]:
         # Fast path lookup without _coalesce
-        # Assuming Shioaji standard keys: 'code', 'close', 'volume', 'ts'
+        # Field names are configurable via self._field_map (default: Shioaji keys)
         try:
+            fm = self._field_map
             if isinstance(payload, dict):
-                symbol = payload.get("code") or payload.get("Code")
-                ts_val = payload.get("ts") or payload.get("datetime")
-                close_val = payload.get("close") or payload.get("Close")
-                vol_val = payload.get("volume") or payload.get("Volume")
-                total_volume = int(payload.get("total_volume") or 0)
-                is_simtrade = bool(payload.get("simtrade") or 0)
-                is_odd_lot = bool(payload.get("intraday_odd") or 0)
+                symbol = payload.get(fm.symbol_key) or payload.get("Code")
+                ts_val = payload.get(fm.ts_key) or payload.get("datetime")
+                close_val = payload.get(fm.price_key) or payload.get("Close")
+                vol_val = payload.get(fm.volume_key) or payload.get("Volume")
+                total_volume = int(payload.get(fm.total_volume_key) or 0)
+                is_simtrade = bool(payload.get(fm.simtrade_key) or 0)
+                is_odd_lot = bool(payload.get(fm.odd_lot_key) or 0)
             else:
-                symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
-                ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
-                close_val = getattr(payload, "close", None) or getattr(payload, "Close", None)
-                vol_val = getattr(payload, "volume", None) or getattr(payload, "Volume", None)
-                total_volume = int(getattr(payload, "total_volume", None) or 0)
-                is_simtrade = bool(getattr(payload, "simtrade", None) or 0)
-                is_odd_lot = bool(getattr(payload, "intraday_odd", None) or 0)
+                symbol = getattr(payload, fm.symbol_key, None) or getattr(payload, "Code", None)
+                ts_val = getattr(payload, fm.ts_key, None) or getattr(payload, "datetime", None)
+                close_val = getattr(payload, fm.price_key, None) or getattr(payload, "Close", None)
+                vol_val = getattr(payload, fm.volume_key, None) or getattr(payload, "Volume", None)
+                total_volume = int(getattr(payload, fm.total_volume_key, None) or 0)
+                is_simtrade = bool(getattr(payload, fm.simtrade_key, None) or 0)
+                is_odd_lot = bool(getattr(payload, fm.odd_lot_key, None) or 0)
 
             if not symbol:
                 return None
@@ -441,7 +472,7 @@ class MarketDataNormalizer:
 
             if close_val is not None:
                 scale = self._get_scale(symbol)
-                if _RUST_ENABLED and _RUST_NORMALIZE_TICK is not None:
+                if _RUST_ENABLED and _RUST_NORMALIZE_TICK is not None and self._is_default_map:
                     try:
                         rust_tuple = _RUST_NORMALIZE_TICK(payload, symbol, scale)
                         if rust_tuple is not None:
@@ -584,20 +615,21 @@ class MarketDataNormalizer:
 
     def normalize_bidask(self, payload: Any) -> Optional[BidAskEvent | tuple]:
         try:
+            fm = self._field_map
             if isinstance(payload, dict):
-                symbol = payload.get("code") or payload.get("Code")
-                ts_val = payload.get("ts") or payload.get("datetime")
-                bp = payload.get("bid_price") or []
-                bv = payload.get("bid_volume") or []
-                ap = payload.get("ask_price") or []
-                av = payload.get("ask_volume") or []
+                symbol = payload.get(fm.symbol_key) or payload.get("Code")
+                ts_val = payload.get(fm.ts_key) or payload.get("datetime")
+                bp = payload.get(fm.bid_price_key) or []
+                bv = payload.get(fm.bid_volume_key) or []
+                ap = payload.get(fm.ask_price_key) or []
+                av = payload.get(fm.ask_volume_key) or []
             else:
-                symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
-                ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
-                bp = getattr(payload, "bid_price", None) or []
-                bv = getattr(payload, "bid_volume", None) or []
-                ap = getattr(payload, "ask_price", None) or []
-                av = getattr(payload, "ask_volume", None) or []
+                symbol = getattr(payload, fm.symbol_key, None) or getattr(payload, "Code", None)
+                ts_val = getattr(payload, fm.ts_key, None) or getattr(payload, "datetime", None)
+                bp = getattr(payload, fm.bid_price_key, None) or []
+                bv = getattr(payload, fm.bid_volume_key, None) or []
+                ap = getattr(payload, fm.ask_price_key, None) or []
+                av = getattr(payload, fm.ask_volume_key, None) or []
             if not symbol:
                 return None
 
@@ -788,7 +820,7 @@ class MarketDataNormalizer:
                     asks_final = None
                     stats = None
 
-            if stats is None and use_rust and _RUST_NORMALIZE_BIDASK is not None:
+            if stats is None and use_rust and _RUST_NORMALIZE_BIDASK is not None and self._is_default_map:
                 try:
                     rust_tuple = _RUST_NORMALIZE_BIDASK(payload, symbol, scale)
                     if rust_tuple is not None:
@@ -925,16 +957,17 @@ class MarketDataNormalizer:
             return None
 
     def normalize_snapshot(self, payload: Dict[str, Any]) -> Optional[BidAskEvent | tuple]:
+        fm = self._field_map
         if isinstance(payload, dict):
-            symbol = payload.get("code") or payload.get("Code")
-            ts_val = payload.get("ts") or payload.get("datetime")
+            symbol = payload.get(fm.symbol_key) or payload.get("Code")
+            ts_val = payload.get(fm.ts_key) or payload.get("datetime")
             buy_price = payload.get("buy_price")
             buy_volume = payload.get("buy_volume")
             sell_price = payload.get("sell_price")
             sell_volume = payload.get("sell_volume")
         else:
-            symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
-            ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
+            symbol = getattr(payload, fm.symbol_key, None) or getattr(payload, "Code", None)
+            ts_val = getattr(payload, fm.ts_key, None) or getattr(payload, "datetime", None)
             buy_price = getattr(payload, "buy_price", None)
             buy_volume = getattr(payload, "buy_volume", None)
             sell_price = getattr(payload, "sell_price", None)
