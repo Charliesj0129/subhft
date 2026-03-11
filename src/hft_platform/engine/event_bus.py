@@ -372,16 +372,26 @@ class RingBufferBus:
                     kind = _KIND_BIDASK
                     exch_ts_ns = int(event[4])
                     if len(event) >= 13:
-                        price0 = int(event[6])   # best_bid
-                        price1 = int(event[7])   # best_ask
-                        qty0 = int(event[8])     # bid_depth
-                        qty1 = int(event[9])     # ask_depth
+                        price0 = int(event[6])  # best_bid
+                        price1 = int(event[7])  # best_ask
+                        qty0 = int(event[8])  # bid_depth
+                        qty1 = int(event[9])  # ask_depth
                         ratio0 = float(event[12])  # imbalance
                 elif tag == "trade":
                     kind = _KIND_TRADE
             self._typed_ring.publish(
-                kind, flags, symbol_id, exch_ts_ns, local_ts_ns,
-                price0, price1, qty0, qty1, aux0, aux1, ratio0,
+                kind,
+                flags,
+                symbol_id,
+                exch_ts_ns,
+                local_ts_ns,
+                price0,
+                price1,
+                qty0,
+                qty1,
+                aux0,
+                aux1,
+                ratio0,
             )
             # Also store in fallback buffer so consume() can read PyObject events
             self._store_fallback(next_seq, event)

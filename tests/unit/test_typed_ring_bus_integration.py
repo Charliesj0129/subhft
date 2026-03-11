@@ -97,8 +97,7 @@ def test_rust_typed_with_mock_typed_ring(monkeypatch):
             ratio0: float,
         ) -> int:
             self.published.append(
-                (kind, flags, symbol_id, exch_ts_ns, local_ts_ns,
-                 price0, price1, qty0, qty1, aux0, aux1, ratio0)
+                (kind, flags, symbol_id, exch_ts_ns, local_ts_ns, price0, price1, qty0, qty1, aux0, aux1, ratio0)
             )
             return len(self.published)
 
@@ -166,14 +165,19 @@ def test_rust_typed_bidask_publish_maps_fields(monkeypatch):
     bus = RingBufferBus(size=8)
 
     bidask = (
-        "bidask", "2330",
-        [[10000, 3]], [[10010, 4]],
+        "bidask",
+        "2330",
+        [[10000, 3]],
+        [[10010, 4]],
         999888777,  # exch_ts
         False,
-        10000, 10010,  # best_bid, best_ask
-        5, 9,          # bid_depth, ask_depth
-        10005.0, 10.0,
-        0.123,         # imbalance
+        10000,
+        10010,  # best_bid, best_ask
+        5,
+        9,  # bid_depth, ask_depth
+        10005.0,
+        10.0,
+        0.123,  # imbalance
     )
     bus.publish_nowait(bidask)
 
@@ -192,12 +196,14 @@ def test_rust_typed_with_importorskip():
     _ftrb = None
     try:
         from hft_platform.rust_core import FastTypedRingBuffer as _ftrb_cls  # type: ignore[attr-defined]
+
         _ftrb = _ftrb_cls
     except (ImportError, AttributeError):
         pass
     # This test just validates the import path; skip gracefully if not registered
     if _ftrb is None:
         import pytest
+
         pytest.skip("FastTypedRingBuffer not yet registered in rust_core lib.rs")
     ring = _ftrb(16)
     seq = ring.publish(1, 0, 42, 100, 200, 10, 20, 30, 40, 50, 60, 0.5)
