@@ -108,7 +108,7 @@ fn main() -> anyhow::Result<()> {
         (20005.0, 1.0),
     ];
 
-    while reader.read_exact(&mut chunk).is_ok() {
+    while let Ok(()) = reader.read_exact(&mut chunk) {
         // let event: Event = unsafe { mem::transmute_copy(&chunk) };
         let event: Event = unsafe { std::ptr::read(chunk.as_ptr() as *const Event) };
 

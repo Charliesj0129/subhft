@@ -1,7 +1,8 @@
-/// MdEventFrame — cache-line-friendly 128-byte market data event struct.
-///
-/// All price fields are i64 scaled x10000 per the Precision Law.
-/// Layout is `#[repr(C)]` for deterministic memory ordering.
+//! MdEventFrame — cache-line-friendly 128-byte market data event struct.
+//!
+//! All price fields are i64 scaled x10000 per the Precision Law.
+//! Layout is `#[repr(C)]` for deterministic memory ordering.
+
 /// Event type discriminator constants.
 #[allow(dead_code)]
 pub const KIND_TICK: u8 = 1;
@@ -130,7 +131,6 @@ mod tests {
             aux0: 30,
             aux1: 40,
             ratio0: 0.5,
-            _pad: [0u8; 40],
         };
         let t = f.as_tuple();
         assert_eq!(t.0, 1);
