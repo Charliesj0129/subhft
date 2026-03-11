@@ -1,3 +1,6 @@
+# DEPRECATED: External consumers should use ShioajiClientFacade from
+# hft_platform.feed_adapter.shioaji.facade instead of importing from this module.
+# This module is retained for internal use by the shioaji/ sub-package runtimes.
 import datetime as dt
 import os
 import queue

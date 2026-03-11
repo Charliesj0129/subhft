@@ -12,7 +12,6 @@ from hft_platform.execution.reconciliation import ReconciliationService
 from hft_platform.execution.router import ExecutionRouter
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
-from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
 from hft_platform.risk.engine import RiskEngine
@@ -20,7 +19,8 @@ from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.runner import StrategyRunner
 
-BrokerClient = ShioajiClient | ShioajiClientFacade
+# All external consumers should use ShioajiClientFacade; ShioajiClient is internal.
+BrokerClient = ShioajiClientFacade
 
 
 @dataclass(slots=True)
