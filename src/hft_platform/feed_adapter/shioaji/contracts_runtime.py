@@ -13,6 +13,8 @@ from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.contracts_runtime")
 
+_CONTINUOUS_SUFFIXES = frozenset({"R1", "R2"})
+
 try:
     import shioaji as sj
 except Exception:  # pragma: no cover
@@ -113,6 +115,10 @@ class ContractsRuntime:
                 )
                 if contract:
                     return contract
+            # Try continuous futures resolution (R1/R2) via nested attribute access
+            continuous = self._resolve_continuous_future(raw_code)
+            if continuous is not None:
+                return continuous
 
         if prod in {"option", "options"} or exch in {"OPT", "OPTIONS"}:
             contract = self._lookup_contract(
@@ -129,12 +135,35 @@ class ContractsRuntime:
 
         return None
 
+    def _resolve_continuous_future(self, code: str) -> Any | None:
+        """Resolve continuous futures contract (R1=near month, R2=next month).
+
+        Tries ``Contracts.Futures.{root}.{code}`` access pattern used by
+        Shioaji SDK, e.g. ``Contracts.Futures.TXF.TXFR1``.
+        """
+        if not self._client.api or len(code) < 4 or code[-2:] not in _CONTINUOUS_SUFFIXES:
+            return None
+        root = code[:-2]
+        root_group = getattr(self._client.api.Contracts.Futures, root, None)
+        if root_group is None:
+            logger.debug("continuous_future_root_not_found", code=code, root=root)
+            return None
+        contract = getattr(root_group, code, None)
+        if contract is not None:
+            logger.debug("continuous_future_resolved", code=code, root=root)
+        else:
+            logger.debug("continuous_future_not_found", code=code, root=root)
+        return contract
+
     def _expand_future_codes(self, code: str) -> list[str]:
         """Expand legacy futures month codes (e.g., TXFD6) to YYYYMM form (TXF202604)."""
         code = str(code or "").strip().upper()
         if not code:
             return []
         candidates = [code]
+        # Continuous futures (R1/R2) — no further expansion needed
+        if len(code) >= 4 and code[-2:] in _CONTINUOUS_SUFFIXES:
+            return candidates
         if len(code) >= 5:
             month_code = code[-2]
             year_digit = code[-1]
