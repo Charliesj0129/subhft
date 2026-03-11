@@ -1313,50 +1313,45 @@ def cmd_alpha_experiments_best(args: argparse.Namespace):
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def cmd_resolve_symbols(args: argparse.Namespace):
-    """Resolve TSE/OTC exchanges for a list of symbols or from config."""
-    import shioaji as sj
+def _resolve_symbols_shioaji(args: argparse.Namespace) -> None:
+    """Resolve TSE/OTC exchanges via Shioaji broker."""
     import yaml
 
     try:
-        from hft_platform.config.loader import detect_live_credentials, load_settings
+        import shioaji as sj
     except ImportError:
+        logger.error("shioaji_not_installed", hint="pip install shioaji")
+        sys.exit(1)
 
-        def load_settings(cli_overrides: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-            return {}, {}
-
-    # Get credentials
     api_key = os.environ.get("SHIOAJI_API_KEY")
     secret_key = os.environ.get("SHIOAJI_SECRET_KEY")
 
     if not api_key or not secret_key:
-        print("Error: SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY env vars required.")
+        logger.error("missing_credentials", keys=["SHIOAJI_API_KEY", "SHIOAJI_SECRET_KEY"])
         sys.exit(1)
 
-    print("Initializing Shioaji (Simulation mode)...")
+    logger.info("shioaji_init", mode="simulation")
     api = sj.Shioaji(simulation=True)
     try:
         api.login(api_key=api_key, secret_key=secret_key, contracts_timeout=60000)
     except Exception as e:
-        print(f"Login failed: {e}")
+        logger.error("shioaji_login_failed", error=str(e))
         sys.exit(1)
 
-    # Get symbols
     symbols = args.symbols
     if not symbols:
-        # Load from config/symbols.yaml or existing
-        print("No symbols provided via args, please provide list.")
+        logger.error("no_symbols_provided")
         sys.exit(1)
 
-    print("Building contract map...")
-    code_map = {}
+    logger.info("building_contract_map")
+    code_map: dict[str, str] = {}
     try:
         for c in api.Contracts.Stocks.TSE:
             code_map[c.code] = "TSE"
         for c in api.Contracts.Stocks.OTC:
             code_map[c.code] = "OTC"
     except Exception as e:
-        print(f"Contract fetch warning: {e}")
+        logger.warning("contract_fetch_warning", error=str(e))
 
     result = []
     for code in symbols:
@@ -1364,16 +1359,29 @@ def cmd_resolve_symbols(args: argparse.Namespace):
         if exch:
             result.append({"code": code, "exchange": exch})
         else:
-            print(f"Warning: {code} not found in TSE/OTC contracts.")
+            logger.warning("symbol_not_found", code=code)
 
     output_data = {"symbols": result}
 
     if args.output:
         with open(args.output, "w") as f:
             yaml.dump(output_data, f, sort_keys=False)
-        print(f"Written to {args.output}")
+        logger.info("written", path=args.output)
     else:
         print(yaml.dump(output_data, sort_keys=False))
+
+
+def cmd_resolve_symbols(args: argparse.Namespace) -> None:
+    """Resolve TSE/OTC exchanges for a list of symbols (broker-agnostic)."""
+    broker = os.getenv("HFT_BROKER", "shioaji")
+
+    if broker == "shioaji":
+        _resolve_symbols_shioaji(args)
+    elif broker == "fubon":
+        logger.info("fubon_resolve_not_implemented", msg="Fubon symbol resolution not yet implemented")
+    else:
+        logger.error("unknown_broker", broker=broker)
+        sys.exit(1)
 
 
 def _print_issues(errors: list[str], warnings: list[str]):
