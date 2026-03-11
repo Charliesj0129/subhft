@@ -4,6 +4,7 @@ from typing import Any
 
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
+from hft_platform.feed_adapter.shioaji.data_gateway import DataGateway
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
@@ -23,6 +24,7 @@ class ShioajiClientFacade:
         "contracts_runtime",
         "order_gateway",
         "account_gateway",
+        "data_gateway",
         "subscription_manager",
     )
 
@@ -36,6 +38,7 @@ class ShioajiClientFacade:
         self.contracts_runtime = ContractsRuntime(client)
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
+        self.data_gateway = DataGateway(client)
         self.subscription_manager = client._subscription_manager
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
@@ -74,8 +77,42 @@ class ShioajiClientFacade:
     def subscribe_basket(self, cb) -> None:
         self.subscription_manager.subscribe_basket(cb)
 
-    def fetch_snapshots(self) -> list[Any]:
-        return self._client.fetch_snapshots()
+    def fetch_snapshots(self, contracts: list[Any] | None = None) -> list[Any]:
+        return self.data_gateway.get_snapshots(contracts=contracts)
+
+    def get_ticks(
+        self,
+        contract: Any,
+        date: str,
+        query_type: str = "AllDay",
+        time_start: str | None = None,
+        time_end: str | None = None,
+        last_cnt: int | None = None,
+        timeout: int = 30000,
+    ) -> Any:
+        return self.data_gateway.get_ticks(
+            contract=contract,
+            date=date,
+            query_type=query_type,
+            time_start=time_start,
+            time_end=time_end,
+            last_cnt=last_cnt,
+            timeout=timeout,
+        )
+
+    def get_kbars(
+        self,
+        contract: Any,
+        start: str,
+        end: str,
+        timeout: int = 30000,
+    ) -> Any:
+        return self.data_gateway.get_kbars(
+            contract=contract,
+            start=start,
+            end=end,
+            timeout=timeout,
+        )
 
     def reload_symbols(self) -> None:
         self.contracts_runtime.reload_symbols()
