@@ -139,7 +139,7 @@ class RiskEngine:
             scale = int(os.getenv("HFT_RISK_FAST_GATE_PRICE_SCALE", "10000"))
         except ValueError:
             scale = 10_000
-        max_price_cap = float(defaults.get("max_price_cap", 5000.0))  # noqa: precision-config
+        max_price_cap = float(defaults.get("max_price_cap", 5000.0))  # precision-config
         max_price_scaled = int(max_price_cap * max(1, scale))
         max_qty = int(
             os.getenv(
