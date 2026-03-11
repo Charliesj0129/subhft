@@ -6,11 +6,12 @@ from typing import Any, Dict, TypeAlias, TypeGuard, cast
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
+from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.circuit_breaker import CircuitBreaker
@@ -45,11 +46,17 @@ def _get_trace_sampler():
 
 class OrderAdapter:
     def __init__(
-        self, config_path: str, order_queue: asyncio.Queue, shioaji_client, order_id_map: Dict[str, str] | None = None
+        self,
+        config_path: str,
+        order_queue: asyncio.Queue,
+        shioaji_client,
+        order_id_map: Dict[str, str] | None = None,
+        broker_codec: ShioajiOrderCodec | None = None,
     ):
         self.config_path = config_path
         self.order_queue = order_queue
         self.client = shioaji_client
+        self._broker_codec = broker_codec if broker_codec is not None else ShioajiOrderCodec()
         # Map broker order IDs -> order_key ("strategy_id:intent_id")
         # Protected by _order_id_map_lock for concurrent access
         self.order_id_map = order_id_map if order_id_map is not None else {}
@@ -323,8 +330,8 @@ class OrderAdapter:
                         )
                         order_params = {}
 
-                # Convert Side IntEnum to String for ShioajiClient
-                action_str = "Buy" if intent.side == Side.BUY else "Sell"
+                # Convert Side IntEnum to broker-specific string
+                action_str = self._broker_codec.encode_side(intent.side)
 
                 # De-scale price (Fixed Point -> Float limit price)
                 price_float = self.price_codec.descale(intent.symbol, intent.price)
@@ -336,13 +343,11 @@ class OrderAdapter:
                     logger.warning("StrategyID too long for custom_field", id=c_field)
                     c_field = ""
 
-                # TIF Mapping (IntEnum -> Str)
-                # Limit -> ROD; IOC/FOK passthrough
-                tif_map = {TIF.LIMIT: "ROD", TIF.IOC: "IOC", TIF.FOK: "FOK"}
-                tif_str = tif_map.get(intent.tif, "ROD")
+                # TIF Mapping via broker codec
+                tif_str = self._broker_codec.encode_tif(intent.tif)
 
-                # Shioaji: MKT/MKP must be IOC/FOK (not ROD)
-                price_type = str(order_params.get("price_type", "LMT")).upper()
+                # Broker-specific price type encoding + validation
+                price_type = self._broker_codec.encode_price_type(str(order_params.get("price_type", "LMT")))
                 if price_type in {"MKT", "MKP"} and tif_str == "ROD":
                     logger.error(
                         "Rejecting invalid order type",
