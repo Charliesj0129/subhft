@@ -13,8 +13,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from hft_platform.feed_adapter.broker_registry import (
-    BrokerFactory,
     _BROKER_REGISTRY,
+    BrokerFactory,
     get_broker_factory,
     list_brokers,
     register_broker,
@@ -134,9 +134,7 @@ class _MockBrokerSession:
 class _FakeBrokerFactory:
     """A concrete BrokerFactory implementation for testing."""
 
-    def create_clients(
-        self, symbols_path: str, broker_config: dict[str, Any]
-    ) -> tuple[Any, Any]:
+    def create_clients(self, symbols_path: str, broker_config: dict[str, Any]) -> tuple[Any, Any]:
         md = _MockMarketDataProvider()
         order = _MockOrderExecutor()
         return md, order
@@ -220,9 +218,7 @@ class TestEnvVarSelection:
         with pytest.raises(ValueError, match="nonexistent"):
             get_broker_factory()
 
-    def test_switch_broker_via_env_var(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_switch_broker_via_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sj = _FakeBrokerFactory()
         fb = _FakeBrokerFactory()
         register_broker("shioaji", sj)
@@ -234,9 +230,7 @@ class TestEnvVarSelection:
         monkeypatch.setenv("HFT_BROKER", "fubon")
         assert get_broker_factory() is fb
 
-    def test_explicit_name_overrides_env_var(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_explicit_name_overrides_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_BROKER", "fubon")
         sj = _FakeBrokerFactory()
         fb = _FakeBrokerFactory()
@@ -316,9 +310,7 @@ class TestFactoryClientCreation:
         register_broker("test_broker", factory)
 
         retrieved = get_broker_factory("test_broker")
-        md, order = retrieved.create_clients(
-            "config/symbols.yaml", {"api_key": "test"}
-        )
+        md, order = retrieved.create_clients("config/symbols.yaml", {"api_key": "test"})
 
         assert md is not None
         assert order is not None
