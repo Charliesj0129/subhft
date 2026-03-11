@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import concurrent.futures
+import copy
 import json
 import os
 import subprocess
@@ -1007,6 +1009,73 @@ def _bds_correlation_delta(arr: np.ndarray, epsilon: float) -> float:
     return float(c2 - (c1 * c1))
 
 
+def _run_single_threshold_trial(
+    *,
+    alpha: Any,
+    base_cfg: Any,
+    threshold: float,
+    is_base: bool,
+    base_result: Any,
+    opt_objective: str,
+    runner_cls: Any,
+) -> dict[str, Any]:
+    """Run a single parameter-optimization trial for one threshold value.
+
+    Each non-base trial deep-copies the alpha to prevent shared mutable state
+    corruption across threads.
+    """
+    if is_base:
+        result = base_result
+    else:
+        alpha_copy = copy.deepcopy(alpha)
+        cfg = replace(base_cfg, signal_threshold=threshold)
+        result = runner_cls(alpha_copy, cfg).run()
+    objective = _optimization_objective(
+        float(result.sharpe_oos),
+        float(result.max_drawdown),
+        float(result.turnover),
+        opt_objective,
+    )
+    return {
+        "signal_threshold": threshold,
+        "sharpe_is": float(result.sharpe_is),
+        "sharpe_oos": float(result.sharpe_oos),
+        "max_drawdown": float(result.max_drawdown),
+        "turnover": float(result.turnover),
+        "objective": float(objective),
+        "run_id": str(result.run_id),
+        "config_hash": str(result.config_hash),
+    }
+
+
+def _run_threshold_trials_parallel(
+    *,
+    alpha: Any,
+    base_cfg: Any,
+    base_result: Any,
+    opt_objective: str,
+    runner_cls: Any,
+    trial_args: list[tuple[float, bool]],
+    max_workers: int,
+) -> list[dict[str, Any]]:
+    """Execute threshold trials in parallel, preserving order."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures: list[concurrent.futures.Future[dict[str, Any]]] = [
+            executor.submit(
+                _run_single_threshold_trial,
+                alpha=alpha,
+                base_cfg=base_cfg,
+                threshold=t,
+                is_base=is_base,
+                base_result=base_result,
+                opt_objective=opt_objective,
+                runner_cls=runner_cls,
+            )
+            for t, is_base in trial_args
+        ]
+        return [f.result() for f in futures]
+
+
 def _optimize_parameters(
     *,
     alpha: Any,
@@ -1047,32 +1116,27 @@ def _optimize_parameters(
     grid = np.unique(np.append(grid, np.asarray([base_threshold], dtype=np.float64)))
     grid.sort()
 
-    rows: list[dict[str, Any]] = []
-    for threshold in grid:
-        t = float(threshold)
-        if abs(t - base_threshold) < 1e-12:
-            result = base_result
-        else:
-            cfg = replace(base_cfg, signal_threshold=t)
-            result = runner_cls(alpha, cfg).run()
-        objective = _optimization_objective(
-            float(result.sharpe_oos),
-            float(result.max_drawdown),
-            float(result.turnover),
-            str(config.opt_objective),
-        )
-        rows.append(
-            {
-                "signal_threshold": t,
-                "sharpe_is": float(result.sharpe_is),
-                "sharpe_oos": float(result.sharpe_oos),
-                "max_drawdown": float(result.max_drawdown),
-                "turnover": float(result.turnover),
-                "objective": float(objective),
-                "run_id": str(result.run_id),
-                "config_hash": str(result.config_hash),
-            }
-        )
+    # Parallel threshold sweep using ThreadPoolExecutor.
+    env_workers = os.environ.get("HFT_GATE_C_PARALLEL_WORKERS", "")
+    if env_workers.strip():
+        max_workers = max(1, min(int(env_workers), 8))
+    else:
+        max_workers = min(len(grid), os.cpu_count() or 4, 8)
+
+    trial_args = [
+        (float(threshold), abs(float(threshold) - base_threshold) < 1e-12)
+        for threshold in grid
+    ]
+
+    rows: list[dict[str, Any]] = _run_threshold_trials_parallel(
+            alpha=alpha,
+            base_cfg=base_cfg,
+            base_result=base_result,
+            opt_objective=str(config.opt_objective),
+            runner_cls=runner_cls,
+            trial_args=trial_args,
+            max_workers=max_workers,
+    )
 
     if not rows:
         return {
