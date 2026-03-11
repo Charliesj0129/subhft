@@ -20,8 +20,6 @@ from hft_platform.feature.profile import load_feature_profile_registry
 from hft_platform.feature.rollout import load_feature_rollout_controller
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
-
-_VALID_BROKERS = frozenset({"shioaji", "fubon"})
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
@@ -33,6 +31,7 @@ from hft_platform.strategy.runner import StrategyRunner
 
 logger = get_logger("bootstrap")
 
+_VALID_BROKERS = frozenset({"shioaji", "fubon"})
 _VALID_RUNTIME_ROLES = frozenset({"engine", "maintenance", "monitor", "wal_loader"})
 _FEED_ALLOWED_ROLES = frozenset({"engine"})
 
@@ -409,9 +408,7 @@ class SystemBootstrapper:
         """Read HFT_BROKER env var and validate against known broker IDs."""
         broker_id = os.environ.get("HFT_BROKER", "shioaji").strip().lower()
         if broker_id not in _VALID_BROKERS:
-            raise ValueError(
-                f"Unknown HFT_BROKER={broker_id!r}; valid options: {sorted(_VALID_BROKERS)}"
-            )
+            raise ValueError(f"Unknown HFT_BROKER={broker_id!r}; valid options: {sorted(_VALID_BROKERS)}")
         return broker_id
 
     def _build_broker_clients(

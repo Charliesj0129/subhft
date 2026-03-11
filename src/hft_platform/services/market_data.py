@@ -22,6 +22,7 @@ from hft_platform.feature.engine import (
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
+
 # TODO: replace with BrokerClientProtocol once WU-1 merges
 # Previously: from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.latency import LatencyRecorder

@@ -1,11 +1,12 @@
 """Tests for HFT_BROKER env var based broker selection in SystemBootstrapper."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.services.bootstrap import SystemBootstrapper, _VALID_BROKERS
+from hft_platform.services.bootstrap import _VALID_BROKERS, SystemBootstrapper
 
 
 class TestResolveBrokerId:
@@ -52,9 +53,7 @@ class TestBuildBrokerClientsSelection:
 
     def test_shioaji_path_uses_shioaji_facade(self, bootstrapper: SystemBootstrapper) -> None:
         """broker_id='shioaji' instantiates ShioajiClientFacade."""
-        with patch(
-            "hft_platform.services.bootstrap.ShioajiClientFacade"
-        ) as mock_facade:
+        with patch("hft_platform.services.bootstrap.ShioajiClientFacade") as mock_facade:
             mock_facade.return_value = MagicMock()
             md, order = bootstrapper._build_broker_clients(
                 role="engine",
@@ -71,24 +70,19 @@ class TestBuildBrokerClientsSelection:
 
         with patch.dict(
             "sys.modules",
-            {"hft_platform.feed_adapter.fubon": MagicMock(), "hft_platform.feed_adapter.fubon.facade": MagicMock(FubonClientFacade=mock_fubon_facade_cls)},
+            {
+                "hft_platform.feed_adapter.fubon": MagicMock(),
+                "hft_platform.feed_adapter.fubon.facade": MagicMock(FubonClientFacade=mock_fubon_facade_cls),
+            },
         ):
-            # Re-import to pick up patched module
-            with patch(
-                "hft_platform.services.bootstrap.ShioajiClientFacade"
-            ):
-                # We need to patch the lazy import inside the method
-                import importlib
-
+            with patch("hft_platform.services.bootstrap.ShioajiClientFacade"):
                 import hft_platform.services.bootstrap as bs_mod
 
-                # Directly mock the import path used in the method
                 with patch.object(
                     bs_mod,
                     "__import__",
                     create=True,
                 ):
-                    # Simpler approach: just mock at the point of import
                     fake_module = MagicMock()
                     fake_module.FubonClientFacade = mock_fubon_facade_cls
                     with patch.dict("sys.modules", {"hft_platform.feed_adapter.fubon.facade": fake_module}):
