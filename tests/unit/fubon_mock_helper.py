@@ -37,7 +37,12 @@ def install_fubon_neo_mock() -> types.ModuleType:
     constant.OrderType.DayTrade = "FUBON_DAYTRADE"
     constant.OrderType.Margin = "FUBON_MARGIN"
 
-    fubon_neo.constant = constant
+    sdk_mod = types.ModuleType("fubon_neo.sdk")
+    sdk_mod.FubonSDK = MagicMock  # type: ignore[attr-defined]
+
+    fubon_neo.constant = constant  # type: ignore[attr-defined]
+    fubon_neo.sdk = sdk_mod  # type: ignore[attr-defined]
     sys.modules["fubon_neo"] = fubon_neo
     sys.modules["fubon_neo.constant"] = constant
+    sys.modules["fubon_neo.sdk"] = sdk_mod
     return constant
