@@ -19,14 +19,14 @@ class StormGuardState(IntEnum):
 
 @dataclass
 class RiskThresholds:
-    warm_drawdown: float = -0.005  # -0.5%  # noqa: precision-ratio
-    storm_drawdown: float = -0.010  # -1.0%  # noqa: precision-ratio
-    halt_drawdown: float = -0.020  # -2.0%  # noqa: precision-ratio
+    warm_drawdown: float = -0.005  # -0.5%  precision-ratio
+    storm_drawdown: float = -0.010  # -1.0%  precision-ratio
+    halt_drawdown: float = -0.020  # -2.0%  precision-ratio
 
     latency_warm_us: int = 5_000
     latency_storm_us: int = 20_000
 
-    feed_gap_halt_s: float = 1.0  # noqa: precision-time
+    feed_gap_halt_s: float = 1.0  # precision-time
 
 
 class StormGuard:
@@ -42,19 +42,19 @@ class StormGuard:
         self.metrics = MetricsRegistry.get()
         self.last_state_change = timebase.now_s()
         self._de_escalate_count: int = 0
-        self._storm_entry_ts: float = 0.0  # noqa: precision-time
-        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # noqa: precision-time
+        self._storm_entry_ts: float = 0.0  # precision-time
+        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
 
     def _apply_env_overrides(self) -> None:
         feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
         if feed_gap_override:
             try:
-                self.thresholds.feed_gap_halt_s = float(feed_gap_override)  # noqa: precision-time
+                self.thresholds.feed_gap_halt_s = float(feed_gap_override)  # precision-time
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
-    def update(  # noqa: precision-ratio
+    def update(  # precision-ratio
         self, drawdown_pct: float = 0.0, latency_us: int = 0, feed_gap_s: float = 0.0
     ) -> StormGuardState:
         """

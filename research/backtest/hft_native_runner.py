@@ -192,32 +192,55 @@ def ensure_hftbt_npz(data_path: str) -> str:
     ask_ev_code = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
     trade_ev_code = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT)
 
-    events: list[tuple] = []
+    # Pre-allocate event list to avoid per-tick .append() reallocation (Allocator Law).
+    # Worst case: 3 events per row (bid + ask + trade when volume > 0).
+    valid_mask = ~((bid_px == 0.0) & (ask_px == 0.0))
+    n_valid = int(np.count_nonzero(valid_mask))
+    if n_valid == 0:
+        raise ValueError(f"No valid events generated from '{data_path}' — all rows had zero prices.")
+
+    has_trade = volume > 0.0
+    n_trades = int(np.count_nonzero(valid_mask & has_trade))
+    est_events = 2 * n_valid + n_trades
+
+    events: list[tuple | None] = [None] * est_events
+    w = 0
     for i in range(n):
+        if not valid_mask[i]:
+            continue
         bp = float(bid_px[i])
         ap = float(ask_px[i])
         bq = float(bid_qty[i])
         aq = float(ask_qty[i])
-        vol = float(volume[i])
         ts = int(local_ts[i])
 
-        # Skip rows where both prices are zero
-        if bp == 0.0 and ap == 0.0:
-            continue
-
-        events.append(_build_event(bid_ev_code, ts, ts, bp, bq))
-        events.append(_build_event(ask_ev_code, ts, ts, ap, aq))
-        if vol > 0.0:
+        events[w] = _build_event(bid_ev_code, ts, ts, bp, bq)
+        w += 1
+        events[w] = _build_event(ask_ev_code, ts, ts, ap, aq)
+        w += 1
+        if has_trade[i]:
             mid = (bp + ap) / 2.0
-            events.append(_build_event(trade_ev_code, ts, ts, mid, vol))
+            events[w] = _build_event(trade_ev_code, ts, ts, mid, float(volume[i]))
+            w += 1
 
-    if not events:
-        raise ValueError(f"No valid events generated from '{data_path}' — all rows had zero prices.")
-
-    event_arr = np.array(events, dtype=_evt_dtype)
+    event_arr = np.array(events[:w], dtype=_evt_dtype)
     out_path = Path(data_path).parent / "hftbt.npz"
     np.savez_compressed(str(out_path), data=event_arr)
     return str(out_path)
+
+
+def _effective_broker_rtt_ms(config: BacktestConfig) -> float:
+    """Return worst-case broker RTT across submit/modify/cancel operations.
+
+    hftbacktest ``constant_order_latency`` applies a single latency to all
+    order types, so we use the maximum (typically cancel P95) for conservative
+    estimation.
+    """
+    return float(max(
+        config.submit_ack_latency_ms,
+        config.modify_ack_latency_ms,
+        config.cancel_ack_latency_ms,
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +265,8 @@ def _run_adapter_slice(
             "hft_platform.backtest.adapter.HftBacktestAdapter not available. Ensure hftbacktest is installed."
         )
 
-    latency_us = int((config.local_decision_pipeline_latency_us + config.submit_ack_latency_ms * 1000))
+    effective_rtt = _effective_broker_rtt_ms(config)
+    latency_us = int((config.local_decision_pipeline_latency_us + effective_rtt * 1000))
     bridge = AlphaStrategyBridge(
         alpha=alpha,
         max_position=config.max_position,
@@ -279,17 +303,35 @@ def _signals_to_positions(
     threshold: float,
     max_position: int,
 ) -> np.ndarray:
-    """Convert signals to integer position ladder."""
-    positions = np.zeros_like(signals)
-    for i in range(1, len(signals)):
-        prev = positions[i - 1]
-        sig = signals[i]
-        if sig > threshold:
-            positions[i] = min(prev + 1, max_position)
-        elif sig < -threshold:
-            positions[i] = max(prev - 1, -max_position)
+    """Convert signals to integer position ladder.
+
+    Pre-computes the per-tick direction vector with numpy, then performs
+    the sequential accumulation in a single tight loop (position[i]
+    depends on position[i-1], so full vectorization is not possible).
+    """
+    n = len(signals)
+    if n == 0:
+        return np.zeros(0, dtype=signals.dtype)
+
+    # Vectorized direction: +1 / -1 / 0
+    direction = np.zeros(n, dtype=np.int64)
+    direction[signals > threshold] = 1
+    direction[signals < -threshold] = -1
+
+    # Sequential accumulation with clamp (inherently data-dependent)
+    positions = np.zeros(n, dtype=np.float64)
+    max_pos = max_position
+    neg_max = -max_position
+    for i in range(1, n):
+        d = direction[i]
+        if d == 1:
+            p = positions[i - 1] + 1.0
+            positions[i] = p if p <= max_pos else max_pos
+        elif d == -1:
+            p = positions[i - 1] - 1.0
+            positions[i] = p if p >= neg_max else neg_max
         else:
-            positions[i] = prev
+            positions[i] = positions[i - 1]
     return positions
 
 
@@ -354,6 +396,7 @@ class HftNativeRunner:
             "cancel_ack_latency_ms": float(self.config.cancel_ack_latency_ms),
             "live_uplift_factor": float(self.config.live_uplift_factor),
             "model_applied": True,
+            "effective_broker_rtt_ms": _effective_broker_rtt_ms(self.config),
             "engine": "hftbacktest_native",
             "backtest_engine": getattr(self.config, "backtest_engine", "hftbacktest_v2"),
             "queue_model": getattr(self.config, "queue_model", "PowerProbQueueModel(3.0)"),

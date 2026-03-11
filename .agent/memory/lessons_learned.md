@@ -85,3 +85,33 @@
 **Context**: Project had 4 overlapping AI context files (`CLAUDE.md`, `AGENTS.md`, `README_AI.md`, `docs/ARCHITECTURE.md`) with contradictions, broken references, and fictional content.
 **Fix**: Deleted `README_AI.md` (referenced 7 nonexistent skills). Rewrote `CLAUDE.md` as the single constitution. Made `docs/ARCHITECTURE.md` an index pointing to canonical `docs/architecture/current-architecture.md`.
 **Rule**: Never create a new top-level AI context file. Extend `CLAUDE.md` or add rules to `.agent/rules/`. Architecture detail goes in `.agent/library/` (auto-synced to `docs/architecture/`).
+
+## [ARCH] Multi-broker registry uses import-time side-effect registration (2026-03)
+
+**Context**: Adding Fubon as a second broker required a broker factory registry. The pattern chosen is module-level auto-registration: each broker `__init__.py` registers itself as a side effect on import.
+**Fix**: `feed_adapter/broker_registry.py` holds `_BROKER_REGISTRY` dict. Bootstrap imports broker packages before calling `get_broker_factory()`. If the broker SDK is missing, import silently skips; failure surfaces only at `get_broker_factory()` call time.
+**Rule**: Always import broker packages before calling `get_broker_factory()`. Catch `ValueError` at the call site and emit a clear error. Set `HFT_BROKER` env var (default `"shioaji"`) to select the active broker.
+
+## [GOTCHA] Fubon prices arrive as strings — never cast via float() (2026-03)
+
+**Context**: Fubon SDK delivers prices as decimal strings (e.g., `"523.00"`). A naive `float(price_str) * 10000` introduces floating-point error, violating the Precision Law.
+**Fix**: All Fubon price ingestion uses `int(Decimal(price_str) * 10000)`. Outgoing order prices use `_scaled_int_to_price_str()` helper for the reverse conversion.
+**Rule**: The Precision Law applies at every broker boundary. Never use `float()` for price string conversion — use `Decimal(str)` then scale to int.
+
+## [ARCH] NormalizerFieldMap enables broker-agnostic Rust fast paths (2026-03)
+
+**Context**: The Rust normalizer hot path was hardcoded to Shioaji field names. Adding Fubon required parameterising field names without regressing Shioaji performance.
+**Fix**: `NormalizerFieldMap` is a frozen dataclass with Shioaji defaults. When `_is_default_map=True`, the Rust fast path is taken unchanged. Custom maps (e.g., Fubon) fall through to Python field lookups.
+**Rule**: Preserve `_is_default_map=True` for Shioaji configs to keep Rust fast paths active. Only set custom field maps for non-default brokers.
+
+## [ARCH] All broker WebSocket callbacks must use call_soon_threadsafe (2026-03)
+
+**Context**: Both Shioaji and Fubon WebSocket/callback handlers run in a broker-owned thread, not the asyncio event loop. Calling event loop APIs directly from that thread causes silent data races or crashes.
+**Fix**: Every broker callback enqueues to the event loop via `loop.call_soon_threadsafe(handler, event)`. Protocol conformance (`isinstance(facade, MarketDataProvider)`) verifies the broker implements required interfaces. Use `runtime_checkable` protocols.
+**Rule**: No broker callback may touch asyncio state directly. Always use `loop.call_soon_threadsafe()`. This pattern is identical for Shioaji and Fubon — keep it consistent when adding future brokers.
+
+## [GOTCHA] fubon-neo SDK is not on PyPI — guard all imports (2026-03)
+
+**Context**: `fubon-neo` requires a platform-specific `.whl` file and is unavailable via `pip install`. Unconditional imports break environments without the SDK (CI, dev machines without the file).
+**Fix**: All Fubon modules gate on `try: import fubon_neo except ImportError: fubon_neo = None`. The broker silently skips registration; `get_broker_factory("fubon")` then raises `ValueError` with a clear message.
+**Rule**: Guard every `import fubon_neo` with a `try/except ImportError`. Note: package name uses hyphen (`fubon-neo` in `pyproject.toml`) but import uses underscore (`fubon_neo`).
