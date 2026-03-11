@@ -167,7 +167,43 @@ def _to_regime_dict(value: Any) -> dict[str, float]:
     return out
 
 
-def _max_pool_correlation(signal: np.ndarray, pool_signals: Mapping[str, Sequence[float]]) -> float | None:
+def _pearson_pair(a: np.ndarray, b: np.ndarray) -> float:
+    """Vectorised single-pair Pearson r.  Returns 0.0 when undefined."""
+    a_m = a - a.mean()
+    b_m = b - b.mean()
+    num = float(np.dot(a_m, b_m))
+    denom = float(np.sqrt(np.dot(a_m, a_m) * np.dot(b_m, b_m)))
+    if denom < 1e-12:
+        return 0.0
+    val = num / denom
+    return val if np.isfinite(val) else 0.0
+
+
+def _max_pool_correlation(
+    signal: np.ndarray,
+    pool_signals: Mapping[str, Sequence[float]],
+    prev_matrix: np.ndarray | None = None,
+) -> float | None:
+    """Compute the maximum absolute correlation between *signal* and the pool.
+
+    Parameters
+    ----------
+    signal:
+        The new alpha signal vector.
+    pool_signals:
+        Existing pool signals keyed by alpha id.
+    prev_matrix:
+        Optional correlation matrix from a prior pool computation.
+        Currently accepted for API compatibility but not used; callers
+        wanting full incremental matrix updates should use
+        :func:`compute_pool_correlation_matrix` instead.
+
+    Returns
+    -------
+    float | None
+        Maximum absolute pairwise correlation, or ``None`` when no
+        valid correlation could be computed.
+    """
     if signal.size == 0:
         return None
     corr_values: list[float] = []
@@ -176,10 +212,120 @@ def _max_pool_correlation(signal: np.ndarray, pool_signals: Mapping[str, Sequenc
         n = min(signal.size, arr.size)
         if n < 2:
             continue
-        matrix = np.corrcoef(signal[:n], arr[:n])
-        value = float(matrix[0, 1])
-        if np.isfinite(value):
+        value = _pearson_pair(signal[:n], arr[:n])
+        if value != 0.0:
             corr_values.append(abs(value))
     if not corr_values:
         return None
     return max(corr_values)
+
+
+def compute_pool_correlation_matrix(
+    pool_signals: Mapping[str, Sequence[float]],
+    prev_matrix: np.ndarray | None = None,
+    prev_keys: Sequence[str] | None = None,
+) -> tuple[np.ndarray, list[str]]:
+    """Build or incrementally update a pool correlation matrix.
+
+    Parameters
+    ----------
+    pool_signals:
+        All pool signals keyed by alpha id (including any new alpha).
+    prev_matrix:
+        The correlation matrix from a previous call (shape
+        ``(K, K)``).  When provided together with *prev_keys*, only
+        the correlations for newly added alphas are computed.
+    prev_keys:
+        Ordered alpha id list that corresponds to *prev_matrix* rows
+        and columns.
+
+    Returns
+    -------
+    (matrix, keys)
+        ``matrix`` has shape ``(N, N)`` with ``N = len(pool_signals)``.
+        ``keys`` is the ordered list of alpha ids matching the matrix
+        axes.
+    """
+    keys = list(pool_signals.keys())
+    n = len(keys)
+    if n == 0:
+        return np.empty((0, 0), dtype=np.float64), []
+
+    # Determine which keys are new.
+    prev_key_set: set[str] = set()
+    prev_key_list: list[str] = []
+    if prev_matrix is not None and prev_keys is not None:
+        prev_key_list = list(prev_keys)
+        prev_key_set = set(prev_key_list)
+
+    # If we can reuse the previous matrix, do an incremental update.
+    if (
+        prev_matrix is not None
+        and prev_key_list
+        and prev_matrix.shape[0] == len(prev_key_list)
+        and prev_key_set.issubset(set(keys))
+    ):
+        new_keys = [k for k in keys if k not in prev_key_set]
+        if not new_keys:
+            # No new alphas — reorder prev_matrix to match current keys
+            idx = [prev_key_list.index(k) for k in keys]
+            reordered = prev_matrix[np.ix_(idx, idx)]
+            return reordered, keys
+
+        # Build full matrix: copy prior block, compute new rows/columns
+        # Reorder keys so prior ones come first, new ones at end
+        ordered_keys = [k for k in keys if k in prev_key_set] + new_keys
+        m_prev = len(prev_key_list)
+        m_total = len(ordered_keys)
+        matrix = np.eye(m_total, dtype=np.float64)
+
+        # Copy prior sub-block (reordered to match ordered_keys)
+        prior_idx = [prev_key_list.index(k) for k in ordered_keys[:m_prev]]
+        matrix[:m_prev, :m_prev] = prev_matrix[np.ix_(prior_idx, prior_idx)]
+
+        # Pre-compute arrays for all signals
+        arrs: dict[str, np.ndarray] = {}
+        for k in ordered_keys:
+            arrs[k] = np.asarray(pool_signals[k], dtype=np.float64)
+
+        # Compute correlations for each new alpha against all others
+        for i, nk in enumerate(new_keys):
+            row_idx = m_prev + i
+            a = arrs[nk]
+            for j, ok in enumerate(ordered_keys):
+                if j == row_idx:
+                    continue
+                b = arrs[ok]
+                nn = min(a.size, b.size)
+                if nn < 2:
+                    matrix[row_idx, j] = 0.0
+                    matrix[j, row_idx] = 0.0
+                    continue
+                val = _pearson_pair(a[:nn], b[:nn])
+                matrix[row_idx, j] = val
+                matrix[j, row_idx] = val
+
+        # Reorder to match the original keys order
+        final_idx = [ordered_keys.index(k) for k in keys]
+        return matrix[np.ix_(final_idx, final_idx)], keys
+
+    # Full computation — no prior matrix or incompatible
+    arrs_list: list[np.ndarray] = []
+    min_len = None
+    for k in keys:
+        a = np.asarray(pool_signals[k], dtype=np.float64)
+        arrs_list.append(a)
+        if min_len is None or a.size < min_len:
+            min_len = a.size
+
+    if min_len is None or min_len < 2:
+        return np.eye(n, dtype=np.float64), keys
+
+    if n == 1:
+        return np.ones((1, 1), dtype=np.float64), keys
+
+    stacked = np.column_stack([a[:min_len] for a in arrs_list])  # (min_len, n)
+    matrix = np.corrcoef(stacked, rowvar=False)  # (n, n)
+    # Replace NaN with 0 for safety
+    matrix = np.where(np.isfinite(matrix), matrix, 0.0)
+    return matrix, keys
