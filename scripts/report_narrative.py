@@ -5,6 +5,7 @@ Provides utility functions for generating actionable operational intelligence
 from soak and daily report check data. Imported by soak_acceptance.py,
 callback_latency_guard.py, and reliability_review_pack.py.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -119,10 +120,7 @@ def sparkline(values: list[float], width: int = 7) -> str:
     span = hi - lo if hi != lo else 1.0
     last_idx = len(_SPARK_CHARS) - 1
 
-    return "".join(
-        _SPARK_CHARS[min(int((v - lo) / span * last_idx + 0.5), last_idx)]
-        for v in sampled
-    )
+    return "".join(_SPARK_CHARS[min(int((v - lo) / span * last_idx + 0.5), last_idx)] for v in sampled)
 
 
 def compute_risk_score(checks: list[dict[str, Any]]) -> int:
@@ -155,11 +153,7 @@ def executive_summary(
     fail_count = sum(1 for c in checks if c.get("status") == "fail")
     warn_count = sum(1 for c in checks if c.get("status") == "warn")
 
-    restarted = [
-        s.get("service", "?")
-        for s in services
-        if (s.get("restart_count") or 0) > 0
-    ]
+    restarted = [s.get("service", "?") for s in services if (s.get("restart_count") or 0) > 0]
 
     parts: list[str] = []
 
@@ -168,14 +162,9 @@ def executive_summary(
         summary = ", ".join(fail_ids[:3])
         if len(fail_ids) > 3:
             summary += f" (+{len(fail_ids) - 3} more)"
-        parts.append(
-            f"ALERT: {fail_count} critical check(s) failed — {summary}. "
-            "Immediate investigation required."
-        )
+        parts.append(f"ALERT: {fail_count} critical check(s) failed — {summary}. Immediate investigation required.")
     else:
-        parts.append(
-            f"System is healthy with {pass_count}/{total} checks passing."
-        )
+        parts.append(f"System is healthy with {pass_count}/{total} checks passing.")
 
     if restarted:
         svc_list = ", ".join(restarted)
@@ -230,13 +219,15 @@ def diagnose_checks(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     category = cat
                     break
 
-        results.append({
-            "check_id": cid,
-            "status": status,
-            "severity": severity,
-            "diagnosis": diagnosis,
-            "category": category,
-        })
+        results.append(
+            {
+                "check_id": cid,
+                "status": status,
+                "severity": severity,
+                "diagnosis": diagnosis,
+                "category": category,
+            }
+        )
     return results
 
 
@@ -262,11 +253,13 @@ def recommend_actions(diagnosed_checks: list[dict[str, Any]]) -> list[dict[str, 
             priority = 3
             urgency = "monitor"
 
-        actions.append({
-            "priority": priority,
-            "action": f"[{check_id}] {diagnosis}",
-            "urgency": urgency,
-        })
+        actions.append(
+            {
+                "priority": priority,
+                "action": f"[{check_id}] {diagnosis}",
+                "urgency": urgency,
+            }
+        )
 
     return sorted(actions, key=lambda a: a["priority"])
 
@@ -289,9 +282,7 @@ def trend_delta(
         return []
 
     prev_checks: list[dict[str, Any]] = prev_report.get("checks", [])
-    prev_map: dict[str, str] = {
-        c.get("id", ""): c.get("status", "unknown") for c in prev_checks
-    }
+    prev_map: dict[str, str] = {c.get("id", ""): c.get("status", "unknown") for c in prev_checks}
 
     changes: list[dict[str, Any]] = []
     for c in current_checks:
@@ -311,12 +302,14 @@ def trend_delta(
         else:
             direction = "unchanged"
 
-        changes.append({
-            "check_id": cid,
-            "prev_status": prev_status,
-            "curr_status": curr_status,
-            "direction": direction,
-        })
+        changes.append(
+            {
+                "check_id": cid,
+                "prev_status": prev_status,
+                "curr_status": curr_status,
+                "direction": direction,
+            }
+        )
 
     return changes
 
