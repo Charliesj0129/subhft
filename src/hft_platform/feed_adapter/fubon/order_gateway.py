@@ -21,19 +21,33 @@ PRICE_SCALE = 10000
 class FubonOrderGateway:
     """Fubon order execution gateway."""
 
-    __slots__ = ("_sdk", "_codec", "log")
+    __slots__ = ("_sdk", "_client", "_codec", "log")
 
-    def __init__(self, sdk: Any, codec: FubonOrderCodec | None = None) -> None:
+    def __init__(
+        self,
+        sdk: Any | None = None,
+        codec: FubonOrderCodec | None = None,
+        *,
+        client: Any | None = None,
+    ) -> None:
+        if sdk is None:
+            sdk = client
         self._sdk = sdk
+        self._client = sdk
         self._codec = codec or FubonOrderCodec()
         self.log = logger
 
+    def _require_sdk(self, op: str) -> Any:
+        if self._sdk is None:
+            raise NotImplementedError(f"FubonOrderGateway.{op} not yet implemented")
+        return self._sdk
+
     def place_order(
         self,
-        symbol: str,
-        price: int,
-        qty: int,
-        side: str,
+        symbol: str | None = None,
+        price: int | None = None,
+        qty: int | None = None,
+        side: str | None = None,
         tif: str = "ROD",
         price_type: str = "LMT",
         order_type: str = "Stock",
@@ -52,6 +66,9 @@ class FubonOrderGateway:
         Returns:
             SDK order result.
         """
+        sdk = self._require_sdk("place_order")
+        if symbol is None or price is None or qty is None or side is None:
+            raise TypeError("symbol, price, qty, and side are required")
         sdk_price = price / PRICE_SCALE
         bs_action = self._codec.encode_side(side)
         time_in_force = self._codec.encode_tif(tif)
@@ -60,7 +77,7 @@ class FubonOrderGateway:
 
         start_ns = time.perf_counter_ns()
         try:
-            result = self._sdk.stock.place_order(
+            result = sdk.stock.place_order(
                 buy_sell=bs_action,
                 symbol=symbol,
                 price=sdk_price,
@@ -92,10 +109,10 @@ class FubonOrderGateway:
 
     def place_futopt_order(
         self,
-        symbol: str,
-        price: int,
-        qty: int,
-        side: str,
+        symbol: str | None = None,
+        price: int | None = None,
+        qty: int | None = None,
+        side: str | None = None,
         tif: str = "ROD",
         price_type: str = "LMT",
     ) -> Any:
@@ -112,6 +129,9 @@ class FubonOrderGateway:
         Returns:
             SDK order result.
         """
+        sdk = self._require_sdk("place_futopt_order")
+        if symbol is None or price is None or qty is None or side is None:
+            raise TypeError("symbol, price, qty, and side are required")
         sdk_price = price / PRICE_SCALE
         bs_action = self._codec.encode_side(side)
         time_in_force = self._codec.encode_tif(tif)
@@ -119,7 +139,7 @@ class FubonOrderGateway:
 
         start_ns = time.perf_counter_ns()
         try:
-            result = self._sdk.futopt.place_order(
+            result = sdk.futopt.place_order(
                 buy_sell=bs_action,
                 symbol=symbol,
                 price=sdk_price,
@@ -157,9 +177,10 @@ class FubonOrderGateway:
         Returns:
             SDK cancellation result.
         """
+        sdk = self._require_sdk("cancel_order")
         start_ns = time.perf_counter_ns()
         try:
-            result = self._sdk.stock.cancel_order(order_id=order_id)
+            result = sdk.stock.cancel_order(order_id=order_id)
             elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
             self.log.info(
                 "fubon_cancel_order",
@@ -177,7 +198,12 @@ class FubonOrderGateway:
             )
             raise
 
-    def update_order(self, order_id: str, price: int, qty: int) -> Any:
+    def update_order(
+        self,
+        order_id: str | None,
+        price: int | None = None,
+        qty: int | None = None,
+    ) -> Any:
         """Modify an existing order's price and/or quantity.
 
         Args:
@@ -188,10 +214,13 @@ class FubonOrderGateway:
         Returns:
             SDK modification result.
         """
+        sdk = self._require_sdk("update_order")
+        if order_id is None or price is None or qty is None:
+            raise TypeError("order_id, price, and qty are required")
         sdk_price = price / PRICE_SCALE
         start_ns = time.perf_counter_ns()
         try:
-            result = self._sdk.stock.modify_order(
+            result = sdk.stock.modify_order(
                 order_id=order_id,
                 price=sdk_price,
                 quantity=qty,
@@ -214,3 +243,8 @@ class FubonOrderGateway:
                 elapsed_us=elapsed_us,
             )
             raise
+
+    def batch_place_orders(self, orders: list[dict[str, Any]]) -> list[Any]:
+        """Batch order placement is not implemented yet."""
+        self._require_sdk("batch_place_orders")
+        raise NotImplementedError("FubonOrderGateway.batch_place_orders not yet implemented")
