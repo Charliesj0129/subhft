@@ -147,9 +147,7 @@ class TickDispatcher:
         finally:
             if metrics and hasattr(metrics, "shioaji_quote_callback_ingress_latency_ns"):
                 try:
-                    metrics.shioaji_quote_callback_ingress_latency_ns.observe(
-                        max(0, time.perf_counter_ns() - start_ns)
-                    )
+                    metrics.shioaji_quote_callback_ingress_latency_ns.observe(max(0, time.perf_counter_ns() - start_ns))
                 except Exception:
                     pass
 
