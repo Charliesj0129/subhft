@@ -5,12 +5,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
+import pytest  # noqa: F811
 
 from hft_platform.feed_adapter.shioaji.historical_gateway import (
     HistoricalGateway,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
