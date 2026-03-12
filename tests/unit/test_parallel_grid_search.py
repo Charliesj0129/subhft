@@ -74,9 +74,7 @@ def _make_base_result(threshold: float = 0.3):
 
 class TestRunSingleGridPoint:
     def test_returns_expected_keys(self):
-        row = _run_single_grid_point(
-            object(), _FakeRunner, BacktestConfig(data_paths=[]), 0.2, "sharpe_oos"
-        )
+        row = _run_single_grid_point(object(), _FakeRunner, BacktestConfig(data_paths=[]), 0.2, "sharpe_oos")
         expected_keys = {
             "signal_threshold",
             "sharpe_is",
@@ -90,15 +88,11 @@ class TestRunSingleGridPoint:
         assert set(row.keys()) == expected_keys
 
     def test_threshold_propagated(self):
-        row = _run_single_grid_point(
-            object(), _FakeRunner, BacktestConfig(data_paths=[]), 0.15, "sharpe_oos"
-        )
+        row = _run_single_grid_point(object(), _FakeRunner, BacktestConfig(data_paths=[]), 0.15, "sharpe_oos")
         assert row["signal_threshold"] == pytest.approx(0.15)
 
     def test_objective_uses_sharpe_oos_mode(self):
-        row = _run_single_grid_point(
-            object(), _FakeRunner, BacktestConfig(data_paths=[]), 0.3, "sharpe_oos"
-        )
+        row = _run_single_grid_point(object(), _FakeRunner, BacktestConfig(data_paths=[]), 0.3, "sharpe_oos")
         assert row["objective"] == pytest.approx(row["sharpe_oos"])
 
 
@@ -220,16 +214,12 @@ class TestOptimizeParametersParallel:
         # Every trial threshold must appear in the grid
         for row in out["trials"]:
             t = row["signal_threshold"]
-            assert any(abs(t - g) < 1e-9 for g in out["grid"]), (
-                f"trial threshold {t} not found in grid {out['grid']}"
-            )
+            assert any(abs(t - g) < 1e-9 for g in out["grid"]), f"trial threshold {t} not found in grid {out['grid']}"
         # No duplicate thresholds in trials (within tolerance)
         trial_ts = [r["signal_threshold"] for r in out["trials"]]
         for i, t in enumerate(trial_ts):
             for j in range(i + 1, len(trial_ts)):
-                assert abs(t - trial_ts[j]) >= 1e-12, (
-                    f"duplicate threshold {t} in trials"
-                )
+                assert abs(t - trial_ts[j]) >= 1e-12, f"duplicate threshold {t} in trials"
 
     def test_selects_best_threshold(self):
         """Best threshold should be at 0.3 (peak sharpe in _FakeRunner)."""
@@ -317,6 +307,4 @@ class TestOptWorkersEnv:
             assert t1["signal_threshold"] == pytest.approx(t4["signal_threshold"])
             assert t1["sharpe_oos"] == pytest.approx(t4["sharpe_oos"])
             assert t1["objective"] == pytest.approx(t4["objective"])
-        assert r1["selected_signal_threshold"] == pytest.approx(
-            r4["selected_signal_threshold"]
-        )
+        assert r1["selected_signal_threshold"] == pytest.approx(r4["selected_signal_threshold"])
