@@ -550,10 +550,7 @@ def _audit_data_governance(
         "invalid_metadata_sidecars": invalid_meta,
     }
     if missing_meta:
-        errors.append(
-            "Data governance violation: metadata sidecar missing for dataset(s): "
-            + ", ".join(missing_meta)
-        )
+        errors.append("Data governance violation: metadata sidecar missing for dataset(s): " + ", ".join(missing_meta))
     if invalid_meta:
         bad = ", ".join(f"{path}({';'.join(problems)})" for path, problems in sorted(invalid_meta.items()))
         errors.append("Data governance violation: metadata sidecar invalid for dataset(s): " + bad)
@@ -882,7 +879,7 @@ def cmd_run_bayesian_opt(args: argparse.Namespace) -> int:
 
     # Parse param space: each --param is "name:lo:hi" or "name:lo:hi:log"
     param_space: dict[str, tuple[float, float, bool]] = {}
-    for spec in (args.param or []):
+    for spec in args.param or []:
         parts = spec.split(":")
         if len(parts) < 3:
             print(f"[run-bayesian-opt] ERROR: invalid --param '{spec}', expected name:lo:hi[:log]")
