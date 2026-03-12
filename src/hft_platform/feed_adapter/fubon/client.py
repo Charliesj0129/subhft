@@ -36,8 +36,7 @@ class FubonClient:
         import warnings
 
         warnings.warn(
-            "FubonClient is deprecated, use FubonClientFacade from "
-            "hft_platform.feed_adapter.fubon.facade instead",
+            "FubonClient is deprecated, use FubonClientFacade from hft_platform.feed_adapter.fubon.facade instead",
             DeprecationWarning,
             stacklevel=2,
         )

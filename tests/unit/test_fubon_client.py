@@ -127,8 +127,13 @@ class TestFubonQuoteRuntime:
 
     def test_fubon_quote_runtime_register_callbacks(self) -> None:
         runtime = FubonQuoteRuntime(sdk=None)
-        on_tick = lambda d: None
-        on_bidask = lambda d: None
+
+        def on_tick(d: object) -> None:
+            pass
+
+        def on_bidask(d: object) -> None:
+            pass
+
         runtime.register_quote_callbacks(on_tick, on_bidask)
         assert runtime._on_tick is on_tick
         assert runtime._on_bidask is on_bidask

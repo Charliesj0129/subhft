@@ -10,6 +10,6 @@ warnings.warn(
     stacklevel=2,
 )
 
-from hft_platform.feed_adapter.fubon.quote_runtime import FubonQuoteRuntime
+from hft_platform.feed_adapter.fubon.quote_runtime import FubonQuoteRuntime  # noqa: E402
 
 __all__ = ["FubonQuoteRuntime"]
