@@ -119,7 +119,9 @@ class ShioajiClientFacade:
     def get_trading_limits(self, account: Any = None) -> Any:
         return self.account_gateway.get_trading_limits(account=account)
 
-    def list_profit_loss_summary(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> list[Any]:
+    def list_profit_loss_summary(
+        self, account: Any = None, begin_date: str | None = None, end_date: str | None = None
+    ) -> list[Any]:
         return self.account_gateway.list_profit_loss_summary(account=account, begin_date=begin_date, end_date=end_date)
 
     def list_trades(self) -> list[Any]:

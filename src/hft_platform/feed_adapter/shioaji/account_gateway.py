@@ -232,7 +232,9 @@ class AccountGateway:
             logger.warning("Failed to fetch trading limits", error=str(exc))
             return cached or {}
 
-    def list_profit_loss_summary(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> list[Any]:
+    def list_profit_loss_summary(
+        self, account: Any = None, begin_date: str | None = None, end_date: str | None = None
+    ) -> list[Any]:
         if self._client.mode == "simulation":
             return []
         cache_key = f"profit_loss_summary:{begin_date}:{end_date}"
