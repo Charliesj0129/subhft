@@ -186,10 +186,7 @@ class FubonOrderGateway:
             return trade
         order_id = getattr(trade, "order_id", None)
         if order_id is None:
-            raise TypeError(
-                f"{op}: cannot extract order_id from trade "
-                f"(type={type(trade).__name__})"
-            )
+            raise TypeError(f"{op}: cannot extract order_id from trade (type={type(trade).__name__})")
         return order_id
 
     def cancel_order(self, trade: Any) -> Any:
