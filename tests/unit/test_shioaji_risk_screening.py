@@ -7,11 +7,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from hft_platform.feed_adapter.shioaji.risk_screening import (
-    RiskScreeningGateway,
     _CREDIT_TTL_S,
     _NOTICE_TTL_S,
     _PUNISH_TTL_S,
     _SHORT_STOCK_TTL_S,
+    RiskScreeningGateway,
 )
 
 
@@ -31,6 +31,7 @@ def gateway(mock_client: MagicMock) -> RiskScreeningGateway:
 
 
 # ── Simulation mode returns defaults ──────────────────────────────
+
 
 class TestSimulationMode:
     def test_punish_sim_returns_none(self, mock_client: MagicMock) -> None:
@@ -55,6 +56,7 @@ class TestSimulationMode:
 
 
 # ── Cache hit returns cached value ────────────────────────────────
+
 
 class TestCacheHit:
     def test_punish_cache_hit(self, gateway: RiskScreeningGateway, mock_client: MagicMock) -> None:
@@ -83,6 +85,7 @@ class TestCacheHit:
 
 
 # ── Cache miss calls API and caches result ────────────────────────
+
 
 class TestCacheMiss:
     def test_punish_calls_api(self, gateway: RiskScreeningGateway, mock_client: MagicMock) -> None:
@@ -120,6 +123,7 @@ class TestCacheMiss:
 
 # ── Rate limit rejection returns fallback ─────────────────────────
 
+
 class TestRateLimit:
     def test_punish_rate_limited(self, gateway: RiskScreeningGateway, mock_client: MagicMock) -> None:
         mock_client._rate_limit_api.return_value = False
@@ -148,6 +152,7 @@ class TestRateLimit:
 
 # ── API error returns fallback gracefully ─────────────────────────
 
+
 class TestApiError:
     def test_punish_api_error(self, gateway: RiskScreeningGateway, mock_client: MagicMock) -> None:
         mock_client.api.punish.side_effect = RuntimeError("network")
@@ -174,6 +179,7 @@ class TestApiError:
 
 
 # ── Long cache TTL values ─────────────────────────────────────────
+
 
 class TestCacheTTL:
     def test_punish_ttl_is_300(self) -> None:
