@@ -245,6 +245,61 @@ class FubonOrderGateway:
             raise
 
     def batch_place_orders(self, orders: list[dict[str, Any]]) -> list[Any]:
-        """Batch order placement is not implemented yet."""
+        """Place multiple orders sequentially with per-order error isolation.
+
+        Fubon SDK has no native batch API, so orders are placed one at a time
+        with rate-limit-aware delays (67ms = 1/15s between orders).
+
+        Args:
+            orders: List of order dicts, each with keys:
+                symbol (str), price (int, scaled x10000), qty (int),
+                side (str), tif (str, default "ROD"),
+                price_type (str, default "LMT"),
+                order_type (str, default "Stock").
+
+        Returns:
+            List of SDK results (or None for failed orders).
+        """
         self._require_sdk("batch_place_orders")
-        raise NotImplementedError("FubonOrderGateway.batch_place_orders not yet implemented")
+        if not orders:
+            return []
+
+        results: list[Any] = []
+        successes = 0
+        failures = 0
+        batch_start_ns = time.perf_counter_ns()
+
+        for i, order in enumerate(orders):
+            if i > 0:
+                time.sleep(0.067)  # Rate limit: max 15 orders/sec
+            try:
+                result = self.place_order(
+                    symbol=order.get("symbol"),
+                    price=order.get("price"),
+                    qty=order.get("qty"),
+                    side=order.get("side"),
+                    tif=order.get("tif", "ROD"),
+                    price_type=order.get("price_type", "LMT"),
+                    order_type=order.get("order_type", "Stock"),
+                )
+                results.append(result)
+                successes += 1
+            except Exception as exc:
+                self.log.error(
+                    "fubon_batch_order_failed",
+                    index=i,
+                    symbol=order.get("symbol"),
+                    error=str(exc),
+                )
+                results.append(None)
+                failures += 1
+
+        elapsed_us = (time.perf_counter_ns() - batch_start_ns) / 1000
+        self.log.info(
+            "fubon_batch_place_orders",
+            count=len(orders),
+            successes=successes,
+            failures=failures,
+            elapsed_us=elapsed_us,
+        )
+        return results
