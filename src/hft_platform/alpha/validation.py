@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
+import pickle
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -1007,6 +1009,127 @@ def _bds_correlation_delta(arr: np.ndarray, epsilon: float) -> float:
     return float(c2 - (c1 * c1))
 
 
+def _build_grid_row(
+    result: Any,
+    threshold: float,
+    objective_mode: str,
+) -> dict[str, Any]:
+    """Build a standardized grid row dict from a backtest result."""
+    objective = _optimization_objective(
+        float(result.sharpe_oos),
+        float(result.max_drawdown),
+        float(result.turnover),
+        objective_mode,
+    )
+    return {
+        "signal_threshold": threshold,
+        "sharpe_is": float(result.sharpe_is),
+        "sharpe_oos": float(result.sharpe_oos),
+        "max_drawdown": float(result.max_drawdown),
+        "turnover": float(result.turnover),
+        "objective": float(objective),
+        "run_id": str(result.run_id),
+        "config_hash": str(result.config_hash),
+    }
+
+
+def _run_single_grid_point(
+    alpha: Any,
+    runner_cls: Any,
+    base_cfg: Any,
+    threshold: float,
+    objective_mode: str,
+) -> dict[str, Any]:
+    """Run a single backtest grid point. Top-level for ProcessPoolExecutor pickling."""
+    cfg = replace(base_cfg, signal_threshold=threshold)
+    result = runner_cls(alpha, cfg).run()
+    return _build_grid_row(result, threshold, objective_mode)
+
+
+def _submit_grid_points(
+    *,
+    alpha: Any,
+    runner_cls: Any,
+    base_cfg: Any,
+    thresholds: list[float],
+    objective_mode: str,
+    max_workers: int,
+) -> list[dict[str, Any]]:
+    """Submit grid points to ProcessPoolExecutor, falling back to sequential on pickle errors.
+
+    Falls back to sequential execution when alpha/runner_cls are not picklable
+    (e.g. locally-defined classes in tests or lambdas).
+    """
+    # Pre-check picklability to avoid spawning processes that will fail
+    try:
+        pickle.dumps((alpha, runner_cls, base_cfg))
+    except (pickle.PicklingError, AttributeError, TypeError):
+        return [_run_single_grid_point(alpha, runner_cls, base_cfg, t, objective_mode) for t in thresholds]
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _run_single_grid_point,
+                alpha,
+                runner_cls,
+                base_cfg,
+                t,
+                objective_mode,
+            )
+            for t in thresholds
+        ]
+        return [f.result() for f in futures]
+
+
+def _run_grid_parallel(
+    *,
+    alpha: Any,
+    runner_cls: Any,
+    base_cfg: Any,
+    base_result: Any,
+    base_threshold: float,
+    grid: np.ndarray,
+    objective_mode: str,
+) -> list[dict[str, Any]]:
+    """Run grid search in parallel using ProcessPoolExecutor.
+
+    Reuses the already-computed base_result for the base threshold point.
+    Non-base points are submitted to a process pool.
+
+    Environment variable HFT_OPT_WORKERS controls max parallelism:
+      - Default: min(len(grid), min(cpu_count, 8))
+      - Set HFT_OPT_WORKERS=1 to force sequential execution
+    """
+    base_row = _build_grid_row(base_result, base_threshold, objective_mode)
+
+    # Separate base vs non-base thresholds
+    non_base_thresholds = [float(t) for t in grid if abs(float(t) - base_threshold) >= 1e-12]
+
+    if not non_base_thresholds:
+        return [base_row]
+
+    # HFT_OPT_WORKERS: max parallel workers for parameter grid search.
+    # Default: min(grid_size, min(cpu_count, 8)). Set to 1 for sequential.
+    max_workers = min(
+        len(non_base_thresholds),
+        int(os.environ.get("HFT_OPT_WORKERS", min(os.cpu_count() or 4, 8))),
+    )
+
+    non_base_rows = _submit_grid_points(
+        alpha=alpha,
+        runner_cls=runner_cls,
+        base_cfg=base_cfg,
+        thresholds=non_base_thresholds,
+        objective_mode=objective_mode,
+        max_workers=max_workers,
+    )
+
+    # Combine and sort by threshold for deterministic ordering
+    rows = [base_row] + non_base_rows
+    rows.sort(key=lambda r: float(r["signal_threshold"]))
+    return rows
+
+
 def _optimize_parameters(
     *,
     alpha: Any,
@@ -1047,32 +1170,15 @@ def _optimize_parameters(
     grid = np.unique(np.append(grid, np.asarray([base_threshold], dtype=np.float64)))
     grid.sort()
 
-    rows: list[dict[str, Any]] = []
-    for threshold in grid:
-        t = float(threshold)
-        if abs(t - base_threshold) < 1e-12:
-            result = base_result
-        else:
-            cfg = replace(base_cfg, signal_threshold=t)
-            result = runner_cls(alpha, cfg).run()
-        objective = _optimization_objective(
-            float(result.sharpe_oos),
-            float(result.max_drawdown),
-            float(result.turnover),
-            str(config.opt_objective),
-        )
-        rows.append(
-            {
-                "signal_threshold": t,
-                "sharpe_is": float(result.sharpe_is),
-                "sharpe_oos": float(result.sharpe_oos),
-                "max_drawdown": float(result.max_drawdown),
-                "turnover": float(result.turnover),
-                "objective": float(objective),
-                "run_id": str(result.run_id),
-                "config_hash": str(result.config_hash),
-            }
-        )
+    rows = _run_grid_parallel(
+        alpha=alpha,
+        runner_cls=runner_cls,
+        base_cfg=base_cfg,
+        base_result=base_result,
+        base_threshold=base_threshold,
+        grid=grid,
+        objective_mode=str(config.opt_objective),
+    )
 
     if not rows:
         return {

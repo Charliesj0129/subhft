@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -104,7 +104,8 @@ class TestFubonOrderGatewayFutopt:
 
 
 class TestFubonOrderGatewayCancel:
-    def test_cancel_order(self) -> None:
+    def test_cancel_order_with_string_order_id(self) -> None:
+        """Backward compat: pass raw order_id string."""
         sdk = MagicMock()
         sdk.stock.cancel_order.return_value = {"status": "cancelled"}
         gw = FubonOrderGateway(sdk)
@@ -113,6 +114,38 @@ class TestFubonOrderGatewayCancel:
 
         sdk.stock.cancel_order.assert_called_once_with(order_id="ORD-001")
         assert result == {"status": "cancelled"}
+
+    def test_cancel_order_with_trade_object(self) -> None:
+        """BrokerProtocol compatible: pass trade object with order_id attr."""
+        sdk = MagicMock()
+        sdk.stock.cancel_order.return_value = {"status": "cancelled"}
+        gw = FubonOrderGateway(sdk)
+        trade = MagicMock()
+        trade.order_id = "ORD-002"
+
+        result = gw.cancel_order(trade)
+
+        sdk.stock.cancel_order.assert_called_once_with(order_id="ORD-002")
+        assert result == {"status": "cancelled"}
+
+    def test_cancel_order_none_raises_type_error(self) -> None:
+        """Passing None should raise TypeError, not reach SDK."""
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+
+        with pytest.raises(TypeError, match="cannot extract order_id"):
+            gw.cancel_order(None)
+
+        sdk.stock.cancel_order.assert_not_called()
+
+    def test_cancel_order_object_without_order_id_raises(self) -> None:
+        """Trade object missing order_id attribute should raise TypeError."""
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+        trade = MagicMock(spec=[])  # no attributes
+
+        with pytest.raises(TypeError, match="cannot extract order_id"):
+            gw.cancel_order(trade)
 
     def test_cancel_order_exception(self) -> None:
         sdk = MagicMock()
@@ -124,7 +157,8 @@ class TestFubonOrderGatewayCancel:
 
 
 class TestFubonOrderGatewayUpdate:
-    def test_update_order(self) -> None:
+    def test_update_order_with_string_order_id(self) -> None:
+        """Backward compat: pass raw order_id string."""
         sdk = MagicMock()
         sdk.stock.modify_order.return_value = {"status": "modified"}
         gw = FubonOrderGateway(sdk)
@@ -137,6 +171,67 @@ class TestFubonOrderGatewayUpdate:
             quantity=3,
         )
         assert result == {"status": "modified"}
+
+    def test_update_order_with_trade_object(self) -> None:
+        """BrokerProtocol compatible: pass trade object with order_id attr."""
+        sdk = MagicMock()
+        sdk.stock.modify_order.return_value = {"status": "modified"}
+        gw = FubonOrderGateway(sdk)
+        trade = MagicMock()
+        trade.order_id = "ORD-003"
+
+        result = gw.update_order(trade, price=7000000, qty=5)
+
+        sdk.stock.modify_order.assert_called_once_with(
+            order_id="ORD-003",
+            price=7000000 / PRICE_SCALE,
+            quantity=5,
+        )
+        assert result == {"status": "modified"}
+
+    def test_update_order_price_only(self) -> None:
+        """Only price provided — qty should not be passed to SDK."""
+        sdk = MagicMock()
+        sdk.stock.modify_order.return_value = {"status": "modified"}
+        gw = FubonOrderGateway(sdk)
+
+        gw.update_order("ORD-001", price=6000000)
+
+        sdk.stock.modify_order.assert_called_once_with(
+            order_id="ORD-001",
+            price=6000000 / PRICE_SCALE,
+        )
+
+    def test_update_order_qty_only(self) -> None:
+        """Only qty provided — price should not be passed to SDK."""
+        sdk = MagicMock()
+        sdk.stock.modify_order.return_value = {"status": "modified"}
+        gw = FubonOrderGateway(sdk)
+
+        gw.update_order("ORD-001", qty=10)
+
+        sdk.stock.modify_order.assert_called_once_with(
+            order_id="ORD-001",
+            quantity=10,
+        )
+
+    def test_update_order_no_changes_returns_none(self) -> None:
+        """No price or qty provided — should log warning and return None."""
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+
+        result = gw.update_order("ORD-001")
+
+        assert result is None
+        sdk.stock.modify_order.assert_not_called()
+
+    def test_update_order_none_trade_raises_type_error(self) -> None:
+        """Passing None as trade with valid price should raise TypeError."""
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+
+        with pytest.raises(TypeError, match="cannot extract order_id"):
+            gw.update_order(None, price=6000000)
 
     def test_update_order_exception(self) -> None:
         sdk = MagicMock()
@@ -212,3 +307,92 @@ class TestFubonAccountGateway:
 
         sdk.settlements.assert_called_once()
         assert len(result) == 1
+
+
+class TestFubonOrderGatewayBatchPlaceOrders:
+    def _make_order(
+        self,
+        symbol: str = "2330",
+        price: int = 5800000,
+        qty: int = 1,
+        side: str = "Buy",
+    ) -> dict:
+        return {"symbol": symbol, "price": price, "qty": qty, "side": side}
+
+    @patch("hft_platform.feed_adapter.fubon.order_gateway.time.sleep")
+    def test_batch_all_succeed(self, mock_sleep: MagicMock) -> None:
+        sdk = MagicMock()
+        sdk.stock.place_order.side_effect = [
+            {"order_id": "ORD-001"},
+            {"order_id": "ORD-002"},
+            {"order_id": "ORD-003"},
+        ]
+        gw = FubonOrderGateway(sdk)
+
+        orders = [
+            self._make_order("2330", 5800000, 1, "Buy"),
+            self._make_order("2317", 1000000, 2, "Sell"),
+            self._make_order("2454", 9000000, 3, "Buy"),
+        ]
+        results = gw.batch_place_orders(orders)
+
+        assert len(results) == 3
+        assert results[0] == {"order_id": "ORD-001"}
+        assert results[1] == {"order_id": "ORD-002"}
+        assert results[2] == {"order_id": "ORD-003"}
+        assert sdk.stock.place_order.call_count == 3
+
+    @patch("hft_platform.feed_adapter.fubon.order_gateway.time.sleep")
+    def test_batch_partial_failure(self, mock_sleep: MagicMock) -> None:
+        sdk = MagicMock()
+        sdk.stock.place_order.side_effect = [
+            {"order_id": "ORD-001"},
+            RuntimeError("SDK error on 2nd"),
+            {"order_id": "ORD-003"},
+        ]
+        gw = FubonOrderGateway(sdk)
+
+        orders = [
+            self._make_order("2330"),
+            self._make_order("2317"),
+            self._make_order("2454"),
+        ]
+        results = gw.batch_place_orders(orders)
+
+        assert len(results) == 3
+        assert results[0] == {"order_id": "ORD-001"}
+        assert results[1] is None
+        assert results[2] == {"order_id": "ORD-003"}
+
+    def test_batch_empty_returns_empty(self) -> None:
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+
+        results = gw.batch_place_orders([])
+
+        assert results == []
+        sdk.stock.place_order.assert_not_called()
+
+    @patch("hft_platform.feed_adapter.fubon.order_gateway.time.sleep")
+    def test_batch_single_order(self, mock_sleep: MagicMock) -> None:
+        sdk = MagicMock()
+        sdk.stock.place_order.return_value = {"order_id": "ORD-SINGLE"}
+        gw = FubonOrderGateway(sdk)
+
+        results = gw.batch_place_orders([self._make_order()])
+
+        assert len(results) == 1
+        assert results[0] == {"order_id": "ORD-SINGLE"}
+        mock_sleep.assert_not_called()
+
+    @patch("hft_platform.feed_adapter.fubon.order_gateway.time.sleep")
+    def test_batch_rate_limit_delay(self, mock_sleep: MagicMock) -> None:
+        sdk = MagicMock()
+        sdk.stock.place_order.return_value = {"order_id": "ORD-X"}
+        gw = FubonOrderGateway(sdk)
+
+        orders = [self._make_order() for _ in range(3)]
+        gw.batch_place_orders(orders)
+
+        assert mock_sleep.call_count == 2  # Between orders 0-1 and 1-2
+        mock_sleep.assert_called_with(0.067)

@@ -168,15 +168,40 @@ class FubonOrderGateway:
             )
             raise
 
-    def cancel_order(self, order_id: str) -> Any:
-        """Cancel an existing order.
+    @staticmethod
+    def _extract_order_id(trade: Any, op: str) -> str:
+        """Extract order_id from a trade object or raw string.
 
         Args:
-            order_id: The order identifier to cancel.
+            trade: Either a string order_id or an object with an ``order_id`` attribute.
+            op: Operation name for error messages.
+
+        Returns:
+            The resolved order_id string.
+
+        Raises:
+            TypeError: If order_id cannot be resolved.
+        """
+        if isinstance(trade, str):
+            return trade
+        order_id = getattr(trade, "order_id", None)
+        if order_id is None:
+            raise TypeError(f"{op}: cannot extract order_id from trade (type={type(trade).__name__})")
+        return order_id
+
+    def cancel_order(self, trade: Any) -> Any:
+        """Cancel an existing order.
+
+        Accepts either a raw ``order_id`` string (backward compat) or a trade
+        object with an ``order_id`` attribute (BrokerProtocol compatible).
+
+        Args:
+            trade: A string order_id or trade object with ``order_id`` attribute.
 
         Returns:
             SDK cancellation result.
         """
+        order_id = self._extract_order_id(trade, "cancel_order")
         sdk = self._require_sdk("cancel_order")
         start_ns = time.perf_counter_ns()
         try:
@@ -200,31 +225,37 @@ class FubonOrderGateway:
 
     def update_order(
         self,
-        order_id: str | None,
+        trade: Any,
         price: int | None = None,
         qty: int | None = None,
     ) -> Any:
         """Modify an existing order's price and/or quantity.
 
+        Accepts either a raw ``order_id`` string (backward compat) or a trade
+        object with an ``order_id`` attribute (BrokerProtocol compatible).
+
         Args:
-            order_id: The order identifier to modify.
+            trade: A string order_id or trade object with ``order_id`` attribute.
             price: New price as scaled int (x10000).
             qty: New quantity.
 
         Returns:
-            SDK modification result.
+            SDK modification result, or None if no changes requested.
         """
+        if price is None and qty is None:
+            self.log.warning("update_order: no price or qty provided, no-op")
+            return None
+        order_id = self._extract_order_id(trade, "update_order")
         sdk = self._require_sdk("update_order")
-        if order_id is None or price is None or qty is None:
-            raise TypeError("order_id, price, and qty are required")
-        sdk_price = price / PRICE_SCALE
+        sdk_price = price / PRICE_SCALE if price is not None else None
+        modify_kwargs: dict[str, Any] = {"order_id": order_id}
+        if sdk_price is not None:
+            modify_kwargs["price"] = sdk_price
+        if qty is not None:
+            modify_kwargs["quantity"] = qty
         start_ns = time.perf_counter_ns()
         try:
-            result = sdk.stock.modify_order(
-                order_id=order_id,
-                price=sdk_price,
-                quantity=qty,
-            )
+            result = sdk.stock.modify_order(**modify_kwargs)
             elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
             self.log.info(
                 "fubon_update_order",
@@ -245,6 +276,61 @@ class FubonOrderGateway:
             raise
 
     def batch_place_orders(self, orders: list[dict[str, Any]]) -> list[Any]:
-        """Batch order placement is not implemented yet."""
+        """Place multiple orders sequentially with per-order error isolation.
+
+        Fubon SDK has no native batch API, so orders are placed one at a time
+        with rate-limit-aware delays (67ms = 1/15s between orders).
+
+        Args:
+            orders: List of order dicts, each with keys:
+                symbol (str), price (int, scaled x10000), qty (int),
+                side (str), tif (str, default "ROD"),
+                price_type (str, default "LMT"),
+                order_type (str, default "Stock").
+
+        Returns:
+            List of SDK results (or None for failed orders).
+        """
         self._require_sdk("batch_place_orders")
-        raise NotImplementedError("FubonOrderGateway.batch_place_orders not yet implemented")
+        if not orders:
+            return []
+
+        results: list[Any] = []
+        successes = 0
+        failures = 0
+        batch_start_ns = time.perf_counter_ns()
+
+        for i, order in enumerate(orders):
+            if i > 0:
+                time.sleep(0.067)  # Rate limit: max 15 orders/sec
+            try:
+                result = self.place_order(
+                    symbol=order.get("symbol"),
+                    price=order.get("price"),
+                    qty=order.get("qty"),
+                    side=order.get("side"),
+                    tif=order.get("tif", "ROD"),
+                    price_type=order.get("price_type", "LMT"),
+                    order_type=order.get("order_type", "Stock"),
+                )
+                results.append(result)
+                successes += 1
+            except Exception as exc:
+                self.log.error(
+                    "fubon_batch_order_failed",
+                    index=i,
+                    symbol=order.get("symbol"),
+                    error=str(exc),
+                )
+                results.append(None)
+                failures += 1
+
+        elapsed_us = (time.perf_counter_ns() - batch_start_ns) / 1000
+        self.log.info(
+            "fubon_batch_place_orders",
+            count=len(orders),
+            successes=successes,
+            failures=failures,
+            elapsed_us=elapsed_us,
+        )
+        return results

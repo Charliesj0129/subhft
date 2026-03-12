@@ -4,7 +4,10 @@ from typing import Any
 
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
+from hft_platform.feed_adapter.shioaji.historical_gateway import HistoricalGateway
+from hft_platform.feed_adapter.shioaji.market_info_gateway import MarketInfoGateway
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
+from hft_platform.feed_adapter.shioaji.scanner_gateway import ScannerGateway
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
 
@@ -23,6 +26,9 @@ class ShioajiClientFacade:
         "contracts_runtime",
         "order_gateway",
         "account_gateway",
+        "historical_gateway",
+        "scanner_gateway",
+        "market_info_gateway",
         "subscription_manager",
     )
 
@@ -36,6 +42,9 @@ class ShioajiClientFacade:
         self.contracts_runtime = ContractsRuntime(client)
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
+        self.historical_gateway = HistoricalGateway(client)
+        self.scanner_gateway = ScannerGateway(client)
+        self.market_info_gateway = MarketInfoGateway(client)
         self.subscription_manager = client._subscription_manager
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
@@ -92,11 +101,23 @@ class ShioajiClientFacade:
     def get_exchange(self, symbol: str) -> str:
         return self._client.get_exchange(symbol) or ""
 
-    def cancel_order(self, trade: Any) -> Any:
-        return self.order_gateway.cancel_order(trade)
+    def cancel_order(
+        self,
+        trade: Any,
+        timeout: int = 5000,
+        cb: Any | None = None,
+    ) -> Any:
+        return self.order_gateway.cancel_order(trade, timeout=timeout, cb=cb)
 
-    def update_order(self, trade: Any, price: float | None = None, qty: int | None = None) -> Any:
-        return self.order_gateway.update_order(trade, price=price, qty=qty)
+    def update_order(
+        self,
+        trade: Any,
+        price: float | None = None,
+        qty: int | None = None,
+        timeout: int = 5000,
+        cb: Any | None = None,
+    ) -> Any:
+        return self.order_gateway.update_order(trade, price=price, qty=qty, timeout=timeout, cb=cb)
 
     def get_positions(self) -> list[Any]:
         return self.account_gateway.get_positions()
@@ -113,11 +134,81 @@ class ShioajiClientFacade:
     def list_profit_loss(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> Any:
         return self.account_gateway.list_profit_loss(account=account, begin_date=begin_date, end_date=end_date)
 
+    def get_trading_limits(self, account: Any = None) -> Any:
+        return self.account_gateway.get_trading_limits(account=account)
+
+    def get_settlements(self, account: Any = None) -> Any:
+        return self.account_gateway.get_settlements(account=account)
+
+    def list_profit_loss_summary(
+        self, account: Any = None, begin_date: str | None = None, end_date: str | None = None
+    ) -> Any:
+        return self.account_gateway.list_profit_loss_summary(account=account, begin_date=begin_date, end_date=end_date)
+
+    def list_profit_loss_detail(self, account: Any = None, detail_id: int = 0, unit: str | None = None) -> Any:
+        return self.account_gateway.list_profit_loss_detail(account=account, detail_id=detail_id, unit=unit)
+
     def validate_symbols(self) -> list[str]:
         return self.contracts_runtime.validate_symbols()
 
     def get_contract_refresh_status(self) -> dict[str, object]:
         return self.contracts_runtime.refresh_status()
+
+    def get_ticks(self, *args: Any, **kwargs: Any) -> Any:
+        return self.historical_gateway.get_ticks(*args, **kwargs)
+
+    def get_kbars(self, *args: Any, **kwargs: Any) -> Any:
+        return self.historical_gateway.get_kbars(*args, **kwargs)
+
+    def scan(
+        self,
+        scanner_type: str,
+        ascending: bool = False,
+        count: int = 100,
+        date: str | None = None,
+        timeout: int = 30000,
+    ) -> list[Any]:
+        return self.scanner_gateway.scan(
+            scanner_type=scanner_type,
+            ascending=ascending,
+            count=count,
+            date=date,
+            timeout=timeout,
+        )
+
+    def get_credit_enquires(
+        self,
+        contract_codes: list[str],
+        exchange: str,
+        timeout: int = 30000,
+        product_type: str | None = None,
+    ) -> list[Any]:
+        return self.market_info_gateway.get_credit_enquires(
+            contract_codes,
+            exchange,
+            timeout=timeout,
+            product_type=product_type,
+        )
+
+    def get_short_stock_sources(
+        self,
+        contract_codes: list[str],
+        exchange: str,
+        timeout: int = 5000,
+        product_type: str | None = None,
+    ) -> list[Any]:
+        return self.market_info_gateway.get_short_stock_sources(
+            contract_codes,
+            exchange,
+            timeout=timeout,
+            product_type=product_type,
+        )
+
+    def get_punish_stocks(self, timeout: int = 5000) -> Any:
+        return self.market_info_gateway.get_punish_stocks(timeout=timeout)
+
+    def get_notice_stocks(self, timeout: int = 5000) -> Any:
+        return self.market_info_gateway.get_notice_stocks(timeout=timeout)
 
     def close(self, logout: bool = False) -> None:
         self._client.close(logout=logout)

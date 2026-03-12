@@ -3,7 +3,6 @@
 # This module is retained for internal use by the shioaji/ sub-package runtimes.
 import datetime as dt
 import os
-import queue
 import re
 import threading
 import time
@@ -18,6 +17,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji import router as _router
 from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
+from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.rate_limiter import RateLimiter
 
@@ -138,30 +138,38 @@ class ShioajiClient:
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
         self.tick_callback: Callable[..., Any] | None = None
-        self._quote_dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
+        self.metrics = MetricsRegistry.get()
+        _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
         try:
-            self._quote_dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
+            _dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
         except ValueError:
-            self._quote_dispatch_queue_size = 8192
+            _dispatch_queue_size = 8192
         try:
-            self._quote_dispatch_batch_max = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_BATCH_MAX", "32")))
+            _dispatch_batch_max = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_BATCH_MAX", "32")))
         except ValueError:
-            self._quote_dispatch_batch_max = 32
+            _dispatch_batch_max = 32
         try:
-            self._quote_dispatch_metrics_every = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_METRICS_EVERY", "128")))
+            _dispatch_metrics_every = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_METRICS_EVERY", "128")))
         except ValueError:
-            self._quote_dispatch_metrics_every = 128
-        self._quote_dispatch_queue: queue.Queue[tuple[tuple[Any, ...], dict[str, Any]] | None] | None = None
-        self._quote_dispatch_thread: threading.Thread | None = None
-        self._quote_dispatch_running = False
-        self._quote_dispatch_dropped = 0
-        self._quote_dispatch_enqueued = 0
-        self._quote_dispatch_processed = 0
+            _dispatch_metrics_every = 128
+        self._tick_dispatcher = TickDispatcher(
+            process_tick_fn=self._process_tick,
+            metrics=self.metrics,
+            quote_dispatch_async=_dispatch_async,
+            queue_size=_dispatch_queue_size,
+            batch_max=_dispatch_batch_max,
+            metrics_every=_dispatch_metrics_every,
+        )
+        # Backward-compat aliases ------------------------------------------------
+        self._quote_dispatch_async = _dispatch_async
+        self._quote_dispatch_queue_size = _dispatch_queue_size
+        self._quote_dispatch_batch_max = _dispatch_batch_max
+        self._quote_dispatch_metrics_every = _dispatch_metrics_every
         self._callbacks_registered = False
         self._pending_quote_resubscribe = False
         self._pending_quote_ts = 0.0
@@ -189,7 +197,6 @@ class ShioajiClient:
             self._login_retry_max = 1
         self._last_login_error: str | None = None
         self._last_reconnect_error: str | None = None
-        self.metrics = MetricsRegistry.get()
         self._api_cache: dict[str, tuple[float, Any]] = {}
         self._api_cache_lock = threading.Lock()
         self._api_cache_max_size = int(os.getenv("HFT_API_CACHE_MAX_SIZE", "1000"))
@@ -199,6 +206,8 @@ class ShioajiClient:
         self._margin_cache_ttl_s = float(os.getenv("HFT_MARGIN_CACHE_TTL_S", "5"))
         self._profit_cache_ttl_s = float(os.getenv("HFT_PROFIT_CACHE_TTL_S", "10"))
         self._positions_detail_cache_ttl_s = float(os.getenv("HFT_POSITION_DETAIL_CACHE_TTL_S", "10"))
+        self._trading_limits_cache_ttl_s = float(os.getenv("HFT_TRADING_LIMITS_CACHE_TTL_S", "30"))
+        self._settlements_cache_ttl_s = float(os.getenv("HFT_SETTLEMENTS_CACHE_TTL_S", "30"))
         self._api_last_latency_ms: dict[str, float] = {}
         self._quote_force_relogin_s = float(os.getenv("HFT_QUOTE_FORCE_RELOGIN_S", "15"))
         self._quote_flap_window_s = float(os.getenv("HFT_QUOTE_FLAP_WINDOW_S", "60"))
@@ -259,6 +268,22 @@ class ShioajiClient:
             soft_cap=int(os.getenv("HFT_SHIOAJI_API_SOFT_CAP", "20")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
             window_s=int(os.getenv("HFT_SHIOAJI_API_WINDOW_S", "5")),
+        )
+        # Tiered rate limiters per Shioaji API category
+        self._order_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_ORDER_SOFT_CAP", "200")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_ORDER_HARD_CAP", "250")),
+            window_s=int(os.getenv("HFT_SHIOAJI_ORDER_WINDOW_S", "10")),
+        )
+        self._quote_query_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_SOFT_CAP", "40")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_HARD_CAP", "50")),
+            window_s=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", "5")),
+        )
+        self._account_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_ACCOUNT_SOFT_CAP", "20")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_ACCOUNT_HARD_CAP", "25")),
+            window_s=int(os.getenv("HFT_SHIOAJI_ACCOUNT_WINDOW_S", "5")),
         )
 
         # Session refresh configuration (C3)
@@ -617,11 +642,55 @@ class ShioajiClient:
                     del self._api_cache[oldest_key]
             self._api_cache[key] = (expires_at, value)
 
+    # Operation-to-limiter routing tables
+    _ORDER_OPS: frozenset[str] = frozenset(
+        {
+            "place_order",
+            "cancel_order",
+            "update_order",
+            "update_price",
+            "update_qty",
+        }
+    )
+    _QUOTE_QUERY_OPS: frozenset[str] = frozenset(
+        {
+            "snapshots",
+            "ticks",
+            "kbars",
+            "scanners",
+            "credit_enquires",
+        }
+    )
+    _ACCOUNT_OPS: frozenset[str] = frozenset(
+        {
+            "usage",
+            "positions",
+            "account_balance",
+            "margin",
+            "position_detail",
+            "profit_loss",
+            "trading_limits",
+            "settlements",
+        }
+    )
+
     def _rate_limit_api(self, op: str) -> bool:
-        if not self._api_rate_limiter.check():
-            logger.warning("API rate limit hit", op=op)
+        if op in self._ORDER_OPS:
+            limiter = self._order_rate_limiter
+            category = "order"
+        elif op in self._QUOTE_QUERY_OPS:
+            limiter = self._quote_query_rate_limiter
+            category = "quote_query"
+        elif op in self._ACCOUNT_OPS:
+            limiter = self._account_rate_limiter
+            category = "account"
+        else:
+            limiter = self._api_rate_limiter
+            category = "default"
+        if not limiter.check():
+            logger.warning("API rate limit hit", op=op, category=category)
             return False
-        self._api_rate_limiter.record()
+        limiter.record()
         return True
 
     def _process_tick(self, *args, **kwargs):
@@ -677,133 +746,24 @@ class ShioajiClient:
             )
 
     def _enqueue_tick(self, *args, **kwargs) -> None:
-        """Non-blocking callback ingress: callback thread enqueues, worker executes."""
-        start_ns = time.perf_counter_ns()
-        try:
-            if not self._quote_dispatch_async:
-                self._process_tick(*args, **kwargs)
-                return
-            self._start_quote_dispatch_worker()
-            q = self._quote_dispatch_queue
-            if q is None:
-                self._process_tick(*args, **kwargs)
-                return
-            try:
-                q.put_nowait((args, kwargs))
-                self._quote_dispatch_enqueued += 1
-                if self.metrics and (self._quote_dispatch_enqueued % self._quote_dispatch_metrics_every == 0):
-                    try:
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth"):
-                            self.metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                    except Exception:
-                        pass
-            except queue.Full:
-                self._quote_dispatch_dropped += 1
-                if self.metrics:
-                    try:
-                        self.metrics.raw_queue_dropped_total.inc()
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_dropped_total"):
-                            self.metrics.shioaji_quote_callback_queue_dropped_total.inc()
-                    except Exception:
-                        pass
-                if self._quote_dispatch_dropped % 100 == 1:
-                    logger.warning(
-                        "Quote callback queue full; dropping quote callback payload",
-                        dropped_total=self._quote_dispatch_dropped,
-                        maxsize=self._quote_dispatch_queue_size,
-                    )
-        finally:
-            if self.metrics and hasattr(self.metrics, "shioaji_quote_callback_ingress_latency_ns"):
-                try:
-                    self.metrics.shioaji_quote_callback_ingress_latency_ns.observe(
-                        max(0, time.perf_counter_ns() - start_ns)
-                    )
-                except Exception:
-                    pass
+        """Delegates to TickDispatcher.enqueue_tick()."""
+        self._tick_dispatcher.enqueue_tick(*args, **kwargs)
 
     def _start_quote_dispatch_worker(self) -> None:
-        if not self._quote_dispatch_async or self._quote_dispatch_running:
-            return
-        self._quote_dispatch_queue = queue.Queue(maxsize=self._quote_dispatch_queue_size)
-        q = self._quote_dispatch_queue
-        if q is None:
-            return
-        self._quote_dispatch_running = True
-        batch_max = self._quote_dispatch_batch_max
-
-        def _worker() -> None:
-            while self._quote_dispatch_running:
-                try:
-                    item = q.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-                if item is None:
-                    continue
-                batch_count = 0
-
-                def _process_item(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-                    try:
-                        self._process_tick(*args, **kwargs)
-                    except Exception as exc:
-                        logger.error("Quote dispatch worker error", error=str(exc))
-
-                args, kwargs = item
-                _process_item(args, kwargs)
-                batch_count += 1
-                while batch_count < batch_max and self._quote_dispatch_running:
-                    try:
-                        nxt = q.get_nowait()
-                    except queue.Empty:
-                        break
-                    if nxt is None:
-                        continue
-                    n_args, n_kwargs = nxt
-                    _process_item(n_args, n_kwargs)
-                    batch_count += 1
-                self._quote_dispatch_processed += batch_count
-                if self.metrics and (self._quote_dispatch_processed % self._quote_dispatch_metrics_every == 0):
-                    try:
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth"):
-                            self.metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                    except Exception:
-                        pass
-
-        self._quote_dispatch_thread = threading.Thread(
-            target=_worker,
-            name="shioaji-quote-dispatch",
-            daemon=True,
-        )
-        self._quote_dispatch_thread.start()
+        """Delegates to TickDispatcher.start_worker()."""
+        self._tick_dispatcher.start_worker()
 
     def _stop_quote_dispatch_worker(self, join_timeout_s: float = 1.0) -> None:
-        if not self._quote_dispatch_running:
-            return
-        self._quote_dispatch_running = False
-        q = self._quote_dispatch_queue
-        if q is not None:
-            try:
-                q.put_nowait(None)
-            except Exception:
-                pass
-        t = self._quote_dispatch_thread
-        if t and t.is_alive():
-            t.join(timeout=max(0.0, float(join_timeout_s)))
-        self._quote_dispatch_thread = None
-        self._quote_dispatch_queue = None
+        """Delegates to TickDispatcher.stop_worker()."""
+        self._tick_dispatcher.stop_worker(join_timeout_s=join_timeout_s)
 
     def _refresh_quote_routes(self) -> None:
-        codes: list[str] = []
-        for sym in self.symbols:
-            if isinstance(sym, dict):
-                code = sym.get("code")
-            else:
-                code = None
-            if code:
-                codes.append(str(code))
-        subscribed_codes = getattr(self, "subscribed_codes", None)
-        if subscribed_codes:
-            codes.extend(str(c) for c in subscribed_codes)
-        _registry_rebind_codes(self, codes)
+        """Delegates to TickDispatcher.refresh_quote_routes()."""
+        TickDispatcher.refresh_quote_routes(
+            self.symbols,
+            getattr(self, "subscribed_codes", None),
+            self,
+        )
 
     def _load_config(self):
         with open(self.config_path, "r") as f:
@@ -1255,12 +1215,8 @@ class ShioajiClient:
         return self._contracts().validate_symbols()
 
     def _wrapped_tick_cb(self, *args, **kwargs):
-        """Persistent callback wrapper."""
-        try:
-            if hasattr(self, "tick_callback") and self.tick_callback:
-                self.tick_callback(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Callback error: {e}")
+        """Delegates to TickDispatcher.wrapped_tick_cb()."""
+        TickDispatcher.wrapped_tick_cb(getattr(self, "tick_callback", None), *args, **kwargs)
 
     def _get_contract(
         self,
