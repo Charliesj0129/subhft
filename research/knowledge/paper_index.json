@@ -653,10 +653,12 @@
     "title": "hft game transient impact"
   },
   "064": {
-    "alphas": [],
+    "alphas": [
+      "vol_of_imbalance"
+    ],
     "note_file": "research/knowledge/notes/064_volatility_time_ordering.md",
     "ref": "064",
-    "status": "reviewed",
+    "status": "implemented",
     "tags": [
       "unclassified"
     ],
