@@ -6,10 +6,10 @@ from unittest.mock import MagicMock, patch
 
 from hft_platform.feed_adapter.shioaji.data_gateway import DataGateway
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_client(
     *,
@@ -230,10 +230,12 @@ class TestGetSnapshots:
         assert len(result) == 3  # 1 per batch
 
     def test_resolves_from_symbols_when_contracts_none(self) -> None:
-        client = _make_client(symbols=[
-            {"code": "2330", "exchange": "TSE", "product_type": "stock"},
-            {"code": "2317", "exchange": "TSE", "product_type": "stock"},
-        ])
+        client = _make_client(
+            symbols=[
+                {"code": "2330", "exchange": "TSE", "product_type": "stock"},
+                {"code": "2317", "exchange": "TSE", "product_type": "stock"},
+            ]
+        )
         mock_contract = MagicMock()
         client._get_contract = MagicMock(return_value=mock_contract)
         client.api.snapshots.return_value = [{"snap": True}]
@@ -283,11 +285,13 @@ class TestGetSnapshots:
         assert client._record_api_latency.call_count == 2
 
     def test_skips_symbols_without_code_or_exchange(self) -> None:
-        client = _make_client(symbols=[
-            {"code": "2330", "exchange": "TSE"},
-            {"code": "", "exchange": "TSE"},  # empty code
-            {"code": "2317"},  # missing exchange
-        ])
+        client = _make_client(
+            symbols=[
+                {"code": "2330", "exchange": "TSE"},
+                {"code": "", "exchange": "TSE"},  # empty code
+                {"code": "2317"},  # missing exchange
+            ]
+        )
         mock_contract = MagicMock()
         client._get_contract = MagicMock(return_value=mock_contract)
         client.api.snapshots.return_value = []
@@ -307,10 +311,12 @@ class TestGetSnapshots:
 class TestResolveSymbolContracts:
     def test_product_type_fallback_fields(self) -> None:
         """product_type falls back to security_type then type."""
-        client = _make_client(symbols=[
-            {"code": "A", "exchange": "TSE", "security_type": "stock"},
-            {"code": "B", "exchange": "OTC", "type": "etf"},
-        ])
+        client = _make_client(
+            symbols=[
+                {"code": "A", "exchange": "TSE", "security_type": "stock"},
+                {"code": "B", "exchange": "OTC", "type": "etf"},
+            ]
+        )
         client._get_contract = MagicMock(return_value=MagicMock())
 
         gw = DataGateway(client)
@@ -323,10 +329,12 @@ class TestResolveSymbolContracts:
         assert client._get_contract.call_args_list[1][1]["product_type"] == "etf"
 
     def test_skips_unresolvable_contracts(self) -> None:
-        client = _make_client(symbols=[
-            {"code": "GOOD", "exchange": "TSE"},
-            {"code": "BAD", "exchange": "TSE"},
-        ])
+        client = _make_client(
+            symbols=[
+                {"code": "GOOD", "exchange": "TSE"},
+                {"code": "BAD", "exchange": "TSE"},
+            ]
+        )
         client._get_contract = MagicMock(side_effect=[MagicMock(), None])
 
         gw = DataGateway(client)
