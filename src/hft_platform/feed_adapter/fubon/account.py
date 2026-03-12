@@ -10,6 +10,6 @@ warnings.warn(
     stacklevel=2,
 )
 
-from hft_platform.feed_adapter.fubon.account_gateway import FubonAccountGateway
+from hft_platform.feed_adapter.fubon.account_gateway import FubonAccountGateway  # noqa: E402
 
 __all__ = ["FubonAccountGateway"]
