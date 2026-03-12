@@ -149,9 +149,7 @@ class TestMarketDataDelegation:
         on_order = MagicMock()
         on_deal = MagicMock()
         wired_facade.set_execution_callbacks(on_order, on_deal)
-        wired_facade._subscription_manager.set_execution_callbacks.assert_called_once_with(
-            on_order, on_deal
-        )
+        wired_facade._subscription_manager.set_execution_callbacks.assert_called_once_with(on_order, on_deal)
 
 
 # ---------------------------------------------------------------------- #
@@ -163,9 +161,7 @@ class TestOrderDelegation:
     def test_place_order(self, wired_facade: FubonClientFacade) -> None:
         wired_facade._order_gateway.place_order.return_value = "order-123"
         result = wired_facade.place_order(symbol="2330", price=5000000, qty=1, side="Buy")
-        wired_facade._order_gateway.place_order.assert_called_once_with(
-            symbol="2330", price=5000000, qty=1, side="Buy"
-        )
+        wired_facade._order_gateway.place_order.assert_called_once_with(symbol="2330", price=5000000, qty=1, side="Buy")
         assert result == "order-123"
 
     def test_cancel_order(self, wired_facade: FubonClientFacade) -> None:
@@ -177,9 +173,7 @@ class TestOrderDelegation:
     def test_update_order(self, wired_facade: FubonClientFacade) -> None:
         wired_facade._order_gateway.update_order.return_value = "updated"
         result = wired_facade.update_order("trade-obj", price=5010000, qty=2)
-        wired_facade._order_gateway.update_order.assert_called_once_with(
-            "trade-obj", price=5010000, qty=2
-        )
+        wired_facade._order_gateway.update_order.assert_called_once_with("trade-obj", price=5010000, qty=2)
         assert result == "updated"
 
 
