@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_sdk() -> MagicMock:
     """Return a mock Fubon SDK."""
@@ -152,12 +152,14 @@ class TestValidateSymbols:
         assert rt.validate_symbols() == []
 
     def test_detects_invalid_codes(self) -> None:
-        config = _make_config([
-            {"code": "2330", "exchange": "TSE"},
-            {"code": "bad symbol!", "exchange": "TSE"},
-            {"code": "has space", "exchange": "TSE"},
-            {"code": "", "exchange": "TSE"},
-        ])
+        config = _make_config(
+            [
+                {"code": "2330", "exchange": "TSE"},
+                {"code": "bad symbol!", "exchange": "TSE"},
+                {"code": "has space", "exchange": "TSE"},
+                {"code": "", "exchange": "TSE"},
+            ]
+        )
         rt = _make_runtime(config=config)
         invalid = rt.validate_symbols()
         assert "bad symbol!" in invalid
@@ -203,19 +205,23 @@ class TestReloadSymbols:
         rt = _make_runtime(config=config_initial)
         assert len(rt.symbols) == 1
 
-        config_new = _make_config([
-            {"code": "2330", "exchange": "TSE"},
-            {"code": "2317", "exchange": "TSE"},
-        ])
+        config_new = _make_config(
+            [
+                {"code": "2330", "exchange": "TSE"},
+                {"code": "2317", "exchange": "TSE"},
+            ]
+        )
         rt.reload_symbols(config=config_new)
         assert len(rt.symbols) == 2
         assert rt.get_exchange("2317") == "TSE"
 
     def test_reload_detects_removed_symbols(self) -> None:
-        config_initial = _make_config([
-            {"code": "2330", "exchange": "TSE"},
-            {"code": "2317", "exchange": "TSE"},
-        ])
+        config_initial = _make_config(
+            [
+                {"code": "2330", "exchange": "TSE"},
+                {"code": "2317", "exchange": "TSE"},
+            ]
+        )
         rt = _make_runtime(config=config_initial)
         assert len(rt.symbols) == 2
 

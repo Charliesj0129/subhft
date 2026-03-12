@@ -68,9 +68,7 @@ class FubonContractsRuntime:
 
         self._symbols = symbols
         self._code_exchange_map = {
-            str(s["code"]): str(s.get("exchange", ""))
-            for s in symbols
-            if s.get("code") is not None
+            str(s["code"]): str(s.get("exchange", "")) for s in symbols if s.get("code") is not None
         }
         self.log.info(
             "Fubon symbols loaded",
