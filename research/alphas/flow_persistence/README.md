@@ -1,17 +1,17 @@
 # flow_persistence
 
 ## Hypothesis
-- Short-horizon microstructure imbalance can predict near-term mid-price direction after controlling for spread and depth.
+- Agreement between recent and longer-term OFI direction (persistence) predicts trend continuation; disagreement predicts reversals.
 
 ## Formula
-- `alpha_t = zscore(depth_imbalance_ppm_t) - 0.5 * zscore(spread_scaled_t)`
+- `qi = (bid_qty - ask_qty) / max(bid_qty + ask_qty, 1)`
+- `fast = EMA_4(qi); slow = EMA_32(qi)`
+- `agreement = fast * slow`
+- `signal = clip(EMA_8(agreement), -1, 1)`
 
 ## Data Fields
-- `spread_scaled`
-- `depth_imbalance_ppm`
-- `l1_bid_qty`
-- `l1_ask_qty`
-- `mid_price_x2`
+- `bid_qty`
+- `ask_qty`
 
 ## Metadata
 - `alpha_id`: `flow_persistence`
