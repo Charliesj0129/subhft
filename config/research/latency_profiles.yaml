@@ -38,3 +38,13 @@ profiles:
     cancel_ack_latency_ms: 47.0
     local_decision_pipeline_latency_us: 250
     measurement_date: "2026-03-01"
+
+  fubon_estimated_p95_v2026-03-12:
+    description: "Fubon TradeAPI conservative P95 estimates — 2026-03-12"
+    source: "estimated_conservative"
+    submit_ack_latency_ms: 50.0
+    modify_ack_latency_ms: 50.0
+    cancel_ack_latency_ms: 40.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: null
+    notes: "Conservative P95 estimates for Fubon TradeAPI v2.2.8. Must be validated with real SDK measurements before production use."

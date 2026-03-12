@@ -22,6 +22,22 @@ class OrderGateway:
         self._client = client
 
     @staticmethod
+    def _async_kwargs(timeout: int, cb: Any | None) -> dict[str, Any]:
+        """Build kwargs for non-blocking API calls.
+
+        When *timeout* is 0 the caller wants async confirmation; pass
+        ``timeout=0`` (and optionally ``cb``) through to the Shioaji SDK.
+        For the default blocking path (timeout > 0) an empty dict is
+        returned so existing behaviour is preserved.
+        """
+        if timeout != 0:
+            return {}
+        kw: dict[str, Any] = {"timeout": 0}
+        if cb is not None:
+            kw["cb"] = cb
+        return kw
+
+    @staticmethod
     def _sdk() -> Any | None:
         # Keep test patching backward compatible by reading SDK handle
         # from shioaji_client module-level symbol.
@@ -48,6 +64,8 @@ class OrderGateway:
         oc_type: str | None = None,
         account: Any | None = None,
         price_type: str | None = None,
+        timeout: int = 5000,
+        cb: Any | None = None,
     ) -> Any:
         sdk = self._sdk()
         if not self._client.api:
@@ -77,6 +95,8 @@ class OrderGateway:
                 oc_type=oc_type,
                 account=account,
                 custom_field=custom_field,
+                timeout=timeout,
+                cb=cb,
             )
 
         pt = sdk.constant.StockPriceType.LMT
@@ -95,7 +115,7 @@ class OrderGateway:
         )
         start_ns = time.perf_counter_ns()
         try:
-            result = self._client.api.place_order(contract, order)
+            result = self._client.api.place_order(contract, order, **self._async_kwargs(timeout, cb))
             self._client._record_api_latency("place_order", start_ns, ok=True)
             return result
         except Exception:
@@ -119,6 +139,8 @@ class OrderGateway:
         oc_type: str | None,
         account: Any | None,
         custom_field: str | None,
+        timeout: int = 5000,
+        cb: Any | None = None,
     ) -> Any:
         sdk = self._sdk()
         if sdk is None:
@@ -190,7 +212,7 @@ class OrderGateway:
 
         start_ns = time.perf_counter_ns()
         try:
-            result = self._client.api.place_order(contract, order)
+            result = self._client.api.place_order(contract, order, **self._async_kwargs(timeout, cb))
             self._client._record_api_latency("place_order", start_ns, ok=True)
             return result
         except Exception:
@@ -288,7 +310,12 @@ class OrderGateway:
         name = mapping.get(key, "Auto")
         return getattr(sdk.constant.FuturesOCType, name, sdk.constant.FuturesOCType.Auto)
 
-    def cancel_order(self, trade: Any) -> Any:
+    def cancel_order(
+        self,
+        trade: Any,
+        timeout: int = 5000,
+        cb: Any | None = None,
+    ) -> Any:
         if not self._client.api:
             logger.warning("Shioaji SDK missing; mock cancel_order invoked.")
             return None
@@ -296,7 +323,7 @@ class OrderGateway:
             raise RuntimeError("Shioaji API missing cancel_order")
         start_ns = time.perf_counter_ns()
         try:
-            result = self._client.api.cancel_order(trade)
+            result = self._client.api.cancel_order(trade, **self._async_kwargs(timeout, cb))
             self._client._record_api_latency("cancel_order", start_ns, ok=True)
             return result
         except Exception as exc:
@@ -304,15 +331,23 @@ class OrderGateway:
             logger.error("cancel_order failed", error=str(exc))
             raise
 
-    def update_order(self, trade: Any, price: float | None = None, qty: int | None = None) -> Any:
+    def update_order(
+        self,
+        trade: Any,
+        price: float | None = None,
+        qty: int | None = None,
+        timeout: int = 5000,
+        cb: Any | None = None,
+    ) -> Any:
         if not self._client.api:
             logger.warning("Shioaji SDK missing; mock update_order invoked.")
             return None
+        async_kw = self._async_kwargs(timeout, cb)
         if price is not None:
             if hasattr(self._client.api, "update_order"):
                 start_ns = time.perf_counter_ns()
                 try:
-                    result = self._client.api.update_order(trade=trade, price=price)
+                    result = self._client.api.update_order(trade=trade, price=price, **async_kw)
                     self._client._record_api_latency("update_order", start_ns, ok=True)
                     return result
                 except Exception as exc:
@@ -322,7 +357,7 @@ class OrderGateway:
             if hasattr(self._client.api, "update_price"):
                 start_ns = time.perf_counter_ns()
                 try:
-                    result = self._client.api.update_price(trade=trade, price=price)
+                    result = self._client.api.update_price(trade=trade, price=price, **async_kw)
                     self._client._record_api_latency("update_price", start_ns, ok=True)
                     return result
                 except Exception as exc:
@@ -334,7 +369,7 @@ class OrderGateway:
             if hasattr(self._client.api, "update_order"):
                 start_ns = time.perf_counter_ns()
                 try:
-                    result = self._client.api.update_order(trade=trade, qty=qty)
+                    result = self._client.api.update_order(trade=trade, qty=qty, **async_kw)
                     self._client._record_api_latency("update_order", start_ns, ok=True)
                     return result
                 except Exception as exc:
@@ -344,7 +379,7 @@ class OrderGateway:
             if hasattr(self._client.api, "update_qty"):
                 start_ns = time.perf_counter_ns()
                 try:
-                    result = self._client.api.update_qty(trade=trade, quantity=qty)
+                    result = self._client.api.update_qty(trade=trade, quantity=qty, **async_kw)
                     self._client._record_api_latency("update_qty", start_ns, ok=True)
                     return result
                 except Exception as exc:
