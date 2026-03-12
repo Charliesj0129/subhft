@@ -4,6 +4,7 @@ from typing import Any
 
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
+from hft_platform.feed_adapter.shioaji.market_info_gateway import MarketInfoGateway
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
@@ -23,6 +24,7 @@ class ShioajiClientFacade:
         "contracts_runtime",
         "order_gateway",
         "account_gateway",
+        "market_info_gateway",
         "subscription_manager",
     )
 
@@ -36,6 +38,7 @@ class ShioajiClientFacade:
         self.contracts_runtime = ContractsRuntime(client)
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
+        self.market_info_gateway = MarketInfoGateway(client)
         self.subscription_manager = client._subscription_manager
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
@@ -118,6 +121,34 @@ class ShioajiClientFacade:
 
     def get_contract_refresh_status(self) -> dict[str, object]:
         return self.contracts_runtime.refresh_status()
+
+    def get_credit_enquires(
+        self,
+        contract_codes: list[str],
+        exchange: str,
+        timeout: int = 30000,
+        product_type: str | None = None,
+    ) -> list[Any]:
+        return self.market_info_gateway.get_credit_enquires(
+            contract_codes, exchange, timeout=timeout, product_type=product_type
+        )
+
+    def get_short_stock_sources(
+        self,
+        contract_codes: list[str],
+        exchange: str,
+        timeout: int = 5000,
+        product_type: str | None = None,
+    ) -> list[Any]:
+        return self.market_info_gateway.get_short_stock_sources(
+            contract_codes, exchange, timeout=timeout, product_type=product_type
+        )
+
+    def get_punish_stocks(self, timeout: int = 5000) -> Any:
+        return self.market_info_gateway.get_punish_stocks(timeout=timeout)
+
+    def get_notice_stocks(self, timeout: int = 5000) -> Any:
+        return self.market_info_gateway.get_notice_stocks(timeout=timeout)
 
     def close(self, logout: bool = False) -> None:
         self._client.close(logout=logout)
