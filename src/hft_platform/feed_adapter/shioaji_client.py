@@ -1,5 +1,7 @@
+# DEPRECATED: External consumers should use ShioajiClientFacade from
+# hft_platform.feed_adapter.shioaji.facade instead of importing from this module.
+# This module is retained for internal use by the shioaji/ sub-package runtimes.
 import os
-import queue
 import re
 import threading
 import time
@@ -14,6 +16,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji import router as _router
 from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
+from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.rate_limiter import RateLimiter
 
@@ -134,30 +137,38 @@ class ShioajiClient:
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
         self.tick_callback: Callable[..., Any] | None = None
-        self._quote_dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
+        self.metrics = MetricsRegistry.get()
+        _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
         try:
-            self._quote_dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
+            _dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
         except ValueError:
-            self._quote_dispatch_queue_size = 8192
+            _dispatch_queue_size = 8192
         try:
-            self._quote_dispatch_batch_max = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_BATCH_MAX", "32")))
+            _dispatch_batch_max = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_BATCH_MAX", "32")))
         except ValueError:
-            self._quote_dispatch_batch_max = 32
+            _dispatch_batch_max = 32
         try:
-            self._quote_dispatch_metrics_every = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_METRICS_EVERY", "128")))
+            _dispatch_metrics_every = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_METRICS_EVERY", "128")))
         except ValueError:
-            self._quote_dispatch_metrics_every = 128
-        self._quote_dispatch_queue: queue.Queue[tuple[tuple[Any, ...], dict[str, Any]] | None] | None = None
-        self._quote_dispatch_thread: threading.Thread | None = None
-        self._quote_dispatch_running = False
-        self._quote_dispatch_dropped = 0
-        self._quote_dispatch_enqueued = 0
-        self._quote_dispatch_processed = 0
+            _dispatch_metrics_every = 128
+        self._tick_dispatcher = TickDispatcher(
+            process_tick_fn=self._process_tick,
+            metrics=self.metrics,
+            quote_dispatch_async=_dispatch_async,
+            queue_size=_dispatch_queue_size,
+            batch_max=_dispatch_batch_max,
+            metrics_every=_dispatch_metrics_every,
+        )
+        # Backward-compat aliases ------------------------------------------------
+        self._quote_dispatch_async = _dispatch_async
+        self._quote_dispatch_queue_size = _dispatch_queue_size
+        self._quote_dispatch_batch_max = _dispatch_batch_max
+        self._quote_dispatch_metrics_every = _dispatch_metrics_every
         self._callbacks_registered = False
         self._pending_quote_resubscribe = False
         self._pending_quote_ts = 0.0
@@ -185,7 +196,6 @@ class ShioajiClient:
             self._login_retry_max = 1
         self._last_login_error: str | None = None
         self._last_reconnect_error: str | None = None
-        self.metrics = MetricsRegistry.get()
         self._api_cache: dict[str, tuple[float, Any]] = {}
         self._api_cache_lock = threading.Lock()
         self._api_cache_max_size = int(os.getenv("HFT_API_CACHE_MAX_SIZE", "1000"))
@@ -195,6 +205,8 @@ class ShioajiClient:
         self._margin_cache_ttl_s = float(os.getenv("HFT_MARGIN_CACHE_TTL_S", "5"))
         self._profit_cache_ttl_s = float(os.getenv("HFT_PROFIT_CACHE_TTL_S", "10"))
         self._positions_detail_cache_ttl_s = float(os.getenv("HFT_POSITION_DETAIL_CACHE_TTL_S", "10"))
+        self._trading_limits_cache_ttl_s = float(os.getenv("HFT_TRADING_LIMITS_CACHE_TTL_S", "30"))
+        self._settlements_cache_ttl_s = float(os.getenv("HFT_SETTLEMENTS_CACHE_TTL_S", "30"))
         self._api_last_latency_ms: dict[str, float] = {}
         self._quote_force_relogin_s = float(os.getenv("HFT_QUOTE_FORCE_RELOGIN_S", "15"))
         self._quote_flap_window_s = float(os.getenv("HFT_QUOTE_FLAP_WINDOW_S", "60"))
@@ -255,6 +267,22 @@ class ShioajiClient:
             soft_cap=int(os.getenv("HFT_SHIOAJI_API_SOFT_CAP", "20")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
             window_s=int(os.getenv("HFT_SHIOAJI_API_WINDOW_S", "5")),
+        )
+        # Tiered rate limiters per Shioaji API category
+        self._order_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_ORDER_SOFT_CAP", "200")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_ORDER_HARD_CAP", "250")),
+            window_s=int(os.getenv("HFT_SHIOAJI_ORDER_WINDOW_S", "10")),
+        )
+        self._quote_query_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_SOFT_CAP", "40")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_HARD_CAP", "50")),
+            window_s=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", "5")),
+        )
+        self._account_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_ACCOUNT_SOFT_CAP", "20")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_ACCOUNT_HARD_CAP", "25")),
+            window_s=int(os.getenv("HFT_SHIOAJI_ACCOUNT_WINDOW_S", "5")),
         )
 
         # Session refresh configuration (C3)
@@ -329,6 +357,7 @@ class ShioajiClient:
         from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
         from hft_platform.feed_adapter.shioaji.reconnect_orchestrator import ReconnectOrchestrator
         from hft_platform.feed_adapter.shioaji.session_runtime import SessionRuntime
+        from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
 
         self._contracts_runtime = ContractsRuntime(self)
         self._account_gateway = AccountGateway(self)
@@ -336,6 +365,7 @@ class ShioajiClient:
         self._session_runtime = SessionRuntime(self)
         self._quote_runtime = QuoteRuntime(self)
         self._reconnect_orchestrator = ReconnectOrchestrator(self)
+        self._subscription_manager = SubscriptionManager(self)
         # Wire decoupled interfaces (SessionPolicy + QuoteEventHandler).
         self._session_policy = self._session_runtime
         self._quote_event_handler = self._quote_runtime._event_handler
@@ -378,6 +408,13 @@ class ShioajiClient:
         if getattr(self, "_quote_event_handler", None) is None:
             self._quote_event_handler = self._quote_runtime._event_handler
 
+    def _init_subscription_manager(self) -> None:
+        """Lazily create subscription manager for __new__-constructed tests."""
+        if getattr(self, "_subscription_manager", None) is None:
+            from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionManager
+
+            self._subscription_manager = SubscriptionManager(self)
+
     def _contracts(self):
         self._init_domain_modules()
         return self._contracts_runtime
@@ -393,6 +430,10 @@ class ShioajiClient:
     def _quotes(self):
         self._init_quote_runtime()
         return self._quote_runtime
+
+    def _subscriptions(self):
+        self._init_subscription_manager()
+        return self._subscription_manager
 
     def _reconnect_orch(self):
         if getattr(self, "_reconnect_orchestrator", None) is None:
@@ -599,11 +640,55 @@ class ShioajiClient:
                     del self._api_cache[oldest_key]
             self._api_cache[key] = (expires_at, value)
 
+    # Operation-to-limiter routing tables
+    _ORDER_OPS: frozenset[str] = frozenset(
+        {
+            "place_order",
+            "cancel_order",
+            "update_order",
+            "update_price",
+            "update_qty",
+        }
+    )
+    _QUOTE_QUERY_OPS: frozenset[str] = frozenset(
+        {
+            "snapshots",
+            "ticks",
+            "kbars",
+            "scanners",
+            "credit_enquires",
+        }
+    )
+    _ACCOUNT_OPS: frozenset[str] = frozenset(
+        {
+            "usage",
+            "positions",
+            "account_balance",
+            "margin",
+            "position_detail",
+            "profit_loss",
+            "trading_limits",
+            "settlements",
+        }
+    )
+
     def _rate_limit_api(self, op: str) -> bool:
-        if not self._api_rate_limiter.check():
-            logger.warning("API rate limit hit", op=op)
+        if op in self._ORDER_OPS:
+            limiter = self._order_rate_limiter
+            category = "order"
+        elif op in self._QUOTE_QUERY_OPS:
+            limiter = self._quote_query_rate_limiter
+            category = "quote_query"
+        elif op in self._ACCOUNT_OPS:
+            limiter = self._account_rate_limiter
+            category = "account"
+        else:
+            limiter = self._api_rate_limiter
+            category = "default"
+        if not limiter.check():
+            logger.warning("API rate limit hit", op=op, category=category)
             return False
-        self._api_rate_limiter.record()
+        limiter.record()
         return True
 
     def _process_tick(self, *args, **kwargs):
@@ -642,133 +727,24 @@ class ShioajiClient:
         self._reconnect_orch().handle_quote_schema_mismatch(reason, *args, **kwargs)
 
     def _enqueue_tick(self, *args, **kwargs) -> None:
-        """Non-blocking callback ingress: callback thread enqueues, worker executes."""
-        start_ns = time.perf_counter_ns()
-        try:
-            if not self._quote_dispatch_async:
-                self._process_tick(*args, **kwargs)
-                return
-            self._start_quote_dispatch_worker()
-            q = self._quote_dispatch_queue
-            if q is None:
-                self._process_tick(*args, **kwargs)
-                return
-            try:
-                q.put_nowait((args, kwargs))
-                self._quote_dispatch_enqueued += 1
-                if self.metrics and (self._quote_dispatch_enqueued % self._quote_dispatch_metrics_every == 0):
-                    try:
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth"):
-                            self.metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                    except Exception:
-                        pass
-            except queue.Full:
-                self._quote_dispatch_dropped += 1
-                if self.metrics:
-                    try:
-                        self.metrics.raw_queue_dropped_total.inc()
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_dropped_total"):
-                            self.metrics.shioaji_quote_callback_queue_dropped_total.inc()
-                    except Exception:
-                        pass
-                if self._quote_dispatch_dropped % 100 == 1:
-                    logger.warning(
-                        "Quote callback queue full; dropping quote callback payload",
-                        dropped_total=self._quote_dispatch_dropped,
-                        maxsize=self._quote_dispatch_queue_size,
-                    )
-        finally:
-            if self.metrics and hasattr(self.metrics, "shioaji_quote_callback_ingress_latency_ns"):
-                try:
-                    self.metrics.shioaji_quote_callback_ingress_latency_ns.observe(
-                        max(0, time.perf_counter_ns() - start_ns)
-                    )
-                except Exception:
-                    pass
+        """Delegates to TickDispatcher.enqueue_tick()."""
+        self._tick_dispatcher.enqueue_tick(*args, **kwargs)
 
     def _start_quote_dispatch_worker(self) -> None:
-        if not self._quote_dispatch_async or self._quote_dispatch_running:
-            return
-        self._quote_dispatch_queue = queue.Queue(maxsize=self._quote_dispatch_queue_size)
-        q = self._quote_dispatch_queue
-        if q is None:
-            return
-        self._quote_dispatch_running = True
-        batch_max = self._quote_dispatch_batch_max
-
-        def _worker() -> None:
-            while self._quote_dispatch_running:
-                try:
-                    item = q.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-                if item is None:
-                    continue
-                batch_count = 0
-
-                def _process_item(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-                    try:
-                        self._process_tick(*args, **kwargs)
-                    except Exception as exc:
-                        logger.error("Quote dispatch worker error", error=str(exc))
-
-                args, kwargs = item
-                _process_item(args, kwargs)
-                batch_count += 1
-                while batch_count < batch_max and self._quote_dispatch_running:
-                    try:
-                        nxt = q.get_nowait()
-                    except queue.Empty:
-                        break
-                    if nxt is None:
-                        continue
-                    n_args, n_kwargs = nxt
-                    _process_item(n_args, n_kwargs)
-                    batch_count += 1
-                self._quote_dispatch_processed += batch_count
-                if self.metrics and (self._quote_dispatch_processed % self._quote_dispatch_metrics_every == 0):
-                    try:
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth"):
-                            self.metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                    except Exception:
-                        pass
-
-        self._quote_dispatch_thread = threading.Thread(
-            target=_worker,
-            name="shioaji-quote-dispatch",
-            daemon=True,
-        )
-        self._quote_dispatch_thread.start()
+        """Delegates to TickDispatcher.start_worker()."""
+        self._tick_dispatcher.start_worker()
 
     def _stop_quote_dispatch_worker(self, join_timeout_s: float = 1.0) -> None:
-        if not self._quote_dispatch_running:
-            return
-        self._quote_dispatch_running = False
-        q = self._quote_dispatch_queue
-        if q is not None:
-            try:
-                q.put_nowait(None)
-            except Exception:
-                pass
-        t = self._quote_dispatch_thread
-        if t and t.is_alive():
-            t.join(timeout=max(0.0, float(join_timeout_s)))
-        self._quote_dispatch_thread = None
-        self._quote_dispatch_queue = None
+        """Delegates to TickDispatcher.stop_worker()."""
+        self._tick_dispatcher.stop_worker(join_timeout_s=join_timeout_s)
 
     def _refresh_quote_routes(self) -> None:
-        codes: list[str] = []
-        for sym in self.symbols:
-            if isinstance(sym, dict):
-                code = sym.get("code")
-            else:
-                code = None
-            if code:
-                codes.append(str(code))
-        subscribed_codes = getattr(self, "subscribed_codes", None)
-        if subscribed_codes:
-            codes.extend(str(c) for c in subscribed_codes)
-        _registry_rebind_codes(self, codes)
+        """Delegates to TickDispatcher.refresh_quote_routes()."""
+        TickDispatcher.refresh_quote_routes(
+            self.symbols,
+            getattr(self, "subscribed_codes", None),
+            self,
+        )
 
     def _load_config(self):
         with open(self.config_path, "r") as f:
@@ -807,32 +783,8 @@ class ShioajiClient:
         )
 
     def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]):
-        """
-        Register low-latency callbacks.
-        Note: These run on Shioaji threads.
-        """
-        if not self.api:
-            logger.warning("Shioaji SDK missing; execution callbacks not registered (sim mode).")
-            return
-        order_state = getattr(sj.constant, "OrderState", None) if sj else None
-        deal_states = set()
-        if order_state:
-            for name in ("StockDeal", "FuturesDeal"):
-                state = getattr(order_state, name, None)
-                if state is not None:
-                    deal_states.add(state)
-
-        def _order_cb(stat, msg):
-            try:
-                if stat in deal_states:
-                    on_deal(msg)
-                else:
-                    on_order(stat, msg)
-            except Exception as exc:
-                logger.error("Execution callback failed", error=str(exc))
-
-        self._order_callback = _order_cb
-        self.api.set_order_callback(self._order_callback)
+        """Delegates to SubscriptionManager.set_execution_callbacks()."""
+        self._subscriptions().set_execution_callbacks(on_order=on_order, on_deal=on_deal)
 
     def _ensure_contracts(self) -> None:
         if not self.api or not hasattr(self.api, "fetch_contracts"):
@@ -870,79 +822,8 @@ class ShioajiClient:
         return quote
 
     def subscribe_basket(self, cb: Callable[..., Any]):
-        if not self.api:
-            # If API is missing entirely (no library), skip
-            logger.info("Shioaji lib missing: skipping real subscription")
-            return
-
-        # In Sim mode with valid login, we CAN subscribe.
-        if not self.logged_in:
-            logger.warning("Not logged in; skipping subscription.")
-            return
-
-        # Store callback permanently for binding (fix GC issues)
-        self.tick_callback = cb
-        self._start_quote_dispatch_worker()
-        self._ensure_callbacks(cb)
-        if not (self._callbacks_registered and self._event_callback_registered):
-            logger.warning(
-                "Quote callbacks not ready; deferring quote subscription",
-                callbacks_registered=self._callbacks_registered,
-                event_callback_registered=self._event_callback_registered,
-            )
-            self._failed_sub_symbols = [sym for sym in self.symbols if isinstance(sym, dict)]
-            if self._failed_sub_symbols:
-                self._start_sub_retry_thread(cb)
-            self._start_quote_watchdog()
-            self._start_session_refresh_thread()
-            return
-
-        quote_api = self._quote_api()
-        if quote_api is None or not hasattr(quote_api, "subscribe"):
-            logger.warning("Quote API unavailable; deferring quote subscription")
-            self._failed_sub_symbols = [sym for sym in self.symbols if isinstance(sym, dict)]
-            if self._failed_sub_symbols:
-                self._start_sub_retry_thread(cb)
-            self._start_quote_watchdog()
-            self._start_session_refresh_thread()
-            return
-
-        self._start_contract_refresh_thread()
-        if self._last_quote_data_ts <= 0:
-            self._last_quote_data_ts = timebase.now_s()
-
-        if os.getenv("HFT_CONTRACT_PREFLIGHT", "1") == "1":
-            self._preflight_contracts()
-
-        logger.info(
-            "Subscribing quote basket",
-            count=len(self.symbols),
-            mode=self.mode,
-            quote_version=self._quote_version,
-            quote_version_mode=self._quote_version_mode,
-        )
-        for sym in self.symbols:
-            if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
-                logger.error("Subscription limit reached", limit=self.MAX_SUBSCRIPTIONS)
-                break
-            if self._subscribe_symbol(sym, cb):
-                code = sym.get("code")
-                if code:
-                    self.subscribed_codes.add(code)
-                self.subscribed_count = len(self.subscribed_codes)
-            else:
-                self._failed_sub_symbols.append(sym)
-        self._refresh_quote_routes()
-        logger.info("Quote subscription completed", subscribed=self.subscribed_count)
-        if self._failed_sub_symbols:
-            logger.warning(
-                "Failed subscriptions queued for retry",
-                count=len(self._failed_sub_symbols),
-                codes=[s.get("code") for s in self._failed_sub_symbols[:10]],
-            )
-            self._start_sub_retry_thread(cb)
-        self._start_quote_watchdog()
-        self._start_session_refresh_thread()
+        """Delegates to SubscriptionManager.subscribe_basket()."""
+        self._subscriptions().subscribe_basket(cb)
 
     def _ensure_callbacks(self, cb: Callable[..., Any]) -> None:
         if not self.api:
@@ -1080,118 +961,20 @@ class ShioajiClient:
         return self._reconnect_orch().reconnect(reason=reason, force=force)
 
     def _resubscribe_all(self) -> None:
-        if not self.api or not self.logged_in or not self.tick_callback:
-            return
-        self._ensure_callbacks(self.tick_callback)
-        if not (self._callbacks_registered and self._event_callback_registered):
-            return
-        quote_api = self._quote_api()
-        if quote_api is None or not hasattr(quote_api, "subscribe"):
-            return
-        now = timebase.now_s()
-        last = getattr(self, "_last_resubscribe_ts", 0.0)
-        cooldown = getattr(self, "resubscribe_cooldown", 1.5)
-        if now - last < cooldown:
-            return
-        self._last_resubscribe_ts = now
-        self.subscribed_codes = set()
-        self.subscribed_count = 0
-        for sym in self.symbols:
-            if self.subscribed_count >= self.MAX_SUBSCRIPTIONS:
-                logger.error("Subscription limit reached during resubscribe", limit=self.MAX_SUBSCRIPTIONS)
-                break
-            if self._subscribe_symbol(sym, self.tick_callback):
-                code = sym.get("code")
-                if code:
-                    self.subscribed_codes.add(code)
-                self.subscribed_count = len(self.subscribed_codes)
-        self._refresh_quote_routes()
+        """Delegates to SubscriptionManager._resubscribe_all()."""
+        self._subscriptions()._resubscribe_all()
 
     def resubscribe(self) -> bool:
-        if not self.api or not self.logged_in or not self.tick_callback:
-            self.metrics.feed_resubscribe_total.labels(result="skip").inc()
-            return False
-        try:
-            self._resubscribe_all()
-            self.metrics.feed_resubscribe_total.labels(result="ok").inc()
-            return True
-        except Exception as exc:
-            logger.error("Resubscribe failed", error=str(exc))
-            self.metrics.feed_resubscribe_total.labels(result="error").inc()
-            return False
+        """Delegates to SubscriptionManager.resubscribe()."""
+        return self._subscriptions().resubscribe()
 
     def _subscribe_symbol(self, sym: Dict[str, Any], cb: Callable[..., Any]) -> bool:
-        code = sym.get("code")
-        exchange = sym.get("exchange")
-        product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
-        if not code or not exchange:
-            logger.error("Invalid symbol entry", symbol=sym)
-            return False
-
-        contract = self._get_contract(
-            exchange,
-            code,
-            product_type=product_type,
-            allow_synthetic=self.allow_synthetic_contracts,
-        )
-        if not contract:
-            logger.error("Contract not found", code=code)
-            if hasattr(self.metrics, "shioaji_contract_lookup_errors_total"):
-                try:
-                    self.metrics.shioaji_contract_lookup_errors_total.labels(code=str(code)).inc()
-                except Exception:
-                    pass
-            return False
-
-        quote_api = self._quote_api()
-        if quote_api is None or not hasattr(quote_api, "subscribe"):
-            logger.error("Quote API unavailable during subscribe", code=code)
-            return False
-
-        try:
-            start_ns = time.perf_counter_ns()
-            v = self._get_quote_version()
-            if v is None:
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.Tick)
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
-            else:
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                quote_api.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
-            self._record_api_latency("subscribe", start_ns, ok=True)
-            return True
-        except Exception as e:
-            self._record_api_latency("subscribe", start_ns, ok=False)
-            self._record_crash_signature(str(e), context="subscribe_symbol")
-            logger.error(f"Subscription failed for {code}: {e}")
-            return False
+        """Delegates to SubscriptionManager._subscribe_symbol()."""
+        return self._subscriptions()._subscribe_symbol(sym, cb)
 
     def _unsubscribe_symbol(self, sym: Dict[str, Any]) -> None:
-        if not self.api or not sj:
-            return
-        quote_api = self._quote_api()
-        if quote_api is None or not hasattr(quote_api, "unsubscribe"):
-            return
-        code = sym.get("code")
-        exchange = sym.get("exchange")
-        product_type = sym.get("product_type") or sym.get("security_type") or sym.get("type")
-        if not code or not exchange:
-            return
-        contract = self._get_contract(exchange, code, product_type=product_type, allow_synthetic=False)
-        if not contract:
-            return
-        try:
-            start_ns = time.perf_counter_ns()
-            v = self._get_quote_version()
-            if v is None:
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick)
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk)
-            else:
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.Tick, version=v)
-                quote_api.unsubscribe(contract, quote_type=sj.constant.QuoteType.BidAsk, version=v)
-            self._record_api_latency("unsubscribe", start_ns, ok=True)
-        except Exception as e:
-            self._record_api_latency("unsubscribe", start_ns, ok=False)
-            logger.warning(f"Unsubscribe failed for {code}: {e}")
+        """Delegates to SubscriptionManager._unsubscribe_symbol()."""
+        self._subscriptions()._unsubscribe_symbol(sym)
 
     def reload_symbols(self) -> None:
         self._contracts().reload_symbols()
@@ -1267,12 +1050,8 @@ class ShioajiClient:
         return self._contracts().validate_symbols()
 
     def _wrapped_tick_cb(self, *args, **kwargs):
-        """Persistent callback wrapper."""
-        try:
-            if hasattr(self, "tick_callback") and self.tick_callback:
-                self.tick_callback(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Callback error: {e}")
+        """Delegates to TickDispatcher.wrapped_tick_cb()."""
+        TickDispatcher.wrapped_tick_cb(getattr(self, "tick_callback", None), *args, **kwargs)
 
     def _get_contract(
         self,
