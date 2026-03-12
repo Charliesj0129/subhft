@@ -1064,15 +1064,17 @@ def _submit_grid_points(
     try:
         pickle.dumps((alpha, runner_cls, base_cfg))
     except (pickle.PicklingError, AttributeError, TypeError):
-        return [
-            _run_single_grid_point(alpha, runner_cls, base_cfg, t, objective_mode)
-            for t in thresholds
-        ]
+        return [_run_single_grid_point(alpha, runner_cls, base_cfg, t, objective_mode) for t in thresholds]
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(
-                _run_single_grid_point, alpha, runner_cls, base_cfg, t, objective_mode,
+                _run_single_grid_point,
+                alpha,
+                runner_cls,
+                base_cfg,
+                t,
+                objective_mode,
             )
             for t in thresholds
         ]
@@ -1101,9 +1103,7 @@ def _run_grid_parallel(
     base_row = _build_grid_row(base_result, base_threshold, objective_mode)
 
     # Separate base vs non-base thresholds
-    non_base_thresholds = [
-        float(t) for t in grid if abs(float(t) - base_threshold) >= 1e-12
-    ]
+    non_base_thresholds = [float(t) for t in grid if abs(float(t) - base_threshold) >= 1e-12]
 
     if not non_base_thresholds:
         return [base_row]
