@@ -262,11 +262,14 @@ class AccountGateway:
                 acct = self._client.api.stock_account
             if acct is not None:
                 result = self._client.api.list_profit_loss_summary(
-                    acct, begin_date=begin_date, end_date=end_date,
+                    acct,
+                    begin_date=begin_date,
+                    end_date=end_date,
                 )
             else:
                 result = self._client.api.list_profit_loss_summary(
-                    begin_date=begin_date, end_date=end_date,
+                    begin_date=begin_date,
+                    end_date=end_date,
                 )
             self._client._record_api_latency("profit_loss_summary", start_ns, ok=True)
             self._client._cache_set(cache_key, self._client._profit_cache_ttl_s, result)

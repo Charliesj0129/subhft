@@ -636,16 +636,36 @@ class ShioajiClient:
             self._api_cache[key] = (expires_at, value)
 
     # Operation-to-limiter routing tables
-    _ORDER_OPS: frozenset[str] = frozenset({
-        "place_order", "cancel_order", "update_order", "update_price", "update_qty",
-    })
-    _QUOTE_QUERY_OPS: frozenset[str] = frozenset({
-        "snapshots", "ticks", "kbars", "scanners", "credit_enquires",
-    })
-    _ACCOUNT_OPS: frozenset[str] = frozenset({
-        "usage", "positions", "account_balance", "margin",
-        "position_detail", "profit_loss", "trading_limits", "settlements",
-    })
+    _ORDER_OPS: frozenset[str] = frozenset(
+        {
+            "place_order",
+            "cancel_order",
+            "update_order",
+            "update_price",
+            "update_qty",
+        }
+    )
+    _QUOTE_QUERY_OPS: frozenset[str] = frozenset(
+        {
+            "snapshots",
+            "ticks",
+            "kbars",
+            "scanners",
+            "credit_enquires",
+        }
+    )
+    _ACCOUNT_OPS: frozenset[str] = frozenset(
+        {
+            "usage",
+            "positions",
+            "account_balance",
+            "margin",
+            "position_detail",
+            "profit_loss",
+            "trading_limits",
+            "settlements",
+        }
+    )
 
     def _rate_limit_api(self, op: str) -> bool:
         if op in self._ORDER_OPS:
