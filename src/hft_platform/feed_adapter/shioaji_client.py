@@ -260,6 +260,22 @@ class ShioajiClient:
             hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
             window_s=int(os.getenv("HFT_SHIOAJI_API_WINDOW_S", "5")),
         )
+        # Tiered rate limiters per Shioaji API category
+        self._order_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_ORDER_SOFT_CAP", "200")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_ORDER_HARD_CAP", "250")),
+            window_s=int(os.getenv("HFT_SHIOAJI_ORDER_WINDOW_S", "10")),
+        )
+        self._quote_query_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_SOFT_CAP", "40")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_HARD_CAP", "50")),
+            window_s=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", "5")),
+        )
+        self._account_rate_limiter = RateLimiter(
+            soft_cap=int(os.getenv("HFT_SHIOAJI_ACCOUNT_SOFT_CAP", "20")),
+            hard_cap=int(os.getenv("HFT_SHIOAJI_ACCOUNT_HARD_CAP", "25")),
+            window_s=int(os.getenv("HFT_SHIOAJI_ACCOUNT_WINDOW_S", "5")),
+        )
 
         # Session refresh configuration (C3)
         self._session_refresh_interval_s = float(os.getenv("HFT_SESSION_REFRESH_S", "86400"))  # 24 hours
@@ -617,11 +633,35 @@ class ShioajiClient:
                     del self._api_cache[oldest_key]
             self._api_cache[key] = (expires_at, value)
 
+    # Operation-to-limiter routing tables
+    _ORDER_OPS: frozenset[str] = frozenset({
+        "place_order", "cancel_order", "update_order", "update_price", "update_qty",
+    })
+    _QUOTE_QUERY_OPS: frozenset[str] = frozenset({
+        "snapshots", "ticks", "kbars", "scanners", "credit_enquires",
+    })
+    _ACCOUNT_OPS: frozenset[str] = frozenset({
+        "usage", "positions", "account_balance", "margin",
+        "position_detail", "profit_loss", "trading_limits", "settlements",
+    })
+
     def _rate_limit_api(self, op: str) -> bool:
-        if not self._api_rate_limiter.check():
-            logger.warning("API rate limit hit", op=op)
+        if op in self._ORDER_OPS:
+            limiter = self._order_rate_limiter
+            category = "order"
+        elif op in self._QUOTE_QUERY_OPS:
+            limiter = self._quote_query_rate_limiter
+            category = "quote_query"
+        elif op in self._ACCOUNT_OPS:
+            limiter = self._account_rate_limiter
+            category = "account"
+        else:
+            limiter = self._api_rate_limiter
+            category = "default"
+        if not limiter.check():
+            logger.warning("API rate limit hit", op=op, category=category)
             return False
-        self._api_rate_limiter.record()
+        limiter.record()
         return True
 
     def _process_tick(self, *args, **kwargs):

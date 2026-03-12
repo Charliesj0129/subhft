@@ -10,9 +10,23 @@ broker:
     protocol: proprietary
     sdk_package: shioaji
   rate_limits:
+    # Legacy global limiter (fallback for uncategorized ops)
     soft_cap: 180
     hard_cap: 250
     window_seconds: 10
+    # Tiered rate limits per Shioaji API category
+    order:
+      soft_cap: 200
+      hard_cap: 250
+      window_seconds: 10
+    quote_query:
+      soft_cap: 40
+      hard_cap: 50
+      window_seconds: 5
+    account:
+      soft_cap: 20
+      hard_cap: 25
+      window_seconds: 5
   capabilities:
     batch_orders: false
     smart_orders: false
