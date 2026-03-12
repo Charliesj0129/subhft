@@ -265,7 +265,7 @@
     "title": "amm fee mechanisms formal approach"
   },
   "026": {
-    "alphas": [],
+    "alphas": ["queue_acceleration"],
     "arxiv_id": "2601.23172",
     "note_file": "research/knowledge/notes/026_unified_theory_order_flow_impact.md",
     "ref": "026",
