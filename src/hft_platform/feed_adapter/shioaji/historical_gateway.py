@@ -36,10 +36,7 @@ class HistoricalGateway:
         if sdk is None:
             raise RuntimeError("Shioaji SDK unavailable")
         if query_type not in _VALID_TICKS_QUERY_TYPES:
-            raise ValueError(
-                f"Unknown query_type {query_type!r}; "
-                f"expected one of {sorted(_VALID_TICKS_QUERY_TYPES)}"
-            )
+            raise ValueError(f"Unknown query_type {query_type!r}; expected one of {sorted(_VALID_TICKS_QUERY_TYPES)}")
         ticks_qt = getattr(sdk.constant, "TicksQueryType", None)
         if ticks_qt is None:
             raise RuntimeError("Shioaji SDK missing TicksQueryType constant")
@@ -67,7 +64,10 @@ class HistoricalGateway:
             return None
 
         contract = self._client._get_contract(
-            exchange, contract_code, product_type=product_type, allow_synthetic=False,
+            exchange,
+            contract_code,
+            product_type=product_type,
+            allow_synthetic=False,
         )
         if not contract:
             raise ValueError(f"Contract {contract_code} not found on {exchange}")
@@ -116,7 +116,10 @@ class HistoricalGateway:
             return None
 
         contract = self._client._get_contract(
-            exchange, contract_code, product_type=product_type, allow_synthetic=False,
+            exchange,
+            contract_code,
+            product_type=product_type,
+            allow_synthetic=False,
         )
         if not contract:
             raise ValueError(f"Contract {contract_code} not found on {exchange}")
