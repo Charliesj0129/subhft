@@ -87,9 +87,7 @@ class TestGetCreditEnquires:
         client.api.credit_enquires.return_value = []
         gw = MarketInfoGateway(client)
         gw.get_credit_enquires(["2330"], "TSE", product_type="stock")
-        client._get_contract.assert_called_once_with(
-            "TSE", "2330", product_type="stock", allow_synthetic=False
-        )
+        client._get_contract.assert_called_once_with("TSE", "2330", product_type="stock", allow_synthetic=False)
 
 
 # ---------------------------------------------------------------------------
@@ -277,9 +275,7 @@ class TestFacadeWiring:
             from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 
             facade = ShioajiClientFacade(str(cfg), {})
-            with patch.object(
-                MarketInfoGateway, "get_credit_enquires", return_value=[{"x": 1}]
-            ) as m:
+            with patch.object(MarketInfoGateway, "get_credit_enquires", return_value=[{"x": 1}]) as m:
                 result = facade.get_credit_enquires(["2330"], "TSE", timeout=1000)
                 assert result == [{"x": 1}]
                 m.assert_called_once_with(["2330"], "TSE", timeout=1000, product_type=None)
@@ -295,9 +291,7 @@ class TestFacadeWiring:
             from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 
             facade = ShioajiClientFacade(str(cfg), {})
-            with patch.object(
-                MarketInfoGateway, "get_punish_stocks", return_value=[]
-            ) as m:
+            with patch.object(MarketInfoGateway, "get_punish_stocks", return_value=[]) as m:
                 result = facade.get_punish_stocks(timeout=2000)
                 assert result == []
                 m.assert_called_once_with(timeout=2000)
@@ -313,9 +307,7 @@ class TestFacadeWiring:
             from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 
             facade = ShioajiClientFacade(str(cfg), {})
-            with patch.object(
-                MarketInfoGateway, "get_notice_stocks", return_value=[]
-            ) as m:
+            with patch.object(MarketInfoGateway, "get_notice_stocks", return_value=[]) as m:
                 result = facade.get_notice_stocks(timeout=3000)
                 assert result == []
                 m.assert_called_once_with(timeout=3000)
@@ -331,9 +323,7 @@ class TestFacadeWiring:
             from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 
             facade = ShioajiClientFacade(str(cfg), {})
-            with patch.object(
-                MarketInfoGateway, "get_short_stock_sources", return_value=[]
-            ) as m:
+            with patch.object(MarketInfoGateway, "get_short_stock_sources", return_value=[]) as m:
                 result = facade.get_short_stock_sources(["2330"], "TSE")
                 assert result == []
                 m.assert_called_once_with(["2330"], "TSE", timeout=5000, product_type=None)
@@ -354,9 +344,7 @@ class TestResolveContracts:
 
     def test_skips_unresolvable_codes(self):
         client = _make_client()
-        client._get_contract.side_effect = lambda ex, code, **kw: (
-            MagicMock(code=code) if code == "2330" else None
-        )
+        client._get_contract.side_effect = lambda ex, code, **kw: (MagicMock(code=code) if code == "2330" else None)
         gw = MarketInfoGateway(client)
         contracts = gw._resolve_contracts(["2330", "INVALID"], "TSE")
         assert len(contracts) == 1
@@ -365,6 +353,4 @@ class TestResolveContracts:
         client = _make_client()
         gw = MarketInfoGateway(client)
         gw._resolve_contracts(["2330"], "TSE", product_type="stock")
-        client._get_contract.assert_called_once_with(
-            "TSE", "2330", product_type="stock", allow_synthetic=False
-        )
+        client._get_contract.assert_called_once_with("TSE", "2330", product_type="stock", allow_synthetic=False)

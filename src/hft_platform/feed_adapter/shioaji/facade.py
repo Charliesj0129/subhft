@@ -140,7 +140,9 @@ class ShioajiClientFacade:
     def get_settlements(self, account: Any = None) -> Any:
         return self.account_gateway.get_settlements(account=account)
 
-    def list_profit_loss_summary(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> Any:
+    def list_profit_loss_summary(
+        self, account: Any = None, begin_date: str | None = None, end_date: str | None = None
+    ) -> Any:
         return self.account_gateway.list_profit_loss_summary(account=account, begin_date=begin_date, end_date=end_date)
 
     def list_profit_loss_detail(self, account: Any = None, detail_id: int = 0, unit: str | None = None) -> Any:
@@ -167,21 +169,39 @@ class ShioajiClientFacade:
         timeout: int = 30000,
     ) -> list[Any]:
         return self.scanner_gateway.scan(
-            scanner_type=scanner_type, ascending=ascending, count=count, date=date, timeout=timeout,
+            scanner_type=scanner_type,
+            ascending=ascending,
+            count=count,
+            date=date,
+            timeout=timeout,
         )
 
     def get_credit_enquires(
-        self, contract_codes: list[str], exchange: str, timeout: int = 30000, product_type: str | None = None,
+        self,
+        contract_codes: list[str],
+        exchange: str,
+        timeout: int = 30000,
+        product_type: str | None = None,
     ) -> list[Any]:
         return self.market_info_gateway.get_credit_enquires(
-            contract_codes, exchange, timeout=timeout, product_type=product_type,
+            contract_codes,
+            exchange,
+            timeout=timeout,
+            product_type=product_type,
         )
 
     def get_short_stock_sources(
-        self, contract_codes: list[str], exchange: str, timeout: int = 5000, product_type: str | None = None,
+        self,
+        contract_codes: list[str],
+        exchange: str,
+        timeout: int = 5000,
+        product_type: str | None = None,
     ) -> list[Any]:
         return self.market_info_gateway.get_short_stock_sources(
-            contract_codes, exchange, timeout=timeout, product_type=product_type,
+            contract_codes,
+            exchange,
+            timeout=timeout,
+            product_type=product_type,
         )
 
     def get_punish_stocks(self, timeout: int = 5000) -> Any:
