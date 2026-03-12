@@ -1,102 +1,229 @@
-"""Tests for Fubon TradeAPI client skeleton and deprecation warnings."""
+"""Tests for Fubon TradeAPI client delegation."""
 
 from __future__ import annotations
 
-import warnings
+from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.feed_adapter.fubon.account_gateway import FubonAccountGateway
+from hft_platform.feed_adapter.fubon.account import FubonAccountGateway as StubAccountGateway
 from hft_platform.feed_adapter.fubon.client import FubonClient
 from hft_platform.feed_adapter.fubon.order_gateway import FubonOrderGateway
-from hft_platform.feed_adapter.fubon.quote_runtime import FubonQuoteRuntime
+from hft_platform.feed_adapter.fubon.quote import FubonQuoteRuntime as StubQuoteRuntime
 from hft_platform.feed_adapter.fubon.session import FubonSessionRuntime
+
+# ------------------------------------------------------------------ #
+# Init / properties
+# ------------------------------------------------------------------ #
 
 
 class TestFubonClientInit:
     def test_fubon_client_init(self) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            client = FubonClient()
+        client = FubonClient()
         assert client.logged_in is False
         assert client.api is None
 
     def test_fubon_client_has_slots(self) -> None:
         assert hasattr(FubonClient, "__slots__")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            client = FubonClient()
+        client = FubonClient()
         with pytest.raises(AttributeError):
             client.nonexistent_attr = 42  # type: ignore[attr-defined]
 
     def test_fubon_client_logged_in_property(self) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            client = FubonClient()
+        client = FubonClient()
         assert client.logged_in is False
 
-    def test_fubon_client_deprecation_warning(self) -> None:
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            FubonClient()
-        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-        assert len(deprecation_warnings) >= 1
-        assert "FubonClient is deprecated" in str(deprecation_warnings[0].message)
+    def test_fubon_client_sub_components_initialised(self) -> None:
+        client = FubonClient()
+        assert client._order_gateway is not None
+        assert client._account_gateway is not None
+        assert client._quote_runtime is not None
 
 
-class TestFubonClientMethodsRaise:
-    """Every stub method must raise NotImplementedError."""
+# ------------------------------------------------------------------ #
+# Order delegation
+# ------------------------------------------------------------------ #
 
-    METHODS_NO_ARGS = (
-        "fetch_snapshots",
-        "resubscribe",
-        "reload_symbols",
-        "get_positions",
-    )
 
-    def test_fubon_client_login_raises_not_implemented(self) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            client = FubonClient()
-        with pytest.raises(NotImplementedError, match="login"):
-            client.login()
+class TestFubonClientOrderDelegation:
+    def test_place_order_delegates(self) -> None:
+        client = FubonClient()
+        mock_gw = MagicMock(spec=FubonOrderGateway)
+        mock_gw.place_order.return_value = "ok"
+        client._order_gateway = mock_gw
 
-    def test_fubon_client_all_methods_raise(self) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            client = FubonClient()
-        for method_name in self.METHODS_NO_ARGS:
-            with pytest.raises(NotImplementedError, match=method_name):
-                getattr(client, method_name)()
+        result = client.place_order(symbol="2330", price=5000000, qty=1, side="Buy")
+        mock_gw.place_order.assert_called_once_with(
+            symbol="2330",
+            price=5000000,
+            qty=1,
+            side="Buy",
+        )
+        assert result == "ok"
 
-        with pytest.raises(NotImplementedError):
-            client.reconnect()
-        with pytest.raises(NotImplementedError):
-            client.close()
-        with pytest.raises(NotImplementedError):
-            client.shutdown()
-        with pytest.raises(NotImplementedError):
-            client.subscribe_basket(lambda: None)
-        with pytest.raises(NotImplementedError):
-            client.set_execution_callbacks(lambda: None, lambda: None)
-        with pytest.raises(NotImplementedError):
-            client.place_order()
-        with pytest.raises(NotImplementedError):
-            client.cancel_order(None)
-        with pytest.raises(NotImplementedError):
-            client.update_order(None)
-        with pytest.raises(NotImplementedError):
-            client.get_account_balance()
-        with pytest.raises(NotImplementedError):
-            client.get_margin()
-        with pytest.raises(NotImplementedError):
-            client.list_profit_loss()
-        with pytest.raises(NotImplementedError):
-            client.list_position_detail()
-        with pytest.raises(NotImplementedError):
-            client.get_exchange("2330")
-        with pytest.raises(NotImplementedError):
-            client.validate_symbols()
+    def test_cancel_order_delegates(self) -> None:
+        client = FubonClient()
+        mock_gw = MagicMock(spec=FubonOrderGateway)
+        mock_gw.cancel_order.return_value = "cancelled"
+        client._order_gateway = mock_gw
+
+        result = client.cancel_order("order-123")
+        mock_gw.cancel_order.assert_called_once_with("order-123")
+        assert result == "cancelled"
+
+    def test_update_order_delegates(self) -> None:
+        client = FubonClient()
+        mock_gw = MagicMock(spec=FubonOrderGateway)
+        mock_gw.update_order.return_value = "updated"
+        client._order_gateway = mock_gw
+
+        result = client.update_order("order-123", price=5100000, qty=2)
+        mock_gw.update_order.assert_called_once_with(
+            "order-123",
+            price=5100000,
+            qty=2,
+        )
+        assert result == "updated"
+
+
+# ------------------------------------------------------------------ #
+# Account delegation
+# ------------------------------------------------------------------ #
+
+
+class TestFubonClientAccountDelegation:
+    def test_get_positions_delegates(self) -> None:
+        client = FubonClient()
+        mock_acct = MagicMock()
+        mock_acct.get_inventories.return_value = [{"symbol": "2330"}]
+        client._account_gateway = mock_acct
+
+        result = client.get_positions()
+        mock_acct.get_inventories.assert_called_once()
+        assert result == [{"symbol": "2330"}]
+
+    def test_get_account_balance_delegates(self) -> None:
+        client = FubonClient()
+        mock_acct = MagicMock()
+        mock_acct.get_accounting.return_value = {"balance": 100}
+        client._account_gateway = mock_acct
+
+        result = client.get_account_balance()
+        mock_acct.get_accounting.assert_called_once()
+        assert result == {"balance": 100}
+
+    def test_get_margin_delegates(self) -> None:
+        client = FubonClient()
+        mock_acct = MagicMock()
+        mock_acct.get_margin.return_value = {"margin": 50}
+        client._account_gateway = mock_acct
+
+        result = client.get_margin()
+        mock_acct.get_margin.assert_called_once()
+        assert result == {"margin": 50}
+
+
+# ------------------------------------------------------------------ #
+# Quote delegation
+# ------------------------------------------------------------------ #
+
+
+class TestFubonClientQuoteDelegation:
+    def test_subscribe_basket_registers_and_subscribes(self) -> None:
+        client = FubonClient()
+        mock_qr = MagicMock()
+        client._quote_runtime = mock_qr
+        client._symbols = ["2330", "2317"]
+
+        cb = MagicMock()
+        client.subscribe_basket(cb)
+        mock_qr.register_quote_callbacks.assert_called_once_with(cb, cb)
+        mock_qr.subscribe.assert_called_once_with(["2330", "2317"])
+
+    def test_subscribe_basket_no_symbols(self) -> None:
+        client = FubonClient()
+        mock_qr = MagicMock()
+        client._quote_runtime = mock_qr
+        client._symbols = []
+
+        cb = MagicMock()
+        client.subscribe_basket(cb)
+        mock_qr.register_quote_callbacks.assert_called_once_with(cb, cb)
+        mock_qr.subscribe.assert_not_called()
+
+    def test_close_stops_quote_runtime(self) -> None:
+        client = FubonClient()
+        mock_qr = MagicMock()
+        client._quote_runtime = mock_qr
+
+        client.close()
+        mock_qr.stop.assert_called_once()
+        assert client.logged_in is False
+
+    def test_shutdown_delegates_to_close(self) -> None:
+        client = FubonClient()
+        mock_qr = MagicMock()
+        client._quote_runtime = mock_qr
+
+        client.shutdown(logout=True)
+        mock_qr.stop.assert_called_once()
+        assert client.logged_in is False
+
+
+# ------------------------------------------------------------------ #
+# Execution callbacks
+# ------------------------------------------------------------------ #
+
+
+class TestFubonClientCallbacks:
+    def test_set_execution_callbacks_stores(self) -> None:
+        client = FubonClient()
+        on_order = MagicMock()
+        on_deal = MagicMock()
+
+        client.set_execution_callbacks(on_order, on_deal)
+        assert client._on_order_cb is on_order
+        assert client._on_deal_cb is on_deal
+
+
+# ------------------------------------------------------------------ #
+# Placeholders return sensible defaults
+# ------------------------------------------------------------------ #
+
+
+class TestFubonClientPlaceholders:
+    def test_fetch_snapshots_returns_empty(self) -> None:
+        client = FubonClient()
+        assert client.fetch_snapshots() == []
+
+    def test_list_profit_loss_returns_empty(self) -> None:
+        client = FubonClient()
+        assert client.list_profit_loss() == []
+
+    def test_list_position_detail_returns_empty(self) -> None:
+        client = FubonClient()
+        assert client.list_position_detail() == []
+
+    def test_get_exchange_returns_empty_string(self) -> None:
+        client = FubonClient()
+        assert client.get_exchange("2330") == ""
+
+    def test_validate_symbols_returns_empty(self) -> None:
+        client = FubonClient()
+        assert client.validate_symbols() == []
+
+    def test_get_contract_refresh_status_returns_empty_dict(self) -> None:
+        client = FubonClient()
+        assert client.get_contract_refresh_status() == {}
+
+    def test_resubscribe_returns_true(self) -> None:
+        client = FubonClient()
+        assert client.resubscribe() is True
+
+
+# ------------------------------------------------------------------ #
+# Session runtime (stub fallback)
+# ------------------------------------------------------------------ #
 
 
 class TestFubonSessionRuntime:
@@ -107,8 +234,11 @@ class TestFubonSessionRuntime:
     def test_fubon_session_runtime_has_slots(self) -> None:
         assert hasattr(FubonSessionRuntime, "__slots__")
 
-    def test_fubon_session_methods_raise(self) -> None:
+    def test_fubon_session_methods_raise_without_impl(self) -> None:
+        """When session_runtime.py is not importable, stubs raise."""
         runtime = FubonSessionRuntime(client=None)
+        # _impl is None when session_runtime module is absent
+        runtime._impl = None
         with pytest.raises(NotImplementedError):
             runtime.login()
         with pytest.raises(NotImplementedError):
@@ -117,40 +247,26 @@ class TestFubonSessionRuntime:
             runtime.logout()
 
 
-class TestFubonQuoteRuntime:
-    def test_fubon_quote_runtime_init(self) -> None:
-        runtime = FubonQuoteRuntime(sdk=None)
-        assert runtime._sdk is None
+# ------------------------------------------------------------------ #
+# Legacy stub modules still importable
+# ------------------------------------------------------------------ #
 
-    def test_fubon_quote_runtime_has_slots(self) -> None:
-        assert hasattr(FubonQuoteRuntime, "__slots__")
 
-    def test_fubon_quote_runtime_register_callbacks(self) -> None:
-        runtime = FubonQuoteRuntime(sdk=None)
+class TestLegacyStubImports:
+    """Ensure the old stub modules (account.py, quote.py) are still importable."""
 
-        def on_tick(d: object) -> None:
-            pass
+    def test_stub_account_gateway_importable(self) -> None:
+        gw = StubAccountGateway(client=None)
+        assert gw._client is None
 
-        def on_bidask(d: object) -> None:
-            pass
+    def test_stub_quote_runtime_importable(self) -> None:
+        rt = StubQuoteRuntime(client=None)
+        assert rt._client is None
 
-        runtime.register_quote_callbacks(on_tick, on_bidask)
-        assert runtime._on_tick is on_tick
-        assert runtime._on_bidask is on_bidask
 
-    def test_fubon_quote_deprecation_warning_on_old_import(self) -> None:
-        """Importing from quote.py (old path) emits DeprecationWarning."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            # Force reimport to trigger module-level warning
-            import importlib
-
-            import hft_platform.feed_adapter.fubon.quote as _quote_mod
-
-            importlib.reload(_quote_mod)
-        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-        assert len(deprecation_warnings) >= 1
-        assert "quote_runtime" in str(deprecation_warnings[0].message)
+# ------------------------------------------------------------------ #
+# Order gateway (existing tests preserved)
+# ------------------------------------------------------------------ #
 
 
 class TestFubonOrderGateway:
@@ -161,43 +277,38 @@ class TestFubonOrderGateway:
     def test_fubon_order_gateway_has_slots(self) -> None:
         assert hasattr(FubonOrderGateway, "__slots__")
 
-    def test_fubon_order_methods_raise(self) -> None:
+    def test_fubon_order_methods_raise_without_sdk(self) -> None:
         gw = FubonOrderGateway(client=None)
         with pytest.raises(NotImplementedError):
             gw.place_order()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(TypeError):
             gw.cancel_order(None)
         with pytest.raises(NotImplementedError):
-            gw.update_order(None)
+            gw.cancel_order("ORD-001")
         with pytest.raises(NotImplementedError):
             gw.batch_place_orders([])
 
 
+# ------------------------------------------------------------------ #
+# Account gateway (existing tests preserved)
+# ------------------------------------------------------------------ #
+
+
 class TestFubonAccountGateway:
     def test_fubon_account_gateway_init(self) -> None:
-        gw = FubonAccountGateway(sdk=None)
-        assert gw._sdk is None
+        gw = StubAccountGateway(client=None)
+        assert gw._client is None
 
     def test_fubon_account_gateway_has_slots(self) -> None:
-        assert hasattr(FubonAccountGateway, "__slots__")
+        assert hasattr(StubAccountGateway, "__slots__")
 
-    def test_fubon_account_gateway_has_methods(self) -> None:
-        """Real FubonAccountGateway has get_inventories, get_accounting, etc."""
-        gw = FubonAccountGateway(sdk=None)
-        assert hasattr(gw, "get_inventories")
-        assert hasattr(gw, "get_accounting")
-        assert hasattr(gw, "get_margin")
-        assert hasattr(gw, "get_settlements")
-
-    def test_fubon_account_deprecation_warning_on_old_import(self) -> None:
-        """Importing from account.py (old path) emits DeprecationWarning."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            import importlib
-
-            import hft_platform.feed_adapter.fubon.account as _account_mod
-
-            importlib.reload(_account_mod)
-        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-        assert len(deprecation_warnings) >= 1
-        assert "account_gateway" in str(deprecation_warnings[0].message)
+    def test_fubon_account_methods_raise(self) -> None:
+        gw = StubAccountGateway(client=None)
+        with pytest.raises(NotImplementedError):
+            gw.get_positions()
+        with pytest.raises(NotImplementedError):
+            gw.get_balance()
+        with pytest.raises(NotImplementedError):
+            gw.get_margin()
+        with pytest.raises(NotImplementedError):
+            gw.list_profit_loss()

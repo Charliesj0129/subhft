@@ -41,22 +41,26 @@ def test_extract_code_from_topic_variants():
 
 
 def test_enqueue_tick_drops_when_queue_full(monkeypatch):
-    dummy = object.__new__(mod.ShioajiClient)
-    dummy._quote_dispatch_async = True
-    dummy._quote_dispatch_queue_size = 1
-    import queue
+    from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 
-    dummy._quote_dispatch_queue = queue.Queue(maxsize=1)
-    dummy._quote_dispatch_queue.put_nowait(((), {}))
-    dummy._quote_dispatch_running = True
-    dummy._quote_dispatch_dropped = 0
-    dummy.metrics = None
-    dummy._start_quote_dispatch_worker = MagicMock()
-    dummy._process_tick = MagicMock()
+    process_mock = MagicMock()
+    dispatcher = TickDispatcher(
+        process_tick_fn=process_mock,
+        metrics=None,
+        quote_dispatch_async=True,
+        queue_size=1,
+    )
+    # Pre-fill to capacity so next enqueue drops.
+    dispatcher.start_worker()
+    import queue as _q
 
-    mod.ShioajiClient._enqueue_tick(dummy, "Q/TSE/2330")
-    assert dummy._quote_dispatch_dropped == 1
-    dummy._process_tick.assert_not_called()
+    dispatcher._queue = _q.Queue(maxsize=1)
+    dispatcher._queue.put_nowait(((), {}))
+
+    dispatcher.enqueue_tick("Q/TSE/2330")
+    assert dispatcher.dropped == 1
+    process_mock.assert_not_called()
+    dispatcher.stop_worker()
 
 
 def test_dispatch_tick_cb_strict_route_miss_drops(monkeypatch):
