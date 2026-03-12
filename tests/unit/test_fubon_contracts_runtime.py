@@ -49,13 +49,7 @@ class TestInit:
         assert rt.get_exchange("2330") == ""
 
     def test_init_from_yaml_file(self, mock_sdk: MagicMock) -> None:
-        yaml_content = (
-            "symbols:\n"
-            "  - code: '2330'\n"
-            "    exchange: TSE\n"
-            "  - code: TXFG6\n"
-            "    exchange: TAIFEX\n"
-        )
+        yaml_content = "symbols:\n  - code: '2330'\n    exchange: TSE\n  - code: TXFG6\n    exchange: TAIFEX\n"
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()

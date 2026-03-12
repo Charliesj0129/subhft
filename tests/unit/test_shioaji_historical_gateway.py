@@ -11,7 +11,6 @@ from hft_platform.feed_adapter.shioaji.historical_gateway import (
     HistoricalGateway,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
