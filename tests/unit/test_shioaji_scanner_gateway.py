@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Stub shioaji before importing the module under test
 # ---------------------------------------------------------------------------
+
 
 def _build_sj_stub() -> types.ModuleType:
     """Create a minimal shioaji stub with ScannerType enum."""
@@ -35,14 +35,14 @@ sys.modules.setdefault("shioaji", _sj_stub)
 sys.modules.setdefault("shioaji.constant", _sj_stub.constant)  # type: ignore[arg-type]
 
 from hft_platform.feed_adapter.shioaji.scanner_gateway import (  # noqa: E402
-    ScannerGateway,
     _VALID_SCANNER_TYPES,
+    ScannerGateway,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def mock_client() -> MagicMock:
@@ -62,6 +62,7 @@ def gateway(mock_client: MagicMock) -> ScannerGateway:
 # ---------------------------------------------------------------------------
 # scan() tests
 # ---------------------------------------------------------------------------
+
 
 class TestScan:
     def test_valid_scanner_type(self, gateway: ScannerGateway, mock_client: MagicMock) -> None:
@@ -109,12 +110,16 @@ class TestScan:
         result = gateway.scan("VolumeRank")
         assert result == []
         mock_client._record_api_latency.assert_called_once()
-        mock_client._record_api_latency.assert_called_with("scanners", mock_client._record_api_latency.call_args[0][1], ok=False)
+        mock_client._record_api_latency.assert_called_with(
+            "scanners", mock_client._record_api_latency.call_args[0][1], ok=False
+        )
 
     def test_latency_recorded_on_success(self, gateway: ScannerGateway, mock_client: MagicMock) -> None:
         gateway.scan("AmountRank")
         mock_client._record_api_latency.assert_called_once()
-        mock_client._record_api_latency.assert_called_with("scanners", mock_client._record_api_latency.call_args[0][1], ok=True)
+        mock_client._record_api_latency.assert_called_with(
+            "scanners", mock_client._record_api_latency.call_args[0][1], ok=True
+        )
 
     def test_cache_set_on_success(self, gateway: ScannerGateway, mock_client: MagicMock) -> None:
         gateway.scan("VolumeRank", ascending=True, count=20)
@@ -126,6 +131,7 @@ class TestScan:
 # ---------------------------------------------------------------------------
 # scan_multiple() tests
 # ---------------------------------------------------------------------------
+
 
 class TestScanMultiple:
     def test_calls_scan_for_each_type(self, gateway: ScannerGateway, mock_client: MagicMock) -> None:

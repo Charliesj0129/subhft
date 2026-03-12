@@ -59,10 +59,7 @@ class ScannerGateway:
         """
         if scanner_type not in _VALID_SCANNER_TYPES:
             logger.warning("Invalid scanner type", scanner_type=scanner_type)
-            raise ValueError(
-                f"Invalid scanner_type '{scanner_type}'. "
-                f"Valid types: {sorted(_VALID_SCANNER_TYPES)}"
-            )
+            raise ValueError(f"Invalid scanner_type '{scanner_type}'. Valid types: {sorted(_VALID_SCANNER_TYPES)}")
 
         if self._client.mode == "simulation":
             logger.info("Simulation mode: returning empty scanner result", scanner_type=scanner_type)
