@@ -116,6 +116,18 @@ class ShioajiClientFacade:
     def list_profit_loss(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> Any:
         return self.account_gateway.list_profit_loss(account=account, begin_date=begin_date, end_date=end_date)
 
+    def get_trading_limits(self, account: Any = None) -> Any:
+        return self.account_gateway.get_trading_limits(account=account)
+
+    def get_settlements(self, account: Any = None) -> Any:
+        return self.account_gateway.get_settlements(account=account)
+
+    def list_profit_loss_summary(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> Any:
+        return self.account_gateway.list_profit_loss_summary(account=account, begin_date=begin_date, end_date=end_date)
+
+    def list_profit_loss_detail(self, account: Any = None, detail_id: int = 0, unit: str | None = None) -> Any:
+        return self.account_gateway.list_profit_loss_detail(account=account, detail_id=detail_id, unit=unit)
+
     def validate_symbols(self) -> list[str]:
         return self.contracts_runtime.validate_symbols()
 
