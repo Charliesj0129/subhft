@@ -256,12 +256,12 @@ class TestLegacyStubImports:
     """Ensure the old stub modules (account.py, quote.py) are still importable."""
 
     def test_stub_account_gateway_importable(self) -> None:
-        gw = StubAccountGateway(client=None)
-        assert gw._client is None
+        gw = StubAccountGateway(sdk=None)
+        assert gw._sdk is None
 
     def test_stub_quote_runtime_importable(self) -> None:
-        rt = StubQuoteRuntime(client=None)
-        assert rt._client is None
+        rt = StubQuoteRuntime(sdk=None)
+        assert rt._sdk is None
 
 
 # ------------------------------------------------------------------ #
@@ -271,14 +271,14 @@ class TestLegacyStubImports:
 
 class TestFubonOrderGateway:
     def test_fubon_order_gateway_init(self) -> None:
-        gw = FubonOrderGateway(client=None)
+        gw = FubonOrderGateway(sdk=None)
         assert gw._client is None
 
     def test_fubon_order_gateway_has_slots(self) -> None:
         assert hasattr(FubonOrderGateway, "__slots__")
 
     def test_fubon_order_methods_raise_without_sdk(self) -> None:
-        gw = FubonOrderGateway(client=None)
+        gw = FubonOrderGateway(sdk=None)
         with pytest.raises(NotImplementedError):
             gw.place_order()
         with pytest.raises(TypeError):
@@ -296,19 +296,15 @@ class TestFubonOrderGateway:
 
 class TestFubonAccountGateway:
     def test_fubon_account_gateway_init(self) -> None:
-        gw = StubAccountGateway(client=None)
-        assert gw._client is None
+        gw = StubAccountGateway(sdk=None)
+        assert gw._sdk is None
 
     def test_fubon_account_gateway_has_slots(self) -> None:
         assert hasattr(StubAccountGateway, "__slots__")
 
-    def test_fubon_account_methods_raise(self) -> None:
-        gw = StubAccountGateway(client=None)
-        with pytest.raises(NotImplementedError):
-            gw.get_positions()
-        with pytest.raises(NotImplementedError):
-            gw.get_balance()
-        with pytest.raises(NotImplementedError):
-            gw.get_margin()
-        with pytest.raises(NotImplementedError):
-            gw.list_profit_loss()
+    def test_fubon_account_methods_exist(self) -> None:
+        gw = StubAccountGateway(sdk=None)
+        assert callable(getattr(gw, "get_inventories", None))
+        assert callable(getattr(gw, "get_accounting", None))
+        assert callable(getattr(gw, "get_margin", None))
+        assert callable(getattr(gw, "get_settlements", None))
