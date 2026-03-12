@@ -706,14 +706,17 @@ jobs:
       - name: Check HFT design review for feat/perf PRs
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Only enforce for feat: and perf: PRs
           if echo "$PR_TITLE" | grep -qiE '^(feat|perf)(\(.+\))?:'; then
             echo "feat/perf PR detected — checking design review sections..."
+            # Fetch body via gh CLI to avoid multiline env var escaping issues
+            PR_BODY="$(gh pr view "$PR_NUMBER" --json body --jq '.body')"
             MISSING=0
             for section in "Allocation Audit" "Latency Budget" "Threading Model" "Data Layout" "Failure Mode"; do
-              if echo "$PR_BODY" | grep -q "### $section"; then
+              if printf '%s\n' "$PR_BODY" | grep -q "### $section"; then
                 echo "  [OK] $section"
               else
                 echo "  [MISSING] $section"
