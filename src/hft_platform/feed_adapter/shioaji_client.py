@@ -3,7 +3,6 @@
 # This module is retained for internal use by the shioaji/ sub-package runtimes.
 import datetime as dt
 import os
-import queue
 import re
 import threading
 import time
@@ -17,7 +16,40 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.feed_adapter.shioaji import router as _router
-from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
+from hft_platform.feed_adapter.shioaji._infra import (
+    cache_get as _cache_get_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    cache_set as _cache_set_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    ensure_session_lock as _ensure_session_lock_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    rate_limit_api as _rate_limit_api_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    record_api_latency as _record_api_latency_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    record_crash_signature as _record_crash_signature_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    release_session_lock as _release_session_lock_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    safe_call_with_timeout as _safe_call_with_timeout_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    sanitize_metric_label as _sanitize_metric_label_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    set_thread_alive_metric as _set_thread_alive_metric_impl,
+)
+from hft_platform.feed_adapter.shioaji._infra import (
+    update_quote_pending_metrics as _update_quote_pending_metrics_impl,
+)
+from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.rate_limiter import RateLimiter
 
@@ -138,30 +170,38 @@ class ShioajiClient:
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
         self.tick_callback: Callable[..., Any] | None = None
-        self._quote_dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
+        self.metrics = MetricsRegistry.get()
+        _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
         try:
-            self._quote_dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
+            _dispatch_queue_size = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_QUEUE_SIZE", "8192")))
         except ValueError:
-            self._quote_dispatch_queue_size = 8192
+            _dispatch_queue_size = 8192
         try:
-            self._quote_dispatch_batch_max = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_BATCH_MAX", "32")))
+            _dispatch_batch_max = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_BATCH_MAX", "32")))
         except ValueError:
-            self._quote_dispatch_batch_max = 32
+            _dispatch_batch_max = 32
         try:
-            self._quote_dispatch_metrics_every = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_METRICS_EVERY", "128")))
+            _dispatch_metrics_every = max(1, int(os.getenv("HFT_SHIOAJI_QUOTE_CB_METRICS_EVERY", "128")))
         except ValueError:
-            self._quote_dispatch_metrics_every = 128
-        self._quote_dispatch_queue: queue.Queue[tuple[tuple[Any, ...], dict[str, Any]] | None] | None = None
-        self._quote_dispatch_thread: threading.Thread | None = None
-        self._quote_dispatch_running = False
-        self._quote_dispatch_dropped = 0
-        self._quote_dispatch_enqueued = 0
-        self._quote_dispatch_processed = 0
+            _dispatch_metrics_every = 128
+        self._tick_dispatcher = TickDispatcher(
+            process_tick_fn=self._process_tick,
+            metrics=self.metrics,
+            quote_dispatch_async=_dispatch_async,
+            queue_size=_dispatch_queue_size,
+            batch_max=_dispatch_batch_max,
+            metrics_every=_dispatch_metrics_every,
+        )
+        # Backward-compat aliases ------------------------------------------------
+        self._quote_dispatch_async = _dispatch_async
+        self._quote_dispatch_queue_size = _dispatch_queue_size
+        self._quote_dispatch_batch_max = _dispatch_batch_max
+        self._quote_dispatch_metrics_every = _dispatch_metrics_every
         self._callbacks_registered = False
         self._pending_quote_resubscribe = False
         self._pending_quote_ts = 0.0
@@ -189,7 +229,6 @@ class ShioajiClient:
             self._login_retry_max = 1
         self._last_login_error: str | None = None
         self._last_reconnect_error: str | None = None
-        self.metrics = MetricsRegistry.get()
         self._api_cache: dict[str, tuple[float, Any]] = {}
         self._api_cache_lock = threading.Lock()
         self._api_cache_max_size = int(os.getenv("HFT_API_CACHE_MAX_SIZE", "1000"))
@@ -442,57 +481,15 @@ class ShioajiClient:
         return bool(self.reconnect(reason=reason, force=force))
 
     def _record_api_latency(self, op: str, start_ns: int, ok: bool = True) -> None:
-        if not self.metrics:
-            return
-        now_ns = time.perf_counter_ns()
-        try:
-            start_ns_int = int(start_ns)
-        except (TypeError, ValueError):
-            start_ns_int = now_ns
-        latency_ms = max(0.0, (now_ns - start_ns_int) / 1e6)
-        op_label = self._sanitize_metric_label(op, fallback="unknown")
-        result = "ok" if bool(ok) else "error"
-        self.metrics.shioaji_api_latency_ms.labels(op=op_label, result=result).observe(latency_ms)
-        last = self._api_last_latency_ms.get(op_label)
-        if last is not None:
-            jitter = abs(latency_ms - last)
-            self.metrics.shioaji_api_jitter_ms.labels(op=op_label).set(jitter)
-            if hasattr(self.metrics, "shioaji_api_jitter_ms_hist"):
-                self.metrics.shioaji_api_jitter_ms_hist.labels(op=op_label).observe(jitter)
-        self._api_last_latency_ms[op_label] = latency_ms
-        if not ok:
-            self.metrics.shioaji_api_errors_total.labels(op=op_label).inc()
+        _record_api_latency_impl(self.metrics, self._api_last_latency_ms, op, start_ns, ok)
 
     @staticmethod
     def _sanitize_metric_label(value: Any, *, fallback: str) -> str:
         """Ensure Prometheus label values are always strings with stable cardinality."""
-        if isinstance(value, str):
-            text = value
-        elif isinstance(value, bytes):
-            text = value.decode("utf-8", errors="replace")
-        elif isinstance(value, type):
-            text = value.__name__
-        else:
-            name = getattr(value, "__name__", None)
-            text = str(name) if name else type(value).__name__
-        text = text.strip()
-        if not text:
-            return fallback
-        if len(text) > 64:
-            return text[:64]
-        return text
+        return _sanitize_metric_label_impl(value, fallback=fallback)
 
     def _record_crash_signature(self, text: str | None, *, context: str) -> None:
-        metrics = getattr(self, "metrics", None)
-        if not metrics or not hasattr(metrics, "shioaji_crash_signature_total"):
-            return
-        signature = detect_crash_signature(text)
-        if not signature:
-            return
-        try:
-            metrics.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
-        except Exception:
-            return
+        _record_crash_signature_impl(getattr(self, "metrics", None), text, context=context)
 
     def _safe_call_with_timeout(
         self,
@@ -501,139 +498,41 @@ class ShioajiClient:
         timeout_s: float,
     ) -> tuple[bool, Any | None, Exception | None, bool]:
         """Run blocking broker SDK call with timeout in a daemon thread."""
-        if timeout_s <= 0:
-            try:
-                return True, fn(), None, False
-            except Exception as exc:
-                return False, None, exc, False
-        done = threading.Event()
-        state: dict[str, Any] = {}
-
-        def _worker() -> None:
-            try:
-                state["result"] = fn()
-            except Exception as exc:  # pragma: no cover
-                state["error"] = exc
-            finally:
-                done.set()
-
-        worker = threading.Thread(target=_worker, name=f"shioaji-{op}-guard", daemon=True)
-        worker.start()
-        if not done.wait(timeout=max(0.1, timeout_s)):
-            return False, None, TimeoutError(f"{op} timed out after {timeout_s:.1f}s"), True
-        err = state.get("error")
-        if err is not None:
-            return False, None, err, False
-        return True, state.get("result"), None, False
+        return _safe_call_with_timeout_impl(op, fn, timeout_s)
 
     def _set_thread_alive_metric(self, thread_name: str, alive: bool) -> None:
-        metrics = getattr(self, "metrics", None)
-        if not metrics or not hasattr(metrics, "shioaji_thread_alive"):
-            return
-        try:
-            metrics.shioaji_thread_alive.labels(thread=thread_name).set(1 if alive else 0)
-        except Exception:
-            return
+        _set_thread_alive_metric_impl(getattr(self, "metrics", None), thread_name, alive)
 
     def _update_quote_pending_metrics(self) -> None:
-        if not self.metrics:
-            return
-        age_s = 0.0
-        if self._pending_quote_resubscribe and self._pending_quote_ts > 0:
-            age_s = max(0.0, timebase.now_s() - self._pending_quote_ts)
-        try:
-            if hasattr(self.metrics, "shioaji_quote_pending_age_seconds"):
-                self.metrics.shioaji_quote_pending_age_seconds.set(age_s)
-            if (
-                self._pending_quote_resubscribe
-                and age_s >= self._quote_pending_stall_warn_s
-                and not self._quote_pending_stall_reported
-                and hasattr(self.metrics, "shioaji_quote_pending_stall_total")
-            ):
-                reason = self._sanitize_metric_label(self._pending_quote_reason or "unknown", fallback="unknown")
-                self.metrics.shioaji_quote_pending_stall_total.labels(reason=reason).inc()
-                self._quote_pending_stall_reported = True
-                logger.warning(
-                    "Pending quote resubscribe appears stalled",
-                    reason=self._pending_quote_reason,
-                    age_s=round(age_s, 2),
-                )
-        except Exception:
-            return
+        self._quote_pending_stall_reported = _update_quote_pending_metrics_impl(
+            self.metrics,
+            self._pending_quote_resubscribe,
+            self._pending_quote_ts,
+            self._quote_pending_stall_warn_s,
+            self._quote_pending_stall_reported,
+            self._pending_quote_reason,
+        )
 
     def _ensure_session_lock(self) -> bool:
-        if not self._session_lock_enabled:
-            return True
-        if self._session_lock_fd is not None:
-            return True
-        lock_fd = None
-        try:
-            lock_path = Path(self._session_lock_path)
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            lock_fd = open(lock_path, "a+", encoding="utf-8")
-            if fcntl is not None:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self._session_lock_fd = lock_fd
-            return True
-        except Exception as exc:
-            if lock_fd is not None:
-                try:
-                    lock_fd.close()
-                except Exception:
-                    pass
-            logger.warning(
-                "Potential duplicate broker runtime detected: session lock unavailable",
-                lock_path=self._session_lock_path,
-                error=str(exc),
-            )
-            if self.metrics and hasattr(self.metrics, "shioaji_session_lock_conflicts_total"):
-                try:
-                    self.metrics.shioaji_session_lock_conflicts_total.inc()
-                except Exception:
-                    pass
-            return False
+        acquired, fd = _ensure_session_lock_impl(
+            self._session_lock_enabled,
+            self._session_lock_fd,
+            self._session_lock_path,
+            self.metrics,
+            fcntl,
+        )
+        self._session_lock_fd = fd
+        return acquired
 
     def _release_session_lock(self) -> None:
-        lock_fd = getattr(self, "_session_lock_fd", None)
-        if lock_fd is None:
-            return
-        try:
-            if fcntl is not None:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        try:
-            lock_fd.close()
-        except Exception:
-            pass
+        _release_session_lock_impl(getattr(self, "_session_lock_fd", None), fcntl)
         self._session_lock_fd = None
 
     def _cache_get(self, key: str) -> Any | None:
-        now = timebase.now_s()
-        with self._api_cache_lock:
-            entry = self._api_cache.get(key)
-            if not entry:
-                return None
-            expires_at, value = entry
-            if now >= expires_at:
-                self._api_cache.pop(key, None)
-                return None
-            return value
+        return _cache_get_impl(self._api_cache, self._api_cache_lock, key)
 
     def _cache_set(self, key: str, ttl_s: float, value: Any) -> None:
-        expires_at = timebase.now_s() + max(0.0, ttl_s)
-        with self._api_cache_lock:
-            # Evict expired entries if cache is at limit
-            if len(self._api_cache) >= self._api_cache_max_size:
-                now = timebase.now_s()
-                expired_keys = [k for k, (exp, _) in self._api_cache.items() if now >= exp]
-                for k in expired_keys:
-                    del self._api_cache[k]
-                # If still at limit, remove oldest entry
-                if len(self._api_cache) >= self._api_cache_max_size:
-                    oldest_key = min(self._api_cache.keys(), key=lambda k: self._api_cache[k][0])
-                    del self._api_cache[oldest_key]
-            self._api_cache[key] = (expires_at, value)
+        _cache_set_impl(self._api_cache, self._api_cache_lock, self._api_cache_max_size, key, ttl_s, value)
 
     # Operation-to-limiter routing tables
     _ORDER_OPS: frozenset[str] = frozenset(
@@ -680,11 +579,7 @@ class ShioajiClient:
         else:
             limiter = self._api_rate_limiter
             category = "default"
-        if not limiter.check():
-            logger.warning("API rate limit hit", op=op, category=category)
-            return False
-        limiter.record()
-        return True
+        return _rate_limit_api_impl(limiter, op, category=category)
 
     def _process_tick(self, *args, **kwargs):
         """Internal method called by global dispatcher."""
@@ -739,133 +634,24 @@ class ShioajiClient:
             )
 
     def _enqueue_tick(self, *args, **kwargs) -> None:
-        """Non-blocking callback ingress: callback thread enqueues, worker executes."""
-        start_ns = time.perf_counter_ns()
-        try:
-            if not self._quote_dispatch_async:
-                self._process_tick(*args, **kwargs)
-                return
-            self._start_quote_dispatch_worker()
-            q = self._quote_dispatch_queue
-            if q is None:
-                self._process_tick(*args, **kwargs)
-                return
-            try:
-                q.put_nowait((args, kwargs))
-                self._quote_dispatch_enqueued += 1
-                if self.metrics and (self._quote_dispatch_enqueued % self._quote_dispatch_metrics_every == 0):
-                    try:
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth"):
-                            self.metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                    except Exception:
-                        pass
-            except queue.Full:
-                self._quote_dispatch_dropped += 1
-                if self.metrics:
-                    try:
-                        self.metrics.raw_queue_dropped_total.inc()
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_dropped_total"):
-                            self.metrics.shioaji_quote_callback_queue_dropped_total.inc()
-                    except Exception:
-                        pass
-                if self._quote_dispatch_dropped % 100 == 1:
-                    logger.warning(
-                        "Quote callback queue full; dropping quote callback payload",
-                        dropped_total=self._quote_dispatch_dropped,
-                        maxsize=self._quote_dispatch_queue_size,
-                    )
-        finally:
-            if self.metrics and hasattr(self.metrics, "shioaji_quote_callback_ingress_latency_ns"):
-                try:
-                    self.metrics.shioaji_quote_callback_ingress_latency_ns.observe(
-                        max(0, time.perf_counter_ns() - start_ns)
-                    )
-                except Exception:
-                    pass
+        """Delegates to TickDispatcher.enqueue_tick()."""
+        self._tick_dispatcher.enqueue_tick(*args, **kwargs)
 
     def _start_quote_dispatch_worker(self) -> None:
-        if not self._quote_dispatch_async or self._quote_dispatch_running:
-            return
-        self._quote_dispatch_queue = queue.Queue(maxsize=self._quote_dispatch_queue_size)
-        q = self._quote_dispatch_queue
-        if q is None:
-            return
-        self._quote_dispatch_running = True
-        batch_max = self._quote_dispatch_batch_max
-
-        def _worker() -> None:
-            while self._quote_dispatch_running:
-                try:
-                    item = q.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-                if item is None:
-                    continue
-                batch_count = 0
-
-                def _process_item(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-                    try:
-                        self._process_tick(*args, **kwargs)
-                    except Exception as exc:
-                        logger.error("Quote dispatch worker error", error=str(exc))
-
-                args, kwargs = item
-                _process_item(args, kwargs)
-                batch_count += 1
-                while batch_count < batch_max and self._quote_dispatch_running:
-                    try:
-                        nxt = q.get_nowait()
-                    except queue.Empty:
-                        break
-                    if nxt is None:
-                        continue
-                    n_args, n_kwargs = nxt
-                    _process_item(n_args, n_kwargs)
-                    batch_count += 1
-                self._quote_dispatch_processed += batch_count
-                if self.metrics and (self._quote_dispatch_processed % self._quote_dispatch_metrics_every == 0):
-                    try:
-                        if hasattr(self.metrics, "shioaji_quote_callback_queue_depth"):
-                            self.metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                    except Exception:
-                        pass
-
-        self._quote_dispatch_thread = threading.Thread(
-            target=_worker,
-            name="shioaji-quote-dispatch",
-            daemon=True,
-        )
-        self._quote_dispatch_thread.start()
+        """Delegates to TickDispatcher.start_worker()."""
+        self._tick_dispatcher.start_worker()
 
     def _stop_quote_dispatch_worker(self, join_timeout_s: float = 1.0) -> None:
-        if not self._quote_dispatch_running:
-            return
-        self._quote_dispatch_running = False
-        q = self._quote_dispatch_queue
-        if q is not None:
-            try:
-                q.put_nowait(None)
-            except Exception:
-                pass
-        t = self._quote_dispatch_thread
-        if t and t.is_alive():
-            t.join(timeout=max(0.0, float(join_timeout_s)))
-        self._quote_dispatch_thread = None
-        self._quote_dispatch_queue = None
+        """Delegates to TickDispatcher.stop_worker()."""
+        self._tick_dispatcher.stop_worker(join_timeout_s=join_timeout_s)
 
     def _refresh_quote_routes(self) -> None:
-        codes: list[str] = []
-        for sym in self.symbols:
-            if isinstance(sym, dict):
-                code = sym.get("code")
-            else:
-                code = None
-            if code:
-                codes.append(str(code))
-        subscribed_codes = getattr(self, "subscribed_codes", None)
-        if subscribed_codes:
-            codes.extend(str(c) for c in subscribed_codes)
-        _registry_rebind_codes(self, codes)
+        """Delegates to TickDispatcher.refresh_quote_routes()."""
+        TickDispatcher.refresh_quote_routes(
+            self.symbols,
+            getattr(self, "subscribed_codes", None),
+            self,
+        )
 
     def _load_config(self):
         with open(self.config_path, "r") as f:
@@ -1317,12 +1103,8 @@ class ShioajiClient:
         return self._contracts().validate_symbols()
 
     def _wrapped_tick_cb(self, *args, **kwargs):
-        """Persistent callback wrapper."""
-        try:
-            if hasattr(self, "tick_callback") and self.tick_callback:
-                self.tick_callback(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Callback error: {e}")
+        """Delegates to TickDispatcher.wrapped_tick_cb()."""
+        TickDispatcher.wrapped_tick_cb(getattr(self, "tick_callback", None), *args, **kwargs)
 
     def _get_contract(
         self,
