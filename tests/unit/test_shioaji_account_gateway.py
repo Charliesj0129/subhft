@@ -33,6 +33,7 @@ def _make_client(mode: str = "live") -> MagicMock:
 # get_trading_limits
 # ---------------------------------------------------------------------------
 
+
 class TestGetTradingLimits:
     def test_simulation_returns_empty_dict(self) -> None:
         client = _make_client(mode="simulation")
@@ -89,6 +90,7 @@ class TestGetTradingLimits:
 # get_settlements
 # ---------------------------------------------------------------------------
 
+
 class TestGetSettlements:
     def test_simulation_returns_empty_list(self) -> None:
         client = _make_client(mode="simulation")
@@ -136,6 +138,7 @@ class TestGetSettlements:
 # list_profit_loss_summary
 # ---------------------------------------------------------------------------
 
+
 class TestListProfitLossSummary:
     def test_simulation_returns_empty_list(self) -> None:
         client = _make_client(mode="simulation")
@@ -179,6 +182,7 @@ class TestListProfitLossSummary:
 # ---------------------------------------------------------------------------
 # list_profit_loss_detail
 # ---------------------------------------------------------------------------
+
 
 class TestListProfitLossDetail:
     def test_simulation_returns_empty_list(self) -> None:
