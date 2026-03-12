@@ -22,6 +22,17 @@ broker:
     l2_depth: true
     max_custom_field_len: 32
   latency_profile:
-    place_order_p95_ms: null  # TBD — must measure
-    update_order_p95_ms: null
-    cancel_order_p95_ms: null
+    place_order_p95_ms: 50    # Conservative estimate — must measure with real SDK
+    update_order_p95_ms: 50   # Conservative estimate — must measure with real SDK
+    cancel_order_p95_ms: 40   # Conservative estimate — must measure with real SDK
+    source: "estimated_conservative_v2026-03-12"
+  session:
+    login_retry_max: 3
+    login_backoff_base_s: 1.0
+    reconnect_timeout_s: 10
+    reconnect_cooldown_s: 5
+    session_refresh_interval_s: 14400  # 4 hours
+  subscription:
+    max_subscriptions: 200
+    resubscribe_cooldown_s: 10
+    watchdog_timeout_s: 30
