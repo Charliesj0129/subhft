@@ -134,9 +134,7 @@ class FubonAccountGateway:
         """
         acct = account if account is not None else self._account
         try:
-            if hasattr(self._sdk, "accounting") and hasattr(
-                self._sdk.accounting, "unrealized_gains_and_loses"
-            ):
+            if hasattr(self._sdk, "accounting") and hasattr(self._sdk.accounting, "unrealized_gains_and_loses"):
                 result = self._sdk.accounting.unrealized_gains_and_loses(acct)
                 self.log.info(
                     "fubon_list_position_detail",
@@ -174,9 +172,7 @@ class FubonAccountGateway:
         """
         acct = account if account is not None else self._account
         try:
-            if hasattr(self._sdk, "accounting") and hasattr(
-                self._sdk.accounting, "query_settlement"
-            ):
+            if hasattr(self._sdk, "accounting") and hasattr(self._sdk.accounting, "query_settlement"):
                 kwargs: dict[str, Any] = {}
                 if begin_date is not None:
                     kwargs["begin_date"] = begin_date
