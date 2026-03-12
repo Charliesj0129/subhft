@@ -49,6 +49,13 @@ class FubonClient:
     )
 
     def __init__(self) -> None:
+        import warnings
+
+        warnings.warn(
+            "FubonClient is deprecated, use FubonClientFacade from hft_platform.feed_adapter.fubon.facade instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._api: Any = None
         self._logged_in: bool = False
         self._api_key: str = os.environ.get("HFT_FUBON_API_KEY", "")
