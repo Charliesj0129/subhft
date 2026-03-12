@@ -1,21 +1,17 @@
 # queue_acceleration
 
 ## Hypothesis
-- Queue imbalance at the best levels provides a fast proxy for one-tick directional pressure when spread remains stable.
+- The acceleration (second derivative) of queue imbalance detects inflection points where directional pressure is changing.
 
 ## Formula
-- `• **Master Parameter $H_0$**: Core Flow 的持久性指數。實證估計 $H_0 \approx 3/4 (0.75)$。`
+- `qi = (bid - ask) / max(bid + ask, 1)`
+- `velocity = EMA_8(qi) - EMA_32(qi)`
+- `accel = velocity - prev_velocity`
+- `signal = clip(EMA_4(accel), -1, 1)`
 
 ## Data Fields
-- `l1_bid_qty`
-- `l1_ask_qty`
-- `l1_imbalance_ppm`
-- `spread_scaled`
-- `spread_ema8_scaled`
-- `mid_price_x2`
-- `depth_imbalance_ppm`
-- `depth_imbalance_ema8_ppm`
-- `microprice_x2`
+- `bid_qty`
+- `ask_qty`
 
 ## Metadata
 - `alpha_id`: `queue_acceleration`
