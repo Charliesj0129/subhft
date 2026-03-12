@@ -281,10 +281,10 @@ class TestFubonOrderGateway:
         gw = FubonOrderGateway(client=None)
         with pytest.raises(NotImplementedError):
             gw.place_order()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(TypeError):
             gw.cancel_order(None)
         with pytest.raises(NotImplementedError):
-            gw.update_order(None)
+            gw.cancel_order("ORD-001")
         with pytest.raises(NotImplementedError):
             gw.batch_place_orders([])
 
