@@ -1,13 +1,16 @@
 # depth_momentum
 
 ## Hypothesis
-- Rate of change in LOB depth imbalance predicts near-term price direction: accelerating bid-side depth growth signals upward pressure before price moves.
+- Total depth change rate predicts liquidity regime shifts; rising total depth signals improving liquidity (mean-reverting), falling depth signals deteriorating liquidity (trending).
 
 ## Formula
-- `signal_t = EMA_8((depth_imb_t - depth_imb_{t-1}))` where `depth_imb = (bid_depth - ask_depth) / (bid_depth + ask_depth + eps)`
+- `signal = clip(EMA16(delta) / max(EMA64(|delta|), eps), -2, 2)` where `delta = (bid_qty + ask_qty) - prev_total`
+
+## Data Fields
+- `bid_qty`
+- `ask_qty`
 
 ## Metadata
 - `alpha_id`: `depth_momentum`
-- `paper_refs`: (original research)
+- `paper_refs`: 013
 - `complexity`: `O(1)`
-- `data_fields`: `bid_depth`, `ask_depth`

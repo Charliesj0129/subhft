@@ -131,7 +131,9 @@
     "title": "equilibrium liquidity dex cex"
   },
   "013": {
-    "alphas": [],
+    "alphas": [
+      "depth_momentum"
+    ],
     "arxiv_id": "2512.11765",
     "note_file": "research/knowledge/notes/013_hft_trading_game_transient_impact.md",
     "ref": "013",
