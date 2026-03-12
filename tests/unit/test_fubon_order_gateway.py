@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -212,3 +212,92 @@ class TestFubonAccountGateway:
 
         sdk.settlements.assert_called_once()
         assert len(result) == 1
+
+
+class TestFubonOrderGatewayBatchPlaceOrders:
+    def _make_order(
+        self,
+        symbol: str = "2330",
+        price: int = 5800000,
+        qty: int = 1,
+        side: str = "Buy",
+    ) -> dict:
+        return {"symbol": symbol, "price": price, "qty": qty, "side": side}
+
+    @patch("hft_platform.feed_adapter.fubon.order_gateway.time.sleep")
+    def test_batch_all_succeed(self, mock_sleep: MagicMock) -> None:
+        sdk = MagicMock()
+        sdk.stock.place_order.side_effect = [
+            {"order_id": "ORD-001"},
+            {"order_id": "ORD-002"},
+            {"order_id": "ORD-003"},
+        ]
+        gw = FubonOrderGateway(sdk)
+
+        orders = [
+            self._make_order("2330", 5800000, 1, "Buy"),
+            self._make_order("2317", 1000000, 2, "Sell"),
+            self._make_order("2454", 9000000, 3, "Buy"),
+        ]
+        results = gw.batch_place_orders(orders)
+
+        assert len(results) == 3
+        assert results[0] == {"order_id": "ORD-001"}
+        assert results[1] == {"order_id": "ORD-002"}
+        assert results[2] == {"order_id": "ORD-003"}
+        assert sdk.stock.place_order.call_count == 3
+
+    @patch("hft_platform.feed_adapter.fubon.order_gateway.time.sleep")
+    def test_batch_partial_failure(self, mock_sleep: MagicMock) -> None:
+        sdk = MagicMock()
+        sdk.stock.place_order.side_effect = [
+            {"order_id": "ORD-001"},
+            RuntimeError("SDK error on 2nd"),
+            {"order_id": "ORD-003"},
+        ]
+        gw = FubonOrderGateway(sdk)
+
+        orders = [
+            self._make_order("2330"),
+            self._make_order("2317"),
+            self._make_order("2454"),
+        ]
+        results = gw.batch_place_orders(orders)
+
+        assert len(results) == 3
+        assert results[0] == {"order_id": "ORD-001"}
+        assert results[1] is None
+        assert results[2] == {"order_id": "ORD-003"}
+
+    def test_batch_empty_returns_empty(self) -> None:
+        sdk = MagicMock()
+        gw = FubonOrderGateway(sdk)
+
+        results = gw.batch_place_orders([])
+
+        assert results == []
+        sdk.stock.place_order.assert_not_called()
+
+    @patch("hft_platform.feed_adapter.fubon.order_gateway.time.sleep")
+    def test_batch_single_order(self, mock_sleep: MagicMock) -> None:
+        sdk = MagicMock()
+        sdk.stock.place_order.return_value = {"order_id": "ORD-SINGLE"}
+        gw = FubonOrderGateway(sdk)
+
+        results = gw.batch_place_orders([self._make_order()])
+
+        assert len(results) == 1
+        assert results[0] == {"order_id": "ORD-SINGLE"}
+        mock_sleep.assert_not_called()
+
+    @patch("hft_platform.feed_adapter.fubon.order_gateway.time.sleep")
+    def test_batch_rate_limit_delay(self, mock_sleep: MagicMock) -> None:
+        sdk = MagicMock()
+        sdk.stock.place_order.return_value = {"order_id": "ORD-X"}
+        gw = FubonOrderGateway(sdk)
+
+        orders = [self._make_order() for _ in range(3)]
+        gw.batch_place_orders(orders)
+
+        assert mock_sleep.call_count == 2  # Between orders 0-1 and 1-2
+        mock_sleep.assert_called_with(0.067)
