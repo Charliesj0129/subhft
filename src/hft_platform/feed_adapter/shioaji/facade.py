@@ -92,11 +92,23 @@ class ShioajiClientFacade:
     def get_exchange(self, symbol: str) -> str:
         return self._client.get_exchange(symbol) or ""
 
-    def cancel_order(self, trade: Any) -> Any:
-        return self.order_gateway.cancel_order(trade)
+    def cancel_order(
+        self,
+        trade: Any,
+        timeout: int = 5000,
+        cb: Any | None = None,
+    ) -> Any:
+        return self.order_gateway.cancel_order(trade, timeout=timeout, cb=cb)
 
-    def update_order(self, trade: Any, price: float | None = None, qty: int | None = None) -> Any:
-        return self.order_gateway.update_order(trade, price=price, qty=qty)
+    def update_order(
+        self,
+        trade: Any,
+        price: float | None = None,
+        qty: int | None = None,
+        timeout: int = 5000,
+        cb: Any | None = None,
+    ) -> Any:
+        return self.order_gateway.update_order(trade, price=price, qty=qty, timeout=timeout, cb=cb)
 
     def get_positions(self) -> list[Any]:
         return self.account_gateway.get_positions()
