@@ -837,10 +837,12 @@
     "title": "diverse optimal execution"
   },
   "082": {
-    "alphas": [],
+    "alphas": [
+      "regime_momentum"
+    ],
     "note_file": "research/knowledge/notes/082_explainable_crypto_microstructure.md",
     "ref": "082",
-    "status": "reviewed",
+    "status": "implemented",
     "tags": [
       "microstructure"
     ],
