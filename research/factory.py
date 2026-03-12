@@ -87,6 +87,7 @@ ALLOWED_ROOT_FILES: set[str] = {
 
 CORE_TOOL_FILES: set[str] = {
     "alpha_scaffold.py",
+    "bayesian_opt.py",
     "data_governance.py",
     "factor_registry.py",
     "feature_benchmark_matrix.py",
@@ -867,6 +868,68 @@ def cmd_run_gate_c(args: argparse.Namespace) -> int:
     return 0 if overall else 1
 
 
+def cmd_run_bayesian_opt(args: argparse.Namespace) -> int:
+    """Run Bayesian optimization for a single alpha's parameter space."""
+    from research.tools.bayesian_opt import BayesianOptConfig, run_bayesian_opt
+
+    alpha_id: str = str(args.alpha_id)
+    data_paths: list[str] = list(args.data or [])
+    n_trials: int = int(args.n_trials)
+    oos_split: float = float(args.oos_split)
+    latency_profile_id: str = str(args.latency_profile)
+    seed: int | None = int(args.seed) if args.seed is not None else None
+
+    # Parse param space: each --param is "name:lo:hi" or "name:lo:hi:log"
+    param_space: dict[str, tuple[float, float, bool]] = {}
+    for spec in (args.param or []):
+        parts = spec.split(":")
+        if len(parts) < 3:
+            print(f"[run-bayesian-opt] ERROR: invalid --param '{spec}', expected name:lo:hi[:log]")
+            return 1
+        name = parts[0]
+        lo = float(parts[1])
+        hi = float(parts[2])
+        log_scale = len(parts) >= 4 and parts[3].lower() in ("log", "true", "1")
+        param_space[name] = (lo, hi, log_scale)
+
+    config = BayesianOptConfig(
+        alpha_id=alpha_id,
+        data_paths=data_paths,
+        n_trials=n_trials,
+        param_space=param_space if param_space else None,
+        objective="risk_adjusted",
+        seed=seed,
+        latency_profile_id=latency_profile_id,
+        is_oos_split=oos_split,
+    )
+
+    print(f"\n[run-bayesian-opt] ── {alpha_id} ────────────────────────────────────")
+    print(f"  n_trials          : {n_trials}")
+    print(f"  latency_profile   : {latency_profile_id}")
+    print(f"  param_space       : {config.param_space}")
+    print(f"  data_paths        : {data_paths}")
+
+    try:
+        result = run_bayesian_opt(config)
+    except Exception as exc:
+        print(f"[run-bayesian-opt] ERROR: {exc}")
+        return 1
+
+    print("\n[run-bayesian-opt] RESULT:")
+    print(f"  best_params       : {result.best_params}")
+    print(f"  best_objective    : {result.best_objective:.4f}")
+    print(f"  deflated_sharpe   : {result.deflated_sharpe:.4f}")
+    print(f"  param_importance  : {result.param_importance}")
+
+    # Save result JSON
+    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    out_path = ROOT / "experiments" / "runs" / f"{alpha_id}_bayesian_{ts}.json"
+    _write_json(out_path, result.to_dict())
+    print(f"  saved             : {out_path}")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Research pipeline factory for layout, cleanup, audit, and indexing.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -961,6 +1024,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable parameter optimization (useful when signal has no meaningful threshold).",
     )
     gate_c_cmd.set_defaults(func=cmd_run_gate_c)
+
+    bayesian_cmd = sub.add_parser(
+        "run-bayesian-opt",
+        help="Run Bayesian optimization (Optuna TPE) for alpha parameter search.",
+    )
+    bayesian_cmd.add_argument("alpha_id", help="Alpha ID (must exist under research/alphas/)")
+    bayesian_cmd.add_argument(
+        "--data",
+        nargs="+",
+        required=True,
+        metavar="PATH",
+        help="One or more .npy data file paths for backtesting.",
+    )
+    bayesian_cmd.add_argument("--n-trials", type=int, default=30, help="Number of Optuna trials (default 30).")
+    bayesian_cmd.add_argument(
+        "--param",
+        action="append",
+        metavar="name:lo:hi[:log]",
+        help="Parameter spec (repeatable). Format: name:lo:hi or name:lo:hi:log.",
+    )
+    bayesian_cmd.add_argument(
+        "--latency-profile",
+        default="shioaji_sim_p95_v2026-03-04",
+        help="Latency profile ID from config/research/latency_profiles.yaml.",
+    )
+    bayesian_cmd.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
+    bayesian_cmd.add_argument("--oos-split", type=float, default=0.7, help="In-sample / OOS split ratio (default 0.7).")
+    bayesian_cmd.set_defaults(func=cmd_run_bayesian_opt)
 
     return parser
 
