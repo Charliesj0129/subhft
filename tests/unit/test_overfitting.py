@@ -87,10 +87,14 @@ class TestDeflatedSharpeRatio:
         skewed_returns[::20] = -0.08  # inject large losses
 
         result_normal = deflated_sharpe_ratio(
-            sharpe_oos=2.0, n_trials=2, oos_returns=normal_returns,
+            sharpe_oos=2.0,
+            n_trials=2,
+            oos_returns=normal_returns,
         )
         result_skewed = deflated_sharpe_ratio(
-            sharpe_oos=2.0, n_trials=2, oos_returns=skewed_returns,
+            sharpe_oos=2.0,
+            n_trials=2,
+            oos_returns=skewed_returns,
         )
         assert result_skewed.skewness < result_normal.skewness
         # Negative skew should reduce the adjusted Sharpe ratio
@@ -101,7 +105,9 @@ class TestDeflatedSharpeRatio:
         rng = np.random.default_rng(55)
         returns = rng.normal(loc=0.001, scale=0.01, size=20)
         result = deflated_sharpe_ratio(
-            sharpe_oos=1.0, n_trials=5, oos_returns=returns,
+            sharpe_oos=1.0,
+            n_trials=5,
+            oos_returns=returns,
         )
         assert result.n_obs == 20
         assert result.se_sharpe > 0.5  # Large SE with small sample
@@ -112,7 +118,9 @@ class TestDeflatedSharpeRatio:
         for sr in [-1.0, 0.0, 1.0, 3.0, 10.0]:
             returns = rng.normal(size=100)
             result = deflated_sharpe_ratio(
-                sharpe_oos=sr, n_trials=50, oos_returns=returns,
+                sharpe_oos=sr,
+                n_trials=50,
+                oos_returns=returns,
             )
             assert 0.0 <= result.dsr <= 1.0, f"DSR={result.dsr} out of range for SR={sr}"
 
