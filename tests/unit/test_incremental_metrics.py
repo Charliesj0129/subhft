@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from research.backtest.metrics import (
-    ICChunkState,
     compute_ic,
     compute_ic_incremental,
     compute_max_drawdown,
@@ -17,10 +15,10 @@ from research.registry.scorecard import (
     compute_pool_correlation_matrix,
 )
 
-
 # ---------------------------------------------------------------------------
 # Incremental IC
 # ---------------------------------------------------------------------------
+
 
 class TestComputeICIncremental:
     """Tests for compute_ic_incremental."""
@@ -32,7 +30,10 @@ class TestComputeICIncremental:
 
         ic_mean, ic_std, ic_series = compute_ic(signals, fwd, buckets=10)
         inc_mean, inc_std, inc_series, state = compute_ic_incremental(
-            signals, fwd, buckets=10, prev_state=None,
+            signals,
+            fwd,
+            buckets=10,
+            prev_state=None,
         )
 
         assert state is not None
@@ -49,12 +50,18 @@ class TestComputeICIncremental:
         # First half
         half = n_total // 2
         _, _, _, state1 = compute_ic_incremental(
-            signals[:half], fwd[:half], buckets=10, prev_state=None,
+            signals[:half],
+            fwd[:half],
+            buckets=10,
+            prev_state=None,
         )
 
         # Full window with prev_state from first half
         inc_mean, inc_std, inc_series, state2 = compute_ic_incremental(
-            signals, fwd, buckets=10, prev_state=state1,
+            signals,
+            fwd,
+            buckets=10,
+            prev_state=state1,
         )
 
         # Full window from scratch
@@ -67,7 +74,9 @@ class TestComputeICIncremental:
 
     def test_too_few_samples_returns_zeros(self) -> None:
         ic_mean, ic_std, series, state = compute_ic_incremental(
-            [1.0, 2.0], [0.5, 0.6], buckets=10,
+            [1.0, 2.0],
+            [0.5, 0.6],
+            buckets=10,
         )
         assert ic_mean == 0.0
         assert state is None
@@ -78,12 +87,17 @@ class TestComputeICIncremental:
         fwd = signals * 0.5 + rng.standard_normal(100) * 0.1
 
         _, _, _, state_b10 = compute_ic_incremental(
-            signals[:50], fwd[:50], buckets=10,
+            signals[:50],
+            fwd[:50],
+            buckets=10,
         )
 
         # Different bucket count changes chunk size -> prev_state discarded
         inc_mean, _, _, state_b5 = compute_ic_incremental(
-            signals, fwd, buckets=5, prev_state=state_b10,
+            signals,
+            fwd,
+            buckets=5,
+            prev_state=state_b10,
         )
         full_mean, _, _ = compute_ic(signals, fwd, buckets=5)
         np.testing.assert_allclose(inc_mean, full_mean, atol=1e-12)
@@ -92,6 +106,7 @@ class TestComputeICIncremental:
 # ---------------------------------------------------------------------------
 # Incremental Metrics
 # ---------------------------------------------------------------------------
+
 
 class TestComputeMetricsIncremental:
     """Tests for compute_metrics_incremental."""
@@ -110,10 +125,16 @@ class TestComputeMetricsIncremental:
 
         half = 100
         m1, state1 = compute_metrics_incremental(
-            None, equity[:half], signals[:half], fwd[:half],
+            None,
+            equity[:half],
+            signals[:half],
+            fwd[:half],
         )
         m2, state2 = compute_metrics_incremental(
-            state1, equity[half:], signals[half:], fwd[half:],
+            state1,
+            equity[half:],
+            signals[half:],
+            fwd[half:],
         )
 
         # Compare with full-window non-incremental
@@ -154,6 +175,7 @@ class TestComputeMetricsIncremental:
 # ---------------------------------------------------------------------------
 # Pool correlation (incremental matrix)
 # ---------------------------------------------------------------------------
+
 
 class TestPoolCorrelationIncremental:
     """Tests for _max_pool_correlation and compute_pool_correlation_matrix."""
@@ -198,7 +220,9 @@ class TestPoolCorrelationIncremental:
         # Incremental: compute prior matrix, then add "c"
         prev_matrix, prev_keys = compute_pool_correlation_matrix(pool_prev)
         inc_matrix, inc_keys = compute_pool_correlation_matrix(
-            pool_full, prev_matrix=prev_matrix, prev_keys=prev_keys,
+            pool_full,
+            prev_matrix=prev_matrix,
+            prev_keys=prev_keys,
         )
 
         assert set(inc_keys) == set(full_keys)
@@ -221,7 +245,9 @@ class TestPoolCorrelationIncremental:
         prev_matrix, prev_keys = compute_pool_correlation_matrix(pool)
         # Same pool, no new keys
         matrix, keys = compute_pool_correlation_matrix(
-            pool, prev_matrix=prev_matrix, prev_keys=prev_keys,
+            pool,
+            prev_matrix=prev_matrix,
+            prev_keys=prev_keys,
         )
         np.testing.assert_allclose(matrix, prev_matrix, atol=1e-12)
 
@@ -236,7 +262,9 @@ class TestPoolCorrelationIncremental:
             "c": rng.standard_normal(60).tolist(),
         }
         inc_matrix, inc_keys = compute_pool_correlation_matrix(
-            pool_full, prev_matrix=prev_matrix, prev_keys=prev_keys,
+            pool_full,
+            prev_matrix=prev_matrix,
+            prev_keys=prev_keys,
         )
         full_matrix, full_keys = compute_pool_correlation_matrix(pool_full)
 
