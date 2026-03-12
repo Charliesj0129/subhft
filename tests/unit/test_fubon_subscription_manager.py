@@ -30,9 +30,7 @@ def mock_quote_runtime() -> MagicMock:
 
 
 class TestSubscribeBasket:
-    def test_registers_callbacks_and_subscribes(
-        self, mock_quote_runtime: MagicMock
-    ) -> None:
+    def test_registers_callbacks_and_subscribes(self, mock_quote_runtime: MagicMock) -> None:
         symbols = ["2330", "2317", "2454"]
         mgr = FubonSubscriptionManager(mock_quote_runtime, symbols)
         cb = MagicMock()
@@ -83,9 +81,7 @@ class TestResubscribe:
         mock_quote_runtime.subscribe.assert_called_once_with(["2330", "2317"])
         mock_quote_runtime.start_quote_watchdog.assert_called_once()
 
-    def test_resubscribe_cooldown_rejects(
-        self, mock_quote_runtime: MagicMock
-    ) -> None:
+    def test_resubscribe_cooldown_rejects(self, mock_quote_runtime: MagicMock) -> None:
         mgr = FubonSubscriptionManager(mock_quote_runtime, ["2330"])
 
         first = mgr.resubscribe()
