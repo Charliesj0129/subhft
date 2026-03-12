@@ -18,6 +18,7 @@ Data flow:
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 import sys
 import tempfile
@@ -25,6 +26,7 @@ import uuid
 from pathlib import Path
 
 import numpy as np
+import structlog
 
 
 # Ensure project root is on sys.path (mirrors hbt_runner.py pattern)
@@ -53,6 +55,9 @@ from research.backtest.metrics import (  # noqa: E402
 from research.backtest.types import (  # noqa: E402
     BacktestConfig,
     BacktestResult,
+    CPCVConfig,
+    CPCVFoldResult,
+    CPCVResult,
     WalkForwardConfig,
     WalkForwardFoldResult,
     WalkForwardResult,
@@ -362,6 +367,29 @@ def _regime_metrics(signals: np.ndarray, fwd_returns: np.ndarray) -> dict[str, f
     return out
 
 
+def _collect_hbt_data(data_paths: list[str]) -> np.ndarray | None:
+    """Resolve hftbt.npz paths, load and concatenate into a single array.
+
+    Returns None if no valid data paths are found.
+    """
+    hbt_paths: list[str] = []
+    for p in data_paths:
+        try:
+            hbt_paths.append(ensure_hftbt_npz(p))
+        except (FileNotFoundError, OSError):
+            pass
+
+    if not hbt_paths:
+        return None
+
+    chunks = []
+    for p in hbt_paths:
+        d = np.load(p, allow_pickle=False)
+        arr = np.asarray(d["data"]) if isinstance(d, np.lib.npyio.NpzFile) else np.asarray(d)
+        chunks.append(arr)
+    return np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
+
+
 # ---------------------------------------------------------------------------
 # HftNativeRunner
 # ---------------------------------------------------------------------------
@@ -543,15 +571,8 @@ class HftNativeRunner:
         """Walk-forward via repeated IS/OOS splits on each fold."""
         wf = config or WalkForwardConfig()
 
-        # Collect all available hftbt.npz paths (auto-convert if needed)
-        hbt_paths: list[str] = []
-        for p in self.config.data_paths:
-            try:
-                hbt_paths.append(ensure_hftbt_npz(p))
-            except (FileNotFoundError, OSError):
-                pass
-
-        if not hbt_paths:
+        full = _collect_hbt_data(self.config.data_paths)
+        if full is None:
             return WalkForwardResult(
                 config=wf,
                 folds=[],
@@ -563,13 +584,6 @@ class HftNativeRunner:
                 fold_ic_mean=float("nan"),
             )
 
-        # Load all events to compute fold boundaries
-        chunks = []
-        for p in hbt_paths:
-            d = np.load(p, allow_pickle=False)
-            arr = np.asarray(d["data"]) if isinstance(d, np.lib.npyio.NpzFile) else np.asarray(d)
-            chunks.append(arr)
-        full = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
         total_rows = len(full)
 
         n_splits = int(wf.n_splits)
@@ -651,6 +665,191 @@ class HftNativeRunner:
             fold_sharpe_max=float(np.max(sharpes)),
             fold_consistency_pct=consistency,
             fold_ic_mean=float(np.mean(ics)) if ics.size else float("nan"),
+        )
+
+    def run_cpcv(
+        self,
+        alpha: AlphaProtocol,
+        config: CPCVConfig | None = None,
+    ) -> CPCVResult:
+        """Combinatorial Purged Cross-Validation with embargo.
+
+        Enumerates C(n_groups, n_groups//2) test-set combinations, applies
+        embargo and purge gaps at train/test boundaries, and computes PBO
+        (Probability of Backtest Overfitting).
+
+        Args:
+            alpha: Alpha implementing AlphaProtocol (must have reset()).
+            config: CPCV configuration; defaults to CPCVConfig().
+
+        Returns:
+            CPCVResult with per-path metrics and aggregate PBO.
+
+        Raises:
+            ValueError: If any group has fewer than min_group_samples ticks.
+            ImportError: If hftbacktest is not installed.
+        """
+        log = structlog.get_logger()
+
+        cpcv = config or CPCVConfig()
+
+        # -- Collect all hftbt.npz data ----------------------------------------
+        full = _collect_hbt_data(self.config.data_paths)
+        if full is None:
+            return CPCVResult(
+                config=cpcv,
+                n_paths=0,
+                folds=[],
+                pbo=float("nan"),
+                path_sharpes=[],
+                path_consistency_pct=float("nan"),
+                sharpe_mean=float("nan"),
+                sharpe_std=float("nan"),
+                sharpe_min=float("nan"),
+            )
+
+        total_rows = len(full)
+
+        # -- Divide into n_groups contiguous blocks ----------------------------
+        n_groups = int(cpcv.n_groups)
+        group_size = total_rows // n_groups
+        if group_size < cpcv.min_group_samples:
+            raise ValueError(
+                f"Group size {group_size} < min_group_samples {cpcv.min_group_samples}. "
+                f"Need at least {n_groups * cpcv.min_group_samples} rows for {n_groups} groups."
+            )
+
+        # Group boundaries: group i spans [boundaries[i], boundaries[i+1])
+        boundaries = [i * group_size for i in range(n_groups)]
+        boundaries.append(total_rows)  # last group gets remainder rows
+
+        embargo_rows = max(1, int(cpcv.embargo_pct * total_rows))
+        purge_rows = max(1, int(cpcv.purge_pct * total_rows))
+
+        # -- Enumerate all C(n_groups, n_groups//2) test combinations ----------
+        n_test = n_groups // 2
+        all_combos = list(itertools.combinations(range(n_groups), n_test))
+        n_paths = len(all_combos)
+        log.info("cpcv_start", n_groups=n_groups, n_paths=n_paths, total_rows=total_rows)
+
+        folds: list[CPCVFoldResult] = []
+        tmp_paths: list[str] = []
+
+        try:
+            for path_idx, test_groups in enumerate(all_combos):
+                test_set = set(test_groups)
+                train_groups = tuple(g for g in range(n_groups) if g not in test_set)
+
+                # -- Build test indices (contiguous blocks, in order) ----------
+                test_row_indices: list[int] = []
+                for g in sorted(test_groups):
+                    start = boundaries[g]
+                    end = boundaries[g + 1]
+                    test_row_indices.extend(range(start, end))
+
+                # -- Build train indices with embargo and purge ----------------
+                # First collect raw train row indices
+                train_row_set: set[int] = set()
+                for g in train_groups:
+                    start = boundaries[g]
+                    end = boundaries[g + 1]
+                    train_row_set.update(range(start, end))
+
+                # Remove embargo and purge rows at each train/test boundary
+                # Using set difference for O(gap_size) instead of per-element discard
+                gap = embargo_rows + purge_rows
+                for g in sorted(test_groups):
+                    test_start = boundaries[g]
+                    test_end = boundaries[g + 1]
+                    # Remove gap rows before test start and after test end
+                    train_row_set -= set(range(max(0, test_start - gap), test_start))
+                    train_row_set -= set(range(test_end, min(total_rows, test_end + gap)))
+
+                train_size = len(train_row_set)
+                test_size = len(test_row_indices)
+
+                if test_size < 2:
+                    continue
+
+                # -- Run alpha on test data ------------------------------------
+                alpha.reset()
+
+                # Extract test data as contiguous array (indices already sorted
+                # since test_groups are iterated in sorted order above)
+                test_data = full[np.array(test_row_indices, dtype=np.int64)]
+
+                tmp_dir = tempfile.mkdtemp(prefix=f"hftnative_cpcv{path_idx}_")
+                test_path = os.path.join(tmp_dir, "test.npz")
+                np.savez_compressed(test_path, data=test_data)
+                tmp_paths.append(test_path)
+
+                eq, sig, mid, pos = _run_adapter_slice(alpha, test_path, self.config, self.symbol)
+                fwd = _forward_returns(mid)
+                sharpe = compute_sharpe(eq) if eq.size >= 2 else 0.0
+                ic_mean, _, _ = compute_ic(sig, fwd)
+                max_dd = compute_max_drawdown(eq)
+                to = compute_turnover(pos)
+
+                folds.append(
+                    CPCVFoldResult(
+                        path_idx=path_idx,
+                        train_indices=train_groups,
+                        test_indices=tuple(sorted(test_groups)),
+                        train_size=train_size,
+                        test_size=test_size,
+                        sharpe=float(sharpe),
+                        ic_mean=float(ic_mean),
+                        max_drawdown=float(max_dd),
+                        turnover=float(to),
+                    )
+                )
+
+        finally:
+            for p in tmp_paths:
+                try:
+                    os.unlink(p)
+                    os.rmdir(os.path.dirname(p))
+                except OSError:
+                    pass
+
+        if not folds:
+            return CPCVResult(
+                config=cpcv,
+                n_paths=n_paths,
+                folds=[],
+                pbo=float("nan"),
+                path_sharpes=[],
+                path_consistency_pct=float("nan"),
+                sharpe_mean=float("nan"),
+                sharpe_std=float("nan"),
+                sharpe_min=float("nan"),
+            )
+
+        path_sharpes = [f.sharpe for f in folds]
+        sharpes_arr = np.asarray(path_sharpes, dtype=np.float64)
+        n_positive = int(np.sum(sharpes_arr > 0.0))
+        n_non_positive = len(path_sharpes) - n_positive
+        pbo = float(n_non_positive / len(path_sharpes))
+        consistency = float(n_positive / len(path_sharpes))
+
+        log.info(
+            "cpcv_done",
+            n_paths=n_paths,
+            pbo=round(pbo, 4),
+            consistency=round(consistency, 4),
+            sharpe_mean=round(float(np.mean(sharpes_arr)), 4),
+        )
+
+        return CPCVResult(
+            config=cpcv,
+            n_paths=n_paths,
+            folds=folds,
+            pbo=pbo,
+            path_sharpes=path_sharpes,
+            path_consistency_pct=consistency,
+            sharpe_mean=float(np.mean(sharpes_arr)),
+            sharpe_std=float(np.std(sharpes_arr)),
+            sharpe_min=float(np.min(sharpes_arr)),
         )
 
     def run_regime_split(self) -> dict[str, float]:
