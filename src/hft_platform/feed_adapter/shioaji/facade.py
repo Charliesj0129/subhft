@@ -23,6 +23,7 @@ class ShioajiClientFacade:
         "_client",
         "session_runtime",
         "quote_runtime",
+        "reconnect_orchestrator",
         "contracts_runtime",
         "order_gateway",
         "account_gateway",
@@ -39,6 +40,7 @@ class ShioajiClientFacade:
         # so the Facade, the client, and the runtimes all share the same objects.
         self.session_runtime = client._session_runtime
         self.quote_runtime = client._quote_runtime
+        self.reconnect_orchestrator = client._reconnect_orchestrator
         self.contracts_runtime = ContractsRuntime(client)
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
