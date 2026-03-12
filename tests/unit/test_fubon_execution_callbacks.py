@@ -73,12 +73,15 @@ class TestResolveOrderId:
 
 
 class TestResolveSide:
-    @pytest.mark.parametrize("raw,expected", [
-        ("B", "Buy"),
-        ("Buy", "Buy"),
-        ("S", "Sell"),
-        ("Sell", "Sell"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("B", "Buy"),
+            ("Buy", "Buy"),
+            ("S", "Sell"),
+            ("Sell", "Sell"),
+        ],
+    )
     def test_canonical_mapping(self, raw: str, expected: str) -> None:
         assert _resolve_side({"buy_sell": raw}) == expected
 
@@ -168,7 +171,9 @@ class TestOnSdkOrder:
         received: list[dict[str, Any]] = []
         adapter.register(on_order=lambda d: received.append(dict(d)), on_deal=MagicMock())
 
-        adapter._on_sdk_order({"ord_no": "X", "stock_no": "2317", "buy_sell": "S", "price": 100, "qty": 1, "status": "New"})
+        adapter._on_sdk_order(
+            {"ord_no": "X", "stock_no": "2317", "buy_sell": "S", "price": 100, "qty": 1, "status": "New"}
+        )
         assert received[0]["side"] == "Sell"
 
     def test_no_callback_is_noop(self, adapter: FubonExecutionCallbackAdapter) -> None:
