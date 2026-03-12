@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from hft_platform.feed_adapter.shioaji.scanner_gateway import (
-    ScannerGateway,
     _VALID_SCANNER_TYPES,
+    ScannerGateway,
 )
 
 
