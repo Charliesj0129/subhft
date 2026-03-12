@@ -42,9 +42,7 @@ class TestFubonClientHasBrokerProtocolMethods:
 
     @pytest.mark.parametrize("method_name", PROTOCOL_METHODS)
     def test_method_exists(self, method_name: str) -> None:
-        assert hasattr(FubonClient, method_name), (
-            f"FubonClient missing required method: {method_name}"
-        )
+        assert hasattr(FubonClient, method_name), f"FubonClient missing required method: {method_name}"
         attr = getattr(FubonClient, method_name)
         assert callable(attr), f"FubonClient.{method_name} is not callable"
 
@@ -62,9 +60,7 @@ class TestFubonClientFacadeHasBrokerProtocolMethods:
 
     @pytest.mark.parametrize("method_name", PROTOCOL_METHODS)
     def test_method_exists(self, facade_cls: type, method_name: str) -> None:
-        assert hasattr(facade_cls, method_name), (
-            f"FubonClientFacade missing required method: {method_name}"
-        )
+        assert hasattr(facade_cls, method_name), f"FubonClientFacade missing required method: {method_name}"
         attr = getattr(facade_cls, method_name)
         assert callable(attr), f"FubonClientFacade.{method_name} is not callable"
 
@@ -84,9 +80,7 @@ class TestFubonIsInstanceBrokerProtocol:
             reason="FubonClientFacade not yet implemented",
         )
         facade = mod.FubonClientFacade()
-        assert isinstance(facade, BrokerProtocol), (
-            "FubonClientFacade() should satisfy BrokerProtocol"
-        )
+        assert isinstance(facade, BrokerProtocol), "FubonClientFacade() should satisfy BrokerProtocol"
 
 
 class TestFubonCapabilities:
@@ -125,27 +119,13 @@ class TestFubonMethodSignatureCompatibility:
         proto_sig = inspect.signature(getattr(BrokerProtocol, method_name))
         impl_sig = inspect.signature(getattr(FubonClient, method_name))
 
-        proto_params = {
-            k: v
-            for k, v in proto_sig.parameters.items()
-            if k != "self"
-        }
-        impl_params = {
-            k: v
-            for k, v in impl_sig.parameters.items()
-            if k != "self"
-        }
+        proto_params = {k: v for k, v in proto_sig.parameters.items() if k != "self"}
+        impl_params = {k: v for k, v in impl_sig.parameters.items() if k != "self"}
 
         # Every non-VAR parameter in the protocol should be accepted by impl
         # (impl may use *args/**kwargs to accept them).
-        impl_has_var_positional = any(
-            p.kind == inspect.Parameter.VAR_POSITIONAL
-            for p in impl_params.values()
-        )
-        impl_has_var_keyword = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD
-            for p in impl_params.values()
-        )
+        impl_has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in impl_params.values())
+        impl_has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in impl_params.values())
 
         for param_name, param in proto_params.items():
             if param.kind in (
@@ -164,8 +144,7 @@ class TestFubonMethodSignatureCompatibility:
                     continue
 
             pytest.fail(
-                f"FubonClient.{method_name} does not accept parameter "
-                f"'{param_name}' required by BrokerProtocol"
+                f"FubonClient.{method_name} does not accept parameter '{param_name}' required by BrokerProtocol"
             )
 
 
