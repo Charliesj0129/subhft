@@ -22,7 +22,9 @@ from hft_platform.feature.engine import (
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
-from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+
+# TODO: replace with BrokerClientProtocol once WU-1 merges
+# Previously: from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 
@@ -197,7 +199,7 @@ class MarketDataService:
         self,
         bus: RingBufferBus,
         raw_queue: asyncio.Queue,
-        client: ShioajiClient,
+        client: Any,  # BrokerClient (ShioajiClient | FubonClientFacade)
         publish_full_events: bool = True,
         symbol_metadata: SymbolMetadata | None = None,
         recorder_queue: asyncio.Queue | None = None,

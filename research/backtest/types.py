@@ -93,6 +93,46 @@ class WalkForwardResult:
     fold_ic_mean: float
 
 
+@dataclass(frozen=True)
+class CPCVConfig:
+    """Combinatorial Purged Cross-Validation configuration."""
+
+    n_groups: int = 6  # N contiguous groups; C(N, N//2) test-set combos
+    embargo_pct: float = 0.01  # 1% of data as gap between train/test boundaries
+    purge_pct: float = 0.005  # 0.5% purge around test boundaries
+    min_group_samples: int = 50  # minimum ticks per group
+
+
+@dataclass(frozen=True)
+class CPCVFoldResult:
+    """Result for a single CPCV path (combination of test groups)."""
+
+    path_idx: int
+    train_indices: tuple[int, ...]  # which groups used for train
+    test_indices: tuple[int, ...]  # which groups used for test
+    train_size: int
+    test_size: int
+    sharpe: float
+    ic_mean: float
+    max_drawdown: float
+    turnover: float
+
+
+@dataclass(frozen=True)
+class CPCVResult:
+    """Aggregated result from Combinatorial Purged Cross-Validation."""
+
+    config: CPCVConfig
+    n_paths: int  # C(n_groups, n_groups//2)
+    folds: list[CPCVFoldResult]
+    pbo: float  # Probability of Backtest Overfitting
+    path_sharpes: list[float]
+    path_consistency_pct: float  # fraction of paths with positive Sharpe
+    sharpe_mean: float
+    sharpe_std: float
+    sharpe_min: float
+
+
 def _hash_config(config: BacktestConfig) -> str:
     payload = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

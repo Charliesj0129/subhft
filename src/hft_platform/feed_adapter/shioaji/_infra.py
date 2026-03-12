@@ -314,13 +314,13 @@ def cache_set(
 # ---------------------------------------------------------------------------
 
 
-def rate_limit_api(limiter: Any, op: str) -> bool:
+def rate_limit_api(limiter: Any, op: str, *, category: str = "default") -> bool:
     """Check and record a rate-limited API call.
 
     Returns ``True`` if the call is allowed, ``False`` if throttled.
     """
     if not limiter.check():
-        logger.warning("API rate limit hit", op=op)
+        logger.warning("API rate limit hit", op=op, category=category)
         return False
     limiter.record()
     return True
