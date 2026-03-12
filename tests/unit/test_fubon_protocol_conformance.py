@@ -219,9 +219,7 @@ class TestNoNotImplementedError:
         _METHOD_CALL_SPECS,
         ids=[spec[0] for spec in _METHOD_CALL_SPECS],
     )
-    def test_fubon_facade_no_not_implemented(
-        self, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> None:
+    def test_fubon_facade_no_not_implemented(self, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
         facade = _make_stub_facade()
         fn = getattr(facade, method)
         # Must not raise NotImplementedError.
