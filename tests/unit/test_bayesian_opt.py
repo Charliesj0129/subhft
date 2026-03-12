@@ -1,4 +1,5 @@
 """Tests for Bayesian optimization tool."""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,6 @@ from research.tools.bayesian_opt import (
     _optimization_objective,
     run_bayesian_opt,
 )
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for _optimization_objective
@@ -168,7 +168,10 @@ class TestRunBayesianOpt:
             sharpe = 5.0 - 40.0 * (threshold - 0.25) ** 2
             runner = MagicMock()
             runner.run.return_value = _make_mock_backtest_result(
-                sharpe_oos=sharpe, sharpe_is=sharpe + 0.5, max_drawdown=-0.03, turnover=0.4,
+                sharpe_oos=sharpe,
+                sharpe_is=sharpe + 0.5,
+                max_drawdown=-0.03,
+                turnover=0.4,
             )
             return runner
 
@@ -204,9 +207,7 @@ class TestRunBayesianOpt:
         mock_discover.return_value = {"test_alpha": mock_alpha}
 
         mock_runner_cls.side_effect = lambda alpha, config: MagicMock(
-            run=MagicMock(
-                return_value=_make_mock_backtest_result(sharpe_oos=3.0, max_drawdown=-0.05, turnover=0.5)
-            )
+            run=MagicMock(return_value=_make_mock_backtest_result(sharpe_oos=3.0, max_drawdown=-0.05, turnover=0.5))
         )
 
         config = BayesianOptConfig(
