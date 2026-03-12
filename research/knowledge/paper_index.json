@@ -403,7 +403,7 @@
     "title": "rl finance review"
   },
   "039": {
-    "alphas": [],
+    "alphas": ["depth_velocity_diff"],
     "note_file": "research/knowledge/notes/039_intraday_lob_markov.md",
     "ref": "039",
     "status": "reviewed",
