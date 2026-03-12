@@ -1,4 +1,5 @@
 """Gate B anti-leak / lookahead-bias tests for DepthVelocityDiffAlpha."""
+
 from __future__ import annotations
 
 import os
