@@ -149,3 +149,6 @@ class FubonClient:
 
     def validate_symbols(self) -> list[str]:
         raise NotImplementedError("FubonClient.validate_symbols not yet implemented")
+
+    def get_contract_refresh_status(self) -> dict[str, Any]:
+        raise NotImplementedError("FubonClient.get_contract_refresh_status not yet implemented")
