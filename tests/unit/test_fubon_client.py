@@ -54,7 +54,10 @@ class TestFubonClientOrderDelegation:
 
         result = client.place_order(symbol="2330", price=5000000, qty=1, side="Buy")
         mock_gw.place_order.assert_called_once_with(
-            symbol="2330", price=5000000, qty=1, side="Buy",
+            symbol="2330",
+            price=5000000,
+            qty=1,
+            side="Buy",
         )
         assert result == "ok"
 
@@ -76,7 +79,9 @@ class TestFubonClientOrderDelegation:
 
         result = client.update_order("order-123", price=5100000, qty=2)
         mock_gw.update_order.assert_called_once_with(
-            "order-123", price=5100000, qty=2,
+            "order-123",
+            price=5100000,
+            qty=2,
         )
         assert result == "updated"
 
