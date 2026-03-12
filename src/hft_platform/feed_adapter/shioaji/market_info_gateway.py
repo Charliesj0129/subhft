@@ -31,9 +31,7 @@ class MarketInfoGateway:
         """Resolve contract codes to Shioaji contract objects."""
         contracts: list[Any] = []
         for code in contract_codes:
-            contract = self._client._get_contract(
-                exchange, code, product_type=product_type, allow_synthetic=False
-            )
+            contract = self._client._get_contract(exchange, code, product_type=product_type, allow_synthetic=False)
             if contract:
                 contracts.append(contract)
             else:

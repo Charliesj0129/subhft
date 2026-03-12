@@ -76,7 +76,9 @@ class TestGetTicks:
 
         with patch(SDK_PATCH, return_value=_make_sdk()):
             gw.get_ticks(
-                "2330", "TSE", "2026-03-10",
+                "2330",
+                "TSE",
+                "2026-03-10",
                 query_type="RangeTime",
                 time_start="09:00:00",
                 time_end="10:00:00",
@@ -94,7 +96,9 @@ class TestGetTicks:
 
         with patch(SDK_PATCH, return_value=_make_sdk()):
             gw.get_ticks(
-                "2330", "TSE", "2026-03-10",
+                "2330",
+                "TSE",
+                "2026-03-10",
                 query_type="LastCount",
                 last_cnt=100,
             )
@@ -123,7 +127,10 @@ class TestGetTicks:
             gw.get_ticks("TXFJ4", "TFE", "2026-03-10", product_type="future")
 
         client._get_contract.assert_called_once_with(
-            "TFE", "TXFJ4", product_type="future", allow_synthetic=False,
+            "TFE",
+            "TXFJ4",
+            product_type="future",
+            allow_synthetic=False,
         )
 
 
@@ -234,7 +241,10 @@ class TestGetKbars:
         gw.get_kbars("TXFJ4", "TFE", "2026-03-01", "2026-03-10", product_type="future")
 
         client._get_contract.assert_called_once_with(
-            "TFE", "TXFJ4", product_type="future", allow_synthetic=False,
+            "TFE",
+            "TXFJ4",
+            product_type="future",
+            allow_synthetic=False,
         )
 
 

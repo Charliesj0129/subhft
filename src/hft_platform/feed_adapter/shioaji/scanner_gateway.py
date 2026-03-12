@@ -10,13 +10,15 @@ if TYPE_CHECKING:
 
 logger = get_logger("feed_adapter.scanner_gateway")
 
-_VALID_SCANNER_TYPES = frozenset({
-    "ChangePercentRank",
-    "ChangePriceRank",
-    "DayRangeRank",
-    "VolumeRank",
-    "AmountRank",
-})
+_VALID_SCANNER_TYPES = frozenset(
+    {
+        "ChangePercentRank",
+        "ChangePriceRank",
+        "DayRangeRank",
+        "VolumeRank",
+        "AmountRank",
+    }
+)
 
 
 class ScannerGateway:
@@ -120,9 +122,7 @@ class ScannerGateway:
     @staticmethod
     def _resolve_scanner_type(sdk: Any, scanner_type: str) -> Any | None:
         """Map a scanner_type string to the SDK ScannerType enum constant."""
-        scanner_type_cls = getattr(
-            getattr(sdk, "constant", None), "ScannerType", None
-        )
+        scanner_type_cls = getattr(getattr(sdk, "constant", None), "ScannerType", None)
         if scanner_type_cls is None:
             return None
         return getattr(scanner_type_cls, scanner_type, None)
