@@ -4,7 +4,7 @@ import os
 import sys
 import time
 
-from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,7 +18,7 @@ def main():
     logger.info("Starting futures subscription script...")
 
     # Initialize Client
-    client = ShioajiClient()
+    client = ShioajiClientFacade()
 
     # Login explicitly
     try:
