@@ -65,9 +65,7 @@ class FubonSnapshotFetcher:
     def _translate(symbol: str, raw: Any) -> dict[str, Any]:
         """Translate SDK response to canonical snapshot format."""
         # Support both dict and object attribute access.
-        get = raw.get if isinstance(raw, dict) else (
-            lambda key, default=None: getattr(raw, key, default)
-        )
+        get = raw.get if isinstance(raw, dict) else (lambda key, default=None: getattr(raw, key, default))
 
         return {
             "code": symbol,
