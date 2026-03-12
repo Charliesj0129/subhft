@@ -1,4 +1,5 @@
 """Tests for Combinatorial Purged Cross-Validation (CPCV) with embargo."""
+
 from __future__ import annotations
 
 import itertools
@@ -49,13 +50,15 @@ def _make_hftbt_npz(path: str, n_rows: int = 600) -> str:
     Uses a simple structured array matching hftbacktest event_dtype layout:
     (ev, exch_ts, local_ts, px, qty).
     """
-    dtype = np.dtype([
-        ("ev", np.uint64),
-        ("exch_ts", np.int64),
-        ("local_ts", np.int64),
-        ("px", np.float64),
-        ("qty", np.float64),
-    ])
+    dtype = np.dtype(
+        [
+            ("ev", np.uint64),
+            ("exch_ts", np.int64),
+            ("local_ts", np.int64),
+            ("px", np.float64),
+            ("qty", np.float64),
+        ]
+    )
     arr = np.zeros(n_rows, dtype=dtype)
     arr["ev"] = 1
     arr["exch_ts"] = np.arange(n_rows, dtype=np.int64) * 1_000_000
