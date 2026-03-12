@@ -199,6 +199,8 @@ class ShioajiClient:
         self._margin_cache_ttl_s = float(os.getenv("HFT_MARGIN_CACHE_TTL_S", "5"))
         self._profit_cache_ttl_s = float(os.getenv("HFT_PROFIT_CACHE_TTL_S", "10"))
         self._positions_detail_cache_ttl_s = float(os.getenv("HFT_POSITION_DETAIL_CACHE_TTL_S", "10"))
+        self._trading_limits_cache_ttl_s = float(os.getenv("HFT_TRADING_LIMITS_CACHE_TTL_S", "30"))
+        self._settlements_cache_ttl_s = float(os.getenv("HFT_SETTLEMENTS_CACHE_TTL_S", "30"))
         self._api_last_latency_ms: dict[str, float] = {}
         self._quote_force_relogin_s = float(os.getenv("HFT_QUOTE_FORCE_RELOGIN_S", "15"))
         self._quote_flap_window_s = float(os.getenv("HFT_QUOTE_FLAP_WINDOW_S", "60"))
