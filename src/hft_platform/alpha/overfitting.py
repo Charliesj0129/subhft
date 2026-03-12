@@ -134,9 +134,8 @@ def deflated_sharpe_ratio(
     if n_trials <= 1:
         expected_max_sr = 0.0
     else:
-        expected_max_sr = (
-            (1.0 - gamma) * stats.norm.ppf(1.0 - 1.0 / n_trials)
-            + gamma * stats.norm.ppf(1.0 - 1.0 / (n_trials * math.e))
+        expected_max_sr = (1.0 - gamma) * stats.norm.ppf(1.0 - 1.0 / n_trials) + gamma * stats.norm.ppf(
+            1.0 - 1.0 / (n_trials * math.e)
         )
 
     # Annualize expected max SR for comparison
@@ -155,8 +154,7 @@ def deflated_sharpe_ratio(
 
     # --- Step 4: standard error of Sharpe estimator ---
     se_per_period = math.sqrt(
-        (1.0 + 0.5 * sr_per_period**2 - skew * sr_per_period + (kurt / 4.0) * sr_per_period**2)
-        / max(n - 1, 1)
+        (1.0 + 0.5 * sr_per_period**2 - skew * sr_per_period + (kurt / 4.0) * sr_per_period**2) / max(n - 1, 1)
     )
     se_sharpe = float(se_per_period * math.sqrt(annualization_factor))
 
@@ -198,10 +196,7 @@ def probability_of_backtest_overfitting(
     oos_sharpes = np.asarray(oos_sharpes, dtype=np.float64).ravel()
 
     if len(is_sharpes) != len(oos_sharpes):
-        msg = (
-            f"is_sharpes and oos_sharpes must have same length, "
-            f"got {len(is_sharpes)} and {len(oos_sharpes)}"
-        )
+        msg = f"is_sharpes and oos_sharpes must have same length, got {len(is_sharpes)} and {len(oos_sharpes)}"
         raise ValueError(msg)
 
     n_paths = len(oos_sharpes)
