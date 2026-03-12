@@ -5,6 +5,7 @@ from typing import Any
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
+from hft_platform.feed_adapter.shioaji.scanner_gateway import ScannerGateway
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
 
@@ -23,6 +24,7 @@ class ShioajiClientFacade:
         "contracts_runtime",
         "order_gateway",
         "account_gateway",
+        "scanner_gateway",
         "subscription_manager",
     )
 
@@ -36,6 +38,7 @@ class ShioajiClientFacade:
         self.contracts_runtime = ContractsRuntime(client)
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
+        self.scanner_gateway = ScannerGateway(client)
         self.subscription_manager = client._subscription_manager
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
@@ -112,6 +115,22 @@ class ShioajiClientFacade:
 
     def list_profit_loss(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> Any:
         return self.account_gateway.list_profit_loss(account=account, begin_date=begin_date, end_date=end_date)
+
+    def scan(
+        self,
+        scanner_type: str,
+        ascending: bool = False,
+        count: int = 100,
+        date: str | None = None,
+        timeout: int = 30000,
+    ) -> list[Any]:
+        return self.scanner_gateway.scan(
+            scanner_type=scanner_type,
+            ascending=ascending,
+            count=count,
+            date=date,
+            timeout=timeout,
+        )
 
     def validate_symbols(self) -> list[str]:
         return self.contracts_runtime.validate_symbols()
