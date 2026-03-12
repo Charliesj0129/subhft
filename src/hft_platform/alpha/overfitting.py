@@ -240,8 +240,8 @@ def pool_correlation_guard(
     Returns:
         PoolCorrelationResult indicating whether the candidate passes.
     """
-    candidate = np.asarray(candidate_signals, dtype=np.float64).ravel()
-    candidate = np.nan_to_num(candidate, nan=0.0)
+    candidate: np.ndarray[tuple[int], np.dtype[np.float64]] = np.asarray(candidate_signals, dtype=np.float64).ravel()
+    np.nan_to_num(candidate, nan=0.0, copy=False)
 
     if not pool_signals:
         return PoolCorrelationResult(
@@ -257,8 +257,8 @@ def pool_correlation_guard(
     most_correlated: str | None = None
 
     for alpha_id, signals in pool_signals.items():
-        other = np.asarray(signals, dtype=np.float64).ravel()
-        other = np.nan_to_num(other, nan=0.0)
+        other: np.ndarray[tuple[int], np.dtype[np.float64]] = np.asarray(signals, dtype=np.float64).ravel()
+        np.nan_to_num(other, nan=0.0, copy=False)
 
         # Truncate to minimum length
         min_len = min(len(candidate), len(other))
