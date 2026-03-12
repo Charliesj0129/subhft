@@ -104,10 +104,12 @@ class TestFetchSnapshots:
         assert snap["ts"] > 0
 
     def test_multiple_symbols(self) -> None:
-        sdk = _make_sdk({
-            "2330": _make_quote_data(close=100.0),
-            "2317": _make_quote_data(close=200.0),
-        })
+        sdk = _make_sdk(
+            {
+                "2330": _make_quote_data(close=100.0),
+                "2317": _make_quote_data(close=200.0),
+            }
+        )
         fetcher = FubonSnapshotFetcher(sdk)
         result = fetcher.fetch_snapshots(["2330", "2317"])
 
