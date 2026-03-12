@@ -5,7 +5,9 @@ from typing import Any
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 from hft_platform.feed_adapter.shioaji.historical_gateway import HistoricalGateway
+from hft_platform.feed_adapter.shioaji.market_info_gateway import MarketInfoGateway
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
+from hft_platform.feed_adapter.shioaji.scanner_gateway import ScannerGateway
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
 
@@ -25,6 +27,8 @@ class ShioajiClientFacade:
         "order_gateway",
         "account_gateway",
         "historical_gateway",
+        "scanner_gateway",
+        "market_info_gateway",
         "subscription_manager",
     )
 
@@ -39,6 +43,8 @@ class ShioajiClientFacade:
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
         self.historical_gateway = HistoricalGateway(client)
+        self.scanner_gateway = ScannerGateway(client)
+        self.market_info_gateway = MarketInfoGateway(client)
         self.subscription_manager = client._subscription_manager
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
@@ -134,7 +140,9 @@ class ShioajiClientFacade:
     def get_settlements(self, account: Any = None) -> Any:
         return self.account_gateway.get_settlements(account=account)
 
-    def list_profit_loss_summary(self, account: Any = None, begin_date: str | None = None, end_date: str | None = None) -> Any:
+    def list_profit_loss_summary(
+        self, account: Any = None, begin_date: str | None = None, end_date: str | None = None
+    ) -> Any:
         return self.account_gateway.list_profit_loss_summary(account=account, begin_date=begin_date, end_date=end_date)
 
     def list_profit_loss_detail(self, account: Any = None, detail_id: int = 0, unit: str | None = None) -> Any:
@@ -151,6 +159,56 @@ class ShioajiClientFacade:
 
     def get_kbars(self, *args: Any, **kwargs: Any) -> Any:
         return self.historical_gateway.get_kbars(*args, **kwargs)
+
+    def scan(
+        self,
+        scanner_type: str,
+        ascending: bool = False,
+        count: int = 100,
+        date: str | None = None,
+        timeout: int = 30000,
+    ) -> list[Any]:
+        return self.scanner_gateway.scan(
+            scanner_type=scanner_type,
+            ascending=ascending,
+            count=count,
+            date=date,
+            timeout=timeout,
+        )
+
+    def get_credit_enquires(
+        self,
+        contract_codes: list[str],
+        exchange: str,
+        timeout: int = 30000,
+        product_type: str | None = None,
+    ) -> list[Any]:
+        return self.market_info_gateway.get_credit_enquires(
+            contract_codes,
+            exchange,
+            timeout=timeout,
+            product_type=product_type,
+        )
+
+    def get_short_stock_sources(
+        self,
+        contract_codes: list[str],
+        exchange: str,
+        timeout: int = 5000,
+        product_type: str | None = None,
+    ) -> list[Any]:
+        return self.market_info_gateway.get_short_stock_sources(
+            contract_codes,
+            exchange,
+            timeout=timeout,
+            product_type=product_type,
+        )
+
+    def get_punish_stocks(self, timeout: int = 5000) -> Any:
+        return self.market_info_gateway.get_punish_stocks(timeout=timeout)
+
+    def get_notice_stocks(self, timeout: int = 5000) -> Any:
+        return self.market_info_gateway.get_notice_stocks(timeout=timeout)
 
     def close(self, logout: bool = False) -> None:
         self._client.close(logout=logout)
