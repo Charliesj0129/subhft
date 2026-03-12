@@ -6,6 +6,7 @@ original ShioajiClient methods it replaces.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import tempfile
 import threading
@@ -175,6 +176,7 @@ class TestTradingHoursGuard:
         orch = ReconnectOrchestrator(client)
         mock_cal = MagicMock()
         mock_cal.is_trading_hours.return_value = True
+        mock_cal._tz = dt.timezone(dt.timedelta(hours=8))
         mock_module = MagicMock(get_calendar=MagicMock(return_value=mock_cal))
         with patch.dict("sys.modules", {"hft_platform.core.market_calendar": mock_module}):
             result = orch.is_trading_hours()
