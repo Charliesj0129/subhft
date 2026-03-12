@@ -4,6 +4,7 @@ from typing import Any
 
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
+from hft_platform.feed_adapter.shioaji.historical_gateway import HistoricalGateway
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
@@ -23,6 +24,7 @@ class ShioajiClientFacade:
         "contracts_runtime",
         "order_gateway",
         "account_gateway",
+        "historical_gateway",
         "subscription_manager",
     )
 
@@ -36,6 +38,7 @@ class ShioajiClientFacade:
         self.contracts_runtime = ContractsRuntime(client)
         self.order_gateway = OrderGateway(client)
         self.account_gateway = AccountGateway(client)
+        self.historical_gateway = HistoricalGateway(client)
         self.subscription_manager = client._subscription_manager
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
@@ -118,6 +121,12 @@ class ShioajiClientFacade:
 
     def get_contract_refresh_status(self) -> dict[str, object]:
         return self.contracts_runtime.refresh_status()
+
+    def get_ticks(self, *args: Any, **kwargs: Any) -> Any:
+        return self.historical_gateway.get_ticks(*args, **kwargs)
+
+    def get_kbars(self, *args: Any, **kwargs: Any) -> Any:
+        return self.historical_gateway.get_kbars(*args, **kwargs)
 
     def close(self, logout: bool = False) -> None:
         self._client.close(logout=logout)
