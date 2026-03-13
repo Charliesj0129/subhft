@@ -37,6 +37,7 @@ class BacktestConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
+    feature_mode: str = "lob_feature"
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ class WalkForwardConfig:
     n_splits: int = 5
     window_type: str = "expanding"
     min_train_samples: int = 30
+    min_consistency_sharpe: float = 0.5
 
 
 @dataclass(frozen=True)

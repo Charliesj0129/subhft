@@ -184,6 +184,19 @@ def ensure_hftbt_npz(data_path: str) -> str:
     zeros_f = np.zeros(n, dtype=np.float64)
     bid_px = arr["bid_px"].astype(np.float64) if has_bid else zeros_f.copy()
     ask_px = arr["ask_px"].astype(np.float64) if has_ask else zeros_f.copy()
+    log = structlog.get_logger()
+    for field_name, arr_check in [("bid_px", bid_px), ("ask_px", ask_px)]:
+        nonzero = arr_check[arr_check != 0.0]
+        if nonzero.size > 0:
+            median_val = float(np.median(nonzero))
+            if median_val < 100.0:
+                log.warning(
+                    "price_values_appear_unscaled",
+                    field=field_name,
+                    median=round(median_val, 2),
+                    hint="Expected scaled int x10000. Raw float prices will produce incorrect results.",
+                )
+
     bid_qty = arr["bid_qty"].astype(np.float64) if "bid_qty" in names else np.ones(n, dtype=np.float64)
     ask_qty = arr["ask_qty"].astype(np.float64) if "ask_qty" in names else np.ones(n, dtype=np.float64)
     volume = arr["volume"].astype(np.float64) if "volume" in names else zeros_f.copy()
@@ -288,7 +301,7 @@ def _run_adapter_slice(
         maker_fee=float(config.maker_fee_bps) / 10_000.0,
         taker_fee=float(config.taker_fee_bps) / 10_000.0,
         equity_sample_ns=1_000_000,  # 1ms equity samples
-        feature_mode="stats_only",
+        feature_mode=config.feature_mode,
         queue_model=getattr(config, "queue_model", "PowerProbQueueModel(3.0)"),
         latency_model=getattr(config, "latency_model", "ConstantLatency"),
         exchange_model=getattr(config, "exchange_model", "NoPartialFillExchange"),
@@ -342,12 +355,10 @@ def _signals_to_positions(
 
 def _forward_returns(mid_prices: np.ndarray) -> np.ndarray:
     if mid_prices.size < 2:
-        return np.zeros_like(mid_prices)
-    out = np.zeros(mid_prices.size, dtype=np.float64)
+        return np.zeros(0, dtype=np.float64)
     base = mid_prices[:-1]
     diff = np.diff(mid_prices)
-    out[:-1] = np.divide(diff, base, out=np.zeros_like(diff), where=base != 0)
-    return out
+    return np.divide(diff, base, out=np.zeros_like(diff), where=base != 0)
 
 
 def _regime_metrics(signals: np.ndarray, fwd_returns: np.ndarray) -> dict[str, float]:
@@ -605,10 +616,10 @@ class HftNativeRunner:
         try:
             for fold_idx in range(n_splits):
                 train_end = fold_size * (fold_idx + 1)
-                test_end = fold_size * (fold_idx + 2)
-                train = full[:train_end]
+                test_end = min(fold_size * (fold_idx + 2), total_rows)
+                train_size = train_end
                 test = full[train_end:test_end]
-                if len(train) < int(wf.min_train_samples) or len(test) < 2:
+                if train_size < int(wf.min_train_samples) or len(test) < 2:
                     continue
 
                 tmp_dir = tempfile.mkdtemp(prefix=f"hftnative_wf{fold_idx}_")
@@ -625,7 +636,7 @@ class HftNativeRunner:
                 folds.append(
                     WalkForwardFoldResult(
                         fold_idx=fold_idx,
-                        train_size=len(train),
+                        train_size=train_size,
                         test_size=len(test),
                         sharpe=float(sharpe),
                         ic_mean=float(ic_mean),
@@ -655,7 +666,7 @@ class HftNativeRunner:
 
         sharpes = np.asarray([f.sharpe for f in folds], dtype=np.float64)
         ics = np.asarray([f.ic_mean for f in folds], dtype=np.float64)
-        consistency = float(np.mean(sharpes > 0.0))
+        consistency = float(np.mean(sharpes > wf.min_consistency_sharpe))
         return WalkForwardResult(
             config=wf,
             folds=folds,
