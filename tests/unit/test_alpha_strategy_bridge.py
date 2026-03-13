@@ -229,3 +229,15 @@ class TestSignalLogToArrays:
     def test_single_entry(self):
         ts, sig, mid = signal_log_to_arrays([(999, 1.23, 50.0)])
         assert float(sig[0]) == pytest.approx(1.23)
+
+    def test_timestamp_precision(self):
+        """Verify nanosecond timestamps survive round-trip without float64 precision loss."""
+        large_ts = 1709251200123456789  # 19 digits — exceeds float64 precision
+        log = [(large_ts, 0.5, 100.0), (large_ts + 1, -0.3, 101.0)]
+        timestamps, signals, mid_prices = signal_log_to_arrays(log)
+        assert timestamps[0] == large_ts, f"Timestamp lost precision: {timestamps[0]} != {large_ts}"
+        assert timestamps[1] == large_ts + 1
+        assert timestamps.dtype == np.int64
+        assert signals.dtype == np.float64
+        np.testing.assert_allclose(signals, [0.5, -0.3])
+        np.testing.assert_allclose(mid_prices, [100.0, 101.0])
