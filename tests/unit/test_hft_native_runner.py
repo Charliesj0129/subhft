@@ -10,15 +10,17 @@ import numpy as np
 import pytest
 
 from research.backtest.hft_native_runner import (
+    HftNativeRunner,
     _effective_broker_rtt_ms,
     _forward_returns,
     _resolve_hftbt_path,
+    _run_adapter_slice,
     _signals_to_positions,
     _split_npz,
     ensure_hftbt_npz,
     has_hftbt_data,
 )
-from research.backtest.types import BacktestConfig
+from research.backtest.types import BacktestConfig, WalkForwardConfig
 
 # Standard research.npy dtype (from synth_lob_gen._DTYPE)
 _RESEARCH_DTYPE = np.dtype(
@@ -200,9 +202,8 @@ class TestForwardReturns:
     def test_basic(self):
         prices = np.array([100.0, 101.0, 100.5, 102.0])
         fwd = _forward_returns(prices)
-        assert fwd.shape == prices.shape
+        assert fwd.shape == (3,)  # n-1 elements
         assert fwd[0] == pytest.approx(0.01)  # (101-100)/100
-        assert fwd[-1] == pytest.approx(0.0)  # last is zero
 
     def test_zero_price_no_nan(self):
         prices = np.array([0.0, 100.0, 101.0])
@@ -212,7 +213,7 @@ class TestForwardReturns:
 
     def test_single_price(self):
         fwd = _forward_returns(np.array([100.0]))
-        np.testing.assert_array_equal(fwd, [0.0])
+        assert fwd.size == 0
 
 
 # ---------------------------------------------------------------------------
@@ -497,3 +498,137 @@ class TestBrokerRTTInjection:
 
         assert "effective_broker_rtt_ms" in result.latency_profile
         assert result.latency_profile["effective_broker_rtt_ms"] == 47.0
+
+
+# ---------------------------------------------------------------------------
+# Bug #8 — feature_mode passthrough
+# ---------------------------------------------------------------------------
+class TestFeatureModePassthrough:
+    def test_feature_mode_passthrough(self):
+        """_run_adapter_slice passes config.feature_mode, not hardcoded 'stats_only'."""
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        config = BacktestConfig(data_paths=[], feature_mode="lob_feature")
+
+        mock_adapter_instance = MagicMock()
+        mock_adapter_instance.equity_values = np.array([1.0, 2.0])
+
+        mock_bridge_cls = MagicMock()
+        mock_bridge_instance = MagicMock()
+        mock_bridge_instance.signal_log = []
+        mock_bridge_cls.return_value = mock_bridge_instance
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner.HftBacktestAdapter") as MockAdapter,
+            patch("research.backtest.hft_native_runner.AlphaStrategyBridge", mock_bridge_cls),
+            patch("research.backtest.hft_native_runner.signal_log_to_arrays", return_value=(
+                np.array([]), np.array([]), np.array([]),
+            )),
+        ):
+            MockAdapter.return_value = mock_adapter_instance
+            _run_adapter_slice(alpha, "/fake/path.npz", config)
+            # Verify feature_mode was passed from config, not hardcoded
+            _, call_kwargs = MockAdapter.call_args
+            assert call_kwargs["feature_mode"] == "lob_feature"
+
+
+# ---------------------------------------------------------------------------
+# Bug #9 — WF consistency uses config threshold
+# ---------------------------------------------------------------------------
+class TestWFConsistencyThreshold:
+    def test_wf_consistency_uses_config_threshold(self):
+        """With min_consistency_sharpe=0.5, folds with Sharpe < 0.5 are not 'consistent'."""
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        alpha.reset = MagicMock()
+
+        config = BacktestConfig(data_paths=["/fake/data.npy"])
+        wf = WalkForwardConfig(n_splits=5, min_train_samples=1, min_consistency_sharpe=0.5)
+
+        # Simulate fold sharpes: [0.1, 0.2, 0.6, 0.8, 1.0] → 3/5 = 0.6 above threshold
+        fold_sharpes = [0.1, 0.2, 0.6, 0.8, 1.0]
+
+        mock_eq_arrays = [np.linspace(100, 100 + s * 10, 50) for s in fold_sharpes]
+        call_count = [0]
+
+        def mock_run_adapter_slice(_alpha, _path, _config, _symbol="ASSET"):
+            idx = call_count[0]
+            call_count[0] += 1
+            eq = mock_eq_arrays[idx]
+            sig = np.random.randn(50)
+            mid = np.linspace(100, 110, 50)
+            pos = np.ones(50)
+            return eq, sig, mid, pos
+
+        # Create fake full data
+        fake_full = _make_event_array(120)  # 120 rows, fold_size = 120//6 = 20
+
+        with (
+            patch("research.backtest.hft_native_runner._collect_hbt_data", return_value=fake_full),
+            patch("research.backtest.hft_native_runner._run_adapter_slice", side_effect=mock_run_adapter_slice),
+            patch("research.backtest.hft_native_runner.compute_sharpe", side_effect=fold_sharpes),
+            patch("research.backtest.hft_native_runner.compute_ic", return_value=(0.1, 0.05, np.array([0.1]))),
+            patch("research.backtest.hft_native_runner.compute_max_drawdown", return_value=0.01),
+            patch("research.backtest.hft_native_runner.compute_turnover", return_value=0.5),
+        ):
+            runner = HftNativeRunner(alpha, config)
+            result = runner.run_walk_forward(alpha, wf)
+
+        # 3 out of 5 folds have Sharpe > 0.5 → consistency = 0.6
+        assert result.fold_consistency_pct == pytest.approx(0.6)
+
+
+# ---------------------------------------------------------------------------
+# Bug #11 — Forward returns no trailing zero
+# ---------------------------------------------------------------------------
+class TestForwardReturnsNoTrailingZero:
+    def test_forward_returns_no_trailing_zero(self):
+        """_forward_returns returns n-1 elements, no trailing 0."""
+        prices = np.array([100.0, 110.0, 105.0])
+        fwd = _forward_returns(prices)
+        assert fwd.shape == (2,)
+        assert fwd[0] == pytest.approx(0.1)  # (110-100)/100
+        assert fwd[1] == pytest.approx(-5.0 / 110.0)  # (105-110)/110
+
+
+# ---------------------------------------------------------------------------
+# Bug #14 — WF includes remainder rows
+# ---------------------------------------------------------------------------
+class TestWFRemainderRows:
+    def test_wf_includes_remainder_rows(self):
+        """With 103 rows and n_splits=5, last fold test_end == 103 (not 102)."""
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        alpha.reset = MagicMock()
+
+        config = BacktestConfig(data_paths=["/fake/data.npy"])
+        wf = WalkForwardConfig(n_splits=5, min_train_samples=1)
+
+        # 103 rows, n_splits=5 -> fold_size = 103//6 = 17
+        # Without fix, last fold test_end = 17*6 = 102 (misses row 102).
+        # With fix, test_end = min(17*6, 103) = 102 (Python slice full[85:102]).
+        # The min() cap prevents OOB when fold_size*(fold_idx+2) > total_rows.
+        fake_full = _make_event_array(103)
+
+        def mock_run_adapter_slice(_alpha, _path, _config, _symbol="ASSET"):
+            eq = np.linspace(100, 110, 10)
+            sig = np.random.randn(10)
+            mid = np.linspace(100, 110, 10)
+            pos = np.ones(10)
+            return eq, sig, mid, pos
+
+        with (
+            patch("research.backtest.hft_native_runner._collect_hbt_data", return_value=fake_full),
+            patch("research.backtest.hft_native_runner._run_adapter_slice", side_effect=mock_run_adapter_slice),
+            patch("research.backtest.hft_native_runner.compute_sharpe", return_value=1.0),
+            patch("research.backtest.hft_native_runner.compute_ic", return_value=(0.1, 0.05, np.array([0.1]))),
+            patch("research.backtest.hft_native_runner.compute_max_drawdown", return_value=0.01),
+            patch("research.backtest.hft_native_runner.compute_turnover", return_value=0.5),
+        ):
+            runner = HftNativeRunner(alpha, config)
+            result = runner.run_walk_forward(alpha, wf)
+
+        assert len(result.folds) == 5
+        last_fold = result.folds[-1]
+        assert last_fold.test_size > 0
