@@ -905,7 +905,7 @@
     "title": "prediction market bench"
   },
   "089": {
-    "alphas": [],
+    "alphas": ["flow_persistence"],
     "note_file": "research/knowledge/notes/089_realised_quantile_variance.md",
     "ref": "089",
     "status": "reviewed",
