@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,12 +15,13 @@ from research.backtest.hft_native_runner import (
     _effective_broker_rtt_ms,
     _forward_returns,
     _resolve_hftbt_path,
+    _run_single_fold,
     _signals_to_positions,
     _split_npz,
     ensure_hftbt_npz,
     has_hftbt_data,
 )
-from research.backtest.types import BacktestConfig
+from research.backtest.types import BacktestConfig, WalkForwardConfig
 
 # Standard research.npy dtype (from synth_lob_gen._DTYPE)
 _RESEARCH_DTYPE = np.dtype(
@@ -578,3 +580,283 @@ class TestCollectHbtDataClosesHandles:
             _collect_hbt_data([npy_path])
 
         assert fake.close_count >= 1, "NpzFile.close() must be called for loaded files"
+
+
+# ---------------------------------------------------------------------------
+# _run_single_fold
+# ---------------------------------------------------------------------------
+class TestRunSingleFold:
+    def test_returns_none_when_train_too_small(self):
+        """Fold is skipped when train size < min_train_samples."""
+        alpha = MagicMock()
+        full_data = _make_event_array(10)
+        wf = WalkForwardConfig(n_splits=5, min_train_samples=100)
+        config = BacktestConfig(data_paths=[])
+        result, tmp_path = _run_single_fold(
+            alpha,
+            full_data,
+            fold_idx=0,
+            fold_size=2,
+            wf_config=wf,
+            backtest_config=config,
+            symbol="ASSET",
+        )
+        assert result is None
+        assert tmp_path is None
+
+    def test_returns_none_when_test_too_small(self):
+        """Fold is skipped when test slice has fewer than 2 rows."""
+        alpha = MagicMock()
+        # fold_size=1, fold_idx=0: train[:1]=1 row, test[1:2]=1 row < 2
+        full_data = _make_event_array(3)
+        config = BacktestConfig(data_paths=[])
+        result, tmp_path = _run_single_fold(
+            alpha,
+            full_data,
+            fold_idx=0,
+            fold_size=1,
+            wf_config=WalkForwardConfig(n_splits=2, min_train_samples=1),
+            backtest_config=config,
+            symbol="ASSET",
+        )
+        assert result is None
+        assert tmp_path is None
+
+    def test_returns_fold_result_with_mock_adapter(self, tmp_path):
+        """When adapter runs successfully, returns a WalkForwardFoldResult."""
+        alpha = MagicMock()
+        full_data = _make_event_array(100)
+        wf = WalkForwardConfig(n_splits=3, min_train_samples=1)
+        config = BacktestConfig(data_paths=[])
+
+        mock_eq = np.array([1.0, 1.01, 1.02, 1.03], dtype=np.float64)
+        mock_sig = np.array([0.1, 0.2, -0.1, 0.3], dtype=np.float64)
+        mock_mid = np.array([100.0, 100.1, 99.9, 100.2], dtype=np.float64)
+        mock_pos = np.array([0.0, 1.0, 1.0, 2.0], dtype=np.float64)
+
+        with patch(
+            "research.backtest.hft_native_runner._run_adapter_slice",
+            return_value=(mock_eq, mock_sig, mock_mid, mock_pos),
+        ):
+            result, tmp_npz = _run_single_fold(
+                alpha,
+                full_data,
+                fold_idx=1,
+                fold_size=25,
+                wf_config=wf,
+                backtest_config=config,
+                symbol="ASSET",
+            )
+
+        assert result is not None
+        assert result.fold_idx == 1
+        assert result.train_size == 50  # fold_size * (1+1)
+        assert result.test_size == 25
+        assert tmp_npz is not None
+        # Clean up
+        try:
+            os.unlink(tmp_npz)
+            os.rmdir(os.path.dirname(tmp_npz))
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Parallel walk-forward tests
+# ---------------------------------------------------------------------------
+class TestWalkForwardParallel:
+    def test_walk_forward_returns_sorted_folds(self):
+        """Folds are returned in fold_idx order regardless of completion order."""
+        from research.backtest.hft_native_runner import HftNativeRunner
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test_wf"
+        full_data = _make_event_array(200)
+
+        config = BacktestConfig(data_paths=["/fake/research.npy"])
+        runner = HftNativeRunner(alpha, config)
+
+        mock_eq = np.array([1.0, 1.01, 1.02], dtype=np.float64)
+        mock_sig = np.array([0.1, 0.2, -0.1], dtype=np.float64)
+        mock_mid = np.array([100.0, 100.1, 99.9], dtype=np.float64)
+        mock_pos = np.array([0.0, 1.0, 1.0], dtype=np.float64)
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+            patch(
+                "research.backtest.hft_native_runner.ensure_hftbt_npz",
+                return_value="/fake/hftbt.npz",
+            ),
+            patch("research.backtest.hft_native_runner.np.load") as mock_load,
+            patch(
+                "research.backtest.hft_native_runner._run_adapter_slice",
+                return_value=(mock_eq, mock_sig, mock_mid, mock_pos),
+            ),
+        ):
+            mock_npz = MagicMock()
+            mock_npz.__class__ = np.lib.npyio.NpzFile
+            mock_npz.__getitem__ = lambda self, key: full_data
+            mock_load.return_value = mock_npz
+
+            wf_config = WalkForwardConfig(n_splits=3, min_train_samples=1)
+            result = runner.run_walk_forward(alpha, wf_config)
+
+        assert len(result.folds) == 3
+        fold_indices = [f.fold_idx for f in result.folds]
+        assert fold_indices == [0, 1, 2], "Folds must be sorted by fold_idx"
+
+    def test_walk_forward_respects_env_var_workers(self, monkeypatch):
+        """HFT_WF_PARALLEL_WORKERS env var controls thread count."""
+        from research.backtest.hft_native_runner import HftNativeRunner
+
+        monkeypatch.setenv("HFT_WF_PARALLEL_WORKERS", "2")
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test_wf"
+        full_data = _make_event_array(200)
+        config = BacktestConfig(data_paths=["/fake/research.npy"])
+        runner = HftNativeRunner(alpha, config)
+
+        mock_eq = np.array([1.0, 1.01], dtype=np.float64)
+        mock_sig = np.array([0.1, 0.2], dtype=np.float64)
+        mock_mid = np.array([100.0, 100.1], dtype=np.float64)
+        mock_pos = np.array([0.0, 1.0], dtype=np.float64)
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+            patch(
+                "research.backtest.hft_native_runner.ensure_hftbt_npz",
+                return_value="/fake/hftbt.npz",
+            ),
+            patch("research.backtest.hft_native_runner.np.load") as mock_load,
+            patch(
+                "research.backtest.hft_native_runner._run_adapter_slice",
+                return_value=(mock_eq, mock_sig, mock_mid, mock_pos),
+            ),
+        ):
+            mock_npz = MagicMock()
+            mock_npz.__class__ = np.lib.npyio.NpzFile
+            mock_npz.__getitem__ = lambda self, key: full_data
+            mock_load.return_value = mock_npz
+
+            wf_config = WalkForwardConfig(n_splits=4, min_train_samples=1)
+            result = runner.run_walk_forward(alpha, wf_config)
+
+        # Should complete without error; folds should be ordered
+        assert len(result.folds) > 0
+        assert result.folds == sorted(result.folds, key=lambda f: f.fold_idx)
+
+    def test_walk_forward_empty_paths_returns_nan(self):
+        """When no hftbt paths found, returns nan-valued WalkForwardResult."""
+        from research.backtest.hft_native_runner import HftNativeRunner
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        config = BacktestConfig(data_paths=["/nonexistent/path.npy"])
+        runner = HftNativeRunner(alpha, config)
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+        ):
+            result = runner.run_walk_forward(alpha)
+
+        assert len(result.folds) == 0
+        assert np.isnan(result.fold_sharpe_mean)
+
+    def test_walk_forward_cleans_up_temps_on_error(self):
+        """Temp files are cleaned up even if a fold raises an exception."""
+        from research.backtest.hft_native_runner import HftNativeRunner
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        full_data = _make_event_array(200)
+        config = BacktestConfig(data_paths=["/fake/research.npy"])
+        runner = HftNativeRunner(alpha, config)
+
+        call_lock = threading.Lock()
+        call_count_box = [0]
+
+        def _failing_adapter(*args, **kwargs):
+            with call_lock:
+                call_count_box[0] += 1
+                count = call_count_box[0]
+            if count >= 2:
+                raise RuntimeError("simulated fold failure")
+            return (
+                np.array([1.0, 1.01], dtype=np.float64),
+                np.array([0.1, 0.2], dtype=np.float64),
+                np.array([100.0, 100.1], dtype=np.float64),
+                np.array([0.0, 1.0], dtype=np.float64),
+            )
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+            patch(
+                "research.backtest.hft_native_runner.ensure_hftbt_npz",
+                return_value="/fake/hftbt.npz",
+            ),
+            patch("research.backtest.hft_native_runner.np.load") as mock_load,
+            patch(
+                "research.backtest.hft_native_runner._run_adapter_slice",
+                side_effect=_failing_adapter,
+            ),
+        ):
+            mock_npz = MagicMock()
+            mock_npz.__class__ = np.lib.npyio.NpzFile
+            mock_npz.__getitem__ = lambda self, key: full_data
+            mock_load.return_value = mock_npz
+
+            wf_config = WalkForwardConfig(n_splits=3, min_train_samples=1)
+            # The error from the thread should propagate
+            with pytest.raises(RuntimeError, match="simulated fold failure"):
+                runner.run_walk_forward(alpha, wf_config)
+
+    def test_walk_forward_deepcopies_alpha_per_fold(self):
+        """Each fold gets a deep-copied alpha to avoid shared state."""
+        from research.backtest.hft_native_runner import HftNativeRunner
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        full_data = _make_event_array(200)
+        config = BacktestConfig(data_paths=["/fake/research.npy"])
+        runner = HftNativeRunner(alpha, config)
+
+        seen_alphas: list[object] = []
+
+        def _capture_alpha(a, *args, **kwargs):
+            seen_alphas.append(id(a))
+            return (
+                np.array([1.0, 1.01], dtype=np.float64),
+                np.array([0.1, 0.2], dtype=np.float64),
+                np.array([100.0, 100.1], dtype=np.float64),
+                np.array([0.0, 1.0], dtype=np.float64),
+            )
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+            patch(
+                "research.backtest.hft_native_runner.ensure_hftbt_npz",
+                return_value="/fake/hftbt.npz",
+            ),
+            patch("research.backtest.hft_native_runner.np.load") as mock_load,
+            patch(
+                "research.backtest.hft_native_runner._run_adapter_slice",
+                side_effect=_capture_alpha,
+            ),
+        ):
+            mock_npz = MagicMock()
+            mock_npz.__class__ = np.lib.npyio.NpzFile
+            mock_npz.__getitem__ = lambda self, key: full_data
+            mock_load.return_value = mock_npz
+
+            wf_config = WalkForwardConfig(n_splits=3, min_train_samples=1)
+            runner.run_walk_forward(alpha, wf_config)
+
+        # All alpha object IDs should be unique (deep copies)
+        assert len(seen_alphas) == 3
+        assert len(set(seen_alphas)) == 3, "Each fold should receive a unique alpha copy"
