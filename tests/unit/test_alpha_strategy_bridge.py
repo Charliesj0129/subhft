@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -35,6 +36,27 @@ class _ConstantAlpha:
 
     def update(self, **kwargs) -> float:
         return self._value
+
+
+class _OFICaptureAlpha:
+    """Captures kwargs passed to update() so tests can inspect OFI values."""
+
+    def __init__(self):
+        self.last_kwargs: dict[str, Any] = {}
+
+    @property
+    def manifest(self):
+        m = MagicMock()
+        m.alpha_id = "ofi_capture"
+        m.data_fields = ("bid_px", "ask_px", "ofi_l1_raw", "ofi_l1_cum")
+        return m
+
+    def reset(self):
+        self.last_kwargs = {}
+
+    def update(self, **kwargs) -> float:
+        self.last_kwargs = dict(kwargs)
+        return 0.0
 
 
 class _CountingAlpha:
@@ -229,3 +251,51 @@ class TestSignalLogToArrays:
     def test_single_entry(self):
         ts, sig, mid = signal_log_to_arrays([(999, 1.23, 50.0)])
         assert float(sig[0]) == pytest.approx(1.23)
+
+
+# ---------------------------------------------------------------------------
+# OFI first-tick spike fix tests
+# ---------------------------------------------------------------------------
+class TestOFIFirstTickSpike:
+    def test_first_tick_ofi_is_zero(self):
+        """First tick should produce ofi_l1_raw=0.0, not a spurious spike."""
+        alpha = _OFICaptureAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+        event = _make_lob_event(bid_depth=100, ask_depth=50)
+        bridge.on_stats(event)
+        assert alpha.last_kwargs["ofi_l1_raw"] == pytest.approx(0.0)
+
+    def test_second_tick_ofi_computes_delta(self):
+        """Second tick should compute proper delta from first tick."""
+        alpha = _OFICaptureAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+        # First tick: seed prev state
+        bridge.on_stats(_make_lob_event(bid_depth=100, ask_depth=50))
+        # Second tick: bid 100->120 (+20), ask 50->40 (-10) => ofi = 20 - (-10) = 30
+        bridge.on_stats(_make_lob_event(bid_depth=120, ask_depth=40, ts=2_000_000_000))
+        assert alpha.last_kwargs["ofi_l1_raw"] == pytest.approx(30.0)
+
+    def test_ofi_cum_no_spike(self):
+        """Cumulative OFI should be 0 after first tick, not bid-ask."""
+        alpha = _OFICaptureAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+        # First tick
+        bridge.on_stats(_make_lob_event(bid_depth=100, ask_depth=50))
+        assert alpha.last_kwargs["ofi_l1_cum"] == pytest.approx(0.0)
+        # Second tick: ofi_raw = (120-100) - (40-50) = 30
+        bridge.on_stats(_make_lob_event(bid_depth=120, ask_depth=40, ts=2_000_000_000))
+        assert alpha.last_kwargs["ofi_l1_cum"] == pytest.approx(30.0)
+
+    def test_reset_clears_first_tick(self):
+        """After reset, next tick should be treated as a new first tick."""
+        alpha = _OFICaptureAlpha()
+        bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
+        # First tick
+        bridge.on_stats(_make_lob_event(bid_depth=100, ask_depth=50))
+        assert alpha.last_kwargs["ofi_l1_raw"] == pytest.approx(0.0)
+        # Reset
+        bridge.reset()
+        # Post-reset tick should behave as first tick again
+        bridge.on_stats(_make_lob_event(bid_depth=200, ask_depth=80, ts=3_000_000_000))
+        assert alpha.last_kwargs["ofi_l1_raw"] == pytest.approx(0.0)
+        assert alpha.last_kwargs["ofi_l1_cum"] == pytest.approx(0.0)
