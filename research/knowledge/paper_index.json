@@ -267,7 +267,7 @@
     "title": "amm fee mechanisms formal approach"
   },
   "026": {
-    "alphas": [],
+    "alphas": ["queue_acceleration"],
     "arxiv_id": "2601.23172",
     "note_file": "research/knowledge/notes/026_unified_theory_order_flow_impact.md",
     "ref": "026",
@@ -405,7 +405,7 @@
     "title": "rl finance review"
   },
   "039": {
-    "alphas": [],
+    "alphas": ["depth_velocity_diff"],
     "note_file": "research/knowledge/notes/039_intraday_lob_markov.md",
     "ref": "039",
     "status": "reviewed",
@@ -655,10 +655,12 @@
     "title": "hft game transient impact"
   },
   "064": {
-    "alphas": [],
+    "alphas": [
+      "vol_of_imbalance"
+    ],
     "note_file": "research/knowledge/notes/064_volatility_time_ordering.md",
     "ref": "064",
-    "status": "reviewed",
+    "status": "implemented",
     "tags": [
       "unclassified"
     ],
