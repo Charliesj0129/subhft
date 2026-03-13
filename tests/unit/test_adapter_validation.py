@@ -12,8 +12,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import numpy as np
-
 
 class TestCrossedBookDetection(unittest.TestCase):
     """Bug #4: adapter.run() must skip ticks where best_bid >= best_ask."""
