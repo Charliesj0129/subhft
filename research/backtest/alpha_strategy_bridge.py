@@ -53,9 +53,19 @@ class AlphaStrategyBridge(BaseStrategy):
         self._symbol = symbol
         self._signal_log: list[tuple[int, float, float]] = []  # (ts_ns, signal, mid_price)
 
+        # OFI state
+        self._prev_bid_qty: float = 0.0
+        self._prev_ask_qty: float = 0.0
+        self._ofi_cum: float = 0.0
+        self._first_tick_seen: bool = False
+
     def reset(self) -> None:
         """Reset alpha state and clear signal log."""
         self._signal_log.clear()
+        self._prev_bid_qty = 0.0
+        self._prev_ask_qty = 0.0
+        self._ofi_cum = 0.0
+        self._first_tick_seen = False
         try:
             self._alpha.reset()
         except Exception:
@@ -83,6 +93,20 @@ class AlphaStrategyBridge(BaseStrategy):
         ask_depth = float(getattr(event, "ask_depth", 0) or 0)
         imbalance = float(getattr(event, "imbalance", 0.0) or 0.0)
 
+        # OFI computation — skip delta on first tick to avoid spurious spike
+        if not self._first_tick_seen:
+            self._first_tick_seen = True
+            self._prev_bid_qty = bid_depth
+            self._prev_ask_qty = ask_depth
+            ofi_l1_raw = 0.0
+        else:
+            delta_bid = bid_depth - self._prev_bid_qty
+            delta_ask = ask_depth - self._prev_ask_qty
+            ofi_l1_raw = delta_bid - delta_ask
+            self._prev_bid_qty = bid_depth
+            self._prev_ask_qty = ask_depth
+        self._ofi_cum += ofi_l1_raw
+
         # Build payload matching typical alpha.update() field names
         payload: dict[str, Any] = {
             "bid_px": best_bid,
@@ -95,6 +119,8 @@ class AlphaStrategyBridge(BaseStrategy):
             "volume": 0.0,  # LOBStatsEvent does not carry trade volume
             "trade_vol": 0.0,
             "imbalance": imbalance,
+            "ofi_l1_raw": ofi_l1_raw,
+            "ofi_l1_cum": self._ofi_cum,
             "local_ts": ts_ns,
         }
 
