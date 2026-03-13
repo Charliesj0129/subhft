@@ -411,6 +411,7 @@ def compute_metrics_incremental(
     if new_signals is not None:
         sig_arr = np.asarray(list(new_signals), dtype=np.float64)
         if sig_arr.size > 0:
+            diffs: np.ndarray
             if last_signal is not None:
                 diffs = np.empty(sig_arr.size, dtype=np.float64)
                 diffs[0] = abs(sig_arr[0] - last_signal)
