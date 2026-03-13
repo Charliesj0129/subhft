@@ -234,6 +234,124 @@ def ensure_hftbt_npz(data_path: str) -> str:
     return str(out_path)
 
 
+# ---------------------------------------------------------------------------
+# Signal-based equity computation (ported from legacy hbt_runner_v1.py)
+# ---------------------------------------------------------------------------
+def _estimate_step_ns(data: np.ndarray) -> int:
+    """Estimate the median tick-step duration in nanoseconds from timestamp fields.
+
+    Looks for ``local_ts`` or ``exch_ts`` in a structured numpy array and
+    returns the median positive delta.  Falls back to 1 ms (1_000_000 ns)
+    when no timestamp fields are present.
+    """
+    if data.dtype.names:
+        for field in ("local_ts", "exch_ts"):
+            if field in data.dtype.names:
+                ts = np.asarray(data[field], dtype=np.int64).reshape(-1)
+                if ts.size >= 2:
+                    diff = np.diff(ts)
+                    positive = diff[diff > 0]
+                    if positive.size > 0:
+                        return int(np.median(positive))
+    # Fall back to 1ms bars when timestamp cadence is unavailable.
+    return 1_000_000
+
+
+def _apply_latency_to_positions(
+    data: np.ndarray,
+    desired_positions: np.ndarray,
+    config: BacktestConfig,
+) -> np.ndarray:
+    """Delay position changes by broker RTT converted to tick-steps.
+
+    Only submits a new order when the *desired* position changes (not every
+    tick), preventing the infinite-deferral bug where a pending order is
+    overwritten before it arrives.
+
+    Uses ``config.live_uplift_factor`` to scale latency, and selects
+    submit / cancel / modify latency depending on the type of order change.
+    """
+    n = int(desired_positions.size)
+    if n <= 1:
+        return np.asarray(desired_positions, dtype=np.float64)
+
+    step_ns = _estimate_step_ns(data)
+    upl = max(1.0, float(config.live_uplift_factor))
+    local_ns = max(0, int(config.local_decision_pipeline_latency_us)) * 1_000
+    submit_ns = int(float(config.submit_ack_latency_ms) * 1_000_000 * upl)
+    modify_ns = int(float(config.modify_ack_latency_ms) * 1_000_000 * upl)
+    cancel_ns = int(float(config.cancel_ack_latency_ms) * 1_000_000 * upl)
+
+    submit_steps = max(1, int(np.ceil((local_ns + submit_ns) / max(1, step_ns))))
+    modify_steps = max(1, int(np.ceil((local_ns + modify_ns) / max(1, step_ns))))
+    cancel_steps = max(1, int(np.ceil((local_ns + cancel_ns) / max(1, step_ns))))
+
+    executed = np.zeros(n, dtype=np.float64)
+    pending_due = -1
+    pending_target = 0.0
+
+    for i in range(1, n):
+        executed[i] = executed[i - 1]
+        if pending_due >= 0 and i >= pending_due:
+            executed[i] = pending_target
+            pending_due = -1
+
+        target = float(desired_positions[i])
+        # Only submit a new order when the desired position actually changes.
+        if target == float(desired_positions[i - 1]):
+            continue
+
+        prev_exec = float(executed[i])
+        if target == prev_exec:
+            pending_due = -1  # already at new target; cancel any pending order
+            continue
+
+        steps = submit_steps
+        if prev_exec != 0.0 and target == 0.0:
+            steps = cancel_steps
+        elif prev_exec != 0.0 and np.sign(prev_exec) != np.sign(target):
+            steps = modify_steps
+        elif prev_exec != 0.0 and abs(target) < abs(prev_exec):
+            steps = cancel_steps
+
+        pending_due = min(n - 1, i + steps)
+        pending_target = target
+
+    return executed
+
+
+def _compute_equity_curve(
+    prices: np.ndarray,
+    positions: np.ndarray,
+    config: BacktestConfig,
+    *,
+    initial_equity: float | None = None,
+) -> np.ndarray:
+    """Compute equity curve from prices and positions with fee deduction.
+
+    ``pnl_step = positions[:-1] * diff(prices)`` captures mark-to-market PnL.
+    Fees are proportional to turnover (absolute position change) times price.
+    """
+    n = min(prices.size, positions.size)
+    base = config.initial_equity if initial_equity is None else float(initial_equity)
+    if n < 2:
+        return np.asarray([base], dtype=np.float64)
+    px = prices[:n]
+    pos = positions[:n]
+
+    pnl_step = pos[:-1] * np.diff(px)
+    turnover = np.abs(np.diff(pos, prepend=0))
+    fee_rate = max(config.taker_fee_bps, 0.0) / 10_000.0
+    fee_step = turnover[1:] * np.abs(px[1:]) * fee_rate
+    pnl_after_fee = pnl_step - fee_step
+    pnl_cum = np.cumsum(pnl_after_fee, dtype=np.float64)
+
+    equity = np.empty(n, dtype=np.float64)
+    equity[0] = base
+    equity[1:] = base + pnl_cum
+    return equity
+
+
 def _effective_broker_rtt_ms(config: BacktestConfig) -> float:
     """Return worst-case broker RTT across submit/modify/cancel operations.
 
@@ -295,10 +413,22 @@ def _run_adapter_slice(
     )
     adapter.run()
 
-    equity = adapter.equity_values  # float64 array (sampled)
-
     _, signals, mid_prices = signal_log_to_arrays(bridge.signal_log)
     positions = _signals_to_positions(signals, config.signal_threshold, config.max_position)
+
+    # Load raw npz data to get timestamps for latency estimation
+    raw_npz = np.load(npz_path, allow_pickle=False)
+    if isinstance(raw_npz, np.lib.npyio.NpzFile):
+        raw_data = np.asarray(raw_npz["data"])
+        raw_npz.close()
+    else:
+        raw_data = np.asarray(raw_npz)
+
+    # Apply latency model: delay position changes by broker RTT
+    positions = _apply_latency_to_positions(raw_data, positions, config)
+
+    # Signal-based equity computation (replaces flat adapter.equity_values)
+    equity = _compute_equity_curve(mid_prices, positions, config)
 
     return equity, signals, mid_prices, positions
 
