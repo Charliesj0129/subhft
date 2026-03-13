@@ -1,0 +1,52 @@
+{
+  "dataset_id": "synthetic_lob_v1_seed51",
+  "source_type": "synthetic",
+  "source": "synthetic_lob_gen",
+  "generator": "synth_lob_gen",
+  "seed": 51,
+  "owner": "research",
+  "schema_version": 1,
+  "rows": 20000,
+  "fields": [
+    "bid_qty",
+    "ask_qty",
+    "bid_px",
+    "ask_px",
+    "mid_price",
+    "spread_bps",
+    "volume",
+    "local_ts"
+  ],
+  "symbols": [],
+  "split": "full",
+  "rng_seed": 51,
+  "generator_script": "research/tools/synth_lob_gen.py",
+  "generator_version": "v1",
+  "parameters": {
+    "n_rows": 20000,
+    "rng_seed": 51,
+    "tick_interval_ms": 2.0,
+    "regime_block_min": 200,
+    "regime_block_max": 500,
+    "regimes": [
+      "trending",
+      "mean_reverting",
+      "volatile"
+    ],
+    "spread_mean_bps": 5.0,
+    "queue_ar_coef": 0.92,
+    "generator_version": "v1"
+  },
+  "regimes_covered": [
+    "mean_reverting",
+    "trending",
+    "volatile"
+  ],
+  "data_fingerprint": "abaec2ccf607a77f3987e7d0383e8ea9d09bafb6c1c87800ce48887de59cbef1",
+  "lineage": {
+    "parent": null,
+    "derived_from": "SyntheticLOBConfig(rng_seed=51)"
+  },
+  "data_ul": 5,
+  "created_at": "2026-03-12T10:34:54.720753+00:00"
+}
