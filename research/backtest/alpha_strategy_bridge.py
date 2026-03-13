@@ -149,8 +149,7 @@ def signal_log_to_arrays(
         empty_f = np.zeros(0, dtype=np.float64)
         return empty_i, empty_f, empty_f
 
-    arr = np.array(signal_log, dtype=np.float64)
-    timestamps = arr[:, 0].astype(np.int64)
-    signals = arr[:, 1]
-    mid_prices = arr[:, 2]
+    timestamps = np.array([t[0] for t in signal_log], dtype=np.int64)
+    signals = np.array([t[1] for t in signal_log], dtype=np.float64)
+    mid_prices = np.array([t[2] for t in signal_log], dtype=np.float64)
     return timestamps, signals, mid_prices
