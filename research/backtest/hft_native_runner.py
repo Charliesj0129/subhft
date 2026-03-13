@@ -98,6 +98,7 @@ def _split_npz(path: str, split: float = 0.7) -> tuple[str, str]:
     data = np.load(path, allow_pickle=False)
     if isinstance(data, np.lib.npyio.NpzFile):
         arr = np.asarray(data["data"])
+        data.close()
     else:
         arr = np.asarray(data)
 
@@ -171,6 +172,7 @@ def ensure_hftbt_npz(data_path: str) -> str:
     raw = np.load(data_path, allow_pickle=False)
     if isinstance(raw, np.lib.npyio.NpzFile):
         arr = np.asarray(raw["data"])
+        raw.close()
     else:
         arr = np.asarray(raw)
 
@@ -385,7 +387,11 @@ def _collect_hbt_data(data_paths: list[str]) -> np.ndarray | None:
     chunks = []
     for p in hbt_paths:
         d = np.load(p, allow_pickle=False)
-        arr = np.asarray(d["data"]) if isinstance(d, np.lib.npyio.NpzFile) else np.asarray(d)
+        if isinstance(d, np.lib.npyio.NpzFile):
+            arr = np.asarray(d["data"])
+            d.close()
+        else:
+            arr = np.asarray(d)
         chunks.append(arr)
     return np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
 
@@ -747,25 +753,27 @@ class HftNativeRunner:
                     end = boundaries[g + 1]
                     test_row_indices.extend(range(start, end))
 
-                # -- Build train indices with embargo and purge ----------------
-                # First collect raw train row indices
-                train_row_set: set[int] = set()
-                for g in train_groups:
-                    start = boundaries[g]
-                    end = boundaries[g + 1]
-                    train_row_set.update(range(start, end))
-
-                # Remove embargo and purge rows at each train/test boundary
-                # Using set difference for O(gap_size) instead of per-element discard
+                # -- Compute train size with embargo/purge arithmetically --------
+                # CPCV tests signal-based alphas (no training phase). We only
+                # need ``train_size`` for metadata — materializing a full index
+                # set of potentially hundreds of thousands of ints is wasteful.
+                raw_train_size = sum(boundaries[g + 1] - boundaries[g] for g in train_groups)
                 gap = embargo_rows + purge_rows
+                gap_removed = 0
                 for g in sorted(test_groups):
                     test_start = boundaries[g]
                     test_end = boundaries[g + 1]
-                    # Remove gap rows before test start and after test end
-                    train_row_set -= set(range(max(0, test_start - gap), test_start))
-                    train_row_set -= set(range(test_end, min(total_rows, test_end + gap)))
-
-                train_size = len(train_row_set)
+                    before_gap_start = max(0, test_start - gap)
+                    after_gap_end = min(total_rows, test_end + gap)
+                    # Count overlap of gap zones with train group ranges
+                    for tg in train_groups:
+                        tg_start = boundaries[tg]
+                        tg_end = boundaries[tg + 1]
+                        # Before test: overlap of [before_gap_start, test_start) with [tg_start, tg_end)
+                        gap_removed += max(0, min(test_start, tg_end) - max(before_gap_start, tg_start))
+                        # After test: overlap of [test_end, after_gap_end) with [tg_start, tg_end)
+                        gap_removed += max(0, min(after_gap_end, tg_end) - max(test_end, tg_start))
+                train_size = max(0, raw_train_size - gap_removed)
                 test_size = len(test_row_indices)
 
                 if test_size < 2:
