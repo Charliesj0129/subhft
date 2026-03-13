@@ -3,6 +3,7 @@
 Covers _estimate_step_ns, _apply_latency_to_positions, _compute_equity_curve,
 and the integration point in _run_adapter_slice.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -212,10 +213,15 @@ class TestRunAdapterSliceEquity:
 
         # Create a fake NPZ with structured data (trending prices)
         n = 200
-        dt = np.dtype([
-            ("ev", np.uint64), ("exch_ts", np.int64), ("local_ts", np.int64),
-            ("px", np.float64), ("qty", np.float64),
-        ])
+        dt = np.dtype(
+            [
+                ("ev", np.uint64),
+                ("exch_ts", np.int64),
+                ("local_ts", np.int64),
+                ("px", np.float64),
+                ("qty", np.float64),
+            ]
+        )
         data = np.zeros(n, dtype=dt)
         data["local_ts"] = np.arange(n, dtype=np.int64) * 2_000_000
         data["px"] = np.linspace(100.0, 110.0, n)
@@ -228,10 +234,7 @@ class TestRunAdapterSliceEquity:
         mock_alpha.manifest.alpha_id = "test_alpha"
 
         # Build signal log: alternating positive signals -> non-zero positions
-        signal_log = [
-            (i * 2_000_000, 0.5 if i % 20 < 10 else -0.5, 100.0 + i * 0.05)
-            for i in range(n)
-        ]
+        signal_log = [(i * 2_000_000, 0.5 if i % 20 < 10 else -0.5, 100.0 + i * 0.05) for i in range(n)]
 
         config = _make_config(
             submit_ack_latency_ms=4.0,
@@ -259,7 +262,9 @@ class TestRunAdapterSliceEquity:
             patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
         ):
             equity, signals, mid_prices, positions = _run_adapter_slice(
-                mock_alpha, npz_path, config,
+                mock_alpha,
+                npz_path,
+                config,
             )
 
         # Equity should NOT be flat (signals produce positions, prices trend up)
