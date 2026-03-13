@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from research.backtest.hft_native_runner import (
+    _collect_hbt_data,
     _effective_broker_rtt_ms,
     _forward_returns,
     _resolve_hftbt_path,
@@ -497,3 +498,83 @@ class TestBrokerRTTInjection:
 
         assert "effective_broker_rtt_ms" in result.latency_profile
         assert result.latency_profile["effective_broker_rtt_ms"] == 47.0
+
+
+# ---------------------------------------------------------------------------
+# NpzFile handle leak — close() must be called
+# ---------------------------------------------------------------------------
+class _FakeNpzFile(np.lib.npyio.NpzFile):
+    """Minimal NpzFile stand-in that tracks close() calls without real zip IO."""
+
+    def __init__(self, arr: np.ndarray) -> None:  # noqa: D107
+        self._arr = arr
+        self.closed = False
+        self.close_count = 0
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        return self._arr
+
+    def __contains__(self, key: object) -> bool:
+        return key == "data"
+
+    def close(self) -> None:  # noqa: D102
+        self.closed = True
+        self.close_count += 1
+
+
+class TestSplitNpzClosesHandle:
+    def test_close_called_on_npzfile(self, tmp_path):
+        """_split_npz must call .close() when np.load returns an NpzFile."""
+        arr = _make_event_array(20)
+        npz_path = str(tmp_path / "data.npz")
+        _save_event_npz(arr, npz_path)
+
+        fake = _FakeNpzFile(arr)
+        with patch("research.backtest.hft_native_runner.np.load", return_value=fake):
+            is_path, oos_path = _split_npz(npz_path, 0.7)
+            # Clean up temp files
+            for p in (is_path, oos_path):
+                try:
+                    os.unlink(p)
+                    os.rmdir(os.path.dirname(p))
+                except OSError:
+                    pass
+
+        assert fake.close_count == 1, "NpzFile.close() must be called exactly once"
+
+
+class TestEnsureHftbtNpzClosesHandle:
+    def test_close_called_on_npzfile(self, tmp_path):
+        """ensure_hftbt_npz must call .close() when np.load returns an NpzFile."""
+        npy = str(tmp_path / "research.npy")
+        _make_research_npy(npy, n=10)
+
+        arr = np.load(npy, allow_pickle=False)
+        fake = _FakeNpzFile(arr)
+
+        with (
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner.np.load", return_value=fake),
+        ):
+            try:
+                ensure_hftbt_npz(npy)
+            except (ImportError, Exception):
+                # Conversion may fail without hftbacktest; we only care about close()
+                pass
+
+        assert fake.close_count == 1, "NpzFile.close() must be called exactly once"
+
+
+class TestCollectHbtDataClosesHandles:
+    def test_close_called_on_npzfile(self, tmp_path):
+        """_collect_hbt_data must call .close() for each NpzFile it loads."""
+        arr = _make_event_array(20)
+        npz = tmp_path / "hftbt.npz"
+        _save_event_npz(arr, str(npz))
+        npy_path = str(tmp_path / "research.npy")
+
+        fake = _FakeNpzFile(arr)
+        with patch("research.backtest.hft_native_runner.np.load", return_value=fake):
+            _collect_hbt_data([npy_path])
+
+        assert fake.close_count >= 1, "NpzFile.close() must be called for loaded files"
