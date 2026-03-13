@@ -996,10 +996,12 @@
     "title": "trade r1 process verification"
   },
   "098": {
-    "alphas": [],
+    "alphas": [
+      "mean_revert_qi"
+    ],
     "note_file": "research/knowledge/notes/098_market_resistance_impact.md",
     "ref": "098",
-    "status": "reviewed",
+    "status": "implemented",
     "tags": [
       "microstructure"
     ],
