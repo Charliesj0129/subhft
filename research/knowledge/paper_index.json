@@ -331,7 +331,7 @@
     "title": "design empirical study llm reits"
   },
   "032": {
-    "alphas": [],
+    "alphas": ["depth_ratio_log"],
     "arxiv_id": "2601.19369",
     "note_file": "research/knowledge/notes/032_directional_liquidity_geometric_shear.md",
     "ref": "032",
