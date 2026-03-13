@@ -570,6 +570,20 @@ def _run_single_fold(
     return fold_result, test_path
 
 
+def _empty_walk_forward_result(wf: WalkForwardConfig) -> WalkForwardResult:
+    """Return an empty WalkForwardResult with NaN aggregates."""
+    return WalkForwardResult(
+        config=wf,
+        folds=[],
+        fold_sharpe_mean=float("nan"),
+        fold_sharpe_std=float("nan"),
+        fold_sharpe_min=float("nan"),
+        fold_sharpe_max=float("nan"),
+        fold_consistency_pct=float("nan"),
+        fold_ic_mean=float("nan"),
+    )
+
+
 def _collect_hbt_data(data_paths: list[str]) -> np.ndarray | None:
     """Resolve hftbt.npz paths, load and concatenate into a single array.
 
@@ -780,32 +794,14 @@ class HftNativeRunner:
 
         full = _collect_hbt_data(self.config.data_paths)
         if full is None:
-            return WalkForwardResult(
-                config=wf,
-                folds=[],
-                fold_sharpe_mean=float("nan"),
-                fold_sharpe_std=float("nan"),
-                fold_sharpe_min=float("nan"),
-                fold_sharpe_max=float("nan"),
-                fold_consistency_pct=float("nan"),
-                fold_ic_mean=float("nan"),
-            )
+            return _empty_walk_forward_result(wf)
 
         total_rows = len(full)
 
         n_splits = int(wf.n_splits)
         fold_size = total_rows // (n_splits + 1)
         if fold_size <= 0:
-            return WalkForwardResult(
-                config=wf,
-                folds=[],
-                fold_sharpe_mean=float("nan"),
-                fold_sharpe_std=float("nan"),
-                fold_sharpe_min=float("nan"),
-                fold_sharpe_max=float("nan"),
-                fold_consistency_pct=float("nan"),
-                fold_ic_mean=float("nan"),
-            )
+            return _empty_walk_forward_result(wf)
 
         folds: list[WalkForwardFoldResult] = []
         tmp_paths: list[str] = []
@@ -859,16 +855,7 @@ class HftNativeRunner:
                     pass
 
         if not folds:
-            return WalkForwardResult(
-                config=wf,
-                folds=[],
-                fold_sharpe_mean=float("nan"),
-                fold_sharpe_std=float("nan"),
-                fold_sharpe_min=float("nan"),
-                fold_sharpe_max=float("nan"),
-                fold_consistency_pct=float("nan"),
-                fold_ic_mean=float("nan"),
-            )
+            return _empty_walk_forward_result(wf)
 
         sharpes = np.asarray([f.sharpe for f in folds], dtype=np.float64)
         ics = np.asarray([f.ic_mean for f in folds], dtype=np.float64)

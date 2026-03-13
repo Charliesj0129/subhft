@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -662,6 +664,55 @@ class TestRunSingleFold:
 
 
 # ---------------------------------------------------------------------------
+# Parallel walk-forward helpers
+# ---------------------------------------------------------------------------
+_DEFAULT_ADAPTER_RETURN = (
+    np.array([1.0, 1.01], dtype=np.float64),
+    np.array([0.1, 0.2], dtype=np.float64),
+    np.array([100.0, 100.1], dtype=np.float64),
+    np.array([0.0, 1.0], dtype=np.float64),
+)
+
+
+@contextlib.contextmanager
+def _wf_runner_context(
+    full_data: np.ndarray,
+    adapter_side_effect: object = None,
+) -> Generator[None, None, None]:
+    """Context manager that patches hftbt availability, np.load, and adapter slice.
+
+    Args:
+        full_data: Array returned by the mocked np.load NpzFile.
+        adapter_side_effect: Passed to _run_adapter_slice mock as
+            ``return_value`` (if tuple) or ``side_effect`` (if callable).
+    """
+    adapter_kwargs: dict[str, object] = {}
+    if callable(adapter_side_effect):
+        adapter_kwargs["side_effect"] = adapter_side_effect
+    else:
+        adapter_kwargs["return_value"] = adapter_side_effect or _DEFAULT_ADAPTER_RETURN
+
+    with (
+        patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+        patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+        patch(
+            "research.backtest.hft_native_runner.ensure_hftbt_npz",
+            return_value="/fake/hftbt.npz",
+        ),
+        patch("research.backtest.hft_native_runner.np.load") as mock_load,
+        patch(
+            "research.backtest.hft_native_runner._run_adapter_slice",
+            **adapter_kwargs,
+        ),
+    ):
+        mock_npz = MagicMock()
+        mock_npz.__class__ = np.lib.npyio.NpzFile
+        mock_npz.__getitem__ = lambda self, key: full_data
+        mock_load.return_value = mock_npz
+        yield
+
+
+# ---------------------------------------------------------------------------
 # Parallel walk-forward tests
 # ---------------------------------------------------------------------------
 class TestWalkForwardParallel:
@@ -672,33 +723,10 @@ class TestWalkForwardParallel:
         alpha = MagicMock()
         alpha.manifest.alpha_id = "test_wf"
         full_data = _make_event_array(200)
-
         config = BacktestConfig(data_paths=["/fake/research.npy"])
         runner = HftNativeRunner(alpha, config)
 
-        mock_eq = np.array([1.0, 1.01, 1.02], dtype=np.float64)
-        mock_sig = np.array([0.1, 0.2, -0.1], dtype=np.float64)
-        mock_mid = np.array([100.0, 100.1, 99.9], dtype=np.float64)
-        mock_pos = np.array([0.0, 1.0, 1.0], dtype=np.float64)
-
-        with (
-            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
-            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
-            patch(
-                "research.backtest.hft_native_runner.ensure_hftbt_npz",
-                return_value="/fake/hftbt.npz",
-            ),
-            patch("research.backtest.hft_native_runner.np.load") as mock_load,
-            patch(
-                "research.backtest.hft_native_runner._run_adapter_slice",
-                return_value=(mock_eq, mock_sig, mock_mid, mock_pos),
-            ),
-        ):
-            mock_npz = MagicMock()
-            mock_npz.__class__ = np.lib.npyio.NpzFile
-            mock_npz.__getitem__ = lambda self, key: full_data
-            mock_load.return_value = mock_npz
-
+        with _wf_runner_context(full_data):
             wf_config = WalkForwardConfig(n_splits=3, min_train_samples=1)
             result = runner.run_walk_forward(alpha, wf_config)
 
@@ -718,29 +746,7 @@ class TestWalkForwardParallel:
         config = BacktestConfig(data_paths=["/fake/research.npy"])
         runner = HftNativeRunner(alpha, config)
 
-        mock_eq = np.array([1.0, 1.01], dtype=np.float64)
-        mock_sig = np.array([0.1, 0.2], dtype=np.float64)
-        mock_mid = np.array([100.0, 100.1], dtype=np.float64)
-        mock_pos = np.array([0.0, 1.0], dtype=np.float64)
-
-        with (
-            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
-            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
-            patch(
-                "research.backtest.hft_native_runner.ensure_hftbt_npz",
-                return_value="/fake/hftbt.npz",
-            ),
-            patch("research.backtest.hft_native_runner.np.load") as mock_load,
-            patch(
-                "research.backtest.hft_native_runner._run_adapter_slice",
-                return_value=(mock_eq, mock_sig, mock_mid, mock_pos),
-            ),
-        ):
-            mock_npz = MagicMock()
-            mock_npz.__class__ = np.lib.npyio.NpzFile
-            mock_npz.__getitem__ = lambda self, key: full_data
-            mock_load.return_value = mock_npz
-
+        with _wf_runner_context(full_data):
             wf_config = WalkForwardConfig(n_splits=4, min_train_samples=1)
             result = runner.run_walk_forward(alpha, wf_config)
 
@@ -785,31 +791,9 @@ class TestWalkForwardParallel:
                 count = call_count_box[0]
             if count >= 2:
                 raise RuntimeError("simulated fold failure")
-            return (
-                np.array([1.0, 1.01], dtype=np.float64),
-                np.array([0.1, 0.2], dtype=np.float64),
-                np.array([100.0, 100.1], dtype=np.float64),
-                np.array([0.0, 1.0], dtype=np.float64),
-            )
+            return _DEFAULT_ADAPTER_RETURN
 
-        with (
-            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
-            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
-            patch(
-                "research.backtest.hft_native_runner.ensure_hftbt_npz",
-                return_value="/fake/hftbt.npz",
-            ),
-            patch("research.backtest.hft_native_runner.np.load") as mock_load,
-            patch(
-                "research.backtest.hft_native_runner._run_adapter_slice",
-                side_effect=_failing_adapter,
-            ),
-        ):
-            mock_npz = MagicMock()
-            mock_npz.__class__ = np.lib.npyio.NpzFile
-            mock_npz.__getitem__ = lambda self, key: full_data
-            mock_load.return_value = mock_npz
-
+        with _wf_runner_context(full_data, adapter_side_effect=_failing_adapter):
             wf_config = WalkForwardConfig(n_splits=3, min_train_samples=1)
             # The error from the thread should propagate
             with pytest.raises(RuntimeError, match="simulated fold failure"):
@@ -829,31 +813,9 @@ class TestWalkForwardParallel:
 
         def _capture_alpha(a, *args, **kwargs):
             seen_alphas.append(id(a))
-            return (
-                np.array([1.0, 1.01], dtype=np.float64),
-                np.array([0.1, 0.2], dtype=np.float64),
-                np.array([100.0, 100.1], dtype=np.float64),
-                np.array([0.0, 1.0], dtype=np.float64),
-            )
+            return _DEFAULT_ADAPTER_RETURN
 
-        with (
-            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
-            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
-            patch(
-                "research.backtest.hft_native_runner.ensure_hftbt_npz",
-                return_value="/fake/hftbt.npz",
-            ),
-            patch("research.backtest.hft_native_runner.np.load") as mock_load,
-            patch(
-                "research.backtest.hft_native_runner._run_adapter_slice",
-                side_effect=_capture_alpha,
-            ),
-        ):
-            mock_npz = MagicMock()
-            mock_npz.__class__ = np.lib.npyio.NpzFile
-            mock_npz.__getitem__ = lambda self, key: full_data
-            mock_load.return_value = mock_npz
-
+        with _wf_runner_context(full_data, adapter_side_effect=_capture_alpha):
             wf_config = WalkForwardConfig(n_splits=3, min_train_samples=1)
             runner.run_walk_forward(alpha, wf_config)
 
