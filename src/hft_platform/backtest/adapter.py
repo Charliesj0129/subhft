@@ -185,7 +185,13 @@ class HftBacktestAdapter:
             dp = self.hbt.depth(0)
             best_bid = dp.best_bid
             best_ask = dp.best_ask
-            if not (best_bid == best_bid) or not (best_ask == best_ask) or best_bid <= 0 or best_ask >= 2147483647:
+            if (
+                not (best_bid == best_bid)
+                or not (best_ask == best_ask)
+                or best_bid <= 0
+                or best_ask >= 2147483647
+                or best_bid >= best_ask
+            ):
                 continue
 
             ts_ns = int(self.hbt.current_timestamp)
@@ -266,18 +272,8 @@ class HftBacktestAdapter:
         self._hbt_seq += 1
         best_bid = int(getattr(depth_obj, "best_bid", 0) or 0)
         best_ask = int(getattr(depth_obj, "best_ask", 0) or 0)
-        bid_qty = int(
-            getattr(depth_obj, "best_bid_qty", None)
-            or getattr(depth_obj, "bid_qty", None)
-            or getattr(depth_obj, "bid_volume", 0)
-            or 0
-        )
-        ask_qty = int(
-            getattr(depth_obj, "best_ask_qty", None)
-            or getattr(depth_obj, "ask_qty", None)
-            or getattr(depth_obj, "ask_volume", 0)
-            or 0
-        )
+        bid_qty = _resolve_qty(depth_obj, "best_bid_qty", "bid_qty", "bid_volume")
+        ask_qty = _resolve_qty(depth_obj, "best_ask_qty", "ask_qty", "ask_volume")
         bids = np.asarray([[best_bid, bid_qty]], dtype=np.int64)
         asks = np.asarray([[best_ask, ask_qty]], dtype=np.int64)
         return BidAskEvent(
@@ -412,6 +408,19 @@ class StrategyHbtAdapter:
 
     def run(self):
         return self.adapter.run()
+
+
+def _resolve_qty(obj: object, *attr_names: str) -> int:
+    """Return the first non-None attribute from *obj*, cast to int.
+
+    Correctly preserves legitimate zero values (``0 is not None``).
+    Falls back to ``0`` when every attribute is absent.
+    """
+    for name in attr_names:
+        val = getattr(obj, name, None)
+        if val is not None:
+            return int(val)
+    return 0
 
 
 def _call_if_exists(obj, method_name: str, *args):
