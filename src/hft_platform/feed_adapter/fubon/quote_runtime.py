@@ -9,8 +9,8 @@ Design notes
 - **Allocator Law**: Translation buffers (_tick_buffer, _bidask_buffer) are
   pre-allocated once in ``__init__`` and reused by overwriting values in each
   callback invocation.  No per-tick heap allocation.
-- **Precision Law**: Float prices from Fubon are converted to scaled integers
-  (x10000) at this boundary so downstream consumers never see floats.
+- **Precision Law**: Fubon raw prices are forwarded unchanged here; the shared
+  normalizer remains the single scaling boundary for canonical events.
 - **Boundary Law**: All Fubon-specific names are translated to canonical keys
   (``code``, ``close``, ``volume``, ``bid_price``, ``ask_price``, etc.) so
   the normalizer can process them without broker awareness.
@@ -27,9 +27,6 @@ from structlog import get_logger
 from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.fubon.quote_runtime")
-
-# Default price scale factor (x10000).
-_PRICE_SCALE: int = 10_000
 
 # Number of order book levels forwarded from the Fubon L5 feed.
 _BOOK_LEVELS: int = 5
@@ -169,15 +166,12 @@ class FubonQuoteRuntime:
             volume = int(_get(data, "volume", 0))
             ts_raw = _get(data, "datetime", None)
 
-            # Precision Law: float → scaled int x10000
-            price_scaled = int(float(price_raw) * _PRICE_SCALE)
-
             # Convert timestamp to nanoseconds
             ts_ns = _ts_to_ns(ts_raw)
 
             # Overwrite pre-allocated buffer (no new dict)
             buf["code"] = symbol
-            buf["close"] = price_scaled
+            buf["close"] = price_raw
             buf["volume"] = volume
             buf["ts"] = ts_ns
 
@@ -215,10 +209,9 @@ class FubonQuoteRuntime:
             av = buf["ask_volume"]
 
             for i in range(_BOOK_LEVELS):
-                # Precision Law: float → scaled int x10000
-                bp[i] = int(float(bid_prices_raw[i]) * _PRICE_SCALE) if i < n_bp else 0
+                bp[i] = bid_prices_raw[i] if i < n_bp else 0
                 bv[i] = int(bid_sizes_raw[i]) if i < n_bv else 0
-                ap[i] = int(float(ask_prices_raw[i]) * _PRICE_SCALE) if i < n_ap else 0
+                ap[i] = ask_prices_raw[i] if i < n_ap else 0
                 av[i] = int(ask_sizes_raw[i]) if i < n_av else 0
 
             buf["code"] = symbol
