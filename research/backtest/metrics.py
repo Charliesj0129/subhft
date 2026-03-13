@@ -5,16 +5,30 @@ from typing import Iterable
 import numpy as np
 
 
+def _safe_pct_returns(values: np.ndarray) -> np.ndarray | None:
+    """Compute percentage returns, excluding ticks where base equity <= 0.
+
+    Returns ``None`` when fewer than 2 valid returns remain.
+    """
+    base = values[:-1]
+    delta = np.diff(values)
+    valid = base > 0
+    if np.count_nonzero(valid) < 2:
+        return None
+    returns = delta[valid] / base[valid]
+    returns = returns[np.isfinite(returns)]
+    if returns.size < 2:
+        return None
+    return returns
+
+
 def compute_sharpe(equity_curve: Iterable[float], annualization_factor: float = 252.0) -> float:
     values = np.asarray(list(equity_curve), dtype=np.float64)
     if values.size < 2:
         return 0.0
 
-    base = values[:-1]
-    delta = np.diff(values)
-    returns = np.divide(delta, base, out=np.zeros_like(delta), where=base != 0)
-    returns = returns[np.isfinite(returns)]
-    if returns.size < 2:
+    returns = _safe_pct_returns(values)
+    if returns is None:
         return 0.0
 
     std = float(np.std(returns))
@@ -123,11 +137,8 @@ def compute_sortino(equity_curve: Iterable[float], annualization_factor: float =
     values = np.asarray(list(equity_curve), dtype=np.float64)
     if values.size < 2:
         return 0.0
-    base = values[:-1]
-    delta = np.diff(values)
-    returns = np.divide(delta, base, out=np.zeros_like(delta), where=base != 0)
-    returns = returns[np.isfinite(returns)]
-    if returns.size < 2:
+    returns = _safe_pct_returns(values)
+    if returns is None:
         return 0.0
     neg = returns[returns < 0.0]
     downside_std = float(np.std(neg)) if neg.size >= 2 else 1e-9
@@ -141,11 +152,8 @@ def compute_cvar(equity_curve: Iterable[float], alpha: float = 0.05) -> float:
     values = np.asarray(list(equity_curve), dtype=np.float64)
     if values.size < 2:
         return 0.0
-    base = values[:-1]
-    delta = np.diff(values)
-    returns = np.divide(delta, base, out=np.zeros_like(delta), where=base != 0)
-    returns = returns[np.isfinite(returns)]
-    if returns.size < 2:
+    returns = _safe_pct_returns(values)
+    if returns is None:
         return 0.0
     cutoff = float(np.quantile(returns, alpha))
     tail = returns[returns <= cutoff]
