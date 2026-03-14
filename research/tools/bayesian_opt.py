@@ -79,6 +79,22 @@ class BayesianOptResult:
         }
 
 
+@dataclass(frozen=True)
+class MultiObjectiveResult:
+    """Structured result from multi-objective Bayesian optimization."""
+
+    pareto_front: list[dict[str, Any]]
+    n_trials: int
+    neighbor_consistency: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pareto_front": list(self.pareto_front),
+            "n_trials": int(self.n_trials),
+            "neighbor_consistency": float(self.neighbor_consistency),
+        }
+
+
 def _optimization_objective(
     sharpe_oos: float,
     max_drawdown: float,

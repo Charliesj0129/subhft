@@ -98,6 +98,7 @@ CORE_TOOL_FILES: set[str] = {
     "paper_autofill.py",
     "paper_prototype.py",
     "paper_trade.py",
+    "prepare_governed_data.py",
     "render_promotion_report.py",
     "synth_lob_gen.py",
     "vm_ul.py",
