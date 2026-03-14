@@ -1,25 +1,18 @@
 # depth_ratio_log
 
 ## Hypothesis
-- Signed order-flow imbalance predicts short-horizon price pressure, especially when queue imbalance aligns with the OFI direction.
+- Log-ratio of bid/ask depth is a symmetric measure of directional pressure;
+  log transform makes it additive and centered at zero.
 
 ## Formula
-- `alpha_t = zscore(ofi_l1_ema8_t) * sign(depth_imbalance_ema8_ppm_t)`
+- `signal = clip(EMA_8(log(max(bid_qty, 1) / max(ask_qty, 1))), -2, 2)`
 
 ## Data Fields
-- `ofi_l1_raw`
-- `ofi_l1_cum`
-- `ofi_l1_ema8`
-- `depth_imbalance_ppm`
-- `depth_imbalance_ema8_ppm`
-- `l1_bid_qty`
-- `l1_ask_qty`
-- `spread_scaled`
-- `spread_ema8_scaled`
-- `mid_price_x2`
-- `microprice_x2`
+- `bid_qty`
+- `ask_qty`
 
 ## Metadata
 - `alpha_id`: `depth_ratio_log`
-- `paper_refs`: 032
+- `paper_refs`: 032 (arXiv 2601.19369)
 - `complexity`: `O(1)`
+- `latency_profile`: `shioaji_sim_p95_v2026-03-04`
