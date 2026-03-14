@@ -204,6 +204,8 @@ def test_main_generates_monthly_pack(tmp_path: Path):
             "2026-03",
             "--disk-path",
             ".",
+            "--min-disk-free-gb",
+            "0",
         ]
     )
     assert rc == 0
@@ -244,6 +246,8 @@ def test_main_fails_when_canary_or_drift_missing(tmp_path: Path):
             "2026-03",
             "--disk-path",
             ".",
+            "--min-disk-free-gb",
+            "0",
         ]
     )
     assert rc == 2
@@ -273,6 +277,8 @@ def test_main_warns_when_query_guard_runs_below_threshold(tmp_path: Path):
             "2026-03",
             "--disk-path",
             ".",
+            "--min-disk-free-gb",
+            "0",
             "--min-query-guard-runs",
             "1",
         ]
@@ -304,6 +310,8 @@ def test_main_warns_when_query_guard_suites_below_threshold(tmp_path: Path):
             "2026-03",
             "--disk-path",
             ".",
+            "--min-disk-free-gb",
+            "0",
             "--min-query-guard-runs",
             "1",
             "--min-query-guard-suite-runs",
@@ -337,6 +345,8 @@ def test_main_warns_when_feature_canary_runs_below_threshold(tmp_path: Path):
             "2026-03",
             "--disk-path",
             ".",
+            "--min-disk-free-gb",
+            "0",
             "--min-feature-canary-runs",
             "1",
         ]
@@ -368,6 +378,8 @@ def test_main_warns_when_callback_latency_runs_below_threshold(tmp_path: Path):
             "2026-03",
             "--disk-path",
             ".",
+            "--min-disk-free-gb",
+            "0",
             "--min-callback-latency-runs",
             "1",
         ]
