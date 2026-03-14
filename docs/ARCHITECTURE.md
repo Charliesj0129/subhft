@@ -7,9 +7,11 @@ This document is the **entry point** for architecture documentation. The canonic
 ## System Overview (Pipeline)
 
 ```
-Market Data → Normalizer → LOB → EventBus → Strategy → Risk → Order → Broker
-                                      ↘ Recorder → WAL / ClickHouse
+Market Data → Normalizer → LOB → FeatureEngine → EventBus → Strategy → Risk → Order → Broker
+                                                       ↘ Recorder → WAL / ClickHouse
 ```
+
+> **Note:** FeatureEngine is feature-flagged (`HFT_FEATURE_ENGINE_ENABLED=1`, default off). When disabled, LOB events flow directly to EventBus.
 
 Key goals:
 
