@@ -17,6 +17,7 @@ These modules run the primary event loop. Any changes here must adhere strictly 
 | **order**        | `OrderAdapter`, `CircuitBreaker`, `SlidingWindowLimiter`  | Outbound flow. Validates rate limits, circuit breakers, and sends `OrderCommand` to `ShioajiClient.place_order()`.                                                   |
 | **execution**    | `ExecutionRouter`, `PositionStore`, `ExecutionNormalizer` | Normalizes incoming fills/callbacks. Tracks position in O(1) time using ONLY integers (`RustPositionTracker`). Publishes `PositionDelta`.                            |
 | **gateway**      | `GatewayService`, `ExposureStore`, `GatewayPolicy`        | (CE-M2 only) Optional HA gateway to serialize intents. Handles Dedup, Policy, and Exposure Limits. Default disabled (`HFT_GATEWAY_ENABLED=0`).                       |
+| **feature**      | `FeatureEngine`, `FeatureRegistry`, `FeatureRollout`      | Computes 16 LOB-derived microstructure features (8 stateless + 8 rolling). Wired between LOBEngine and EventBus. Feature-flagged (`HFT_FEATURE_ENGINE_ENABLED`). |
 
 ## Data & Event Models (Contracts)
 
@@ -45,3 +46,4 @@ These modules run the primary event loop. Any changes here must adhere strictly 
 | **cli** / **main** | `cli.py`, `__main__.py`                 | CLI Entry point. Commands: `run sim`, `run live`, `init`, `strat test`, `check`.           |
 | **strategies**     | `simple_mm.py`, `rust_alpha.py`         | Built-in implementations of strategies. You can use these as templates.                    |
 | **backtest**       | `adapter.py`, `convert.py`, `runner.py` | Integration with `hftbacktest`. Converts JSONL → NPZ and generates HTML scorecard reports. |
+| **alpha**          | `validation.py`, `promotion.py`, `canary.py`, `audit.py`, `experiments.py`, `pool.py` | Alpha governance pipeline: Gate A-E validation, promotion decisions, canary lifecycle, experiment tracking, pool management. 48+ alpha implementations in `research/alphas/`. |
