@@ -44,13 +44,13 @@
 ### Runtime Pipeline
 
 ```
-Exchange → BrokerFacade(Shioaji|Fubon) → Normalizer → LOBEngine → RingBufferBus → StrategyRunner → RiskEngine → OrderAdapter → BrokerFacade
+Exchange → BrokerFacade(Shioaji|Fubon) → Normalizer → LOBEngine → FeatureEngine → RingBufferBus → StrategyRunner → RiskEngine → OrderAdapter → BrokerFacade
                                                                           ↘ RecorderService → WAL / ClickHouse
 ```
 
 > **Multi-broker**: The `BrokerFacade` is a polymorphic adapter selected at startup by `config.broker` / `HFT_BROKER`. Each implementation exposes identical `login()`, `subscribe()`, `place_order()`, `cancel_order()` interfaces. See `docs/architecture/multi-broker-support.md` for the ADR.
 
-Planned (TODO, not implemented yet): insert a **Feature Plane / FeatureEngine** between `LOBEngine` and `StrategyRunner` for shared microstructure feature computation and research/live parity. See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+**Feature Engine** (Phase 18): `FeatureEngine` sits between `LOBEngine` and `RingBufferBus`, computing 16 shared LOB-derived features (8 stateless + 8 rolling: OFI L1, EMA spread/imbalance). Feature-flagged via `HFT_FEATURE_ENGINE_ENABLED=1` (default off). See `feature/engine.py`, `feature/registry.py`. Production hardening (Rust kernel promotion, parity testing) tracked in `docs/TODO.md`.
 
 ### Latency Realism Guard (Research / Backtest / Promotion)
 
@@ -66,22 +66,17 @@ Mandatory policy:
 3. Record latency assumptions in research artifacts; missing latency profile = non-promotion-ready.
 4. Treat sub-broker-RTT alpha half-lives as optimistic until validated via shadow/live evidence.
 
-### Runtime Planes (6)
+### Runtime Planes (7)
 
 | Plane         | Key Module                                                                           | Responsibility                              |
 | ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
 | Control       | `services/bootstrap.py`, `services/system.py`                                        | Bounded queues, service graph, supervision  |
 | Market Data   | `feed_adapter/shioaji_client.py`, `normalizer.py`, `lob_engine.py`                   | Ingest → normalize → LOB state              |
+| Feature       | `feature/engine.py`, `feature/registry.py`                                           | 16 LOB-derived features, research/live parity |
 | Decision      | `strategy/runner.py`, `risk/engine.py`                                               | Strategy dispatch → risk validation         |
 | Execution     | `order/adapter.py`, `execution/router.py`, `execution/positions.py`                  | Broker API, fill routing, position tracking |
 | Persistence   | `recorder/worker.py`, `recorder/batcher.py`, `recorder/writer.py`, `recorder/wal.py` | ClickHouse + WAL fallback                   |
 | Observability | `observability/metrics.py`, `risk/storm_guard.py`                                    | Prometheus metrics, StormGuard FSM          |
-
-### Planned Feature Plane (TODO, Not Yet Implemented)
-
-| Plane | Candidate Modules | Responsibility |
-| ----- | ----------------- | -------------- |
-| Feature (planned) | `feature/engine.py`, `feature/registry.py` (TBD) | Shared LOB-derived feature kernels for research/backtest/live parity |
 
 ## 📦 Key Data Contracts (Scaled Int Convention)
 
@@ -126,8 +121,7 @@ Full lifecycle from research to production, implemented in `src/hft_platform/alp
 | **E**      | Shadow session + execution quality | `alpha/promotion.py::_evaluate_gate_e` |
 | **Canary** | Hold/escalate/rollback/graduate    | `alpha/canary.py`                      |
 
-Research artifacts: `research/alphas/<alpha_id>/`, experiment runs: `research/experiments/runs/`.
-Planned (TODO): unify shared LOB-derived feature kernels across research replay, `hftbacktest`, and live runtime via the FeatureEngine spec in `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+Research artifacts: `research/alphas/<alpha_id>/` (48+ implementations), experiment runs: `research/experiments/runs/`. Feature kernels unified via `FeatureEngine` (Phase 18); remaining parity work tracked in `docs/TODO.md`.
 
 ## 🦀 Rust Boundary (`rust_core` via PyO3)
 
@@ -168,6 +162,7 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_CLICKHOUSE_HOST`      | `localhost` | ClickHouse host                           |
 | `HFT_EXPOSURE_MAX_SYMBOLS` | `10000`     | ExposureStore cardinality bound           |
 | `HFT_BROKER`               | `shioaji`   | Broker backend: `shioaji` / `fubon`       |
+| `HFT_FEATURE_ENGINE_ENABLED` | `0`         | `1` = enable FeatureEngine in runtime pipeline |
 | `HFT_FUBON_CERT_PATH`      | —           | Fubon API certificate file path           |
 | `HFT_FUBON_ACCOUNT`        | —           | Fubon trading account ID                  |
 | `HFT_FUBON_PASSWORD`       | —           | Fubon account password (use secret mgr)   |
