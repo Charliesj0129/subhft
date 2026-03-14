@@ -17,6 +17,7 @@ Allocator Law  : __slots__ on class; all state is scalar.
 Precision Law  : output is float (signal score, not price).
 Latency profile: shioaji_sim_p95_v2026-03-04.
 """
+
 from __future__ import annotations
 
 import math
