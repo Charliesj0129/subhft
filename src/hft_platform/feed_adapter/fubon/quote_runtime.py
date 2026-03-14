@@ -305,4 +305,4 @@ def _scale_price(price_val: Any) -> int:
     """Scale Fubon prices to canonical x10000 integer units."""
     if price_val is None:
         return 0
-    return int(round(float(price_val) * 10_000))
+    return int(round(float(price_val) * _PRICE_SCALE))
