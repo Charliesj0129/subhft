@@ -131,7 +131,9 @@
     "title": "equilibrium liquidity dex cex"
   },
   "013": {
-    "alphas": [],
+    "alphas": [
+      "depth_momentum"
+    ],
     "arxiv_id": "2512.11765",
     "note_file": "research/knowledge/notes/013_hft_trading_game_transient_impact.md",
     "ref": "013",
@@ -331,7 +333,7 @@
     "title": "design empirical study llm reits"
   },
   "032": {
-    "alphas": [],
+    "alphas": ["depth_ratio_log"],
     "arxiv_id": "2601.19369",
     "note_file": "research/knowledge/notes/032_directional_liquidity_geometric_shear.md",
     "ref": "032",
@@ -905,7 +907,7 @@
     "title": "prediction market bench"
   },
   "089": {
-    "alphas": [],
+    "alphas": ["flow_persistence"],
     "note_file": "research/knowledge/notes/089_realised_quantile_variance.md",
     "ref": "089",
     "status": "reviewed",
@@ -996,10 +998,12 @@
     "title": "trade r1 process verification"
   },
   "098": {
-    "alphas": [],
+    "alphas": [
+      "mean_revert_qi"
+    ],
     "note_file": "research/knowledge/notes/098_market_resistance_impact.md",
     "ref": "098",
-    "status": "reviewed",
+    "status": "implemented",
     "tags": [
       "microstructure"
     ],

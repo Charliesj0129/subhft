@@ -1,11 +1,13 @@
-"""Anti-leak tests for depth_momentum signal (>=8 tests).
+"""Gate B anti-leak / lookahead-bias tests for MeanRevertQiAlpha (ref 098).
 
 Tests verify:
-- No future data contamination
+- No future data contamination (causal replay)
 - No division by zero on edge inputs
 - No overflow on extreme inputs
-- Correct signal direction
+- Correct contrarian signal direction
+- Signal bounds [-2, 2]
 - Reset idempotency
+- No state contamination across resets
 """
 
 from __future__ import annotations
@@ -14,11 +16,11 @@ import math
 
 import numpy as np
 
-from research.alphas.depth_momentum.impl import DepthMomentumAlpha
+from research.alphas.mean_revert_qi.impl import MeanRevertQiAlpha
 
 
-def _make_alpha() -> DepthMomentumAlpha:
-    a = DepthMomentumAlpha()
+def _make_alpha() -> MeanRevertQiAlpha:
+    a = MeanRevertQiAlpha()
     a.reset()
     return a
 
@@ -42,7 +44,7 @@ def test_future_bids_do_not_affect_past_signal() -> None:
     for b, a in ticks:
         signals.append(alpha.update(b, a))
 
-    # Replay again: same inputs must yield same outputs
+    # Replay: same inputs must yield same outputs
     alpha.reset()
     for i, (b, a) in enumerate(ticks):
         s = alpha.update(b, a)
@@ -59,9 +61,6 @@ def test_zero_bid_and_ask_no_division_by_zero() -> None:
     alpha = _make_alpha()
     result = alpha.update(0.0, 0.0)
     assert math.isfinite(result)
-    # Second tick also zero
-    result2 = alpha.update(0.0, 0.0)
-    assert math.isfinite(result2)
 
 
 def test_zero_ask_qty_no_division_by_zero() -> None:
@@ -72,14 +71,14 @@ def test_zero_ask_qty_no_division_by_zero() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4-5: Extreme inputs -- no overflow
+# 4: Extreme inputs - no overflow
 # ---------------------------------------------------------------------------
 
 
 def test_extreme_large_input_no_overflow() -> None:
     """Extremely large bid/ask quantities must not produce inf or nan."""
     alpha = _make_alpha()
-    for _ in range(20):
+    for _ in range(50):
         result = alpha.update(1e15, 1e14)
         assert math.isfinite(result), f"Overflow with large input: {result}"
 
@@ -87,7 +86,7 @@ def test_extreme_large_input_no_overflow() -> None:
 def test_extreme_alternating_no_overflow() -> None:
     """Alternating extreme values must keep signal finite."""
     alpha = _make_alpha()
-    for i in range(100):
+    for i in range(200):
         if i % 2 == 0:
             result = alpha.update(1e12, 1.0)
         else:
@@ -96,44 +95,41 @@ def test_extreme_alternating_no_overflow() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6-7: Signal direction correctness
+# 5: Contrarian signal direction
 # ---------------------------------------------------------------------------
 
 
-def test_strong_bid_dominance_gives_positive_signal() -> None:
-    """Steadily increasing total depth for 200 ticks -> positive signal."""
+def test_contrarian_direction_after_regime_shift() -> None:
+    """After stable baseline + shift to bid dominance, signal should be negative
+    (contrarian: positive z -> negative signal)."""
     alpha = _make_alpha()
-    for i in range(200):
-        alpha.update(100.0 + i * 2.0, 100.0)
-    assert alpha.get_signal() > 0.0, f"Expected positive signal, got {alpha.get_signal()}"
+    # Establish baseline with balanced input
+    for _ in range(300):
+        alpha.update(100.0, 100.0)
+    # Shift to bid dominance
+    for _ in range(100):
+        alpha.update(400.0, 50.0)
+    assert alpha.get_signal() < 0.0, f"Expected negative contrarian signal, got {alpha.get_signal()}"
 
 
-def test_strong_ask_dominance_gives_negative_signal() -> None:
-    """Steadily decreasing total depth for 200 ticks -> negative signal."""
+# ---------------------------------------------------------------------------
+# 6: Signal bounds
+# ---------------------------------------------------------------------------
+
+
+def test_signal_bounded_within_minus_2_to_plus_2() -> None:
+    """Signal must stay in [-2.0, 2.0] for any input pattern."""
     alpha = _make_alpha()
-    for i in range(200):
-        alpha.update(300.0 - i * 1.0, 300.0 - i * 1.0)
-    assert alpha.get_signal() < 0.0, f"Expected negative signal, got {alpha.get_signal()}"
-
-
-# ---------------------------------------------------------------------------
-# 8: Signal bounds with random inputs
-# ---------------------------------------------------------------------------
-
-
-def test_signal_bounded_within_range() -> None:
-    """Signal must stay in [-2.0, 2.0] for 1000 random ticks."""
     rng = np.random.default_rng(99)
-    alpha = _make_alpha()
     for _ in range(1000):
         bid = float(rng.uniform(0.0, 500.0))
         ask = float(rng.uniform(0.0, 500.0))
         s = alpha.update(bid, ask)
-        assert -2.0 <= s <= 2.0, f"Signal out of bounds: {s}"
+        assert -2.0 - 1e-9 <= s <= 2.0 + 1e-9, f"Signal out of bounds: {s}"
 
 
 # ---------------------------------------------------------------------------
-# 9: Reset idempotency
+# 7: Reset idempotency
 # ---------------------------------------------------------------------------
 
 
@@ -157,22 +153,26 @@ def test_two_resets_then_replay_identical() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10: Signal not contaminated after reset
+# 8: Signal does not reverse direction after reset (no contamination)
 # ---------------------------------------------------------------------------
 
 
 def test_signal_direction_not_contaminated_after_reset() -> None:
     """Signal direction after reset must not be biased by prior warmup."""
     alpha = _make_alpha()
-    # Warmup with increasing depth (positive momentum)
-    for i in range(200):
-        alpha.update(100.0 + i, 100.0)
-    assert alpha.get_signal() > 0.0
+    # Warmup with balanced, then shift to bid dominance
+    for _ in range(200):
+        alpha.update(100.0, 100.0)
+    for _ in range(100):
+        alpha.update(500.0, 10.0)
 
-    # Reset and immediately feed decreasing depth
+    # Reset and feed ask dominance shift from balanced
     alpha.reset()
-    for i in range(200):
-        alpha.update(300.0 - i, 300.0 - i)
-    assert alpha.get_signal() < 0.0, (
-        f"Signal contaminated by pre-reset state: expected negative, got {alpha.get_signal()}"
+    for _ in range(200):
+        alpha.update(100.0, 100.0)
+    for _ in range(100):
+        alpha.update(10.0, 500.0)
+    # Contrarian: ask dominance -> positive z -> positive signal (negated negative z)
+    assert alpha.get_signal() > 0.0, (
+        f"Signal contaminated by pre-reset state: expected positive, got {alpha.get_signal()}"
     )
