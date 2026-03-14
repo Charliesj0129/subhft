@@ -129,6 +129,8 @@ research/tools/*
 !research/tools/synth_lob_gen.py
 !research/tools/latency_profiles.py
 !research/tools/vm_ul.py
+!research/tools/momentum_meanrevert_explorer.py
+!research/tools/toxicity_alpha_explorer.py
 !research/tools/legacy/
 !research/tools/legacy/**/*.py
 !research/logs/
