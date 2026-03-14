@@ -1,25 +1,19 @@
 # regime_momentum
 
 ## Hypothesis
-- Signed order-flow imbalance predicts short-horizon price pressure, especially when queue imbalance aligns with the OFI direction.
+- The momentum of the volatility regime factor predicts whether the market is transitioning between regimes; rising regime factor with positive OFI signals trend continuation.
 
 ## Formula
-- `alpha_t = zscore(ofi_l1_ema8_t) * sign(depth_imbalance_ema8_ppm_t)`
+- `signal = clip((EMA8(rf) - EMA32(rf)) * sign(ofi_ema8), -2, 2)`
+- `rf = clip(vol16 / base64, 0.5, 2.0)`
 
 ## Data Fields
-- `ofi_l1_raw`
-- `ofi_l1_cum`
-- `ofi_l1_ema8`
-- `depth_imbalance_ppm`
-- `depth_imbalance_ema8_ppm`
-- `l1_bid_qty`
-- `l1_ask_qty`
-- `spread_scaled`
-- `spread_ema8_scaled`
-- `mid_price_x2`
-- `microprice_x2`
+- `bid_qty`
+- `ask_qty`
 
 ## Metadata
 - `alpha_id`: `regime_momentum`
 - `paper_refs`: 082
 - `complexity`: `O(1)`
+- `latency_profile`: `shioaji_sim_p95_v2026-03-04`
+- `feature_set_version`: `lob_shared_v1`
