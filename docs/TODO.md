@@ -1,6 +1,6 @@
 # 技術債與 TODO（僅保留未完成項）
 
-更新日期：2026-03-05
+更新日期：2026-03-14
 
 > 本文件只追蹤「尚未落地」項目。已完成事項不再保留於此，請改查 git 歷史與對應 runbook / architecture 文檔。
 
@@ -10,11 +10,14 @@
 ## 1. 架構與核心路徑
 
 ### 1.1 Feature Plane Productionization（P0）
-- 狀態：進行中（prototype 已有，production 化未完成）
+- 狀態：進行中（Phase 18 已實作 FeatureEngine — 16 features, wired into StrategyContext/Runner/BacktestAdapter, feature-flagged `HFT_FEATURE_ENGINE_ENABLED=1`；production 化待完成）
 - 追蹤文件：`docs/architecture/feature-engine-lob-research-unification-spec.md`
 - 待辦：
-  - 定稿 Python/Rust typed feature frame 邊界（packed/zero-copy transport contract）。
+  - Python FeatureEngine 已完成，剩餘工作為 production hardening：
   - 將 Rust feature kernel 從 prototype 提升到 production-ready（先聚焦已 promoted 的 feature family）。
+  - 定稿 Python/Rust typed feature frame 邊界（packed/zero-copy transport contract）。
+  - 完成 CI parity test（research/replay/live feature schema 一致性）。
+  - Default-on rollout（目前 default off）。
 - 驗收標準：
   - research/replay/live 三條路徑 feature schema 與 warmup/reset 規則一致。
   - parity 測試與回歸測試可在 CI 穩定通過。
