@@ -1335,6 +1335,102 @@
     "tags": [],
     "title": "A High Frequency Trade Execution Model for Supervised Learning"
   },
+  "129": {
+    "alphas": [
+      "toxicity_acceleration",
+      "toxicity_timescale_divergence",
+      "adverse_flow_asymmetry"
+    ],
+    "arxiv_id": "2312.05827",
+    "note_file": "research/knowledge/notes/129_detecting_toxic_flow.md",
+    "ref": "129",
+    "status": "reviewed",
+    "tags": [
+      "toxic_flow",
+      "adverse_selection",
+      "lob_features",
+      "bayesian",
+      "microstructure"
+    ],
+    "title": "Detecting Toxic Flow",
+    "authors": "Álvaro Cartea, Gerardo Durán-Martín, Leandro Sánchez-Betancourt",
+    "year": 2023
+  },
+  "130": {
+    "alphas": [],
+    "arxiv_id": "2507.22712",
+    "note_file": "research/knowledge/notes/130_order_book_filtration_signal.md",
+    "ref": "130",
+    "status": "reviewed",
+    "tags": [
+      "order_book",
+      "signal_extraction",
+      "obi",
+      "filtration",
+      "microstructure"
+    ],
+    "title": "Order Book Filtration and Directional Signal Extraction at High Frequency",
+    "authors": "",
+    "year": 2025
+  },
+  "131": {
+    "alphas": [
+      "spread_excess_toxicity"
+    ],
+    "arxiv_id": "2503.18005",
+    "note_file": "research/knowledge/notes/131_simple_strategy_toxic_flow.md",
+    "ref": "131",
+    "status": "reviewed",
+    "tags": [
+      "toxic_flow",
+      "market_making",
+      "adverse_selection",
+      "optimal_control",
+      "microstructure"
+    ],
+    "title": "A Simple Strategy to Deal with Toxic Flow",
+    "authors": "Álvaro Cartea, Leandro Sánchez-Betancourt",
+    "year": 2025
+  },
+  "132": {
+    "alphas": [
+      "toxicity_acceleration",
+      "toxicity_timescale_divergence"
+    ],
+    "note_file": "research/knowledge/notes/132_brokers_informed_traders.md",
+    "ref": "132",
+    "status": "reviewed",
+    "tags": [
+      "toxic_flow",
+      "informed_traders",
+      "broker_signal",
+      "trend_extraction",
+      "microstructure"
+    ],
+    "title": "Brokers and Informed Traders: Dealing with Toxic Flow and Extracting Trading Signals",
+    "authors": "Álvaro Cartea, Leandro Sánchez-Betancourt",
+    "year": 2024,
+    "journal": "SIAM Journal on Financial Mathematics 16(2), 243-270"
+  },
+  "133": {
+    "alphas": [
+      "adverse_flow_asymmetry"
+    ],
+    "arxiv_id": "2409.12721",
+    "note_file": "research/knowledge/notes/133_market_simulation_adverse_selection.md",
+    "ref": "133",
+    "status": "reviewed",
+    "tags": [
+      "adverse_selection",
+      "fill_probability",
+      "simulation",
+      "market_making",
+      "microstructure"
+    ],
+    "title": "Market Simulation under Adverse Selection",
+    "authors": "",
+    "year": 2024
+  },
   "depth_slope_ref": {
     "alphas": [
       "lob_shape"
