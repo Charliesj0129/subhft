@@ -817,7 +817,7 @@
     "title": "llm multi agent reits"
   },
   "080": {
-    "alphas": [],
+    "alphas": ["depth_shock"],
     "note_file": "research/knowledge/notes/080_directional_liquidity_shear.md",
     "ref": "080",
     "status": "reviewed",
