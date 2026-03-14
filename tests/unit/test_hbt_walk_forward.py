@@ -161,13 +161,21 @@ def test_walk_forward_too_small_data(tmp_path: Path, mock_adapter_slice) -> None
 
 
 def test_walk_forward_resets_alpha(tmp_path: Path, mock_adapter_slice) -> None:
-    """HftNativeRunner calls alpha.reset() once per fold via _run_adapter_slice."""
+    """Each fold receives a deep-copied alpha; reset() is called on each copy.
+
+    With parallel walk-forward, the original alpha is deep-copied per fold,
+    so the original's reset_calls stays at 0. We verify folds ran successfully
+    and that the original alpha was not mutated (confirming deep-copy isolation).
+    """
     path = tmp_path / "hftbt.npz"
     _make_feed(path, n=140, seed=51)
     alpha = _ConstAlpha(1.0)
     runner = HftNativeRunner(alpha, _cfg(path))
     result = runner.run_walk_forward(alpha, WalkForwardConfig(n_splits=4, min_train_samples=5))
-    assert alpha.reset_calls == len(result.folds)
+    # Original alpha should NOT have been reset (deep copies used)
+    assert alpha.reset_calls == 0
+    # But folds should have run successfully
+    assert len(result.folds) > 0
 
 
 # ---------------------------------------------------------------------------

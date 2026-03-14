@@ -1,5 +1,6 @@
 """hft_native_runner.py — BacktestResult via hftbacktest native engine.
 
+Supports parallel walk-forward fold evaluation via ThreadPoolExecutor.
 Part C of the dirty-data-repair + golden-data pipeline plan.
 
 HftNativeRunner uses HftBacktestAdapter (true hftbacktest simulation) and produces
@@ -18,11 +19,13 @@ Data flow:
 from __future__ import annotations
 
 import argparse
+import copy
 import itertools
 import os
 import sys
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -361,11 +364,13 @@ def _effective_broker_rtt_ms(config: BacktestConfig) -> float:
     order types, so we use the maximum (typically cancel P95) for conservative
     estimation.
     """
-    return float(max(
-        config.submit_ack_latency_ms,
-        config.modify_ack_latency_ms,
-        config.cancel_ack_latency_ms,
-    ))
+    return float(
+        max(
+            config.submit_ack_latency_ms,
+            config.modify_ack_latency_ms,
+            config.cancel_ack_latency_ms,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -497,6 +502,86 @@ def _regime_metrics(signals: np.ndarray, fwd_returns: np.ndarray) -> dict[str, f
         if std > 0:
             out[name] = float(np.mean(masked) / std * np.sqrt(252.0))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Walk-forward fold worker (module-level for ThreadPoolExecutor)
+# ---------------------------------------------------------------------------
+def _run_single_fold(
+    alpha: AlphaProtocol,
+    full_data: np.ndarray,
+    fold_idx: int,
+    fold_size: int,
+    wf_config: WalkForwardConfig,
+    backtest_config: BacktestConfig,
+    symbol: str,
+) -> tuple[WalkForwardFoldResult | None, str | None]:
+    """Run a single walk-forward fold.
+
+    Args:
+        alpha: Deep-copied alpha instance (thread-isolated).
+        full_data: Read-only shared data array (all folds).
+        fold_idx: Zero-based fold index.
+        fold_size: Number of rows per fold window.
+        wf_config: Walk-forward configuration.
+        backtest_config: Backtest configuration for the adapter.
+        symbol: Asset symbol.
+
+    Returns:
+        (fold_result, tmp_path) — fold_result is None if fold was skipped.
+        tmp_path is the temp NPZ path for cleanup (None if skipped).
+    """
+    train_end = fold_size * (fold_idx + 1)
+    test_end = fold_size * (fold_idx + 2)
+    train = full_data[:train_end]
+    test = full_data[train_end:test_end]
+    if len(train) < int(wf_config.min_train_samples) or len(test) < 2:
+        return None, None
+
+    tmp_dir = tempfile.mkdtemp(prefix=f"hftnative_wf{fold_idx}_")
+    test_path = os.path.join(tmp_dir, "test.npz")
+    np.savez_compressed(test_path, data=test)
+
+    try:
+        eq, sig, mid, pos = _run_adapter_slice(alpha, test_path, backtest_config, symbol)
+    except BaseException:
+        # Clean up temp file on failure so caller does not leak
+        try:
+            os.unlink(test_path)
+            os.rmdir(tmp_dir)
+        except OSError:
+            pass
+        raise
+
+    fwd = _forward_returns(mid)
+    sharpe = compute_sharpe(eq) if eq.size >= 2 else 0.0
+    ic_mean, _, _ = compute_ic(sig, fwd)
+    max_dd = compute_max_drawdown(eq)
+    to = compute_turnover(pos)
+    fold_result = WalkForwardFoldResult(
+        fold_idx=fold_idx,
+        train_size=len(train),
+        test_size=len(test),
+        sharpe=float(sharpe),
+        ic_mean=float(ic_mean),
+        max_drawdown=float(max_dd),
+        turnover=float(to),
+    )
+    return fold_result, test_path
+
+
+def _empty_walk_forward_result(wf: WalkForwardConfig) -> WalkForwardResult:
+    """Return an empty WalkForwardResult with NaN aggregates."""
+    return WalkForwardResult(
+        config=wf,
+        folds=[],
+        fold_sharpe_mean=float("nan"),
+        fold_sharpe_std=float("nan"),
+        fold_sharpe_min=float("nan"),
+        fold_sharpe_max=float("nan"),
+        fold_consistency_pct=float("nan"),
+        fold_ic_mean=float("nan"),
+    )
 
 
 def _collect_hbt_data(data_paths: list[str]) -> np.ndarray | None:
@@ -709,66 +794,58 @@ class HftNativeRunner:
 
         full = _collect_hbt_data(self.config.data_paths)
         if full is None:
-            return WalkForwardResult(
-                config=wf,
-                folds=[],
-                fold_sharpe_mean=float("nan"),
-                fold_sharpe_std=float("nan"),
-                fold_sharpe_min=float("nan"),
-                fold_sharpe_max=float("nan"),
-                fold_consistency_pct=float("nan"),
-                fold_ic_mean=float("nan"),
-            )
+            return _empty_walk_forward_result(wf)
 
         total_rows = len(full)
 
         n_splits = int(wf.n_splits)
         fold_size = total_rows // (n_splits + 1)
         if fold_size <= 0:
-            return WalkForwardResult(
-                config=wf,
-                folds=[],
-                fold_sharpe_mean=float("nan"),
-                fold_sharpe_std=float("nan"),
-                fold_sharpe_min=float("nan"),
-                fold_sharpe_max=float("nan"),
-                fold_consistency_pct=float("nan"),
-                fold_ic_mean=float("nan"),
-            )
+            return _empty_walk_forward_result(wf)
 
         folds: list[WalkForwardFoldResult] = []
         tmp_paths: list[str] = []
+
+        max_workers_env = os.environ.get("HFT_WF_PARALLEL_WORKERS")
+        if max_workers_env is not None:
+            max_workers = max(1, int(max_workers_env))
+        else:
+            max_workers = min(n_splits, os.cpu_count() or 4)
+
         try:
-            for fold_idx in range(n_splits):
-                train_end = fold_size * (fold_idx + 1)
-                test_end = fold_size * (fold_idx + 2)
-                train = full[:train_end]
-                test = full[train_end:test_end]
-                if len(train) < int(wf.min_train_samples) or len(test) < 2:
-                    continue
-
-                tmp_dir = tempfile.mkdtemp(prefix=f"hftnative_wf{fold_idx}_")
-                test_path = os.path.join(tmp_dir, "test.npz")
-                np.savez_compressed(test_path, data=test)
-                tmp_paths.append(test_path)
-
-                eq, sig, mid, pos = _run_adapter_slice(alpha, test_path, self.config, self.symbol)
-                fwd = _forward_returns(mid)
-                sharpe = compute_sharpe(eq) if eq.size >= 2 else 0.0
-                ic_mean, _, _ = compute_ic(sig, fwd)
-                max_dd = compute_max_drawdown(eq)
-                to = compute_turnover(pos)
-                folds.append(
-                    WalkForwardFoldResult(
-                        fold_idx=fold_idx,
-                        train_size=len(train),
-                        test_size=len(test),
-                        sharpe=float(sharpe),
-                        ic_mean=float(ic_mean),
-                        max_drawdown=float(max_dd),
-                        turnover=float(to),
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {}
+                for fold_idx in range(n_splits):
+                    fold_alpha = copy.deepcopy(alpha)
+                    future = executor.submit(
+                        _run_single_fold,
+                        fold_alpha,
+                        full,
+                        fold_idx,
+                        fold_size,
+                        wf,
+                        self.config,
+                        self.symbol,
                     )
-                )
+                    futures[future] = fold_idx
+
+                first_error: BaseException | None = None
+                for future in as_completed(futures):
+                    try:
+                        fold_result, tmp_path = future.result()
+                    except BaseException as exc:
+                        first_error = first_error or exc
+                        continue
+                    if tmp_path is not None:
+                        tmp_paths.append(tmp_path)
+                    if fold_result is not None:
+                        folds.append(fold_result)
+
+            if first_error is not None:
+                raise first_error
+
+            # Sort by fold_idx to maintain deterministic order
+            folds.sort(key=lambda f: f.fold_idx)
         finally:
             for p in tmp_paths:
                 try:
@@ -778,16 +855,7 @@ class HftNativeRunner:
                     pass
 
         if not folds:
-            return WalkForwardResult(
-                config=wf,
-                folds=[],
-                fold_sharpe_mean=float("nan"),
-                fold_sharpe_std=float("nan"),
-                fold_sharpe_min=float("nan"),
-                fold_sharpe_max=float("nan"),
-                fold_consistency_pct=float("nan"),
-                fold_ic_mean=float("nan"),
-            )
+            return _empty_walk_forward_result(wf)
 
         sharpes = np.asarray([f.sharpe for f in folds], dtype=np.float64)
         ics = np.asarray([f.ic_mean for f in folds], dtype=np.float64)
