@@ -129,6 +129,7 @@ research/tools/*
 !research/tools/synth_lob_gen.py
 !research/tools/latency_profiles.py
 !research/tools/vm_ul.py
+!research/tools/spread_microprice_explorer.py
 !research/tools/legacy/
 !research/tools/legacy/**/*.py
 !research/logs/
