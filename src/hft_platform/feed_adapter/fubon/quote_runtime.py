@@ -9,8 +9,7 @@ Design notes
 - **Allocator Law**: Translation buffers (_tick_buffer, _bidask_buffer) are
   pre-allocated once in ``__init__`` and reused by overwriting values in each
   callback invocation.  No per-tick heap allocation.
-- **Precision Law**: Fubon raw prices are forwarded unchanged here; the shared
-  normalizer remains the single scaling boundary for canonical events.
+- **Precision Law**: Canonical callbacks receive x10000 scaled integer prices.
 - **Boundary Law**: All Fubon-specific names are translated to canonical keys
   (``code``, ``close``, ``volume``, ``bid_price``, ``ask_price``, etc.) so
   the normalizer can process them without broker awareness.
@@ -171,7 +170,7 @@ class FubonQuoteRuntime:
 
             # Overwrite pre-allocated buffer (no new dict)
             buf["code"] = symbol
-            buf["close"] = price_raw
+            buf["close"] = _scale_price(price_raw)
             buf["volume"] = volume
             buf["ts"] = ts_ns
 
@@ -209,9 +208,9 @@ class FubonQuoteRuntime:
             av = buf["ask_volume"]
 
             for i in range(_BOOK_LEVELS):
-                bp[i] = bid_prices_raw[i] if i < n_bp else 0
+                bp[i] = _scale_price(bid_prices_raw[i]) if i < n_bp else 0
                 bv[i] = int(bid_sizes_raw[i]) if i < n_bv else 0
-                ap[i] = ask_prices_raw[i] if i < n_ap else 0
+                ap[i] = _scale_price(ask_prices_raw[i]) if i < n_ap else 0
                 av[i] = int(ask_sizes_raw[i]) if i < n_av else 0
 
             buf["code"] = symbol
@@ -295,3 +294,10 @@ def _ts_to_ns(ts_val: Any) -> int:
     if ts_val is None:
         return 0
     return timebase.coerce_ns(ts_val)
+
+
+def _scale_price(price_val: Any) -> int:
+    """Scale Fubon prices to canonical x10000 integer units."""
+    if price_val is None:
+        return 0
+    return int(round(float(price_val) * 10_000))
