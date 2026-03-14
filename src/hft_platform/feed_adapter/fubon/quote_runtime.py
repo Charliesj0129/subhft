@@ -169,15 +169,12 @@ class FubonQuoteRuntime:
             volume = int(_get(data, "volume", 0))
             ts_raw = _get(data, "datetime", None)
 
-            # Precision Law: float → scaled int x10000
-            price_scaled = int(float(price_raw) * _PRICE_SCALE)
-
             # Convert timestamp to nanoseconds
             ts_ns = _ts_to_ns(ts_raw)
 
             # Overwrite pre-allocated buffer (no new dict)
             buf["code"] = symbol
-            buf["close"] = price_scaled
+            buf["close"] = _scale_price(price_raw)
             buf["volume"] = volume
             buf["ts"] = ts_ns
 
@@ -215,10 +212,9 @@ class FubonQuoteRuntime:
             av = buf["ask_volume"]
 
             for i in range(_BOOK_LEVELS):
-                # Precision Law: float → scaled int x10000
-                bp[i] = int(float(bid_prices_raw[i]) * _PRICE_SCALE) if i < n_bp else 0
+                bp[i] = _scale_price(bid_prices_raw[i]) if i < n_bp else 0
                 bv[i] = int(bid_sizes_raw[i]) if i < n_bv else 0
-                ap[i] = int(float(ask_prices_raw[i]) * _PRICE_SCALE) if i < n_ap else 0
+                ap[i] = _scale_price(ask_prices_raw[i]) if i < n_ap else 0
                 av[i] = int(ask_sizes_raw[i]) if i < n_av else 0
 
             buf["code"] = symbol
@@ -302,3 +298,10 @@ def _ts_to_ns(ts_val: Any) -> int:
     if ts_val is None:
         return 0
     return timebase.coerce_ns(ts_val)
+
+
+def _scale_price(price_val: Any) -> int:
+    """Scale Fubon prices to canonical x10000 integer units."""
+    if price_val is None:
+        return 0
+    return int(round(float(price_val) * _PRICE_SCALE))
