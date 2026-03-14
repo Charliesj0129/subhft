@@ -10,6 +10,8 @@ Design notes
   pre-allocated once in ``__init__`` and reused by overwriting values in each
   callback invocation.  No per-tick heap allocation.
 - **Precision Law**: Canonical callbacks receive x10000 scaled integer prices.
+- **Precision Law**: Float prices are scaled to canonical x10000 integers at
+  this boundary before they leave the adapter.
 - **Boundary Law**: All Fubon-specific names are translated to canonical keys
   (``code``, ``close``, ``volume``, ``bid_price``, ``ask_price``, etc.) so
   the normalizer can process them without broker awareness.
@@ -26,6 +28,9 @@ from structlog import get_logger
 from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.fubon.quote_runtime")
+
+# Precision Law: all prices are scaled int x10000.
+_PRICE_SCALE: int = 10_000
 
 # Number of order book levels forwarded from the Fubon L5 feed.
 _BOOK_LEVELS: int = 5
