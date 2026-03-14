@@ -1,12 +1,12 @@
 # HFT Platform Current Architecture Baseline
 
-Date: 2026-02-21
+Date: 2026-03-14
 Scope: As-built implementation under `src/hft_platform`, `research`, `rust_core`, `rust`, `config`, and `docker-compose.yml`.
 Companion target document: `.agent/library/target-architecture.md`.
 Companion C4 diagrams: `.agent/library/c4-model-current.md`.
 Companion research execution plan: `.agent/library/research_pipeline_execution_plan.md`.
 Companion Rust boundary note: `.agent/library/rust_pyo3.md`.
-Companion feature unification spec (prototype landed): `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+Companion feature unification spec (implemented, production backlog open): `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 ## 1. Architecture Slices (As-Built)
@@ -43,7 +43,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping.
 - `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events (Python/Rust paths).
 - `src/hft_platform/feed_adapter/lob_engine.py`: per-symbol LOB + stats.
-- 🟡 Prototype landed: optional `FeatureEngine` / Feature Plane after `LOBEngine` for shared LOB-derived feature kernels (research/backtest/live parity). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+- ✅ Implemented: `FeatureEngine` (Phase 18) with 16 features (8 stateless + 8 rolling), feature-flagged via `HFT_FEATURE_ENGINE_ENABLED=1` (default off). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 
 3. Decision plane
 
@@ -86,7 +86,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - Shioaji callback -> `raw_queue`
 - `MarketDataService`: normalize -> LOB update -> publish events to bus
 - optional direct recorder mapping to `recorder_queue`
-- 🟡 Prototype path available (feature-flagged): `LOBEngine -> FeatureEngine -> StrategyRunner` for shared microstructure features
+- ✅ Implemented path (feature-flagged): `LOBEngine -> FeatureEngine -> StrategyRunner` for shared microstructure features (16 features, `HFT_FEATURE_ENGINE_ENABLED=1`)
 
 4. Strategy:
 
@@ -147,7 +147,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `hft alpha experiments list|compare|best` reads `research/experiments/runs/*/meta.json`.
 - RL bridge in `research/rl/lifecycle.py` logs RL runs and can promote latest run via Gate D-E (`hft alpha rl-promote`).
 
-## 4A. Research/Runtime Feature Unification (Prototype Landed, Production Backlog Open)
+## 4A. Research/Runtime Feature Unification (Implemented, Production Backlog Open)
 
 Reference spec: `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 
@@ -160,9 +160,9 @@ Planned direction:
 
 Status:
 
-- ✅ `FeatureEngine` runtime component and strategy pull APIs landed (feature-flagged rollout)
-- ✅ `HftBacktestAdapter` feature-first mode (`lob_feature`) landed (L1 synthesized compatibility path)
-- 🟡 Feature ABI/versioning/parity gates landed in prototype scope; Rust transport/production kernel promotion remains backlog
+- ✅ `FeatureEngine` runtime component and strategy pull APIs implemented (feature-flagged rollout, 16 features)
+- ✅ `HftBacktestAdapter` feature-first mode (`lob_feature`) implemented (L1 synthesized compatibility path)
+- ✅ Feature ABI/versioning/parity gates implemented; Rust transport and production kernel promotion remain backlog
 
 ## 5. Module Inventory (Current)
 
@@ -185,6 +185,7 @@ Status:
 | `research.backtest`      | standardized research backtest and metrics                                                                      | `research/backtest/*.py`                                                                                               |
 | `research.combinatorial` | expression language + alpha search engine                                                                       | `research/combinatorial/*.py`                                                                                          |
 | `research.rl`            | RL alpha adapter and lifecycle integration                                                                      | `research/rl/*.py`                                                                                                     |
+| `feature`                | Feature Engine (16 features), registry, rollout, profile, compat                                                | `src/hft_platform/feature/engine.py`, `registry.py`, `rollout.py`, `profile.py`, `boundary.py`, `compat.py`           |
 | `backtest`               | runtime backtest runner/adapter/reporting with real-equity-first extraction                                     | `src/hft_platform/backtest/*.py`                                                                                       |
 
 ## 6. Rust Boundary (Current)
