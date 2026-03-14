@@ -213,7 +213,7 @@ class FubonClientFacade:
         self.log = logger
 
         # Instantiate SDK (None if fubon_neo not installed).
-        sdk = FubonSDK() if FubonSDK is not None else None
+        sdk = FubonSDK() if FubonSDK is not None and broker_config else None
         self._sdk = sdk
 
         # Compose sub-components.
