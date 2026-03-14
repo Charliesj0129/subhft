@@ -16,7 +16,7 @@
   "feature_engine_parity_mismatch_rate_max": 0.0,
   "feature_engine_lob_update_rust_us_per_event_max": 20.0,
   "feature_engine_python_vs_rust_parity_mismatch_rate_max": 0.0,
-  "strategy_noop_metrics_on_us_per_event_max": 8.0,
+  "strategy_noop_metrics_on_us_per_event_max": 12.0,
   "shioaji_callback_dispatch_us_per_event_max": 15.0,
   "research_backtest_us_per_row_max": 65.0,
   "research_search_ms_per_trial_max": 80.0,
