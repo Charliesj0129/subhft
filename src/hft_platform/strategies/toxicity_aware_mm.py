@@ -28,6 +28,7 @@ Usage::
         max_position=5,
     )
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -124,12 +125,7 @@ class ToxicityAwareMM(AlphaDrivenMMStrategy):
         # --- 1. Directional signal (weighted, [-1, 1] range) ---
         # Weights based on IC × IR product from exploration
         direction = (
-            0.20 * qi
-            + 0.20 * micro_ratio
-            + 0.20 * ofi_asym
-            + 0.15 * cross_qi
-            + 0.15 * depth_vel
-            + 0.10 * adv_mom
+            0.20 * qi + 0.20 * micro_ratio + 0.20 * ofi_asym + 0.15 * cross_qi + 0.15 * depth_vel + 0.10 * adv_mom
         )
         direction = max(-1.0, min(1.0, direction))
 

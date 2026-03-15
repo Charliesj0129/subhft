@@ -23,19 +23,18 @@ Usage with HftBacktestAdapter (elapse mode):
     )
     adapter.run()
 """
+
 from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from decimal import Decimal
-from typing import Optional
 
 import numpy as np
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import TIF, Side
 from hft_platform.events import LOBStatsEvent
-from hft_platform.strategy.base import BaseStrategy, StrategyContext
+from hft_platform.strategy.base import BaseStrategy
 
 logger = get_logger("alpha_driven_mm")
 
@@ -175,8 +174,12 @@ class AlphaDrivenMMStrategy(BaseStrategy):
             best_ask=int(event.best_ask),
             bid_depth=int(event.bid_depth),
             ask_depth=int(event.ask_depth),
-            mid_price_x2=int(event.mid_price_x2) if event.mid_price_x2 is not None else int(event.best_bid) + int(event.best_ask),
-            spread_scaled=int(event.spread_scaled) if event.spread_scaled is not None else int(event.best_ask) - int(event.best_bid),
+            mid_price_x2=int(event.mid_price_x2)
+            if event.mid_price_x2 is not None
+            else int(event.best_bid) + int(event.best_ask),
+            spread_scaled=int(event.spread_scaled)
+            if event.spread_scaled is not None
+            else int(event.best_ask) - int(event.best_bid),
             imbalance=float(event.imbalance),
             ts_ns=ts_ns,
         )
