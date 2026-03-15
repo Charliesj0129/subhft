@@ -1,0 +1,233 @@
+[
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-02-25_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-02-25_l2.hftbt.npz",
+    "elapsed_s": 107.40338950000023,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 10000000.0,
+    "pnl": 0.0,
+    "max_drawdown": -285372.0,
+    "sharpe": 0.03404903002635504,
+    "n_equity_samples": 203623,
+    "date": "2026-02-25"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-02-26_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-02-26_l2.hftbt.npz",
+    "elapsed_s": 350.3470892530004,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 10140342.0,
+    "pnl": 140342.0,
+    "max_drawdown": -286400.0,
+    "sharpe": 0.1790543886517132,
+    "n_equity_samples": 737950,
+    "date": "2026-02-26"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-03_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-03_l2.hftbt.npz",
+    "elapsed_s": 363.97567113399964,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 9966451.5,
+    "pnl": -33548.5,
+    "max_drawdown": -351415.0,
+    "sharpe": 0.21426655266758488,
+    "n_equity_samples": 737950,
+    "date": "2026-03-03"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-04_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-04_l2.hftbt.npz",
+    "elapsed_s": 141.99704397799997,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 10033783.5,
+    "pnl": 33783.5,
+    "max_drawdown": -334370.0,
+    "sharpe": 0.20777342599656703,
+    "n_equity_samples": 734382,
+    "date": "2026-03-04"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-05_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-05_l2.hftbt.npz",
+    "elapsed_s": 107.82285514400064,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 9900143.5,
+    "pnl": -99856.5,
+    "max_drawdown": -341710.0,
+    "sharpe": 0.18333510680444656,
+    "n_equity_samples": 737950,
+    "date": "2026-03-05"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-06_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-06_l2.hftbt.npz",
+    "elapsed_s": 84.62172977400041,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 10032658.5,
+    "pnl": 32658.5,
+    "max_drawdown": -335765.0,
+    "sharpe": 0.18595976820404722,
+    "n_equity_samples": 737950,
+    "date": "2026-03-06"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-09_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-09_l2.hftbt.npz",
+    "elapsed_s": 94.0705720169999,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 9866358.0,
+    "pnl": -133642.0,
+    "max_drawdown": -333700.0,
+    "sharpe": 0.16507430798454023,
+    "n_equity_samples": 736351,
+    "date": "2026-03-09"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-10_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-10_l2.hftbt.npz",
+    "elapsed_s": 109.22857862399997,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 9900692.5,
+    "pnl": -99307.5,
+    "max_drawdown": -331720.0,
+    "sharpe": 0.16716157369045223,
+    "n_equity_samples": 737950,
+    "date": "2026-03-10"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-11_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-11_l2.hftbt.npz",
+    "elapsed_s": 81.5848110449997,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 9898853.5,
+    "pnl": -101146.5,
+    "max_drawdown": -338080.0,
+    "sharpe": 0.10672229955563102,
+    "n_equity_samples": 737949,
+    "date": "2026-03-11"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-12_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-12_l2.hftbt.npz",
+    "elapsed_s": 60.71039971600021,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 10064889.0,
+    "pnl": 64889.0,
+    "max_drawdown": -336580.0,
+    "sharpe": 0.17501395132881847,
+    "n_equity_samples": 737950,
+    "date": "2026-03-12"
+  },
+  {
+    "symbol": "TXFC6",
+    "l1_path": "research/data/raw/txfc6/TXFC6_2026-03-13_l1.npy",
+    "l2_path": "research/data/raw/txfc6/TXFC6_2026-03-13_l2.hftbt.npz",
+    "elapsed_s": 36.26789536199976,
+    "n_features": 6,
+    "feature_names": [
+      "queue_imbalance",
+      "toxicity_timescale_div",
+      "microprice_spread_ratio",
+      "cross_ema_qi",
+      "depth_velocity_diff",
+      "adverse_momentum"
+    ],
+    "final_equity": 9934297.0,
+    "pnl": -65703.0,
+    "max_drawdown": -331285.0,
+    "sharpe": 0.12488491722716616,
+    "n_equity_samples": 737950,
+    "date": "2026-03-13"
+  }
+]
