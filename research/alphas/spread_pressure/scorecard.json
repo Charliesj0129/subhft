@@ -1,0 +1,59 @@
+{
+  "alpha_id": "spread_pressure",
+  "primary_dataset": "TXFC6_all_l1",
+  "primary_ticks": 2000000,
+  "horizons": {
+    "h1": {
+      "ic": 0.009,
+      "sharpe": 5.24
+    },
+    "h5": {
+      "ic": 0.0111,
+      "sharpe": 3.94
+    },
+    "h10": {
+      "ic": 0.0083,
+      "sharpe": 3.18
+    },
+    "h20": {
+      "ic": 0.0063,
+      "sharpe": 4.86
+    },
+    "h50": {
+      "ic": 0.0039,
+      "sharpe": 1.27
+    }
+  },
+  "oos_split_h5": {
+    "ic_is": 0.012508479396241038,
+    "ic_oos": 0.008050874041843617,
+    "sharpe_is": 3.4250527005280786,
+    "sharpe_oos": 7.300710391233256
+  },
+  "signal_stats": {
+    "mean": 0.000255302853955106,
+    "std": 0.19014995787732816,
+    "nonzero_pct": 99.98555,
+    "autocorr_1": 0.47755569105104767
+  },
+  "tier": "Promising",
+  "cross_validation": {
+    "2330": {
+      "ic_oos_h5": 0.07937116014721632,
+      "sharpe_oos_h5": 37.75065624816541,
+      "tier": "Star"
+    },
+    "2317": {
+      "ic_oos_h5": 0.11654754187109703,
+      "sharpe_oos_h5": 99.60627202393616,
+      "tier": "Star"
+    },
+    "MXFC6": {
+      "ic_oos_h5": 0.007777762969761533,
+      "sharpe_oos_h5": 4.456066242186937,
+      "tier": "Promising"
+    }
+  },
+  "evaluation_date": "2026-03-15",
+  "latency_profile": "shioaji_sim_p95_v2026-03-04"
+}

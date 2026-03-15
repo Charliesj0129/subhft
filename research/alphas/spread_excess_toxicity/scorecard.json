@@ -1,0 +1,43 @@
+{
+  "alpha_id": "spread_excess_toxicity",
+  "primary_dataset": "TXFC6_all_l1",
+  "primary_ticks": 2000000,
+  "horizons": {
+    "h1": {
+      "ic": -0.0112,
+      "sharpe": -9.9
+    },
+    "h5": {
+      "ic": -0.0249,
+      "sharpe": -16.16
+    },
+    "h10": {
+      "ic": -0.0221,
+      "sharpe": -14.06
+    },
+    "h20": {
+      "ic": -0.0157,
+      "sharpe": -12.29
+    },
+    "h50": {
+      "ic": -0.0107,
+      "sharpe": -11.34
+    }
+  },
+  "oos_split_h5": {
+    "ic_is": -0.027028030003354294,
+    "ic_oos": -0.019809211585301686,
+    "sharpe_is": -15.102999032108137,
+    "sharpe_oos": -24.902439023666986
+  },
+  "signal_stats": {
+    "mean": 7.729140394250668e-05,
+    "std": 0.048244395050283766,
+    "nonzero_pct": 99.99934999999999,
+    "autocorr_1": 0.7873348464171809
+  },
+  "tier": "Failed",
+  "cross_validation": {},
+  "evaluation_date": "2026-03-15",
+  "latency_profile": "shioaji_sim_p95_v2026-03-04"
+}
