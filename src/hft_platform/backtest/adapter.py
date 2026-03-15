@@ -1,4 +1,5 @@
 from decimal import Decimal
+from importlib import metadata as importlib_metadata
 
 import numpy as np
 from structlog import get_logger
@@ -24,6 +25,7 @@ from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
 logger = get_logger("hbt_adapter")
+_MODERN_DEFAULT_WAIT_TIMEOUT = 10**18
 
 
 class HftBacktestAdapter:
@@ -58,6 +60,10 @@ class HftBacktestAdapter:
         latency_data_path: str | None = None,
         modify_latency_us: int = 0,
         cancel_latency_us: int = 0,
+        timeout: int = 0,
+        tick_mode: str = "feed",
+        elapse_ns: int = 100_000_000,
+        feature_array_source: tuple[np.ndarray, np.ndarray] | None = None,
     ):
         if not HFTBACKTEST_AVAILABLE:
             raise ImportError("hftbacktest not installed")
@@ -73,6 +79,7 @@ class HftBacktestAdapter:
         self.data_path = data_path
         self.modify_latency_us = int(modify_latency_us)
         self.cancel_latency_us = int(cancel_latency_us)
+        self.timeout = int(timeout)
         self.price_scale = price_scale
         self.price_codec = PriceCodec(FixedPriceScaleProvider(price_scale))
         self._intent_seq = 0
@@ -83,10 +90,17 @@ class HftBacktestAdapter:
         self._last_known_balance = float(initial_balance)
         self._equity_timestamps_ns: list[int] = []
         self._equity_values: list[float] = []
+        self._wait_status_mode = _detect_wait_status_mode()
         self.feature_mode = str(feature_mode or "stats_only").strip().lower()
         self.dispatch_feature_events = bool(dispatch_feature_events)
         self._lob_engine: LOBEngine | None = None
         self._feature_engine: FeatureEngine | None = None
+        self.tick_mode = str(tick_mode).strip().lower()
+        if self.tick_mode not in ("feed", "elapse"):
+            raise ValueError(f"tick_mode must be 'feed' or 'elapse', got {self.tick_mode!r}")
+        self.elapse_ns = int(elapse_ns)
+        self._feature_array_source = feature_array_source
+
         if self.feature_mode == "lob_feature":
             self._lob_engine = LOBEngine()
             self._feature_engine = FeatureEngine()
@@ -94,6 +108,9 @@ class HftBacktestAdapter:
                 setattr(self._lob_engine, "feature_engine", self._feature_engine)
             except Exception:
                 pass
+
+        resolved_tick_size = float(tick_size) if tick_size is not None else _infer_tick_size_from_data(data_path)
+        resolved_lot_size = float(lot_size) if lot_size is not None else 1.0
 
         # Setup HftBacktest (v2.x builder pattern)
         asset_builder = BacktestAsset().data([data_path]).linear_asset(1.0)
@@ -128,10 +145,8 @@ class HftBacktestAdapter:
             exponent = float(m.group()) if m else 3.0
             asset_builder = _call_if_exists(asset_builder, "power_prob_queue_model", exponent)
 
-        if tick_size is not None:
-            asset_builder = _call_if_exists(asset_builder, "tick_size", float(tick_size))
-        if lot_size is not None:
-            asset_builder = _call_if_exists(asset_builder, "lot_size", float(lot_size))
+        asset_builder = _call_if_exists(asset_builder, "tick_size", resolved_tick_size)
+        asset_builder = _call_if_exists(asset_builder, "lot_size", resolved_lot_size)
         if maker_fee or taker_fee:
             asset_builder = _call_if_exists(
                 asset_builder,
@@ -152,7 +167,17 @@ class HftBacktestAdapter:
 
         self.hbt = HashMapMarketDepthBacktest([asset_builder])
 
+        # Feature array lookup (for elapse mode with precomputed features)
+        self._feature_array_lookup = None
+        if self._feature_array_source is not None:
+            ts_arr, feat_arr = self._feature_array_source
+            self._feature_array_lookup = self._make_feature_lookup(ts_arr, feat_arr)
+
         # Context Mapping
+        feature_tuple_src = self._feature_engine.get_feature_tuple if self._feature_engine else None
+        if self._feature_array_lookup is not None:
+            feature_tuple_src = self._feature_array_lookup
+
         self.ctx = StrategyContext(
             positions=self.positions,
             strategy_id=self.strategy.strategy_id,
@@ -163,11 +188,17 @@ class HftBacktestAdapter:
             feature_source=(self._feature_engine.get_feature if self._feature_engine else None),
             feature_view_source=(self._feature_engine.get_feature_view if self._feature_engine else None),
             feature_set_source=(self._feature_engine.feature_set_id if self._feature_engine else None),
-            feature_tuple_source=(self._feature_engine.get_feature_tuple if self._feature_engine else None),
+            feature_tuple_source=feature_tuple_src,
         )
 
     def run(self):
-        logger.info("Starting HftBacktest simulation...")
+        """Dispatch to feed or elapse run loop based on tick_mode."""
+        if self.tick_mode == "elapse":
+            return self._run_elapse()
+        return self._run_feed()
+
+    def _run_feed(self):
+        logger.info("Starting HftBacktest simulation (feed mode)...")
         self._equity_timestamps_ns.clear()
         self._equity_values.clear()
         self._next_equity_sample_ns = 0
@@ -177,7 +208,7 @@ class HftBacktestAdapter:
         # We need to bridge the loop.
 
         # HftBacktest v2.x loop: advance to each feed event
-        while self.hbt.wait_next_feed(True, -1) == 0:
+        while self._wait_for_next_feed():
             # Current LOB State
             # We construct a mock event for the strategy
             # Efficiently accessing hbt depth
@@ -209,25 +240,32 @@ class HftBacktestAdapter:
                         else:
                             feature_event = self._feature_engine.process_lob_stats(stats, local_ts_ns=ts_ns)
                 else:
+                    bid_qty = _resolve_qty(dp, "best_bid_qty", "bid_qty", "bid_volume")
+                    ask_qty = _resolve_qty(dp, "best_ask_qty", "ask_qty", "ask_volume")
+                    total_qty = bid_qty + ask_qty
+                    imb = (bid_qty - ask_qty) / total_qty if total_qty > 0 else 0.0
                     event = LOBStatsEvent(
                         symbol=self.symbol,
                         ts=ts_ns,
-                        imbalance=0.0,
+                        imbalance=imb,
                         best_bid=int(best_bid),
                         best_ask=int(best_ask),
-                        bid_depth=0,
-                        ask_depth=0,
+                        bid_depth=bid_qty,
+                        ask_depth=ask_qty,
                     )
             else:
-                # LOBStatsEvent auto-computes mid_price_x2/spread from best_bid/best_ask
+                bid_qty = _resolve_qty(dp, "best_bid_qty", "bid_qty", "bid_volume")
+                ask_qty = _resolve_qty(dp, "best_ask_qty", "ask_qty", "ask_volume")
+                total_qty = bid_qty + ask_qty
+                imb = (bid_qty - ask_qty) / total_qty if total_qty > 0 else 0.0
                 event = LOBStatsEvent(
                     symbol=self.symbol,
                     ts=ts_ns,
-                    imbalance=0.0,
+                    imbalance=imb,
                     best_bid=int(best_bid),
                     best_ask=int(best_ask),
-                    bid_depth=0,
-                    ask_depth=0,
+                    bid_depth=bid_qty,
+                    ask_depth=ask_qty,
                 )
 
             # Update Context State
@@ -246,6 +284,154 @@ class HftBacktestAdapter:
                 self.execute_intent(intent)
 
         return self.hbt.close()
+
+    def _run_elapse(self):
+        """Run simulation using elapse-based stepping.
+
+        Instead of calling back on every LOB event, ``hbt.elapse(ns)``
+        advances the internal engine by ``elapse_ns`` nanoseconds at a time.
+        All intermediate LOB updates are processed internally by hftbacktest
+        (queue position stays accurate), but Python only gets called at each
+        elapse boundary — dramatically reducing Python overhead for long
+        backtests.
+        """
+        logger.info(
+            "Starting HftBacktest simulation (elapse mode)...",
+            elapse_ns=self.elapse_ns,
+        )
+        self._equity_timestamps_ns.clear()
+        self._equity_values.clear()
+        self._next_equity_sample_ns = 0
+
+        while self.hbt.elapse(self.elapse_ns) == 0:
+            dp = self.hbt.depth(0)
+            best_bid = dp.best_bid
+            best_ask = dp.best_ask
+            if (
+                not (best_bid == best_bid)
+                or not (best_ask == best_ask)
+                or best_bid <= 0
+                or best_ask >= 2147483647
+                or best_bid >= best_ask
+            ):
+                continue
+
+            ts_ns = int(self.hbt.current_timestamp)
+
+            # Access trades that occurred during this elapse interval
+            last_trades = None
+            try:
+                last_trades = self.hbt.last_trades(0)
+                self.hbt.clear_last_trades(0)
+            except (AttributeError, TypeError):
+                pass
+
+            # Build LOB event
+            event = None
+            feature_event = None
+            if self.feature_mode == "lob_feature" and self._lob_engine is not None:
+                bidask_event = self._build_l1_bidask_event(dp, ts_ns)
+                stats = self._lob_engine.process_event(bidask_event)
+                if isinstance(stats, LOBStatsEvent):
+                    event = stats
+                    if self._feature_engine is not None:
+                        process_lob_update = getattr(self._feature_engine, "process_lob_update", None)
+                        if callable(process_lob_update):
+                            feature_event = process_lob_update(bidask_event, stats, local_ts_ns=ts_ns)
+                        else:
+                            feature_event = self._feature_engine.process_lob_stats(stats, local_ts_ns=ts_ns)
+                else:
+                    bid_qty = _resolve_qty(dp, "best_bid_qty", "bid_qty", "bid_volume")
+                    ask_qty = _resolve_qty(dp, "best_ask_qty", "ask_qty", "ask_volume")
+                    total_qty = bid_qty + ask_qty
+                    imb = (bid_qty - ask_qty) / total_qty if total_qty > 0 else 0.0
+                    event = LOBStatsEvent(
+                        symbol=self.symbol,
+                        ts=ts_ns,
+                        imbalance=imb,
+                        best_bid=int(best_bid),
+                        best_ask=int(best_ask),
+                        bid_depth=bid_qty,
+                        ask_depth=ask_qty,
+                    )
+            else:
+                bid_qty = _resolve_qty(dp, "best_bid_qty", "bid_qty", "bid_volume")
+                ask_qty = _resolve_qty(dp, "best_ask_qty", "ask_qty", "ask_volume")
+                total_qty = bid_qty + ask_qty
+                imb = (bid_qty - ask_qty) / total_qty if total_qty > 0 else 0.0
+                event = LOBStatsEvent(
+                    symbol=self.symbol,
+                    ts=ts_ns,
+                    imbalance=imb,
+                    best_bid=int(best_bid),
+                    best_ask=int(best_ask),
+                    bid_depth=bid_qty,
+                    ask_depth=ask_qty,
+                )
+
+            # Attach last_trades to event for MM strategies (best-effort)
+            if last_trades is not None:
+                try:
+                    event.last_trades = last_trades  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass  # __slots__ dataclass — skip
+
+            # Update Context State
+            self._sync_positions()
+            self._maybe_record_equity_point(ts_ns, int(best_bid), int(best_ask))
+
+            # Call Strategy
+            intents = self.strategy.handle_event(self.ctx, event)
+            if feature_event is not None and self.dispatch_feature_events:
+                more = self.strategy.handle_event(self.ctx, feature_event)
+                if more:
+                    intents.extend(more)
+
+            # Execute Intents
+            for intent in intents:
+                self.execute_intent(intent)
+
+        return self.hbt.close()
+
+    def _make_feature_lookup(
+        self, timestamps: np.ndarray, features: np.ndarray
+    ):
+        """Returns a callable(symbol: str) -> tuple that looks up features by current hbt timestamp."""
+        idx = [0]  # mutable container for closure state
+
+        def lookup(symbol: str) -> tuple:
+            ts = int(self.hbt.current_timestamp)
+            # Advance index monotonically (timestamps are sorted)
+            while idx[0] < len(timestamps) - 1 and timestamps[idx[0] + 1] <= ts:
+                idx[0] += 1
+            return tuple(features[idx[0]])
+
+        return lookup
+
+    def _wait_for_next_feed(self) -> bool:
+        if self._wait_status_mode == "modern":
+            wait_timeout = self.timeout if self.timeout > 0 else _MODERN_DEFAULT_WAIT_TIMEOUT
+        else:
+            wait_timeout = self.timeout if self.timeout > 0 else -1
+        status = int(self.hbt.wait_next_feed(True, wait_timeout))
+
+        if status == 1:
+            return False
+
+        if self._wait_status_mode == "modern":
+            if status in (2, 3):
+                return True
+            if status == 0:
+                raise TimeoutError(
+                    "hftbacktest wait_next_feed timed out before the next event; "
+                    f"rerun with a larger --timeout or verify the input data stream: timeout={self.timeout}"
+                )
+            raise RuntimeError(f"Unexpected hftbacktest wait_next_feed status: {status}")
+
+        if status == 0:
+            return True
+
+        raise RuntimeError(f"Unexpected legacy hftbacktest wait_next_feed status: {status}")
 
     @property
     def equity_timestamps_ns(self) -> np.ndarray:
@@ -296,12 +482,12 @@ class HftBacktestAdapter:
 
         if intent.intent_type == IntentType.NEW:
             if intent.side == Side.BUY:
-                self.hbt.submit_buy_order(asset_id, order_id, price, qty, tif, LIMIT)
+                self.hbt.submit_buy_order(asset_id, order_id, price, qty, tif, LIMIT, False)
             else:
-                self.hbt.submit_sell_order(asset_id, order_id, price, qty, tif, LIMIT)
+                self.hbt.submit_sell_order(asset_id, order_id, price, qty, tif, LIMIT, False)
 
         elif intent.intent_type == IntentType.CANCEL:
-            self.hbt.cancel(asset_id, int(intent.target_order_id))
+            self.hbt.cancel(asset_id, int(intent.target_order_id), False)
 
     def _intent_factory(self, strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None):
         self._intent_seq += 1
@@ -402,6 +588,7 @@ class StrategyHbtAdapter:
             partial_fill=partial_fill,
             seed=seed,
             price_scale=price_scale,
+            timeout=timeout,
             feature_mode=feature_mode,
             dispatch_feature_events=dispatch_feature_events,
         )
@@ -431,3 +618,73 @@ def _call_if_exists(obj, method_name: str, *args):
         return method(*args)
     except Exception:
         return obj
+
+
+def _detect_wait_status_mode() -> str:
+    """Detect wait_next_feed status semantics.
+
+    hftbacktest v2.4+ returns explicit status codes:
+    0=timeout, 1=end, 2=feed, 3=order response.
+    Older releases returned 0 on successful advancement.
+    """
+
+    try:
+        version_text = importlib_metadata.version("hftbacktest")
+    except Exception:
+        return "legacy"
+
+    parts = []
+    for chunk in version_text.split(".")[:2]:
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 2:
+        parts.append(0)
+
+    return "modern" if tuple(parts[:2]) >= (2, 4) else "legacy"
+
+
+def _infer_tick_size_from_data(data_path: str) -> float:
+    """Infer a positive tick size from research.npy or hftbt.npz price fields.
+
+    Falls back to 1.0 when the source cannot be loaded or the price ladder
+    does not expose a usable positive increment.
+    """
+
+    try:
+        loaded = np.load(data_path, allow_pickle=False)
+        try:
+            if isinstance(loaded, np.lib.npyio.NpzFile):
+                arr = np.asarray(loaded["data"])
+            else:
+                arr = np.asarray(loaded)
+        finally:
+            if hasattr(loaded, "close"):
+                loaded.close()
+    except Exception:
+        return 1.0
+
+    names = tuple(arr.dtype.names or ())
+    price_fields = [name for name in ("px", "bid_px", "ask_px") if name in names]
+    if not price_fields:
+        return 1.0
+
+    samples: list[np.ndarray] = []
+    head = arr[: min(len(arr), 20_000)]
+    for field in price_fields:
+        col = np.asarray(head[field], dtype=np.float64)
+        col = col[np.isfinite(col) & (col > 0.0)]
+        if col.size:
+            samples.append(col)
+    if not samples:
+        return 1.0
+
+    prices = np.unique(np.concatenate(samples))
+    if prices.size < 2:
+        return 1.0
+
+    diffs = np.diff(prices)
+    diffs = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+    if diffs.size == 0:
+        return 1.0
+
+    return float(diffs.min())
