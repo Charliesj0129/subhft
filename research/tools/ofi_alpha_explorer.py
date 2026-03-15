@@ -432,6 +432,14 @@ def explore_symbol(
     if n < 2000:
         return {}
 
+    # Validate required fields exist
+    if data.dtype.names is None:
+        return {}
+    required = {"bid_qty", "ask_qty", "mid_price", "spread_bps"}
+    if not required.issubset(set(data.dtype.names)):
+        logger.warning("skip_invalid_schema", path=data_path, fields=list(data.dtype.names or []))
+        return {}
+
     bid_qty = data["bid_qty"].astype(np.float64)
     ask_qty = data["ask_qty"].astype(np.float64)
     mid = data["mid_price"].astype(np.float64)

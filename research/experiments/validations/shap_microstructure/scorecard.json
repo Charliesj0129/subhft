@@ -1,0 +1,26 @@
+{
+  "alpha_id": "shap_microstructure",
+  "sharpe_is": 717.6052,
+  "sharpe_oos": 380.1294,
+  "ic_mean": 0.020108,
+  "ic_is": 0.029161,
+  "max_drawdown": 0.035918,
+  "turnover": 0.01536719,
+  "tier": "Star",
+  "data_source": "TXFC6_all_l1.npy",
+  "cross_validation": {
+    "2330": {
+      "ic": 0.61808,
+      "sharpe": 1536.44
+    },
+    "2317": {
+      "ic": 0.449927,
+      "sharpe": 2387.35
+    },
+    "MXFC6": {
+      "ic": 0.029775,
+      "sharpe": 856.31
+    }
+  },
+  "error": null
+}
