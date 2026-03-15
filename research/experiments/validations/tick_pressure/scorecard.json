@@ -1,0 +1,63 @@
+{
+  "alpha_id": "tick_pressure",
+  "screening_status": "ok",
+  "error": null,
+  "primary_data": "TXFC6_all_l1.npy",
+  "primary_ticks": 6271393,
+  "signal_stats": {
+    "mean": -0.0009093736402365249,
+    "std": 0.16950173307194255,
+    "nonzero_pct": 99.99996810915852,
+    "autocorr_1": 0.8746717981340386
+  },
+  "horizons": {
+    "h1": {
+      "ic": -0.042455,
+      "sharpe": -15.17
+    },
+    "h5": {
+      "ic": 0.007182,
+      "sharpe": 18.47
+    },
+    "h10": {
+      "ic": 0.020295,
+      "sharpe": 24.76
+    },
+    "h20": {
+      "ic": 0.021941,
+      "sharpe": 25.86
+    },
+    "h50": {
+      "ic": 0.019026,
+      "sharpe": 24.21
+    }
+  },
+  "oos_split_h5": {
+    "ic_is": 0.007716,
+    "ic_oos": 0.006459,
+    "sharpe_is": 20.53,
+    "sharpe_oos": 16.18
+  },
+  "screening_timestamp": "2026-03-15T04:17:29.618460+00:00",
+  "tier": "promising",
+  "cross_validation": {
+    "2330": {
+      "ticks": 1323989,
+      "ic_oos": -0.009102,
+      "sharpe_oos": -2.74,
+      "status": "ok"
+    },
+    "2317": {
+      "ticks": 1838663,
+      "ic_oos": -0.030183,
+      "sharpe_oos": -21.57,
+      "status": "ok"
+    },
+    "MXFC6": {
+      "ticks": 8723566,
+      "ic_oos": -0.01682,
+      "sharpe_oos": 5.59,
+      "status": "ok"
+    }
+  }
+}

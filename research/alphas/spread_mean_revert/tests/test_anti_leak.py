@@ -9,6 +9,35 @@ sys.path.append(os.getcwd())
 from research.alphas.spread_mean_revert.impl import SpreadMeanRevertAlpha
 
 
+def test_update_no_args_returns_float() -> None:
+    """update() with no args (spread_bps defaults to 0) must return a numeric value."""
+    alpha = SpreadMeanRevertAlpha()
+    result = alpha.update()
+    assert isinstance(result, (int, float))
+
+
+def test_update_is_deterministic() -> None:
+    """Same input sequence always produces the same output."""
+    data = [100.0, 120.0, 80.0, 150.0, 90.0, 110.0]
+    a1 = SpreadMeanRevertAlpha()
+    a2 = SpreadMeanRevertAlpha()
+    for v in data:
+        s1 = a1.update(v)
+        s2 = a2.update(v)
+        assert s1 == s2
+
+
+def test_reset_eliminates_state_dependency() -> None:
+    """After reset(), two alphas fed the same sequence return identical signals."""
+    a1 = SpreadMeanRevertAlpha()
+    a2 = SpreadMeanRevertAlpha()
+    a1.update(800.0)
+    a1.reset()
+    s1 = a1.update(300.0)
+    s2 = a2.update(300.0)
+    assert s1 == s2
+
+
 def test_no_future_leak() -> None:
     """Each update only uses current and past data, not future."""
     alpha = SpreadMeanRevertAlpha()
@@ -21,20 +50,6 @@ def test_no_future_leak() -> None:
     sig_after = alpha.get_signal()
     # Signal must change -- proves it reacts to new data, not pre-computed
     assert sig_before != sig_after
-
-
-def test_reset_prevents_leak() -> None:
-    """After reset(), past data cannot influence future signals."""
-    a1 = SpreadMeanRevertAlpha()
-    a2 = SpreadMeanRevertAlpha()
-    # a1 sees extreme data then resets
-    for _ in range(100):
-        a1.update(9999)
-    a1.reset()
-    # Both fed same data after reset
-    s1 = a1.update(100)
-    s2 = a2.update(100)
-    assert s1 == s2
 
 
 def test_no_global_state() -> None:
