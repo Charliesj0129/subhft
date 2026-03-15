@@ -11,7 +11,7 @@ _MANIFEST = AlphaManifest(
     data_fields=("price", "volume"),
     complexity="O(1)",
     status=AlphaStatus.DRAFT,
-    tier=AlphaTier.TIER_2,
+    tier=AlphaTier.TIER_3,
     rust_module=None,
 )
 
