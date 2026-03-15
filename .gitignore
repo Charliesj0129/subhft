@@ -131,6 +131,14 @@ research/tools/*
 !research/tools/vm_ul.py
 !research/tools/toxicity_alpha_explorer.py
 !research/tools/microstructure_explorer.py
+!research/tools/volatility_regime_explorer.py
+!research/tools/spread_microprice_explorer.py
+!research/tools/momentum_meanrevert_explorer.py
+!research/tools/depth_alpha_explorer.py
+!research/tools/ofi_alpha_explorer.py
+!research/tools/toxicity_ii_explorer.py
+!research/tools/cross_signal_explorer.py
+!research/tools/ch_batch_export.py
 !research/tools/legacy/
 !research/tools/legacy/**/*.py
 !research/logs/
