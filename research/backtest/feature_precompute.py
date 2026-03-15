@@ -39,6 +39,7 @@ KNOWN_ALPHA_IDS: frozenset[str] = frozenset(
         "depth_velocity_diff",
         "cum_ofi_revert",
         "adverse_momentum",
+        "ofi_asymmetry",
     ]
 )
 # EMA decay constants (matching production alpha implementations)
@@ -220,6 +221,8 @@ def precompute_alpha_features_vectorized(
     if alpha_id == "adverse_momentum":
         mid = np.asarray(data["mid_price"], dtype=np.float64)
         return _vectorized_adverse_momentum(bid_qty, ask_qty, mid)
+    if alpha_id == "ofi_asymmetry":
+        return _vectorized_ofi_asymmetry(bid_qty, ask_qty)
     msg = f"Vectorized path not implemented for {alpha_id!r}"
     raise NotImplementedError(msg)
 
@@ -379,6 +382,23 @@ def _vectorized_adverse_momentum(
 
 
 # ---------------------------------------------------------------------------
+# Vectorized: ofi_asymmetry
+# ---------------------------------------------------------------------------
+def _vectorized_ofi_asymmetry(
+    bid_qty: NDArray[np.float64],
+    ask_qty: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """2nd-moment OFI decomposition. IC=+0.093, IR=1.72, 92/94 symbols."""
+    ofi = np.diff(bid_qty, prepend=bid_qty[0]) - np.diff(ask_qty, prepend=ask_qty[0])
+    pos_sq = np.maximum(ofi, 0.0) ** 2
+    neg_sq = np.maximum(-ofi, 0.0) ** 2
+    ema_pos = _ema_vectorized(pos_sq, _EMA_ALPHA_16)
+    ema_neg = _ema_vectorized(neg_sq, _EMA_ALPHA_16)
+    denom = ema_pos + ema_neg + 1e-8
+    return np.clip((ema_pos - ema_neg) / denom, -1.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
 # Multi-alpha precompute (batch all features at once)
 # ---------------------------------------------------------------------------
 def precompute_all_mm_features(
@@ -400,6 +420,7 @@ def precompute_all_mm_features(
             "cross_ema_qi",
             "depth_velocity_diff",
             "adverse_momentum",
+            "ofi_asymmetry",
         ]
 
     timestamps = np.asarray(data["local_ts"], dtype=np.int64)
