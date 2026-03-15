@@ -1,0 +1,70 @@
+{
+  "alpha_id": "depth_shock",
+  "screening_status": "ok",
+  "error": null,
+  "primary_data": "TXFC6_all_l1.npy",
+  "primary_ticks": 6271393,
+  "signal_stats": {
+    "mean": 0.019837,
+    "std": 0.654222,
+    "nonzero_pct": 0.999992,
+    "autocorr_1": 0.754379
+  },
+  "horizons": {
+    "h1": {
+      "ic": 0.051157,
+      "sharpe": 0.022992
+    },
+    "h5": {
+      "ic": 0.040216,
+      "sharpe": 0.018407
+    },
+    "h10": {
+      "ic": 0.02738,
+      "sharpe": 0.011502
+    },
+    "h20": {
+      "ic": 0.017578,
+      "sharpe": 0.011423
+    },
+    "h50": {
+      "ic": 0.01048,
+      "sharpe": 0.008251
+    }
+  },
+  "oos_split_h5": {
+    "is_ic": 0.041536,
+    "oos_ic": 0.03747,
+    "is_sharpe": 0.019581,
+    "oos_sharpe": 0.015906
+  },
+  "screening_timestamp": "2026-03-15T04:13:58.176173+00:00",
+  "tier": "promising",
+  "eval_time_s": 8.56,
+  "cross_validation": [
+    {
+      "dataset": "2330",
+      "ticks": 1323989,
+      "h5_ic": 0.049163,
+      "h5_sharpe": 0.015767,
+      "oos_ic": 0.058394,
+      "oos_sharpe": 0.022608
+    },
+    {
+      "dataset": "2317",
+      "ticks": 1838663,
+      "h5_ic": 0.0758,
+      "h5_sharpe": 0.046601,
+      "oos_ic": 0.079839,
+      "oos_sharpe": 0.046551
+    },
+    {
+      "dataset": "MXFC6",
+      "ticks": 8723566,
+      "h5_ic": 0.044417,
+      "h5_sharpe": 0.024286,
+      "oos_ic": 0.045097,
+      "oos_sharpe": 0.023249
+    }
+  ]
+}
