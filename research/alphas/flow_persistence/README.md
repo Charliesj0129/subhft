@@ -1,13 +1,13 @@
 # flow_persistence
 
 ## Hypothesis
-- Agreement between recent and longer-term OFI direction (persistence) predicts trend continuation; disagreement predicts reversals.
+- Order flow exhibits persistence (autocorrelation). When OFI maintains direction for sustained periods, the trend is likely to continue.
 
 ## Formula
-- `qi = (bid_qty - ask_qty) / max(bid_qty + ask_qty, 1)`
-- `fast = EMA_4(qi); slow = EMA_32(qi)`
-- `agreement = fast * slow`
-- `signal = clip(EMA_8(agreement), -1, 1)`
+- `OFI_raw = bid_qty - ask_qty`
+- `ema_ofi = EMA_8(OFI_raw)`
+- `ema_abs = EMA_16(|OFI_raw|)`
+- `FP_t = ema_ofi * |ema_ofi| / max(ema_abs, epsilon)`
 
 ## Data Fields
 - `bid_qty`
@@ -15,5 +15,4 @@
 
 ## Metadata
 - `alpha_id`: `flow_persistence`
-- `paper_refs`: 089
 - `complexity`: `O(1)`

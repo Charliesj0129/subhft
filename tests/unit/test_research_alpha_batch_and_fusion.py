@@ -17,15 +17,16 @@ def _run_row(alpha, rows, fields: list[str]) -> np.ndarray:
     return out
 
 
-def test_garch_vol_update_batch_matches_row():
+def test_garch_vol_update_row_by_row():
+    """GARCHVolAlpha no longer has update_batch; verify row-by-row update via mid_price."""
     n = 64
-    arr = np.zeros(n, dtype=[("price", "f8")])
-    arr["price"] = 100 + np.linspace(0, 1, n)
+    arr = np.zeros(n, dtype=[("mid_price", "f8")])
+    arr["mid_price"] = 100 + np.linspace(0, 1, n)
     alpha = GARCHVolAlpha()
-    row = _run_row(alpha, arr, ["price"])
-    alpha.reset()
-    batch = np.asarray(alpha.update_batch(arr), dtype=np.float64)
-    assert np.allclose(batch, row, equal_nan=True)
+    signals = _run_row(alpha, arr, ["mid_price"])
+    # First tick returns 0 (no delta yet), subsequent ticks produce finite signals
+    assert signals[0] == 0.0
+    assert np.all(np.isfinite(signals))
 
 
 def test_kl_regime_update_batch_matches_row():
