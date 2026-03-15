@@ -12,6 +12,7 @@ Feature set (8 features):
 - queue_imbalance, toxicity_timescale_div, microprice_spread_ratio, cross_ema_qi,
   depth_velocity_diff, adverse_momentum, cum_ofi_revert, ofi_asymmetry
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -129,12 +130,7 @@ class ToxicityAwareMMv3(AlphaDrivenMMStrategy):
 
         # --- 2. Directional signal ---
         momentum = (
-            0.20 * qi
-            + 0.20 * micro_ratio
-            + 0.15 * ofi_asym
-            + 0.15 * cross_qi
-            + 0.10 * depth_vel
-            + 0.05 * adv_mom
+            0.20 * qi + 0.20 * micro_ratio + 0.15 * ofi_asym + 0.15 * cross_qi + 0.10 * depth_vel + 0.05 * adv_mom
         )
 
         # --- 3. Contrarian signal (cum_ofi_revert) ---

@@ -282,12 +282,14 @@ class HftBacktestAdapter:
                     self._total_buy_fills += abs(delta)
                 else:
                     self._total_sell_fills += abs(delta)
-                self._fill_log.append({
-                    "ts_ns": ts_ns,
-                    "delta": delta,
-                    "position_after": new_pos,
-                    "mid_price": (int(best_bid) + int(best_ask)) / 2.0,
-                })
+                self._fill_log.append(
+                    {
+                        "ts_ns": ts_ns,
+                        "delta": delta,
+                        "position_after": new_pos,
+                        "mid_price": (int(best_bid) + int(best_ask)) / 2.0,
+                    }
+                )
             self._prev_position = new_pos
             self._maybe_record_equity_point(int(self.hbt.current_timestamp), int(best_bid), int(best_ask))
 
@@ -405,12 +407,14 @@ class HftBacktestAdapter:
                     self._total_buy_fills += abs(delta)
                 else:
                     self._total_sell_fills += abs(delta)
-                self._fill_log.append({
-                    "ts_ns": ts_ns,
-                    "delta": delta,
-                    "position_after": new_pos,
-                    "mid_price": (int(best_bid) + int(best_ask)) / 2.0,
-                })
+                self._fill_log.append(
+                    {
+                        "ts_ns": ts_ns,
+                        "delta": delta,
+                        "position_after": new_pos,
+                        "mid_price": (int(best_bid) + int(best_ask)) / 2.0,
+                    }
+                )
             self._prev_position = new_pos
             self._maybe_record_equity_point(ts_ns, int(best_bid), int(best_ask))
 
@@ -427,9 +431,7 @@ class HftBacktestAdapter:
 
         return self.hbt.close()
 
-    def _make_feature_lookup(
-        self, timestamps: np.ndarray, features: np.ndarray
-    ):
+    def _make_feature_lookup(self, timestamps: np.ndarray, features: np.ndarray):
         """Returns a callable(symbol: str) -> tuple that looks up features by current hbt timestamp."""
         idx = [0]  # mutable container for closure state
 
