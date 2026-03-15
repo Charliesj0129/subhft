@@ -85,6 +85,10 @@ class HftBacktestAdapter:
         self._intent_seq = 0
         self._hbt_seq = 0
         self.positions = {self.symbol: 0}
+        self._prev_position = 0
+        self._total_buy_fills = 0
+        self._total_sell_fills = 0
+        self._fill_log: list[dict] = []
         self.equity_sample_ns = int(equity_sample_ns)
         self._next_equity_sample_ns = 0
         self._last_known_balance = float(initial_balance)
@@ -268,8 +272,23 @@ class HftBacktestAdapter:
                     ask_depth=ask_qty,
                 )
 
-            # Update Context State
+            # Update Context State + fill detection
+            old_pos = self._prev_position
             self._sync_positions()
+            new_pos = self.positions.get(self.symbol, 0)
+            delta = new_pos - old_pos
+            if delta != 0:
+                if delta > 0:
+                    self._total_buy_fills += abs(delta)
+                else:
+                    self._total_sell_fills += abs(delta)
+                self._fill_log.append({
+                    "ts_ns": ts_ns,
+                    "delta": delta,
+                    "position_after": new_pos,
+                    "mid_price": (int(best_bid) + int(best_ask)) / 2.0,
+                })
+            self._prev_position = new_pos
             self._maybe_record_equity_point(int(self.hbt.current_timestamp), int(best_bid), int(best_ask))
 
             # Call Strategy
@@ -376,8 +395,23 @@ class HftBacktestAdapter:
                 except AttributeError:
                     pass  # __slots__ dataclass — skip
 
-            # Update Context State
+            # Update Context State + fill detection
+            old_pos = self._prev_position
             self._sync_positions()
+            new_pos = self.positions.get(self.symbol, 0)
+            delta = new_pos - old_pos
+            if delta != 0:
+                if delta > 0:
+                    self._total_buy_fills += abs(delta)
+                else:
+                    self._total_sell_fills += abs(delta)
+                self._fill_log.append({
+                    "ts_ns": ts_ns,
+                    "delta": delta,
+                    "position_after": new_pos,
+                    "mid_price": (int(best_bid) + int(best_ask)) / 2.0,
+                })
+            self._prev_position = new_pos
             self._maybe_record_equity_point(ts_ns, int(best_bid), int(best_ask))
 
             # Call Strategy
@@ -432,6 +466,43 @@ class HftBacktestAdapter:
             return True
 
         raise RuntimeError(f"Unexpected legacy hftbacktest wait_next_feed status: {status}")
+
+    @property
+    def fill_stats(self) -> dict:
+        """Return fill statistics from backtest run."""
+        total_fills = self._total_buy_fills + self._total_sell_fills
+        # Compute adverse selection: price move against fill direction
+        adverse_selections: list[float] = []
+        for i, fill in enumerate(self._fill_log):
+            # Look ahead to next fill or end of log for mid price change
+            if i + 1 < len(self._fill_log):
+                next_mid = self._fill_log[i + 1]["mid_price"]
+                mid_change = next_mid - fill["mid_price"]
+                # Adverse = price moved against us (bought and price fell, or sold and price rose)
+                if fill["delta"] > 0:  # buy fill
+                    adverse_selections.append(-mid_change)
+                else:  # sell fill
+                    adverse_selections.append(mid_change)
+
+        # Duration for fill rate calculation
+        if len(self._fill_log) >= 2:
+            duration_ns = self._fill_log[-1]["ts_ns"] - self._fill_log[0]["ts_ns"]
+            duration_hours = duration_ns / 3.6e12
+        elif len(self._equity_timestamps_ns) >= 2:
+            duration_ns = self._equity_timestamps_ns[-1] - self._equity_timestamps_ns[0]
+            duration_hours = duration_ns / 3.6e12
+        else:
+            duration_hours = 0.0
+
+        return {
+            "buy_fills": self._total_buy_fills,
+            "sell_fills": self._total_sell_fills,
+            "total_fills": total_fills,
+            "fill_rate_per_hour": total_fills / duration_hours if duration_hours > 0 else 0.0,
+            "adverse_selection_mean": float(np.mean(adverse_selections)) if adverse_selections else 0.0,
+            "adverse_selection_median": float(np.median(adverse_selections)) if adverse_selections else 0.0,
+            "n_fill_events": len(self._fill_log),
+        }
 
     @property
     def equity_timestamps_ns(self) -> np.ndarray:
