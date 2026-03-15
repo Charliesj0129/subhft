@@ -1,0 +1,26 @@
+{
+  "dataset_id": "2881_hftbt",
+  "source_type": "real",
+  "source": "clickhouse_hft.market_data",
+  "generator": "ch_batch_export",
+  "schema_version": 1,
+  "rows": 31106,
+  "fields": [
+    "ev",
+    "exch_ts",
+    "local_ts",
+    "px",
+    "qty",
+    "order_id",
+    "ival",
+    "fval"
+  ],
+  "symbols": [
+    "2881"
+  ],
+  "data_fingerprint": "68f1f11b9ef396218c8f827b6d4cca45fceacc4ffafd8fc6b89613da8a7af777",
+  "data_ul": 5,
+  "price_scale_applied": 1000000.0,
+  "created_at": "2026-03-15T13:17:37.726821+00:00",
+  "owner": "research"
+}

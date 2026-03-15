@@ -42,6 +42,7 @@ class AlphaStatus(str, Enum):
 class AlphaTier(str, Enum):
     TIER_1 = "TIER_1"
     TIER_2 = "TIER_2"
+    TIER_3 = "TIER_3"
     ENSEMBLE = "ENSEMBLE"
     RL = "RL"
 
