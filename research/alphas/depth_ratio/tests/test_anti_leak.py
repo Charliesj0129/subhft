@@ -11,6 +11,24 @@ sys.path.append(os.getcwd())
 from research.alphas.depth_ratio.impl import DepthRatioAlpha
 
 
+def test_update_no_args_returns_float() -> None:
+    """update() with no args (both quantities 0) must return a numeric value."""
+    alpha = DepthRatioAlpha()
+    result = alpha.update()
+    assert isinstance(result, (int, float))
+
+
+def test_update_is_deterministic() -> None:
+    """Same inputs produce the same outputs every time."""
+    a1 = DepthRatioAlpha()
+    a2 = DepthRatioAlpha()
+    inputs = [(200.0, 100.0), (100.0, 300.0), (150.0, 150.0)]
+    for bid, ask in inputs:
+        s1 = a1.update(bid, ask)
+        s2 = a2.update(bid, ask)
+        assert s1 == s2
+
+
 def test_no_future_leakage() -> None:
     """Each call should only see past data; no future leakage."""
     alpha = DepthRatioAlpha()
@@ -66,5 +84,4 @@ def test_no_lookahead_monotonic() -> None:
     # All inputs identical -> EMA should converge monotonically toward log(2)
     expected = math.log(2.0)
     for i in range(1, len(signals)):
-        # Each signal should be closer to or equal to expected than the previous
         assert abs(signals[i] - expected) <= abs(signals[i - 1] - expected) + 1e-12
