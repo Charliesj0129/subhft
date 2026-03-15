@@ -4,13 +4,13 @@ from __future__ import annotations
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
 _MANIFEST = AlphaManifest(
-    alpha_id="vpin_bvc",
+    alpha_id="vpin_bvc_stub",
     hypothesis="Stub — pending research.",
     formula="N/A",
     paper_refs=(),
     data_fields=("price", "volume"),
     complexity="O(1)",
-    status=AlphaStatus.DRAFT,
+    status=AlphaStatus.DEPRECATED,
     tier=AlphaTier.TIER_3,
     rust_module=None,
 )
