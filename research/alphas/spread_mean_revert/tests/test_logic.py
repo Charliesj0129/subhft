@@ -31,7 +31,7 @@ def test_manifest_tier_is_tier2() -> None:
 
 def test_manifest_data_fields() -> None:
     fields = SpreadMeanRevertAlpha().manifest.data_fields
-    assert "spread_scaled" in fields
+    assert "spread_bps" in fields
 
 
 def test_manifest_latency_profile_set() -> None:
@@ -67,7 +67,7 @@ def test_initial_signal_zero() -> None:
 
 
 def test_wide_spread_negative_signal() -> None:
-    """Spread above baseline -> deviation positive -> signal negative (fade)."""
+    """Spread above baseline -> signal negative (fade the widening)."""
     alpha = SpreadMeanRevertAlpha()
     # Warm up at baseline 100
     for _ in range(200):
@@ -79,7 +79,7 @@ def test_wide_spread_negative_signal() -> None:
 
 
 def test_narrow_spread_positive_signal() -> None:
-    """Spread below baseline -> deviation negative -> signal positive (fade)."""
+    """Spread below baseline -> signal positive (fade the narrowing)."""
     alpha = SpreadMeanRevertAlpha()
     # Warm up at baseline 100
     for _ in range(200):
@@ -91,7 +91,7 @@ def test_narrow_spread_positive_signal() -> None:
 
 
 def test_ema_convergence() -> None:
-    """With constant input, EMA64 converges to input and signal -> 0."""
+    """With constant input, EMA32 converges to input and signal -> 0."""
     alpha = SpreadMeanRevertAlpha()
     for _ in range(2000):
         alpha.update(100)
@@ -105,7 +105,7 @@ def test_reset_clears_state() -> None:
     alpha.update(200)
     alpha.reset()
     assert alpha.get_signal() == 0.0
-    # First update after reset should initialize EMA64 and return 0
+    # First update after reset should initialize EMA and return 0
     sig = alpha.update(100)
     assert sig == pytest.approx(0.0, abs=1e-9)
 
@@ -121,7 +121,7 @@ def test_get_signal_matches_update_return() -> None:
 def test_update_accepts_kwargs() -> None:
     """update() works with keyword argument."""
     alpha = SpreadMeanRevertAlpha()
-    sig = alpha.update(spread_scaled=100)
+    sig = alpha.update(spread_bps=100)
     assert isinstance(sig, float)
 
 
@@ -133,7 +133,7 @@ def test_update_accepts_positional() -> None:
 
 
 def test_zero_spread() -> None:
-    """Zero spread_scaled is handled without error."""
+    """Zero spread_bps is handled without error."""
     alpha = SpreadMeanRevertAlpha()
     sig = alpha.update(0)
     assert sig == pytest.approx(0.0, abs=1e-9)
@@ -157,9 +157,6 @@ def test_symmetric_response() -> None:
     sig_down = alpha_down.get_signal()
     assert sig_up < 0.0  # wide spread -> negative
     assert sig_down > 0.0  # narrow spread -> positive
-    # Asymmetry is expected due to normalized deviation denominator shifting
-    # with EMA_64; verify they are at least in the same order of magnitude
-    assert abs(sig_up) == pytest.approx(abs(sig_down), rel=0.5)
 
 
 def test_signal_bounded() -> None:

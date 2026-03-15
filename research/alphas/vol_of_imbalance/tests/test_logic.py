@@ -100,8 +100,7 @@ def test_constant_input_vol_converges_to_baseline() -> None:
     alpha = VolOfImbalanceAlpha()
     for _ in range(500):
         alpha.update(300.0, 100.0)
-    # With constant input, deviation -> 0, so vol and baseline both -> 0.
-    # They may not be exactly equal (EMA lag), but both should be very small.
+    # With constant input after bootstrap, deviation -> 0, so dev_ema -> 0.
     assert alpha._dev_ema < 1e-6
     # Signal is bounded regardless
     assert -2.0 <= alpha.get_signal() <= 2.0
@@ -148,14 +147,26 @@ def test_equal_queues_signal_zero_initially() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_qi_ema_first_step_tracks_raw() -> None:
-    """After first update, qi_ema = A8 * raw_qi (from initial 0)."""
+def test_qi_ema_first_step_bootstraps_to_raw() -> None:
+    """After first update, qi_ema = raw_qi (bootstrap convention)."""
     alpha = VolOfImbalanceAlpha()
     bid, ask = 300.0, 100.0
     qi = (bid - ask) / (bid + ask)
     alpha.update(bid, ask)
-    expected_ema = _A8 * qi  # starts from 0
-    assert alpha._qi_ema == pytest.approx(expected_ema, abs=1e-9)
+    assert alpha._qi_ema == pytest.approx(qi, abs=1e-9)
+
+
+def test_qi_ema_second_step_uses_ema_decay() -> None:
+    """Second step: qi_ema = prev + A8 * (raw - prev)."""
+    alpha = VolOfImbalanceAlpha()
+    b1, a1 = 300.0, 100.0
+    b2, a2 = 100.0, 300.0
+    qi1 = (b1 - a1) / (b1 + a1)
+    qi2 = (b2 - a2) / (b2 + a2)
+    alpha.update(b1, a1)
+    alpha.update(b2, a2)
+    expected_ema2 = qi1 + _A8 * (qi2 - qi1)
+    assert alpha._qi_ema == pytest.approx(expected_ema2, abs=1e-9)
 
 
 def test_ema_constants_are_correct() -> None:
@@ -213,6 +224,7 @@ def test_reset_clears_state() -> None:
     assert alpha._dev_ema == 0.0
     assert alpha._vol_baseline == 0.0
     assert alpha._signal == 0.0
+    assert alpha._initialized is False
     sig = alpha.update(300.0, 300.0)
     assert sig == pytest.approx(0.0, abs=1e-9)
 

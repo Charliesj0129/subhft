@@ -81,6 +81,7 @@ research/experiments/*
 !research/experiments/tracker.py
 !research/experiments/runs/.gitkeep
 !research/experiments/comparisons/.gitkeep
+!research/experiments/validations/
 !research/knowledge/
 research/knowledge/*
 !research/knowledge/paper_index.json
@@ -131,6 +132,17 @@ research/tools/*
 !research/tools/vm_ul.py
 !research/tools/toxicity_alpha_explorer.py
 !research/tools/microstructure_explorer.py
+!research/tools/volatility_regime_explorer.py
+!research/tools/spread_microprice_explorer.py
+!research/tools/momentum_meanrevert_explorer.py
+!research/tools/depth_alpha_explorer.py
+!research/tools/ofi_alpha_explorer.py
+!research/tools/toxicity_ii_explorer.py
+!research/tools/cross_signal_explorer.py
+!research/tools/ch_batch_export.py
+!research/tools/run_mm_backtest.py
+!research/tools/volume_proxy_explorer.py
+!research/tools/mm_param_sweep.py
 !research/tools/legacy/
 !research/tools/legacy/**/*.py
 !research/logs/
