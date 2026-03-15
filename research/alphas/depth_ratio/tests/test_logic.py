@@ -13,6 +13,7 @@ import pytest
 
 from research.alphas.depth_ratio.impl import (
     _EMA_ALPHA_8,
+    _EPSILON,
     ALPHA_CLASS,
     DepthRatioAlpha,
 )
@@ -26,10 +27,16 @@ def test_manifest_alpha_id() -> None:
     assert DepthRatioAlpha().manifest.alpha_id == "depth_ratio"
 
 
+def test_manifest_tier_is_tier2() -> None:
+    from research.registry.schemas import AlphaTier
+
+    assert DepthRatioAlpha().manifest.tier == AlphaTier.TIER_2
+
+
 def test_manifest_data_fields() -> None:
     fields = DepthRatioAlpha().manifest.data_fields
-    assert "bid_depth" in fields
-    assert "ask_depth" in fields
+    assert "bid_qty" in fields
+    assert "ask_qty" in fields
 
 
 def test_manifest_latency_profile_set() -> None:
@@ -39,6 +46,14 @@ def test_manifest_latency_profile_set() -> None:
 
 def test_manifest_feature_set_version() -> None:
     assert DepthRatioAlpha().manifest.feature_set_version == "lob_shared_v1"
+
+
+def test_manifest_valid_roles_and_skills() -> None:
+    from research.registry.schemas import VALID_ROLES, VALID_SKILLS
+
+    m = DepthRatioAlpha().manifest
+    assert set(m.roles_used) <= VALID_ROLES
+    assert set(m.skills_used) <= VALID_SKILLS
 
 
 def test_alpha_class_export() -> None:
@@ -62,7 +77,7 @@ def test_initial_signal_zero() -> None:
 
 
 def test_bid_dominant_positive() -> None:
-    """Bid depth > ask depth -> positive signal."""
+    """Bid qty > ask qty -> positive signal."""
     alpha = DepthRatioAlpha()
     for _ in range(20):
         alpha.update(500.0, 100.0)
@@ -70,7 +85,7 @@ def test_bid_dominant_positive() -> None:
 
 
 def test_ask_dominant_negative() -> None:
-    """Ask depth > bid depth -> negative signal."""
+    """Ask qty > bid qty -> negative signal."""
     alpha = DepthRatioAlpha()
     for _ in range(20):
         alpha.update(100.0, 500.0)
@@ -78,7 +93,7 @@ def test_ask_dominant_negative() -> None:
 
 
 def test_equal_depth_zero() -> None:
-    """Equal depths -> log(1/1) = 0 -> signal = 0."""
+    """Equal depths -> log(1) = 0 -> signal = 0."""
     alpha = DepthRatioAlpha()
     sig = alpha.update(200.0, 200.0)
     assert sig == pytest.approx(0.0, abs=1e-9)
@@ -90,21 +105,21 @@ def test_equal_depth_zero() -> None:
 
 
 def test_zero_depth_both() -> None:
-    """Both depths zero -> max(0,1)/max(0,1) = 1 -> log(1) = 0."""
+    """Both depths zero -> log(eps/eps) = 0."""
     alpha = DepthRatioAlpha()
     sig = alpha.update(0.0, 0.0)
     assert sig == pytest.approx(0.0, abs=1e-9)
 
 
-def test_zero_bid_depth() -> None:
-    """Zero bid depth -> max(0,1)/max(ask,1) -> negative signal."""
+def test_zero_bid_qty() -> None:
+    """Zero bid qty -> log(eps/ask) -> negative signal."""
     alpha = DepthRatioAlpha()
     sig = alpha.update(0.0, 100.0)
     assert sig < 0.0
 
 
-def test_zero_ask_depth() -> None:
-    """Zero ask depth -> max(bid,1)/max(0,1) -> positive signal."""
+def test_zero_ask_qty() -> None:
+    """Zero ask qty -> log(bid/eps) -> positive signal."""
     alpha = DepthRatioAlpha()
     sig = alpha.update(100.0, 0.0)
     assert sig > 0.0
@@ -185,7 +200,7 @@ def test_get_signal() -> None:
 
 def test_update_kwargs() -> None:
     alpha = DepthRatioAlpha()
-    sig = alpha.update(bid_depth=200.0, ask_depth=100.0)
+    sig = alpha.update(bid_qty=200.0, ask_qty=100.0)
     expected = math.log(200.0 / 100.0)
     assert sig == pytest.approx(expected, abs=1e-9)
 
@@ -209,12 +224,11 @@ def test_update_one_arg_raises() -> None:
 
 
 def test_log_smoothness() -> None:
-    """log(2) ~ 0.69 < linear 1.0 for a 2:1 ratio -- log is smoother."""
+    """log(2) ~ 0.69 < 1.0 -- log is smoother than linear ratio."""
     alpha = DepthRatioAlpha()
     sig = alpha.update(200.0, 100.0)
-    # log(2) ~ 0.693
     assert sig == pytest.approx(math.log(2.0), abs=1e-9)
-    assert sig < 1.0  # smoother than linear (200-100)/(200+100) would give 0.33, but the key property is log(2) < 1.0
+    assert sig < 1.0
 
 
 # ---------------------------------------------------------------------------
