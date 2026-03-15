@@ -1,0 +1,43 @@
+{
+  "alpha_id": "flow_toxicity_ratio",
+  "screening_status": "ok",
+  "error": null,
+  "primary_data": "TXFC6_all_l1.npy",
+  "primary_ticks": 500000,
+  "signal_stats": {
+    "mean": 0.28786002083773926,
+    "std": 0.14059664283224754,
+    "nonzero_pct": 99.99980000000001,
+    "autocorr_1": 0.9795937450905962
+  },
+  "horizons": {
+    "h1": {
+      "ic": 2.8e-05,
+      "sharpe": 0.47
+    },
+    "h5": {
+      "ic": 0.001147,
+      "sharpe": 1.58
+    },
+    "h10": {
+      "ic": 0.002149,
+      "sharpe": 2.3
+    },
+    "h20": {
+      "ic": 0.003666,
+      "sharpe": 3.34
+    },
+    "h50": {
+      "ic": 0.001365,
+      "sharpe": 5.86
+    }
+  },
+  "oos_split_h5": {
+    "ic_is": 0.002183,
+    "ic_oos": 0.002162,
+    "sharpe_is": 0.04,
+    "sharpe_oos": 4.11
+  },
+  "screening_timestamp": "2026-03-15T04:18:41.254418+00:00",
+  "tier": "promising"
+}

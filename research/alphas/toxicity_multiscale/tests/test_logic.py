@@ -181,3 +181,77 @@ def test_implements_alpha_protocol() -> None:
 
     alpha = ToxicityMultiscaleAlpha()
     assert isinstance(alpha, AlphaProtocol)
+
+
+def test_reset_clears_all_state() -> None:
+    alpha = ToxicityMultiscaleAlpha()
+    alpha.update(800.0, 100.0, 100.0, 100.0)
+    alpha.update(800.0, 100.0, 100.0, 105.0)
+    alpha.reset()
+    assert alpha.get_signal() == 0.0
+    # After reset, first update should equal fresh instance
+    fresh = ToxicityMultiscaleAlpha()
+    s1 = alpha.update(300.0, 300.0, 50.0, 100.0)
+    s2 = fresh.update(300.0, 300.0, 50.0, 100.0)
+    assert s1 == pytest.approx(s2, abs=1e-9)
+
+
+def test_get_signal_matches_update_return() -> None:
+    alpha = ToxicityMultiscaleAlpha()
+    ret = alpha.update(500.0, 100.0, 80.0, 100.0)
+    assert ret == alpha.get_signal()
+
+
+def test_kwargs_interface() -> None:
+    alpha = ToxicityMultiscaleAlpha()
+    alpha.update(bid_qty=500.0, ask_qty=100.0, spread_scaled=50.0, mid_price=100.0)
+    sig = alpha.update(
+        bid_qty=500.0,
+        ask_qty=100.0,
+        spread_scaled=50.0,
+        mid_price=101.0,
+    )
+    assert isinstance(sig, float)
+
+
+def test_positional_interface() -> None:
+    alpha = ToxicityMultiscaleAlpha()
+    sig = alpha.update(500.0, 100.0, 50.0, 100.0)
+    assert isinstance(sig, float)
+
+
+def test_zero_quantities_handled() -> None:
+    """bid_qty=0, ask_qty=0 doesn't crash."""
+    alpha = ToxicityMultiscaleAlpha()
+    sig = alpha.update(0.0, 0.0, 50.0, 100.0)
+    assert isinstance(sig, float)
+    assert math.isfinite(sig)
+
+
+def test_signal_finite_random_data() -> None:
+    """Signal stays finite with random data."""
+    alpha = ToxicityMultiscaleAlpha()
+    rng = np.random.default_rng(42)
+    mid = 100.0
+    for _ in range(500):
+        bq = rng.uniform(0, 1000)
+        aq = rng.uniform(0, 1000)
+        sp = rng.uniform(1, 200)
+        mid += rng.normal(0, 0.5)
+        sig = alpha.update(bq, aq, sp, mid)
+        assert math.isfinite(sig)
+        assert -2.0 <= sig <= 2.0
+
+
+def test_update_insufficient_args_raises() -> None:
+    alpha = ToxicityMultiscaleAlpha()
+    with pytest.raises(ValueError):
+        alpha.update(100.0)
+
+
+def test_equal_qty_gives_zero_signal() -> None:
+    """When bid_qty == ask_qty, QI is 0, so signal is 0."""
+    alpha = ToxicityMultiscaleAlpha()
+    alpha.update(100.0, 100.0, 50.0, 100.0)
+    sig = alpha.update(100.0, 100.0, 50.0, 101.0)
+    assert sig == 0.0
