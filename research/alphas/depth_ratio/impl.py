@@ -1,6 +1,6 @@
 """Depth Ratio Alpha — log book asymmetry signal.
 
-Signal:  DR_t = EMA_8( log( max(bid_depth, 1) / max(ask_depth, 1) ) )
+Signal:  DR_t = EMA_8( log( bid_qty / max(ask_qty, EPSILON) ) )
 Smoothed via exponential moving average (alpha_ema ~ 1 - exp(-1/8)).
 
 A positive DR -> bid-side depth dominates -> near-term upward mid-price pressure.
@@ -22,6 +22,8 @@ from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
 # EMA decay: window ~ 8 ticks -> alpha = 1 - exp(-1/8) ~ 0.1175
 _EMA_ALPHA_8: float = 1.0 - math.exp(-1.0 / 8.0)
+_EPSILON: float = 1e-8  # guards against division by zero
+
 # Cached manifest (Allocator Law: no per-call heap allocation).
 _MANIFEST = AlphaManifest(
     alpha_id="depth_ratio",
@@ -30,15 +32,15 @@ _MANIFEST = AlphaManifest(
         " linear imbalance. Log scale handles extreme depth distributions and"
         " is more stable."
     ),
-    formula="DR_t = EMA_8( log( max(bid_depth, 1) / max(ask_depth, 1) ) )",
+    formula="DR_t = EMA_8( log( bid_qty / max(ask_qty, EPSILON) ) )",
     paper_refs=(),
-    data_fields=("bid_depth", "ask_depth"),
+    data_fields=("bid_qty", "ask_qty"),
     complexity="O(1)",
     status=AlphaStatus.DRAFT,
     tier=AlphaTier.TIER_2,
     rust_module=None,
     latency_profile="shioaji_sim_p95_v2026-03-04",
-    roles_used=("planner", "code-reviewer"),
+    roles_used=("planner",),
     skills_used=("iterative-retrieval", "validation-gate"),
     feature_set_version="lob_shared_v1",
 )
@@ -48,8 +50,8 @@ class DepthRatioAlpha:
     """O(1) log-depth-ratio predictor with EMA smoothing.
 
     update() accepts either:
-      - 2 positional args:  bid_depth, ask_depth
-      - keyword args:       bid_depth=..., ask_depth=...
+      - 2 positional args:  bid_qty, ask_qty
+      - keyword args:       bid_qty=..., ask_qty=...
     """
 
     __slots__ = ("_log_ratio_ema", "_signal", "_initialized")
@@ -65,20 +67,20 @@ class DepthRatioAlpha:
 
     def update(self, *args: float, **kwargs: float) -> float:
         """Compute log depth ratio and update EMA."""
-        # --- resolve bid_depth and ask_depth from call conventions ---
+        # --- resolve bid_qty and ask_qty from call conventions ---
         if len(args) >= 2:
-            bid_depth = float(args[0])
-            ask_depth = float(args[1])
+            bid_qty = float(args[0])
+            ask_qty = float(args[1])
         elif len(args) == 1:
-            raise ValueError("update() requires 2 positional args (bid_depth, ask_depth) or keyword args")
+            raise ValueError(
+                "update() requires 2 positional args (bid_qty, ask_qty) or keyword args"
+            )
         else:
-            bid_depth = float(kwargs.get("bid_depth", 0.0))
-            ask_depth = float(kwargs.get("ask_depth", 0.0))
+            bid_qty = float(kwargs.get("bid_qty", 0.0))
+            ask_qty = float(kwargs.get("ask_qty", 0.0))
 
-        # Guard against zero/negative depth: max(x, 1) ensures log is defined
-        safe_bid = max(bid_depth, 1.0)
-        safe_ask = max(ask_depth, 1.0)
-        raw_log_ratio = math.log(safe_bid / safe_ask)
+        # Safe log: guard denominator with epsilon, numerator with max(x, epsilon)
+        raw_log_ratio = math.log(max(bid_qty, _EPSILON) / max(ask_qty, _EPSILON))
 
         if not self._initialized:
             self._log_ratio_ema = raw_log_ratio

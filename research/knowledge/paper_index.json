@@ -1339,7 +1339,8 @@
     "alphas": [
       "toxicity_acceleration",
       "toxicity_timescale_divergence",
-      "adverse_flow_asymmetry"
+      "adverse_flow_asymmetry",
+      "toxicity_multiscale"
     ],
     "arxiv_id": "2312.05827",
     "note_file": "research/knowledge/notes/129_detecting_toxic_flow.md",
@@ -1375,7 +1376,9 @@
   },
   "131": {
     "alphas": [
-      "spread_excess_toxicity"
+      "spread_excess_toxicity",
+      "adverse_momentum",
+      "spread_adverse_ratio"
     ],
     "arxiv_id": "2503.18005",
     "note_file": "research/knowledge/notes/131_simple_strategy_toxic_flow.md",
@@ -1428,7 +1431,64 @@
       "microstructure"
     ],
     "title": "Market Simulation under Adverse Selection",
-    "authors": "",
+    "authors": "Luca Lalor, Anatoliy V. Swishchuk",
+    "year": 2024
+  },
+  "134": {
+    "alphas": [
+      "vpin_bvc"
+    ],
+    "note_file": "research/knowledge/notes/134_vpin_flow_toxicity.md",
+    "ref": "134",
+    "status": "reviewed",
+    "tags": [
+      "vpin",
+      "toxic_flow",
+      "volume_clock",
+      "informed_trading",
+      "microstructure"
+    ],
+    "title": "Flow Toxicity and Liquidity in a High Frequency World",
+    "authors": "David Easley, Marcos Lopez de Prado, Maureen O'Hara",
+    "year": 2012,
+    "journal": "Review of Financial Studies 25(5), 1457-1493"
+  },
+  "135": {
+    "alphas": [
+      "kyle_lambda"
+    ],
+    "note_file": "research/knowledge/notes/135_kyle_continuous_auctions.md",
+    "ref": "135",
+    "status": "reviewed",
+    "tags": [
+      "kyle_lambda",
+      "price_impact",
+      "adverse_selection",
+      "insider_trading",
+      "microstructure"
+    ],
+    "title": "Continuous Auctions and Insider Trading",
+    "authors": "Albert S. Kyle",
+    "year": 1985,
+    "journal": "Econometrica 53(6), 1315-1335"
+  },
+  "136": {
+    "alphas": [
+      "adverse_momentum"
+    ],
+    "arxiv_id": "2407.04510",
+    "note_file": "research/knowledge/notes/136_unwinding_toxic_flow_partial_info.md",
+    "ref": "136",
+    "status": "reviewed",
+    "tags": [
+      "toxic_flow",
+      "partial_information",
+      "filtering",
+      "adverse_selection",
+      "microstructure"
+    ],
+    "title": "Unwinding Toxic Flow with Partial Information",
+    "authors": "Alexander Barzykin, Robert Boyce, Eyal Neuman",
     "year": 2024
   },
   "depth_slope_ref": {

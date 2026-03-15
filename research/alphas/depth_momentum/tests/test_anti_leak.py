@@ -161,6 +161,38 @@ def test_two_resets_then_replay_identical() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_update_no_args_returns_float() -> None:
+    """update() with no args (both quantities 0) must return a numeric value."""
+    alpha = _make_alpha()
+    result = alpha.update()
+    assert isinstance(result, (int, float))
+
+
+def test_update_is_deterministic() -> None:
+    """Two fresh alphas fed the same sequence must produce identical signals."""
+    a1 = _make_alpha()
+    a2 = _make_alpha()
+    inputs = [(120.0, 80.0), (90.0, 110.0), (150.0, 60.0), (200.0, 100.0)]
+    for b, a in inputs:
+        s1 = a1.update(b, a)
+        s2 = a2.update(b, a)
+        assert s1 == s2, f"Non-deterministic: {s1} vs {s2}"
+
+
+def test_reset_eliminates_state_dependency() -> None:
+    """After reset(), an alpha fed the same first input as a fresh one returns identical signal."""
+    a1 = _make_alpha()
+    a2 = _make_alpha()
+    # Warm up a1 with different data
+    a1.update(800.0, 200.0)
+    a1.update(100.0, 900.0)
+    a1.reset()
+    # Both should produce identical output for the same first input
+    s1 = a1.update(300.0, 300.0)
+    s2 = a2.update(300.0, 300.0)
+    assert s1 == s2, f"State leak after reset: {s1} vs {s2}"
+
+
 def test_signal_direction_not_contaminated_after_reset() -> None:
     """Signal direction after reset must not be biased by prior warmup."""
     alpha = _make_alpha()
