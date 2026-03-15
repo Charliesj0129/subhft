@@ -1,0 +1,43 @@
+{
+  "alpha_id": "mean_revert_qi",
+  "screening_status": "ok",
+  "error": null,
+  "primary_data": "TXFC6_all_l1.npy",
+  "primary_ticks": 6271393,
+  "signal_stats": {
+    "mean": 0.000526230921334922,
+    "std": 0.9825979144411793,
+    "nonzero_pct": 100.0,
+    "autocorr_1": 0.5376365306087189
+  },
+  "horizons": {
+    "h1": {
+      "ic": -0.120181,
+      "sharpe": -74.06
+    },
+    "h5": {
+      "ic": -0.114576,
+      "sharpe": -79.44
+    },
+    "h10": {
+      "ic": -0.08858,
+      "sharpe": -66.48
+    },
+    "h20": {
+      "ic": -0.063132,
+      "sharpe": -53.33
+    },
+    "h50": {
+      "ic": -0.039805,
+      "sharpe": -38.41
+    }
+  },
+  "oos_split_h5": {
+    "ic_is": -0.116231,
+    "ic_oos": -0.111324,
+    "sharpe_is": -91.84,
+    "sharpe_oos": -64.12
+  },
+  "screening_timestamp": "2026-03-15T04:15:17.778449+00:00",
+  "tier": "failed"
+}
