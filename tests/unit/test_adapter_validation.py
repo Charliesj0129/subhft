@@ -38,6 +38,7 @@ class TestCrossedBookDetection(unittest.TestCase):
                 asset_symbol="2330",
                 data_path="dummy.npz",
             )
+            adapter._wait_status_mode = "modern"
             return adapter, strategy
 
     def test_crossed_book_skipped(self):
@@ -49,7 +50,7 @@ class TestCrossedBookDetection(unittest.TestCase):
         def fake_wait(flag, timeout):
             nonlocal call_count
             call_count += 1
-            return 0 if call_count <= 1 else -1
+            return 2 if call_count <= 1 else 1
 
         adapter.hbt.wait_next_feed = fake_wait
         adapter.hbt.current_timestamp = 1_000_000
@@ -71,7 +72,7 @@ class TestCrossedBookDetection(unittest.TestCase):
         def fake_wait(flag, timeout):
             nonlocal call_count
             call_count += 1
-            return 0 if call_count <= 1 else -1
+            return 2 if call_count <= 1 else 1
 
         adapter.hbt.wait_next_feed = fake_wait
         adapter.hbt.current_timestamp = 1_000_000
@@ -93,7 +94,7 @@ class TestCrossedBookDetection(unittest.TestCase):
         def fake_wait(flag, timeout):
             nonlocal call_count
             call_count += 1
-            return 0 if call_count <= 1 else -1
+            return 2 if call_count <= 1 else 1
 
         adapter.hbt.wait_next_feed = fake_wait
         adapter.hbt.current_timestamp = 1_000_000
