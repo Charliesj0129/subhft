@@ -1,0 +1,43 @@
+{
+  "alpha_id": "toxicity_acceleration",
+  "screening_status": "ok",
+  "error": null,
+  "primary_data": "TXFC6_all_l1.npy",
+  "primary_ticks": 500000,
+  "signal_stats": {
+    "mean": 0.000502216064854573,
+    "std": 0.31850440026836097,
+    "nonzero_pct": 99.99980000000001,
+    "autocorr_1": 0.7223523822936372
+  },
+  "horizons": {
+    "h1": {
+      "ic": -0.05413,
+      "sharpe": -63.02
+    },
+    "h5": {
+      "ic": 0.001048,
+      "sharpe": -0.13
+    },
+    "h10": {
+      "ic": 0.027522,
+      "sharpe": 31.68
+    },
+    "h20": {
+      "ic": 0.041159,
+      "sharpe": 42.87
+    },
+    "h50": {
+      "ic": 0.033446,
+      "sharpe": 38.56
+    }
+  },
+  "oos_split_h5": {
+    "ic_is": 0.000232,
+    "ic_oos": 0.002784,
+    "sharpe_is": -2.46,
+    "sharpe_oos": 3.6
+  },
+  "screening_timestamp": "2026-03-15T04:18:54.448544+00:00",
+  "tier": "promising"
+}
