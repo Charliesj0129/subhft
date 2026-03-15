@@ -12,20 +12,24 @@ from typing import Any, Protocol, runtime_checkable
 # construction time (warn-only, non-blocking).
 # ---------------------------------------------------------------------------
 
-VALID_ROLES: frozenset[str] = frozenset({
-    "planner",
-    "architect",
-    "code-reviewer",
-    "refactor-cleaner",
-})
+VALID_ROLES: frozenset[str] = frozenset(
+    {
+        "planner",
+        "architect",
+        "code-reviewer",
+        "refactor-cleaner",
+    }
+)
 
-VALID_SKILLS: frozenset[str] = frozenset({
-    "iterative-retrieval",
-    "validation-gate",
-    "hft-backtester",
-    "paper_trader",
-    "rust_feature_engineering",
-})
+VALID_SKILLS: frozenset[str] = frozenset(
+    {
+        "iterative-retrieval",
+        "validation-gate",
+        "hft-backtester",
+        "paper_trader",
+        "rust_feature_engineering",
+    }
+)
 
 
 class AlphaStatus(str, Enum):
@@ -145,11 +149,7 @@ class Scorecard:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Scorecard":
         raw_latency = data.get("latency_profile")
-        latency_profile = (
-            {str(k): v for k, v in dict(raw_latency).items()}
-            if isinstance(raw_latency, dict)
-            else None
-        )
+        latency_profile = {str(k): v for k, v in dict(raw_latency).items()} if isinstance(raw_latency, dict) else None
         return cls(
             sharpe_is=_to_optional_float(data.get("sharpe_is")),
             sharpe_oos=_to_optional_float(data.get("sharpe_oos")),
@@ -198,22 +198,17 @@ def _to_optional_int(value: Any) -> int | None:
 @runtime_checkable
 class AlphaProtocol(Protocol):
     @property
-    def manifest(self) -> AlphaManifest:
-        ...
+    def manifest(self) -> AlphaManifest: ...
 
-    def update(self, *args: Any, **kwargs: Any) -> float:
-        ...
+    def update(self, *args: Any, **kwargs: Any) -> float: ...
 
-    def reset(self) -> None:
-        ...
+    def reset(self) -> None: ...
 
-    def get_signal(self) -> float:
-        ...
+    def get_signal(self) -> float: ...
 
 
 @runtime_checkable
 class BatchAlphaProtocol(AlphaProtocol, Protocol):
     """Optional high-throughput API for batch evaluation on ndarray inputs."""
 
-    def update_batch(self, data: Any) -> Any:
-        ...
+    def update_batch(self, data: Any) -> Any: ...
