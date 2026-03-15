@@ -21,7 +21,7 @@ class _Hbt:
         if self._ran:
             return 1
         self._ran = True
-        return 0
+        return 2  # modern: 2=feed available, legacy: handled by patching
 
     def run(self):
         return True
@@ -35,10 +35,10 @@ class _Hbt:
     def position(self, *_args, **_kwargs):
         return 0
 
-    def submit_buy_order(self, asset_id, order_id, price, qty, tif, order_type):
+    def submit_buy_order(self, asset_id, order_id, price, qty, tif, order_type, wait=False):
         self.submitted.append(("buy", asset_id, order_id, price, qty, tif, order_type))
 
-    def submit_sell_order(self, asset_id, order_id, price, qty, tif, order_type):
+    def submit_sell_order(self, asset_id, order_id, price, qty, tif, order_type, wait=False):
         self.submitted.append(("sell", asset_id, order_id, price, qty, tif, order_type))
 
     def cancel(self, *_args, **_kwargs):
@@ -85,7 +85,7 @@ class _FeatureAwareStrategy(BaseStrategy):
             self.last_spread = self.ctx.get_feature(event.symbol, "spread_scaled")
 
 
-def test_backtest_adapter_submits_scaled_order(monkeypatch):
+def _patch_hftbacktest(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "HFTBACKTEST_AVAILABLE", True, raising=False)
     monkeypatch.setattr(hbt_adapter, "HashMapMarketDepthBacktest", _Hbt, raising=False)
     monkeypatch.setattr(hbt_adapter, "BacktestAsset", _BacktestAsset, raising=False)
@@ -93,8 +93,13 @@ def test_backtest_adapter_submits_scaled_order(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "ConstantLatency", _Noop, raising=False)
     monkeypatch.setattr(hbt_adapter, "PowerProbQueueModel", _Noop, raising=False)
     monkeypatch.setattr(hbt_adapter, "IOC", object(), raising=False)
-    monkeypatch.setattr(hbt_adapter, "ROD", object(), raising=False)
-    monkeypatch.setattr(hbt_adapter, "Limit", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "GTC", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "LIMIT", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
+
+
+def test_backtest_adapter_submits_scaled_order(monkeypatch):
+    _patch_hftbacktest(monkeypatch)
 
     strategy = _SimpleStrategy("demo")
     adapter = hbt_adapter.HftBacktestAdapter(strategy=strategy, asset_symbol="AAA", data_path="dummy", price_scale=100)
@@ -110,15 +115,7 @@ def test_backtest_adapter_submits_scaled_order(monkeypatch):
 
 
 def test_backtest_adapter_lob_feature_mode_populates_ctx_features(monkeypatch):
-    monkeypatch.setattr(hbt_adapter, "HFTBACKTEST_AVAILABLE", True, raising=False)
-    monkeypatch.setattr(hbt_adapter, "HashMapMarketDepthBacktest", _Hbt, raising=False)
-    monkeypatch.setattr(hbt_adapter, "BacktestAsset", _BacktestAsset, raising=False)
-    monkeypatch.setattr(hbt_adapter, "LinearAsset", _Noop, raising=False)
-    monkeypatch.setattr(hbt_adapter, "ConstantLatency", _Noop, raising=False)
-    monkeypatch.setattr(hbt_adapter, "PowerProbQueueModel", _Noop, raising=False)
-    monkeypatch.setattr(hbt_adapter, "IOC", object(), raising=False)
-    monkeypatch.setattr(hbt_adapter, "ROD", object(), raising=False)
-    monkeypatch.setattr(hbt_adapter, "Limit", object(), raising=False)
+    _patch_hftbacktest(monkeypatch)
 
     strategy = _FeatureAwareStrategy("demo")
     adapter = hbt_adapter.HftBacktestAdapter(
@@ -160,15 +157,7 @@ def test_strategy_hbt_adapter_uses_strategy_class(monkeypatch):
 
 def test_backtest_adapter_accepts_modify_cancel_latency(monkeypatch):
     """HftBacktestAdapter stores modify_latency_us and cancel_latency_us for future use."""
-    monkeypatch.setattr(hbt_adapter, "HFTBACKTEST_AVAILABLE", True, raising=False)
-    monkeypatch.setattr(hbt_adapter, "HashMapMarketDepthBacktest", _Hbt, raising=False)
-    monkeypatch.setattr(hbt_adapter, "BacktestAsset", _BacktestAsset, raising=False)
-    monkeypatch.setattr(hbt_adapter, "LinearAsset", _Noop, raising=False)
-    monkeypatch.setattr(hbt_adapter, "ConstantLatency", _Noop, raising=False)
-    monkeypatch.setattr(hbt_adapter, "PowerProbQueueModel", _Noop, raising=False)
-    monkeypatch.setattr(hbt_adapter, "IOC", object(), raising=False)
-    monkeypatch.setattr(hbt_adapter, "ROD", object(), raising=False)
-    monkeypatch.setattr(hbt_adapter, "Limit", object(), raising=False)
+    _patch_hftbacktest(monkeypatch)
 
     strategy = _SimpleStrategy("demo")
     adapter = hbt_adapter.HftBacktestAdapter(

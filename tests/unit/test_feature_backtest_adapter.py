@@ -25,7 +25,7 @@ class _Hbt:
         if self._ran:
             return 1
         self._ran = True
-        return 0
+        return 2  # modern: 2=feed available
 
     def run(self):
         return True
@@ -39,10 +39,10 @@ class _Hbt:
     def position(self, *_args, **_kwargs):
         return 0
 
-    def submit_buy_order(self, asset_id, order_id, price, qty, tif, order_type):
+    def submit_buy_order(self, asset_id, order_id, price, qty, tif, order_type, wait=False):
         self.submitted.append(("buy", price, qty))
 
-    def submit_sell_order(self, asset_id, order_id, price, qty, tif, order_type):
+    def submit_sell_order(self, asset_id, order_id, price, qty, tif, order_type, wait=False):
         self.submitted.append(("sell", price, qty))
 
     def cancel(self, *_args, **_kwargs):
@@ -82,8 +82,9 @@ def _patch_hftbacktest(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "ConstantLatency", _Noop, raising=False)
     monkeypatch.setattr(hbt_adapter, "PowerProbQueueModel", _Noop, raising=False)
     monkeypatch.setattr(hbt_adapter, "IOC", object(), raising=False)
-    monkeypatch.setattr(hbt_adapter, "ROD", object(), raising=False)
-    monkeypatch.setattr(hbt_adapter, "Limit", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "GTC", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "LIMIT", object(), raising=False)
+    monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
 
 
 # --- Test strategies ---
