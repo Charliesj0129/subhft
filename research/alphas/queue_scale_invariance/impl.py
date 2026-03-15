@@ -11,7 +11,7 @@ _MANIFEST = AlphaManifest(
     data_fields=("price", "volume"),
     complexity="O(1)",
     status=AlphaStatus.DRAFT,
-    tier=AlphaTier.TIER_3,
+    tier=AlphaTier.TIER_2,
     rust_module=None,
 )
 
@@ -32,6 +32,9 @@ class QueueScaleInvarianceAlpha:
         return self._signal
 
     def value(self) -> float:
+        return self._signal
+
+    def get_signal(self) -> float:
         return self._signal
 
     def reset(self) -> None:
