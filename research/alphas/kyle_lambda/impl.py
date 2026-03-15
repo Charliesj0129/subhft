@@ -2,7 +2,7 @@
 
 Signal:  Rolling Kyle's Lambda (Price Impact Coefficient)
   signed_vol = volume * sign(bid_qty - ask_qty)      # Tick rule
-  lambda     = Cov(dP, signed_vol) / Var(signed_vol)  # Kyle's lambda
+  lambda     = EMA_16(Cov(dP, signed_vol)) / EMA_16(Var(signed_vol))
   signal     = clip(lambda / max(EMA_64(|lambda|), eps), -2, 2)
 
 A positive lambda → price impact aligned with buy pressure → informed trading.
@@ -19,7 +19,7 @@ import math
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
 # EMA decay constants
-_EMA_32_ALPHA: float = 1.0 - math.exp(-1.0 / 32.0)  # ~0.0308
+_EMA_16_ALPHA: float = 1.0 - math.exp(-1.0 / 16.0)  # ~0.0606
 _EMA_64_ALPHA: float = 1.0 - math.exp(-1.0 / 64.0)  # ~0.0155
 _EPSILON: float = 1e-8
 
@@ -31,7 +31,7 @@ _MANIFEST = AlphaManifest(
         " High lambda indicates informed trading and directional price pressure;"
         " low lambda suggests noise-dominated flow."
     ),
-    formula="lambda = Cov(dP, signed_vol) / Var(signed_vol); signal = clip(lambda / EMA_64(|lambda|), -2, 2)",
+    formula="lambda = EMA_16(Cov(dP, signed_vol)) / EMA_16(Var(signed_vol)); signal = clip(lambda / EMA_64(|lambda|), -2, 2)",
     paper_refs=("135",),
     data_fields=("mid_price", "volume", "bid_qty", "ask_qty"),
     complexity="O(1)",
@@ -122,7 +122,7 @@ class KyleLambdaAlpha:
         signed_vol = volume * sign_v
 
         # Step 4: EMA updates
-        alpha = _EMA_32_ALPHA
+        alpha = _EMA_16_ALPHA
         if not self._initialized:
             self._ema_dp = delta_mid
             self._ema_sv = signed_vol
