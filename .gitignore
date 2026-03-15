@@ -140,6 +140,9 @@ research/tools/*
 !research/tools/toxicity_ii_explorer.py
 !research/tools/cross_signal_explorer.py
 !research/tools/ch_batch_export.py
+!research/tools/run_mm_backtest.py
+!research/tools/volume_proxy_explorer.py
+!research/tools/mm_param_sweep.py
 !research/tools/legacy/
 !research/tools/legacy/**/*.py
 !research/logs/
