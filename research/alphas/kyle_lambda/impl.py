@@ -1,78 +1,86 @@
-"""Kyle's Lambda Alpha — ref 135 (Kyle 1985, Continuous Auctions and Insider Trading).
+"""Kyle Lambda Alpha -- ref 001 (Kyle 1985).
 
-Signal:  Rolling Kyle's Lambda (Price Impact Coefficient)
-  signed_vol = volume * sign(bid_qty - ask_qty)      # Tick rule
-  lambda     = EMA_16(Cov(dP, signed_vol)) / EMA_16(Var(signed_vol))
-  signal     = clip(lambda / max(EMA_64(|lambda|), eps), -2, 2)
+Signal: Estimates Kyle's lambda (price impact per unit signed flow).
+        High lambda -> illiquid market, flow has large price impact.
+        Low lambda -> liquid market, flow absorbed without price move.
 
-A positive lambda → price impact aligned with buy pressure → informed trading.
-A negative lambda → adverse selection / mean-reversion dynamics.
+Formula:
+  ofi       = delta(bid_qty) - delta(ask_qty)
+  dp        = delta(mid_price)
+  ofi_ema   = EMA_16(ofi)
+  dp_ema    = EMA_16(dp)
+  ofi2_ema  = EMA_16(ofi^2)
+  lambda_est = dp_ema / (ofi_ema + epsilon)   # signed impact
+  signal    = clip(EMA_8(lambda_est * ofi_ema / max(sqrt(ofi2_ema), eps)), -2, 2)
+
+Interpretation:
+  signal > 0 -> recent flow is buy-side with positive price impact
+  signal < 0 -> recent flow is sell-side with negative price impact
+  magnitude  -> strength of flow * impact (illiquidity amplifies)
 
 Allocator Law  : __slots__ on class; all state is scalar.
-Precision Law  : output is float (signal score, not price — no Decimal needed).
-Latency profile: shioaji_sim_p95_v2026-03-04 (set at inception per CLAUDE.md).
+Precision Law  : output is float (signal score, not price).
 """
+
 from __future__ import annotations
 
 import math
 
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
-# EMA decay constants
-_EMA_16_ALPHA: float = 1.0 - math.exp(-1.0 / 16.0)  # ~0.0606
-_EMA_64_ALPHA: float = 1.0 - math.exp(-1.0 / 64.0)  # ~0.0155
+_EMA_ALPHA_8: float = 1.0 - math.exp(-1.0 / 8.0)
+_EMA_ALPHA_16: float = 1.0 - math.exp(-1.0 / 16.0)
 _EPSILON: float = 1e-8
 
-# Cached manifest (Allocator Law: no per-call heap allocation).
 _MANIFEST = AlphaManifest(
     alpha_id="kyle_lambda",
     hypothesis=(
-        "Kyle's lambda measures the price impact per unit of signed order flow."
-        " High lambda indicates informed trading and directional price pressure;"
-        " low lambda suggests noise-dominated flow."
+        "Kyle's lambda measures price impact per unit of signed order flow. "
+        "High lambda signals illiquid conditions where flow moves price; "
+        "the product of lambda and flow direction predicts short-term returns."
     ),
-    formula="lambda = EMA_16(Cov(dP, signed_vol)) / EMA_16(Var(signed_vol)); signal = clip(lambda / EMA_64(|lambda|), -2, 2)",
-    paper_refs=("135",),
-    data_fields=("mid_price", "volume", "bid_qty", "ask_qty"),
+    formula="signal = clip(EMA_8(lambda_est * ofi_ema / sqrt(ofi2_ema)), -2, 2)",
+    paper_refs=("001",),
+    data_fields=("bid_qty", "ask_qty", "mid_price"),
     complexity="O(1)",
     status=AlphaStatus.DRAFT,
-    tier=AlphaTier.TIER_2,
+    tier=AlphaTier.ENSEMBLE,
     rust_module=None,
     latency_profile="shioaji_sim_p95_v2026-03-04",
-    roles_used=("planner", "code-reviewer"),
-    skills_used=("iterative-retrieval", "validation-gate"),
+    roles_used=("planner",),
+    skills_used=("iterative-retrieval",),
     feature_set_version="lob_shared_v1",
 )
 
 
 class KyleLambdaAlpha:
-    """O(1) rolling Kyle's Lambda with EMA-based covariance estimation.
+    """O(1) Kyle lambda price-impact predictor.
 
     update() accepts either:
-      - 4 positional args:  mid_price, volume, bid_qty, ask_qty
-      - keyword args:       mid_price=..., volume=..., bid_qty=..., ask_qty=...
+      - 3 positional args:  bid_qty, ask_qty, mid_price
+      - keyword args:       bid_qty=..., ask_qty=..., mid_price=...
     """
 
     __slots__ = (
+        "_ofi_ema",
+        "_dp_ema",
+        "_ofi2_ema",
+        "_signal_ema",
+        "_prev_bid",
+        "_prev_ask",
         "_prev_mid",
-        "_ema_dp",
-        "_ema_sv",
-        "_ema_dp_sq",
-        "_ema_sv_sq",
-        "_ema_dp_sv",
-        "_lambda_baseline",
         "_signal",
         "_initialized",
     )
 
     def __init__(self) -> None:
+        self._ofi_ema: float = 0.0
+        self._dp_ema: float = 0.0
+        self._ofi2_ema: float = 0.0
+        self._signal_ema: float = 0.0
+        self._prev_bid: float = 0.0
+        self._prev_ask: float = 0.0
         self._prev_mid: float = 0.0
-        self._ema_dp: float = 0.0
-        self._ema_sv: float = 0.0
-        self._ema_dp_sq: float = 0.0
-        self._ema_sv_sq: float = 0.0
-        self._ema_dp_sv: float = 0.0
-        self._lambda_baseline: float = 0.0
         self._signal: float = 0.0
         self._initialized: bool = False
 
@@ -80,89 +88,62 @@ class KyleLambdaAlpha:
     def manifest(self) -> AlphaManifest:
         return _MANIFEST
 
-    def update(self, *args, **kwargs) -> float:  # noqa: C901
-        """Ingest one tick and return the normalized Kyle's Lambda signal."""
-        # --- resolve 4 fields from various call conventions ---
-        if len(args) == 4:
-            mid_price = float(args[0])
-            volume = float(args[1])
-            bid_qty = float(args[2])
-            ask_qty = float(args[3])
-        elif len(args) == 0 and kwargs:
-            mid_price = float(kwargs.get("mid_price", 0.0))
-            volume = float(kwargs.get("volume", 0.0))
+    def update(self, *args: float, **kwargs: float) -> float:  # noqa: ANN002
+        """Ingest one tick and return signal."""
+        if len(args) >= 3:
+            bid_qty = float(args[0])
+            ask_qty = float(args[1])
+            mid_price = float(args[2])
+        elif len(args) in (1, 2):
+            raise ValueError(
+                "update() requires 3 positional args (bid_qty, ask_qty, mid_price) "
+                "or keyword args"
+            )
+        else:
             bid_qty = float(kwargs.get("bid_qty", 0.0))
             ask_qty = float(kwargs.get("ask_qty", 0.0))
-        elif len(args) == 0:
-            mid_price = 0.0
-            volume = 0.0
-            bid_qty = 0.0
-            ask_qty = 0.0
-        else:
-            raise ValueError(
-                "update() requires 4 positional args (mid_price, volume, bid_qty, ask_qty) "
-                "or keyword args; got %d positional args" % len(args)
-            )
+            mid_price = float(kwargs.get("mid_price", 0.0))
 
-        # Step 1: delta_mid
         if not self._initialized:
-            delta_mid = 0.0
-        else:
-            delta_mid = mid_price - self._prev_mid
-
-        # Step 2: tick-rule sign
-        if bid_qty > ask_qty:
-            sign_v = 1.0
-        elif ask_qty > bid_qty:
-            sign_v = -1.0
-        else:
-            sign_v = 0.0
-
-        # Step 3: signed volume
-        signed_vol = volume * sign_v
-
-        # Step 4: EMA updates
-        alpha = _EMA_16_ALPHA
-        if not self._initialized:
-            self._ema_dp = delta_mid
-            self._ema_sv = signed_vol
-            self._ema_dp_sq = delta_mid * delta_mid
-            self._ema_sv_sq = signed_vol * signed_vol
-            self._ema_dp_sv = delta_mid * signed_vol
+            self._prev_bid = bid_qty
+            self._prev_ask = ask_qty
+            self._prev_mid = mid_price
             self._initialized = True
-        else:
-            self._ema_dp += alpha * (delta_mid - self._ema_dp)
-            self._ema_sv += alpha * (signed_vol - self._ema_sv)
-            self._ema_dp_sq += alpha * (delta_mid * delta_mid - self._ema_dp_sq)
-            self._ema_sv_sq += alpha * (signed_vol * signed_vol - self._ema_sv_sq)
-            self._ema_dp_sv += alpha * (delta_mid * signed_vol - self._ema_dp_sv)
+            self._signal = 0.0
+            return self._signal
 
-        # Step 5: covariance and variance
-        cov = self._ema_dp_sv - self._ema_dp * self._ema_sv
-        var = self._ema_sv_sq - self._ema_sv * self._ema_sv
-
-        # Step 6: raw lambda
-        raw_lambda = cov / max(var, _EPSILON)
-
-        # Step 7: baseline normalization (EMA-64 of |lambda|)
-        self._lambda_baseline += _EMA_64_ALPHA * (abs(raw_lambda) - self._lambda_baseline)
-
-        # Step 8: normalized signal
-        self._signal = max(-2.0, min(2.0, raw_lambda / max(self._lambda_baseline, _EPSILON)))
-
-        # Update prev_mid for next tick
+        # OFI: change in bid qty minus change in ask qty
+        ofi = (bid_qty - self._prev_bid) - (ask_qty - self._prev_ask)
+        dp = mid_price - self._prev_mid
+        self._prev_bid = bid_qty
+        self._prev_ask = ask_qty
         self._prev_mid = mid_price
 
+        # EMA of OFI, price change, and OFI squared
+        self._ofi_ema += _EMA_ALPHA_16 * (ofi - self._ofi_ema)
+        self._dp_ema += _EMA_ALPHA_16 * (dp - self._dp_ema)
+        self._ofi2_ema += _EMA_ALPHA_16 * (ofi * ofi - self._ofi2_ema)
+
+        # Kyle's lambda estimate: price change per unit flow
+        lambda_est = self._dp_ema / (self._ofi_ema + _EPSILON)
+
+        # Normalize: lambda * flow_direction / flow_volatility
+        ofi_vol = math.sqrt(max(self._ofi2_ema, _EPSILON))
+        raw = lambda_est * self._ofi_ema / ofi_vol
+
+        # Smooth and clip
+        self._signal_ema += _EMA_ALPHA_8 * (raw - self._signal_ema)
+        self._signal = max(-2.0, min(2.0, self._signal_ema))
         return self._signal
 
     def reset(self) -> None:
+        self._ofi_ema = 0.0
+        self._dp_ema = 0.0
+        self._ofi2_ema = 0.0
+        self._signal_ema = 0.0
+        self._prev_bid = 0.0
+        self._prev_ask = 0.0
         self._prev_mid = 0.0
-        self._ema_dp = 0.0
-        self._ema_sv = 0.0
-        self._ema_dp_sq = 0.0
-        self._ema_sv_sq = 0.0
-        self._ema_dp_sv = 0.0
-        self._lambda_baseline = 0.0
         self._signal = 0.0
         self._initialized = False
 

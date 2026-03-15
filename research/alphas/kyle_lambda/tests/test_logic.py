@@ -1,4 +1,5 @@
-"""Gate B correctness tests for KyleLambdaAlpha (ref 135)."""
+"""Gate B correctness tests for KyleLambdaAlpha (ref 001)."""
+
 from __future__ import annotations
 
 import math
@@ -13,8 +14,10 @@ import pytest
 from research.alphas.kyle_lambda.impl import (
     ALPHA_CLASS,
     KyleLambdaAlpha,
+    _EMA_ALPHA_8,
+    _EMA_ALPHA_16,
+    _EPSILON,
 )
-
 
 # ---------------------------------------------------------------------------
 # Manifest governance
@@ -25,26 +28,24 @@ def test_manifest_alpha_id() -> None:
     assert KyleLambdaAlpha().manifest.alpha_id == "kyle_lambda"
 
 
-def test_manifest_tier_is_tier2() -> None:
+def test_manifest_tier_is_ensemble() -> None:
     from research.registry.schemas import AlphaTier
 
-    assert KyleLambdaAlpha().manifest.tier == AlphaTier.TIER_2
+    assert KyleLambdaAlpha().manifest.tier == AlphaTier.ENSEMBLE
 
 
-def test_manifest_paper_refs_includes_135() -> None:
-    assert "135" in KyleLambdaAlpha().manifest.paper_refs
+def test_manifest_paper_refs_includes_001() -> None:
+    assert "001" in KyleLambdaAlpha().manifest.paper_refs
 
 
 def test_manifest_data_fields() -> None:
     fields = KyleLambdaAlpha().manifest.data_fields
-    assert "mid_price" in fields
-    assert "volume" in fields
     assert "bid_qty" in fields
     assert "ask_qty" in fields
+    assert "mid_price" in fields
 
 
 def test_manifest_latency_profile_set() -> None:
-    """latency_profile must be non-None before Gate D (constitution requirement)."""
     assert KyleLambdaAlpha().manifest.latency_profile is not None
 
 
@@ -69,85 +70,56 @@ def test_alpha_class_export() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_zero_volume_does_not_crash() -> None:
-    """Zero volume should not raise; signal remains finite."""
+def test_first_tick_returns_zero() -> None:
     alpha = KyleLambdaAlpha()
-    sig = alpha.update(100.0, 0.0, 50.0, 50.0)
-    assert isinstance(sig, float)
-    assert math.isfinite(sig)
-
-
-def test_equal_queues_neutral() -> None:
-    """bid_qty == ask_qty -> signed_vol = 0 -> lambda ~ 0."""
-    alpha = KyleLambdaAlpha()
-    for i in range(50):
-        sig = alpha.update(100.0 + i * 0.01, 100.0, 50.0, 50.0)
-    # With zero signed volume, covariance is zero, lambda is zero
-    assert abs(sig) < 0.1
-
-
-def test_positive_correlation_positive_lambda() -> None:
-    """Positive correlation between dP and signed_vol yields positive lambda.
-
-    We alternate between 'buy ticks' (rising price + buy-side imbalance) and
-    'sell ticks' (falling price + sell-side imbalance) so that Cov(dP, signed_vol) > 0
-    while Var(signed_vol) > 0 (non-degenerate).
-    """
-    alpha = KyleLambdaAlpha()
-    for i in range(200):
-        if i % 2 == 0:
-            # Buy tick: price rises, bid_qty > ask_qty
-            mid = 100.0 + (i // 2) * 0.2
-            vol = 100.0
-            bid_qty = 200.0
-            ask_qty = 50.0
-        else:
-            # Sell tick: price falls, ask_qty > bid_qty
-            mid = 100.0 + (i // 2) * 0.2 - 0.1
-            vol = 100.0
-            bid_qty = 50.0
-            ask_qty = 200.0
-        alpha.update(mid, vol, bid_qty, ask_qty)
-    assert alpha.get_signal() > 0.0
+    sig = alpha.update(100.0, 100.0, 35000.0)
+    assert sig == 0.0
 
 
 def test_signal_bounded() -> None:
-    """Random fuzz -> signal must stay in [-2, 2]."""
     alpha = KyleLambdaAlpha()
     rng = np.random.default_rng(42)
-    mids = rng.uniform(90, 110, 500)
-    vols = rng.uniform(0, 1000, 500)
-    bids = rng.uniform(0, 500, 500)
-    asks = rng.uniform(0, 500, 500)
-    for m, v, b, a in zip(mids, vols, bids, asks):
-        sig = alpha.update(m, v, b, a)
-        assert -2.0 <= sig <= 2.0, f"Signal {sig} out of bounds"
+    for _ in range(500):
+        sig = alpha.update(
+            rng.uniform(1, 1000),
+            rng.uniform(1, 1000),
+            rng.uniform(30000, 40000),
+        )
+        assert -2.0 <= sig <= 2.0
 
 
-# ---------------------------------------------------------------------------
-# EMA convergence and correctness
-# ---------------------------------------------------------------------------
-
-
-def test_ema_convergence() -> None:
-    """Constant inputs should converge to a stable signal."""
+def test_constant_queues_signal_decays() -> None:
     alpha = KyleLambdaAlpha()
-    signals = []
-    for i in range(500):
-        sig = alpha.update(100.0 + 0.01, 100.0, 200.0, 50.0)
-        signals.append(sig)
-    # Last 50 signals should be very stable
-    last_50 = signals[-50:]
-    assert max(last_50) - min(last_50) < 0.01
+    alpha.update(100.0, 100.0, 35000.0)
+    for _ in range(200):
+        sig = alpha.update(100.0, 100.0, 35000.0)
+    assert abs(sig) < 1e-4
 
 
-def test_first_update_initializes() -> None:
-    """First update should set _initialized to True and return a float."""
+def test_zero_inputs_safe() -> None:
     alpha = KyleLambdaAlpha()
-    assert not alpha._initialized
-    sig = alpha.update(100.0, 50.0, 200.0, 100.0)
-    assert alpha._initialized
+    sig = alpha.update(0.0, 0.0, 0.0)
     assert isinstance(sig, float)
+    sig2 = alpha.update(0.0, 0.0, 0.0)
+    assert math.isfinite(sig2)
+
+
+# ---------------------------------------------------------------------------
+# Directional behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_buying_with_price_increase_positive() -> None:
+    """Bid increase + price increase -> positive lambda * positive OFI -> positive."""
+    alpha = KyleLambdaAlpha()
+    alpha.update(100.0, 100.0, 35000.0)
+    bid = 100.0
+    price = 35000.0
+    for _ in range(50):
+        bid += 5.0
+        price += 1.0
+        alpha.update(bid, 100.0, price)
+    assert alpha.get_signal() > 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -155,41 +127,35 @@ def test_first_update_initializes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_update_accepts_keyword_args() -> None:
+def test_keyword_args() -> None:
     alpha = KyleLambdaAlpha()
-    sig = alpha.update(mid_price=100.0, volume=50.0, bid_qty=200.0, ask_qty=100.0)
+    sig = alpha.update(bid_qty=200.0, ask_qty=100.0, mid_price=35000.0)
     assert isinstance(sig, float)
 
 
-def test_update_wrong_arg_count_raises() -> None:
-    """1, 2, or 3 positional args should raise ValueError."""
+def test_one_arg_raises() -> None:
     alpha = KyleLambdaAlpha()
     with pytest.raises(ValueError):
         alpha.update(100.0)
+
+
+def test_two_args_raises() -> None:
+    alpha = KyleLambdaAlpha()
     with pytest.raises(ValueError):
-        alpha.update(100.0, 50.0)
-    with pytest.raises(ValueError):
-        alpha.update(100.0, 50.0, 200.0)
+        alpha.update(100.0, 100.0)
 
 
 def test_reset_clears_state() -> None:
     alpha = KyleLambdaAlpha()
-    alpha.update(100.0, 50.0, 200.0, 100.0)
-    alpha.update(101.0, 60.0, 210.0, 90.0)
+    alpha.update(100.0, 100.0, 35000.0)
+    alpha.update(500.0, 50.0, 35005.0)
     alpha.reset()
-    assert not alpha._initialized
-    assert alpha._signal == 0.0
-    assert alpha._prev_mid == 0.0
-    # After reset, first update should behave like fresh instance
-    sig = alpha.update(100.0, 50.0, 200.0, 100.0)
-    fresh = KyleLambdaAlpha()
-    sig_fresh = fresh.update(100.0, 50.0, 200.0, 100.0)
-    assert sig == sig_fresh
+    sig = alpha.update(100.0, 100.0, 35000.0)
+    assert sig == 0.0
 
 
-def test_get_signal_before_update_zero() -> None:
-    alpha = KyleLambdaAlpha()
-    assert alpha.get_signal() == 0.0
+def test_get_signal_before_update() -> None:
+    assert KyleLambdaAlpha().get_signal() == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -202,3 +168,8 @@ def test_implements_alpha_protocol() -> None:
 
     alpha = KyleLambdaAlpha()
     assert isinstance(alpha, AlphaProtocol)
+
+
+def test_slots_no_dict() -> None:
+    alpha = KyleLambdaAlpha()
+    assert not hasattr(alpha, "__dict__")
