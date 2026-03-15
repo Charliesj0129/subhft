@@ -1,20 +1,19 @@
-"""Toxicity Multiscale Alpha — volatility-weighted queue toxicity.
+"""Toxicity Multiscale Alpha — ref 129 (Cartea, Duran-Martin, Sanchez-Betancourt 2023).
 
-Signal: clip(sign(QI) * EMA_8(EMA_16(|d_mid|) * |QI| * spread_dev), -2, 2)
-where spread_dev = spread_scaled / max(EMA_64(spread_scaled), 1)
+Signal:  Multi-timescale interaction of volatility, queue imbalance, and spread
+         deviation captures informed trading more completely than any single-scale
+         measure.
 
-Combines three microstructure dimensions:
-1. Queue imbalance magnitude (|QI|) — informed flow pressure
-2. Mid-price volatility (EMA_16(|delta_mid|)) — price impact
-3. Spread deviation (spread / baseline) — market maker retreat
+Formula:
+    QI = (bid_qty - ask_qty) / (bid_qty + ask_qty + eps)
+    volatility = EMA_16(|delta_mid|)
+    spread_dev = spread_scaled / max(EMA_64(spread_scaled), 1.0)
+    raw = volatility * |QI| * spread_dev
+    signal = sign(QI) * EMA_8(raw), clipped to [-2, 2]
 
-Directional: follows sign of queue imbalance.
-
-Papers 129 + 132: Cartea et al. multi-scale toxicity indicators.
-
-Allocator Law: __slots__ on class; all state is scalar.
-Precision Law: output is float (signal score, not price).
-Latency profile: shioaji_sim_p95_v2026-03-04.
+Allocator Law  : __slots__ on class; all state is scalar.
+Precision Law  : output is float (signal score, not price — no Decimal needed).
+Latency profile: shioaji_sim_p95_v2026-03-04 (set at inception per CLAUDE.md).
 """
 from __future__ import annotations
 
@@ -22,25 +21,26 @@ import math
 
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
-# EMA decay constants: alpha = 1 - exp(-1/N)
-_EMA_ALPHA_8: float = 1.0 - math.exp(-1.0 / 8.0)
-_EMA_ALPHA_16: float = 1.0 - math.exp(-1.0 / 16.0)
-_EMA_ALPHA_64: float = 1.0 - math.exp(-1.0 / 64.0)
+# EMA constants: alpha = 1 - exp(-1/window)
+_EMA_ALPHA_8: float = 1.0 - math.exp(-1.0 / 8.0)    # ~0.1175
+_EMA_ALPHA_16: float = 1.0 - math.exp(-1.0 / 16.0)   # ~0.0606
+_EMA_ALPHA_64: float = 1.0 - math.exp(-1.0 / 64.0)   # ~0.0155
+_EPSILON: float = 1e-8  # guards against division by zero
 
 # Cached manifest (Allocator Law: no per-call heap allocation).
 _MANIFEST = AlphaManifest(
     alpha_id="toxicity_multiscale",
     hypothesis=(
-        "When mid-price volatility, queue imbalance, and spread widening"
-        " coincide, it indicates multi-dimensional toxic flow; following"
-        " the imbalance direction predicts short-term price movement."
+        "Multi-timescale interaction of volatility, queue imbalance, and spread"
+        " deviation captures informed trading more completely than any single-scale"
+        " measure; the multiplicative composite isolates periods where all three"
+        " toxicity indicators align."
     ),
     formula=(
-        "signal = clip(sign(QI)"
-        " * EMA_8(EMA_16(|d_mid|) * |QI| * spread_scaled/max(EMA_64(spread_scaled),1)),"
-        " -2, 2)"
+        "signal = sign(QI) * EMA_8(EMA_16(|dP|) * |QI| * spread_scaled / EMA_64(spread_scaled)),"
+        " clipped [-2, 2]"
     ),
-    paper_refs=("129", "132"),
+    paper_refs=("129",),
     data_fields=("bid_qty", "ask_qty", "spread_scaled", "mid_price"),
     complexity="O(1)",
     status=AlphaStatus.DRAFT,
@@ -54,48 +54,43 @@ _MANIFEST = AlphaManifest(
 
 
 class ToxicityMultiscaleAlpha:
-    """O(1) multiscale toxicity signal combining volatility, QI, and spread.
+    """O(1) multi-timescale toxicity composite with EMA smoothing.
 
     update() accepts either:
-      - 4 positional args:  bid_qty, ask_qty, spread_scaled, mid_price
-      - keyword args:       bid_qty=..., ask_qty=..., spread_scaled=..., mid_price=...
+      - 4 positional args: bid_qty, ask_qty, spread_scaled, mid_price
+      - keyword args:      bid_qty=..., ask_qty=..., spread_scaled=..., mid_price=...
     """
 
     __slots__ = (
         "_prev_mid",
-        "_vol_ema",
-        "_spread_base_ema",
-        "_tox_ema",
+        "_vol16",
+        "_spread_base64",
+        "_composite_ema8",
         "_signal",
         "_initialized",
+        "_vol_initialized",
     )
 
     def __init__(self) -> None:
         self._prev_mid: float = 0.0
-        self._vol_ema: float = 0.0
-        self._spread_base_ema: float = 0.0
-        self._tox_ema: float = 0.0
+        self._vol16: float = 0.0
+        self._spread_base64: float = 0.0
+        self._composite_ema8: float = 0.0
         self._signal: float = 0.0
         self._initialized: bool = False
+        self._vol_initialized: bool = False
 
     @property
     def manifest(self) -> AlphaManifest:
         return _MANIFEST
 
     def update(self, *args: float, **kwargs: float) -> float:
-        """Compute one tick of the multiscale toxicity signal.
+        """Compute one tick of the toxicity multiscale signal.
 
-        Args:
-            bid_qty: Best-bid queue size.
-            ask_qty: Best-ask queue size.
-            spread_scaled: Spread in scaled-int units.
-            mid_price: Mid price (float).
-
-        Returns:
-            The updated signal value clipped to [-2, 2].
+        Returns the current signal value (float in [-2, 2]).
         """
         # --- resolve inputs from various call conventions ---
-        if len(args) >= 4:
+        if len(args) == 4:
             bid_qty = float(args[0])
             ask_qty = float(args[1])
             spread_scaled = float(args[2])
@@ -103,8 +98,7 @@ class ToxicityMultiscaleAlpha:
         elif args:
             raise ValueError(
                 "update() requires 4 positional args"
-                " (bid_qty, ask_qty, spread_scaled, mid_price)"
-                " or keyword args"
+                " (bid_qty, ask_qty, spread_scaled, mid_price) or keyword args"
             )
         else:
             bid_qty = float(kwargs.get("bid_qty", 0.0))
@@ -112,53 +106,49 @@ class ToxicityMultiscaleAlpha:
             spread_scaled = float(kwargs.get("spread_scaled", 0.0))
             mid_price = float(kwargs.get("mid_price", 0.0))
 
-        # --- queue imbalance ratio ---
+        # 1. Queue imbalance
         denom = bid_qty + ask_qty
-        qi = (bid_qty - ask_qty) / max(denom, 1.0)
+        qi = (bid_qty - ask_qty) / (denom + _EPSILON)
 
-        # --- initialization ---
+        # 2. Price volatility (EMA-16 of |delta_mid|)
         if not self._initialized:
+            delta_mid = 0.0
             self._prev_mid = mid_price
-            self._vol_ema = 0.0
-            self._spread_base_ema = spread_scaled
-            self._tox_ema = 0.0
             self._initialized = True
-            self._signal = 0.0
-            return self._signal
-
-        # --- mid-price volatility: EMA_16(|delta_mid|) ---
-        d_mid = abs(mid_price - self._prev_mid)
-        self._prev_mid = mid_price
-        self._vol_ema += _EMA_ALPHA_16 * (d_mid - self._vol_ema)
-
-        # --- spread deviation: spread / max(EMA_64(spread), 1) ---
-        self._spread_base_ema += _EMA_ALPHA_64 * (
-            spread_scaled - self._spread_base_ema
-        )
-        spread_base = max(self._spread_base_ema, 1.0)
-        spread_dev = spread_scaled / spread_base
-
-        # --- raw multiscale toxicity: volatility * |QI| * spread_dev ---
-        raw_tox = self._vol_ema * abs(qi) * spread_dev
-
-        # --- EMA-8 smooth the toxicity ---
-        self._tox_ema += _EMA_ALPHA_8 * (raw_tox - self._tox_ema)
-
-        # --- directional signal: follow the queue imbalance ---
-        if qi == 0.0:
-            self._signal = 0.0
         else:
-            raw_signal = math.copysign(self._tox_ema, qi)
-            self._signal = max(-2.0, min(2.0, raw_signal))
+            delta_mid = mid_price - self._prev_mid
+            self._prev_mid = mid_price
+
+        abs_delta = abs(delta_mid)
+        if not self._vol_initialized:
+            self._vol16 = abs_delta
+            self._spread_base64 = spread_scaled
+            self._vol_initialized = True
+        else:
+            self._vol16 += _EMA_ALPHA_16 * (abs_delta - self._vol16)
+            self._spread_base64 += _EMA_ALPHA_64 * (spread_scaled - self._spread_base64)
+
+        # 3. Spread deviation
+        spread_dev = spread_scaled / max(self._spread_base64, 1.0)
+
+        # 4. Raw composite
+        raw = self._vol16 * abs(qi) * spread_dev
+
+        # 5. Composite EMA-8
+        self._composite_ema8 += _EMA_ALPHA_8 * (raw - self._composite_ema8)
+
+        # 6. Directional signal, clipped
+        self._signal = max(-2.0, min(2.0, math.copysign(self._composite_ema8, qi)))
         return self._signal
 
     def reset(self) -> None:
         self._prev_mid = 0.0
-        self._vol_ema = 0.0
-        self._spread_base_ema = 0.0
-        self._tox_ema = 0.0
+        self._vol16 = 0.0
+        self._spread_base64 = 0.0
+        self._composite_ema8 = 0.0
         self._signal = 0.0
         self._initialized = False
+        self._vol_initialized = False
 
     def get_signal(self) -> float:
         return self._signal

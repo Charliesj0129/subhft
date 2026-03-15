@@ -1,0 +1,13 @@
+{
+  "alpha_id": "microprice_reversion",
+  "sharpe_is": -716.1032,
+  "sharpe_oos": -476.2552,
+  "ic_mean": -0.018853,
+  "ic_is": -0.027697,
+  "max_drawdown": 1.000293,
+  "turnover": 0.01641479,
+  "tier": "Failed",
+  "data_source": "TXFC6_all_l1.npy",
+  "cross_validation": {},
+  "error": null
+}
