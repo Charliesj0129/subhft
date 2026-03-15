@@ -119,13 +119,15 @@ class ToxicityAwareMM(AlphaDrivenMMStrategy):
         cross_qi = self.feature_by_name(features, "cross_ema_qi")
         depth_vel = self.feature_by_name(features, "depth_velocity_diff")
         adv_mom = self.feature_by_name(features, "adverse_momentum")
+        ofi_asym = self.feature_by_name(features, "ofi_asymmetry")
 
         # --- 1. Directional signal (weighted, [-1, 1] range) ---
         # Weights based on IC × IR product from exploration
         direction = (
-            0.30 * qi
-            + 0.25 * micro_ratio
-            + 0.20 * cross_qi
+            0.20 * qi
+            + 0.20 * micro_ratio
+            + 0.20 * ofi_asym
+            + 0.15 * cross_qi
             + 0.15 * depth_vel
             + 0.10 * adv_mom
         )
