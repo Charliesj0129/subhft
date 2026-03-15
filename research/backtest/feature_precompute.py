@@ -420,6 +420,7 @@ def precompute_all_mm_features(
             "cross_ema_qi",
             "depth_velocity_diff",
             "adverse_momentum",
+            "cum_ofi_revert",
             "ofi_asymmetry",
         ]
 
