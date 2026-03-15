@@ -1,5 +1,5 @@
 """Alpha package: garch_vol."""
 
-from research.alphas.garch_vol.impl import ALPHA_CLASS, GARCHResult, GARCHFactor, GARCHVolAlpha
+from research.alphas.garch_vol.impl import ALPHA_CLASS, GARCHVolAlpha
 
-__all__ = ["GARCHResult", "GARCHFactor", "GARCHVolAlpha", "ALPHA_CLASS"]
+__all__ = ["GARCHVolAlpha", "ALPHA_CLASS"]
