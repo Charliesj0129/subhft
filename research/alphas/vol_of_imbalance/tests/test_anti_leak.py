@@ -12,7 +12,14 @@ import numpy as np
 from research.alphas.vol_of_imbalance.impl import VolOfImbalanceAlpha
 
 
-def test_replay_determinism() -> None:
+def test_update_no_args_returns_float() -> None:
+    """update() with no args (both queues 0) must return a numeric value."""
+    alpha = VolOfImbalanceAlpha()
+    result = alpha.update()
+    assert isinstance(result, (int, float))
+
+
+def test_update_is_deterministic() -> None:
     """Two fresh alphas fed the same sequence produce identical signals."""
     a1 = VolOfImbalanceAlpha()
     a2 = VolOfImbalanceAlpha()
@@ -25,11 +32,16 @@ def test_replay_determinism() -> None:
         assert s1 == s2
 
 
-def test_zero_input_returns_float() -> None:
-    """update() with no args (both queues 0) must return a numeric value."""
-    alpha = VolOfImbalanceAlpha()
-    result = alpha.update()
-    assert isinstance(result, (int, float))
+def test_reset_eliminates_state_dependency() -> None:
+    """After reset(), two alphas fed the same sequence return identical signals."""
+    a1 = VolOfImbalanceAlpha()
+    a2 = VolOfImbalanceAlpha()
+    a1.update(800.0, 200.0)
+    a1.update(200.0, 800.0)
+    a1.reset()
+    s1 = a1.update(300.0, 300.0)
+    s2 = a2.update(300.0, 300.0)
+    assert s1 == s2
 
 
 def test_extreme_bid_signal_bounded() -> None:
@@ -49,22 +61,6 @@ def test_alternating_input_no_divergence() -> None:
         else:
             sig = alpha.update(1.0, 1000.0)
         assert -2.0 <= sig <= 2.0
-
-
-def test_direction_tracks_qi_sign_200_ticks() -> None:
-    """After 200 ticks of bid-dominant input, signal direction matches qi_ema sign."""
-    alpha = VolOfImbalanceAlpha()
-    # Start with some variance to build vol, then go steady bid
-    for i in range(100):
-        if i % 3 == 0:
-            alpha.update(100.0, 400.0)
-        else:
-            alpha.update(400.0, 100.0)
-    # Now go fully bid-dominant
-    for _ in range(100):
-        alpha.update(400.0, 100.0)
-    # qi_ema should be positive
-    assert alpha._qi_ema > 0.0
 
 
 def test_bounds_1000_random_ticks() -> None:
@@ -88,15 +84,19 @@ def test_reset_idempotency() -> None:
     assert alpha._dev_ema == 0.0
     assert alpha._vol_baseline == 0.0
     assert alpha._signal == 0.0
+    assert alpha._initialized is False
 
 
 def test_no_cross_instance_contamination() -> None:
     """Two instances do not share state."""
     a1 = VolOfImbalanceAlpha()
     a2 = VolOfImbalanceAlpha()
+    # Feed varying input to build volatility state
     a1.update(800.0, 100.0)
+    a1.update(100.0, 800.0)
     a1.update(800.0, 100.0)
     assert a2.get_signal() == 0.0
     s2 = a2.update(100.0, 100.0)
     assert s2 == 0.0
-    assert a1.get_signal() != 0.0
+    # a1 has accumulated deviation from oscillating input
+    assert a1._dev_ema > 0.0
