@@ -1,21 +1,18 @@
-"""Adverse Selection Momentum Alpha — refs 131, 136.
+"""Adverse Selection Momentum Alpha.
 
-Signal: signed OFI-return residual from rolling micro-regression.
+Signal: AM_t = EMA_8(delta_price * lagged_imbalance)
+  where delta_price   = mid_price_t - mid_price_{t-1}
+        lagged_imbalance = (bid_qty_{t-1} - ask_qty_{t-1})
+                         / (bid_qty_{t-1} + ask_qty_{t-1})
 
-Paper 131: Cartea, Sanchez-Betancourt (2025) — toxic flow detection via
-           OFI-return residual decomposition.
-Paper 136: Barzykin, Boyce, Neuman (2024) — hidden alpha process estimation
-           under partial information.
-
-Formula:
-    delta_mid   = mid_price - prev_mid
-    beta        = EMA_32(ofi * delta_mid) / max(EMA_32(ofi^2), eps)
-    expected    = beta * ofi
-    residual    = delta_mid - expected
-    signal      = EMA_8(sign(ofi) * |residual|), clipped to [-2, 2]
+Hypothesis: Adverse selection creates momentum when informed traders
+consistently move the price against market makers.  Tracking the
+correlation between order flow direction (lagged imbalance) and
+subsequent price moves reveals informed trading.  A positive signal
+means flow is correctly predicting price moves.
 
 Allocator Law  : __slots__ on class; all state is scalar.
-Precision Law  : output is float (signal score, not price — no Decimal needed).
+Precision Law  : output is float (signal score, not price -- no Decimal needed).
 Latency profile: shioaji_sim_p95_v2026-03-04 (set at inception per CLAUDE.md).
 """
 from __future__ import annotations
@@ -24,59 +21,53 @@ import math
 
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
-# EMA decay constants
-_EMA_ALPHA_8: float = 1.0 - math.exp(-1.0 / 8.0)    # ~0.1175
-_EMA_ALPHA_32: float = 1.0 - math.exp(-1.0 / 32.0)   # ~0.0308
+# EMA decay: window ~ 8 ticks -> alpha = 1 - exp(-1/8) ~ 0.1175
+_EMA_ALPHA: float = 1.0 - math.exp(-1.0 / 8.0)
 _EPSILON: float = 1e-8
 
 # Cached manifest (Allocator Law: no per-call heap allocation).
 _MANIFEST = AlphaManifest(
     alpha_id="adverse_momentum",
     hypothesis=(
-        "When realized micro-returns consistently exceed the return predicted"
-        " by OFI alone, informed traders are present; the signed residual"
-        " (direction from OFI, magnitude from unexplained return) captures"
-        " the 'hidden alpha process' from Cartea (2025)."
+        "Adverse selection creates momentum when informed traders"
+        " consistently move the price against market makers."
+        " Tracking the correlation between order flow direction"
+        " and subsequent price moves reveals informed trading."
     ),
-    formula=(
-        "signal = EMA_8(sign(ofi) * |delta_mid - beta * ofi|),"
-        " beta = EMA_32(ofi * delta_mid) / max(EMA_32(ofi^2), eps)"
-    ),
+    formula="AM_t = EMA_8(delta_price * lagged_imbalance)",
     paper_refs=("131", "136"),
-    data_fields=("mid_price", "ofi_l1_ema8", "spread_scaled"),
+    data_fields=("mid_price", "bid_qty", "ask_qty"),
     complexity="O(1)",
     status=AlphaStatus.DRAFT,
     tier=AlphaTier.TIER_2,
     rust_module=None,
     latency_profile="shioaji_sim_p95_v2026-03-04",
-    roles_used=("planner", "code-reviewer"),
+    roles_used=("planner",),
     skills_used=("iterative-retrieval", "validation-gate"),
     feature_set_version="lob_shared_v1",
 )
 
 
 class AdverseMomentumAlpha:
-    """O(1) adverse-selection momentum predictor via OFI-return residual.
+    """O(1) adverse-selection momentum predictor.
 
     update() accepts either:
-      - 3 positional args:  mid_price, ofi_l1_ema8, spread_scaled
-      - keyword args:       mid_price=..., ofi_l1_ema8=..., spread_scaled=...
+      - 3 positional args:  mid_price, bid_qty, ask_qty
+      - keyword args:       mid_price=..., bid_qty=..., ask_qty=...
     """
 
     __slots__ = (
         "_prev_mid",
-        "_beta_num_ema",
-        "_beta_den_ema",
-        "_residual_ema",
+        "_lagged_imbalance",
+        "_ema",
         "_signal",
         "_initialized",
     )
 
     def __init__(self) -> None:
         self._prev_mid: float = 0.0
-        self._beta_num_ema: float = 0.0
-        self._beta_den_ema: float = 0.0
-        self._residual_ema: float = 0.0
+        self._lagged_imbalance: float = 0.0
+        self._ema: float = 0.0
         self._signal: float = 0.0
         self._initialized: bool = False
 
@@ -84,68 +75,57 @@ class AdverseMomentumAlpha:
     def manifest(self) -> AlphaManifest:
         return _MANIFEST
 
-    def update(self, *args: float, **kwargs: float) -> float:  # noqa: C901
+    def update(self, *args: float, **kwargs: float) -> float:
         """Ingest one tick and return the updated signal.
 
         Args:
             mid_price: current mid price (scaled int or float).
-            ofi_l1_ema8: EMA-8 smoothed L1 order flow imbalance.
-            spread_scaled: bid-ask spread (reserved, unused in v1).
+            bid_qty: best-bid queue size.
+            ask_qty: best-ask queue size.
         """
         if args:
             if len(args) < 3:
                 raise ValueError(
                     "update() requires 3 positional args"
-                    " (mid_price, ofi_l1_ema8, spread_scaled) or keyword args"
+                    " (mid_price, bid_qty, ask_qty) or keyword args"
                 )
             mid_price = float(args[0])
-            ofi = float(args[1])
-            # spread_scaled = args[2]  — reserved for future use
+            bid_qty = float(args[1])
+            ask_qty = float(args[2])
         else:
             mid_price = float(kwargs.get("mid_price", 0.0))
-            ofi = float(kwargs.get("ofi_l1_ema8", 0.0))
-            # spread_scaled = kwargs.get("spread_scaled", 0)  — reserved
+            bid_qty = float(kwargs.get("bid_qty", 0.0))
+            ask_qty = float(kwargs.get("ask_qty", 0.0))
 
-        # Step 1: compute delta_mid
         if not self._initialized:
-            delta_mid = 0.0
+            # First tick: no previous mid or imbalance, signal stays 0.
             self._prev_mid = mid_price
+            # Compute imbalance for use as lagged value on next tick.
+            denom = bid_qty + ask_qty
+            self._lagged_imbalance = (bid_qty - ask_qty) / (denom + _EPSILON)
             self._initialized = True
-        else:
-            delta_mid = mid_price - self._prev_mid
-            self._prev_mid = mid_price
+            return self._signal
 
-        # Step 2: update rolling beta (OFI -> return regression)
-        self._beta_num_ema += _EMA_ALPHA_32 * (
-            ofi * delta_mid - self._beta_num_ema
-        )
-        self._beta_den_ema += _EMA_ALPHA_32 * (
-            ofi * ofi - self._beta_den_ema
-        )
+        # Step 1: price change
+        delta_price = mid_price - self._prev_mid
+        self._prev_mid = mid_price
 
-        # Step 3: compute residual
-        beta = self._beta_num_ema / max(self._beta_den_ema, _EPSILON)
-        expected = beta * ofi
-        residual = delta_mid - expected
+        # Step 2: raw signal = delta_price * lagged_imbalance
+        raw = delta_price * self._lagged_imbalance
 
-        # Step 4: signed residual — direction from OFI, magnitude from residual
-        if ofi != 0.0:
-            signed_residual = math.copysign(abs(residual), ofi)
-        else:
-            signed_residual = 0.0
+        # Step 3: update lagged imbalance for next tick
+        denom = bid_qty + ask_qty
+        self._lagged_imbalance = (bid_qty - ask_qty) / (denom + _EPSILON)
 
-        # Step 5: smooth and clip
-        self._residual_ema += _EMA_ALPHA_8 * (
-            signed_residual - self._residual_ema
-        )
-        self._signal = max(-2.0, min(2.0, self._residual_ema))
+        # Step 4: EMA smoothing and clip to [-2, 2]
+        self._ema += _EMA_ALPHA * (raw - self._ema)
+        self._signal = max(-2.0, min(2.0, self._ema))
         return self._signal
 
     def reset(self) -> None:
         self._prev_mid = 0.0
-        self._beta_num_ema = 0.0
-        self._beta_den_ema = 0.0
-        self._residual_ema = 0.0
+        self._lagged_imbalance = 0.0
+        self._ema = 0.0
         self._signal = 0.0
         self._initialized = False
 
