@@ -1,0 +1,26 @@
+{
+  "alpha_id": "alpha_mid_price_v1",
+  "sharpe_is": 1586.1008,
+  "sharpe_oos": 1111.0271,
+  "ic_mean": 0.051336,
+  "ic_is": 0.060683,
+  "max_drawdown": 0.00463,
+  "turnover": 0.10720985,
+  "tier": "Star",
+  "data_source": "TXFC6_all_l1.npy",
+  "cross_validation": {
+    "2330": {
+      "ic": 0.658001,
+      "sharpe": 1915.4
+    },
+    "2317": {
+      "ic": 0.568971,
+      "sharpe": 3230.19
+    },
+    "MXFC6": {
+      "ic": 0.06355,
+      "sharpe": 1922.22
+    }
+  },
+  "error": null
+}

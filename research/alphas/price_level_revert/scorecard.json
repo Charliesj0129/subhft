@@ -1,0 +1,13 @@
+{
+  "alpha_id": "price_level_revert",
+  "sharpe_is": -222.7156,
+  "sharpe_oos": -542.0313,
+  "ic_mean": -0.024098,
+  "ic_is": -0.029009,
+  "max_drawdown": 1.037587,
+  "turnover": 0.09630906,
+  "tier": "Failed",
+  "data_source": "TXFC6_all_l1.npy",
+  "cross_validation": {},
+  "error": null
+}
