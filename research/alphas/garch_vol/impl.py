@@ -1,125 +1,117 @@
+"""GARCH Vol Alpha — short/long volatility ratio as regime indicator.
+
+Signal:  GV_t = EMA_8(dP^2) / EMA_64(dP^2) - 1
+         where dP = mid_price_t - mid_price_{t-1}
+
+Hypothesis: Volatility clusters (GARCH effect) — high volatility predicts
+continued high volatility.  The ratio of short-term to long-term volatility
+indicates regime (trending vs mean-reverting).  Positive = vol expansion,
+negative = vol contraction.
+
+Allocator Law  : __slots__ on class; all state is scalar.
+Precision Law  : output is float (signal score, not price — no Decimal needed).
+Latency profile: shioaji_sim_p95_v2026-03-04 (set at inception per CLAUDE.md).
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
-
-import numpy as np
+import math
 
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
+# EMA decay constants
+_EMA_ALPHA_8: float = 1.0 - math.exp(-1.0 / 8.0)    # window ~ 8 ticks
+_EMA_ALPHA_64: float = 1.0 - math.exp(-1.0 / 64.0)   # window ~ 64 ticks
+_EPSILON: float = 1e-8  # guards against division by zero
 
-@dataclass
-class GARCHResult:
-    variance_forecast: float
-    vol_forecast: float
-    shock_squared: float
+# Cached manifest (Allocator Law: no per-call heap allocation).
+_MANIFEST = AlphaManifest(
+    alpha_id="garch_vol",
+    hypothesis=(
+        "Volatility clusters (GARCH effect) — high volatility predicts"
+        " continued high volatility.  The ratio of short-term to long-term"
+        " volatility indicates regime (trending vs mean-reverting)."
+    ),
+    formula="GV_t = EMA_8(dP^2) / EMA_64(dP^2) - 1",
+    paper_refs=("021",),
+    data_fields=("mid_price",),
+    complexity="O(1)",
+    status=AlphaStatus.DRAFT,
+    tier=AlphaTier.TIER_2,
+    rust_module=None,
+    latency_profile="shioaji_sim_p95_v2026-03-04",
+    roles_used=("planner",),
+    skills_used=("iterative-retrieval", "validation-gate"),
+    feature_set_version="lob_shared_v1",
+)
 
 
-class GARCHFactor:
-    """Online GARCH(1,1) volatility estimator."""
+class GARCHVolAlpha:
+    """O(1) GARCH-style volatility regime detector with dual EMA.
 
-    def __init__(
-        self,
-        omega: float = 1e-6,
-        alpha: float = 0.09,
-        beta: float = 0.90,
-        initial_vol: float = 0.001,
-    ):
-        self.omega = omega
-        self.alpha = alpha
-        self.beta = beta
-        self.initial_vol = initial_vol
-        self.prev_sigma2 = initial_vol**2
-        self.prev_return = 0.0
-        self.last_price: float | None = None
-        self._signal = initial_vol
+    update() accepts either:
+      - 1 positional arg:  mid_price
+      - keyword arg:       mid_price=...
+    """
+
+    __slots__ = (
+        "_prev_mid",
+        "_ema_short",
+        "_ema_long",
+        "_signal",
+        "_initialized",
+    )
+
+    def __init__(self) -> None:
+        self._prev_mid: float = 0.0
+        self._ema_short: float = 0.0
+        self._ema_long: float = 0.0
+        self._signal: float = 0.0
+        self._initialized: bool = False
+
+    @property
+    def manifest(self) -> AlphaManifest:
+        return _MANIFEST
+
+    def update(self, *args: float, **kwargs: float) -> float:  # noqa: ANN002
+        """Update signal with new mid_price value."""
+        # --- resolve mid_price ---
+        if len(args) >= 1:
+            mid_price = float(args[0])
+        else:
+            mid_price = float(kwargs.get("mid_price", 0.0))
+
+        if not self._initialized:
+            # First tick: store prev, return 0 (no delta yet).
+            self._prev_mid = mid_price
+            self._initialized = True
+            self._signal = 0.0
+            return self._signal
+
+        # Compute squared return.
+        delta = mid_price - self._prev_mid
+        self._prev_mid = mid_price
+        delta_sq = delta * delta
+
+        # Dual EMA update on squared returns.
+        self._ema_short += _EMA_ALPHA_8 * (delta_sq - self._ema_short)
+        self._ema_long += _EMA_ALPHA_64 * (delta_sq - self._ema_long)
+
+        # Ratio - 1: positive = vol expansion, negative = vol contraction.
+        self._signal = self._ema_short / (self._ema_long + _EPSILON) - 1.0
+        return self._signal
 
     def reset(self) -> None:
-        self.prev_sigma2 = self.initial_vol**2
-        self.prev_return = 0.0
-        self.last_price = None
-        self._signal = self.initial_vol
-
-    def update(self, price: float) -> Optional[GARCHResult]:
-        if self.last_price is None:
-            self.last_price = price
-            return None
-
-        if self.last_price > 0:
-            ret = float(np.log(price / self.last_price))
-        else:
-            ret = 0.0
-
-        self.last_price = price
-        epsilon2 = ret**2
-        new_sigma2 = self.omega + self.alpha * epsilon2 + self.beta * self.prev_sigma2
-        self.prev_sigma2 = new_sigma2
-        self.prev_return = ret
-        vol = float(np.sqrt(new_sigma2))
-        self._signal = vol
-        return GARCHResult(
-            variance_forecast=float(new_sigma2),
-            vol_forecast=vol,
-            shock_squared=float(epsilon2),
-        )
-
-    def get_current_forecast(self) -> float:
-        return float(np.sqrt(self.prev_sigma2))
+        self._prev_mid = 0.0
+        self._ema_short = 0.0
+        self._ema_long = 0.0
+        self._signal = 0.0
+        self._initialized = False
 
     def get_signal(self) -> float:
         return self._signal
 
 
-class GARCHVolAlpha(GARCHFactor):
-    @property
-    def manifest(self) -> AlphaManifest:
-        return AlphaManifest(
-            alpha_id="garch_vol",
-            hypothesis="Online GARCH forecast captures near-term conditional volatility regime.",
-            formula="sigma^2_t = omega + alpha * r^2_{t-1} + beta * sigma^2_{t-1}",
-            paper_refs=("021",),
-            data_fields=("price",),
-            complexity="O(1)",
-            status=AlphaStatus.DRAFT,
-            tier=AlphaTier.ENSEMBLE,
-            rust_module=None,
-            roles_used=("planner", "code-reviewer"),
-            skills_used=("iterative-retrieval", "validation-gate"),
-        )
-
-    def update(self, *args, **kwargs) -> float:
-        if args:
-            price = float(args[0])
-        else:
-            price = float(kwargs.get("price", kwargs.get("current_price", 0.0)))
-        result = super().update(price=price)
-        if result is None:
-            return 0.0
-        return result.vol_forecast
-
-    def update_batch(self, data) -> np.ndarray:
-        arr = np.asarray(data)
-        if arr.size == 0:
-            return np.zeros(0, dtype=np.float64)
-        if arr.dtype.names:
-            if "price" in arr.dtype.names:
-                values = np.asarray(arr["price"], dtype=np.float64).reshape(-1)
-            elif "current_price" in arr.dtype.names:
-                values = np.asarray(arr["current_price"], dtype=np.float64).reshape(-1)
-            elif "mid" in arr.dtype.names:
-                values = np.asarray(arr["mid"], dtype=np.float64).reshape(-1)
-            elif "mid_price" in arr.dtype.names:
-                values = np.asarray(arr["mid_price"], dtype=np.float64).reshape(-1)
-            else:
-                values = np.asarray(arr, dtype=np.float64).reshape(-1)
-        else:
-            values = np.asarray(arr, dtype=np.float64).reshape(-1)
-        out = np.zeros(values.size, dtype=np.float64)
-        for i, value in enumerate(values):
-            out[i] = self.update(float(value))
-        return out
-
-
 ALPHA_CLASS = GARCHVolAlpha
 
-__all__ = ["GARCHResult", "GARCHFactor", "GARCHVolAlpha", "ALPHA_CLASS"]
+__all__ = ["GARCHVolAlpha", "ALPHA_CLASS"]
