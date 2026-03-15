@@ -87,13 +87,26 @@ def test_equal_queues_neutral() -> None:
 
 
 def test_positive_correlation_positive_lambda() -> None:
-    """Rising prices + buy-side imbalance should yield positive lambda."""
+    """Positive correlation between dP and signed_vol yields positive lambda.
+
+    We alternate between 'buy ticks' (rising price + buy-side imbalance) and
+    'sell ticks' (falling price + sell-side imbalance) so that Cov(dP, signed_vol) > 0
+    while Var(signed_vol) > 0 (non-degenerate).
+    """
     alpha = KyleLambdaAlpha()
     for i in range(200):
-        mid = 100.0 + i * 0.1  # rising price
-        vol = 100.0
-        bid_qty = 200.0  # buy-side dominant
-        ask_qty = 50.0
+        if i % 2 == 0:
+            # Buy tick: price rises, bid_qty > ask_qty
+            mid = 100.0 + (i // 2) * 0.2
+            vol = 100.0
+            bid_qty = 200.0
+            ask_qty = 50.0
+        else:
+            # Sell tick: price falls, ask_qty > bid_qty
+            mid = 100.0 + (i // 2) * 0.2 - 0.1
+            vol = 100.0
+            bid_qty = 50.0
+            ask_qty = 200.0
         alpha.update(mid, vol, bid_qty, ask_qty)
     assert alpha.get_signal() > 0.0
 
