@@ -81,6 +81,7 @@ research/experiments/*
 !research/experiments/tracker.py
 !research/experiments/runs/.gitkeep
 !research/experiments/comparisons/.gitkeep
+!research/experiments/validations/
 !research/knowledge/
 research/knowledge/*
 !research/knowledge/paper_index.json
