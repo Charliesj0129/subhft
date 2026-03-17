@@ -4,7 +4,6 @@ This module provides functionality to persist subscription state to disk,
 enabling recovery of subscribed symbols after crashes or restarts.
 """
 
-import json
 import os
 import threading
 from dataclasses import asdict, dataclass, field
@@ -14,6 +13,14 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+
+try:
+    import orjson
+
+    _HAS_ORJSON = True
+except ImportError:
+    _HAS_ORJSON = False
+    import json
 
 logger = get_logger("subscription_state")
 
@@ -114,8 +121,13 @@ class SubscriptionStateManager:
                 logger.debug("No existing subscription state file", path=self._state_path)
                 return False
 
-            with open(path, "r") as f:
-                data = json.load(f)
+            with open(path, "rb") as f:
+                raw = f.read()
+
+            if _HAS_ORJSON:
+                data = orjson.loads(raw)
+            else:
+                data = json.loads(raw)
 
             with self._lock:
                 self._state = SubscriptionStateData.from_dict(data)
@@ -132,7 +144,7 @@ class SubscriptionStateManager:
             )
             return True
 
-        except json.JSONDecodeError as e:
+        except orjson.JSONDecodeError if _HAS_ORJSON else json.JSONDecodeError as e:
             logger.error(
                 "Failed to parse subscription state file",
                 path=self._state_path,
@@ -165,8 +177,11 @@ class SubscriptionStateManager:
 
             # Atomic write: write to temp file, then rename
             tmp_path = path.with_suffix(".json.tmp")
-            with open(tmp_path, "w") as f:
-                json.dump(data, f, indent=2)
+            with open(tmp_path, "wb") as f:
+                if _HAS_ORJSON:
+                    f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
+                else:
+                    f.write(json.dumps(data, indent=2).encode())
                 f.flush()
                 os.fsync(f.fileno())
 
