@@ -6,6 +6,8 @@ import queue
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 
 # ------------------------------------------------------------------
@@ -264,3 +266,267 @@ class TestWrappedTickCb:
         # Should not raise.
         TickDispatcher.wrapped_tick_cb(cb, "a")
         cb.assert_called_once()
+
+
+# ==================================================================
+# Deque transport (HFT_TICK_RING_BUFFER=1) tests
+# ==================================================================
+
+
+class TestDequeTransportRouting:
+    """Mirror of TestProcessTickRouting but using the deque transport."""
+
+    def test_async_dispatch_via_deque(self) -> None:
+        received: list[tuple] = []
+
+        def _capture(*args: object, **kwargs: object) -> None:
+            received.append((args, kwargs))
+
+        dispatcher = TickDispatcher(
+            process_tick_fn=_capture,
+            metrics=None,
+            quote_dispatch_async=True,
+            queue_size=64,
+            use_deque=True,
+        )
+        dispatcher.enqueue_tick("topic", "quote")
+        time.sleep(0.2)
+        dispatcher.stop_worker()
+
+        assert len(received) == 1
+        assert received[0] == (("topic", "quote"), {})
+
+    def test_exception_does_not_crash_deque_worker(self) -> None:
+        call_count = 0
+
+        def _flaky(*args: object, **kwargs: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("boom")
+
+        dispatcher = TickDispatcher(
+            process_tick_fn=_flaky,
+            metrics=None,
+            quote_dispatch_async=True,
+            queue_size=64,
+            use_deque=True,
+        )
+        dispatcher.enqueue_tick("a")
+        time.sleep(0.15)
+        dispatcher.enqueue_tick("b")
+        time.sleep(0.15)
+        dispatcher.stop_worker()
+        assert call_count == 2
+
+
+class TestDequeEnqueueDequeue:
+    def test_drop_when_deque_full(self) -> None:
+        """When deque is at capacity, new items are dropped (not oldest)."""
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=None,
+            quote_dispatch_async=True,
+            queue_size=2,
+            use_deque=True,
+        )
+        dispatcher.start_worker()
+        # Stuff the deque directly to simulate full state.
+        assert dispatcher._deque is not None
+        dispatcher._deque.append((("old1",), {}))
+        dispatcher._deque.append((("old2",), {}))
+
+        dispatcher.enqueue_tick("new_tick")
+        assert dispatcher.dropped == 1
+        # The deque still has the original items, new one was dropped.
+        assert len(dispatcher._deque) == 2
+        dispatcher.stop_worker()
+
+    def test_enqueue_increments_counter_deque(self) -> None:
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=None,
+            quote_dispatch_async=True,
+            queue_size=64,
+            use_deque=True,
+        )
+        dispatcher.enqueue_tick("a")
+        dispatcher.enqueue_tick("b")
+        assert dispatcher.enqueued == 2
+        time.sleep(0.15)
+        dispatcher.stop_worker()
+
+    def test_fallback_to_inline_when_deque_none(self) -> None:
+        """If _deque is None despite use_deque=True, falls back to inline call."""
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=None,
+            quote_dispatch_async=True,
+            queue_size=64,
+            use_deque=True,
+        )
+        dispatcher._running = True
+        dispatcher._deque = None
+        dispatcher._deque_event = None
+        dispatcher.enqueue_tick("tick_data")
+        cb.assert_called_once_with("tick_data")
+        dispatcher._running = False
+
+    def test_batch_drain_deque(self) -> None:
+        """Worker drains up to batch_max items per wake-up."""
+        received: list[str] = []
+
+        def _capture(*args: object, **kwargs: object) -> None:
+            received.append(args[0])  # type: ignore[arg-type]
+
+        dispatcher = TickDispatcher(
+            process_tick_fn=_capture,
+            metrics=None,
+            quote_dispatch_async=True,
+            queue_size=64,
+            batch_max=4,
+            use_deque=True,
+        )
+        for i in range(6):
+            dispatcher.enqueue_tick(f"t{i}")
+        time.sleep(0.3)
+        dispatcher.stop_worker()
+        assert received == [f"t{i}" for i in range(6)]
+        assert dispatcher.processed == 6
+
+
+class TestDequeWorkerLifecycle:
+    def test_start_stop_deque(self) -> None:
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=None,
+            quote_dispatch_async=True,
+            use_deque=True,
+        )
+        dispatcher.start_worker()
+        assert dispatcher.running is True
+        assert dispatcher._thread is not None
+        assert dispatcher._thread.is_alive()
+        assert dispatcher._deque is not None
+        assert dispatcher._deque_event is not None
+
+        dispatcher.stop_worker()
+        assert dispatcher.running is False
+        assert dispatcher._thread is None
+        assert dispatcher._deque is None
+        assert dispatcher._deque_event is None
+
+    def test_start_is_idempotent_deque(self) -> None:
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=None,
+            quote_dispatch_async=True,
+            use_deque=True,
+        )
+        dispatcher.start_worker()
+        thread1 = dispatcher._thread
+        dispatcher.start_worker()
+        thread2 = dispatcher._thread
+        assert thread1 is thread2
+        dispatcher.stop_worker()
+
+    def test_stop_is_idempotent_deque(self) -> None:
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=None,
+            quote_dispatch_async=True,
+            use_deque=True,
+        )
+        dispatcher.stop_worker()
+        dispatcher.stop_worker()
+
+
+class TestDequeMetrics:
+    """Verify metrics instrumentation works with the deque transport."""
+
+    def test_drop_metrics_fired(self) -> None:
+        metrics = MagicMock()
+        metrics.raw_queue_dropped_total = MagicMock()
+        metrics.shioaji_quote_callback_queue_dropped_total = MagicMock()
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=metrics,
+            quote_dispatch_async=True,
+            queue_size=1,
+            use_deque=True,
+        )
+        dispatcher.start_worker()
+        assert dispatcher._deque is not None
+        dispatcher._deque.append((("old",), {}))
+
+        dispatcher.enqueue_tick("overflow")
+        assert dispatcher.dropped == 1
+        metrics.raw_queue_dropped_total.inc.assert_called_once()
+        dispatcher.stop_worker()
+
+    def test_queue_depth_metric_on_enqueue(self) -> None:
+        metrics = MagicMock()
+        metrics.shioaji_quote_callback_queue_depth = MagicMock()
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=metrics,
+            quote_dispatch_async=True,
+            queue_size=256,
+            metrics_every=1,
+            use_deque=True,
+        )
+        dispatcher.enqueue_tick("a")
+        metrics.shioaji_quote_callback_queue_depth.set.assert_called()
+        dispatcher.stop_worker()
+
+
+class TestDequeBackwardCompat:
+    """Verify that the default (use_deque=False) still uses queue.Queue."""
+
+    def test_default_uses_queue(self) -> None:
+        """Without use_deque kwarg, transport follows the env var (default off)."""
+        cb = MagicMock()
+        dispatcher = TickDispatcher(
+            process_tick_fn=cb,
+            metrics=None,
+            quote_dispatch_async=True,
+        )
+        dispatcher.start_worker()
+        if dispatcher._use_deque:
+            assert dispatcher._deque is not None
+        else:
+            assert dispatcher._queue is not None
+        dispatcher.stop_worker()
+
+    @pytest.mark.parametrize("use_deque", [True, False])
+    def test_both_transports_produce_same_results(self, use_deque: bool) -> None:
+        """Both transports deliver the same sequence of items."""
+        received: list[str] = []
+
+        def _capture(*args: object, **kwargs: object) -> None:
+            received.append(args[0])  # type: ignore[arg-type]
+
+        dispatcher = TickDispatcher(
+            process_tick_fn=_capture,
+            metrics=None,
+            quote_dispatch_async=True,
+            queue_size=64,
+            batch_max=32,
+            use_deque=use_deque,
+        )
+        items = [f"item_{i}" for i in range(10)]
+        for item in items:
+            dispatcher.enqueue_tick(item)
+        time.sleep(0.3)
+        dispatcher.stop_worker()
+        assert received == items
+        assert dispatcher.processed == 10
+        assert dispatcher.enqueued == 10
