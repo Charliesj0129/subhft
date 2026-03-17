@@ -4,6 +4,7 @@ Canonical location: ``hft_platform.feed_adapter.shioaji.client``
 External consumers should prefer ``ShioajiClientFacade`` from
 ``hft_platform.feed_adapter.shioaji.facade``.
 """
+
 import os
 import re
 import sys
@@ -74,6 +75,7 @@ def _sdk() -> Any:
     if shim is not None:
         return getattr(shim, "sj", sj)
     return sj
+
 
 _fcntl: ModuleType | None
 try:

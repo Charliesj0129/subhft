@@ -202,17 +202,17 @@ def test_fused_path_selected_when_enabled(tmp_path):
     bids_np = np.array([[1000000, 10]], dtype=np.int64)
     asks_np = np.array([[1005000, 20]], dtype=np.int64)
     mock_fused.process_bidask.return_value = (
-        bids_np,      # bids_np
-        asks_np,      # asks_np
-        1000000,      # best_bid
-        1005000,      # best_ask
-        10,           # bid_depth
-        20,           # ask_depth
-        2005000,      # mid_x2 (best_bid + best_ask)
-        5000,         # spread_scaled
-        -333333,      # imbalance_ppm
-        1,            # version
-        -0.333333,    # top_imbalance
+        bids_np,  # bids_np
+        asks_np,  # asks_np
+        1000000,  # best_bid
+        1005000,  # best_ask
+        10,  # bid_depth
+        20,  # ask_depth
+        2005000,  # mid_x2 (best_bid + best_ask)
+        5000,  # spread_scaled
+        -333333,  # imbalance_ppm
+        1,  # version
+        -0.333333,  # top_imbalance
     )
     nm._fused = mock_fused
 
@@ -229,10 +229,10 @@ def test_fused_path_selected_when_enabled(tmp_path):
     assert isinstance(event, BidAskEvent)
     assert event.symbol == "2330"
     assert event.fused_stats is not None
-    assert event.fused_stats[0] == 1000000   # best_bid
-    assert event.fused_stats[1] == 1005000   # best_ask
-    assert event.fused_stats[4] == 2005000   # mid_x2
-    assert event.fused_stats[5] == 5000      # spread_scaled
+    assert event.fused_stats[0] == 1000000  # best_bid
+    assert event.fused_stats[1] == 1005000  # best_ask
+    assert event.fused_stats[4] == 2005000  # mid_x2
+    assert event.fused_stats[5] == 5000  # spread_scaled
     # stats (compat) should have float mid_price
     assert event.stats is not None
     assert event.stats[4] == pytest.approx(1002500.0)  # mid_x2 / 2
