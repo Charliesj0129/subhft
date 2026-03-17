@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from structlog import get_logger
 
 if TYPE_CHECKING:
-    from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+    from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
 logger = get_logger("feed_adapter.account_gateway")
 
