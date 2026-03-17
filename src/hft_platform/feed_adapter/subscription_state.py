@@ -144,7 +144,7 @@ class SubscriptionStateManager:
             )
             return True
 
-        except (orjson.JSONDecodeError if _HAS_ORJSON else json.JSONDecodeError) as e:
+        except orjson.JSONDecodeError if _HAS_ORJSON else json.JSONDecodeError as e:
             logger.error(
                 "Failed to parse subscription state file",
                 path=self._state_path,
