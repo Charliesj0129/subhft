@@ -26,7 +26,9 @@ _METRICS_ENABLED = os.getenv("HFT_METRICS_ENABLED", "0").lower() not in {"0", "f
 _METRICS_BATCH = max(1, int(os.getenv("HFT_METRICS_BATCH", "4096")))
 _METRICS_ASYNC = os.getenv("HFT_METRICS_ASYNC", "1").lower() not in {"0", "false", "no", "off"}
 _STATS_MODE = os.getenv("HFT_LOB_STATS_MODE", "event").lower()
-_STATS_TUPLE = _STATS_MODE in {"tuple", "raw"}
+# HFT_STATS_TUPLE=1 is a convenience alias for HFT_LOB_STATS_MODE=tuple
+_STATS_TUPLE_ENV = os.getenv("HFT_STATS_TUPLE", "0") == "1"
+_STATS_TUPLE = _STATS_MODE in {"tuple", "raw"} or _STATS_TUPLE_ENV
 _STATS_NONE = _STATS_MODE in {"none", "off", "disabled"}
 _FORCE_NUMPY = os.getenv("HFT_LOB_FORCE_NUMPY", "1").lower() not in {"0", "false", "no", "off"}
 
