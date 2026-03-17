@@ -370,7 +370,9 @@ class FeatureEngine:
             values=values,
         )
 
-    def _compute_values(self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy) -> tuple[int, ...]:
+    def _compute_values(
+        self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
+    ) -> tuple[int, ...]:
         if self._kernel_backend == "rust":
             return self._compute_values_rust(symbol, event, stats)
 
@@ -462,7 +464,9 @@ class FeatureEngine:
             int(depth_imbalance_ema8_ppm),
         )
 
-    def _compute_values_rust(self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy) -> tuple[int, ...]:
+    def _compute_values_rust(
+        self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
+    ) -> tuple[int, ...]:
         if _RUST_LOB_FEATURE_KERNEL_V1 is None:
             # Safety fallback in case runtime extension is unavailable.
             self._kernel_backend = "python"
