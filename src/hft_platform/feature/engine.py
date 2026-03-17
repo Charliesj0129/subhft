@@ -21,6 +21,55 @@ except Exception:
     _RUST_FEATURE_PIPELINE_V1 = None
 
 
+class _StatsTupleProxy:
+    """Zero-allocation proxy: provides LOBStatsEvent-compatible attribute access over a raw tuple.
+
+    Tuple layout from BookState.get_stats_tuple():
+        (symbol, ts, mid_price_x2, spread_scaled, imbalance, best_bid, best_ask, bid_depth, ask_depth)
+    """
+
+    __slots__ = ("_t",)
+
+    def __init__(self, t: tuple) -> None:
+        self._t = t
+
+    @property
+    def symbol(self) -> str:
+        return self._t[0]
+
+    @property
+    def ts(self) -> int:
+        return self._t[1]
+
+    @property
+    def mid_price_x2(self) -> int:
+        return self._t[2]
+
+    @property
+    def spread_scaled(self) -> int:
+        return self._t[3]
+
+    @property
+    def imbalance(self) -> float:
+        return self._t[4]
+
+    @property
+    def best_bid(self) -> int:
+        return self._t[5]
+
+    @property
+    def best_ask(self) -> int:
+        return self._t[6]
+
+    @property
+    def bid_depth(self) -> int:
+        return self._t[7]
+
+    @property
+    def ask_depth(self) -> int:
+        return self._t[8]
+
+
 QUALITY_FLAG_GAP = 1 << 0
 QUALITY_FLAG_STATE_RESET = 1 << 1
 QUALITY_FLAG_STALE_INPUT = 1 << 2
@@ -250,14 +299,23 @@ class FeatureEngine:
     def process_lob_update(
         self,
         event: object | None,
-        stats: LOBStatsEvent,
+        stats: LOBStatsEvent | tuple,
         *,
         local_ts_ns: int | None = None,
     ) -> FeatureUpdateEvent | None:
-        symbol = str(stats.symbol)
+        # Tuple fast path: extract fields positionally to avoid LOBStatsEvent construction.
+        # See _StatsTupleProxy for tuple layout definition.
+        stats_resolved: LOBStatsEvent | _StatsTupleProxy
+        if isinstance(stats, tuple):
+            symbol = str(stats[0])
+            source_ts_ns = int(stats[1])
+            stats_resolved = _StatsTupleProxy(stats)
+        else:
+            symbol = str(stats.symbol)
+            source_ts_ns = int(getattr(stats, "ts", 0) or 0)
+            stats_resolved = stats
         self._seq += 1
         seq = self._seq
-        source_ts_ns = int(getattr(stats, "ts", 0) or 0)
         local_ts_ns = int(source_ts_ns if local_ts_ns is None else local_ts_ns)
 
         prev = self._states.get(symbol)
@@ -266,26 +324,35 @@ class FeatureEngine:
         # Fused Rust pipeline: compute values + changed_mask + warmup_mask in one call
         fused = None
         if self._kernel_backend == "rust":
-            fused = self._compute_fused_rust(symbol, event, stats, warm_count)
+            fused = self._compute_fused_rust(symbol, event, stats_resolved, warm_count)
 
         if fused is not None:
             values, changed_mask, warmup_ready_mask = fused
         else:
-            values = self._compute_values(symbol, event, stats)
+            values = self._compute_values(symbol, event, stats_resolved)
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
             warmup_ready_mask = self._compute_warmup_ready_mask(warm_count)
         qflags = int(self._quality_flags_next.pop(symbol, 0))
         if prev is not None and source_ts_ns and source_ts_ns < prev.source_ts_ns:
             qflags |= QUALITY_FLAG_OUT_OF_ORDER
 
-        self._states[symbol] = _FeatureState(
-            seq=seq,
-            source_ts_ns=source_ts_ns,
-            local_ts_ns=local_ts_ns,
-            values=values,
-            warm_count=warm_count,
-            quality_flags=qflags,
-        )
+        # Hot-path exception: in-place mutation to avoid per-tick allocation
+        if prev is not None:
+            prev.seq = seq
+            prev.source_ts_ns = source_ts_ns
+            prev.local_ts_ns = local_ts_ns
+            prev.values = values
+            prev.warm_count = warm_count
+            prev.quality_flags = qflags
+        else:
+            self._states[symbol] = _FeatureState(
+                seq=seq,
+                source_ts_ns=source_ts_ns,
+                local_ts_ns=local_ts_ns,
+                values=values,
+                warm_count=warm_count,
+                quality_flags=qflags,
+            )
 
         if not self._emit_events:
             return None
@@ -303,7 +370,9 @@ class FeatureEngine:
             values=values,
         )
 
-    def _compute_values(self, symbol: str, event: object | None, stats: LOBStatsEvent) -> tuple[int, ...]:
+    def _compute_values(
+        self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
+    ) -> tuple[int, ...]:
         if self._kernel_backend == "rust":
             return self._compute_values_rust(symbol, event, stats)
 
@@ -395,7 +464,9 @@ class FeatureEngine:
             int(depth_imbalance_ema8_ppm),
         )
 
-    def _compute_values_rust(self, symbol: str, event: object | None, stats: LOBStatsEvent) -> tuple[int, ...]:
+    def _compute_values_rust(
+        self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
+    ) -> tuple[int, ...]:
         if _RUST_LOB_FEATURE_KERNEL_V1 is None:
             # Safety fallback in case runtime extension is unavailable.
             self._kernel_backend = "python"
@@ -443,7 +514,7 @@ class FeatureEngine:
         self,
         symbol: str,
         event: object | None,
-        stats: LOBStatsEvent,
+        stats: LOBStatsEvent | _StatsTupleProxy,
         warm_count: int,
     ) -> tuple[tuple[int, ...], int, int] | None:
         """Fused Rust pipeline: returns (values, changed_mask, warmup_ready_mask) or None."""

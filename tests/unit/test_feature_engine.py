@@ -373,6 +373,102 @@ def test_feature_update_event_typed_frame_roundtrip():
     assert evt2.values == evt.values
 
 
+def _stats_tuple(
+    symbol: str = "2330",
+    ts: int = 1,
+    bid: int = 1000000,
+    ask: int = 1001000,
+    bq: int = 10,
+    aq: int = 20,
+) -> tuple:
+    """Build a stats tuple matching BookState.get_stats_tuple() layout."""
+    mid_x2 = bid + ask
+    spread = ask - bid
+    total = bq + aq
+    imbalance = (bq - aq) / total if total > 0 else 0.0
+    return (symbol, ts, mid_x2, spread, imbalance, bid, ask, bq, aq)
+
+
+def test_feature_engine_accepts_stats_tuple():
+    """process_lob_update should accept a raw tuple and produce identical results to LOBStatsEvent."""
+    eng_event = FeatureEngine()
+    eng_tuple = FeatureEngine()
+
+    bid, ask, bq, aq = 1000000, 1001000, 10, 20
+    stats_event = _stats(ts=1, bid=bid, ask=ask, bq=bq, aq=aq)
+    stats_tup = _stats_tuple(ts=1, bid=bid, ask=ask, bq=bq, aq=aq)
+
+    evt1 = eng_event.process_lob_update(None, stats_event, local_ts_ns=1)
+    evt2 = eng_tuple.process_lob_update(None, stats_tup, local_ts_ns=1)
+
+    assert evt1 is not None and evt2 is not None
+    assert evt1.values == evt2.values
+    assert evt1.symbol == evt2.symbol
+    assert evt1.ts == evt2.ts
+
+
+def test_feature_engine_tuple_multi_tick_sequence():
+    """Verify that a multi-tick sequence via tuple input produces correct OFI accumulation."""
+    eng = FeatureEngine()
+
+    # Tick 1: initial
+    t1 = _stats_tuple(ts=1, bid=1000000, ask=1001000, bq=10, aq=20)
+    u1 = eng.process_lob_update(None, t1, local_ts_ns=1)
+    assert u1 is not None
+    assert u1.get("ofi_l1_raw") == 0  # First tick, no OFI
+
+    # Tick 2: same prices, bid qty up, ask qty down
+    t2 = _stats_tuple(ts=2, bid=1000000, ask=1001000, bq=15, aq=15)
+    u2 = eng.process_lob_update(None, t2, local_ts_ns=2)
+    assert u2 is not None
+    # b_flow = 15-10 = 5; a_flow = 15-20 = -5; ofi = 5-(-5) = 10
+    assert u2.get("ofi_l1_raw") == 10
+    assert u2.get("ofi_l1_cum") == 10
+
+
+def test_feature_state_in_place_mutation():
+    """Verify that _FeatureState is pre-allocated once and mutated in-place on subsequent ticks."""
+    eng = FeatureEngine()
+
+    # First tick creates the state
+    eng.process_lob_update(None, _stats(ts=1), local_ts_ns=1)
+    state1 = eng._states.get("2330")
+    assert state1 is not None
+    state1_id = id(state1)
+
+    # Second tick should reuse the same _FeatureState object
+    eng.process_lob_update(None, _stats(ts=2, bid=1000100, ask=1001100), local_ts_ns=2)
+    state2 = eng._states.get("2330")
+    assert state2 is not None
+    assert id(state2) == state1_id  # Same object, mutated in-place
+    assert state2.seq == 2
+    assert state2.source_ts_ns == 2
+
+    # Third tick: still same object
+    eng.process_lob_update(None, _stats(ts=3, bid=1000200, ask=1001200), local_ts_ns=3)
+    state3 = eng._states.get("2330")
+    assert id(state3) == state1_id
+    assert state3.warm_count == 3
+
+
+def test_feature_state_fresh_after_reset():
+    """After reset_symbol, warm_count restarts at 1 (fresh state)."""
+    eng = FeatureEngine()
+    eng.process_lob_update(None, _stats(ts=1), local_ts_ns=1)
+    eng.process_lob_update(None, _stats(ts=2), local_ts_ns=2)
+    state_before = eng._states["2330"]
+    assert state_before.warm_count == 2
+
+    eng.reset_symbol("2330")
+    assert "2330" not in eng._states  # State cleared
+
+    eng.process_lob_update(None, _stats(ts=3), local_ts_ns=3)
+    state_after = eng._states["2330"]
+    # After reset, warm_count restarts at 1
+    assert state_after.warm_count == 1
+    assert state_after.seq == 3
+
+
 def test_feature_engine_rust_backend_parity_when_available():
     py_eng = FeatureEngine(kernel_backend="python")
     rust_eng = FeatureEngine(kernel_backend="rust")
