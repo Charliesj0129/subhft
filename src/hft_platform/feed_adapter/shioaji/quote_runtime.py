@@ -12,7 +12,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 
 if TYPE_CHECKING:
-    from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+    from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
 logger = get_logger("feed_adapter.quote_runtime")
 
@@ -226,7 +226,7 @@ class QuoteRuntime:
 
         # Local import avoids circular dependency at module load time;
         # by call time both modules are fully initialised.
-        from hft_platform.feed_adapter.shioaji_client import dispatch_tick_cb
+        from hft_platform.feed_adapter.shioaji.client import dispatch_tick_cb
 
         supports_v1 = c._supports_quote_v1()
         supports_v0 = c._supports_quote_v0()

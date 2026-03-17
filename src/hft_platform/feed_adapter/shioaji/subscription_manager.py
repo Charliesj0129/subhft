@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover - fallback when library absent
     _sj = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
-    from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+    from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
 logger = get_logger("feed_adapter.subscription_manager")
 

@@ -737,7 +737,7 @@ class TestShioajiClientFull(unittest.TestCase):
             if iteration["n"] >= 2:
                 self.client._sub_retry_running = False
 
-        with patch("hft_platform.feed_adapter.shioaji_client.time.sleep", side_effect=fake_sleep):
+        with patch("hft_platform.feed_adapter.shioaji.quote_runtime.time.sleep", side_effect=fake_sleep):
             self.client._start_sub_retry_thread(cb)
             self.client._sub_retry_thread.join(timeout=2)
 
@@ -759,7 +759,7 @@ class TestShioajiClientFull(unittest.TestCase):
             if iteration["n"] >= 2:
                 self.client._sub_retry_running = False
 
-        with patch("hft_platform.feed_adapter.shioaji_client.time.sleep", side_effect=fake_sleep):
+        with patch("hft_platform.feed_adapter.shioaji.quote_runtime.time.sleep", side_effect=fake_sleep):
             with patch.object(self.client, "_ensure_callbacks"):  # prevent it from setting the flag
                 self.client._start_sub_retry_thread(cb)
                 self.client._sub_retry_thread.join(timeout=2)
