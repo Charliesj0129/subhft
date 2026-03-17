@@ -61,6 +61,8 @@ except Exception as exc:
     logger.warning("Failed to parse HFT_TS_SKEW_LOG_COOLDOWN_S, using 0", error=str(exc))
     _TS_SKEW_LOG_COOLDOWN_NS = 0
 
+_FUSED_ENABLED = os.environ.get("HFT_FUSED_NORMALIZER", "0") == "1"
+
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
@@ -92,6 +94,16 @@ except Exception as exc:
     _RUST_NORMALIZE_BIDASK = None
     _RUST_NORMALIZE_BIDASK_NP = None
     _RUST_NORMALIZE_BIDASK_SYNTH = None
+
+# Fused normalizer+LOB pipeline (single Rust call replaces normalize → book update → stats)
+_HAS_FUSED = False
+_RustNormalizerLobFused: type | None = None
+if _FUSED_ENABLED and _RUST_SCALE_BOOK is not None:  # _rust_core loaded successfully
+    try:
+        _RustNormalizerLobFused = getattr(_rust_core, "RustNormalizerLobFused", None)
+        _HAS_FUSED = _RustNormalizerLobFused is not None
+    except Exception:
+        _HAS_FUSED = False
 
 
 class SymbolMetadata:
@@ -281,13 +293,16 @@ class MarketDataNormalizer:
         "metrics",
         "_last_symbol",
         "_last_scale",
-        "_last_local_ts_ns",
+        "_last_local_ts_tick",
+        "_last_local_ts_bidask",
+        "_last_local_ts_snapshot",
         "_last_skew_log_ns",
         "_fixed5_scratch_enabled",
         "_fixed5_bid_prices_np",
         "_fixed5_bid_vols_np",
         "_fixed5_ask_prices_np",
         "_fixed5_ask_vols_np",
+        "_fused",
     )
 
     def __init__(self, config_path: Optional[str] = None, metadata: SymbolMetadata | None = None):
@@ -300,8 +315,16 @@ class MarketDataNormalizer:
         self.metrics = MetricsRegistry.get()
         self._last_symbol: str | None = None
         self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
-        self._last_local_ts_ns = {"tick": 0, "bidask": 0, "snapshot": 0}
+        self._last_local_ts_tick: int = 0
+        self._last_local_ts_bidask: int = 0
+        self._last_local_ts_snapshot: int = 0
         self._last_skew_log_ns = 0
+        self._fused: Any = None
+        if _HAS_FUSED and _RustNormalizerLobFused is not None:
+            try:
+                self._fused = _RustNormalizerLobFused()
+            except Exception:
+                self._fused = None
         self._fixed5_scratch_enabled = False
         self._fixed5_bid_prices_np = None
         self._fixed5_bid_vols_np = None
@@ -489,12 +512,12 @@ class MarketDataNormalizer:
                                     lag_ns = local_ts - exch_ts
                                     if lag_ns >= 0:
                                         self.metrics.feed_latency_ns.observe(lag_ns)
-                                last = self._last_local_ts_ns.get("tick", 0)
+                                last = self._last_local_ts_tick
                                 if last:
                                     delta = local_ts - last
                                     if delta >= 0:
                                         self.metrics.feed_interarrival_ns.observe(delta)
-                                self._last_local_ts_ns["tick"] = local_ts
+                                self._last_local_ts_tick = local_ts
                             meta = MetaData(
                                 seq=self._next_seq(),
                                 topic="tick",
@@ -557,12 +580,12 @@ class MarketDataNormalizer:
                     lag_ns = local_ts - exch_ts
                     if lag_ns >= 0:
                         self.metrics.feed_latency_ns.observe(lag_ns)
-                last = self._last_local_ts_ns.get("tick", 0)
+                last = self._last_local_ts_tick
                 if last:
                     delta = local_ts - last
                     if delta >= 0:
                         self.metrics.feed_interarrival_ns.observe(delta)
-                self._last_local_ts_ns["tick"] = local_ts
+                self._last_local_ts_tick = local_ts
             meta = MetaData(seq=self._next_seq(), topic="tick", source_ts=exch_ts, local_ts=local_ts)
 
             return TickEvent(
@@ -604,6 +627,109 @@ class MarketDataNormalizer:
             exch_ts = _extract_ts_ns(ts_val)
 
             scale = self._get_scale(symbol)
+
+            # Fused path: single Rust call does scale + book update + stats
+            fused = self._fused
+            if fused is not None:
+                try:
+                    # tick_size_scaled = 1 tick unit in scaled price space (reserved for future use)
+                    tick_size_scaled = 1
+                    fused_result = fused.process_bidask(
+                        symbol,
+                        list(bp) if not isinstance(bp, list) else bp,
+                        list(bv) if not isinstance(bv, list) else bv,
+                        list(ap) if not isinstance(ap, list) else ap,
+                        list(av) if not isinstance(av, list) else av,
+                        scale,
+                        tick_size_scaled,
+                    )
+                    if fused_result is not None:
+                        (
+                            bids_np,
+                            asks_np,
+                            best_bid,
+                            best_ask,
+                            bid_depth,
+                            ask_depth,
+                            mid_x2,
+                            spread_scaled,
+                            imbalance_ppm,
+                            version,
+                            top_imbalance,
+                        ) = fused_result
+                        bb = int(best_bid)
+                        ba = int(best_ask)
+                        bd = int(bid_depth)
+                        ad = int(ask_depth)
+                        mx2 = int(mid_x2)
+                        ss = int(spread_scaled)
+                        timb = float(top_imbalance)
+                        # Standard stats tuple (backward-compat: mid_price as float, spread as float)
+                        compat_stats = (bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)
+                        # Fused stats: integer mid_x2 + spread_scaled for LOBEngine bypass
+                        fused_stats = (bb, ba, bd, ad, mx2, ss, timb)
+
+                        if _RETURN_TUPLE:
+                            return (
+                                "bidask",
+                                symbol,
+                                bids_np,
+                                asks_np,
+                                exch_ts,
+                                False,
+                                bb,
+                                ba,
+                                bd,
+                                ad,
+                                mx2 / 2.0,
+                                float(ss),
+                                timb,
+                            )
+
+                        local_ts = timebase.now_ns()
+                        if exch_ts:
+                            exch_ts = _clamp_future_ts(exch_ts, local_ts, "bidask", symbol)
+                            if local_ts < exch_ts:
+                                local_ts = exch_ts
+                            else:
+                                delta = local_ts - exch_ts
+                                if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                                    if _TS_SKEW_LOG_COOLDOWN_NS and (
+                                        local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
+                                    ):
+                                        logger.warning(
+                                            "Feed time skew",
+                                            topic="bidask",
+                                            symbol=symbol,
+                                            delta_ns=delta,
+                                            max_ns=_TS_MAX_LAG_NS,
+                                        )
+                                        self._last_skew_log_ns = local_ts
+                                    if self.metrics:
+                                        self.metrics.feed_time_skew_ns.labels(topic="bidask").set(delta)
+                                    local_ts = exch_ts + _TS_MAX_LAG_NS
+                        if self.metrics:
+                            if exch_ts:
+                                lag_ns = local_ts - exch_ts
+                                if lag_ns >= 0:
+                                    self.metrics.feed_latency_ns.observe(lag_ns)
+                            last = self._last_local_ts_bidask
+                            if last:
+                                delta = local_ts - last
+                                if delta >= 0:
+                                    self.metrics.feed_interarrival_ns.observe(delta)
+                            self._last_local_ts_bidask = local_ts
+                        meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
+                        return BidAskEvent(
+                            meta=meta,
+                            symbol=symbol,
+                            bids=bids_np,
+                            asks=asks_np,
+                            stats=compat_stats,
+                            fused_stats=fused_stats,
+                        )
+                except Exception:
+                    pass  # Fall through to standard path
 
             # Convert to numpy
             # We need to scale prices. Using numpy vectorization for scaling is faster.
@@ -909,12 +1035,12 @@ class MarketDataNormalizer:
                     lag_ns = local_ts - exch_ts
                     if lag_ns >= 0:
                         self.metrics.feed_latency_ns.observe(lag_ns)
-                last = self._last_local_ts_ns.get("bidask", 0)
+                last = self._last_local_ts_bidask
                 if last:
                     delta = local_ts - last
                     if delta >= 0:
                         self.metrics.feed_interarrival_ns.observe(delta)
-                self._last_local_ts_ns["bidask"] = local_ts
+                self._last_local_ts_bidask = local_ts
             meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
             event_stats = stats if stats is not None and not synthesized else None
             return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final, stats=event_stats)
@@ -984,12 +1110,12 @@ class MarketDataNormalizer:
                     lag_ns = local_ts - exch_ts
                     if lag_ns >= 0:
                         self.metrics.feed_latency_ns.observe(lag_ns)
-                last = self._last_local_ts_ns.get("snapshot", 0)
+                last = self._last_local_ts_snapshot
                 if last:
                     delta = local_ts - last
                     if delta >= 0:
                         self.metrics.feed_interarrival_ns.observe(delta)
-                self._last_local_ts_ns["snapshot"] = local_ts
+                self._last_local_ts_snapshot = local_ts
             meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=local_ts)
             return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)
 

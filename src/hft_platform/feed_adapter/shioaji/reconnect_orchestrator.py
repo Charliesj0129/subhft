@@ -21,7 +21,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 
 if TYPE_CHECKING:
-    from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+    from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
 logger = get_logger("feed_adapter.reconnect_orchestrator")
 

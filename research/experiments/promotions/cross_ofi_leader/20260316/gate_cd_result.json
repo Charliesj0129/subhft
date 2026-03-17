@@ -1,0 +1,55 @@
+{
+  "alpha_id": "cross_ofi_leader",
+  "paper_ref": "2112.13213",
+  "config": {
+    "ema_window": 32,
+    "pos_scale": 0.3,
+    "pos_step": 0.1,
+    "cross_weight": 0.5,
+    "leader": "2330"
+  },
+  "per_symbol": {
+    "2317": {
+      "n_days": 20,
+      "sharpe": 21.07,
+      "ic": 0.0266,
+      "mdd_frac": -0.0034,
+      "wf_con": 1.0,
+      "win_rate": 0.9,
+      "total_pnl": 6.07,
+      "stat_pass": "3",
+      "gate_c": "True",
+      "gate_d": "True"
+    },
+    "2454": {
+      "n_days": 20,
+      "sharpe": 18.84,
+      "ic": 0.0411,
+      "mdd_frac": -0.0056,
+      "wf_con": 1.0,
+      "win_rate": 0.95,
+      "total_pnl": 46.82,
+      "stat_pass": "3",
+      "gate_c": "True",
+      "gate_d": "True"
+    },
+    "2881": {
+      "n_days": 20,
+      "sharpe": 13.05,
+      "ic": 0.043,
+      "mdd_frac": -0.0004,
+      "wf_con": 1.0,
+      "win_rate": 0.7,
+      "total_pnl": 0.68,
+      "stat_pass": "3",
+      "gate_c": "True",
+      "gate_d": "True"
+    }
+  },
+  "aggregate": {
+    "sharpe": 17.65,
+    "ic": 0.0369,
+    "gate_c": 3,
+    "gate_d": 3
+  }
+}
