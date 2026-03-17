@@ -128,6 +128,51 @@ def test_late_packet_handling(engine):
     assert book.mid_price_x2 / 2.0 == 101.0  # If bug exists, this might fail (be 51.0)
 
 
+def test_stats_tuple_mode_equivalent_to_event_mode(engine):
+    """Stats tuple output should contain the same data as LOBStatsEvent output."""
+    bids = np.array([[5000000, 10]], dtype=np.int64)
+    asks = np.array([[5010000, 20]], dtype=np.int64)
+    event = BidAskEvent(meta=make_meta(1000), symbol="2330", bids=bids, asks=asks, is_snapshot=True)
+
+    # Get event-mode stats
+    stats_event = engine.process_event(event)
+    assert stats_event is not None
+
+    # Get tuple-mode stats via get_stats_tuple
+    book = engine.get_book("2330")
+    stats_tuple = book.get_stats_tuple()
+    assert isinstance(stats_tuple, tuple)
+    assert len(stats_tuple) == 9
+
+    # Verify fields match: (symbol, ts, mid_price_x2, spread, imbalance, best_bid, best_ask, bid_depth, ask_depth)
+    assert stats_tuple[0] == stats_event.symbol
+    assert stats_tuple[1] == stats_event.ts
+    assert stats_tuple[2] == stats_event.mid_price_x2
+    assert stats_tuple[3] == stats_event.spread_scaled
+    assert stats_tuple[4] == pytest.approx(stats_event.imbalance)
+    assert stats_tuple[5] == stats_event.best_bid
+    assert stats_tuple[6] == stats_event.best_ask
+    assert stats_tuple[7] == stats_event.bid_depth
+    assert stats_tuple[8] == stats_event.ask_depth
+
+
+def test_stats_tuple_mode_via_emit_stats(engine):
+    """When _STATS_TUPLE is true, _emit_stats returns a tuple."""
+    from hft_platform.feed_adapter import lob_engine as _mod
+
+    orig = _mod._STATS_TUPLE
+    try:
+        _mod._STATS_TUPLE = True
+        bids = np.array([[5000000, 10]], dtype=np.int64)
+        asks = np.array([[5010000, 20]], dtype=np.int64)
+        event = BidAskEvent(meta=make_meta(1000), symbol="2330", bids=bids, asks=asks, is_snapshot=True)
+        result = engine.process_event(event)
+        assert isinstance(result, tuple)
+        assert result[0] == "2330"
+    finally:
+        _mod._STATS_TUPLE = orig
+
+
 from unittest.mock import MagicMock
 
 
