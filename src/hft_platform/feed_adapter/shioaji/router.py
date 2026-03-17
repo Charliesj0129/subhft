@@ -25,6 +25,7 @@ CLIENT_DISPATCH_WILDCARD_SNAPSHOT: tuple[Callable[..., Any], ...] = ()
 TOPIC_CODE_CACHE: Dict[str, str | None] = {}
 _TOPIC_CODE_CACHE_MISS = object()
 _TOPIC_CODE_CACHE_MAX = max(128, int(os.getenv("HFT_SHIOAJI_TOPIC_CODE_CACHE_MAX", "4096")))
+_CACHE_WARMED: bool = False
 _ROUTE_MISS_STRICT = os.getenv("HFT_SHIOAJI_ROUTE_MISS_STRICT", "0").strip().lower() in {"1", "true", "yes", "on"}
 _ROUTE_MISS_FALLBACK_MODE = os.getenv("HFT_SHIOAJI_ROUTE_MISS_FALLBACK", "wildcard").strip().lower()
 if _ROUTE_MISS_FALLBACK_MODE not in {"wildcard", "broadcast", "none"}:
@@ -71,6 +72,14 @@ def _refresh_registry_snapshots_locked() -> None:
 
 def _clear_topic_code_cache_locked() -> None:
     TOPIC_CODE_CACHE.clear()
+
+
+def _warmup_topic_code_cache_locked() -> None:
+    """Pre-populate TOPIC_CODE_CACHE with common topic patterns for all bound codes."""
+    for code in CLIENT_REGISTRY_BY_CODE:
+        # Pre-cache the most common Shioaji topic patterns.
+        for pattern in (f"Q/TSE/{code}", f"Q/OTC/{code}", f"L1:STK:{code}:tick"):
+            TOPIC_CODE_CACHE[pattern] = code
 
 
 def _record_route_metric(kind: str) -> None:
@@ -191,11 +200,16 @@ def _extract_code_from_topic(topic: str) -> str | None:
                         code = parts[-1]
                         break
 
-    with CLIENT_REGISTRY_LOCK:
-        if len(TOPIC_CODE_CACHE) >= _TOPIC_CODE_CACHE_MAX:
-            # Simple coarse reset keeps O(1) behavior on hot path.
-            TOPIC_CODE_CACHE.clear()
-        TOPIC_CODE_CACHE[topic] = code
+    if _CACHE_WARMED:
+        # Post-warmup: dict writes are GIL-atomic in CPython; skip lock.
+        if len(TOPIC_CODE_CACHE) < _TOPIC_CODE_CACHE_MAX:
+            TOPIC_CODE_CACHE[topic] = code
+    else:
+        with CLIENT_REGISTRY_LOCK:
+            if len(TOPIC_CODE_CACHE) >= _TOPIC_CODE_CACHE_MAX:
+                # Simple coarse reset keeps O(1) behavior on hot path.
+                TOPIC_CODE_CACHE.clear()
+            TOPIC_CODE_CACHE[topic] = code
     return code
 
 
@@ -239,6 +253,7 @@ def _registry_register(client: Any) -> None:
 
 
 def _registry_rebind_codes(client: Any, codes: list[str]) -> None:
+    global _CACHE_WARMED
     with CLIENT_REGISTRY_LOCK:
         for mapped_code, clients in list(CLIENT_REGISTRY_BY_CODE.items()):
             if client in clients:
@@ -256,9 +271,13 @@ def _registry_rebind_codes(client: Any, codes: list[str]) -> None:
                 bucket.append(client)
         _refresh_registry_snapshots_locked()
         _clear_topic_code_cache_locked()
+        # Pre-populate cache for all known codes and mark warmed.
+        _warmup_topic_code_cache_locked()
+        _CACHE_WARMED = True
 
 
 def _registry_unregister(client: Any) -> None:
+    global _CACHE_WARMED
     with CLIENT_REGISTRY_LOCK:
         if client in CLIENT_REGISTRY:
             CLIENT_REGISTRY[:] = [c for c in CLIENT_REGISTRY if c is not client]
@@ -269,86 +288,113 @@ def _registry_unregister(client: Any) -> None:
                     CLIENT_REGISTRY_BY_CODE[mapped_code] = clients
                 else:
                     CLIENT_REGISTRY_BY_CODE.pop(mapped_code, None)
+        _CACHE_WARMED = False
         _refresh_registry_snapshots_locked()
         _clear_topic_code_cache_locked()
 
 
-def dispatch_tick_cb(*args, **kwargs):
-    """
-    Global static callback to dispatch ticks/bidask to all registered clients.
-    Passes through raw args to avoid signature drift across Shioaji callbacks.
-    """
-    try:
-        global _ROUTE_MISS_COUNT
-        if not args and not kwargs:
-            return
-        code = _extract_quote_code(*args, **kwargs)
-        dispatchers, routed_exact = _registry_dispatch_snapshot(code)
-        if code and not routed_exact:
-            _ROUTE_MISS_COUNT += 1
-            _record_route_metric("miss")
-            if _ROUTE_MISS_STRICT:
-                _record_route_metric("drop")
-                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                    logger.warning(
-                        "Quote route miss; dropping callback payload",
-                        code=code,
-                        strict=True,
-                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    )
-                return
-            dispatchers = _registry_fallback_dispatch_snapshot()
-            if not dispatchers:
-                _record_route_metric("drop")
-                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                    logger.warning(
-                        "Quote route miss; no fallback targets, dropping callback payload",
-                        code=code,
-                        strict=False,
-                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    )
-                return
-            _record_route_metric("fallback")
+def _dispatch_core(code: str | None, topic: Any, quote: Any) -> None:
+    """Shared dispatch logic for both concrete and compat callbacks."""
+    global _ROUTE_MISS_COUNT
+    dispatchers, routed_exact = _registry_dispatch_snapshot(code)
+    if code and not routed_exact:
+        _ROUTE_MISS_COUNT += 1
+        _record_route_metric("miss")
+        if _ROUTE_MISS_STRICT:
+            _record_route_metric("drop")
             if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
                 logger.warning(
-                    "Quote route miss; falling back to snapshot",
+                    "Quote route miss; dropping callback payload",
+                    code=code,
+                    strict=True,
+                    fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
+                )
+            return
+        dispatchers = _registry_fallback_dispatch_snapshot()
+        if not dispatchers:
+            _record_route_metric("drop")
+            if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+                logger.warning(
+                    "Quote route miss; no fallback targets, dropping callback payload",
                     code=code,
                     strict=False,
                     fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    fallback_targets=len(dispatchers),
                 )
-        elif code is None and _ROUTE_MISS_STRICT:
-            _ROUTE_MISS_COUNT += 1
-            _record_route_metric("miss")
+            return
+        _record_route_metric("fallback")
+        if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+            logger.warning(
+                "Quote route miss; falling back to snapshot",
+                code=code,
+                strict=False,
+                fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
+                fallback_targets=len(dispatchers),
+            )
+    elif code is None and _ROUTE_MISS_STRICT:
+        _ROUTE_MISS_COUNT += 1
+        _record_route_metric("miss")
+        _record_route_metric("drop")
+        if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+            logger.warning("Quote route parse miss; dropping callback payload", strict=True)
+        return
+    elif code is None:
+        _ROUTE_MISS_COUNT += 1
+        _record_route_metric("miss")
+        dispatchers = _registry_fallback_dispatch_snapshot()
+        if not dispatchers:
             _record_route_metric("drop")
             if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                logger.warning("Quote route parse miss; dropping callback payload", strict=True)
-            return
-        elif code is None:
-            _ROUTE_MISS_COUNT += 1
-            _record_route_metric("miss")
-            dispatchers = _registry_fallback_dispatch_snapshot()
-            if not dispatchers:
-                _record_route_metric("drop")
-                if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
-                    logger.warning(
-                        "Quote route parse miss; no fallback targets, dropping callback payload",
-                        strict=False,
-                        fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    )
-                return
-            _record_route_metric("fallback")
-            if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
                 logger.warning(
-                    "Quote route parse miss; falling back to snapshot",
+                    "Quote route parse miss; no fallback targets, dropping callback payload",
                     strict=False,
                     fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
-                    fallback_targets=len(dispatchers),
                 )
-        for dispatch_fn in dispatchers:
-            dispatch_fn(*args, **kwargs)
+            return
+        _record_route_metric("fallback")
+        if _ROUTE_MISS_COUNT % _ROUTE_MISS_LOG_EVERY == 1:
+            logger.warning(
+                "Quote route parse miss; falling back to snapshot",
+                strict=False,
+                fallback_mode=_ROUTE_MISS_FALLBACK_MODE,
+                fallback_targets=len(dispatchers),
+            )
+    for dispatch_fn in dispatchers:
+        dispatch_fn(topic, quote)
+
+
+def dispatch_tick_cb(topic: Any, quote: Any) -> None:
+    """
+    Concrete 2-arg callback for Shioaji quote dispatch.
+
+    Shioaji always calls back with ``(topic, quote)`` — using a concrete
+    signature avoids the per-call cost of packing ``*args`` / ``**kwargs``
+    (~100-200 ns savings on hot path).
+    """
+    try:
+        code = _extract_quote_code_from_obj(quote)
+        if code is None and isinstance(topic, str):
+            code = _extract_code_from_topic(topic)
+        _dispatch_core(code, topic, quote)
     except Exception as e:
         logger.error("Global Dispatch Error", error=str(e))
+
+
+def dispatch_tick_cb_compat(*args: Any, **kwargs: Any) -> None:
+    """
+    Varargs-compatible fallback for non-standard callback shapes.
+
+    Use ``dispatch_tick_cb`` (concrete 2-arg) for the hot path.
+    """
+    try:
+        if not args and not kwargs:
+            return
+        code = _extract_quote_code(*args, **kwargs)
+        # Reconstruct (topic, quote) from args for downstream dispatchers.
+        topic = args[0] if args else None
+        quote = args[1] if len(args) >= 2 else None
+        _dispatch_core(code, topic, quote)
+    except Exception as e:
+        logger.error("Global Dispatch Error (compat)", error=str(e))
 
 
 __all__ = [
@@ -356,4 +402,5 @@ __all__ = [
     "_registry_rebind_codes",
     "_registry_unregister",
     "dispatch_tick_cb",
+    "dispatch_tick_cb_compat",
 ]

@@ -1,0 +1,63 @@
+{
+  "alpha_id": "ofi_momentum",
+  "paper_ref": "0906.1444",
+  "config": {
+    "w_fast": 8,
+    "w_slow": 32,
+    "blend": 0.5,
+    "pos_step": 0.1,
+    "pos_scale": 0.3
+  },
+  "per_symbol": {
+    "2330": {
+      "n_days": 20,
+      "sharpe": 7.46,
+      "ic": 0.028,
+      "mdd": -0.0106,
+      "wf": 1.0,
+      "win": 0.6,
+      "stat": "1",
+      "gc": "False",
+      "gd": "True"
+    },
+    "2317": {
+      "n_days": 20,
+      "sharpe": 9.45,
+      "ic": 0.0458,
+      "mdd": -0.0244,
+      "wf": 1.0,
+      "win": 0.85,
+      "stat": "3",
+      "gc": "True",
+      "gd": "True"
+    },
+    "2454": {
+      "n_days": 20,
+      "sharpe": 23.74,
+      "ic": 0.0636,
+      "mdd": 0.0,
+      "wf": 1.0,
+      "win": 0.95,
+      "stat": "3",
+      "gc": "True",
+      "gd": "True"
+    },
+    "2881": {
+      "n_days": 20,
+      "sharpe": 19.34,
+      "ic": 0.0801,
+      "mdd": -0.0001,
+      "wf": 1.0,
+      "win": 0.95,
+      "stat": "3",
+      "gc": "True",
+      "gd": "True"
+    }
+  },
+  "aggregate": {
+    "sharpe": 15.0,
+    "ic": 0.0544,
+    "gate_c": 3,
+    "gate_d": 4
+  }
+}

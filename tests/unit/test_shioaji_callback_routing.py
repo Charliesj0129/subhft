@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from hft_platform.feed_adapter import shioaji_client as mod
+from hft_platform.feed_adapter.shioaji import client as _client_mod
 
 
 class _DummyClient:
@@ -154,7 +155,7 @@ def test_close_stops_worker_and_unregisters(monkeypatch):
     dummy._stop_quote_dispatch_worker = MagicMock()
 
     unreg = MagicMock()
-    monkeypatch.setattr(mod, "_registry_unregister", unreg)
+    monkeypatch.setattr(_client_mod, "_registry_unregister", unreg)
 
     mod.ShioajiClient.close(dummy)
 

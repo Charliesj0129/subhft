@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover
     sj = None
 
 if TYPE_CHECKING:
-    from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+    from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
 
 class ContractsRuntime:

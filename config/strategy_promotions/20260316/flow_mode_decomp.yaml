@@ -1,0 +1,53 @@
+alpha_id: flow_mode_decomp
+enabled: true
+weight: 0.1
+owner: charlie
+expiry_review_date: '2026-04-16'
+forced: false
+config_version: v1
+parent_config_version: null
+scorecard_snapshot:
+  sharpe_oos: 26.34
+  max_drawdown: -0.001
+  turnover: 0.01
+  correlation_pool_max: 0.363
+  ic_mean: 0.041
+  win_rate: 0.96
+  n_days_tested: 62
+thresholds:
+  min_sharpe_oos: 1.0
+  max_abs_drawdown: 0.2
+  max_turnover: 2.0
+  max_correlation: 0.7
+  min_shadow_sessions: 5
+  min_paper_trade_calendar_days: 7
+  min_paper_trade_trading_days: 5
+  min_paper_trade_session_minutes: 60
+signal_config:
+  ema_window: 32
+  pos_scale: 0.3
+  pos_step: 0.10
+  latency_profile: shioaji_sim_p95_v2026-03-04
+guardrails:
+  max_live_slippage_bps: 3.0
+  max_live_drawdown_contribution: 0.02
+  max_execution_error_rate: 0.01
+readiness:
+  require_paper_trade_governance: true
+  enable_rust_readiness_gate: false
+  rust_module_name: null
+rollback:
+  trigger:
+    live_slippage_bps_gt: 3.0
+    live_drawdown_contribution_gt: 0.02
+    execution_error_rate_gt: 0.01
+  action:
+    set_weight_to_zero: true
+    open_incident: true
+paper_ref: '2405.10654'
+notes: |
+  Flow Mode Decomposition — activity-normalised directional flow from Bouchaud et al. (2024).
+  Tuned: EMA_32 + pos_step=0.10 reduces turnover while preserving IC.
+  Nearly orthogonal to QI (corr 0.02-0.16) and MM (corr 0.22-0.36).
+  Tested on 62 days across 4 TWSE symbols (2330/2881/2454/2317).
+  Gate E requires 5 paper-trade sessions over 1 week before live promotion.

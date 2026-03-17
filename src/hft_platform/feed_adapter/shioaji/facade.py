@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
+from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 from hft_platform.feed_adapter.shioaji.historical_gateway import HistoricalGateway
 from hft_platform.feed_adapter.shioaji.market_info_gateway import MarketInfoGateway
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
 from hft_platform.feed_adapter.shioaji.scanner_gateway import ScannerGateway
-from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
 
 class ShioajiClientFacade:

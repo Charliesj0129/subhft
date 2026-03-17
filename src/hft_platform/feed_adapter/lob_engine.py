@@ -38,6 +38,7 @@ _RUST_BOOK_STATE_ENABLED = os.getenv("HFT_LOB_RUST_BOOKSTATE", "1").lower() not 
     "no",
     "off",
 }
+_FUSED_BYPASS = os.environ.get("HFT_FUSED_NORMALIZER", "0") == "1"
 
 try:
     try:
@@ -521,6 +522,25 @@ class LOBEngine:
         # Typed dispatch
         if isinstance(event, BidAskEvent):
             book = self.get_book(event.symbol)
+            # Fused bypass: normalizer already computed stats in a single Rust call;
+            # skip redundant apply_update + _recompute and directly set book fields.
+            if _FUSED_BYPASS and event.fused_stats is not None:
+                fs = event.fused_stats
+                exch_ts = event.meta.source_ts
+                with book.lock:
+                    if exch_ts >= book.exch_ts:
+                        book.exch_ts = exch_ts
+                        book.bids = event.bids
+                        book.asks = event.asks
+                        book.bid_depth_total = int(fs[2])
+                        book.ask_depth_total = int(fs[3])
+                        book.mid_price_x2 = int(fs[4])
+                        book.spread = int(fs[5])
+                        book.imbalance = float(fs[6])
+                        book.version += 1
+                if metrics_enabled:
+                    self._record_lob_metrics(event.symbol, event.is_snapshot)
+                return self._emit_stats(book)
             if event.stats is not None:
                 book.apply_update_with_stats(event.bids, event.asks, event.meta.source_ts, event.stats)
             else:
