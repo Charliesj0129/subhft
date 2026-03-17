@@ -106,10 +106,16 @@ def _registry_unregister(client: Any) -> None:
     _router._registry_unregister(client)
 
 
-def dispatch_tick_cb(*args, **kwargs):
+def dispatch_tick_cb(topic: Any = None, quote: Any = None, *args: Any, **kwargs: Any) -> None:
     global _ROUTE_MISS_COUNT
     _sync_router_route_globals()
-    _router.dispatch_tick_cb(*args, **kwargs)
+    if args or kwargs:
+        # Non-standard shape — use compat path.
+        _router.dispatch_tick_cb_compat(topic, quote, *args, **kwargs)
+    elif topic is None and quote is None:
+        return
+    else:
+        _router.dispatch_tick_cb(topic, quote)
     _ROUTE_MISS_COUNT = _router._ROUTE_MISS_COUNT
 
 
