@@ -3,11 +3,24 @@
 All broker client implementations (Shioaji, Fubon, etc.) must satisfy
 ``BrokerClientProtocol``.  Order-enum encoding is abstracted behind
 ``BrokerOrderCodec`` so strategy/risk layers stay broker-agnostic.
+
+Quote runtime and subscription manager protocols are re-exported from
+``_base`` for convenience.
 """
 
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
+
+from hft_platform.feed_adapter._base.quote_runtime import QuoteRuntimeProtocol
+from hft_platform.feed_adapter._base.subscription_manager import SubscriptionManagerProtocol
+
+__all__ = [
+    "BrokerClientProtocol",
+    "BrokerOrderCodec",
+    "QuoteRuntimeProtocol",
+    "SubscriptionManagerProtocol",
+]
 
 
 @runtime_checkable
