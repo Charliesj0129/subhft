@@ -52,6 +52,7 @@ class BidAskEvent:
     bids: Union[np.ndarray, list]
     asks: Union[np.ndarray, list]
     stats: tuple[int, int, int, int, float, float, float] | None = None
+    fused_stats: tuple[int, int, int, int, int, int, float] | None = None
     is_snapshot: bool = False
 
 

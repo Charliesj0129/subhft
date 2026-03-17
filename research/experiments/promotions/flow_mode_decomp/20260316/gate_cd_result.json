@@ -1,0 +1,31 @@
+{
+  "alpha_id": "flow_mode_decomp",
+  "paper_ref": "2405.10654",
+  "date": "2026-03-16",
+  "config": {
+    "ema_window": 32,
+    "pos_scale": 0.3,
+    "pos_step": 0.10,
+    "latency_ms": 36,
+    "fee_bps": 0.2,
+    "latency_profile": "shioaji_sim_p95_v2026-03-04"
+  },
+  "per_symbol": {
+    "2330": {"n_days": 6, "sharpe": 31.42, "ic": 0.019, "mdd_frac": 0.0, "wf_con": 1.0, "win_rate": 1.0, "gate_c": true, "gate_d": true},
+    "2881": {"n_days": 19, "sharpe": 16.91, "ic": 0.0573, "mdd_frac": -0.0004, "wf_con": 1.0, "win_rate": 0.89, "gate_c": true, "gate_d": true},
+    "2454": {"n_days": 19, "sharpe": 30.91, "ic": 0.0532, "mdd_frac": 0.0, "wf_con": 1.0, "win_rate": 1.0, "gate_c": true, "gate_d": true},
+    "2317": {"n_days": 18, "sharpe": 26.14, "ic": 0.034, "mdd_frac": -0.0035, "wf_con": 1.0, "win_rate": 0.94, "gate_c": true, "gate_d": true}
+  },
+  "aggregate": {
+    "sharpe": 26.34,
+    "ic": 0.041,
+    "mdd": -0.001,
+    "gate_c_pass": 4,
+    "gate_d_pass": 4,
+    "win_rate_mean": 0.96
+  },
+  "correlation_check": {
+    "vs_queue_imbalance": {"2330": 0.089, "2881": 0.108, "2454": 0.016, "2317": 0.162},
+    "vs_microprice_momentum": {"2330": 0.254, "2881": 0.253, "2454": 0.363, "2317": 0.217}
+  }
+}
