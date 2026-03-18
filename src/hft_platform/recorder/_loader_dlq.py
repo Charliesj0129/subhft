@@ -100,9 +100,7 @@ def replay_dlq(
     errors: list[str] = []
     selected = 0
 
-    file_names = sorted(
-        [f for f in os.listdir(svc.dlq_dir) if f.endswith(".jsonl")]
-    )
+    file_names = sorted([f for f in os.listdir(svc.dlq_dir) if f.endswith(".jsonl")])
     if isinstance(max_files, int) and max_files > 0:
         file_names = file_names[:max_files]
 
@@ -114,9 +112,7 @@ def replay_dlq(
 
         table = parse_table_from_filename(fname)
         if table == "unknown":
-            logger.warning(
-                "DLQ replay: unknown table for file", file=fname
-            )
+            logger.warning("DLQ replay: unknown table for file", file=fname)
             skipped += 1
             continue
 
@@ -136,13 +132,9 @@ def replay_dlq(
                     rows.append(obj)
 
             if not rows:
-                logger.info(
-                    "DLQ replay: empty file, archiving", file=fname
-                )
+                logger.info("DLQ replay: empty file, archiving", file=fname)
                 if not dry_run:
-                    shutil.move(
-                        fpath, os.path.join(svc.archive_dir, fname)
-                    )
+                    shutil.move(fpath, os.path.join(svc.archive_dir, fname))
                 skipped += 1
                 continue
 
@@ -160,9 +152,7 @@ def replay_dlq(
 
             success = svc.insert_batch(table, rows)
             if success:
-                shutil.move(
-                    fpath, os.path.join(svc.archive_dir, fname)
-                )
+                shutil.move(fpath, os.path.join(svc.archive_dir, fname))
                 logger.info(
                     "DLQ replay: success, archived",
                     file=fname,
@@ -259,9 +249,7 @@ def cleanup_old_dlq_files(svc: Any) -> None:
             )
             if svc.metrics:
                 try:
-                    svc.metrics.dlq_size_total.labels(
-                        source="cleanup"
-                    ).inc(archived + deleted)
+                    svc.metrics.dlq_size_total.labels(source="cleanup").inc(archived + deleted)
                 except Exception:
                     pass
     except Exception as e:
@@ -430,9 +418,7 @@ def check_wal_accumulation(svc: Any) -> None:
         logger.warning("WAL accumulation check failed", error=str(e))
 
 
-def quarantine_corrupt_file(
-    svc: Any, fpath: str, fname: str, reason: str
-) -> None:
+def quarantine_corrupt_file(svc: Any, fpath: str, fname: str, reason: str) -> None:
     """Move corrupt WAL file to quarantine directory."""
     os.makedirs(svc.corrupt_dir, exist_ok=True)
     try:

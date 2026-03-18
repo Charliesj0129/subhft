@@ -34,11 +34,7 @@ def connect(svc: Any) -> None:
             or os.getenv("CLICKHOUSE_USERNAME")
             or "default"
         )
-        ch_password = (
-            os.getenv("HFT_CLICKHOUSE_PASSWORD")
-            or os.getenv("CLICKHOUSE_PASSWORD")
-            or ""
-        )
+        ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
         svc.ch_client = clickhouse_connect.get_client(
             host=svc.ch_host,
             port=svc.ch_port,
@@ -83,9 +79,7 @@ def connect(svc: Any) -> None:
 
 def compute_connect_backoff(svc: Any, attempt: int) -> float:
     """Compute exponential backoff delay for connection retry."""
-    delay = min(
-        svc._connect_base_delay_s * (2**attempt), svc._connect_max_backoff_s
-    )
+    delay = min(svc._connect_base_delay_s * (2**attempt), svc._connect_max_backoff_s)
     jitter = delay * 0.25 * (random.random() * 2 - 1)
     return max(1.0, delay + jitter)
 
@@ -97,9 +91,7 @@ def compute_connect_backoff(svc: Any, attempt: int) -> float:
 
 def compute_insert_backoff(svc: Any, attempt: int) -> float:
     """Compute backoff delay for insert retry."""
-    delay = min(
-        svc._insert_base_delay_s * (2**attempt), svc._insert_max_backoff_s
-    )
+    delay = min(svc._insert_base_delay_s * (2**attempt), svc._insert_max_backoff_s)
     jitter = delay * 0.25 * (random.random() * 2 - 1)
     return max(0.1, delay + jitter)
 
@@ -124,33 +116,21 @@ def insert_with_retry(
         for attempt in range(svc._insert_max_retries):
             try:
                 with svc._ch_lock:
-                    svc.ch_client.insert(
-                        full_table_name, data, column_names=cols
-                    )
+                    svc.ch_client.insert(full_table_name, data, column_names=cols)
                 logger.info("Inserted batch", table=table_alias, count=row_count)
                 if svc.metrics:
                     if hasattr(svc.metrics, "recorder_insert_batches_total"):
-                        outcome = (
-                            "success_no_retry"
-                            if attempt == 0
-                            else "success_after_retry"
-                        )
-                        svc.metrics.recorder_insert_batches_total.labels(
-                            table=table_alias, result=outcome
-                        ).inc()
+                        outcome = "success_no_retry" if attempt == 0 else "success_after_retry"
+                        svc.metrics.recorder_insert_batches_total.labels(table=table_alias, result=outcome).inc()
                     if attempt > 0:
-                        svc.metrics.recorder_insert_retry_total.labels(
-                            table=table_alias, result="success"
-                        ).inc()
+                        svc.metrics.recorder_insert_retry_total.labels(table=table_alias, result="success").inc()
                     svc.metrics.wal_replay_throughput_rows_total.inc(row_count)
                 return True
             except Exception as e:
                 last_error = e
                 if attempt < svc._insert_max_retries - 1:
                     if svc.metrics:
-                        svc.metrics.recorder_insert_retry_total.labels(
-                            table=table_alias, result="retry"
-                        ).inc()
+                        svc.metrics.recorder_insert_retry_total.labels(table=table_alias, result="retry").inc()
                     delay = compute_insert_backoff(svc, attempt)
                     logger.warning(
                         "Insert failed, retrying with backoff",
@@ -172,12 +152,8 @@ def insert_with_retry(
                             svc.metrics.recorder_insert_batches_total.labels(
                                 table=table_alias, result="failed_after_retry"
                             ).inc()
-                        svc.metrics.recorder_insert_retry_total.labels(
-                            table=table_alias, result="failed"
-                        ).inc()
-                        svc.metrics.wal_replay_errors_total.labels(
-                            type="insert_failed"
-                        ).inc()
+                        svc.metrics.recorder_insert_retry_total.labels(table=table_alias, result="failed").inc()
+                        svc.metrics.wal_replay_errors_total.labels(type="insert_failed").inc()
                     return False
     elif data:
         logger.warning(
@@ -187,9 +163,7 @@ def insert_with_retry(
         )
         if svc.metrics:
             if hasattr(svc.metrics, "recorder_insert_batches_total"):
-                svc.metrics.recorder_insert_batches_total.labels(
-                    table=table_alias, result="failed_no_client"
-                ).inc()
+                svc.metrics.recorder_insert_batches_total.labels(table=table_alias, result="failed_no_client").inc()
             svc.metrics.wal_replay_errors_total.labels(type="no_client").inc()
         return False
 
@@ -206,17 +180,14 @@ def is_duplicate(svc: Any, table: str, content_hash: str) -> bool:
     try:
         with svc._ch_lock:
             result = svc.ch_client.command(
-                f"SELECT count() FROM hft._wal_dedup "
-                f"WHERE table = '{table}' AND hash = '{content_hash}'"
+                f"SELECT count() FROM hft._wal_dedup WHERE table = '{table}' AND hash = '{content_hash}'"
             )
         return int(result) > 0
     except Exception:
         return False
 
 
-def record_dedup(
-    svc: Any, table: str, content_hash: str, row_count: int
-) -> None:
+def record_dedup(svc: Any, table: str, content_hash: str, row_count: int) -> None:
     """Record WAL content hash after successful insert."""
     try:
         with svc._ch_lock:
@@ -229,9 +200,7 @@ def record_dedup(
         logger.warning("Failed to record dedup hash", error=str(e))
 
 
-def insert_with_dedup(
-    svc: Any, target_table: str, rows: list, fname: str
-) -> bool:
+def insert_with_dedup(svc: Any, target_table: str, rows: list, fname: str) -> bool:
     """Insert rows with optional dedup guard (EC-1).
 
     Returns True on success.

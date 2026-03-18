@@ -38,22 +38,17 @@ def load_manifest(svc: Any) -> None:
             svc._manifest = {line.strip() for line in f if line.strip()}
         logger.info("Loaded WAL manifest", count=len(svc._manifest))
     except Exception as e:
-        logger.warning(
-            "Failed to load manifest, starting fresh", error=str(e)
-        )
+        logger.warning("Failed to load manifest, starting fresh", error=str(e))
         svc._manifest = set()
         return
 
     # EC-5: Detect stuck files still in WAL dir but marked as processed
     try:
-        pending = {
-            f for f in os.listdir(svc.wal_dir) if f.endswith(".jsonl")
-        }
+        pending = {f for f in os.listdir(svc.wal_dir) if f.endswith(".jsonl")}
         stuck = svc._manifest & pending
         if stuck:
             logger.warning(
-                "Manifest has entries still pending in WAL dir, "
-                "allowing re-process",
+                "Manifest has entries still pending in WAL dir, allowing re-process",
                 count=len(stuck),
             )
             svc._manifest -= stuck
@@ -121,9 +116,7 @@ def get_new_files(svc: Any) -> list[str]:
         return files
 
     try:
-        current = {
-            f for f in os.listdir(svc.wal_dir) if f.endswith(".jsonl")
-        }
+        current = {f for f in os.listdir(svc.wal_dir) if f.endswith(".jsonl")}
     except OSError:
         return []
 
@@ -189,9 +182,7 @@ def parse_batch_table_name(table_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def process_single_file(
-    svc: Any, fpath: str, force: bool = False
-) -> bool:
+def process_single_file(svc: Any, fpath: str, force: bool = False) -> bool:
     """Process a single WAL file (CC-3: extracted for parallel use).
 
     Returns True if the file was successfully processed and archived.
@@ -209,9 +200,7 @@ def process_single_file(
         svc._claim_registry.release_claim(fname)
 
 
-def _process_single_file_inner(
-    svc: Any, fpath: str, fname: str, force: bool
-) -> bool:
+def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) -> bool:
     """Inner processing logic (called after claim acquired)."""
     # Check modification time to ensure writer is done
     if not force:
@@ -244,9 +233,7 @@ def _process_single_file_inner(
             try:
                 fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
-                logger.debug(
-                    "File locked by writer, skipping", file=fname
-                )
+                logger.debug("File locked by writer, skipping", file=fname)
                 return False
             try:
                 for line in f:
@@ -261,9 +248,7 @@ def _process_single_file_inner(
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         if corrupt_lines > 0 and not all_lines:
-            svc._quarantine_corrupt_file(
-                fpath, fname, f"All {corrupt_lines} lines corrupt"
-            )
+            svc._quarantine_corrupt_file(fpath, fname, f"All {corrupt_lines} lines corrupt")
             return False
         elif corrupt_lines > 0:
             logger.warning(
@@ -284,9 +269,7 @@ def _process_single_file_inner(
         return True
 
     # CC-4: Detect multi-table batch format
-    is_batch = (
-        isinstance(all_lines[0], dict) and "__wal_table__" in all_lines[0]
-    )
+    is_batch = isinstance(all_lines[0], dict) and "__wal_table__" in all_lines[0]
 
     if is_batch:
         table_batches: list[tuple[str, list]] = []
@@ -309,9 +292,7 @@ def _process_single_file_inner(
             parsed_table = parse_batch_table_name(target_table)
             success = svc._insert_with_dedup(parsed_table, rows, fname)
             if not success:
-                svc._write_to_dlq(
-                    parsed_table, rows, "insert_failed_after_retries"
-                )
+                svc._write_to_dlq(parsed_table, rows, "insert_failed_after_retries")
                 return False
     else:
         target_table = parse_table_from_filename(fname)
@@ -321,9 +302,7 @@ def _process_single_file_inner(
 
         success = svc._insert_with_dedup(target_table, all_lines, fname)
         if not success:
-            svc._write_to_dlq(
-                target_table, all_lines, "insert_failed_after_retries"
-            )
+            svc._write_to_dlq(target_table, all_lines, "insert_failed_after_retries")
             return False
 
     # Move to archive
@@ -347,9 +326,7 @@ def process_files(svc: Any, force: bool = False) -> None:
     CC-3: Supports parallel file processing via ThreadPoolExecutor.
     """
     if not svc.ch_client:
-        logger.debug(
-            "ClickHouse client not ready, deferring WAL processing"
-        )
+        logger.debug("ClickHouse client not ready, deferring WAL processing")
         return
 
     files = get_new_files(svc)
@@ -361,13 +338,8 @@ def process_files(svc: Any, force: bool = False) -> None:
     if svc._loader_concurrency > 1 and len(files) > 1:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        with ThreadPoolExecutor(
-            max_workers=svc._loader_concurrency
-        ) as pool:
-            futures = {
-                pool.submit(process_single_file, svc, f, force): f
-                for f in files
-            }
+        with ThreadPoolExecutor(max_workers=svc._loader_concurrency) as pool:
+            futures = {pool.submit(process_single_file, svc, f, force): f for f in files}
             for future in as_completed(futures):
                 fpath = futures[future]
                 try:
@@ -385,9 +357,7 @@ def process_files(svc: Any, force: bool = False) -> None:
                 if process_single_file(svc, fpath, force):
                     processed += 1
             except Exception as e:
-                logger.error(
-                    "File processing failed", file=fpath, error=str(e)
-                )
+                logger.error("File processing failed", file=fpath, error=str(e))
 
     if processed and svc._manifest_enabled:
         save_manifest(svc)

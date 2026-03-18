@@ -51,23 +51,11 @@ class WALLoaderService:
         self.wal_dir = wal_dir
         self.archive_dir = archive_dir
         self.running = False
-        self.poll_interval_s = float(
-            os.getenv(
-                "HFT_WAL_POLL_INTERVAL_S", str(self.DEFAULT_POLL_INTERVAL_S)
-            )
-        )
+        self.poll_interval_s = float(os.getenv("HFT_WAL_POLL_INTERVAL_S", str(self.DEFAULT_POLL_INTERVAL_S)))
 
         # ClickHouse Client (default to native protocol port 9000)
-        self.ch_host = (
-            os.getenv("HFT_CLICKHOUSE_HOST")
-            or os.getenv("CLICKHOUSE_HOST")
-            or ch_host
-        )
-        self.ch_port = int(
-            os.getenv("HFT_CLICKHOUSE_PORT")
-            or os.getenv("CLICKHOUSE_PORT")
-            or ch_port
-        )
+        self.ch_host = os.getenv("HFT_CLICKHOUSE_HOST") or os.getenv("CLICKHOUSE_HOST") or ch_host
+        self.ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT") or os.getenv("CLICKHOUSE_PORT") or ch_port)
         self.ch_client = None
         self._ch_lock = threading.Lock()
 
@@ -94,21 +82,9 @@ class WALLoaderService:
         self._circuit_open_until = 0.0
 
         # Insert retry configuration
-        self._insert_max_retries = int(
-            os.getenv(
-                "HFT_INSERT_MAX_RETRIES", str(DEFAULT_INSERT_MAX_RETRIES)
-            )
-        )
-        self._insert_base_delay_s = float(
-            os.getenv(
-                "HFT_INSERT_BASE_DELAY_S", str(DEFAULT_INSERT_BASE_DELAY_S)
-            )
-        )
-        self._insert_max_backoff_s = float(
-            os.getenv(
-                "HFT_INSERT_MAX_BACKOFF_S", str(DEFAULT_INSERT_MAX_BACKOFF_S)
-            )
-        )
+        self._insert_max_retries = int(os.getenv("HFT_INSERT_MAX_RETRIES", str(DEFAULT_INSERT_MAX_RETRIES)))
+        self._insert_base_delay_s = float(os.getenv("HFT_INSERT_BASE_DELAY_S", str(DEFAULT_INSERT_BASE_DELAY_S)))
+        self._insert_max_backoff_s = float(os.getenv("HFT_INSERT_MAX_BACKOFF_S", str(DEFAULT_INSERT_MAX_BACKOFF_S)))
 
         # Dead Letter Queue directory for failed inserts
         self.dlq_dir = os.path.join(self.wal_dir, "dlq")
@@ -116,32 +92,22 @@ class WALLoaderService:
         self.corrupt_dir = os.path.join(self.wal_dir, "corrupt")
 
         # DLQ cleanup configuration (B3)
-        self._dlq_retention_days = int(
-            os.getenv("HFT_DLQ_RETENTION_DAYS", "7")
-        )
+        self._dlq_retention_days = int(os.getenv("HFT_DLQ_RETENTION_DAYS", "7"))
         self._dlq_archive_path = os.getenv("HFT_DLQ_ARCHIVE_PATH") or None
         self._last_dlq_cleanup_ts = 0.0
         self._dlq_cleanup_interval_s = 3600.0  # 1 hour
 
         # Corrupt file cleanup configuration (B5)
-        self._corrupt_retention_days = int(
-            os.getenv("HFT_CORRUPT_RETENTION_DAYS", "30")
-        )
+        self._corrupt_retention_days = int(os.getenv("HFT_CORRUPT_RETENTION_DAYS", "30"))
         self._last_corrupt_cleanup_ts = 0.0
 
         # Archive cleanup configuration (long-run stability)
-        self._archive_retention_days = int(
-            os.getenv("HFT_ARCHIVE_RETENTION_DAYS", "14")
-        )
+        self._archive_retention_days = int(os.getenv("HFT_ARCHIVE_RETENTION_DAYS", "14"))
         self._last_archive_cleanup_ts = 0.0
 
         # WAL accumulation monitoring (C5)
-        self._wal_size_warning_mb = float(
-            os.getenv("HFT_WAL_SIZE_WARNING_MB", "100")
-        )
-        self._wal_size_critical_mb = float(
-            os.getenv("HFT_WAL_SIZE_CRITICAL_MB", "500")
-        )
+        self._wal_size_warning_mb = float(os.getenv("HFT_WAL_SIZE_WARNING_MB", "100"))
+        self._wal_size_critical_mb = float(os.getenv("HFT_WAL_SIZE_CRITICAL_MB", "500"))
         self._last_wal_check_ts = 0.0
         self._wal_check_interval_s = 60.0  # Check every minute
         self._processed_files_total = 0
@@ -151,34 +117,22 @@ class WALLoaderService:
         self._wal_scheduler = None
 
         # P0-4: Async mode configuration
-        self._async_enabled = os.getenv(
-            "HFT_LOADER_ASYNC", "1"
-        ).lower() not in {"0", "false", "no", "off"}
+        self._async_enabled = os.getenv("HFT_LOADER_ASYNC", "1").lower() not in {"0", "false", "no", "off"}
 
         # P1-1: WAL manifest tracking
-        self._manifest_enabled = os.getenv(
-            "HFT_WAL_USE_MANIFEST", "1"
-        ).lower() not in {"0", "false", "no", "off"}
-        self._manifest_path = os.getenv(
-            "HFT_WAL_MANIFEST_PATH", os.path.join(wal_dir, "manifest.txt")
-        )
+        self._manifest_enabled = os.getenv("HFT_WAL_USE_MANIFEST", "1").lower() not in {"0", "false", "no", "off"}
+        self._manifest_path = os.getenv("HFT_WAL_MANIFEST_PATH", os.path.join(wal_dir, "manifest.txt"))
         self._manifest: set[str] = set()
         self._manifest_lock = threading.Lock()
 
         # CC-3: Parallel WAL file processing
-        self._loader_concurrency = int(
-            os.getenv("HFT_WAL_LOADER_CONCURRENCY", "4")
-        )
+        self._loader_concurrency = int(os.getenv("HFT_WAL_LOADER_CONCURRENCY", "4"))
 
         # EC-1: WAL replay dedup guard
-        self._dedup_enabled = os.getenv(
-            "HFT_WAL_DEDUP_ENABLED", "0"
-        ).lower() in {"1", "true", "yes", "on"}
+        self._dedup_enabled = os.getenv("HFT_WAL_DEDUP_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 
         # EC-2: WAL file timestamp ordering
-        self._strict_order = os.getenv(
-            "HFT_WAL_STRICT_ORDER", "0"
-        ).lower() in {"1", "true", "yes", "on"}
+        self._strict_order = os.getenv("HFT_WAL_STRICT_ORDER", "0").lower() in {"1", "true", "yes", "on"}
         self._last_processed_ts: int = 0
 
         # CE3-03: Shard claim registry
@@ -269,9 +223,7 @@ class WALLoaderService:
 
         self._init_run_common()
 
-        logger.info(
-            "Starting WAL Loader (async mode)", wal_dir=self.wal_dir
-        )
+        logger.info("Starting WAL Loader (async mode)", wal_dir=self.wal_dir)
         self._ensure_scheduler()
 
         try:
@@ -319,9 +271,7 @@ class WALLoaderService:
                 try:
                     await asyncio.to_thread(self._check_wal_accumulation)
                 except Exception as e:
-                    logger.warning(
-                        "WAL accumulation check failed", error=str(e)
-                    )
+                    logger.warning("WAL accumulation check failed", error=str(e))
 
                 await asyncio.sleep(self.poll_interval_s)
         finally:
@@ -339,9 +289,7 @@ class WALLoaderService:
 
             self.metrics = MetricsRegistry.get()
         except Exception as exc:
-            logger.warning(
-                "Failed to initialize metrics", error=str(exc)
-            )
+            logger.warning("Failed to initialize metrics", error=str(exc))
             self.metrics = None
 
         if self._manifest_enabled:
@@ -350,9 +298,7 @@ class WALLoaderService:
         try:
             self._claim_registry.recover_stale_claims()
         except Exception as exc:
-            logger.warning(
-                "Stale claim recovery failed", error=str(exc)
-            )
+            logger.warning("Stale claim recovery failed", error=str(exc))
 
         from hft_platform.recorder.replay_contract import (
             validate_replay_preconditions,
@@ -373,9 +319,7 @@ class WALLoaderService:
                 self._wal_scheduler = WALScheduler(self)
                 self._wal_scheduler.start()
             except Exception as exc:
-                logger.warning(
-                    "Failed to start WAL scheduler", error=str(exc)
-                )
+                logger.warning("Failed to start WAL scheduler", error=str(exc))
 
     # ------------------------------------------------------------------
     # Reconnect helpers
@@ -423,20 +367,15 @@ class WALLoaderService:
         if not self.ch_client:
             self._connect_failures += 1
             if self._connect_failures >= self._connect_max_retries:
-                backoff = self._compute_connect_backoff(
-                    self._connect_failures - self._connect_max_retries
-                )
+                backoff = self._compute_connect_backoff(self._connect_failures - self._connect_max_retries)
                 self._circuit_open_until = timebase.now_s() + backoff
                 logger.error(
-                    "ClickHouse connection failed repeatedly, "
-                    "circuit breaker opened",
+                    "ClickHouse connection failed repeatedly, circuit breaker opened",
                     failures=self._connect_failures,
                     backoff_s=round(backoff, 1),
                 )
             else:
-                delay = self._compute_connect_backoff(
-                    self._connect_failures
-                )
+                delay = self._compute_connect_backoff(self._connect_failures)
                 logger.warning(
                     "ClickHouse connection failed, retrying with backoff",
                     attempt=self._connect_failures,
@@ -453,20 +392,15 @@ class WALLoaderService:
         if not self.ch_client:
             self._connect_failures += 1
             if self._connect_failures >= self._connect_max_retries:
-                backoff = self._compute_connect_backoff(
-                    self._connect_failures - self._connect_max_retries
-                )
+                backoff = self._compute_connect_backoff(self._connect_failures - self._connect_max_retries)
                 self._circuit_open_until = timebase.now_s() + backoff
                 logger.error(
-                    "ClickHouse connection failed repeatedly, "
-                    "circuit breaker opened",
+                    "ClickHouse connection failed repeatedly, circuit breaker opened",
                     failures=self._connect_failures,
                     backoff_s=round(backoff, 1),
                 )
             else:
-                delay = self._compute_connect_backoff(
-                    self._connect_failures
-                )
+                delay = self._compute_connect_backoff(self._connect_failures)
                 logger.warning(
                     "ClickHouse connection failed, retrying with backoff",
                     attempt=self._connect_failures,
@@ -494,9 +428,7 @@ class WALLoaderService:
         try:
             self._check_wal_accumulation()
         except Exception as e:
-            logger.warning(
-                "WAL accumulation check failed", error=str(e)
-            )
+            logger.warning("WAL accumulation check failed", error=str(e))
 
     # ------------------------------------------------------------------
     # Manifest delegates
@@ -534,21 +466,13 @@ class WALLoaderService:
     # File processing delegates
     # ------------------------------------------------------------------
 
-    def _process_single_file(
-        self, fpath: str, force: bool = False
-    ) -> bool:
+    def _process_single_file(self, fpath: str, force: bool = False) -> bool:
         return _wal.process_single_file(self, fpath, force)
 
-    def _process_single_file_inner(
-        self, fpath: str, fname: str, force: bool
-    ) -> bool:
-        return _wal._process_single_file_inner(
-            self, fpath, fname, force
-        )
+    def _process_single_file_inner(self, fpath: str, fname: str, force: bool) -> bool:
+        return _wal._process_single_file_inner(self, fpath, fname, force)
 
-    def _insert_with_dedup(
-        self, target_table: str, rows: list, fname: str
-    ) -> bool:
+    def _insert_with_dedup(self, target_table: str, rows: list, fname: str) -> bool:
         return _ch.insert_with_dedup(self, target_table, rows, fname)
 
     def process_files(self, force: bool = False) -> None:
@@ -558,9 +482,7 @@ class WALLoaderService:
     # DLQ delegates
     # ------------------------------------------------------------------
 
-    def _quarantine_corrupt_file(
-        self, fpath: str, fname: str, reason: str
-    ) -> None:
+    def _quarantine_corrupt_file(self, fpath: str, fname: str, reason: str) -> None:
         _dlq.quarantine_corrupt_file(self, fpath, fname, reason)
 
     def _cleanup_old_dlq_files(self) -> None:
@@ -575,14 +497,10 @@ class WALLoaderService:
     def _check_wal_accumulation(self) -> None:
         _dlq.check_wal_accumulation(self)
 
-    def _write_to_dlq(
-        self, table: str, rows: List[Dict[str, Any]], error: str
-    ) -> None:
+    def _write_to_dlq(self, table: str, rows: List[Dict[str, Any]], error: str) -> None:
         _dlq.write_to_dlq(self, table, rows, error)
 
-    def replay_dlq(
-        self, dry_run: bool = False, max_files: int | None = None
-    ) -> dict:
+    def replay_dlq(self, dry_run: bool = False, max_files: int | None = None) -> dict:
         return _dlq.replay_dlq(self, dry_run, max_files)
 
     # ------------------------------------------------------------------
@@ -592,9 +510,7 @@ class WALLoaderService:
     def _compute_insert_backoff(self, attempt: int) -> float:
         return _ch.compute_insert_backoff(self, attempt)
 
-    def insert_batch(
-        self, table: str, rows: List[Dict[str, Any]]
-    ) -> bool:
+    def insert_batch(self, table: str, rows: List[Dict[str, Any]]) -> bool:
         """Insert batch with retry logic. Returns True on success."""
         return _batch.insert_batch_for_table(self, table, rows)
 
@@ -606,16 +522,12 @@ class WALLoaderService:
         table_alias: str,
         row_count: int,
     ) -> bool:
-        return _ch.insert_with_retry(
-            self, full_table_name, cols, data, table_alias, row_count
-        )
+        return _ch.insert_with_retry(self, full_table_name, cols, data, table_alias, row_count)
 
     def _is_duplicate(self, table: str, content_hash: str) -> bool:
         return _ch.is_duplicate(self, table, content_hash)
 
-    def _record_dedup(
-        self, table: str, content_hash: str, row_count: int
-    ) -> None:
+    def _record_dedup(self, table: str, content_hash: str, row_count: int) -> None:
         _ch.record_dedup(self, table, content_hash, row_count)
 
 

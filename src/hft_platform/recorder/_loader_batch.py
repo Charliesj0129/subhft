@@ -44,12 +44,7 @@ def format_market_data(
     for r in rows:
         meta = r.get("meta") or {}
         ts = int(
-            r.get("exch_ts")
-            or r.get("ts")
-            or r.get("timestamp")
-            or r.get("event_ts")
-            or meta.get("source_ts")
-            or 0
+            r.get("exch_ts") or r.get("ts") or r.get("timestamp") or r.get("event_ts") or meta.get("source_ts") or 0
         )
         ingest_ts = int(
             r.get("recv_ts")
@@ -69,18 +64,10 @@ def format_market_data(
         # Normalize bid/ask arrays when provided as [[price, vol], ...]
         raw_bids = r.get("bids")
         raw_asks = r.get("asks")
-        if (
-            raw_bids
-            and isinstance(raw_bids, (list, tuple))
-            and isinstance(raw_bids[0], (list, tuple))
-        ):
+        if raw_bids and isinstance(raw_bids, (list, tuple)) and isinstance(raw_bids[0], (list, tuple)):
             bids_price = [_to_scaled(p[0]) for p in raw_bids]
             bids_vol = [int(p[1]) for p in raw_bids]
-        if (
-            raw_asks
-            and isinstance(raw_asks, (list, tuple))
-            and isinstance(raw_asks[0], (list, tuple))
-        ):
+        if raw_asks and isinstance(raw_asks, (list, tuple)) and isinstance(raw_asks[0], (list, tuple)):
             asks_price = [_to_scaled(p[0]) for p in raw_asks]
             asks_vol = [int(p[1]) for p in raw_asks]
 
@@ -96,17 +83,11 @@ def format_market_data(
         # Handle price: prefer price_scaled, fallback to scaling float price
         if price_scaled is None:
             price_float = r.get("price") or r.get("mid_price")
-            if (
-                price_float is None
-                and best_bid is not None
-                and best_ask is not None
-            ):
+            if price_float is None and best_bid is not None and best_ask is not None:
                 if isinstance(best_bid, int) and best_bid > 10000:
                     price_scaled = (best_bid + best_ask) // 2
                 else:
-                    price_scaled = _to_scaled(
-                        (float(best_bid) + float(best_ask)) / 2
-                    )
+                    price_scaled = _to_scaled((float(best_bid) + float(best_ask)) / 2)
             elif price_float is not None:
                 price_scaled = _to_scaled(price_float)
             else:
@@ -114,18 +95,10 @@ def format_market_data(
 
         # If we only have top-of-book, still store it as depth-1 arrays
         if not bids_price and best_bid is not None:
-            bids_price = [
-                _to_scaled(best_bid)
-                if isinstance(best_bid, float)
-                else int(best_bid)
-            ]
+            bids_price = [_to_scaled(best_bid) if isinstance(best_bid, float) else int(best_bid)]
             bids_vol = [int(r.get("bid_depth") or 0)]
         if not asks_price and best_ask is not None:
-            asks_price = [
-                _to_scaled(best_ask)
-                if isinstance(best_ask, float)
-                else int(best_ask)
-            ]
+            asks_price = [_to_scaled(best_ask) if isinstance(best_ask, float) else int(best_ask)]
             asks_vol = [int(r.get("ask_depth") or 0)]
 
         # Timestamp validation
@@ -204,12 +177,8 @@ def format_orders(
             price_float = r.get("price")
             price = _to_scaled(price_float) if price_float is not None else 0
 
-        exch_ts = int(
-            r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0
-        )
-        ingest_ts = int(
-            r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns()
-        )
+        exch_ts = int(r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0)
+        ingest_ts = int(r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
 
         row_data = [
             str(r.get("order_id", "")),
@@ -257,12 +226,8 @@ def format_trades(
             price_float = r.get("price")
             price = _to_scaled(price_float) if price_float is not None else 0
 
-        exch_ts = int(
-            r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0
-        )
-        ingest_ts = int(
-            r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns()
-        )
+        exch_ts = int(r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0)
+        ingest_ts = int(r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
 
         row_data = [
             str(r.get("trade_id", r.get("fill_id", ""))),
@@ -299,12 +264,7 @@ def format_risk_log(
     """Return ``(cols, data)`` for the ``hft.risk_log`` table."""
     data: list[list] = []
     for r in rows:
-        ts = int(
-            r.get("ts")
-            or r.get("timestamp")
-            or r.get("ingest_ts")
-            or timebase.now_ns()
-        )
+        ts = int(r.get("ts") or r.get("timestamp") or r.get("ingest_ts") or timebase.now_ns())
         context = r.get("context", {})
         if isinstance(context, dict):
             context = _dumps(context)
@@ -374,22 +334,16 @@ _TABLE_FORMATTERS = {
 }
 
 
-def insert_batch_for_table(
-    svc: Any, table: str, rows: list[dict[str, Any]]
-) -> bool:
+def insert_batch_for_table(svc: Any, table: str, rows: list[dict[str, Any]]) -> bool:
     """Format *rows* for *table* and insert via ``svc._insert_with_retry``.
 
     Returns ``True`` on success, ``False`` on failure or unknown table.
     """
     entry = _TABLE_FORMATTERS.get(table)
     if entry is None:
-        logger.warning(
-            "No insert logic for table", table=table, count=len(rows)
-        )
+        logger.warning("No insert logic for table", table=table, count=len(rows))
         return False
 
     full_table_name, formatter = entry
     cols, data = formatter(rows)
-    return svc._insert_with_retry(
-        full_table_name, cols, data, table, len(rows)
-    )
+    return svc._insert_with_retry(full_table_name, cols, data, table, len(rows))
