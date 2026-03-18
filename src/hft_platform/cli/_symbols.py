@@ -60,11 +60,13 @@ def _resolve_symbols_shioaji(args: argparse.Namespace) -> None:
 
     if args.output:
         import yaml as _yaml
+
         with open(args.output, "w") as f:
             _yaml.dump(output_data, f, sort_keys=False)
         print(f"Written to {args.output}")
     else:
         import yaml as _yaml
+
         print(_yaml.dump(output_data, sort_keys=False))
 
 
