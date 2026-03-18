@@ -1,0 +1,356 @@
+{
+  "details": {
+    "base_signal_threshold": 0.3,
+    "capacity_estimate": 20000000.0,
+    "config_hash": "12b0d9874a3491cb",
+    "core_metrics_passed": false,
+    "criteria": {
+      "enable_param_optimization": true,
+      "enable_walk_forward": true,
+      "max_abs_drawdown": 0.3,
+      "min_sharpe_oos": 0.0,
+      "min_stat_tests_bh_pass": 1,
+      "min_stat_tests_pass": 2,
+      "min_stress_sharpe_ratio": 0.5,
+      "min_turnover": 1e-06,
+      "opt_objective": "risk_adjusted",
+      "opt_signal_threshold_max": 0.6,
+      "opt_signal_threshold_min": 0.05,
+      "opt_signal_threshold_steps": 8,
+      "stat_correction_method": "bh",
+      "stat_pvalue_threshold": 0.1,
+      "stress_drawdown_limit_multiplier": 1.25,
+      "wf_min_fold_consistency": 0.6,
+      "wf_min_fold_sharpe_min": -0.5,
+      "wf_n_splits": 5
+    },
+    "data_ul_advisory": {
+      "blocking": false,
+      "detail": "VM-UL<3: Gate C recommends UL3+ metadata for stronger reproducibility.",
+      "recommended_min": 3,
+      "value": null,
+      "warn": true
+    },
+    "experiment_meta_path": "/home/charlie/hft_platform/research/experiments/runs/dd963d30-9a75-406a-81b9-cc2d9fc9b73a/meta.json",
+    "ic_mean": 0.0,
+    "ic_std": 0.0,
+    "latency_profile": {
+      "backtest_engine": "hftbacktest_v2",
+      "cancel_ack_latency_ms": 47.0,
+      "effective_broker_rtt_ms": 47.0,
+      "engine": "hftbacktest_native",
+      "exchange_model": "NoPartialFillExchange",
+      "latency_model": "IntpOrderLatency",
+      "latency_profile_id": "sim_p95_v2026-02-26",
+      "live_uplift_factor": 1.5,
+      "local_decision_pipeline_latency_us": 250,
+      "model_applied": true,
+      "modify_ack_latency_ms": 43.0,
+      "queue_model": "PowerProbQueueModel(3.0)",
+      "submit_ack_latency_ms": 36.0
+    },
+    "max_drawdown": 0.0,
+    "multiple_testing": {
+      "adjusted_pvalues": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "method": "bh",
+      "n_survived": 0,
+      "raw_pvalues": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "rejected": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "required": 1
+    },
+    "optimization_gate_passed": false,
+    "parameter_optimization": {
+      "base_signal_threshold": 0.3,
+      "deflated_sharpe": -0.0270652966144017,
+      "enabled": true,
+      "grid": [
+        0.05,
+        0.12857142857142856,
+        0.20714285714285713,
+        0.28571428571428564,
+        0.3,
+        0.3642857142857142,
+        0.4428571428571428,
+        0.5214285714285714,
+        0.6
+      ],
+      "neighbor_objective_ratio": 1.0,
+      "objective": "risk_adjusted",
+      "passed": false,
+      "risks": {
+        "boundary_risk": true,
+        "overfit_gap_risk": false,
+        "plateau_risk": false,
+        "selection_bias_risk": false,
+        "sign_flip_risk": false
+      },
+      "selected_row": {
+        "config_hash": "12b0d9874a3491cb",
+        "max_drawdown": 0.0,
+        "objective": 0.0,
+        "run_id": "4d74f60e-2e17-4701-9508-e3c91e1d2523",
+        "sharpe_is": 0.0,
+        "sharpe_oos": 0.0,
+        "signal_threshold": 0.05,
+        "turnover": 0.0
+      },
+      "selected_signal_threshold": 0.05,
+      "selection_penalty": 0.0270652966144017,
+      "top_k": [
+        {
+          "config_hash": "12b0d9874a3491cb",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "4d74f60e-2e17-4701-9508-e3c91e1d2523",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.05,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "4e6750ddd9334727",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "b5b3bc2a-24d8-4a6c-a274-34995fe939f2",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.12857142857142856,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "087bdacd2444e726",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "35d4a7fe-0619-4bdf-8244-c3b4cfa7e18a",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.20714285714285713,
+          "turnover": 0.0
+        }
+      ],
+      "trials": [
+        {
+          "config_hash": "12b0d9874a3491cb",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "4d74f60e-2e17-4701-9508-e3c91e1d2523",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.05,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "4e6750ddd9334727",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "b5b3bc2a-24d8-4a6c-a274-34995fe939f2",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.12857142857142856,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "087bdacd2444e726",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "35d4a7fe-0619-4bdf-8244-c3b4cfa7e18a",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.20714285714285713,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "6b630e1752fa46fa",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "f901d406-d4db-4a10-9d6a-4192361ed1d9",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.28571428571428564,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "2dc2fdaf1489f6c0",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "1c9bd33d-ff43-467a-ac08-fe56c8aec5f9",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.3,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "7e673df39abe1513",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "8bac4d56-5e98-4637-a22d-c090b3536614",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.3642857142857142,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "9936503faccda6e4",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "523fa7af-6f60-43cc-ab0f-2eb67fc954c4",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.4428571428571428,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "f86491692641efbe",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "d3d2fba6-d95f-47e4-a12d-9e73570c63a5",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.5214285714285714,
+          "turnover": 0.0
+        },
+        {
+          "config_hash": "0ce93f156710e865",
+          "max_drawdown": 0.0,
+          "objective": 0.0,
+          "run_id": "cbb6a492-fdd3-486d-b256-5cb0a5468c61",
+          "sharpe_is": 0.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.6,
+          "turnover": 0.0
+        }
+      ]
+    },
+    "parameter_robustness": {
+      "median_neighbor_sharpe": 0.0,
+      "passed": true,
+      "ratios": [
+        0.8,
+        1.0,
+        1.2
+      ],
+      "risks": {
+        "cliff_risk": false,
+        "drawdown_jump_risk": false,
+        "sign_flip_risk": false,
+        "turnover_spike_risk": false
+      },
+      "sweep": [
+        {
+          "max_drawdown": 0.0,
+          "ratio": 0.8,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.04000000000000001,
+          "turnover": 0.0
+        },
+        {
+          "max_drawdown": 0.0,
+          "ratio": 1.0,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.05,
+          "turnover": 0.0
+        },
+        {
+          "max_drawdown": 0.0,
+          "ratio": 1.2,
+          "sharpe_oos": 0.0,
+          "signal_threshold": 0.06,
+          "turnover": 0.0
+        }
+      ]
+    },
+    "regime_metrics": {},
+    "run_id": "dd963d30-9a75-406a-81b9-cc2d9fc9b73a",
+    "scorecard_data_meta_path": "/home/charlie/hft_platform/research/data/processed/trade_intensity_surprise/synth_lob_v2_train.npy.meta.json",
+    "scorecard_path": "/home/charlie/hft_platform/research/experiments/runs/dd963d30-9a75-406a-81b9-cc2d9fc9b73a/scorecard.json",
+    "selected_signal_threshold": 0.05,
+    "sharpe_is": 0.0,
+    "sharpe_oos": 0.0,
+    "stat_gate_passed": false,
+    "statistical_tests": {
+      "diagnostic_gate_passed": true,
+      "mean_return": 0.0,
+      "passed": false,
+      "pvalue_threshold": 0.1,
+      "sample_count": 6000,
+      "std_return": 0.0,
+      "tests": {
+        "bds_independence": {
+          "available": false,
+          "method": "bds",
+          "pass": true,
+          "pvalue": 1.0,
+          "reason": "constant_series",
+          "sample_count": 600
+        },
+        "bootstrap_ci_mean": {
+          "ci_high": 0.0,
+          "ci_low": 0.0,
+          "pass": false,
+          "pvalue": 1.0
+        },
+        "sign_test_gt_half": {
+          "pass": false,
+          "pvalue": 1.0
+        },
+        "ttest_mean_gt_zero": {
+          "pass": false,
+          "pvalue": 1.0
+        },
+        "wilcoxon_gt_zero": {
+          "pass": false,
+          "pvalue": 1.0
+        }
+      },
+      "tests_passed": 0,
+      "tests_required": 2
+    },
+    "stress_backtest": {
+      "base_sharpe_oos": 0.0,
+      "checks": {
+        "drawdown_limit": true,
+        "sharpe_resilience": true
+      },
+      "multipliers": {
+        "fees": 1.5,
+        "latency": 1.5
+      },
+      "passed": true,
+      "stress_config_hash": "cdf7978e03f1ef24",
+      "stress_drawdown_limit": -0.375,
+      "stress_max_drawdown": 0.0,
+      "stress_run_id": "0b331a55-a5b4-41f0-91f5-f9e3a922fd63",
+      "stress_sharpe_oos": 0.0,
+      "stress_sharpe_ratio_vs_base": null
+    },
+    "turnover": 0.0,
+    "walk_forward": {
+      "fold_consistency_pct": 0.0,
+      "fold_ic_mean": 0.0,
+      "fold_sharpe_max": 0.0,
+      "fold_sharpe_mean": 0.0,
+      "fold_sharpe_min": 0.0,
+      "fold_sharpe_std": 0.0,
+      "n_folds": 5,
+      "n_splits": 5
+    },
+    "walk_forward_gate_passed": false
+  },
+  "gate": "Gate C",
+  "passed": false
+}

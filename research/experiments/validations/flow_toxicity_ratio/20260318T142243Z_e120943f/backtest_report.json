@@ -1,0 +1,10 @@
+{
+  "details": {
+    "gate_a_passed": false,
+    "gate_b_passed": true,
+    "reason": "Gate A or Gate B failed",
+    "skipped": true
+  },
+  "gate": "Gate C",
+  "passed": false
+}

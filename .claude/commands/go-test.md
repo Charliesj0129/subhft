@@ -1,0 +1,1 @@
+/home/charlie/hft_platform/.agent/commands/go-test.md

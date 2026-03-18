@@ -1,0 +1,1 @@
+/home/charlie/hft_platform/.agent/rules/25-architecture-governance.md
