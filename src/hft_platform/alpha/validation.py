@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import datetime as _dt
 import json
 import os
 import pickle
@@ -8,13 +9,14 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import numpy as np
 from scipy import stats
+
+from hft_platform.core import timebase
 
 
 @dataclass(frozen=True)
@@ -1392,7 +1394,7 @@ def _evaluate_parameter_robustness(
 
 
 def _make_validation_artifact_dir(experiments_base: Path, alpha_id: str) -> Path:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    stamp = _dt.datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = experiments_base / "validations" / alpha_id / f"{stamp}_{uuid4().hex[:8]}"
     out.mkdir(parents=True, exist_ok=True)
     return out

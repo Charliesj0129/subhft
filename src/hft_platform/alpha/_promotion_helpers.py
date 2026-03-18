@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -16,6 +17,7 @@ from hft_platform.alpha._promotion_types import (
     PromotionChecklistItem,
     PromotionConfig,
 )
+from hft_platform.core import timebase
 
 
 def _resolve_scorecard_path(root: Path, config: PromotionConfig, alpha_dir: Path) -> Path:
@@ -198,7 +200,7 @@ def _write_promotion_config(
     approved: bool,
     forced: bool,
 ) -> Path:
-    day = datetime.now(UTC).strftime("%Y%m%d")
+    day = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%d")
     out = root / "config" / "strategy_promotions" / day / f"{config.alpha_id}.yaml"
     out.parent.mkdir(parents=True, exist_ok=True)
 

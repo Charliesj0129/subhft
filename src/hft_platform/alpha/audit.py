@@ -8,12 +8,20 @@ Controlled by environment variables:
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from structlog import get_logger
+
+from hft_platform.core import timebase
+
+
+def _now_utc() -> _dt.datetime:
+    """UTC-aware datetime via timebase (no direct datetime.now)."""  # noqa: E501
+    return _dt.datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
+
 
 if TYPE_CHECKING:
     from hft_platform.alpha.promotion import PromotionResult
@@ -51,7 +59,7 @@ def log_gate_result(
     try:
         client = _get_client()
         gate_letter = gate_report.gate.replace("Gate ", "")
-        now = datetime.now(UTC)
+        now = _now_utc()
         client.insert(
             "audit.alpha_gate_log",
             [
@@ -89,7 +97,7 @@ def log_promotion_result(
         return
     try:
         client = _get_client()
-        now = datetime.now(UTC)
+        now = _now_utc()
         client.insert(
             "audit.alpha_promotion_log",
             [
@@ -142,7 +150,7 @@ def log_canary_action(
         return
     try:
         client = _get_client()
-        now = datetime.now(UTC)
+        now = _now_utc()
         client.insert(
             "audit.alpha_canary_log",
             [
