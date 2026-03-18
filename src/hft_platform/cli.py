@@ -36,6 +36,22 @@ def _safe_write(path: str, content: str):
         f.write(content)
 
 
+def cmd_monitor(args: argparse.Namespace):
+    """Launch signal monitor TUI."""
+    try:
+        from hft_platform.monitor.cli import run_cli
+    except ImportError as exc:
+        print(f"Monitor dependencies missing (pip install -e '.[monitor]'): {exc}")
+        raise SystemExit(1) from exc
+    raise SystemExit(
+        run_cli(
+            watchlist_path=args.watchlist,
+            symbols_path=args.symbols_path,
+            source=getattr(args, "source", None),
+        )
+    )
+
+
 def cmd_run(args: argparse.Namespace):
     os.environ.setdefault("HFT_RUNTIME_ROLE", "engine")
     runtime_role = str(os.getenv("HFT_RUNTIME_ROLE", "engine")).strip().lower().replace("-", "_")
@@ -1593,6 +1609,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--strategy-class", help="Override strategy class")
     run.add_argument("--symbols", nargs="+", help="Symbols to load")
     run.set_defaults(func=cmd_run)
+
+    monitor = sub.add_parser("monitor", help="Signal monitor TUI (real-time alpha dashboard)")
+    monitor.add_argument("--watchlist", default=None, help="Path to watchlist.yaml")
+    monitor.add_argument("--symbols-path", default=None, help="Path to symbols.yaml")
+    monitor.add_argument(
+        "--source",
+        choices=["ch", "clickhouse", "redis", "hybrid"],
+        default=None,
+        help="Data source override (default: from config)",
+    )
+    monitor.set_defaults(func=cmd_monitor)
 
     init = sub.add_parser("init", help="Generate settings and strategy skeleton")
     init.add_argument("--strategy-id", help="Strategy id/name")

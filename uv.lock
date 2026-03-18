@@ -953,6 +953,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+monitor = [
+    { name = "rich" },
+]
 shioaji-broker = [
     { name = "shioaji", extra = ["speed"], marker = "extra == 'extra-12-hft-platform-shioaji-broker'" },
 ]
@@ -1003,13 +1006,14 @@ requires-dist = [
     { name = "psutil" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "pyyaml" },
+    { name = "rich", marker = "extra == 'monitor'", specifier = ">=13.0" },
     { name = "scipy", specifier = ">=1.15.3" },
     { name = "shioaji", extras = ["speed"] },
     { name = "shioaji", extras = ["speed"], marker = "extra == 'shioaji-broker'" },
     { name = "structlog" },
     { name = "uvloop" },
 ]
-provides-extras = ["shioaji-broker", "fubon"]
+provides-extras = ["shioaji-broker", "fubon", "monitor"]
 
 [package.metadata.requires-dev]
 dev = [

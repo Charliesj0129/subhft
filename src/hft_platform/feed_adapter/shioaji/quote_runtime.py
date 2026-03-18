@@ -28,7 +28,7 @@ class QuotePendingState:
 
     pending: bool
     reason: str | None
-    ts: float  # monotonic epoch from time.time()
+    ts: float  # wall-clock epoch from timebase.now_s()
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ class QuoteEventHandler:
         Returns a QuotePendingState delta for the caller to apply.
         Idempotent: repeated marks with the same reason return an unchanged state.
         """
-        ts = current_ts if current_ts is not None else time.time()
+        ts = current_ts if current_ts is not None else timebase.now_s()
         if self._pending_reason == reason:
             # Already pending for the same reason — no-op
             return QuotePendingState(pending=True, reason=reason, ts=self._pending_ts)
@@ -424,7 +424,7 @@ class QuoteRuntime:
         except ImportError:
             return False
 
-        now = dt.datetime.now(calendar._tz)
+        now = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
         if not calendar.is_trading_day(now.date()):
             return False
 
