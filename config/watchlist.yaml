@@ -40,12 +40,12 @@ monitor:
 
 symbols:
   - code: TMFC6
-    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum, depth_concentration_index]
   - code: "2330"
-    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum, depth_concentration_index]
   - code: "2317"
-    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum, depth_concentration_index]
   - code: "2454"
-    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum, depth_concentration_index]
   - code: "2881"
-    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum, depth_concentration_index]
