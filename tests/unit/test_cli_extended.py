@@ -7,20 +7,24 @@ import numpy as np
 import pytest
 
 import hft_platform.cli as cli
+import hft_platform.cli._alpha as _cli_alpha
+import hft_platform.cli._diag as _cli_diag
+import hft_platform.cli._run as _cli_run
+import hft_platform.cli._utils as _cli_utils
 
 
 def test_resolve_default_mode_env(monkeypatch):
     monkeypatch.setenv("HFT_MODE", "real")
-    assert cli._resolve_default_mode() == "live"
+    assert _cli_utils._resolve_default_mode() == "live"
     monkeypatch.setenv("HFT_MODE", "replay")
-    assert cli._resolve_default_mode() == "replay"
+    assert _cli_utils._resolve_default_mode() == "replay"
     monkeypatch.setenv("HFT_MODE", "unknown")
-    assert cli._resolve_default_mode() == "sim"
+    assert _cli_utils._resolve_default_mode() == "sim"
 
 
 def test_cmd_check_export_json(tmp_path, monkeypatch):
     settings = {"symbols": ["2330"], "strategy": {"id": "s1"}}
-    monkeypatch.setattr(cli, "load_settings", lambda *a, **k: (settings, {}))
+    monkeypatch.setattr(_cli_run, "load_settings", lambda *a, **k: (settings, {}))
     monkeypatch.chdir(tmp_path)
 
     cli.cmd_check(Namespace(export="json"))
@@ -32,7 +36,7 @@ def test_cmd_check_export_json(tmp_path, monkeypatch):
 
 def test_cmd_check_export_yaml(tmp_path, monkeypatch):
     settings = {"symbols": ["2330"], "strategy": {"id": "s1"}}
-    monkeypatch.setattr(cli, "load_settings", lambda *a, **k: (settings, {}))
+    monkeypatch.setattr(_cli_run, "load_settings", lambda *a, **k: (settings, {}))
     monkeypatch.chdir(tmp_path)
 
     cli.cmd_check(Namespace(export="yaml"))
@@ -44,7 +48,7 @@ def test_cmd_check_export_yaml(tmp_path, monkeypatch):
 
 def test_cmd_check_missing_exits(monkeypatch):
     settings = {"symbols": [], "strategy": {}}
-    monkeypatch.setattr(cli, "load_settings", lambda *a, **k: (settings, {}))
+    monkeypatch.setattr(_cli_run, "load_settings", lambda *a, **k: (settings, {}))
     with pytest.raises(SystemExit) as exc:
         cli.cmd_check(Namespace(export=None))
     assert exc.value.code == 1
@@ -107,8 +111,8 @@ def test_cmd_diag_timeline(tmp_path, capsys):
 
 
 def test_cmd_strat_test_import_failure(monkeypatch):
-    monkeypatch.setattr(cli, "load_settings", lambda *a, **k: ({}, {}))
-    monkeypatch.setattr(cli, "import_module", lambda *_a, **_k: (_ for _ in ()).throw(ImportError("nope")))
+    monkeypatch.setattr(_cli_diag, "load_settings", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(_cli_diag, "import_module", lambda *_a, **_k: (_ for _ in ()).throw(ImportError("nope")))
     with pytest.raises(SystemExit) as exc:
         cli.cmd_strat_test(Namespace(module="x", cls="Y", strategy_id="s", symbol="2330"))
     assert exc.value.code == 1
@@ -165,8 +169,8 @@ def test_cmd_strat_test_success(monkeypatch, capsys):
             return []
 
     dummy_mod = types.SimpleNamespace(DummyStrategy=DummyStrategy)
-    monkeypatch.setattr(cli, "load_settings", lambda *a, **k: ({"symbols": ["2330"]}, {}))
-    monkeypatch.setattr(cli, "import_module", lambda *_a, **_k: dummy_mod)
+    monkeypatch.setattr(_cli_diag, "load_settings", lambda *a, **k: ({"symbols": ["2330"]}, {}))
+    monkeypatch.setattr(_cli_diag, "import_module", lambda *_a, **_k: dummy_mod)
 
     cli.cmd_strat_test(Namespace(module="dummy", cls="DummyStrategy", strategy_id="s", symbol="2330"))
     out = capsys.readouterr().out
@@ -296,7 +300,7 @@ def test_cmd_backtest_run_runner_rejects_multi_data_without_strategy():
 
 
 def test_cmd_run_replay_exits(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "load_settings", lambda *_a, **_k: ({"mode": "replay"}, {}))
+    monkeypatch.setattr(_cli_run, "load_settings", lambda *_a, **_k: ({"mode": "replay"}, {}))
     args = Namespace(
         mode=None,
         mode_flag=None,
@@ -311,9 +315,9 @@ def test_cmd_run_replay_exits(monkeypatch, capsys):
 
 
 def test_cmd_run_downgrades_live(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "load_settings", lambda *_a, **_k: ({"mode": "live", "prometheus_port": 9091}, {}))
-    monkeypatch.setattr(cli, "detect_live_credentials", lambda: False)
-    monkeypatch.setattr(cli, "summarize_settings", lambda *_a, **_k: "summary")
+    monkeypatch.setattr(_cli_run, "load_settings", lambda *_a, **_k: ({"mode": "live", "prometheus_port": 9091}, {}))
+    monkeypatch.setattr(_cli_run, "detect_live_credentials", lambda: False)
+    monkeypatch.setattr(_cli_run, "summarize_settings", lambda *_a, **_k: "summary")
 
     import types as _types
 
@@ -330,7 +334,7 @@ def test_cmd_run_downgrades_live(monkeypatch, capsys):
     def _run(coro):
         coro.close()
 
-    monkeypatch.setattr(cli, "asyncio", types.SimpleNamespace(run=_run))
+    monkeypatch.setattr(_cli_run, "asyncio", types.SimpleNamespace(run=_run))
     monkeypatch.setitem(
         sys.modules, "prometheus_client", _types.SimpleNamespace(start_http_server=lambda *_a, **_k: None)
     )
@@ -440,7 +444,7 @@ def test_cmd_alpha_scaffold(monkeypatch):
         calls["check"] = check
         return _Proc()
 
-    monkeypatch.setattr(cli.subprocess, "run", _run)
+    monkeypatch.setattr(_cli_alpha.subprocess, "run", _run)
     args = Namespace(alpha_id="ofi_mc_v2", paper=["018"], complexity="O1", force=False)
     cli.cmd_alpha_scaffold(args)
     assert calls["cmd"][0] == sys.executable

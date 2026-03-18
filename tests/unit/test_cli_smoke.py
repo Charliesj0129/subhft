@@ -16,7 +16,7 @@ class TestCLISmoke(unittest.TestCase):
         with (
             patch("os.makedirs"),
             patch("builtins.open", unittest.mock.mock_open()),
-            patch("hft_platform.cli._safe_write"),
+            patch("hft_platform.cli._run._safe_write"),
         ):
             args = MagicMock()
             args.base_dir = "."
@@ -26,7 +26,7 @@ class TestCLISmoke(unittest.TestCase):
         with (
             patch("os.path.exists", return_value=True),
             patch("builtins.open", unittest.mock.mock_open()),
-            patch("hft_platform.cli._safe_write"),
+            patch("hft_platform.cli._run._safe_write"),
         ):
             args = MagicMock()
             args.export = "json"
@@ -59,7 +59,7 @@ class TestCLISmoke(unittest.TestCase):
                 # Mock load_settings to return valid settings
                 # cmd_run calls load_settings
                 with patch(
-                    "hft_platform.cli.load_settings", return_value=({"mode": "sim", "prometheus_port": 9090}, {})
+                    "hft_platform.cli._run.load_settings", return_value=({"mode": "sim", "prometheus_port": 9090}, {})
                 ):
                     cmd_run(args)
 
@@ -67,7 +67,7 @@ class TestCLISmoke(unittest.TestCase):
                 mock_start_http.assert_called()
 
     def test_main_dispatch(self):
-        with patch("hft_platform.cli.cmd_init") as mock_init:
+        with patch("hft_platform.cli._parser.cmd_init") as mock_init:
             with patch.object(sys, "argv", ["hft", "init"]):
                 ret = main()
                 mock_init.assert_called()
