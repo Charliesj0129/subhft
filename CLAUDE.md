@@ -166,6 +166,12 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_FUBON_CERT_PATH`      | —           | Fubon API certificate file path           |
 | `HFT_FUBON_ACCOUNT`        | —           | Fubon trading account ID                  |
 | `HFT_FUBON_PASSWORD`       | —           | Fubon account password (use secret mgr)   |
+| `HFT_MONITOR_SOURCE`       | `clickhouse`| Monitor data source: `clickhouse`/`redis`/`hybrid` |
+| `HFT_MONITOR_LIVE_ENABLED` | `0`         | `1` = enable Redis live publisher in MarketDataService |
+| `HFT_MONITOR_REDIS_HOST`   | `localhost` | Redis host for monitor live cache         |
+| `HFT_MONITOR_REDIS_PORT`   | `6379`      | Redis port for monitor live cache         |
+| `HFT_MONITOR_REDIS_PASSWORD`| —          | Redis password for monitor live cache     |
+| `HFT_MONITOR_DATA_SOURCE`  | `auto`      | Data source layer: `ch`/`shm`/`auto`     |
 
 ## 🎨 Coding Style (Strict)
 

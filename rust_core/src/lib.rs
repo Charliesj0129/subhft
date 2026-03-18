@@ -18,6 +18,7 @@ mod fast_lob;
 mod feature;
 mod feature_engine;
 pub mod ipc;
+mod shm_snapshot;
 mod lob;
 mod metrics_sampler;
 mod normalizer_bidask;
@@ -56,6 +57,7 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<bus::FastLOBStatsRingBuffer>()?;
     m.add_class::<feature::LobFeatureKernelV1>()?;
     m.add_class::<ipc::ShmRingBuffer>()?;
+    m.add_class::<shm_snapshot::ShmSnapshotTable>()?;
     m.add_class::<risk::FastGate>()?;
     m.add_class::<risk_validator::RustRiskValidator>()?;
     m.add_class::<exposure::RustExposureStore>()?;
