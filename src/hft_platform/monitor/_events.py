@@ -17,6 +17,7 @@ _ALPHA_SHORT: dict[str, str] = {
     "ofi_regime": "OFI_R",
     "sqrt_ofi": "sOFI",
     "depth_depletion_asym": "DA",
+    "depth_concentration_index": "DCI",
 }
 
 
@@ -25,6 +26,8 @@ def snapshot_prev(ss: SymbolState) -> None:
     ss.prev_composite = ss.composite
     ss.prev_spread_bps = ss.spread_bps
     ss.prev_is_stale = ss.is_stale
+    # S2: save price for delta flash
+    ss.prev_poll_price = ss.last_price
     # Derive agree direction from current alpha_states
     pos = neg = 0
     for astate in ss.alpha_states.values():

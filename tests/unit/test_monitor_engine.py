@@ -147,7 +147,9 @@ def test_engine_marks_stale_and_handles_disconnect(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
 
-    now_values = iter([100, 8_000_000_000, 8_000_000_000, 8_000_000_000])
+    # S1: poll_and_update now calls now_ns() for heartbeat tracking too,
+    # so we need extra values in the iterator.
+    now_values = iter([100, 8_000_000_000, 8_000_000_000, 8_000_000_000, 8_000_000_000, 8_000_000_000])
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: next(now_values))
 
     engine = MonitorEngine(_config(warmup_ticks=1, stale_threshold_s=6.0))
@@ -306,6 +308,85 @@ def test_engine_sort_mode_cycles(monkeypatch: pytest.MonkeyPatch) -> None:
     assert engine._sort_mode == 2
     engine.cycle_sort_mode()
     assert engine._sort_mode == SORT_OPPORTUNITY
+
+
+def test_engine_poll_counter_increments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S1: poll_and_update increments poll counter and sets last_poll_ns."""
+    from hft_platform.monitor import _engine as engine_mod
+
+    fake_ds = _FakeDataSource(
+        replay_rows={"TMFC6": [_row(1), _row(2)]},
+        poll_batches=[{"TMFC6": []}, {"TMFC6": []}],
+    )
+    monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
+    monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
+    monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 1_000_000_000)
+
+    engine = MonitorEngine(_config())
+    engine._dispatcher = _StubDispatcher()
+    engine.initialize()
+
+    assert engine._poll_count == 0
+    engine.poll_and_update()
+    assert engine._poll_count == 1
+    engine.poll_and_update()
+    assert engine._poll_count == 2
+
+    ctx = engine.get_header_context()
+    assert ctx.poll_count == 2
+    assert ctx.poll_age_s >= 0
+
+
+def test_engine_closed_collapsed_toggle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S3: toggle_closed_collapse flips the collapsed state."""
+    from hft_platform.monitor import _engine as engine_mod
+
+    fake_ds = _FakeDataSource(
+        replay_rows={"TMFC6": [_row(1)]},
+        poll_batches=[],
+    )
+    monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
+    monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
+    monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 1)
+
+    engine = MonitorEngine(_config(warmup_ticks=1))
+    engine._dispatcher = _StubDispatcher()
+    engine.initialize()
+
+    assert engine._closed_collapsed is True
+    engine.toggle_closed_collapse()
+    assert engine._closed_collapsed is False
+    engine.toggle_closed_collapse()
+    assert engine._closed_collapsed is True
+
+
+def test_engine_bootstrap_skips_closed_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S4: _bootstrap_all_symbols skips symbols with closed sessions."""
+    from hft_platform.monitor import _engine as engine_mod
+
+    bootstrap_calls: list[str] = []
+    orig_bootstrap = MonitorEngine._bootstrap_symbol
+
+    def _track_bootstrap(self, ss):
+        bootstrap_calls.append(ss.symbol.code)
+        orig_bootstrap(self, ss)
+
+    fake_ds = _FakeDataSource(replay_rows={}, poll_batches=[])
+    monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
+    # All sessions closed
+    monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (False, "[CLOSED]", "Closed"))
+    monkeypatch.setattr(engine_mod, "get_session_start", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 1)
+    monkeypatch.setattr(MonitorEngine, "_bootstrap_symbol", _track_bootstrap)
+
+    engine = MonitorEngine(_config())
+    engine._dispatcher = _StubDispatcher()
+    engine.initialize()
+
+    # S4: bootstrap should not have been called for closed sessions
+    assert len(bootstrap_calls) == 0
 
 
 def test_engine_initializes_with_hybrid_source(monkeypatch: pytest.MonkeyPatch) -> None:

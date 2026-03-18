@@ -76,6 +76,11 @@ class MonitorEngine:
         # Phase 3: selection + detail
         "_selected_idx",
         "_detail_visible",
+        # S1: heartbeat
+        "_poll_count",
+        "_last_poll_ns",
+        # S3: collapsed closed symbols
+        "_closed_collapsed",
     )
 
     def __init__(self, config: MonitorConfig) -> None:
@@ -107,6 +112,11 @@ class MonitorEngine:
         # Phase 3: selection + detail
         self._selected_idx: int = 0
         self._detail_visible: bool = False
+        # S1: heartbeat
+        self._poll_count: int = 0
+        self._last_poll_ns: int = 0
+        # S3: collapsed closed symbols
+        self._closed_collapsed: bool = True
 
     @property
     def state(self) -> MonitorState:
@@ -270,6 +280,10 @@ class MonitorEngine:
         """Execute one poll cycle: fetch ticks, enrich, dispatch, update state."""
         if self._state == MonitorState.ERROR:
             return
+
+        # S1: heartbeat tracking
+        self._poll_count += 1
+        self._last_poll_ns = timebase.now_ns()
 
         now = dt.datetime.now(_TZ_TAIPEI)
         self._last_now = now
@@ -466,6 +480,11 @@ class MonitorEngine:
         """Close detail panel and clear selection."""
         self._detail_visible = False
 
+    # S3: Collapsed closed symbols
+    def toggle_closed_collapse(self) -> None:
+        """Toggle whether closed symbols are collapsed into a summary row."""
+        self._closed_collapsed = not self._closed_collapsed
+
     # ------------------------------------------------------------------ #
     # Rendering helpers                                                    #
     # ------------------------------------------------------------------ #
@@ -530,6 +549,13 @@ class MonitorEngine:
         # Event ticker (Phase 1)
         event_ticker = self._build_event_ticker()
 
+        # S1: heartbeat age
+        now_ns = timebase.now_ns()
+        poll_age_s = (now_ns - self._last_poll_ns) / 1e9 if self._last_poll_ns > 0 else 0.0
+
+        # S3: count closed symbols
+        n_closed = sum(1 for ss in self._sym_states if ss.is_closed)
+
         return HeaderContext(
             state=self._state,
             session_display=session_display,
@@ -540,6 +566,10 @@ class MonitorEngine:
             sort_mode=_SORT_LABELS[self._sort_mode],
             event_ticker=event_ticker,
             source_label=source_label,
+            poll_count=self._poll_count,
+            poll_age_s=poll_age_s,
+            closed_collapsed=self._closed_collapsed,
+            n_closed=n_closed,
         )
 
     def _build_event_ticker(self) -> str:
@@ -572,6 +602,7 @@ class MonitorEngine:
             self._state,
             self._alpha_cols or None,
             selected_idx=self._selected_idx if self._detail_visible else -1,
+            closed_collapsed=self._closed_collapsed,
         )
 
     def get_selected_symbol_state(self) -> SymbolState | None:
@@ -627,12 +658,17 @@ class MonitorEngine:
             self._process_row(ss, row)
 
     def _bootstrap_all_symbols(self) -> None:
-        """Warm symbols from recent valid history so ready rows appear immediately."""
+        """Warm symbols from recent valid history so ready rows appear immediately.
+
+        S4: Only bootstrap symbols with active sessions to avoid blocking on
+        closed-session symbols during init.
+        """
         if self._data_source is None:
             return
         self._state = MonitorState.WARMING_UP
         for ss in self._sym_states:
-            self._bootstrap_symbol(ss)
+            if ss.session_active:
+                self._bootstrap_symbol(ss)
 
     def _bootstrap_new_sessions(self) -> None:
         """Reset and replay any symbol that just entered an active session."""
@@ -693,8 +729,10 @@ class MonitorEngine:
         ss.event_flags = 0
         ss.last_event_ns = 0
         ss.opportunity_score = 0.0
+        ss.prev_poll_price = 0.0
         self._dispatcher.reset_symbol(ss)
         ss.sparkline_clear()
+        ss.price_sparkline_clear()
 
     def _session_min_ingest_ts(self, ss: SymbolState) -> int:
         """Return current-session lower bound for warmup replays when active."""

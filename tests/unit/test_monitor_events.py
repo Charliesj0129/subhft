@@ -153,6 +153,14 @@ def test_opportunity_score_positive_for_live_symbols() -> None:
     assert score > 0
 
 
+def test_snapshot_prev_saves_prev_poll_price() -> None:
+    """S2: snapshot_prev copies last_price to prev_poll_price."""
+    ss = _ss(composite=1.0)
+    ss.last_price = 210.5
+    snapshot_prev(ss)
+    assert ss.prev_poll_price == 210.5
+
+
 def test_format_event_label() -> None:
     ss = _ss(composite=-1.5)
     assert "crossed 0" in format_event_label(EventFlag.COMPOSITE_CROSS, ss)

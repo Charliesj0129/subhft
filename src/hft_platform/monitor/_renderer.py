@@ -69,6 +69,17 @@ def build_header(ctx: HeaderContext) -> Text:
 
     parts.append(f"|  {ctx.time_str}  |  {ctx.ch_status}", _DIM)
 
+    # S1: Heartbeat indicator
+    if ctx.poll_count > 0:
+        age = ctx.poll_age_s
+        if age < 1.0:
+            hb_style = _GREEN
+        elif age < 3.0:
+            hb_style = _YELLOW
+        else:
+            hb_style = _BRIGHT_RED
+        parts.append(f"  |  \u25cf poll #{ctx.poll_count} {age:.0f}s ago", hb_style)
+
     if ctx.stale_symbols:
         parts.append(f"  |  Stale: {', '.join(ctx.stale_symbols)}", _YELLOW)
 
@@ -92,6 +103,7 @@ def build_table(
     state: MonitorState,
     alpha_cols: Sequence[str] | None = None,
     selected_idx: int = -1,
+    closed_collapsed: bool = True,
 ) -> Table:
     """Build the main signal table."""
     table = Table(
@@ -108,6 +120,8 @@ def build_table(
     table.add_column("Name", width=6)
     table.add_column("State", width=7)
     table.add_column("Last", justify="right", width=8)
+    # S2: Price delta column
+    table.add_column("\u0394", justify="right", width=6)
     table.add_column("Sprd", justify="right", width=6)
 
     # Dynamic alpha columns — use pre-computed list when provided
@@ -131,88 +145,141 @@ def build_table(
     table.add_column("Agree", justify="center", width=7)
     table.add_column("Action", justify="center", width=10)
     table.add_column("Drivers", justify="center", width=8)
+    # S7: price sparkline instead of composite sparkline
     table.add_column("Spark", width=20)
 
     now_ns = timebase.now_ns()
 
-    for rank, ss in enumerate(symbol_states, 1):
-        row: list[Text] = []
-        row_style = _get_row_style(ss, state, now_ns)
+    # S3: partition into active and closed for optional collapse
+    active_states: list[SymbolState] = []
+    closed_states: list[SymbolState] = []
+    for ss in symbol_states:
+        if ss.is_closed:
+            closed_states.append(ss)
+        else:
+            active_states.append(ss)
+
+    rank = 0
+    for ss in active_states:
+        rank += 1
+        row = _build_symbol_row(ss, rank, config, state, alpha_cols, now_ns)
         is_selected = (rank - 1) == selected_idx
-
-        # Rank
-        row.append(Text(str(rank), style=_DIM))
-
-        # Symbol + quality badges (Phase 4)
-        sym_text = Text(ss.symbol.code)
-        if ss.session_label:
-            sym_text.append(f" {ss.session_label}", _DIM)
-        if ss.invalid_row_count > 5:
-            sym_text.append(" [!L1]", _YELLOW)
-        row.append(sym_text)
-
-        # Name (truncated to 6 chars)
-        row.append(Text(ss.symbol.name[:6]))
-
-        # State — compact badges (Phase 2)
-        status_text, status_style = _render_symbol_status(ss, config, state, now_ns)
-        row.append(Text(status_text, style=status_style))
-
-        # Last price
-        if ss.last_price > 0:
-            row.append(Text(_format_price(ss.last_price)))
-        else:
-            row.append(Text("--", style=_DIM))
-
-        # Spread
-        if ss.spread_bps > 0:
-            row.append(Text(f"{ss.spread_bps:.1f}", style=row_style))
-        else:
-            row.append(Text("--", style=_DIM))
-
-        # Alpha signals — colored by z-score (Phase 4)
-        for aid in alpha_cols:
-            astate = ss.alpha_states.get(aid)
-            row.append(_render_alpha_cell(astate, ss.tick_count, config.warmup_ticks))
-
-        # Composite
-        if ss.tick_count >= config.warmup_ticks:
-            comp_text = _format_signal(ss.composite)
-            row.append(Text(comp_text, style=_signal_style(ss.composite)))
-        else:
-            row.append(Text("--", style=_DIM))
-
-        # Strength (sigma)
-        strength = abs(ss.composite)
-        if ss.tick_count >= config.warmup_ticks:
-            row.append(Text(f"{strength:.1f}σ", style=_signal_style_sigma(strength)))
-        else:
-            row.append(Text("--", style=_DIM))
-
-        # Count directions once for agreement, action, and drivers
-        pos, neg, total = _count_directions(ss, alpha_cols, config.warmup_ticks)
-
-        # Agreement
-        agreement_text, agreement_style = _format_agreement(pos, neg, total, ss.tick_count, config.warmup_ticks)
-        row.append(Text(agreement_text, style=agreement_style))
-
-        # Action — Phase 1: actionable suggestion with alpha names
-        action_text, action_style = _format_action(ss, pos, neg, total, config.warmup_ticks)
-        row.append(Text(action_text, style=action_style))
-
-        # Drivers — Phase 1: compact alpha direction indicators
-        drivers_text = _format_drivers(ss, alpha_cols, config.warmup_ticks)
-        row.append(drivers_text)
-
-        # Sparkline
-        row.append(Text(_render_sparkline(ss.sparkline_values())))
-
         if is_selected:
             table.add_row(*row, style=_SELECTED_BG)
         else:
             table.add_row(*row)
 
+    # S3: closed symbols — collapsed or expanded
+    if closed_states:
+        if closed_collapsed:
+            # Single summary row
+            n_cols = len(table.columns)
+            cells: list[Text] = [Text("", style=_DIM)] * n_cols
+            cells[0] = Text("", style=_DIM)
+            cells[1] = Text(f"[{len(closed_states)} closed]", style=_DIM)
+            cells[2] = Text("press c", style=_DIM)
+            table.add_row(*cells)
+        else:
+            for ss in closed_states:
+                rank += 1
+                row = _build_symbol_row(ss, rank, config, state, alpha_cols, now_ns)
+                table.add_row(*row)
+
     return table
+
+
+def _build_symbol_row(
+    ss: SymbolState,
+    rank: int,
+    config: MonitorConfig,
+    state: MonitorState,
+    alpha_cols: Sequence[str],
+    now_ns: int,
+) -> list[Text]:
+    """Build a single symbol row for the table."""
+    row: list[Text] = []
+    row_style = _get_row_style(ss, state, now_ns)
+
+    # Rank
+    row.append(Text(str(rank), style=_DIM))
+
+    # Symbol + quality badges (Phase 4)
+    sym_text = Text(ss.symbol.code)
+    if ss.session_label:
+        sym_text.append(f" {ss.session_label}", _DIM)
+    if ss.invalid_row_count > 5:
+        sym_text.append(" [!L1]", _YELLOW)
+    row.append(sym_text)
+
+    # Name (truncated to 6 chars)
+    row.append(Text(ss.symbol.name[:6]))
+
+    # State — compact badges (Phase 2)
+    status_text, status_style = _render_symbol_status(ss, config, state, now_ns)
+    row.append(Text(status_text, style=status_style))
+
+    # Last price
+    if ss.last_price > 0:
+        row.append(Text(_format_price(ss.last_price)))
+    else:
+        row.append(Text("--", style=_DIM))
+
+    # S2: Price delta column
+    if ss.prev_poll_price > 0 and ss.last_price > 0:
+        delta = ss.last_price - ss.prev_poll_price
+        if abs(delta) > 1e-8:
+            arrow = "\u25b2" if delta > 0 else "\u25bc"
+            delta_style = _GREEN if delta > 0 else _RED
+            row.append(Text(f"{delta:+.1f}{arrow}", style=delta_style))
+        else:
+            row.append(Text("0", style=_DIM))
+    else:
+        row.append(Text("--", style=_DIM))
+
+    # Spread
+    if ss.spread_bps > 0:
+        row.append(Text(f"{ss.spread_bps:.1f}", style=row_style))
+    else:
+        row.append(Text("--", style=_DIM))
+
+    # Alpha signals — colored by z-score (Phase 4)
+    for aid in alpha_cols:
+        astate = ss.alpha_states.get(aid)
+        row.append(_render_alpha_cell(astate, ss.tick_count, config.warmup_ticks))
+
+    # Composite
+    if ss.tick_count >= config.warmup_ticks:
+        comp_text = _format_signal(ss.composite)
+        row.append(Text(comp_text, style=_signal_style(ss.composite)))
+    else:
+        row.append(Text("--", style=_DIM))
+
+    # Strength (sigma)
+    strength = abs(ss.composite)
+    if ss.tick_count >= config.warmup_ticks:
+        row.append(Text(f"{strength:.1f}\u03c3", style=_signal_style_sigma(strength)))
+    else:
+        row.append(Text("--", style=_DIM))
+
+    # Count directions once for agreement, action, and drivers
+    pos, neg, total = _count_directions(ss, alpha_cols, config.warmup_ticks)
+
+    # Agreement
+    agreement_text, agreement_style = _format_agreement(pos, neg, total, ss.tick_count, config.warmup_ticks)
+    row.append(Text(agreement_text, style=agreement_style))
+
+    # Action — Phase 1: actionable suggestion with alpha names
+    action_text, action_style = _format_action(ss, pos, neg, total, config.warmup_ticks)
+    row.append(Text(action_text, style=action_style))
+
+    # Drivers — Phase 1: compact alpha direction indicators
+    drivers_text = _format_drivers(ss, alpha_cols, config.warmup_ticks)
+    row.append(drivers_text)
+
+    # S7: price sparkline instead of composite sparkline
+    row.append(Text(_render_sparkline(ss.price_sparkline_values())))
+
+    return row
 
 
 def _short_alpha_label(alpha_id: str) -> str:

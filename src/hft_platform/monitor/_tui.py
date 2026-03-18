@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from hft_platform.monitor._config_loader import load_watchlist
@@ -34,6 +35,9 @@ async def run_monitor(
     engine = MonitorEngine(config)
     console = Console()
 
+    # S6: Dedicated poll executor — single thread to avoid concurrent CH queries
+    poll_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="monitor-poll")
+
     # Signal handling for graceful exit
     stop_event = asyncio.Event()
 
@@ -44,10 +48,11 @@ async def run_monitor(
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    # Initialize (blocking CH connect — run in executor to avoid blocking the event loop)
+    # Initialize (blocking CH connect — run in dedicated executor)
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, engine.initialize)
+    await loop.run_in_executor(poll_executor, engine.initialize)
     if engine.state == MonitorState.ERROR:
+        poll_executor.shutdown(wait=False)
         console.print(f"[red bold]ERROR:[/] {engine.error_msg}")
         console.print("Press q to exit")
         return 1
@@ -81,10 +86,8 @@ async def run_monitor(
 
         while not stop_event.is_set():
             try:
-                # Offload to thread executor: _poller.poll() does a synchronous CH HTTP
-                # query (100ms-2s); running it in a thread keeps the event loop free for
-                # keyboard input and display refresh.
-                await loop.run_in_executor(None, engine.poll_and_update)
+                # S6: Offload to dedicated single-thread executor for poll isolation.
+                await loop.run_in_executor(poll_executor, engine.poll_and_update)
             except Exception as exc:
                 from structlog import get_logger
 
@@ -110,6 +113,9 @@ async def run_monitor(
             await key_task
         except asyncio.CancelledError:
             pass
+
+    # S6: shutdown dedicated executor
+    poll_executor.shutdown(wait=False)
 
     return 0
 
@@ -147,6 +153,8 @@ async def _key_listener(engine: MonitorEngine, stop_event: asyncio.Event) -> Non
                 engine.reset_session()
             elif char in ("s", "S"):
                 engine.cycle_sort_mode()
+            elif char in ("c", "C"):
+                engine.toggle_closed_collapse()
             elif char in ("j",):
                 engine.move_selection(1)
             elif char in ("k",):

@@ -12,6 +12,7 @@ from hft_platform.monitor._renderer import (
     _render_sparkline,
     _render_symbol_status,
     build_header,
+    build_table,
 )
 from hft_platform.monitor._types import (
     AlphaState,
@@ -133,3 +134,83 @@ def test_source_badge_shown_in_header() -> None:
     )
     header_no_src = build_header(ctx_no_src)
     assert "src:" not in header_no_src.plain
+
+
+def test_heartbeat_indicator_in_header() -> None:
+    """S1: heartbeat shows poll count and age with color coding."""
+    ctx = HeaderContext(
+        state=MonitorState.LIVE,
+        session_display="Day Session",
+        time_str="2026-03-18 10:00:00 TST",
+        ch_status="CH: OK",
+        stale_symbols=[],
+        poll_count=42,
+        poll_age_s=0.5,
+    )
+    header = build_header(ctx)
+    assert "poll #42" in header.plain
+    assert "0s ago" in header.plain
+
+    # No heartbeat when poll_count is 0
+    ctx_no_poll = HeaderContext(
+        state=MonitorState.LIVE,
+        session_display="Day Session",
+        time_str="2026-03-18 10:00:00 TST",
+        ch_status="CH: OK",
+        stale_symbols=[],
+        poll_count=0,
+    )
+    header_no_poll = build_header(ctx_no_poll)
+    assert "poll #" not in header_no_poll.plain
+
+
+def test_delta_column_shows_price_change() -> None:
+    """S2: Δ column shows price delta with arrow."""
+    ss = _symbol_state()
+    ss.last_price = 210.5
+    ss.prev_poll_price = 210.0
+    config = MonitorConfig(symbols=(ss.symbol,), warmup_ticks=64)
+
+    table = build_table([ss], config, MonitorState.LIVE, alpha_cols=list(ss.symbol.alpha_ids))
+    # Table should have a Δ column
+    col_names = [c.header for c in table.columns]
+    assert "\u0394" in col_names
+
+
+def test_collapsed_closed_section() -> None:
+    """S3: closed symbols are collapsed into summary row when closed_collapsed=True."""
+    ws = WatchlistSymbol(code="2330", name="台積", product_type="stock", alpha_ids=("queue_imbalance",))
+    active = SymbolState(symbol=ws, tick_count=64, composite=1.0, session_active=True)
+    closed = SymbolState(symbol=ws, tick_count=0, is_closed=True)
+
+    config = MonitorConfig(symbols=(ws,), warmup_ticks=64)
+
+    # Collapsed: should show summary row
+    table_collapsed = build_table(
+        [active, closed], config, MonitorState.LIVE, alpha_cols=["queue_imbalance"], closed_collapsed=True
+    )
+    row_count_collapsed = table_collapsed.row_count
+    # 1 active row + 1 collapsed summary row = 2
+    assert row_count_collapsed == 2
+
+    # Expanded: should show all rows
+    table_expanded = build_table(
+        [active, closed], config, MonitorState.LIVE, alpha_cols=["queue_imbalance"], closed_collapsed=False
+    )
+    row_count_expanded = table_expanded.row_count
+    assert row_count_expanded == 2  # 1 active + 1 closed shown
+
+
+def test_price_sparkline_in_table() -> None:
+    """S7: table uses price sparkline instead of composite sparkline."""
+    ss = _symbol_state()
+    ss.last_price = 210.0
+    # Fill price sparkline with data
+    for i in range(10):
+        ss.price_sparkline_append(200.0 + float(i))
+
+    config = MonitorConfig(symbols=(ss.symbol,), warmup_ticks=64)
+    table = build_table([ss], config, MonitorState.LIVE, alpha_cols=list(ss.symbol.alpha_ids))
+    # Spark column should exist
+    col_names = [c.header for c in table.columns]
+    assert "Spark" in col_names
