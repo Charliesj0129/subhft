@@ -28,7 +28,7 @@ def _normalize_date_str(date_str: str) -> str:
     if not date_str:
         return date_str
     if date_str == "today":
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return datetime.fromtimestamp(timebase.now_s(), tz=timezone.utc).strftime("%Y-%m-%d")
     if "-" in date_str:
         return date_str
     if len(date_str) == 8 and date_str.isdigit():
