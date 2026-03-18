@@ -3,6 +3,7 @@
 Tests cover: skip mode, success/failure propagation, timeout handling,
 alpha_id validation, and output truncation.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -98,9 +99,7 @@ class TestRunGateBFailure:
 class TestRunGateBTimeout:
     def test_timeout_returns_failed(self, tmp_path: Path):
         with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired(
-                cmd=["pytest"], timeout=10, output="partial output"
-            )
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd=["pytest"], timeout=10, output="partial output")
             report = run_gate_b("ofi_mc", tmp_path, timeout_s=10)
             assert report.passed is False
             assert "timeout" in report.details["error"]
@@ -108,9 +107,7 @@ class TestRunGateBTimeout:
 
     def test_timeout_with_none_stdout(self, tmp_path: Path):
         with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired(
-                cmd=["pytest"], timeout=5, output=None
-            )
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd=["pytest"], timeout=5, output=None)
             report = run_gate_b("ofi_mc", tmp_path, timeout_s=5)
             assert report.passed is False
             assert report.details["stdout_tail"] == ""

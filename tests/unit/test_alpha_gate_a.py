@@ -4,6 +4,7 @@ Tests cover: field resolution with aliases, complexity validation, precision
 warnings, paper governance, data governance, skills governance, data format
 checks (hftbacktest V2), and edge cases.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_structured_npy(path: Path, fields: list[tuple[str, str]], n: int = 8) -> Path:
     """Create a structured .npy file with given dtype fields."""
@@ -321,8 +323,12 @@ class TestDatasetMetadata:
         data_path = tmp_path / "test.npy"
         np.save(data_path, np.zeros(5))
         meta = {
-            "dataset_id": "t", "source_type": "invalid", "owner": "x",
-            "schema_version": 1, "rows": 5, "fields": ["a"],
+            "dataset_id": "t",
+            "source_type": "invalid",
+            "owner": "x",
+            "schema_version": 1,
+            "rows": 5,
+            "fields": ["a"],
         }
         problems = _validate_dataset_metadata(meta, data_path)
         assert "source_type_must_be_synthetic_or_real" in problems
@@ -331,8 +337,12 @@ class TestDatasetMetadata:
         data_path = tmp_path / "test.npy"
         np.save(data_path, np.zeros(5))
         meta = {
-            "dataset_id": "t", "source_type": "real", "owner": "x",
-            "schema_version": 0, "rows": 5, "fields": ["a"],
+            "dataset_id": "t",
+            "source_type": "real",
+            "owner": "x",
+            "schema_version": 0,
+            "rows": 5,
+            "fields": ["a"],
         }
         problems = _validate_dataset_metadata(meta, data_path)
         assert "schema_version_must_be>=1" in problems
@@ -342,8 +352,12 @@ class TestDatasetMetadata:
         arr = np.zeros(10, dtype=[("px", "i8")])
         np.save(data_path, arr)
         meta = {
-            "dataset_id": "t", "source_type": "real", "owner": "x",
-            "schema_version": 1, "rows": 99, "fields": ["px"],
+            "dataset_id": "t",
+            "source_type": "real",
+            "owner": "x",
+            "schema_version": 1,
+            "rows": 99,
+            "fields": ["px"],
         }
         problems = _validate_dataset_metadata(meta, data_path)
         assert any("rows_mismatch" in p for p in problems)
@@ -352,8 +366,12 @@ class TestDatasetMetadata:
         data_path = tmp_path / "test.npy"
         np.save(data_path, np.zeros(5))
         meta = {
-            "dataset_id": "t", "source_type": "real", "owner": "x",
-            "schema_version": 1, "rows": 5, "fields": [],
+            "dataset_id": "t",
+            "source_type": "real",
+            "owner": "x",
+            "schema_version": 1,
+            "rows": 5,
+            "fields": [],
         }
         problems = _validate_dataset_metadata(meta, data_path)
         assert "fields_must_be_nonempty_list" in problems
@@ -362,8 +380,12 @@ class TestDatasetMetadata:
         data_path = tmp_path / "test.npy"
         np.save(data_path, np.zeros(5))
         meta = {
-            "dataset_id": "t", "source_type": "real", "owner": "x",
-            "schema_version": 1, "rows": "many", "fields": ["a"],
+            "dataset_id": "t",
+            "source_type": "real",
+            "owner": "x",
+            "schema_version": 1,
+            "rows": "many",
+            "fields": ["a"],
         }
         problems = _validate_dataset_metadata(meta, data_path)
         assert "rows_not_int" in problems
@@ -372,8 +394,12 @@ class TestDatasetMetadata:
         data_path = tmp_path / "test.npy"
         np.save(data_path, np.zeros(5))
         meta = {
-            "dataset_id": "t", "source_type": "real", "owner": "x",
-            "schema_version": "abc", "rows": 5, "fields": ["a"],
+            "dataset_id": "t",
+            "source_type": "real",
+            "owner": "x",
+            "schema_version": "abc",
+            "rows": 5,
+            "fields": ["a"],
         }
         problems = _validate_dataset_metadata(meta, data_path)
         assert "schema_version_not_int" in problems

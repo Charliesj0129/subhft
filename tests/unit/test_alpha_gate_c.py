@@ -7,6 +7,7 @@ evaluation, scorecard propagation, and edge cases.
 Heavy external dependencies (HftNativeRunner, ExperimentTracker, research.*)
 are mocked to isolate Gate C logic.
 """
+
 from __future__ import annotations
 
 import types
@@ -22,6 +23,7 @@ from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_backtest_result(**overrides: Any) -> types.SimpleNamespace:
     defaults = {
@@ -116,31 +118,17 @@ def _opt_pass(**kwargs: Any) -> dict[str, Any]:
 @pytest.fixture()
 def gate_c_mocks(monkeypatch, tmp_path):
     """Patch all external dependencies for Gate C."""
-    monkeypatch.setattr(
-        "hft_platform.alpha._gate_c._ensure_project_root_on_path", lambda *a: None
-    )
-    monkeypatch.setattr(
-        "research.backtest.hft_native_runner.HftNativeRunner", _FakeRunner
-    )
-    monkeypatch.setattr(
-        "research.backtest.hft_native_runner.ensure_hftbt_npz", lambda p: p
-    )
-    monkeypatch.setattr(
-        "hft_platform.alpha.experiments.ExperimentTracker", _FakeTracker
-    )
+    monkeypatch.setattr("hft_platform.alpha._gate_c._ensure_project_root_on_path", lambda *a: None)
+    monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", _FakeRunner)
+    monkeypatch.setattr("research.backtest.hft_native_runner.ensure_hftbt_npz", lambda p: p)
+    monkeypatch.setattr("hft_platform.alpha.experiments.ExperimentTracker", _FakeTracker)
     monkeypatch.setattr(
         "hft_platform.alpha._gate_c._evaluate_oos_statistical_tests",
         _all_stat_tests_pass,
     )
-    monkeypatch.setattr(
-        "hft_platform.alpha._gate_c._evaluate_stress_backtest", _stress_pass
-    )
-    monkeypatch.setattr(
-        "hft_platform.alpha._gate_c._evaluate_parameter_robustness", _robustness_pass
-    )
-    monkeypatch.setattr(
-        "hft_platform.alpha._gate_c._optimize_parameters", _opt_pass
-    )
+    monkeypatch.setattr("hft_platform.alpha._gate_c._evaluate_stress_backtest", _stress_pass)
+    monkeypatch.setattr("hft_platform.alpha._gate_c._evaluate_parameter_robustness", _robustness_pass)
+    monkeypatch.setattr("hft_platform.alpha._gate_c._optimize_parameters", _opt_pass)
     monkeypatch.setattr(
         "research.registry.scorecard.compute_scorecard",
         lambda *a, **kw: _FakeScorecard(),
@@ -149,9 +137,7 @@ def gate_c_mocks(monkeypatch, tmp_path):
 
 
 def _run(tmp_path: Path, cfg_overrides: dict | None = None) -> tuple[GateReport, str, str, str, str]:
-    alpha = types.SimpleNamespace(
-        manifest=types.SimpleNamespace(alpha_id="test_alpha")
-    )
+    alpha = types.SimpleNamespace(manifest=types.SimpleNamespace(alpha_id="test_alpha"))
     cfg_kwargs: dict[str, Any] = {
         "alpha_id": "test_alpha",
         "data_paths": [],
@@ -190,9 +176,7 @@ class TestGateCCoreMetrics:
             def run(self):
                 return _make_backtest_result(sharpe_oos=-0.5)
 
-        monkeypatch.setattr(
-            "research.backtest.hft_native_runner.HftNativeRunner", LowSharpeRunner
-        )
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", LowSharpeRunner)
         report, *_ = _run(gate_c_mocks, {"min_sharpe_oos": 0.5})
         assert report.passed is False
         assert report.details["core_metrics_passed"] is False
@@ -202,9 +186,7 @@ class TestGateCCoreMetrics:
             def run(self):
                 return _make_backtest_result(max_drawdown=-0.5)
 
-        monkeypatch.setattr(
-            "research.backtest.hft_native_runner.HftNativeRunner", BigDrawdownRunner
-        )
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", BigDrawdownRunner)
         report, *_ = _run(gate_c_mocks, {"max_abs_drawdown": 0.3})
         assert report.passed is False
 
@@ -213,9 +195,7 @@ class TestGateCCoreMetrics:
             def run(self):
                 return _make_backtest_result(turnover=0.0)
 
-        monkeypatch.setattr(
-            "research.backtest.hft_native_runner.HftNativeRunner", LowTurnoverRunner
-        )
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", LowTurnoverRunner)
         report, *_ = _run(gate_c_mocks, {"min_turnover": 0.1})
         assert report.passed is False
 
@@ -261,13 +241,14 @@ class TestGateCStatCorrection:
                 },
             }
 
-        monkeypatch.setattr(
-            "hft_platform.alpha._gate_c._evaluate_oos_statistical_tests", only_one_pass
+        monkeypatch.setattr("hft_platform.alpha._gate_c._evaluate_oos_statistical_tests", only_one_pass)
+        report, *_ = _run(
+            gate_c_mocks,
+            {
+                "stat_correction_method": "bh",
+                "min_stat_tests_bh_pass": 4,
+            },
         )
-        report, *_ = _run(gate_c_mocks, {
-            "stat_correction_method": "bh",
-            "min_stat_tests_bh_pass": 4,
-        })
         assert report.details["stat_gate_passed"] is False
         assert report.passed is False
 
@@ -289,13 +270,14 @@ class TestGateCWalkForward:
             def run_walk_forward(self, alpha, cfg):
                 return _make_wf_result(fold_consistency_pct=0.1)
 
-        monkeypatch.setattr(
-            "research.backtest.hft_native_runner.HftNativeRunner", WFRunner
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", WFRunner)
+        report, *_ = _run(
+            gate_c_mocks,
+            {
+                "enable_walk_forward": True,
+                "wf_min_fold_consistency": 0.6,
+            },
         )
-        report, *_ = _run(gate_c_mocks, {
-            "enable_walk_forward": True,
-            "wf_min_fold_consistency": 0.6,
-        })
         assert report.details["walk_forward_gate_passed"] is False
         assert report.passed is False
 
@@ -304,13 +286,14 @@ class TestGateCWalkForward:
             def run_walk_forward(self, alpha, cfg):
                 return _make_wf_result(fold_sharpe_min=-2.0)
 
-        monkeypatch.setattr(
-            "research.backtest.hft_native_runner.HftNativeRunner", WFRunner
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", WFRunner)
+        report, *_ = _run(
+            gate_c_mocks,
+            {
+                "enable_walk_forward": True,
+                "wf_min_fold_sharpe_min": -0.5,
+            },
         )
-        report, *_ = _run(gate_c_mocks, {
-            "enable_walk_forward": True,
-            "wf_min_fold_sharpe_min": -0.5,
-        })
         assert report.details["walk_forward_gate_passed"] is False
 
     def test_walk_forward_passes(self, gate_c_mocks, monkeypatch):
@@ -321,9 +304,7 @@ class TestGateCWalkForward:
                     fold_sharpe_min=0.3,
                 )
 
-        monkeypatch.setattr(
-            "research.backtest.hft_native_runner.HftNativeRunner", WFRunner
-        )
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", WFRunner)
         report, *_ = _run(gate_c_mocks, {"enable_walk_forward": True})
         assert report.details["walk_forward_gate_passed"] is True
         wf = report.details["walk_forward"]
@@ -359,9 +340,7 @@ class TestGateCOptimization:
                 run_count["n"] += 1
                 return _make_backtest_result()
 
-        monkeypatch.setattr(
-            "research.backtest.hft_native_runner.HftNativeRunner", CountingRunner
-        )
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", CountingRunner)
         monkeypatch.setattr(
             "hft_platform.alpha._gate_c._optimize_parameters",
             lambda **kw: {"passed": True, "selected_signal_threshold": 0.999},
@@ -379,9 +358,7 @@ class TestGateCOptimization:
                 run_count["n"] += 1
                 return _make_backtest_result()
 
-        monkeypatch.setattr(
-            "research.backtest.hft_native_runner.HftNativeRunner", CountingRunner
-        )
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", CountingRunner)
         monkeypatch.setattr(
             "hft_platform.alpha._gate_c._optimize_parameters",
             lambda **kw: {"passed": True, "selected_signal_threshold": 0.3},
@@ -432,15 +409,30 @@ class TestGateCOutputStructure:
     def test_details_contain_expected_keys(self, gate_c_mocks):
         report, *_ = _run(gate_c_mocks)
         expected_keys = {
-            "run_id", "config_hash", "sharpe_is", "sharpe_oos",
-            "ic_mean", "ic_std", "turnover", "max_drawdown",
-            "criteria", "core_metrics_passed", "stat_gate_passed",
-            "walk_forward_gate_passed", "optimization_gate_passed",
-            "statistical_tests", "multiple_testing", "walk_forward",
-            "parameter_optimization", "stress_backtest",
-            "parameter_robustness", "latency_profile",
-            "scorecard_path", "data_ul_advisory",
-            "selected_signal_threshold", "base_signal_threshold",
+            "run_id",
+            "config_hash",
+            "sharpe_is",
+            "sharpe_oos",
+            "ic_mean",
+            "ic_std",
+            "turnover",
+            "max_drawdown",
+            "criteria",
+            "core_metrics_passed",
+            "stat_gate_passed",
+            "walk_forward_gate_passed",
+            "optimization_gate_passed",
+            "statistical_tests",
+            "multiple_testing",
+            "walk_forward",
+            "parameter_optimization",
+            "stress_backtest",
+            "parameter_robustness",
+            "latency_profile",
+            "scorecard_path",
+            "data_ul_advisory",
+            "selected_signal_threshold",
+            "base_signal_threshold",
         }
         assert expected_keys.issubset(set(report.details.keys()))
 
@@ -467,9 +459,7 @@ class TestGateCOutputStructure:
 class TestGateCResearchEngineRejected:
     def test_research_engine_raises_error(self, gate_c_mocks):
         with pytest.raises(ValueError, match="research"):
-            alpha = types.SimpleNamespace(
-                manifest=types.SimpleNamespace(alpha_id="test_alpha")
-            )
+            alpha = types.SimpleNamespace(manifest=types.SimpleNamespace(alpha_id="test_alpha"))
             cfg = ValidationConfig(
                 alpha_id="test_alpha",
                 data_paths=[],
