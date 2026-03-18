@@ -15,9 +15,11 @@ CH_USER="${HFT_CLICKHOUSE_USER:-${MONITOR_CH_USER:-default}}"
 CH_PASSWORD="${HFT_CLICKHOUSE_PASSWORD:-${MONITOR_CH_PASSWORD:-changeme}}"
 REPLAY_TICKS="${HFT_MONITOR_REPLAY_TICKS:-${MONITOR_REPLAY_TICKS:-24}}"
 BATCH_LIMIT_PER_SYMBOL="${HFT_MONITOR_BATCH_LIMIT_PER_SYMBOL:-${MONITOR_BATCH_LIMIT_PER_SYMBOL:-96}}"
+REDIS_TUNNEL_PORT="${MONITOR_REDIS_TUNNEL_PORT:-16379}"
+REMOTE_REDIS_PORT="${MONITOR_REMOTE_REDIS_PORT:-6379}"
 REDIS_HOST="${HFT_MONITOR_REDIS_HOST:-${MONITOR_REDIS_HOST:-127.0.0.1}}"
-REDIS_PORT="${HFT_MONITOR_REDIS_PORT:-${MONITOR_REDIS_PORT:-6379}}"
-REDIS_PASSWORD="${HFT_MONITOR_REDIS_PASSWORD:-${MONITOR_REDIS_PASSWORD:-}}"
+REDIS_PORT="${HFT_MONITOR_REDIS_PORT:-${MONITOR_REDIS_PORT:-${REDIS_TUNNEL_PORT}}}"
+REDIS_PASSWORD="${HFT_MONITOR_REDIS_PASSWORD:-${MONITOR_REDIS_PASSWORD:-changeme}}"
 UV_SYNC="${MONITOR_UV_SYNC:-1}"
 
 echo "Signal Monitor TUI"
@@ -33,30 +35,34 @@ export HFT_MONITOR_SOURCE="${SOURCE}"
 export HFT_MONITOR_REPLAY_TICKS="${REPLAY_TICKS}"
 export HFT_MONITOR_BATCH_LIMIT_PER_SYMBOL="${BATCH_LIMIT_PER_SYMBOL}"
 
-if [ "$SOURCE" = "clickhouse" ]; then
-    echo "Tunnel: 127.0.0.1:${TUNNEL_PORT} -> localhost:${REMOTE_CH_PORT}"
-    if curl -fsS "http://127.0.0.1:${TUNNEL_PORT}/ping" >/dev/null 2>&1; then
-        echo "Using existing ClickHouse tunnel on ${TUNNEL_PORT}."
+# --- SSH Tunnels ---
+# Helper: ensure an SSH tunnel is open
+open_tunnel() {
+    local local_port=$1 remote_port=$2 label=$3
+    if ss -tlnp 2>/dev/null | grep -q ":${local_port} " || \
+       lsof -iTCP:${local_port} -sTCP:LISTEN >/dev/null 2>&1; then
+        echo "Using existing ${label} tunnel on ${local_port}."
     else
-        echo "Opening SSH tunnel..."
+        echo "Opening ${label} SSH tunnel: 127.0.0.1:${local_port} -> localhost:${remote_port}"
         ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -f -N \
-            -L "${TUNNEL_PORT}:localhost:${REMOTE_CH_PORT}" \
+            -L "${local_port}:localhost:${remote_port}" \
             "${REMOTE_USER}@${REMOTE_HOST}"
     fi
+}
 
-    if ! curl -fsS "http://127.0.0.1:${TUNNEL_PORT}/ping" >/dev/null 2>&1; then
-        echo "Failed to reach ClickHouse through tunnel on ${TUNNEL_PORT}." >&2
-        echo "Check SSH reachability or free the local port and retry." >&2
-        exit 1
-    fi
-
+# Open tunnels based on source mode
+if [ "$SOURCE" = "clickhouse" ] || [ "$SOURCE" = "hybrid" ]; then
+    open_tunnel "${TUNNEL_PORT}" "${REMOTE_CH_PORT}" "ClickHouse"
     export HFT_CLICKHOUSE_HOST="127.0.0.1"
     export HFT_CLICKHOUSE_PORT="${TUNNEL_PORT}"
     export HFT_CLICKHOUSE_USER="${CH_USER}"
     export HFT_CLICKHOUSE_PASSWORD="${CH_PASSWORD}"
-else
-    export HFT_MONITOR_REDIS_HOST="${REDIS_HOST}"
-    export HFT_MONITOR_REDIS_PORT="${REDIS_PORT}"
+fi
+
+if [ "$SOURCE" = "redis" ] || [ "$SOURCE" = "hybrid" ]; then
+    open_tunnel "${REDIS_TUNNEL_PORT}" "${REMOTE_REDIS_PORT}" "Redis"
+    export HFT_MONITOR_REDIS_HOST="127.0.0.1"
+    export HFT_MONITOR_REDIS_PORT="${REDIS_TUNNEL_PORT}"
     export HFT_MONITOR_REDIS_PASSWORD="${REDIS_PASSWORD}"
 fi
 
