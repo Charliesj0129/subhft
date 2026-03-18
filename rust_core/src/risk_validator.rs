@@ -173,9 +173,9 @@ mod tests {
 
     fn make_validator() -> RustRiskValidator {
         RustRiskValidator::new(
-            10_000_000_000, // max_price_cap = 1M at x10000
-            100,            // tick_size = 0.01 at x10000
-            500,            // default_band_ticks
+            10_000_000_000,  // max_price_cap = 1M at x10000
+            100,             // tick_size = 0.01 at x10000
+            500,             // default_band_ticks
             100_000_000_000, // default_max_notional = 10M at x10000
         )
     }

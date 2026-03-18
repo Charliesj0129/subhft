@@ -161,8 +161,8 @@ mod tests {
     fn test_hawkes_decay() {
         let mut h = HawkesTracker::new(0.1, 0.5, 1.0);
         h.update(1_000_000_000, true); // intensity = 0.6
-        // After 1 second with beta=1.0: decay = exp(-1) ≈ 0.368
-        // intensity = 0.1 + (0.6 - 0.1) * 0.368 = 0.1 + 0.184 = 0.284
+                                       // After 1 second with beta=1.0: decay = exp(-1) ≈ 0.368
+                                       // intensity = 0.1 + (0.6 - 0.1) * 0.368 = 0.1 + 0.184 = 0.284
         let intensity = h.update(2_000_000_000, false);
         assert!((intensity - (0.1 + 0.5 * (-1.0_f64).exp())).abs() < 1e-6);
     }

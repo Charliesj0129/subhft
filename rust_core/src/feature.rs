@@ -271,7 +271,11 @@ impl LobFeatureKernelV1Inner {
                 let ofi_raw = b_flow - a_flow;
                 self.ofi_l1_cum += ofi_raw;
                 let alpha = 2.0 / 9.0;
-                let inputs = [ofi_raw as f64, spread_scaled as f64, l1_imbalance_ppm as f64];
+                let inputs = [
+                    ofi_raw as f64,
+                    spread_scaled as f64,
+                    l1_imbalance_ppm as f64,
+                ];
                 let one_minus_alpha = 1.0 - alpha;
                 for (i, &inp) in inputs.iter().enumerate() {
                     self.ema_state[i] = one_minus_alpha * self.ema_state[i] + alpha * inp;

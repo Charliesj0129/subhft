@@ -286,11 +286,7 @@ impl RustBookState {
 
     /// Test-only constructor from flat vectors.
     #[cfg(test)]
-    fn from_flat_for_test(
-        symbol: &str,
-        bids_flat: Vec<i64>,
-        asks_flat: Vec<i64>,
-    ) -> Self {
+    fn from_flat_for_test(symbol: &str, bids_flat: Vec<i64>, asks_flat: Vec<i64>) -> Self {
         let bid_rows = bids_flat.len() / 2;
         let ask_rows = asks_flat.len() / 2;
         let mut s = Self {
@@ -334,11 +330,8 @@ mod tests {
 
     #[test]
     fn test_recompute_imbalance() {
-        let bs = RustBookState::from_flat_for_test(
-            "2330",
-            vec![100_0000, 200],
-            vec![101_0000, 100],
-        );
+        let bs =
+            RustBookState::from_flat_for_test("2330", vec![100_0000, 200], vec![101_0000, 100]);
         // imbalance = (200 - 100) / (200 + 100) = 0.333...
         assert!((bs.imbalance - 1.0 / 3.0).abs() < 1e-10);
     }
@@ -353,11 +346,7 @@ mod tests {
 
     #[test]
     fn test_recompute_one_sided() {
-        let bs = RustBookState::from_flat_for_test(
-            "2330",
-            vec![100_0000, 50],
-            vec![],
-        );
+        let bs = RustBookState::from_flat_for_test("2330", vec![100_0000, 50], vec![]);
         assert_eq!(bs.mid_price_x2, 0);
         assert_eq!(bs.bid_depth_total, 50);
         assert_eq!(bs.ask_depth_total, 0);
@@ -404,11 +393,8 @@ mod tests {
 
     #[test]
     fn test_equal_depth_imbalance_zero() {
-        let bs = RustBookState::from_flat_for_test(
-            "2330",
-            vec![100_0000, 100],
-            vec![101_0000, 100],
-        );
+        let bs =
+            RustBookState::from_flat_for_test("2330", vec![100_0000, 100], vec![101_0000, 100]);
         assert_eq!(bs.imbalance, 0.0);
     }
 }
