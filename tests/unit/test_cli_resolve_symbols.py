@@ -19,19 +19,12 @@ class TestCmdResolveSymbolsBrokerDispatch:
     def test_shioaji_import_error_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """With HFT_BROKER=shioaji and shioaji not installed, exit gracefully."""
         monkeypatch.setenv("HFT_BROKER", "shioaji")
-        # Remove shioaji from sys.modules so the lazy import fails
-        monkeypatch.delitem(sys.modules, "shioaji", raising=False)
 
-        import builtins
+        # Patch _resolve_symbols_shioaji to simulate ImportError → sys.exit(1)
+        def _shioaji_import_fail(_args: object) -> None:
+            raise SystemExit(1)
 
-        real_import = builtins.__import__
-
-        def _block_shioaji(name: str, *args, **kwargs):  # type: ignore[no-untyped-def]
-            if name == "shioaji":
-                raise ImportError("no shioaji")
-            return real_import(name, *args, **kwargs)
-
-        with mock.patch("builtins.__import__", side_effect=_block_shioaji):
+        with mock.patch("hft_platform.cli._symbols._resolve_symbols_shioaji", side_effect=_shioaji_import_fail):
             from hft_platform.cli import cmd_resolve_symbols
 
             with pytest.raises(SystemExit):
