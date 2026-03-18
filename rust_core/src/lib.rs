@@ -33,6 +33,7 @@ mod timeutil;
 // Wave 4 modules
 mod gateway_fused;
 mod md_event_frame;
+mod normalizer_feature_fused;
 mod normalizer_lob_fused;
 mod typed_ring;
 
@@ -96,5 +97,6 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<typed_ring::FastTypedRingBuffer>()?;
     m.add_class::<gateway_fused::RustGatewayFusedCheck>()?;
     m.add_class::<normalizer_lob_fused::RustNormalizerLobFused>()?;
+    m.add_class::<normalizer_feature_fused::RustNormalizerFeatureFusedV1>()?;
     Ok(())
 }

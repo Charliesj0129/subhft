@@ -172,15 +172,17 @@ pub struct RustFeaturePipelineV1 {
 unsafe impl Send for RustFeaturePipelineV1 {}
 
 /// Internal kernel state (not exposed to Python).
+/// EMA fields stored as SoA array for LLVM auto-vectorization:
+///   ema_state[0] = ofi_l1_ema8
+///   ema_state[1] = spread_ema8
+///   ema_state[2] = imbalance_ema8_ppm
 struct LobFeatureKernelV1Inner {
     prev_best_bid: i64,
     prev_best_ask: i64,
     prev_l1_bid_qty: i64,
     prev_l1_ask_qty: i64,
     ofi_l1_cum: i64,
-    ofi_l1_ema8: f64,
-    spread_ema8: f64,
-    imbalance_ema8_ppm: f64,
+    ema_state: [f64; 3],
     initialized: bool,
 }
 
@@ -192,9 +194,7 @@ impl LobFeatureKernelV1Inner {
             prev_l1_bid_qty: 0,
             prev_l1_ask_qty: 0,
             ofi_l1_cum: 0,
-            ofi_l1_ema8: 0.0,
-            spread_ema8: 0.0,
-            imbalance_ema8_ppm: 0.0,
+            ema_state: [0.0; 3],
             initialized: false,
         }
     }
@@ -241,15 +241,15 @@ impl LobFeatureKernelV1Inner {
 
         let (ofi_l1_raw, ofi_l1_cum, ofi_l1_ema8, spread_ema8_scaled, depth_imbalance_ema8_ppm) =
             if !self.initialized {
-                self.spread_ema8 = spread_scaled as f64;
-                self.imbalance_ema8_ppm = l1_imbalance_ppm as f64;
+                self.ema_state[1] = spread_scaled as f64;
+                self.ema_state[2] = l1_imbalance_ppm as f64;
                 self.initialized = true;
                 (
                     0_i64,
                     0_i64,
                     0_i64,
-                    py_round_i64(self.spread_ema8),
-                    py_round_i64(self.imbalance_ema8_ppm),
+                    py_round_i64(self.ema_state[1]),
+                    py_round_i64(self.ema_state[2]),
                 )
             } else {
                 let b_flow = if best_bid > self.prev_best_bid {
@@ -271,17 +271,22 @@ impl LobFeatureKernelV1Inner {
                 let ofi_raw = b_flow - a_flow;
                 self.ofi_l1_cum += ofi_raw;
                 let alpha = 2.0 / 9.0;
-                self.ofi_l1_ema8 = (1.0 - alpha) * self.ofi_l1_ema8 + alpha * ofi_raw as f64;
-                self.spread_ema8 = (1.0 - alpha) * self.spread_ema8 + alpha * spread_scaled as f64;
-                self.imbalance_ema8_ppm =
-                    (1.0 - alpha) * self.imbalance_ema8_ppm + alpha * l1_imbalance_ppm as f64;
+                let inputs = [
+                    ofi_raw as f64,
+                    spread_scaled as f64,
+                    l1_imbalance_ppm as f64,
+                ];
+                let one_minus_alpha = 1.0 - alpha;
+                for (i, &inp) in inputs.iter().enumerate() {
+                    self.ema_state[i] = one_minus_alpha * self.ema_state[i] + alpha * inp;
+                }
 
                 (
                     ofi_raw,
                     self.ofi_l1_cum,
-                    py_round_i64(self.ofi_l1_ema8),
-                    py_round_i64(self.spread_ema8),
-                    py_round_i64(self.imbalance_ema8_ppm),
+                    py_round_i64(self.ema_state[0]),
+                    py_round_i64(self.ema_state[1]),
+                    py_round_i64(self.ema_state[2]),
                 )
             };
 
@@ -389,4 +394,111 @@ fn py_round_i64(x: f64) -> i64 {
     // Python round() uses bankers rounding (ties to even).
     // Rust stable provides round_ties_even on f64.
     x.round_ties_even() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_kernel_inner_first_tick_returns_zero_ofi() {
+        let mut k = LobFeatureKernelV1Inner::new();
+        let v = k.compute(100_0000, 101_0000, 201_0000, 1_0000, 500, 400, 100, 80);
+        assert_eq!(v.len(), 16);
+        assert_eq!(v[11], 0); // ofi_l1_raw
+        assert_eq!(v[12], 0); // ofi_l1_cum
+    }
+
+    #[test]
+    fn test_kernel_inner_second_tick_ofi() {
+        let mut k = LobFeatureKernelV1Inner::new();
+        k.compute(100_0000, 101_0000, 201_0000, 1_0000, 500, 400, 100, 80);
+        let v = k.compute(100_0000, 101_0000, 201_0000, 1_0000, 500, 400, 150, 80);
+        // b_flow = 150 - 100 = 50 (same price), a_flow = 80 - 80 = 0
+        assert_eq!(v[11], 50); // ofi_l1_raw
+    }
+
+    #[test]
+    fn test_kernel_inner_ema_convergence() {
+        let mut k = LobFeatureKernelV1Inner::new();
+        for _ in 0..500 {
+            k.compute(100_0000, 101_0000, 201_0000, 1_0000, 100, 100, 50, 50);
+        }
+        let v = k.compute(100_0000, 101_0000, 201_0000, 1_0000, 100, 100, 50, 50);
+        // spread_ema should converge to spread_scaled = 1_0000
+        assert_eq!(v[14], 1_0000);
+    }
+
+    #[test]
+    fn test_kernel_inner_reset() {
+        let mut k = LobFeatureKernelV1Inner::new();
+        k.compute(100_0000, 101_0000, 201_0000, 1_0000, 500, 400, 100, 80);
+        assert!(k.initialized);
+        k.reset();
+        assert!(!k.initialized);
+        assert_eq!(k.ema_state, [0.0; 3]);
+    }
+
+    #[test]
+    fn test_pipeline_process_returns_three_tuple() {
+        let mut p = RustFeaturePipelineV1::new(vec![0; 16]);
+        let (values, changed, warmup) = p.process(100, 102, 202, 2, 50, 40, 30, 20, 0);
+        assert_eq!(values.len(), 16);
+        assert_eq!(changed, (1_i64 << 16) - 1); // all changed on first tick
+        assert_eq!(warmup, (1_i64 << 16) - 1); // warm_count=0 >= threshold=0
+    }
+
+    #[test]
+    fn test_pipeline_warmup_mask() {
+        let thresholds: Vec<i64> = (0..16).map(|i| i * 10).collect();
+        let mut p = RustFeaturePipelineV1::new(thresholds);
+        let (_, _, warmup) = p.process(100, 102, 202, 2, 50, 40, 30, 20, 5);
+        // warm_count=5, thresholds: 0,10,20,...
+        // Only threshold 0 is met (5 >= 0), so warmup_mask = 1
+        assert_eq!(warmup, 1);
+    }
+
+    #[test]
+    fn test_pipeline_changed_mask_stable() {
+        let mut p = RustFeaturePipelineV1::new(vec![0; 16]);
+        p.process(100, 102, 202, 2, 50, 40, 30, 20, 0);
+        let (_, changed, _) = p.process(100, 102, 202, 2, 50, 40, 30, 20, 1);
+        // Same inputs → OFI raw = 0, cum = 0, no price change → most values same
+        // Only ofi_l1_ema8, spread_ema8, depth_imbalance_ema8_ppm may differ slightly
+        // But with same inputs, the mask should be small
+        assert!(changed < (1_i64 << 16) - 1); // not all changed
+    }
+
+    #[test]
+    fn test_py_round_i64_bankers() {
+        assert_eq!(py_round_i64(2.5), 2);
+        assert_eq!(py_round_i64(3.5), 4);
+        assert_eq!(py_round_i64(-0.5), 0);
+        assert_eq!(py_round_i64(1.6), 2);
+    }
+
+    #[test]
+    fn test_microprice_calculation() {
+        let mut k = LobFeatureKernelV1Inner::new();
+        // bid=100, ask=102, bid_qty=200, ask_qty=100
+        let v = k.compute(100, 102, 202, 2, 300, 200, 200, 100);
+        // microprice_x2 = round(2.0 * (102*200 + 100*100) / 300) = round(202.666...) = 203
+        assert_eq!(v[7], 203);
+    }
+
+    #[test]
+    fn test_imbalance_ppm_zero_depth() {
+        let mut k = LobFeatureKernelV1Inner::new();
+        let v = k.compute(100, 102, 202, 2, 0, 0, 0, 0);
+        assert_eq!(v[6], 0); // imbalance_ppm
+        assert_eq!(v[10], 0); // l1_imbalance_ppm
+    }
+
+    #[test]
+    fn test_negative_inputs_clamped() {
+        let mut k = LobFeatureKernelV1Inner::new();
+        let v = k.compute(100, 102, 202, 2, -10, -5, -3, -2);
+        assert_eq!(v[4], 0); // bid_depth clamped to 0
+        assert_eq!(v[5], 0); // ask_depth clamped to 0
+    }
 }

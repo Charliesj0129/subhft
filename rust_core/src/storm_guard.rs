@@ -39,3 +39,43 @@ impl RustStormGuardValidator {
         self.state
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_initial_normal() {
+        let sg = RustStormGuardValidator::new(100);
+        assert_eq!(sg.state(), 0);
+    }
+
+    #[test]
+    fn test_normal_to_warn() {
+        let mut sg = RustStormGuardValidator::new(100);
+        for _ in 0..101 {
+            sg.check();
+        }
+        assert_eq!(sg.state(), 1);
+    }
+
+    #[test]
+    fn test_warn_to_storm() {
+        let mut sg = RustStormGuardValidator::new(100);
+        for _ in 0..201 {
+            sg.check();
+        }
+        assert_eq!(sg.state(), 2);
+    }
+
+    #[test]
+    fn test_reset() {
+        let mut sg = RustStormGuardValidator::new(100);
+        for _ in 0..201 {
+            sg.check();
+        }
+        assert_eq!(sg.state(), 2);
+        sg.reset();
+        assert_eq!(sg.state(), 0);
+    }
+}
