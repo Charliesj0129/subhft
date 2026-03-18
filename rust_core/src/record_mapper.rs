@@ -100,3 +100,42 @@ pub fn map_fill_record(
     dict.set_item("ts_ns", ts_ns)?;
     Ok(dict.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_ch_price_scaled_10000() {
+        // price=500_0000 at scale=10000 → 500_0000 * (1e6/10000) = 500_000_000
+        assert_eq!(to_ch_price_scaled(500_0000, 10000), 500_000_000);
+    }
+
+    #[test]
+    fn test_to_ch_price_scaled_zero_scale() {
+        assert_eq!(to_ch_price_scaled(123, 0), 0);
+    }
+
+    #[test]
+    fn test_to_ch_price_scaled_same_scale() {
+        // scale = 1_000_000 → factor = 1.0
+        assert_eq!(to_ch_price_scaled(500_000_000, 1_000_000), 500_000_000);
+    }
+
+    #[test]
+    fn test_to_ch_price_zero() {
+        assert_eq!(to_ch_price_scaled(0, 10000), 0);
+    }
+
+    #[test]
+    fn test_to_ch_price_negative() {
+        // Negative prices (shouldn't happen but test edge case)
+        assert_eq!(to_ch_price_scaled(-100_0000, 10000), -100_000_000);
+    }
+
+    #[test]
+    fn test_to_ch_price_small_scale() {
+        // scale = 100 → factor = 10000
+        assert_eq!(to_ch_price_scaled(5000, 100), 50_000_000);
+    }
+}

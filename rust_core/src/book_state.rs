@@ -283,4 +283,118 @@ impl RustBookState {
             0
         }
     }
+
+    /// Test-only constructor from flat vectors.
+    #[cfg(test)]
+    fn from_flat_for_test(symbol: &str, bids_flat: Vec<i64>, asks_flat: Vec<i64>) -> Self {
+        let bid_rows = bids_flat.len() / 2;
+        let ask_rows = asks_flat.len() / 2;
+        let mut s = Self {
+            symbol: symbol.to_string(),
+            bids_flat,
+            asks_flat,
+            bid_rows,
+            ask_rows,
+            exch_ts: 0,
+            version: 0,
+            mid_price_x2: 0,
+            spread: 0,
+            imbalance: 0.0,
+            last_price: 0,
+            last_volume: 0,
+            bid_depth_total: 0,
+            ask_depth_total: 0,
+        };
+        s._recompute();
+        s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_recompute_basic() {
+        // bids: [100_0000, 50, 99_0000, 30], asks: [101_0000, 40, 102_0000, 20]
+        let bs = RustBookState::from_flat_for_test(
+            "2330",
+            vec![100_0000, 50, 99_0000, 30],
+            vec![101_0000, 40, 102_0000, 20],
+        );
+        assert_eq!(bs.mid_price_x2, 201_0000);
+        assert_eq!(bs.spread, 1_0000);
+        assert_eq!(bs.bid_depth_total, 80);
+        assert_eq!(bs.ask_depth_total, 60);
+    }
+
+    #[test]
+    fn test_recompute_imbalance() {
+        let bs =
+            RustBookState::from_flat_for_test("2330", vec![100_0000, 200], vec![101_0000, 100]);
+        // imbalance = (200 - 100) / (200 + 100) = 0.333...
+        assert!((bs.imbalance - 1.0 / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_recompute_empty() {
+        let bs = RustBookState::from_flat_for_test("2330", vec![], vec![]);
+        assert_eq!(bs.mid_price_x2, 0);
+        assert_eq!(bs.spread, 0);
+        assert_eq!(bs.imbalance, 0.0);
+    }
+
+    #[test]
+    fn test_recompute_one_sided() {
+        let bs = RustBookState::from_flat_for_test("2330", vec![100_0000, 50], vec![]);
+        assert_eq!(bs.mid_price_x2, 0);
+        assert_eq!(bs.bid_depth_total, 50);
+        assert_eq!(bs.ask_depth_total, 0);
+    }
+
+    #[test]
+    fn test_best_bid_ask() {
+        let bs = RustBookState::from_flat_for_test(
+            "2330",
+            vec![100_0000, 50, 99_0000, 30],
+            vec![101_0000, 40],
+        );
+        assert_eq!(bs._best_bid(), 100_0000);
+        assert_eq!(bs._best_ask(), 101_0000);
+    }
+
+    #[test]
+    fn test_best_bid_ask_empty() {
+        let bs = RustBookState::from_flat_for_test("2330", vec![], vec![]);
+        assert_eq!(bs._best_bid(), 0);
+        assert_eq!(bs._best_ask(), 0);
+    }
+
+    #[test]
+    fn test_update_tick() {
+        let mut bs = RustBookState::from_flat_for_test("2330", vec![], vec![]);
+        assert!(bs.update_tick(100_0000, 500, 1000));
+        assert_eq!(bs.last_price, 100_0000);
+        assert_eq!(bs.last_volume, 500);
+    }
+
+    #[test]
+    fn test_update_tick_rejects_stale() {
+        let mut bs = RustBookState::from_flat_for_test("2330", vec![], vec![]);
+        bs.exch_ts = 2000;
+        assert!(!bs.update_tick(100_0000, 500, 1000));
+    }
+
+    #[test]
+    fn test_version_starts_zero() {
+        let bs = RustBookState::from_flat_for_test("2330", vec![], vec![]);
+        assert_eq!(bs.version, 0);
+    }
+
+    #[test]
+    fn test_equal_depth_imbalance_zero() {
+        let bs =
+            RustBookState::from_flat_for_test("2330", vec![100_0000, 100], vec![101_0000, 100]);
+        assert_eq!(bs.imbalance, 0.0);
+    }
 }

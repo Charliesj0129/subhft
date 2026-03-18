@@ -67,3 +67,62 @@ impl Default for SymbolInternTable {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_intern_sequential_ids() {
+        let mut table = SymbolInternTable::new();
+        assert_eq!(table.intern("2330"), 0);
+        assert_eq!(table.intern("2317"), 1);
+        assert_eq!(table.intern("2454"), 2);
+    }
+
+    #[test]
+    fn test_intern_idempotent() {
+        let mut table = SymbolInternTable::new();
+        let id1 = table.intern("2330");
+        let id2 = table.intern("2330");
+        assert_eq!(id1, id2);
+        assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn test_resolve() {
+        let mut table = SymbolInternTable::new();
+        table.intern("2330");
+        assert_eq!(table.resolve(0), Some("2330".to_string()));
+        assert_eq!(table.resolve(99), None);
+    }
+
+    #[test]
+    fn test_contains() {
+        let mut table = SymbolInternTable::new();
+        table.intern("2330");
+        assert!(table.contains("2330"));
+        assert!(!table.contains("9999"));
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let table = SymbolInternTable::new();
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn test_len() {
+        let mut table = SymbolInternTable::new();
+        table.intern("A");
+        table.intern("B");
+        table.intern("C");
+        assert_eq!(table.len(), 3);
+    }
+
+    #[test]
+    fn test_default() {
+        let table = SymbolInternTable::default();
+        assert!(table.is_empty());
+    }
+}
