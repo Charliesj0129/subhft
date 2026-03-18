@@ -138,3 +138,119 @@ impl AlphaStrategy {
         (self.hawkes.intensity, mom)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hawkes_initial_intensity() {
+        let h = HawkesTracker::new(0.1, 0.5, 1.0);
+        assert_eq!(h.intensity, 0.1);
+    }
+
+    #[test]
+    fn test_hawkes_jump_on_event() {
+        let mut h = HawkesTracker::new(0.1, 0.5, 1.0);
+        let intensity = h.update(1_000_000_000, true);
+        // intensity = mu + (mu - mu)*decay + alpha = 0.1 + 0.5 = 0.6
+        assert!((intensity - 0.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_hawkes_decay() {
+        let mut h = HawkesTracker::new(0.1, 0.5, 1.0);
+        h.update(1_000_000_000, true); // intensity = 0.6
+        // After 1 second with beta=1.0: decay = exp(-1) ≈ 0.368
+        // intensity = 0.1 + (0.6 - 0.1) * 0.368 = 0.1 + 0.184 = 0.284
+        let intensity = h.update(2_000_000_000, false);
+        assert!((intensity - (0.1 + 0.5 * (-1.0_f64).exp())).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hawkes_no_event_returns_decayed() {
+        let mut h = HawkesTracker::new(0.1, 0.5, 1.0);
+        let intensity = h.update(1_000_000_000, false);
+        // No event, first update with dt=1s from 0
+        // decay = exp(-1) ≈ 0.368
+        // intensity = 0.1 + (0.1 - 0.1) * decay = 0.1
+        assert!((intensity - 0.1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_strategy_on_depth_empty() {
+        let mut s = AlphaStrategy::new(4, 0.1, 0.5, 1.0);
+        let signal = s.on_depth(vec![], vec![]);
+        assert_eq!(signal, 0.0);
+    }
+
+    #[test]
+    fn test_strategy_on_depth_basic() {
+        let mut s = AlphaStrategy::new(1, 0.1, 0.5, 1.0);
+        let bids = vec![(100.0, 200.0)];
+        let asks = vec![(102.0, 100.0)];
+        let signal = s.on_depth(bids, asks);
+        // Level 0 (deep_level=1 → idx=0): imb = (200-100)/(200+100) = 0.333...
+        // mom = 0 (no trade yet)
+        // signal = imb * 1.0 + 0.0 * 0.5 = 0.333...
+        assert!((signal - 1.0 / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_strategy_on_trade() {
+        let mut s = AlphaStrategy::new(4, 0.1, 0.5, 1.0);
+        let intensity = s.on_trade(1_000_000_000, 100.5, 10.0, true);
+        assert!(intensity > 0.1); // Should have jumped
+        assert_eq!(s.last_trade_price, 100.5);
+    }
+
+    #[test]
+    fn test_strategy_get_signal_initial() {
+        let s = AlphaStrategy::new(4, 0.1, 0.5, 1.0);
+        let (intensity, mom) = s.get_signal();
+        assert_eq!(intensity, 0.1);
+        assert_eq!(mom, 0.0);
+    }
+
+    #[test]
+    fn test_strategy_get_signal_after_trade() {
+        let mut s = AlphaStrategy::new(4, 0.1, 0.5, 1.0);
+        s.on_depth(vec![(100.0, 50.0)], vec![(102.0, 50.0)]);
+        s.on_trade(1_000_000_000, 101.5, 10.0, true);
+        let (intensity, mom) = s.get_signal();
+        assert!(intensity > 0.1);
+        assert!((mom - (101.5 - 101.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_strategy_deep_level_bounds() {
+        let mut s = AlphaStrategy::new(5, 0.1, 0.5, 1.0);
+        // Only 2 levels available but deep_level wants idx 4
+        let bids = vec![(100.0, 200.0), (99.0, 150.0)];
+        let asks = vec![(101.0, 100.0), (102.0, 80.0)];
+        let signal = s.on_depth(bids, asks);
+        // idx=4, len=2 → doesn't enter imbalance calc → imb=0
+        assert_eq!(signal, 0.0);
+    }
+
+    #[test]
+    fn test_strategy_level_zero() {
+        let mut s = AlphaStrategy::new(0, 0.1, 0.5, 1.0);
+        let bids = vec![(100.0, 200.0)];
+        let asks = vec![(102.0, 100.0)];
+        let signal = s.on_depth(bids, asks);
+        // deep_level=0 → idx=0
+        assert!((signal - 1.0 / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_strategy_momentum_with_trade() {
+        let mut s = AlphaStrategy::new(1, 0.1, 0.5, 1.0);
+        s.on_depth(vec![(100.0, 100.0)], vec![(102.0, 100.0)]);
+        s.on_trade(1_000_000_000, 103.0, 10.0, true);
+        let signal = s.on_depth(vec![(100.0, 100.0)], vec![(102.0, 100.0)]);
+        // imb = 0, mom = 103.0 - 101.0 = 2.0
+        // signal = 0 * 1.0 + 2.0 * 0.5 = 1.0
+        assert!((signal - 1.0).abs() < 1e-10);
+    }
+}

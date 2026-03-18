@@ -145,3 +145,94 @@ impl RustCircuitBreaker {
     #[classattr]
     pub const HALTED: u8 = STATE_HALTED;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_initial_state_normal() {
+        let cb = RustCircuitBreaker::new(10, 5, 5_000_000_000);
+        assert_eq!(cb.get_state("strat_a"), STATE_NORMAL);
+        assert_eq!(cb.get_failure_count("strat_a"), 0);
+    }
+
+    #[test]
+    fn test_normal_to_degraded() {
+        let mut cb = RustCircuitBreaker::new(10, 5, 5_000_000_000);
+        for i in 0..5 {
+            cb.record_failure("s1", i * 1_000_000_000);
+        }
+        assert_eq!(cb.get_state("s1"), STATE_DEGRADED);
+    }
+
+    #[test]
+    fn test_degraded_to_halted() {
+        let mut cb = RustCircuitBreaker::new(10, 5, 5_000_000_000);
+        for i in 0..10 {
+            let (state, should_disable) = cb.record_failure("s1", i * 1_000_000_000);
+            if i == 9 {
+                assert_eq!(state, STATE_HALTED);
+                assert!(should_disable);
+            }
+        }
+    }
+
+    #[test]
+    fn test_recovery_from_degraded() {
+        let mut cb = RustCircuitBreaker::new(10, 3, 5_000_000_000);
+        for i in 0..5 {
+            cb.record_failure("s1", i);
+        }
+        assert_eq!(cb.get_state("s1"), STATE_DEGRADED);
+        for _ in 0..3 {
+            cb.record_success("s1");
+        }
+        assert_eq!(cb.get_state("s1"), STATE_NORMAL);
+    }
+
+    #[test]
+    fn test_cooldown_recovery() {
+        let mut cb = RustCircuitBreaker::new(10, 5, 5_000_000_000);
+        for i in 0..10 {
+            cb.record_failure("s1", 1_000_000_000 * i);
+        }
+        assert_eq!(cb.get_state("s1"), STATE_HALTED);
+        // Before cooldown
+        let (reenable, _) = cb.check_cooldown("s1", 10_000_000_000);
+        assert!(!reenable);
+        // After cooldown
+        let (reenable, state) = cb.check_cooldown("s1", 20_000_000_000);
+        assert!(reenable);
+        assert_eq!(state, STATE_DEGRADED);
+    }
+
+    #[test]
+    fn test_reset() {
+        let mut cb = RustCircuitBreaker::new(10, 5, 5_000_000_000);
+        for i in 0..5 {
+            cb.record_failure("s1", i);
+        }
+        cb.reset("s1");
+        assert_eq!(cb.get_state("s1"), STATE_NORMAL);
+        assert_eq!(cb.get_failure_count("s1"), 0);
+    }
+
+    #[test]
+    fn test_success_in_normal_state() {
+        let mut cb = RustCircuitBreaker::new(10, 5, 5_000_000_000);
+        let (state, recovered) = cb.record_success("s1");
+        assert_eq!(state, STATE_NORMAL);
+        assert!(!recovered);
+    }
+
+    #[test]
+    fn test_multiple_strategies() {
+        let mut cb = RustCircuitBreaker::new(10, 5, 5_000_000_000);
+        for i in 0..5 {
+            cb.record_failure("s1", i);
+        }
+        assert_eq!(cb.get_state("s1"), STATE_DEGRADED);
+        assert_eq!(cb.get_state("s2"), STATE_NORMAL);
+    }
+}
