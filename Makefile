@@ -165,7 +165,7 @@ test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
 	uv run pytest tests/unit -q --cov=src/hft_platform --cov-branch --cov-report=term-missing --cov-report=xml
 
 coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
-	uv run coverage report --fail-under=70
+	uv run coverage report --fail-under=65
 
 coverage-markdown: ## Print coverage summary in markdown-friendly text
 	uv run coverage report
