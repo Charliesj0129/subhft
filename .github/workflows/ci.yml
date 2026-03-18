@@ -146,7 +146,7 @@ jobs:
         run: cargo clippy --manifest-path rust_core/Cargo.toml -- -D warnings
 
       - name: Run tests
-        run: cargo test --manifest-path rust_core/Cargo.toml
+        run: cargo test --manifest-path rust_core/Cargo.toml --no-default-features
 
   # ============================================================================
   # Stage 2b: Type Check
