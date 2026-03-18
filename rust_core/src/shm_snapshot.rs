@@ -31,7 +31,7 @@ const SLOT_TS_OFF: usize = 8;
 const SLOT_HASH_OFF: usize = 16;
 const SLOT_LOB_OFF: usize = 24; // 9 × i64 = 72B
 const SLOT_FEAT_OFF: usize = 96; // 16 × i64 = 128B
-// total used: 96 + 128 = 224B, padding to 256B
+                                 // total used: 96 + 128 = 224B, padding to 256B
 
 /// Number of i64 LOB fields per slot.
 const LOB_FIELDS: usize = 9;
@@ -113,7 +113,9 @@ impl ShmSnapshotTable {
         features: Vec<i64>,
     ) -> PyResult<()> {
         if slot_idx >= self.max_symbols {
-            return Err(pyo3::exceptions::PyIndexError::new_err("slot_idx out of range"));
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                "slot_idx out of range",
+            ));
         }
         if lob_fields.len() != LOB_FIELDS {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -183,7 +185,9 @@ impl ShmSnapshotTable {
         slot_idx: usize,
     ) -> PyResult<Option<(u64, i64, u64, Vec<i64>, Vec<i64>)>> {
         if slot_idx >= self.max_symbols {
-            return Err(pyo3::exceptions::PyIndexError::new_err("slot_idx out of range"));
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                "slot_idx out of range",
+            ));
         }
 
         unsafe {

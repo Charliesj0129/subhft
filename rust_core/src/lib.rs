@@ -18,7 +18,6 @@ mod fast_lob;
 mod feature;
 mod feature_engine;
 pub mod ipc;
-mod shm_snapshot;
 mod lob;
 mod metrics_sampler;
 mod normalizer_bidask;
@@ -27,6 +26,7 @@ mod positions;
 mod record_mapper;
 pub mod risk;
 mod risk_validator;
+mod shm_snapshot;
 mod storm_guard;
 mod strategy; // New Strategy
 mod symbol_intern;
