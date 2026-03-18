@@ -62,4 +62,4 @@ fi
 
 echo "Starting monitor..."
 echo "Replay ticks: ${HFT_MONITOR_REPLAY_TICKS} | Batch per symbol: ${HFT_MONITOR_BATCH_LIMIT_PER_SYMBOL}"
-exec uv run hft monitor --watchlist "${WATCHLIST_PATH}" --symbols-path "${SYMBOLS_PATH}"
+exec uv run hft monitor --watchlist "${WATCHLIST_PATH}" --symbols "${SYMBOLS_PATH}"
