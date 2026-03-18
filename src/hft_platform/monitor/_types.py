@@ -130,7 +130,7 @@ class AlphaState:
         dev = abs(signal - self._ema_signal)
         self._ema_abs_dev += alpha * (dev - self._ema_abs_dev)
         sigma = max(self._ema_abs_dev, 1e-8)
-        self.z_score = signal / sigma
+        self.z_score = (signal - self._ema_signal) / sigma
 
     def signal_sparkline_append(self, value: float) -> None:
         """Append to per-alpha sparkline ring buffer."""
