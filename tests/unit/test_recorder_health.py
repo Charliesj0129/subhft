@@ -224,13 +224,19 @@ class TestMetrics:
 
     def test_metrics_updated_on_transition(self) -> None:
         t = PipelineHealthTracker()
-        mock_metrics = type("M", (), {
-            "pipeline_health_state": type("G", (), {"set": lambda self, v: None})(),
-            "pipeline_degradation_events_total": type("C", (), {"inc": lambda self: None})(),
-        })()
+        mock_metrics = type(
+            "M",
+            (),
+            {
+                "pipeline_health_state": type("G", (), {"set": lambda self, v: None})(),
+                "pipeline_degradation_events_total": type("C", (), {"inc": lambda self: None})(),
+            },
+        )()
         t._metrics = mock_metrics
-        with patch.object(mock_metrics.pipeline_health_state, "set") as mock_set, \
-             patch.object(mock_metrics.pipeline_degradation_events_total, "inc") as mock_inc:
+        with (
+            patch.object(mock_metrics.pipeline_health_state, "set") as mock_set,
+            patch.object(mock_metrics.pipeline_degradation_events_total, "inc") as mock_inc,
+        ):
             t.record_event("data_loss")
             mock_set.assert_called_once_with(int(PipelineState.DATA_LOSS))
             mock_inc.assert_called_once()
