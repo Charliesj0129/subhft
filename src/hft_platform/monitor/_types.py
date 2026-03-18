@@ -81,6 +81,11 @@ class MonitorConfig:
     promotions_dir: str = "config/strategy_promotions"
     data_source: str = "auto"  # "ch" | "shm" | "auto" (hybrid)
     hybrid_backfill_interval_s: float = 30.0
+    # S5: Watchlist auto-derive
+    symbol_source: str = ""  # path to symbols.yaml for auto-derive
+    auto_filter_skip_expired: bool = True
+    pin_symbols: tuple[str, ...] = ()
+    default_alpha_ids: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -222,6 +227,14 @@ class SymbolState:
         }
     )
 
+    # S2: previous poll price for delta flash
+    prev_poll_price: float = 0.0
+
+    # S7: price sparkline ring buffer (mirrors composite sparkline pattern)
+    _price_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
+    _price_spark_idx: int = 0
+    _price_spark_len: int = 0
+
     # Session status
     is_stale: bool = False
     is_closed: bool = False
@@ -258,6 +271,29 @@ class SymbolState:
         self._spark_len = 0
         self._spark_dirty = True
 
+    # S7: Price sparkline methods
+    def price_sparkline_append(self, value: float) -> None:
+        """Append a value to the price sparkline ring buffer."""
+        self._price_spark_buf[self._price_spark_idx] = value
+        self._price_spark_idx = (self._price_spark_idx + 1) % _SPARKLINE_SIZE
+        if self._price_spark_len < _SPARKLINE_SIZE:
+            self._price_spark_len += 1
+
+    def price_sparkline_values(self) -> list[float]:
+        """Return price sparkline values in order (oldest to newest)."""
+        n = self._price_spark_len
+        if n == 0:
+            return []
+        if n < _SPARKLINE_SIZE:
+            return self._price_spark_buf[:n]
+        start = self._price_spark_idx
+        return self._price_spark_buf[start:] + self._price_spark_buf[:start]
+
+    def price_sparkline_clear(self) -> None:
+        """Reset price sparkline ring buffer."""
+        self._price_spark_idx = 0
+        self._price_spark_len = 0
+
 
 @dataclass(slots=True, frozen=True)
 class HeaderContext:
@@ -272,6 +308,12 @@ class HeaderContext:
     sort_mode: str = "opportunity"
     event_ticker: str = ""
     source_label: str = ""
+    # S1: heartbeat
+    poll_count: int = 0
+    poll_age_s: float = 0.0
+    # S3: collapsed closed symbols
+    closed_collapsed: bool = True
+    n_closed: int = 0
 
 
 # CH → platform price scale constants

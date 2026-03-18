@@ -99,40 +99,72 @@ def load_watchlist(
         os.getenv("HFT_MONITOR_HYBRID_BACKFILL_INTERVAL_S") or monitor_cfg.get("hybrid_backfill_interval_s", 30.0)
     )
 
+    # S5: auto-derive symbol_source + config
+    symbol_source = str(monitor_cfg.get("symbol_source", ""))
+    auto_filter_skip_expired = bool(monitor_cfg.get("auto_filter_skip_expired", True))
+    pin_symbols = tuple(str(s) for s in monitor_cfg.get("pin_symbols", []))
+    default_alpha_ids = tuple(str(a) for a in monitor_cfg.get("default_alpha_ids", []))
+
     # Parse symbols
     symbols: list[WatchlistSymbol] = []
+
+    # S5: If symbol_source is set, auto-derive symbols from referenced file
     raw_symbols = raw.get("symbols", [])
-    if not raw_symbols:
+    if symbol_source:
+        symbols = _derive_symbols_from_source(
+            symbol_source,
+            sym_meta,
+            auto_filter_skip_expired,
+            pin_symbols,
+            default_alpha_ids,
+        )
+        # Merge any explicitly listed symbols (they take priority)
+        existing_codes = {s.code for s in symbols}
+        for entry in raw_symbols:
+            code = str(entry.get("code", ""))
+            if code and code not in existing_codes:
+                meta = sym_meta.get(code, {})
+                name = meta.get("name", code)
+                product_type = meta.get("product_type", _infer_product_type(code))
+                alpha_ids = tuple(str(a) for a in entry.get("alpha_ids", [])) or default_alpha_ids
+                if alpha_ids:
+                    symbols.append(
+                        WatchlistSymbol(code=code, name=name, product_type=product_type, alpha_ids=alpha_ids)
+                    )
+
+    if not raw_symbols and not symbol_source:
         raise ValueError("watchlist.yaml: no symbols defined")
 
-    for entry in raw_symbols:
-        code = str(entry.get("code", ""))
-        if not code:
-            logger.warning("skipping symbol with empty code")
-            continue
+    if not symbols:
+        # Standard path: parse symbols from watchlist.yaml
+        for entry in raw_symbols:
+            code = str(entry.get("code", ""))
+            if not code:
+                logger.warning("skipping symbol with empty code")
+                continue
 
-        meta = sym_meta.get(code, {})
-        name = meta.get("name", code)
-        product_type = meta.get("product_type", "stock")
-        alpha_ids = tuple(str(a) for a in entry.get("alpha_ids", []))
-        if not alpha_ids:
-            logger.warning("skipping symbol with no alphas", code=code)
-            continue
+            meta = sym_meta.get(code, {})
+            name = meta.get("name", code)
+            product_type = meta.get("product_type", "stock")
+            alpha_ids = tuple(str(a) for a in entry.get("alpha_ids", []))
+            if not alpha_ids:
+                logger.warning("skipping symbol with no alphas", code=code)
+                continue
 
-        if code not in sym_meta:
-            # Infer product_type from code pattern: alpha prefix → future/option, numeric → stock
-            product_type = _infer_product_type(code)
-            name = code
-            logger.warning("symbol_not_in_symbols_yaml_using_fallback", code=code, product_type=product_type)
+            if code not in sym_meta:
+                # Infer product_type from code pattern: alpha prefix → future/option, numeric → stock
+                product_type = _infer_product_type(code)
+                name = code
+                logger.warning("symbol_not_in_symbols_yaml_using_fallback", code=code, product_type=product_type)
 
-        symbols.append(
-            WatchlistSymbol(
-                code=code,
-                name=name,
-                product_type=product_type,
-                alpha_ids=alpha_ids,
+            symbols.append(
+                WatchlistSymbol(
+                    code=code,
+                    name=name,
+                    product_type=product_type,
+                    alpha_ids=alpha_ids,
+                )
             )
-        )
 
     if not symbols:
         raise ValueError("watchlist.yaml: all symbols were invalid")
@@ -168,7 +200,91 @@ def load_watchlist(
         promotions_dir=promotions_dir,
         data_source=data_source,
         hybrid_backfill_interval_s=hybrid_backfill_interval_s,
+        symbol_source=symbol_source,
+        auto_filter_skip_expired=auto_filter_skip_expired,
+        pin_symbols=pin_symbols,
+        default_alpha_ids=default_alpha_ids,
     )
+
+
+def _derive_symbols_from_source(
+    symbol_source: str,
+    sym_meta: dict[str, dict[str, str]],
+    auto_filter_skip_expired: bool,
+    pin_symbols: tuple[str, ...],
+    default_alpha_ids: tuple[str, ...],
+) -> list[WatchlistSymbol]:
+    """S5: Auto-derive watchlist symbols from a symbols.yaml source file.
+
+    Filters expired contracts (e.g., TMFC6 when TMFE6 exists) when enabled.
+    Pin symbols are always included.
+    """
+    source_path = Path(symbol_source)
+    if not source_path.exists():
+        logger.warning("symbol_source_not_found", path=symbol_source)
+        return []
+
+    with open(source_path) as f:
+        src_data = yaml.safe_load(f) or {}
+
+    raw_entries = src_data.get("symbols", [])
+    if not raw_entries:
+        return []
+
+    # Build code set for expired filtering
+    all_codes = {str(e.get("code", "")) for e in raw_entries}
+
+    symbols: list[WatchlistSymbol] = []
+    for entry in raw_entries:
+        code = str(entry.get("code", ""))
+        if not code:
+            continue
+
+        # S5: skip expired contracts (e.g., TMFC6 when TMFE6 exists)
+        if auto_filter_skip_expired and code not in pin_symbols:
+            if _is_expired_contract(code, all_codes):
+                logger.info("auto_derive_skip_expired", code=code)
+                continue
+
+        meta = sym_meta.get(code, {})
+        name = meta.get("name", entry.get("name", code))
+        product_type = meta.get("product_type", entry.get("product_type", _infer_product_type(code)))
+        alpha_ids = tuple(str(a) for a in entry.get("alpha_ids", [])) or default_alpha_ids
+
+        if not alpha_ids:
+            continue
+
+        symbols.append(WatchlistSymbol(code=code, name=name, product_type=product_type, alpha_ids=alpha_ids))
+
+    logger.info("auto_derived_symbols", source=symbol_source, n_symbols=len(symbols))
+    return symbols
+
+
+def _is_expired_contract(code: str, all_codes: set[str]) -> bool:
+    """Check if a futures contract code is expired by checking if a later month exists.
+
+    Convention: contracts end with month letter + year digit (e.g., TMFC6 = March 2026).
+    Month letters: A-L map to Jan-Dec. If the same prefix with a later month exists, skip.
+    """
+    if len(code) < 2:
+        return False
+    month_char = code[-2]
+    if not month_char.isalpha():
+        return False
+    year_char = code[-1]
+    if not year_char.isdigit():
+        return False
+    prefix = code[:-2]
+    month_ord = ord(month_char.upper())
+    if month_ord < ord("A") or month_ord > ord("L"):
+        return False
+
+    # Check if any later month exists with same prefix and year
+    for later_month in range(month_ord + 1, ord("L") + 1):
+        candidate = f"{prefix}{chr(later_month)}{year_char}"
+        if candidate in all_codes:
+            return True
+    return False
 
 
 def _infer_product_type(code: str) -> str:

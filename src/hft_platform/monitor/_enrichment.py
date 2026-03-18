@@ -95,6 +95,8 @@ def enrich_tick(
     sym_state.tick_count += 1
     sym_state.last_update_ns = row.ingest_ts
     sym_state.cursor_ts_ns = max(sym_state.cursor_ts_ns, row.ingest_ts)
+    # S7: append mid_price to price sparkline
+    sym_state.price_sparkline_append(mid)
 
     # Mutate pre-allocated payload buffer in-place
     buf = sym_state._payload_buf
@@ -162,6 +164,8 @@ def enrich_from_snapshot(
     sym_state.tick_count += 1
     sym_state.last_update_ns = slot.ts_ns
     sym_state.cursor_ts_ns = max(sym_state.cursor_ts_ns, slot.ts_ns)
+    # S7: append mid_price to price sparkline
+    sym_state.price_sparkline_append(mid)
 
     buf = sym_state._payload_buf
     buf["bid_px"] = bid_px

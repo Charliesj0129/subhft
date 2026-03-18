@@ -11,7 +11,7 @@ def run_cli(
     source: str | None = None,
 ) -> int:
     """Run the monitor TUI from the main CLI."""
-    from hft_platform.monitor._engine import run_monitor
+    from hft_platform.monitor._tui import run_monitor
 
     return asyncio.run(
         run_monitor(
