@@ -494,8 +494,8 @@ class MonitorEngine:
             source_label = "CH"
 
         if ds and ds.connected:
-            # Check heartbeat staleness via public property
-            hb_stale = getattr(ds, "heartbeat_stale", False)
+            # Check heartbeat staleness via protocol property
+            hb_stale = ds.heartbeat_stale
             if hb_stale:
                 ch_status = f"{source_label}: STALE (no heartbeat)"
             else:

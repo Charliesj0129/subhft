@@ -67,12 +67,8 @@ class RedisPoller:
         self._heartbeat_stale = False
         # Pre-compute keys
         self._hb_key = f"{self._key_prefix}:heartbeat"
-        self._latest_keys_cache: dict[str, str] = {
-            s: f"{self._key_prefix}:latest:{s}" for s in symbols
-        }
-        self._ring_keys_cache: dict[str, str] = {
-            s: f"{self._key_prefix}:ring:{s}" for s in symbols
-        }
+        self._latest_keys_cache: dict[str, str] = {s: f"{self._key_prefix}:latest:{s}" for s in symbols}
+        self._ring_keys_cache: dict[str, str] = {s: f"{self._key_prefix}:ring:{s}" for s in symbols}
 
     def connect(self) -> None:
         self._client.connect()
@@ -127,10 +123,7 @@ class RedisPoller:
 
             # Batch all LRANGE via pipeline (1 round-trip)
             if need_ring:
-                pipe_cmds = tuple(
-                    ("LRANGE", self._ring_key(s), "0", ring_limit)
-                    for s in need_ring
-                )
+                pipe_cmds = tuple(("LRANGE", self._ring_key(s), "0", ring_limit) for s in need_ring)
                 pipe_results = self._client.pipeline(*pipe_cmds)
                 for symbol, ring_values in zip(need_ring, pipe_results, strict=False):
                     cursor = cursors[symbol]
@@ -163,9 +156,15 @@ class RedisPoller:
                 str(min(max(1, int(limit)), self._ring_size) - 1),
             )
             self._retry_count = 0
-            rows = [self._decode_row(raw) for raw in (ring_values or []) if raw is not None]
-            rows.reverse()
-            return [row for row in rows if row.ingest_ts >= min_ingest_ts]
+            # Single-pass reverse iteration with early filter
+            rows: list[RowView] = []
+            for raw in reversed(ring_values or []):
+                if raw is None:
+                    continue
+                row = self._decode_row(raw)
+                if row.ingest_ts >= min_ingest_ts:
+                    rows.append(row)
+            return rows
         except Exception as exc:
             self._register_disconnect(str(exc))
             raise ConnectionError(f"Redis replay failed: {exc}") from exc
@@ -194,11 +193,9 @@ class RedisPoller:
         self._client.close()
         self._next_retry_at = time.monotonic() + self.get_backoff_seconds()
 
-    def _check_heartbeat(self) -> None:
-        """Check publisher heartbeat key. Sets _heartbeat_stale flag."""
+    def _parse_heartbeat(self, raw: str | None) -> None:
+        """Parse heartbeat value and set _heartbeat_stale flag."""
         try:
-            hb_key = f"{self._key_prefix}:heartbeat"
-            raw = self._client.request("GET", hb_key)
             if raw is None:
                 self._heartbeat_stale = True
                 return
@@ -209,10 +206,20 @@ class RedisPoller:
             self._heartbeat_stale = True
 
     def _latest_key(self, symbol: str) -> str:
-        return f"{self._key_prefix}:latest:{symbol}"
+        cached = self._latest_keys_cache.get(symbol)
+        if cached is not None:
+            return cached
+        key = f"{self._key_prefix}:latest:{symbol}"
+        self._latest_keys_cache[symbol] = key
+        return key
 
     def _ring_key(self, symbol: str) -> str:
-        return f"{self._key_prefix}:ring:{symbol}"
+        cached = self._ring_keys_cache.get(symbol)
+        if cached is not None:
+            return cached
+        key = f"{self._key_prefix}:ring:{symbol}"
+        self._ring_keys_cache[symbol] = key
+        return key
 
     @staticmethod
     def _decode_row(raw: str) -> RowView:

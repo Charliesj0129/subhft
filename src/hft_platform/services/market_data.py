@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import datetime as dt
 import os
 import time
 from enum import Enum
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 from structlog import get_logger
@@ -22,7 +24,9 @@ from hft_platform.feature.engine import (
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
-from hft_platform.monitor._redis_publish import MonitorLivePublisher
+
+if TYPE_CHECKING:
+    from hft_platform.monitor._redis_publish import MonitorLivePublisher
 
 # TODO: replace with BrokerClientProtocol once WU-1 merges
 # Previously: from hft_platform.feed_adapter.shioaji_client import ShioajiClient
@@ -274,6 +278,8 @@ class MarketDataService:
         _live_tap = os.getenv("HFT_MONITOR_LIVE_ENABLED", os.getenv("HFT_MONITOR_REDIS_TAP", "0"))
         if _live_tap.lower() in {"1", "true", "yes", "on"}:
             try:
+                from hft_platform.monitor._redis_publish import MonitorLivePublisher
+
                 _redis_host: str = (
                     os.getenv("HFT_MONITOR_REDIS_HOST")
                     or os.getenv("HFT_REDIS_HOST")

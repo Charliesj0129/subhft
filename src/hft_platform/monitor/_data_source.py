@@ -9,7 +9,10 @@ Three concrete implementations:
 from __future__ import annotations
 
 import time
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from hft_platform.monitor._redis_poller import RedisPoller
 
 from structlog import get_logger
 
@@ -20,6 +23,34 @@ from hft_platform.monitor._types import (
 )
 
 logger = get_logger("monitor.data_source")
+
+
+class Poller(Protocol):
+    """Protocol for pollers (CHPoller, RedisPoller) used by DataSource wrappers."""
+
+    def connect(self) -> None: ...
+
+    def poll(self, cursors: dict[str, int]) -> dict[str, list[RowView]]: ...
+
+    def fetch_recent_valid(
+        self,
+        symbol: str,
+        limit: int,
+        min_ingest_ts: int = 0,
+    ) -> list[RowView]: ...
+
+    def try_reconnect(self) -> bool: ...
+
+    @property
+    def connected(self) -> bool: ...
+
+    @property
+    def retry_count(self) -> int: ...
+
+    @property
+    def last_error(self) -> str: ...
+
+    def remaining_backoff_seconds(self) -> float: ...
 
 
 class DataSource(Protocol):
@@ -49,13 +80,16 @@ class DataSource(Protocol):
 
     def remaining_backoff_seconds(self) -> float: ...
 
+    @property
+    def heartbeat_stale(self) -> bool: ...
+
 
 class CHDataSource:
     """Thin wrapper delegating to existing CHPoller (no behavioral change)."""
 
     __slots__ = ("_poller",)
 
-    def __init__(self, poller: Any) -> None:
+    def __init__(self, poller: Poller) -> None:
         self._poller = poller
 
     def connect(self) -> None:
@@ -234,6 +268,10 @@ class ShmDataSource:
     def remaining_backoff_seconds(self) -> float:
         return 0.0
 
+    @property
+    def heartbeat_stale(self) -> bool:
+        return False
+
 
 class HybridDataSource:
     """SHM for live polling + CH for sparkline history and bootstrap.
@@ -354,6 +392,10 @@ class HybridDataSource:
         return self._ch.remaining_backoff_seconds()
 
     @property
+    def heartbeat_stale(self) -> bool:
+        return False
+
+    @property
     def mode_label(self) -> str:
         return self._mode_label
 
@@ -386,7 +428,7 @@ class RedisHybridSource:
 
     def __init__(
         self,
-        redis_poller: Any,
+        redis_poller: RedisPoller,
         ch_source: CHDataSource,
         backfill_interval_s: float = 30.0,
     ) -> None:

@@ -44,6 +44,9 @@ class MonitorLivePublisher:
         "_dropped",
         "_last_heartbeat",
         "_published",
+        "_latest_keys",
+        "_ring_keys",
+        "_body_template",
     )
 
     def __init__(
@@ -64,6 +67,20 @@ class MonitorLivePublisher:
         self._dropped = 0
         self._last_heartbeat = 0.0
         self._published = 0
+        # Pre-computed key caches (populated lazily per symbol)
+        self._latest_keys: dict[str, str] = {}
+        self._ring_keys: dict[str, str] = {}
+        # Reusable body dict — safe because worker is single-threaded
+        self._body_template: dict[str, Any] = {
+            "symbol": "",
+            "ingest_ts": 0,
+            "bids_price": [],
+            "asks_price": [],
+            "bids_vol": [],
+            "asks_vol": [],
+            "price_scaled": 0,
+            "volume": 0,
+        }
 
     @property
     def dropped(self) -> int:
@@ -134,20 +151,26 @@ class MonitorLivePublisher:
 
     def _publish_now(self, payload: dict[str, Any]) -> None:
         symbol = str(payload["symbol"])
-        body = _dumps(
-            {
-                "symbol": symbol,
-                "ingest_ts": int(payload["ingest_ts"]),
-                "bids_price": payload.get("bids_price", []),
-                "asks_price": payload.get("asks_price", []),
-                "bids_vol": payload.get("bids_vol", []),
-                "asks_vol": payload.get("asks_vol", []),
-                "price_scaled": int(payload.get("price_scaled", 0) or 0),
-                "volume": int(payload.get("volume", 0) or 0),
-            },
-        )
-        latest_key = f"{self._key_prefix}:latest:{symbol}"
-        ring_key = f"{self._key_prefix}:ring:{symbol}"
+        # Mutate reusable body template in-place (single-threaded worker)
+        t = self._body_template
+        t["symbol"] = symbol
+        t["ingest_ts"] = int(payload["ingest_ts"])
+        t["bids_price"] = payload.get("bids_price", [])
+        t["asks_price"] = payload.get("asks_price", [])
+        t["bids_vol"] = payload.get("bids_vol", [])
+        t["asks_vol"] = payload.get("asks_vol", [])
+        t["price_scaled"] = int(payload.get("price_scaled", 0) or 0)
+        t["volume"] = int(payload.get("volume", 0) or 0)
+        body = _dumps(t)
+        # Use cached keys
+        latest_key = self._latest_keys.get(symbol)
+        if latest_key is None:
+            latest_key = f"{self._key_prefix}:latest:{symbol}"
+            self._latest_keys[symbol] = latest_key
+        ring_key = self._ring_keys.get(symbol)
+        if ring_key is None:
+            ring_key = f"{self._key_prefix}:ring:{symbol}"
+            self._ring_keys[symbol] = ring_key
         self._client.pipeline(
             ("SET", latest_key, body, "EX", "300"),
             ("LPUSH", ring_key, body),
