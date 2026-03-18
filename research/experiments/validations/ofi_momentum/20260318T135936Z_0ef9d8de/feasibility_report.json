@@ -1,0 +1,80 @@
+{
+  "details": {
+    "available_fields": [
+      "ev",
+      "exch_ts",
+      "fval",
+      "ival",
+      "local_ts",
+      "order_id",
+      "px",
+      "qty"
+    ],
+    "checked_data_paths": [
+      "/home/charlie/hft_platform/research/data/processed/hftbt.npz"
+    ],
+    "complexity": "O(1)",
+    "complexity_ok": true,
+    "data_governance": {
+      "allowed_data_roots": [],
+      "data_ul_achieved": null,
+      "data_ul_achieved_by_path": {},
+      "data_ul_missing_fields": {},
+      "data_ul_target": 2,
+      "enforced": false,
+      "invalid_data_formats": {
+        "/home/charlie/hft_platform/research/data/processed/hftbt.npz": [
+          "First event is not DEPTH_SNAPSHOT_EVENT"
+        ]
+      },
+      "invalid_data_metadata": {},
+      "invalid_data_roots": [],
+      "missing_data_metadata": {},
+      "passed": true,
+      "require_data_meta": false,
+      "required_data_provenance_fields": [],
+      "warnings": []
+    },
+    "missing_fields": [
+      "ask_qty",
+      "bid_qty"
+    ],
+    "missing_fields_by_path": {
+      "/home/charlie/hft_platform/research/data/processed/hftbt.npz": [
+        "bid_qty",
+        "ask_qty"
+      ]
+    },
+    "paper_governance": {
+      "paper_ref_missing": false,
+      "passed": true,
+      "require_paper_index_link": false,
+      "require_paper_refs": false,
+      "unmapped_paper_refs": [],
+      "unresolved_paper_refs": []
+    },
+    "paper_refs": [
+      "0906.1444"
+    ],
+    "precision_warnings": [],
+    "required_fields": [
+      "bid_qty",
+      "ask_qty"
+    ],
+    "skills_governance": {
+      "invalid_roles": [],
+      "invalid_skills": [],
+      "roles_used": [
+        "planner",
+        "code-reviewer"
+      ],
+      "skills_used": [
+        "iterative-retrieval",
+        "validation-gate"
+      ],
+      "warnings": []
+    }
+  },
+  "gate": "Gate A",
+  "passed": false
+}

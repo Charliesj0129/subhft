@@ -1,0 +1,1 @@
+/home/charlie/hft_platform/.agent/commands/test-coverage.md
