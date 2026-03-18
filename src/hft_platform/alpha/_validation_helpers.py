@@ -14,7 +14,7 @@ import numpy as np
 
 from hft_platform.alpha._validation_types import ValidationConfig
 
-_ALPHA_ID_PATTERN = re.compile(r'[a-z][a-z0-9_]{0,63}')
+_ALPHA_ID_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 def _validate_alpha_id(alpha_id: str) -> None:
@@ -23,9 +23,7 @@ def _validate_alpha_id(alpha_id: str) -> None:
     Raises ValueError if alpha_id does not match ``[a-z][a-z0-9_]{0,63}``.
     """
     if not isinstance(alpha_id, str) or not _ALPHA_ID_PATTERN.fullmatch(alpha_id):
-        raise ValueError(
-            f"Invalid alpha_id {alpha_id!r}: must match [a-z][a-z0-9_]{{0,63}}"
-        )
+        raise ValueError(f"Invalid alpha_id {alpha_id!r}: must match [a-z][a-z0-9_]{{0,63}}")
 
 
 def _resolve_data_path(root: Path, path: str) -> str:
