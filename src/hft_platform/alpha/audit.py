@@ -22,6 +22,7 @@ def _now_utc() -> _dt.datetime:
     """UTC-aware datetime via timebase (no direct datetime.now)."""  # noqa: E501
     return _dt.datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
 
+
 if TYPE_CHECKING:
     from hft_platform.alpha.promotion import PromotionResult
     from hft_platform.alpha.validation import GateReport
