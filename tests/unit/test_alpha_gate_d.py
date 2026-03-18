@@ -168,9 +168,7 @@ class TestGateDFeatureSetVersion:
             reg_mod.FEATURE_SET_VERSION = "lob_shared_v1"  # type: ignore[attr-defined]
             try:
                 sc = _scorecard()
-                passed, checks = _evaluate_gate_d(
-                    sc, _cfg(manifest_feature_set_version="lob_shared_v1")
-                )
+                passed, checks = _evaluate_gate_d(sc, _cfg(manifest_feature_set_version="lob_shared_v1"))
                 assert "feature_set_version" in checks
                 assert checks["feature_set_version"]["pass"] is True
                 assert checks["feature_set_version"]["detail"] == "OK"
@@ -185,9 +183,7 @@ class TestGateDFeatureSetVersion:
         reg_mod.FEATURE_SET_VERSION = "lob_shared_v2"  # type: ignore[attr-defined]
         try:
             sc = _scorecard()
-            passed, checks = _evaluate_gate_d(
-                sc, _cfg(manifest_feature_set_version="lob_shared_v1")
-            )
+            passed, checks = _evaluate_gate_d(sc, _cfg(manifest_feature_set_version="lob_shared_v1"))
             assert "feature_set_version" in checks
             assert checks["feature_set_version"]["pass"] is False
             assert "MISMATCH" in checks["feature_set_version"]["detail"]

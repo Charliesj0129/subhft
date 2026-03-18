@@ -230,9 +230,7 @@ class TestGateEPaperGovernance:
 
     def test_governance_insufficient_calendar_days(self, tmp_path: Path) -> None:
         summary_file = tmp_path / "summary.json"
-        summary_file.write_text(
-            json.dumps(_paper_summary(calendar_span_days=3))
-        )
+        summary_file.write_text(json.dumps(_paper_summary(calendar_span_days=3)))
         cfg = _cfg(
             require_paper_trade_governance=True,
             paper_trade_summary_path=str(summary_file),
@@ -244,9 +242,7 @@ class TestGateEPaperGovernance:
 
     def test_governance_insufficient_trading_days(self, tmp_path: Path) -> None:
         summary_file = tmp_path / "summary.json"
-        summary_file.write_text(
-            json.dumps(_paper_summary(distinct_trading_days=2))
-        )
+        summary_file.write_text(json.dumps(_paper_summary(distinct_trading_days=2)))
         cfg = _cfg(
             require_paper_trade_governance=True,
             paper_trade_summary_path=str(summary_file),
@@ -289,9 +285,7 @@ class TestGateEPaperGovernance:
 class TestGateERegimeSpan:
     def test_regime_span_warning_when_insufficient(self, tmp_path: Path) -> None:
         summary_file = tmp_path / "summary.json"
-        summary_file.write_text(
-            json.dumps(_paper_summary(regimes_covered=["trending"]))
-        )
+        summary_file.write_text(json.dumps(_paper_summary(regimes_covered=["trending"])))
         cfg = _cfg(paper_trade_summary_path=str(summary_file))
         passed, result = _evaluate_gate_e(cfg, tmp_path)
         regime = result["checks"]["regime_span"]
@@ -301,11 +295,7 @@ class TestGateERegimeSpan:
 
     def test_regime_span_no_warning_when_sufficient(self, tmp_path: Path) -> None:
         summary_file = tmp_path / "summary.json"
-        summary_file.write_text(
-            json.dumps(
-                _paper_summary(regimes_covered=["trending", "mean_reverting"])
-            )
-        )
+        summary_file.write_text(json.dumps(_paper_summary(regimes_covered=["trending", "mean_reverting"])))
         cfg = _cfg(paper_trade_summary_path=str(summary_file))
         _, result = _evaluate_gate_e(cfg, tmp_path)
         assert "warning" not in result["checks"]["regime_span"]

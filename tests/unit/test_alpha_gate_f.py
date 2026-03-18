@@ -42,9 +42,7 @@ class TestGateFDisabled:
 class TestGateFNoRustModule:
     def test_fails_when_no_rust_module(self, tmp_path: Path) -> None:
         cfg = _cfg(rust_module_name=None)
-        with patch(
-            "hft_platform.alpha._gate_f._load_rust_module_name", return_value=""
-        ):
+        with patch("hft_platform.alpha._gate_f._load_rust_module_name", return_value=""):
             passed, details = _evaluate_gate_f(cfg, tmp_path)
         assert passed is False
         checks = details["checks"]
@@ -56,9 +54,7 @@ class TestGateFNoRustModule:
             rust_module_name=None,
             enforce_rust_benchmark_gate=True,
         )
-        with patch(
-            "hft_platform.alpha._gate_f._load_rust_module_name", return_value=""
-        ):
+        with patch("hft_platform.alpha._gate_f._load_rust_module_name", return_value=""):
             passed, details = _evaluate_gate_f(cfg, tmp_path)
         assert passed is False
         checks = details["checks"]
@@ -66,9 +62,7 @@ class TestGateFNoRustModule:
 
     def test_empty_string_module_fails(self, tmp_path: Path) -> None:
         cfg = _cfg(rust_module_name="  ")
-        with patch(
-            "hft_platform.alpha._gate_f._load_rust_module_name", return_value=""
-        ):
+        with patch("hft_platform.alpha._gate_f._load_rust_module_name", return_value=""):
             passed, details = _evaluate_gate_f(cfg, tmp_path)
         assert passed is False
 
@@ -108,9 +102,7 @@ class TestGateFParityTests:
         exc = subprocess.TimeoutExpired(cmd=["pytest"], timeout=10)
         exc.stdout = "partial output"
         exc.stderr = "timeout stderr"
-        with patch(
-            "hft_platform.alpha._gate_f.subprocess.run", side_effect=exc
-        ):
+        with patch("hft_platform.alpha._gate_f.subprocess.run", side_effect=exc):
             passed, details = _evaluate_gate_f(cfg, tmp_path)
         assert passed is False
         check = details["checks"]["rust_parity_tests"]
@@ -152,9 +144,7 @@ class TestGateFBenchmark:
         mock_proc.returncode = 0
         mock_proc.stdout = "benchmark ok"
         mock_proc.stderr = ""
-        with patch(
-            "hft_platform.alpha._gate_f.subprocess.run", return_value=mock_proc
-        ):
+        with patch("hft_platform.alpha._gate_f.subprocess.run", return_value=mock_proc):
             passed, details = _evaluate_gate_f(cfg, tmp_path)
         assert passed is True
         assert details["checks"]["rust_perf_regression_gate"]["pass"] is True
