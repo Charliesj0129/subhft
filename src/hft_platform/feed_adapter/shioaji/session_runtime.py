@@ -284,7 +284,7 @@ class SessionRuntime:
                         break
 
                     now = timebase.now_s()
-                    now_dt = dt.datetime.now(calendar._tz)
+                    now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
 
                     # Skip refresh during active trading hours
                     if calendar.is_trading_hours(now_dt):
