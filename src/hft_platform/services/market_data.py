@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import datetime as dt
 import os
 import time
 from enum import Enum
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 from structlog import get_logger
@@ -22,6 +24,9 @@ from hft_platform.feature.engine import (
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
+
+if TYPE_CHECKING:
+    from hft_platform.monitor._redis_publish import MonitorLivePublisher
 
 # TODO: replace with BrokerClientProtocol once WU-1 merges
 # Previously: from hft_platform.feed_adapter.shioaji_client import ShioajiClient
@@ -269,6 +274,39 @@ class MarketDataService:
             if self.feature_engine and hasattr(self.feature_engine, "feature_set_id")
             else "unknown"
         )
+        self._monitor_live_publisher: MonitorLivePublisher | None = None
+        _live_tap = os.getenv("HFT_MONITOR_LIVE_ENABLED", os.getenv("HFT_MONITOR_REDIS_TAP", "0"))
+        if _live_tap.lower() in {"1", "true", "yes", "on"}:
+            try:
+                from hft_platform.monitor._redis_publish import MonitorLivePublisher
+
+                _redis_host: str = (
+                    os.getenv("HFT_MONITOR_REDIS_HOST")
+                    or os.getenv("HFT_REDIS_HOST")
+                    or os.getenv("REDIS_HOST", "redis")
+                    or "redis"
+                )
+                _redis_port: str = (
+                    os.getenv("HFT_MONITOR_REDIS_PORT")
+                    or os.getenv("HFT_REDIS_PORT")
+                    or os.getenv("REDIS_PORT", "6379")
+                    or "6379"
+                )
+                self._monitor_live_publisher = MonitorLivePublisher(
+                    host=_redis_host,
+                    port=int(_redis_port),
+                    password=os.getenv("HFT_MONITOR_REDIS_PASSWORD")
+                    or os.getenv("HFT_REDIS_PASSWORD")
+                    or os.getenv("REDIS_PASSWORD")
+                    or "",
+                    key_prefix=os.getenv("HFT_MONITOR_REDIS_KEY_PREFIX", "monitor:l1"),
+                    ring_size=int(os.getenv("HFT_MONITOR_REDIS_RING_SIZE", "256")),
+                    queue_size=int(os.getenv("HFT_MONITOR_LIVE_QUEUE_SIZE", "2048")),
+                )
+                self._monitor_live_publisher.start()
+            except Exception as exc:
+                logger.warning("monitor_live_publisher_init_failed", error=str(exc))
+                self._monitor_live_publisher = None
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
         self.log_raw_every = int(os.getenv("HFT_MD_LOG_EVERY", "1000"))
         self._raw_log_counter = 0
@@ -369,6 +407,80 @@ class MarketDataService:
         self._feature_shadow_mismatch_counter = 0
 
         self._init_feature_shadow_engine()
+        self._init_shm_publisher()
+
+    def _init_shm_publisher(self) -> None:
+        """Initialize SHM snapshot publisher if HFT_MONITOR_SHM_ENABLED=1."""
+        self._shm_publisher = None
+        self._shm_symbol_index: dict[str, int] = {}
+        self._shm_symbol_hashes: dict[str, int] = {}
+        enabled = os.getenv("HFT_MONITOR_SHM_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return
+        try:
+            from hft_platform.ipc.shm_snapshot import ShmSnapshotWriter, _symbol_hash
+
+            shm_name = os.getenv("HFT_MONITOR_SHM_NAME", "hft_monitor_snapshot")
+            max_symbols = int(os.getenv("HFT_MONITOR_SHM_MAX_SYMBOLS", "64"))
+            self._shm_publisher = ShmSnapshotWriter(shm_name, max_symbols=max_symbols)
+            logger.info("shm_publisher_enabled", shm_name=shm_name, max_symbols=max_symbols)
+            # Pre-build symbol→index mapping from client subscriptions
+            symbols = getattr(self.client, "subscribed_symbols", None)
+            if symbols is None:
+                symbols = getattr(self.client, "symbols", None)
+            if symbols:
+                for idx, sym in enumerate(symbols):
+                    sym_str = str(sym)
+                    if idx < max_symbols:
+                        self._shm_symbol_index[sym_str] = idx
+                        self._shm_symbol_hashes[sym_str] = _symbol_hash(sym_str)
+        except Exception as exc:
+            logger.warning("shm_publisher_init_failed", error=str(exc))
+            self._shm_publisher = None
+
+    def _publish_to_shm(self, symbol: str, stats: object, feature_tuple: tuple | None) -> None:
+        """Publish LOB stats + features to SHM snapshot table (~50ns)."""
+        publisher = self._shm_publisher
+        if publisher is None:
+            return
+        idx = self._shm_symbol_index.get(symbol)
+        if idx is None:
+            # Lazily assign next available slot
+            from hft_platform.ipc.shm_snapshot import _symbol_hash
+
+            next_idx = len(self._shm_symbol_index)
+            if next_idx >= publisher.max_symbols:
+                return
+            self._shm_symbol_index[symbol] = next_idx
+            self._shm_symbol_hashes[symbol] = _symbol_hash(symbol)
+            idx = next_idx
+
+        sym_hash = self._shm_symbol_hashes[symbol]
+        ts_ns = int(getattr(stats, "local_ts", 0) or 0) or time.time_ns()
+
+        # Extract 9 LOB fields from stats
+        lob_fields = [
+            int(getattr(stats, "best_bid", 0) or 0),
+            int(getattr(stats, "best_ask", 0) or 0),
+            int(getattr(stats, "mid_price_x2", 0) or 0),
+            int(getattr(stats, "spread_scaled", 0) or 0),
+            int(getattr(stats, "bid_depth", 0) or 0),
+            int(getattr(stats, "ask_depth", 0) or 0),
+            int(getattr(stats, "l1_bid_qty", 0) or 0),
+            int(getattr(stats, "l1_ask_qty", 0) or 0),
+            int(getattr(stats, "microprice_x2", 0) or 0),
+        ]
+
+        # Extract 16 features (pad with 0 if unavailable)
+        if feature_tuple is not None and len(feature_tuple) >= 16:
+            features = [int(v) for v in feature_tuple[:16]]
+        else:
+            features = [0] * 16
+
+        try:
+            publisher.publish(idx, ts_ns, sym_hash, lob_fields, features)
+        except Exception:
+            pass  # fire-and-forget — never block hot path
 
     def _init_feature_shadow_engine(self) -> None:
         if self.feature_engine is None:
@@ -548,6 +660,10 @@ class MarketDataService:
                     lob_start_ns = time.perf_counter_ns()
                     stats = self.lob.process_event(event)
                     feature_update = self._maybe_update_features(event, stats)
+                    if self._shm_publisher is not None and stats is not None:
+                        sym = getattr(event, "symbol", "")
+                        ft = self.feature_engine.get_feature_tuple(sym) if self.feature_engine is not None else None
+                        self._publish_to_shm(sym, stats, ft)
                     lob_duration = time.perf_counter_ns() - lob_start_ns
                     if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
                         self.latency.record(
@@ -610,6 +726,8 @@ class MarketDataService:
         finally:
             monitor_task.cancel()
             watchdog_task.cancel()
+            if self._monitor_live_publisher is not None:
+                self._monitor_live_publisher.close()
 
     async def _connect_sequence(self):
         try:
@@ -640,6 +758,10 @@ class MarketDataService:
                         continue
                     stats = self.lob.process_event(event)
                     feature_update = self._maybe_update_features(event, stats)
+                    if self._shm_publisher is not None and stats is not None:
+                        sym = getattr(event, "symbol", "")
+                        ft = self.feature_engine.get_feature_tuple(sym) if self.feature_engine is not None else None
+                        self._publish_to_shm(sym, stats, ft)
                     if self.publish_full_events:
                         if stats or feature_update:
                             payload = [event]
@@ -1200,6 +1322,8 @@ class MarketDataService:
         if not mapped:
             return
         topic, payload = mapped
+        if topic == "market_data" and self._monitor_live_publisher is not None:
+            self._monitor_live_publisher.publish_market_data(payload)
         if self._record_drop_on_full:
             try:
                 self.recorder_queue.put_nowait({"topic": topic, "data": payload})

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
 from hft_platform.core.market_calendar import get_calendar
 from hft_platform.observability.metrics import MetricsRegistry
 
@@ -99,7 +100,7 @@ class WALScheduler:
         Returns:
             Check interval in seconds
         """
-        now = dt.datetime.now(self._calendar._tz)
+        now = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._calendar._tz)
         today = now.date()
 
         # Non-trading day: check every hour
@@ -151,7 +152,7 @@ class WALScheduler:
 
     def _check_and_flush(self) -> None:
         """Check if we should trigger batch flush."""
-        now = dt.datetime.now(self._calendar._tz)
+        now = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._calendar._tz)
         today = now.date()
 
         # Skip if not a trading day

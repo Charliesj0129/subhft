@@ -1,0 +1,51 @@
+# Signal Monitor TUI — watchlist configuration
+# Symbols listed here will be tracked in the monitor dashboard.
+# Alpha IDs reference research/alphas/<alpha_id>/ implementations.
+
+monitor:
+  poll_interval_s: 2.0
+  warmup_ticks: 64
+  stale_threshold_s: 6.0
+  max_retries: 20
+
+  # --- Data Source Layer (transport) ---
+  # Controls HOW data reaches the monitor:
+  #   "ch"   — ClickHouse HTTP polling only (default, highest latency ~2s)
+  #   "shm"  — Shared memory snapshot only (lowest latency ~μs, no history)
+  #   "auto" — Try SHM+CH hybrid; fall back to CH if SHM unavailable
+  # Env override: HFT_MONITOR_DATA_SOURCE
+  data_source: auto
+
+  # --- Source Mode (for non-SHM transports) ---
+  # Controls which backend CHDataSource wraps:
+  #   "clickhouse" — poll ClickHouse directly (default)
+  #   "redis"      — poll Redis live cache only (requires engine publisher)
+  #   "hybrid"     — Redis for live ticks + CH for warmup/sparkline history
+  # Env override: HFT_MONITOR_SOURCE
+  # Requires HFT_MONITOR_LIVE_ENABLED=1 on the engine side for Redis publisher.
+  # source: hybrid
+
+  # --- Hybrid Backfill ---
+  # In hybrid modes (SHM+CH or Redis+CH), how often to fetch CH data
+  # for sparkline history while the live source is active (seconds).
+  # Env override: HFT_MONITOR_HYBRID_BACKFILL_INTERVAL_S
+  # hybrid_backfill_interval_s: 30.0
+
+  # --- Redis Settings ---
+  # redis_host: localhost
+  # redis_port: 6379
+  # redis_password: ""
+  # redis_key_prefix: "monitor:l1"
+  # redis_ring_size: 256
+
+symbols:
+  - code: TMFC6
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+  - code: "2330"
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+  - code: "2317"
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+  - code: "2454"
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
+  - code: "2881"
+    alpha_ids: [queue_imbalance, flow_mode_decomp, microprice_momentum]
