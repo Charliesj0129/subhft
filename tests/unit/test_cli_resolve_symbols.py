@@ -57,7 +57,7 @@ class TestCmdResolveSymbolsBrokerDispatch:
         """When HFT_BROKER is not set, defaults to shioaji."""
         monkeypatch.delenv("HFT_BROKER", raising=False)
         # Patch _resolve_symbols_shioaji to verify it's called
-        with mock.patch("hft_platform.cli._resolve_symbols_shioaji") as mock_shioaji:
+        with mock.patch("hft_platform.cli._symbols._resolve_symbols_shioaji") as mock_shioaji:
             from hft_platform.cli import cmd_resolve_symbols
 
             args = _make_args()

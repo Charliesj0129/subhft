@@ -5,24 +5,19 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Any
 
 from ._utils import _print_issues
 
 
-def cmd_resolve_symbols(args: argparse.Namespace) -> None:
-    """Resolve TSE/OTC exchanges for a list of symbols or from config."""
-    import shioaji as sj
-    import yaml
+def _resolve_symbols_shioaji(args: argparse.Namespace) -> None:
+    """Resolve TSE/OTC exchanges via Shioaji broker."""
 
     try:
-        from hft_platform.config.loader import load_settings
+        import shioaji as sj
     except ImportError:
+        print("Error: shioaji not installed. pip install shioaji")
+        sys.exit(1)
 
-        def load_settings(cli_overrides: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-            return {}, {}
-
-    # Get credentials
     api_key = os.environ.get("SHIOAJI_API_KEY")
     secret_key = os.environ.get("SHIOAJI_SECRET_KEY")
 
@@ -38,15 +33,13 @@ def cmd_resolve_symbols(args: argparse.Namespace) -> None:
         print(f"Login failed: {e}")
         sys.exit(1)
 
-    # Get symbols
     symbols = args.symbols
     if not symbols:
-        # Load from config/symbols.yaml or existing
         print("No symbols provided via args, please provide list.")
         sys.exit(1)
 
     print("Building contract map...")
-    code_map = {}
+    code_map: dict[str, str] = {}
     try:
         for c in api.Contracts.Stocks.TSE:
             code_map[c.code] = "TSE"
@@ -66,11 +59,30 @@ def cmd_resolve_symbols(args: argparse.Namespace) -> None:
     output_data = {"symbols": result}
 
     if args.output:
+        import yaml as _yaml
         with open(args.output, "w") as f:
-            yaml.dump(output_data, f, sort_keys=False)
+            _yaml.dump(output_data, f, sort_keys=False)
         print(f"Written to {args.output}")
     else:
-        print(yaml.dump(output_data, sort_keys=False))
+        import yaml as _yaml
+        print(_yaml.dump(output_data, sort_keys=False))
+
+
+def cmd_resolve_symbols(args: argparse.Namespace) -> None:
+    """Resolve TSE/OTC exchanges for a list of symbols (broker-agnostic)."""
+    broker = os.getenv("HFT_BROKER", "shioaji")
+
+    if broker == "shioaji":
+        _resolve_symbols_shioaji(args)
+    elif broker == "fubon":
+        print("Fubon resolve-symbols not yet implemented.")
+    else:
+        print(f"Error: unknown broker '{broker}'")
+        sys.exit(1)
+
+
+# Backward-compat alias: old monolithic cli.py had this as a standalone helper.
+_resolve_symbols_shioaji = cmd_resolve_symbols
 
 
 def cmd_symbols_build(args: argparse.Namespace) -> None:
