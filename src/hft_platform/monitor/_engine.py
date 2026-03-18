@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import signal
-import time
 from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
 from hft_platform.monitor._alpha_dispatcher import AlphaDispatcher
 from hft_platform.monitor._ch_poller import CHPoller
 from hft_platform.monitor._config_loader import load_watchlist
@@ -47,6 +47,8 @@ SORT_OPPORTUNITY = 0
 SORT_COMPOSITE = 1
 SORT_CONFIG = 2
 _SORT_LABELS = ("opportunity", "composite", "config")
+
+_SOURCE_MAP = {"ch": "clickhouse", "clickhouse": "clickhouse", "redis": "redis", "hybrid": "hybrid"}
 
 
 class MonitorEngine:
@@ -307,11 +309,11 @@ class MonitorEngine:
             rows_by_sym = self._data_source.poll(self._cursor_buf)
         except ConnectionError:
             self._state = MonitorState.DISCONNECTED
-            logger.warning("ch_disconnected", error=self._data_source.last_error)
+            logger.warning("source_disconnected", error=self._data_source.last_error)
             return
 
         # Process each symbol's rows
-        now_ns = time.time_ns()
+        now_ns = timebase.now_ns()
         warmup = self._config.warmup_ticks
         for ss in self._sym_states:
             # Phase 1: snapshot prev values before processing
@@ -553,7 +555,7 @@ class MonitorEngine:
         """Build event ticker string from ring buffer (most recent first, max 3)."""
         if self._event_ring_len == 0:
             return ""
-        now_ns = time.time_ns()
+        now_ns = timebase.now_ns()
         entries: list[str] = []
         n = min(self._event_ring_len, 3)
         for i in range(n):
@@ -628,7 +630,7 @@ class MonitorEngine:
         except NotImplementedError:
             rows = []
         if ss.session_active:
-            ss.session_started_ns = min_ingest_ts or time.time_ns()
+            ss.session_started_ns = min_ingest_ts or timebase.now_ns()
             ss.cursor_ts_ns = max(0, (min_ingest_ts - 1) if min_ingest_ts > 0 else 0)
         for row in rows:
             self._process_row(ss, row)
@@ -651,7 +653,7 @@ class MonitorEngine:
                     self._bootstrap_symbol(ss)
                 except ConnectionError:
                     self._state = MonitorState.DISCONNECTED
-                    logger.warning("ch_disconnected", error=self._data_source.last_error)
+                    logger.warning("source_disconnected", error=self._data_source.last_error)
                     return
 
     def _process_row(self, ss: SymbolState, row: RowView) -> None:
@@ -716,7 +718,7 @@ class MonitorEngine:
         """Build compact runtime summary for the header (single pass)."""
         warmup = self._config.warmup_ticks
         warn_s = self._config.no_data_warn_s
-        now_ns = time.time_ns()
+        now_ns = timebase.now_ns()
         ready = warming = no_data = stale_n = bad_rows = 0
 
         for ss in self._sym_states:
@@ -755,7 +757,6 @@ async def run_monitor(
 
     config = load_watchlist(watchlist_path, symbols_path)
     if source is not None:
-        _SOURCE_MAP = {"ch": "clickhouse", "clickhouse": "clickhouse", "redis": "redis", "hybrid": "hybrid"}
         effective = _SOURCE_MAP.get(source, "clickhouse")
         config = replace(config, source=effective)
     engine = MonitorEngine(config)

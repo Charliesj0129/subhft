@@ -95,7 +95,6 @@ class RedisPoller:
             self._check_heartbeat()
             latest_keys = [self._latest_key(symbol) for symbol in cursors]
             latest_values = self._client.request("MGET", *latest_keys)
-            self._retry_count = 0
             rows_by_symbol: dict[str, list[RowView]] = {symbol: [] for symbol in cursors}
             for symbol, latest_json in zip(cursors, latest_values, strict=False):
                 if not latest_json:
@@ -112,6 +111,7 @@ class RedisPoller:
                 rows = [self._decode_row(raw) for raw in (ring_values or []) if raw is not None]
                 rows.reverse()
                 rows_by_symbol[symbol] = [row for row in rows if row.ingest_ts > cursors[symbol]]
+            self._retry_count = 0
             return rows_by_symbol
         except Exception as exc:
             self._register_disconnect(str(exc))

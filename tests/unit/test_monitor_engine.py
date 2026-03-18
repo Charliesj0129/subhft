@@ -31,11 +31,15 @@ class _StubDispatcher:
 class _FakeDataSource:
     """Implements the DataSource protocol for testing."""
 
-    replay_rows: dict[str, list[RowView]] = {}
-    poll_batches: list[dict[str, list[RowView]] | Exception] = []
     reconnect_success = True
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        replay_rows: dict[str, list[RowView]] | None = None,
+        poll_batches: list | None = None,
+    ) -> None:
+        self.replay_rows = replay_rows if replay_rows is not None else {}
+        self.poll_batches = poll_batches if poll_batches is not None else []
         self._connected = False
         self._retry_count = 0
         self._last_error = "down"
@@ -115,13 +119,14 @@ def _session_start(*args, **kwargs) -> dt.datetime:
 def test_engine_initializes_with_replay_and_reaches_live(monkeypatch: pytest.MonkeyPatch) -> None:
     from hft_platform.monitor import _engine as engine_mod
 
-    fake_ds = _FakeDataSource()
-    _FakeDataSource.replay_rows = {"TMFC6": [_row(1), _row(2)]}
-    _FakeDataSource.poll_batches = [{"TMFC6": []}]
+    fake_ds = _FakeDataSource(
+        replay_rows={"TMFC6": [_row(1), _row(2)]},
+        poll_batches=[{"TMFC6": []}],
+    )
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
-    monkeypatch.setattr(engine_mod.time, "time_ns", lambda: 2)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 2)
 
     engine = MonitorEngine(_config())
     engine._dispatcher = _StubDispatcher()
@@ -134,15 +139,16 @@ def test_engine_initializes_with_replay_and_reaches_live(monkeypatch: pytest.Mon
 def test_engine_marks_stale_and_handles_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
     from hft_platform.monitor import _engine as engine_mod
 
-    fake_ds = _FakeDataSource()
-    _FakeDataSource.replay_rows = {"TMFC6": [_row(100)]}
-    _FakeDataSource.poll_batches = [{"TMFC6": []}]
+    fake_ds = _FakeDataSource(
+        replay_rows={"TMFC6": [_row(100)]},
+        poll_batches=[{"TMFC6": []}],
+    )
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
 
     now_values = iter([100, 8_000_000_000, 8_000_000_000, 8_000_000_000])
-    monkeypatch.setattr(engine_mod.time, "time_ns", lambda: next(now_values))
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: next(now_values))
 
     engine = MonitorEngine(_config(warmup_ticks=1, stale_threshold_s=6.0))
     engine._dispatcher = _StubDispatcher()
@@ -155,7 +161,7 @@ def test_engine_marks_stale_and_handles_disconnect(monkeypatch: pytest.MonkeyPat
     assert engine._sym_states[0].is_stale is True
 
     # Replace data source with a fresh fake that raises on poll
-    fake_ds2 = _FakeDataSource()
+    fake_ds2 = _FakeDataSource(replay_rows={"TMFC6": [_row(100)]})
     fake_ds2._connected = True
     engine._data_source = fake_ds2
     monkeypatch.setattr(fake_ds2, "poll", lambda cursors: (_ for _ in ()).throw(ConnectionError("down")))
@@ -171,9 +177,10 @@ def test_engine_marks_stale_and_handles_disconnect(monkeypatch: pytest.MonkeyPat
 def test_engine_pauses_when_all_symbols_are_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     from hft_platform.monitor import _engine as engine_mod
 
-    fake_ds = _FakeDataSource()
-    _FakeDataSource.replay_rows = {}
-    _FakeDataSource.poll_batches = [{"TMFC6": []}]
+    fake_ds = _FakeDataSource(
+        replay_rows={},
+        poll_batches=[{"TMFC6": []}],
+    )
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (False, "[CLOSED]", "Closed"))
     monkeypatch.setattr(engine_mod, "get_session_start", lambda *args, **kwargs: None)
@@ -201,13 +208,14 @@ def test_engine_skips_invalid_rows_without_crashing(monkeypatch: pytest.MonkeyPa
         volume=0,
     )
 
-    fake_ds = _FakeDataSource()
-    _FakeDataSource.replay_rows = {}
-    _FakeDataSource.poll_batches = [{"TMFC6": [invalid, _row(102)]}]
+    fake_ds = _FakeDataSource(
+        replay_rows={},
+        poll_batches=[{"TMFC6": [invalid, _row(102)]}],
+    )
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
-    monkeypatch.setattr(engine_mod.time, "time_ns", lambda: 102)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 102)
 
     engine = MonitorEngine(_config(warmup_ticks=1))
     engine._dispatcher = _StubDispatcher()
@@ -225,13 +233,14 @@ def test_engine_skips_invalid_rows_without_crashing(monkeypatch: pytest.MonkeyPa
 def test_engine_navigation_moves_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     from hft_platform.monitor import _engine as engine_mod
 
-    fake_ds = _FakeDataSource()
-    _FakeDataSource.replay_rows = {"TMFC6": [_row(1), _row(2)]}
-    _FakeDataSource.poll_batches = []
+    fake_ds = _FakeDataSource(
+        replay_rows={"TMFC6": [_row(1), _row(2)]},
+        poll_batches=[],
+    )
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
-    monkeypatch.setattr(engine_mod.time, "time_ns", lambda: 2)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 2)
 
     engine = MonitorEngine(_config())
     engine._dispatcher = _StubDispatcher()
@@ -253,14 +262,15 @@ def test_engine_initializes_with_redis_source(monkeypatch: pytest.MonkeyPatch) -
 
     redis_config = replace(_config(), source="redis", redis_host="127.0.0.1", redis_port=6379)
 
-    fake_ds = _FakeDataSource()
-    _FakeDataSource.replay_rows = {"TMFC6": [_row(1), _row(2)]}
-    _FakeDataSource.poll_batches = []
+    fake_ds = _FakeDataSource(
+        replay_rows={"TMFC6": [_row(1), _row(2)]},
+        poll_batches=[],
+    )
 
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
-    monkeypatch.setattr(engine_mod.time, "time_ns", lambda: 2)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 2)
 
     engine = MonitorEngine(redis_config)
     engine._dispatcher = _StubDispatcher()
@@ -275,13 +285,14 @@ def test_engine_initializes_with_redis_source(monkeypatch: pytest.MonkeyPatch) -
 def test_engine_sort_mode_cycles(monkeypatch: pytest.MonkeyPatch) -> None:
     from hft_platform.monitor import _engine as engine_mod
 
-    fake_ds = _FakeDataSource()
-    _FakeDataSource.replay_rows = {"TMFC6": [_row(1)]}
-    _FakeDataSource.poll_batches = []
+    fake_ds = _FakeDataSource(
+        replay_rows={"TMFC6": [_row(1)]},
+        poll_batches=[],
+    )
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
-    monkeypatch.setattr(engine_mod.time, "time_ns", lambda: 1)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 1)
 
     engine = MonitorEngine(_config(warmup_ticks=1))
     engine._dispatcher = _StubDispatcher()
@@ -312,9 +323,6 @@ def test_engine_initializes_with_hybrid_source(monkeypatch: pytest.MonkeyPatch) 
         redis_port=6379,
     )
 
-    _FakeDataSource.replay_rows = {"TMFC6": [_row(1), _row(2)]}
-    _FakeDataSource.poll_batches = []
-
     # Create a MagicMock that passes isinstance(ds, RedisHybridSource) check
     fake_ds = MagicMock(spec=RedisHybridSource)
     fake_ds.connected = True
@@ -323,7 +331,10 @@ def test_engine_initializes_with_hybrid_source(monkeypatch: pytest.MonkeyPatch) 
     fake_ds.mode_label = "REDIS+CH"
     fake_ds.remaining_backoff_seconds.return_value = 0.0
 
-    inner_fake = _FakeDataSource()
+    inner_fake = _FakeDataSource(
+        replay_rows={"TMFC6": [_row(1), _row(2)]},
+        poll_batches=[],
+    )
     fake_ds.connect.side_effect = lambda: None
     fake_ds.poll.side_effect = inner_fake.poll
     fake_ds.fetch_recent_valid.side_effect = inner_fake.fetch_recent_valid
@@ -331,7 +342,7 @@ def test_engine_initializes_with_hybrid_source(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
-    monkeypatch.setattr(engine_mod.time, "time_ns", lambda: 2)
+    monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 2)
 
     engine = MonitorEngine(hybrid_config)
     engine._dispatcher = _StubDispatcher()

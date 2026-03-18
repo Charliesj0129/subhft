@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import math
-import time
 
 from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
 
+from hft_platform.core import timebase
 from hft_platform.monitor._events import _ALPHA_SHORT, dominant_alpha_label
 from hft_platform.monitor._types import MonitorConfig, SymbolState
 
@@ -38,7 +38,7 @@ def build_detail_panel(
             height=8,
         )
 
-    now_ns = time.time_ns()
+    now_ns = timebase.now_ns()
     lines = Text()
 
     # Line 1: L1 quote

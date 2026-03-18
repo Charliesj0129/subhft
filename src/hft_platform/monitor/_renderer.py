@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import math
-import time
 from typing import Sequence
 
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
+from hft_platform.core import timebase
 from hft_platform.monitor._events import _ALPHA_SHORT, dominant_alpha_label
 from hft_platform.monitor._types import AlphaState, HeaderContext, MonitorConfig, MonitorState, SymbolState
 
@@ -133,7 +133,7 @@ def build_table(
     table.add_column("Drivers", justify="center", width=8)
     table.add_column("Spark", width=20)
 
-    now_ns = time.time_ns()
+    now_ns = timebase.now_ns()
 
     for rank, ss in enumerate(symbol_states, 1):
         row: list[Text] = []
@@ -528,7 +528,7 @@ def _render_symbol_status(
     """Render compact per-symbol runtime status (Phase 2: compact badges).
 
     ``now_ns`` is pre-computed once per render cycle to avoid per-row syscalls.
-    Falls back to ``time.time_ns()`` when not provided (backward compat).
+    Falls back to ``timebase.now_ns()`` when not provided (backward compat).
     """
     if state == MonitorState.DISCONNECTED:
         return "!CH", _ERROR_STYLE
@@ -537,7 +537,7 @@ def _render_symbol_status(
     if ss.session_label == "[PRE]":
         return "PRE", _DIM
     if ss.is_stale and ss.last_update_ns > 0:
-        ts = now_ns or time.time_ns()
+        ts = now_ns or timebase.now_ns()
         age_s = max(0.0, (ts - ss.last_update_ns) / 1e9)
         return f"S{age_s:.0f}s", Style(color="yellow", bold=True)
     if ss.tick_count >= config.warmup_ticks:
@@ -547,7 +547,7 @@ def _render_symbol_status(
     if ss.session_active and ss.invalid_row_count > 0:
         return "!L1", _YELLOW
     if ss.session_active and ss.session_started_ns > 0:
-        ts = now_ns or time.time_ns()
+        ts = now_ns or timebase.now_ns()
         age_s = (ts - ss.session_started_ns) / 1e9
         if age_s >= config.no_data_warn_s:
             return "NO DATA", _YELLOW

@@ -8,11 +8,11 @@ Three concrete implementations:
 
 from __future__ import annotations
 
-import time
 from typing import Any, Protocol
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
 from hft_platform.monitor._types import (
     CH_PRICE_SCALE,
     PLATFORM_SCALE,
@@ -295,7 +295,7 @@ class HybridDataSource:
         """Best-effort CH backfill for sparkline history."""
         if not self._ch_ok:
             return
-        now_ns = time.time_ns()
+        now_ns = timebase.now_ns()
         if now_ns - self._last_backfill_ns < int(self._backfill_interval_s * 1_000_000_000):
             return
         self._last_backfill_ns = now_ns
@@ -435,7 +435,7 @@ class RedisHybridSource:
         """Best-effort CH backfill for sparkline history."""
         if not self._ch_ok:
             return
-        now_ns = time.time_ns()
+        now_ns = timebase.now_ns()
         if now_ns - self._last_backfill_ns < int(self._backfill_interval_s * 1_000_000_000):
             return
         self._last_backfill_ns = now_ns
