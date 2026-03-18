@@ -224,11 +224,11 @@ class ReconnectOrchestrator:
             from hft_platform.core.market_calendar import get_calendar
 
             calendar = get_calendar()
-            now_dt = dt.datetime.now(calendar._tz)
+            now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
             return calendar.is_trading_hours(now_dt)
         except Exception:
             # Conservative fallback: weekdays 09:00-13:30 Asia/Taipei.
-            now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+            now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
                 return False
             minute = now_dt.hour * 60 + now_dt.minute
