@@ -161,7 +161,7 @@ class ContractsRuntime:
         return candidates
 
     def _resolve_year_from_digit(self, digit: int) -> int:
-        now_year = dt.datetime.now(timebase.TZINFO).year
+        now_year = dt.datetime.fromtimestamp(timebase.now_s(), tz=timebase.TZINFO).year
         base = (now_year // 10) * 10 + digit
         if base < now_year - 1:
             base += 10
@@ -307,7 +307,7 @@ class ContractsRuntime:
             dt = datetime.datetime.fromisoformat(updated_at)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=datetime.timezone.utc)
-            age_s = (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds()
+            age_s = (datetime.datetime.fromtimestamp(timebase.now_s(), tz=datetime.timezone.utc) - dt).total_seconds()
             return age_s > self._client._contract_refresh_s
         except Exception as exc:
             logger.warning("Cannot parse contract cache for staleness check", error=str(exc))
