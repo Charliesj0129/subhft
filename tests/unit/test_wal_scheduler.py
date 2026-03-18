@@ -95,6 +95,11 @@ def test_wal_scheduler_check_and_flush_non_trading_day():
     mock_loader.process_files.assert_not_called()
 
 
+def _epoch_s(d: dt.datetime) -> float:
+    """Convert a datetime to epoch seconds for mocking timebase.now_s."""
+    return d.timestamp()
+
+
 def test_wal_scheduler_check_and_flush_before_close():
     """Test _check_and_flush does not flush before close time."""
     from hft_platform.recorder.wal_scheduler import WALScheduler
@@ -113,11 +118,9 @@ def test_wal_scheduler_check_and_flush_before_close():
     scheduler._calendar = mock_calendar
 
     # Freeze time to before trigger
-    with patch("hft_platform.recorder.wal_scheduler.dt") as mock_dt:
-        now = dt.datetime(2026, 2, 11, 13, 0, tzinfo=dt.timezone.utc)
-        mock_dt.datetime.now.return_value = now
-        mock_dt.timedelta = dt.timedelta
-
+    now = dt.datetime(2026, 2, 11, 13, 0, tzinfo=dt.timezone.utc)
+    with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
+        mock_tb.now_s.return_value = _epoch_s(now)
         scheduler._check_and_flush()
 
     mock_loader.process_files.assert_not_called()
@@ -140,11 +143,10 @@ def test_wal_scheduler_check_and_flush_after_close():
     scheduler._calendar = mock_calendar
 
     # Freeze time to after trigger (13:36 > 13:35)
-    with patch("hft_platform.recorder.wal_scheduler.dt") as mock_dt:
-        now = dt.datetime(2026, 2, 11, 13, 36, tzinfo=dt.timezone.utc)
-        mock_dt.datetime.now.return_value = now
-        mock_dt.timedelta = dt.timedelta
-
+    now = dt.datetime(2026, 2, 11, 13, 36, tzinfo=dt.timezone.utc)
+    with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
+        mock_tb.now_s.return_value = _epoch_s(now)
+        mock_tb.perf_ns.return_value = 0
         scheduler._check_and_flush()
 
     mock_loader.process_files.assert_called_once_with(force=True)
@@ -170,11 +172,9 @@ def test_wal_scheduler_no_double_flush():
     # Set already flushed today
     scheduler._last_flush_date = dt.date(2026, 2, 11)
 
-    with patch("hft_platform.recorder.wal_scheduler.dt") as mock_dt:
-        now = dt.datetime(2026, 2, 11, 14, 0, tzinfo=dt.timezone.utc)
-        mock_dt.datetime.now.return_value = now
-        mock_dt.timedelta = dt.timedelta
-
+    now = dt.datetime(2026, 2, 11, 14, 0, tzinfo=dt.timezone.utc)
+    with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
+        mock_tb.now_s.return_value = _epoch_s(now)
         scheduler._check_and_flush()
 
     mock_loader.process_files.assert_not_called()
@@ -279,10 +279,9 @@ def test_adaptive_check_interval_non_trading_day():
     mock_calendar._tz = dt.timezone.utc
     scheduler._calendar = mock_calendar
 
-    with patch("hft_platform.recorder.wal_scheduler.dt") as mock_dt:
-        mock_dt.datetime.now.return_value = dt.datetime(2026, 2, 14, 10, 0, tzinfo=dt.timezone.utc)
-        mock_dt.timedelta = dt.timedelta
-
+    now = dt.datetime(2026, 2, 14, 10, 0, tzinfo=dt.timezone.utc)
+    with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
+        mock_tb.now_s.return_value = _epoch_s(now)
         interval = scheduler._get_check_interval()
 
     assert interval == 3600.0
@@ -305,10 +304,9 @@ def test_adaptive_check_interval_trading_hours():
     scheduler._calendar = mock_calendar
 
     # During trading hours (10:00)
-    with patch("hft_platform.recorder.wal_scheduler.dt") as mock_dt:
-        mock_dt.datetime.now.return_value = dt.datetime(2026, 2, 16, 10, 0, tzinfo=dt.timezone.utc)
-        mock_dt.timedelta = dt.timedelta
-
+    now = dt.datetime(2026, 2, 16, 10, 0, tzinfo=dt.timezone.utc)
+    with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
+        mock_tb.now_s.return_value = _epoch_s(now)
         interval = scheduler._get_check_interval()
 
     assert interval == 60.0
@@ -331,10 +329,9 @@ def test_adaptive_check_interval_pre_market():
     scheduler._calendar = mock_calendar
 
     # Pre-market (8:30 - within 1 hour before open)
-    with patch("hft_platform.recorder.wal_scheduler.dt") as mock_dt:
-        mock_dt.datetime.now.return_value = dt.datetime(2026, 2, 16, 8, 30, tzinfo=dt.timezone.utc)
-        mock_dt.timedelta = dt.timedelta
-
+    now = dt.datetime(2026, 2, 16, 8, 30, tzinfo=dt.timezone.utc)
+    with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
+        mock_tb.now_s.return_value = _epoch_s(now)
         interval = scheduler._get_check_interval()
 
     assert interval == 300.0
@@ -358,10 +355,9 @@ def test_adaptive_check_interval_post_close_buffer():
     scheduler._calendar = mock_calendar
 
     # Post-close buffer (13:35 - 5 minutes after close)
-    with patch("hft_platform.recorder.wal_scheduler.dt") as mock_dt:
-        mock_dt.datetime.now.return_value = dt.datetime(2026, 2, 16, 13, 35, tzinfo=dt.timezone.utc)
-        mock_dt.timedelta = dt.timedelta
-
+    now = dt.datetime(2026, 2, 16, 13, 35, tzinfo=dt.timezone.utc)
+    with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
+        mock_tb.now_s.return_value = _epoch_s(now)
         interval = scheduler._get_check_interval()
 
     assert interval == 60.0
@@ -385,10 +381,9 @@ def test_adaptive_check_interval_after_buffer():
     scheduler._calendar = mock_calendar
 
     # Well after buffer (15:00)
-    with patch("hft_platform.recorder.wal_scheduler.dt") as mock_dt:
-        mock_dt.datetime.now.return_value = dt.datetime(2026, 2, 16, 15, 0, tzinfo=dt.timezone.utc)
-        mock_dt.timedelta = dt.timedelta
-
+    now = dt.datetime(2026, 2, 16, 15, 0, tzinfo=dt.timezone.utc)
+    with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
+        mock_tb.now_s.return_value = _epoch_s(now)
         interval = scheduler._get_check_interval()
 
     assert interval == 3600.0

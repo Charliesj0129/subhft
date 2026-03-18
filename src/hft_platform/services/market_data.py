@@ -274,17 +274,21 @@ class MarketDataService:
         _live_tap = os.getenv("HFT_MONITOR_LIVE_ENABLED", os.getenv("HFT_MONITOR_REDIS_TAP", "0"))
         if _live_tap.lower() in {"1", "true", "yes", "on"}:
             try:
+                _redis_host: str = (
+                    os.getenv("HFT_MONITOR_REDIS_HOST")
+                    or os.getenv("HFT_REDIS_HOST")
+                    or os.getenv("REDIS_HOST", "redis")
+                    or "redis"
+                )
+                _redis_port: str = (
+                    os.getenv("HFT_MONITOR_REDIS_PORT")
+                    or os.getenv("HFT_REDIS_PORT")
+                    or os.getenv("REDIS_PORT", "6379")
+                    or "6379"
+                )
                 self._monitor_live_publisher = MonitorLivePublisher(
-                    host=(
-                        os.getenv("HFT_MONITOR_REDIS_HOST")
-                        or os.getenv("HFT_REDIS_HOST")
-                        or os.getenv("REDIS_HOST", "redis")
-                    ),
-                    port=int(
-                        os.getenv("HFT_MONITOR_REDIS_PORT")
-                        or os.getenv("HFT_REDIS_PORT")
-                        or os.getenv("REDIS_PORT", "6379")
-                    ),
+                    host=_redis_host,
+                    port=int(_redis_port),
                     password=os.getenv("HFT_MONITOR_REDIS_PASSWORD")
                     or os.getenv("HFT_REDIS_PASSWORD")
                     or os.getenv("REDIS_PASSWORD")
