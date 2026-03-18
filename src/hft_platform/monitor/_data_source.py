@@ -8,11 +8,11 @@ Three concrete implementations:
 
 from __future__ import annotations
 
+import time
 from typing import Any, Protocol
 
 from structlog import get_logger
 
-from hft_platform.core import timebase
 from hft_platform.monitor._types import (
     CH_PRICE_SCALE,
     PLATFORM_SCALE,
@@ -89,6 +89,10 @@ class CHDataSource:
 
     def remaining_backoff_seconds(self) -> float:
         return self._poller.remaining_backoff_seconds()
+
+    @property
+    def heartbeat_stale(self) -> bool:
+        return getattr(self._poller, "heartbeat_stale", False)
 
 
 # Scale factor: SHM uses platform x10000, CH uses x1000000
@@ -195,8 +199,9 @@ class ShmDataSource:
         from hft_platform.ipc.shm_snapshot import _symbol_hash
 
         target_hash = _symbol_hash(sym)
+        occupied = set(self._symbol_to_slot.values())
         for slot_idx in range(self._reader.max_symbols):
-            if slot_idx in {v for v in self._symbol_to_slot.values()}:
+            if slot_idx in occupied:
                 continue
             snap = self._reader.read_slot(slot_idx)
             if snap is not None and snap.symbol_hash == target_hash:
@@ -295,7 +300,7 @@ class HybridDataSource:
         """Best-effort CH backfill for sparkline history."""
         if not self._ch_ok:
             return
-        now_ns = timebase.now_ns()
+        now_ns = time.monotonic_ns()
         if now_ns - self._last_backfill_ns < int(self._backfill_interval_s * 1_000_000_000):
             return
         self._last_backfill_ns = now_ns
@@ -435,7 +440,7 @@ class RedisHybridSource:
         """Best-effort CH backfill for sparkline history."""
         if not self._ch_ok:
             return
-        now_ns = timebase.now_ns()
+        now_ns = time.monotonic_ns()
         if now_ns - self._last_backfill_ns < int(self._backfill_interval_s * 1_000_000_000):
             return
         self._last_backfill_ns = now_ns
@@ -498,6 +503,10 @@ class RedisHybridSource:
 
     def remaining_backoff_seconds(self) -> float:
         return self._ch.remaining_backoff_seconds()
+
+    @property
+    def heartbeat_stale(self) -> bool:
+        return getattr(self._redis, "heartbeat_stale", False)
 
     @property
     def mode_label(self) -> str:

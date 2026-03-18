@@ -39,6 +39,9 @@ class RedisPoller:
         "_ring_size",
         "_batch_limit",
         "_heartbeat_stale",
+        "_hb_key",
+        "_latest_keys_cache",
+        "_ring_keys_cache",
     )
 
     def __init__(
@@ -62,6 +65,14 @@ class RedisPoller:
         self._ring_size = max(1, int(ring_size))
         self._batch_limit = max(1, int(batch_limit))
         self._heartbeat_stale = False
+        # Pre-compute keys
+        self._hb_key = f"{self._key_prefix}:heartbeat"
+        self._latest_keys_cache: dict[str, str] = {
+            s: f"{self._key_prefix}:latest:{s}" for s in symbols
+        }
+        self._ring_keys_cache: dict[str, str] = {
+            s: f"{self._key_prefix}:ring:{s}" for s in symbols
+        }
 
     def connect(self) -> None:
         self._client.connect()
@@ -92,25 +103,46 @@ class RedisPoller:
         if not cursors:
             return {}
         try:
-            self._check_heartbeat()
-            latest_keys = [self._latest_key(symbol) for symbol in cursors]
-            latest_values = self._client.request("MGET", *latest_keys)
-            rows_by_symbol: dict[str, list[RowView]] = {symbol: [] for symbol in cursors}
-            for symbol, latest_json in zip(cursors, latest_values, strict=False):
+            # Merge heartbeat GET into MGET: prepend heartbeat key
+            symbols = list(cursors)
+            latest_keys = [self._latest_key(s) for s in symbols]
+            mget_keys = [self._hb_key, *latest_keys]
+            mget_values = self._client.request("MGET", *mget_keys)
+
+            # Extract heartbeat (first value) and process
+            self._parse_heartbeat(mget_values[0] if mget_values else None)
+            latest_values = mget_values[1:] if mget_values else []
+
+            # Identify symbols needing ring fetch
+            rows_by_symbol: dict[str, list[RowView]] = {s: [] for s in symbols}
+            ring_limit = str(min(self._batch_limit, self._ring_size) - 1)
+            need_ring: list[str] = []
+            for symbol, latest_json in zip(symbols, latest_values, strict=False):
                 if not latest_json:
                     continue
                 latest = self._decode_row(latest_json)
                 if latest.ingest_ts <= cursors[symbol]:
                     continue
-                ring_values = self._client.request(
-                    "LRANGE",
-                    self._ring_key(symbol),
-                    "0",
-                    str(min(self._batch_limit, self._ring_size) - 1),
+                need_ring.append(symbol)
+
+            # Batch all LRANGE via pipeline (1 round-trip)
+            if need_ring:
+                pipe_cmds = tuple(
+                    ("LRANGE", self._ring_key(s), "0", ring_limit)
+                    for s in need_ring
                 )
-                rows = [self._decode_row(raw) for raw in (ring_values or []) if raw is not None]
-                rows.reverse()
-                rows_by_symbol[symbol] = [row for row in rows if row.ingest_ts > cursors[symbol]]
+                pipe_results = self._client.pipeline(*pipe_cmds)
+                for symbol, ring_values in zip(need_ring, pipe_results, strict=False):
+                    cursor = cursors[symbol]
+                    rows: list[RowView] = []
+                    for raw in reversed(ring_values or []):
+                        if raw is None:
+                            continue
+                        row = self._decode_row(raw)
+                        if row.ingest_ts > cursor:
+                            rows.append(row)
+                    rows_by_symbol[symbol] = rows
+
             self._retry_count = 0
             return rows_by_symbol
         except Exception as exc:
