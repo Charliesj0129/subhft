@@ -105,4 +105,3 @@ class RedisClient:
         except (socket.error, ConnectionResetError, BrokenPipeError, OSError) as exc:
             self.close()
             raise RuntimeError(f"redis connection lost: {exc}") from exc
-

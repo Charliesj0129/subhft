@@ -51,10 +51,10 @@ def load_watchlist(
     no_data_warn_s = float(monitor_cfg.get("no_data_warn_s", 10.0))
     max_retries = int(monitor_cfg.get("max_retries", 20))
     source = (
-        os.getenv("HFT_MONITOR_SOURCE")
-        or os.getenv("MONITOR_SOURCE")
-        or str(monitor_cfg.get("source", "clickhouse"))
-    ).strip().lower()
+        (os.getenv("HFT_MONITOR_SOURCE") or os.getenv("MONITOR_SOURCE") or str(monitor_cfg.get("source", "clickhouse")))
+        .strip()
+        .lower()
+    )
     batch_limit_per_symbol = int(
         os.getenv("HFT_MONITOR_BATCH_LIMIT_PER_SYMBOL")
         or os.getenv("MONITOR_BATCH_LIMIT_PER_SYMBOL")
@@ -78,14 +78,10 @@ def load_watchlist(
         os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or monitor_cfg.get("ch_password", "")
     )
     redis_host = (
-        os.getenv("HFT_MONITOR_REDIS_HOST")
-        or os.getenv("REDIS_HOST")
-        or monitor_cfg.get("redis_host", "localhost")
+        os.getenv("HFT_MONITOR_REDIS_HOST") or os.getenv("REDIS_HOST") or monitor_cfg.get("redis_host", "localhost")
     )
     redis_port = int(
-        os.getenv("HFT_MONITOR_REDIS_PORT")
-        or os.getenv("REDIS_PORT")
-        or str(monitor_cfg.get("redis_port", 6379))
+        os.getenv("HFT_MONITOR_REDIS_PORT") or os.getenv("REDIS_PORT") or str(monitor_cfg.get("redis_port", 6379))
     )
     redis_password = (
         os.getenv("HFT_MONITOR_REDIS_PASSWORD")
@@ -94,21 +90,13 @@ def load_watchlist(
         or monitor_cfg.get("redis_password", "")
     )
     redis_key_prefix = str(
-        os.getenv("HFT_MONITOR_REDIS_KEY_PREFIX")
-        or monitor_cfg.get("redis_key_prefix", "monitor:l1")
+        os.getenv("HFT_MONITOR_REDIS_KEY_PREFIX") or monitor_cfg.get("redis_key_prefix", "monitor:l1")
     )
-    redis_ring_size = int(
-        os.getenv("HFT_MONITOR_REDIS_RING_SIZE")
-        or monitor_cfg.get("redis_ring_size", 256)
-    )
+    redis_ring_size = int(os.getenv("HFT_MONITOR_REDIS_RING_SIZE") or monitor_cfg.get("redis_ring_size", 256))
     promotions_dir = monitor_cfg.get("promotions_dir", "config/strategy_promotions")
-    data_source = (
-        os.getenv("HFT_MONITOR_DATA_SOURCE")
-        or str(monitor_cfg.get("data_source", "auto"))
-    ).strip().lower()
+    data_source = (os.getenv("HFT_MONITOR_DATA_SOURCE") or str(monitor_cfg.get("data_source", "auto"))).strip().lower()
     hybrid_backfill_interval_s = float(
-        os.getenv("HFT_MONITOR_HYBRID_BACKFILL_INTERVAL_S")
-        or monitor_cfg.get("hybrid_backfill_interval_s", 30.0)
+        os.getenv("HFT_MONITOR_HYBRID_BACKFILL_INTERVAL_S") or monitor_cfg.get("hybrid_backfill_interval_s", 30.0)
     )
 
     # Parse symbols

@@ -13,8 +13,10 @@ def run_cli(
     """Run the monitor TUI from the main CLI."""
     from hft_platform.monitor._engine import run_monitor
 
-    return asyncio.run(run_monitor(
-        watchlist_path=watchlist_path,
-        symbols_path=symbols_path,
-        source=source,
-    ))
+    return asyncio.run(
+        run_monitor(
+            watchlist_path=watchlist_path,
+            symbols_path=symbols_path,
+            source=source,
+        )
+    )

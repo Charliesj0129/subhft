@@ -43,11 +43,13 @@ def cmd_monitor(args: argparse.Namespace):
     except ImportError as exc:
         print(f"Monitor dependencies missing (pip install -e '.[monitor]'): {exc}")
         raise SystemExit(1) from exc
-    raise SystemExit(run_cli(
-        watchlist_path=args.watchlist,
-        symbols_path=args.symbols_path,
-        source=getattr(args, "source", None),
-    ))
+    raise SystemExit(
+        run_cli(
+            watchlist_path=args.watchlist,
+            symbols_path=args.symbols_path,
+            source=getattr(args, "source", None),
+        )
+    )
 
 
 def cmd_run(args: argparse.Namespace):

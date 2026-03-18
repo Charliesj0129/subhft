@@ -652,11 +652,7 @@ class MarketDataService:
                     feature_update = self._maybe_update_features(event, stats)
                     if self._shm_publisher is not None and stats is not None:
                         sym = getattr(event, "symbol", "")
-                        ft = (
-                            self.feature_engine.get_feature_tuple(sym)
-                            if self.feature_engine is not None
-                            else None
-                        )
+                        ft = self.feature_engine.get_feature_tuple(sym) if self.feature_engine is not None else None
                         self._publish_to_shm(sym, stats, ft)
                     lob_duration = time.perf_counter_ns() - lob_start_ns
                     if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
@@ -754,11 +750,7 @@ class MarketDataService:
                     feature_update = self._maybe_update_features(event, stats)
                     if self._shm_publisher is not None and stats is not None:
                         sym = getattr(event, "symbol", "")
-                        ft = (
-                            self.feature_engine.get_feature_tuple(sym)
-                            if self.feature_engine is not None
-                            else None
-                        )
+                        ft = self.feature_engine.get_feature_tuple(sym) if self.feature_engine is not None else None
                         self._publish_to_shm(sym, stats, ft)
                     if self.publish_full_events:
                         if stats or feature_update:

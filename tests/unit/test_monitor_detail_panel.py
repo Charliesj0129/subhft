@@ -11,14 +11,18 @@ from hft_platform.monitor._types import AlphaState, MonitorConfig, SymbolState, 
 
 
 def _config() -> MonitorConfig:
-    ws = WatchlistSymbol(code="2330", name="台積電", product_type="stock", alpha_ids=("queue_imbalance", "microprice_momentum"))
+    ws = WatchlistSymbol(
+        code="2330", name="台積電", product_type="stock", alpha_ids=("queue_imbalance", "microprice_momentum")
+    )
     return MonitorConfig(symbols=(ws,))
 
 
 def _ss() -> SymbolState:
     ss = SymbolState(
         symbol=WatchlistSymbol(
-            code="2330", name="台積電", product_type="stock",
+            code="2330",
+            name="台積電",
+            product_type="stock",
             alpha_ids=("queue_imbalance", "microprice_momentum"),
         ),
         tick_count=200,

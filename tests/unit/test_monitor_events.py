@@ -113,7 +113,9 @@ def test_dominant_alpha_label_returns_top2() -> None:
 def test_dominant_alpha_label_returns_all_when_all_aligned() -> None:
     ss = SymbolState(
         symbol=WatchlistSymbol(
-            code="2330", name="台積電", product_type="stock",
+            code="2330",
+            name="台積電",
+            product_type="stock",
             alpha_ids=("queue_imbalance", "microprice_momentum", "flow_mode_decomp"),
         ),
         tick_count=64,

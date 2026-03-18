@@ -126,7 +126,7 @@ def test_second_tick_produces_nonzero_ofi() -> None:
         bids_price=[210_000_000],
         asks_price=[210_500_000],
         bids_vol=[120],  # +20
-        asks_vol=[70],   # -10
+        asks_vol=[70],  # -10
         price_scaled=0,
         volume=0,
     )
@@ -139,16 +139,18 @@ def test_second_tick_produces_nonzero_ofi() -> None:
 
 def test_empty_book_fails_validation() -> None:
     """A row with empty book from a bad publisher should fail validation."""
-    bad_json = json.dumps({
-        "symbol": "2330",
-        "ingest_ts": 1000,
-        "bids_price": [],
-        "asks_price": [],
-        "bids_vol": [],
-        "asks_vol": [],
-        "price_scaled": 0,
-        "volume": 0,
-    })
+    bad_json = json.dumps(
+        {
+            "symbol": "2330",
+            "ingest_ts": 1000,
+            "bids_price": [],
+            "asks_price": [],
+            "bids_vol": [],
+            "asks_vol": [],
+            "price_scaled": 0,
+            "volume": 0,
+        }
+    )
     row = RedisPoller._decode_row(bad_json)
     reason = validate_l1_row(row)
     assert reason is not None
@@ -161,5 +163,14 @@ def test_publisher_payload_field_completeness() -> None:
     json_str = _publisher_json(payload)
     decoded = json.loads(json_str)
 
-    required_fields = {"symbol", "ingest_ts", "bids_price", "asks_price", "bids_vol", "asks_vol", "price_scaled", "volume"}
+    required_fields = {
+        "symbol",
+        "ingest_ts",
+        "bids_price",
+        "asks_price",
+        "bids_vol",
+        "asks_vol",
+        "price_scaled",
+        "volume",
+    }
     assert required_fields.issubset(set(decoded.keys())), f"Missing: {required_fields - set(decoded.keys())}"

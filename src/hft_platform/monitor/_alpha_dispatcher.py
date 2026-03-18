@@ -66,9 +66,7 @@ class AlphaDispatcher:
 
         # Load promotion weights and pre-filter weighted IDs
         self._weights = _load_promotion_weights(promotions_dir)
-        self._weighted_ids = tuple(
-            aid for aid in self._alpha_ids if self._weights.get(aid, 0.0) > 0
-        )
+        self._weighted_ids = tuple(aid for aid in self._alpha_ids if self._weights.get(aid, 0.0) > 0)
         logger.info(
             "alphas_loaded",
             loaded=loaded,

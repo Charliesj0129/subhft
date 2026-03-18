@@ -109,11 +109,7 @@ class RedisPoller:
                     "0",
                     str(min(self._batch_limit, self._ring_size) - 1),
                 )
-                rows = [
-                    self._decode_row(raw)
-                    for raw in (ring_values or [])
-                    if raw is not None
-                ]
+                rows = [self._decode_row(raw) for raw in (ring_values or []) if raw is not None]
                 rows.reverse()
                 rows_by_symbol[symbol] = [row for row in rows if row.ingest_ts > cursors[symbol]]
             return rows_by_symbol
@@ -135,11 +131,7 @@ class RedisPoller:
                 str(min(max(1, int(limit)), self._ring_size) - 1),
             )
             self._retry_count = 0
-            rows = [
-                self._decode_row(raw)
-                for raw in (ring_values or [])
-                if raw is not None
-            ]
+            rows = [self._decode_row(raw) for raw in (ring_values or []) if raw is not None]
             rows.reverse()
             return [row for row in rows if row.ingest_ts >= min_ingest_ts]
         except Exception as exc:
@@ -148,9 +140,7 @@ class RedisPoller:
 
     def try_reconnect(self) -> bool:
         if self._retry_count >= self._max_retries:
-            raise RuntimeError(
-                f"Redis reconnection failed after {self._max_retries} attempts: {self._last_error}"
-            )
+            raise RuntimeError(f"Redis reconnection failed after {self._max_retries} attempts: {self._last_error}")
         if self.remaining_backoff_seconds() > 0:
             return False
         try:
@@ -161,7 +151,7 @@ class RedisPoller:
             return False
 
     def get_backoff_seconds(self) -> float:
-        return min(2 ** self._retry_count, 30)
+        return min(2**self._retry_count, 30)
 
     def remaining_backoff_seconds(self) -> float:
         return max(0.0, self._next_retry_at - time.monotonic())

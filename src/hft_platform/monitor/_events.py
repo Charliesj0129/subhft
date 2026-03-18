@@ -115,9 +115,7 @@ def dominant_alpha_label(ss: SymbolState) -> str:
     if not aligned:
         return ""
 
-    total_active = sum(
-        1 for a in ss.alpha_states.values() if not a.disabled and not math.isnan(a.signal)
-    )
+    total_active = sum(1 for a in ss.alpha_states.values() if not a.disabled and not math.isnan(a.signal))
     if len(aligned) == total_active and total_active > 2:
         return "all"
 

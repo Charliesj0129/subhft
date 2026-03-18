@@ -31,8 +31,8 @@ class SnapshotSlot:
     version: int
     ts_ns: int
     symbol_hash: int
-    lob_fields: tuple[int, ...]   # 9 LOB stats (platform x10000 convention)
-    features: tuple[int, ...]     # 16 feature values
+    lob_fields: tuple[int, ...]  # 9 LOB stats (platform x10000 convention)
+    features: tuple[int, ...]  # 16 feature values
 
 
 def _symbol_hash(symbol: str) -> int:

@@ -125,8 +125,11 @@ def test_data_source_skips_unchanged_version(shm_name: str) -> None:
 
     writer = ShmSnapshotWriter(shm_name, max_symbols=4)
     writer.publish(
-        slot_idx=0, ts_ns=ts, symbol_hash=_symbol_hash(sym),
-        lob_fields=_make_lob_fields(), features=_make_features(),
+        slot_idx=0,
+        ts_ns=ts,
+        symbol_hash=_symbol_hash(sym),
+        lob_fields=_make_lob_fields(),
+        features=_make_features(),
     )
 
     ds = ShmDataSource(shm_name=shm_name, max_symbols=4, symbols=(sym,))
@@ -152,8 +155,11 @@ def test_data_source_discovers_new_symbol(shm_name: str) -> None:
     writer = ShmSnapshotWriter(shm_name, max_symbols=4)
     # Only sym_a exists at init time
     writer.publish(
-        slot_idx=0, ts_ns=ts, symbol_hash=_symbol_hash(sym_a),
-        lob_fields=_make_lob_fields(), features=_make_features(),
+        slot_idx=0,
+        ts_ns=ts,
+        symbol_hash=_symbol_hash(sym_a),
+        lob_fields=_make_lob_fields(),
+        features=_make_features(),
     )
 
     ds = ShmDataSource(shm_name=shm_name, max_symbols=4, symbols=(sym_a, sym_b))
@@ -162,8 +168,11 @@ def test_data_source_discovers_new_symbol(shm_name: str) -> None:
 
     # Publish sym_b after init
     writer.publish(
-        slot_idx=1, ts_ns=ts + 1, symbol_hash=_symbol_hash(sym_b),
-        lob_fields=_make_lob_fields(3000000, 3001000), features=_make_features(),
+        slot_idx=1,
+        ts_ns=ts + 1,
+        symbol_hash=_symbol_hash(sym_b),
+        lob_fields=_make_lob_fields(3000000, 3001000),
+        features=_make_features(),
     )
 
     rows = ds.poll({sym_a: 0, sym_b: 0})

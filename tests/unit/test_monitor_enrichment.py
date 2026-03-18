@@ -81,14 +81,24 @@ def test_enrich_tick_computes_incremental_ofi() -> None:
 
 def test_validate_l1_row_rejects_empty_or_mismatched_arrays() -> None:
     empty_row = RowView(
-        symbol="X", ingest_ts=0,
-        bids_price=[], asks_price=[], bids_vol=[], asks_vol=[],
-        price_scaled=0, volume=0,
+        symbol="X",
+        ingest_ts=0,
+        bids_price=[],
+        asks_price=[],
+        bids_vol=[],
+        asks_vol=[],
+        price_scaled=0,
+        volume=0,
     )
     mismatch_row = RowView(
-        symbol="X", ingest_ts=0,
-        bids_price=[1, 2], asks_price=[1], bids_vol=[3], asks_vol=[4],
-        price_scaled=0, volume=0,
+        symbol="X",
+        ingest_ts=0,
+        bids_price=[1, 2],
+        asks_price=[1],
+        bids_vol=[3],
+        asks_vol=[4],
+        price_scaled=0,
+        volume=0,
     )
 
     assert validate_l1_row(empty_row) == "bids_price_empty"

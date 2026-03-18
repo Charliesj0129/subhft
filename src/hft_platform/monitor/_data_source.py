@@ -30,7 +30,10 @@ class DataSource(Protocol):
     def poll(self, cursors: dict[str, int]) -> dict[str, list[RowView]]: ...
 
     def fetch_recent_valid(
-        self, symbol: str, limit: int, min_ingest_ts: int = 0,
+        self,
+        symbol: str,
+        limit: int,
+        min_ingest_ts: int = 0,
     ) -> list[RowView]: ...
 
     def try_reconnect(self) -> bool: ...
@@ -62,7 +65,10 @@ class CHDataSource:
         return self._poller.poll(cursors)
 
     def fetch_recent_valid(
-        self, symbol: str, limit: int, min_ingest_ts: int = 0,
+        self,
+        symbol: str,
+        limit: int,
+        min_ingest_ts: int = 0,
     ) -> list[RowView]:
         return self._poller.fetch_recent_valid(symbol, limit, min_ingest_ts=min_ingest_ts)
 
@@ -198,7 +204,10 @@ class ShmDataSource:
                 return
 
     def fetch_recent_valid(
-        self, symbol: str, limit: int, min_ingest_ts: int = 0,
+        self,
+        symbol: str,
+        limit: int,
+        min_ingest_ts: int = 0,
     ) -> list[RowView]:
         raise NotImplementedError("ShmDataSource does not support historical replay; use CH")
 
@@ -279,7 +288,9 @@ class HybridDataSource:
         return {}
 
     def _maybe_backfill(
-        self, result: dict[str, list[RowView]], cursors: dict[str, int],
+        self,
+        result: dict[str, list[RowView]],
+        cursors: dict[str, int],
     ) -> None:
         """Best-effort CH backfill for sparkline history."""
         if not self._ch_ok:
@@ -301,7 +312,10 @@ class HybridDataSource:
             logger.warning("hybrid_backfill_failed", error=str(exc))
 
     def fetch_recent_valid(
-        self, symbol: str, limit: int, min_ingest_ts: int = 0,
+        self,
+        symbol: str,
+        limit: int,
+        min_ingest_ts: int = 0,
     ) -> list[RowView]:
         if self._ch_ok:
             return self._ch.fetch_recent_valid(symbol, limit, min_ingest_ts=min_ingest_ts)
@@ -414,7 +428,9 @@ class RedisHybridSource:
         return {}
 
     def _maybe_backfill(
-        self, result: dict[str, list[RowView]], cursors: dict[str, int],
+        self,
+        result: dict[str, list[RowView]],
+        cursors: dict[str, int],
     ) -> None:
         """Best-effort CH backfill for sparkline history."""
         if not self._ch_ok:
@@ -436,7 +452,10 @@ class RedisHybridSource:
             logger.warning("hybrid_backfill_failed", error=str(exc))
 
     def fetch_recent_valid(
-        self, symbol: str, limit: int, min_ingest_ts: int = 0,
+        self,
+        symbol: str,
+        limit: int,
+        min_ingest_ts: int = 0,
     ) -> list[RowView]:
         if self._ch_ok:
             return self._ch.fetch_recent_valid(symbol, limit, min_ingest_ts=min_ingest_ts)

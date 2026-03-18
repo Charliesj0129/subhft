@@ -24,12 +24,12 @@ class EventFlag(IntFlag):
     """Bitmask for per-symbol events detected each poll cycle."""
 
     NONE = 0
-    COMPOSITE_CROSS = auto()   # signal flipped sign
-    SIGMA_BREAK_UP = auto()    # crossed 1σ or 2σ upward
+    COMPOSITE_CROSS = auto()  # signal flipped sign
+    SIGMA_BREAK_UP = auto()  # crossed 1σ or 2σ upward
     SIGMA_BREAK_DOWN = auto()  # fell below 1σ or 2σ
-    AGREE_FLIP = auto()        # dominant direction changed
-    SPREAD_CONVERGE = auto()   # spread dropped >30%
-    SPREAD_WIDEN = auto()      # spread increased >50%
+    AGREE_FLIP = auto()  # dominant direction changed
+    SPREAD_CONVERGE = auto()  # spread dropped >30%
+    SPREAD_WIDEN = auto()  # spread increased >50%
     STALE_ENTER = auto()
     STALE_RESOLVE = auto()
 
@@ -184,14 +184,14 @@ class SymbolState:
 
     # Delta tracking — snapshot before each poll cycle (Phase 1)
     prev_composite: float = 0.0
-    prev_agree_direction: int = 0       # -1, 0, +1
+    prev_agree_direction: int = 0  # -1, 0, +1
     prev_spread_bps: float = 0.0
     prev_is_stale: bool = False
     composite_delta: float = 0.0
     composite_delta_abs: float = 0.0
 
     # Event flags — reset each cycle (Phase 1)
-    event_flags: int = 0                # bitmask of EventFlag
+    event_flags: int = 0  # bitmask of EventFlag
     last_event_ns: int = 0
 
     # Opportunity score — updated each cycle (Phase 1/2)

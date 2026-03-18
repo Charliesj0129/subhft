@@ -196,7 +196,8 @@ class MonitorEngine:
             if shm_source.connected:
                 logger.info("data_source_auto_selected_hybrid")
                 return HybridDataSource(
-                    shm_source, ch_source,
+                    shm_source,
+                    ch_source,
                     backfill_interval_s=cfg.hybrid_backfill_interval_s,
                 )
         except Exception as exc:
@@ -357,11 +358,15 @@ class MonitorEngine:
         """Sort _sym_states_sorted according to current sort mode."""
         if self._sort_mode == SORT_OPPORTUNITY:
             self._sym_states_sorted = sorted(
-                self._sym_states, key=lambda ss: ss.opportunity_score, reverse=True,
+                self._sym_states,
+                key=lambda ss: ss.opportunity_score,
+                reverse=True,
             )
         elif self._sort_mode == SORT_COMPOSITE:
             self._sym_states_sorted = sorted(
-                self._sym_states, key=lambda ss: abs(ss.composite), reverse=True,
+                self._sym_states,
+                key=lambda ss: abs(ss.composite),
+                reverse=True,
             )
         else:
             # Config order = original order
@@ -723,8 +728,7 @@ class MonitorEngine:
             elif tc > 0:
                 warming += 1
             elif ss.invalid_row_count > 0 or (
-                ss.session_started_ns > 0
-                and (now_ns - ss.session_started_ns) / 1e9 >= warn_s
+                ss.session_started_ns > 0 and (now_ns - ss.session_started_ns) / 1e9 >= warn_s
             ):
                 no_data += 1
             if ss.is_stale:

@@ -9,7 +9,6 @@ import pytest
 
 from hft_platform.monitor._types import RowView
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -265,20 +264,42 @@ class TestHybridDataSource:
         from hft_platform.monitor._types import MonitorConfig, MonitorState, WatchlistSymbol
 
         class _StubDispatcher:
-            def load_alphas(self, *a, **kw): return ["qi"]
-            def bind_symbol(self, ss): pass
-            def dispatch(self, ss, p): pass
-            def reset_symbol(self, ss): ss.alpha_states.clear()
+            def load_alphas(self, *a, **kw):
+                return ["qi"]
+
+            def bind_symbol(self, ss):
+                pass
+
+            def dispatch(self, ss, p):
+                pass
+
+            def reset_symbol(self, ss):
+                ss.alpha_states.clear()
+
             @property
-            def weights(self): return {}
+            def weights(self):
+                return {}
 
         class FakePoller:
-            def __init__(self, **kw): self.connected = False; self.retry_count = 0; self.last_error = ""
-            def connect(self): self.connected = True
-            def poll(self, c): return {}
-            def fetch_recent_valid(self, s, l, min_ingest_ts=0): return []
-            def try_reconnect(self): return True
-            def remaining_backoff_seconds(self): return 0.0
+            def __init__(self, **kw):
+                self.connected = False
+                self.retry_count = 0
+                self.last_error = ""
+
+            def connect(self):
+                self.connected = True
+
+            def poll(self, c):
+                return {}
+
+            def fetch_recent_valid(self, s, limit, min_ingest_ts=0):
+                return []
+
+            def try_reconnect(self):
+                return True
+
+            def remaining_backoff_seconds(self):
+                return 0.0
 
         monkeypatch.setattr(engine_mod, "CHPoller", lambda **kw: FakePoller(**kw))
         monkeypatch.setattr(engine_mod, "get_session_info", lambda *a, **kw: (True, "", "Day"))
@@ -295,4 +316,5 @@ class TestHybridDataSource:
         assert engine.state != MonitorState.ERROR
         # Should have created CHDataSource (auto fallback since no SHM)
         from hft_platform.monitor._data_source import CHDataSource
+
         assert isinstance(engine._data_source, CHDataSource)

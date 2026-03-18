@@ -49,7 +49,10 @@ class _StubPoller:
         return self._poll_result
 
     def fetch_recent_valid(
-        self, symbol: str, limit: int, min_ingest_ts: int = 0,
+        self,
+        symbol: str,
+        limit: int,
+        min_ingest_ts: int = 0,
     ) -> list[RowView]:
         return self._fetch_result
 
@@ -138,7 +141,10 @@ class _StubRedisPoller:
         return self._poll_result
 
     def fetch_recent_valid(
-        self, symbol: str, limit: int, min_ingest_ts: int = 0,
+        self,
+        symbol: str,
+        limit: int,
+        min_ingest_ts: int = 0,
     ) -> list[RowView]:
         return self._fetch_result
 
@@ -196,7 +202,7 @@ class TestSnapshotToRowView:
 
         assert row.bids_price == [500_000]
         assert row.asks_price == [0]  # no ask field
-        assert row.bids_vol == [0]    # no qty fields
+        assert row.bids_vol == [0]  # no qty fields
         assert row.asks_vol == [0]
 
     def test_lob_fields_with_seven_elements(self) -> None:
@@ -272,7 +278,9 @@ class TestShmDataSourceStubbed:
     """Tests using injected stub reader — no real SHM needed."""
 
     def _make_source(
-        self, reader: _StubReader, symbols: tuple[str, ...] = ("2330",),
+        self,
+        reader: _StubReader,
+        symbols: tuple[str, ...] = ("2330",),
     ):
         from hft_platform.ipc.shm_snapshot import _symbol_hash
         from hft_platform.monitor._data_source import ShmDataSource
@@ -302,7 +310,9 @@ class TestShmDataSourceStubbed:
         reader = _StubReader(max_symbols=4)
         h = _symbol_hash("2330")
         reader._slots[0] = _StubSnapshotSlot(
-            version=1, ts_ns=5000, symbol_hash=h,
+            version=1,
+            ts_ns=5000,
+            symbol_hash=h,
             lob_fields=(1000, 2000, 0, 0, 0, 0, 10, 20, 0),
         )
 
@@ -317,7 +327,9 @@ class TestShmDataSourceStubbed:
         reader = _StubReader(max_symbols=4)
         h = _symbol_hash("2330")
         reader._slots[0] = _StubSnapshotSlot(
-            version=1, ts_ns=5000, symbol_hash=h,
+            version=1,
+            ts_ns=5000,
+            symbol_hash=h,
             lob_fields=(1000, 2000, 0, 0, 0, 0, 10, 20, 0),
         )
 
@@ -336,7 +348,9 @@ class TestShmDataSourceStubbed:
         reader = _StubReader(max_symbols=4)
         h = _symbol_hash("2330")
         reader._slots[0] = _StubSnapshotSlot(
-            version=1, ts_ns=3000, symbol_hash=h,
+            version=1,
+            ts_ns=3000,
+            symbol_hash=h,
             lob_fields=(1000, 2000, 0, 0, 0, 0, 10, 20, 0),
         )
 
@@ -352,7 +366,9 @@ class TestShmDataSourceStubbed:
         reader = _StubReader(max_symbols=4)
         h = _symbol_hash("2330")
         reader._slots[0] = _StubSnapshotSlot(
-            version=1, ts_ns=8000, symbol_hash=h,
+            version=1,
+            ts_ns=8000,
+            symbol_hash=h,
             lob_fields=(1000, 2000, 0, 0, 0, 0, 10, 20, 0),
         )
 
@@ -367,7 +383,9 @@ class TestShmDataSourceStubbed:
         h = _symbol_hash("2330")
         # Slot 0 mapped during init, but then becomes None
         reader._slots[0] = _StubSnapshotSlot(
-            version=1, ts_ns=1000, symbol_hash=h,
+            version=1,
+            ts_ns=1000,
+            symbol_hash=h,
             lob_fields=(1000, 2000, 0, 0, 0, 0, 10, 20, 0),
         )
         ds = self._make_source(reader, ("2330",))
@@ -388,7 +406,9 @@ class TestShmDataSourceStubbed:
 
         # Now the slot appears
         reader._slots[2] = _StubSnapshotSlot(
-            version=1, ts_ns=9000, symbol_hash=h,
+            version=1,
+            ts_ns=9000,
+            symbol_hash=h,
             lob_fields=(500, 600, 0, 0, 0, 0, 5, 8, 0),
         )
 
