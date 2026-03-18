@@ -334,9 +334,19 @@ class TestFeatureEngineEnrichment:
         ctx.get_feature_tuple.return_value = fake_tuple
         bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
 
-        base_keys = {"bid_px", "ask_px", "bid_qty", "ask_qty", "mid_price",
-                      "current_mid", "spread_bps", "volume", "trade_vol",
-                      "imbalance", "local_ts"}
+        base_keys = {
+            "bid_px",
+            "ask_px",
+            "bid_qty",
+            "ask_qty",
+            "mid_price",
+            "current_mid",
+            "spread_bps",
+            "volume",
+            "trade_vol",
+            "imbalance",
+            "local_ts",
+        }
         for key in base_keys:
             assert key in alpha.last_kwargs, f"Missing base key: {key}"
 

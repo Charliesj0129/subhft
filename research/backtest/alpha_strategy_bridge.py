@@ -6,13 +6,14 @@ The bridge extracts L1 LOB data from LOBStatsEvent, calls alpha.update(**payload
 records (ts_ns, signal, mid_price) in signal_log, and returns empty OrderIntents
 (position management is handled by HftNativeRunner from the signal log).
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 import numpy as np
 
-from hft_platform.contracts.strategy import OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import OrderIntent
 from hft_platform.events import LOBStatsEvent
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
@@ -20,11 +21,22 @@ _PRICE_SCALE = 10_000  # platform default
 
 # FeatureEngine tuple keys (lob_shared_v1, 16 values)
 _FE_KEYS: tuple[str, ...] = (
-    "fe_best_bid", "fe_best_ask", "fe_mid_x2", "fe_spread",
-    "fe_bid_depth", "fe_ask_depth", "fe_imbalance_ppm", "fe_microprice_x2",
-    "fe_l1_bid_qty", "fe_l1_ask_qty", "fe_l1_imbalance_ppm",
-    "fe_ofi_l1_raw", "fe_ofi_l1_cum", "fe_ofi_l1_ema8",
-    "fe_spread_ema8", "fe_imbalance_ema8_ppm",
+    "fe_best_bid",
+    "fe_best_ask",
+    "fe_mid_x2",
+    "fe_spread",
+    "fe_bid_depth",
+    "fe_ask_depth",
+    "fe_imbalance_ppm",
+    "fe_microprice_x2",
+    "fe_l1_bid_qty",
+    "fe_l1_ask_qty",
+    "fe_l1_imbalance_ppm",
+    "fe_ofi_l1_raw",
+    "fe_ofi_l1_cum",
+    "fe_ofi_l1_ema8",
+    "fe_spread_ema8",
+    "fe_imbalance_ema8_ppm",
 )
 
 
@@ -148,12 +160,14 @@ class AlphaStrategyBridge(BaseStrategy):
         except TypeError:
             # Some alphas only accept positional-style; try positional via keyword subset
             try:
-                signal = float(self._alpha.update(
-                    bid_px=best_bid,
-                    ask_px=best_ask,
-                    bid_qty=bid_depth,
-                    ask_qty=ask_depth,
-                ))
+                signal = float(
+                    self._alpha.update(
+                        bid_px=best_bid,
+                        ask_px=best_ask,
+                        bid_qty=bid_depth,
+                        ask_qty=ask_depth,
+                    )
+                )
             except Exception:
                 signal = 0.0
         except Exception:
