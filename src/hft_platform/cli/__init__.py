@@ -6,9 +6,12 @@ cli.py -> cli/ package refactor.
 
 from __future__ import annotations
 
+# Backward-compat: tests patch these at "hft_platform.cli" scope
+import subprocess as subprocess  # noqa: F401
 import sys
 from pathlib import Path
 
+from hft_platform.config.loader import load_settings as load_settings  # noqa: F401
 from hft_platform.utils.logging import configure_logging
 
 # ---------------------------------------------------------------------------
@@ -56,6 +59,7 @@ from ._run import (  # noqa: F401
     cmd_wizard,
 )
 from ._symbols import (  # noqa: F401
+    _resolve_symbols_shioaji,  # noqa: F401
     cmd_resolve_symbols,
     cmd_symbols_build,
     cmd_symbols_preview,
