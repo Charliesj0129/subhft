@@ -30,11 +30,9 @@ def test_weekend_rollover_reconnect_once(service):
     now = dt.datetime(2026, 2, 2, 9, 0, tzinfo=tz)  # Monday
     last = dt.datetime(2026, 1, 31, 5, 0, tzinfo=tz)  # Saturday
     service.last_event_ts = last.timestamp()
-    real_datetime = dt.datetime
 
-    with patch("hft_platform.services.market_data.dt.datetime") as mock_dt:
-        mock_dt.now.return_value = now
-        mock_dt.fromtimestamp.side_effect = lambda ts, tz=None: real_datetime.fromtimestamp(ts, tz=tz)
+    with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
+        mock_tb.now_s.return_value = now.timestamp()
         assert service._should_rollover_reconnect() is True
         # Same day should not trigger again
         assert service._should_rollover_reconnect() is False
