@@ -72,6 +72,7 @@ class TestCLISmoke(unittest.TestCase):
             import importlib
 
             import hft_platform.cli._parser as _parser_mod
+
             importlib.reload(_parser_mod)
             with patch.object(sys, "argv", ["hft", "init"]):
                 ret = main()

@@ -108,7 +108,9 @@ def test_cmd_diag_timeline(tmp_path, capsys):
 
 def test_cmd_strat_test_import_failure(monkeypatch):
     monkeypatch.setattr("hft_platform.cli._ops.load_settings", lambda *a, **k: ({}, {}))
-    monkeypatch.setattr("hft_platform.cli._ops.import_module", lambda *_a, **_k: (_ for _ in ()).throw(ImportError("nope")))
+    monkeypatch.setattr(
+        "hft_platform.cli._ops.import_module", lambda *_a, **_k: (_ for _ in ()).throw(ImportError("nope"))
+    )
     with pytest.raises(SystemExit) as exc:
         cli.cmd_strat_test(Namespace(module="x", cls="Y", strategy_id="s", symbol="2330"))
     assert exc.value.code == 1
@@ -311,7 +313,9 @@ def test_cmd_run_replay_exits(monkeypatch, capsys):
 
 
 def test_cmd_run_downgrades_live(monkeypatch, capsys):
-    monkeypatch.setattr("hft_platform.cli._run.load_settings", lambda *_a, **_k: ({"mode": "live", "prometheus_port": 9091}, {}))
+    monkeypatch.setattr(
+        "hft_platform.cli._run.load_settings", lambda *_a, **_k: ({"mode": "live", "prometheus_port": 9091}, {})
+    )
     monkeypatch.setattr("hft_platform.cli._run.detect_live_credentials", lambda: False)
     monkeypatch.setattr("hft_platform.cli._run.summarize_settings", lambda *_a, **_k: "summary")
 
@@ -441,6 +445,7 @@ def test_cmd_alpha_scaffold(monkeypatch):
         return _Proc()
 
     import hft_platform.cli._alpha as _alpha_mod
+
     monkeypatch.setattr(_alpha_mod.subprocess, "run", _run)
     args = Namespace(alpha_id="ofi_mc_v2", paper=["018"], complexity="O1", force=False)
     cli.cmd_alpha_scaffold(args)
