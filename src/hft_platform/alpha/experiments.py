@@ -10,6 +10,7 @@ Each run is stored as a directory under ``base_dir/runs/<run_id>/`` containing:
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -19,6 +20,8 @@ from uuid import uuid4
 
 import numpy as np
 from structlog import get_logger
+
+from hft_platform.core import timebase
 
 logger = get_logger("alpha.experiments")
 
@@ -113,7 +116,7 @@ class ExperimentTracker:
             run_id=run_id,
             alpha_id=alpha_id,
             config_hash=config_hash,
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).isoformat(),
             data_paths=tuple(str(p) for p in data_paths),
             metrics=dict(metrics),
             gate_status=dict(gate_status),
@@ -471,7 +474,7 @@ def _trading_day_from_iso(ts: str) -> str:
     try:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).date().isoformat()
     except ValueError:
-        return datetime.now(UTC).date().isoformat()
+        return datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).date().isoformat()
 
 
 def _coerce_utc(ts: datetime) -> datetime:
@@ -487,7 +490,7 @@ def _resolve_session_window(
     default_minutes: int,
 ) -> tuple[datetime, datetime]:
     default_delta = timedelta(minutes=max(1, int(default_minutes)))
-    now = datetime.now(UTC)
+    now = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
 
     start = _parse_iso_timestamp(started_at) if started_at else None
     end = _parse_iso_timestamp(ended_at) if ended_at else None

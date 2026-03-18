@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import re
 import sys
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -13,6 +13,7 @@ from uuid import uuid4
 import numpy as np
 
 from hft_platform.alpha._validation_types import ValidationConfig
+from hft_platform.core import timebase
 
 _ALPHA_ID_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
@@ -83,7 +84,7 @@ def _pushd(path: Path):
 
 
 def _make_validation_artifact_dir(experiments_base: Path, alpha_id: str) -> Path:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    stamp = _dt.datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = experiments_base / "validations" / alpha_id / f"{stamp}_{uuid4().hex[:8]}"
     out.mkdir(parents=True, exist_ok=True)
     return out

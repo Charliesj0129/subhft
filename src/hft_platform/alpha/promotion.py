@@ -13,16 +13,19 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import shlex
 import subprocess
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import yaml
+
+from hft_platform.core import timebase
 
 
 @dataclass(frozen=True)
@@ -150,7 +153,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
             reasons.append("force=true override")
 
     weight = _suggest_canary_weight(scorecard, override=config.canary_weight) if approved else 0.0
-    now = datetime.now(UTC)
+    now = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
     expiry = (now + timedelta(days=max(config.expiry_days, 1))).date().isoformat()
     artifact_dir = _promotion_artifact_dir(root, config.alpha_id, now)
 
@@ -797,7 +800,7 @@ def _write_promotion_config(
     approved: bool,
     forced: bool,
 ) -> Path:
-    day = datetime.now(UTC).strftime("%Y%m%d")
+    day = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%d")
     out = root / "config" / "strategy_promotions" / day / f"{config.alpha_id}.yaml"
     out.parent.mkdir(parents=True, exist_ok=True)
 
