@@ -233,9 +233,10 @@ def test_bridge_payload_has_scaled_fields():
             ask_depth=10,
         )
     )
-    assert alpha.kw["bid_px_scaled"] == 50000
-    assert alpha.kw["mid_price_x2"] == 100100
-    assert isinstance(alpha.kw["mid_price_x2"], int)
+    assert alpha.kw["bid_px"] == 50000 / 10000  # 5.0
+    assert alpha.kw["ask_px"] == 50100 / 10000  # 5.01
+    assert "current_mid" in alpha.kw
+    assert alpha.kw["current_mid"] == (5.0 + 5.01) / 2.0
 
 
 # ---------------------------------------------------------------------------

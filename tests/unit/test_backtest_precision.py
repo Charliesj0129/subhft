@@ -138,7 +138,7 @@ def test_backward_compat_mid_price_float(monkeypatch):
 
 
 def test_bridge_payload_has_scaled_fields():
-    """AlphaStrategyBridge payload includes bid_px_scaled, ask_px_scaled, mid_price_x2."""
+    """AlphaStrategyBridge payload includes bid_px, ask_px, current_mid as floats."""
     from hft_platform.events import LOBStatsEvent
 
     class _DummyAlpha:
@@ -166,13 +166,12 @@ def test_bridge_payload_has_scaled_fields():
     bridge.on_stats(event)
 
     payload = alpha.last_payload
-    assert "bid_px_scaled" in payload
-    assert "ask_px_scaled" in payload
-    assert "mid_price_x2" in payload
-    assert payload["bid_px_scaled"] == 50000
-    assert payload["ask_px_scaled"] == 50100
-    assert payload["mid_price_x2"] == 100100  # 50000 + 50100
-    assert isinstance(payload["mid_price_x2"], int)
+    assert "bid_px" in payload
+    assert "ask_px" in payload
+    assert "current_mid" in payload
+    assert payload["bid_px"] == 50000 / 10000  # 5.0
+    assert payload["ask_px"] == 50100 / 10000  # 5.01
+    assert payload["current_mid"] == (5.0 + 5.01) / 2.0
 
 
 def test_signal_log_still_records(monkeypatch):
