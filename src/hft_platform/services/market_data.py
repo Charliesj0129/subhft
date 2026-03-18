@@ -1,200 +1,53 @@
+"""MarketDataService — orchestrates ingestion, normalization, LOB, feature, and recording.
+
+Delegates to private helper modules:
+- ``_md_ingestion``     — payload parsing, constants, ``FeedState``
+- ``_md_observability``  — metrics, tracing, feature-shadow parity
+- ``_md_reconnect``      — reconnection, rollover, watchdog, trading-hours
+"""
+
+from __future__ import annotations
+
 import asyncio
 import datetime as dt
 import os
 import time
-from enum import Enum
-from typing import Any, cast
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.engine.event_bus import RingBufferBus
-from hft_platform.events import BidAskEvent, FeatureUpdateEvent, LOBStatsEvent, TickEvent
-from hft_platform.feature.engine import (
-    QUALITY_FLAG_GAP,
-    QUALITY_FLAG_OUT_OF_ORDER,
-    QUALITY_FLAG_PARTIAL,
-    QUALITY_FLAG_STALE_INPUT,
-    QUALITY_FLAG_STATE_RESET,
-    FeatureEngine,
-)
+from hft_platform.events import BidAskEvent, FeatureUpdateEvent, TickEvent
+from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
-from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
 
 # TODO: replace with BrokerClientProtocol once WU-1 merges
-# Previously: from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 
+from ._md_ingestion import (
+    FeedState,
+    env_int,
+    get_trace_sampler,
+    looks_like_md,
+    obs_policy,
+    summarize_md,
+    try_fast_extract_callback_payload,
+    unwrap_md,
+)
+from ._md_observability import MarketDataObservabilityMixin
+from ._md_reconnect import MarketDataReconnectMixin
+
 logger = get_logger("service.market_data")
 
-_MD_PRICE_FIELDS = (
-    "close",
-    "price",
-    "bid_price",
-    "ask_price",
-    "bid_volume",
-    "ask_volume",
-    "buy_price",
-    "sell_price",
-)
-_MD_TIME_FIELDS = ("ts", "datetime")
-_MD_CODE_FIELDS = ("code", "symbol")
-_MD_NESTED_FIELDS = ("tick", "bidask")
-_FEATURE_QUALITY_FLAG_LABELS = (
-    (QUALITY_FLAG_GAP, "gap"),
-    (QUALITY_FLAG_STATE_RESET, "state_reset"),
-    (QUALITY_FLAG_STALE_INPUT, "stale_input"),
-    (QUALITY_FLAG_OUT_OF_ORDER, "out_of_order"),
-    (QUALITY_FLAG_PARTIAL, "partial"),
-)
+# Re-export so ``from hft_platform.services.market_data import FeedState`` keeps working.
+__all__ = ["FeedState", "MarketDataService"]
 
 
-def _get_trace_sampler():
-    try:
-        from hft_platform.diagnostics.trace import get_trace_sampler
-
-        return get_trace_sampler()
-    except Exception:
-        return None
-
-
-def _looks_like_md(obj: object) -> bool:
-    if obj is None:
-        return False
-    if isinstance(obj, dict):
-        keys = obj.keys()
-        if "code" in keys or "symbol" in keys:
-            return True
-        if (
-            "bid_price" in keys
-            or "ask_price" in keys
-            or "close" in keys
-            or "price" in keys
-            or "bid_volume" in keys
-            or "ask_volume" in keys
-            or "buy_price" in keys
-            or "sell_price" in keys
-        ):
-            return True
-        return "ts" in keys or "datetime" in keys
-    has_code = getattr(obj, "code", None) is not None or getattr(obj, "symbol", None) is not None
-    has_price = (
-        hasattr(obj, "bid_price")
-        or hasattr(obj, "ask_price")
-        or hasattr(obj, "close")
-        or hasattr(obj, "price")
-        or hasattr(obj, "bid_volume")
-        or hasattr(obj, "ask_volume")
-    )
-    has_time = hasattr(obj, "ts") or hasattr(obj, "datetime")
-    return bool(has_price or (has_code and (has_price or has_time)))
-
-
-def _unwrap_md(obj: object) -> object:
-    if obj is None:
-        return obj
-    if isinstance(obj, dict):
-        tick = obj.get("tick")
-        if _looks_like_md(tick):
-            return tick
-        bidask = obj.get("bidask")
-        if _looks_like_md(bidask):
-            return bidask
-        return obj
-    tick = getattr(obj, "tick", None)
-    if _looks_like_md(tick):
-        return tick
-    bidask = getattr(obj, "bidask", None)
-    if _looks_like_md(bidask):
-        return bidask
-    return obj
-
-
-def _summarize_md(obj: object) -> dict[str, Any]:
-    if obj is None:
-        return {}
-    nested: dict[str, str]
-    if isinstance(obj, dict):
-        keys = list(obj.keys())
-        present = [k for k in (*_MD_CODE_FIELDS, *_MD_PRICE_FIELDS, *_MD_TIME_FIELDS) if k in obj]
-        nested = {k: type(obj.get(k)).__name__ for k in _MD_NESTED_FIELDS if k in obj}
-        return {"keys": keys[:20], "present": present, "nested": nested}
-    present = [k for k in (*_MD_CODE_FIELDS, *_MD_PRICE_FIELDS, *_MD_TIME_FIELDS) if hasattr(obj, k)]
-    nested = {}
-    for k in _MD_NESTED_FIELDS:
-        if hasattr(obj, k):
-            nested[k] = type(getattr(obj, k)).__name__
-    return {"attrs": present, "nested": nested}
-
-
-def _try_fast_extract_callback_payload(*args: Any, **kwargs: Any) -> tuple[object | None, object | None]:
-    exchange = kwargs.get("exchange")
-
-    for key in ("quote", "tick", "bidask", "data", "msg"):
-        if key not in kwargs:
-            continue
-        candidate = _unwrap_md(kwargs[key])
-        if _looks_like_md(candidate):
-            return exchange, candidate
-
-    argc = len(args)
-    if argc == 2:
-        a0, a1 = args
-        # Common Shioaji shape: (exchange/topic, msg)
-        msg = _unwrap_md(a1)
-        if _looks_like_md(msg):
-            if exchange is None and (isinstance(a0, str) or hasattr(a0, "name")):
-                exchange = a0
-            return exchange, msg
-        # Alternate order fallback
-        msg = _unwrap_md(a0)
-        if _looks_like_md(msg):
-            if exchange is None and (isinstance(a1, str) or hasattr(a1, "name")):
-                exchange = a1
-            return exchange, msg
-    elif argc == 1:
-        msg = _unwrap_md(args[0])
-        if _looks_like_md(msg):
-            return exchange, msg
-    elif argc >= 3:
-        # Another common shape: (topic, quote, event) — pick the last MD-like payload quickly.
-        for candidate in (args[-1], args[-2], args[0]):
-            msg = _unwrap_md(candidate)
-            if _looks_like_md(msg):
-                if exchange is None and argc > 0 and (isinstance(args[0], str) or hasattr(args[0], "name")):
-                    exchange = args[0]
-                return exchange, msg
-
-    return exchange, None
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except Exception:
-        return max(1, int(default))
-
-
-def _obs_policy() -> str:
-    policy = os.getenv("HFT_OBS_POLICY", "balanced").strip().lower()
-    if policy not in {"minimal", "balanced", "debug"}:
-        return "balanced"
-    return policy
-
-
-class FeedState(Enum):
-    INIT = "INIT"
-    CONNECTING = "CONNECTING"
-    SNAPSHOTTING = "SNAPSHOTTING"
-    CONNECTED = "CONNECTED"
-    DISCONNECTED = "DISCONNECTED"
-    RECOVERING = "RECOVERING"
-
-
-class MarketDataService:
+class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     def __init__(
         self,
         bus: RingBufferBus,
@@ -235,7 +88,9 @@ class MarketDataService:
         self.reconnect_timeout_s = float(os.getenv("HFT_MD_RECONNECT_TIMEOUT_S", "30"))
         self._heartbeat_gap_metric_cooldown_s = float(os.getenv("HFT_MD_GAP_METRIC_COOLDOWN_S", "30"))
         self._last_heartbeat_gap_metric_ts = 0.0
-        self.reconnect_days = {d.strip().lower() for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",") if d.strip()}
+        self.reconnect_days = {
+            d.strip().lower() for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",") if d.strip()
+        }
         self.reconnect_hours = os.getenv("HFT_RECONNECT_HOURS", "")
         self.reconnect_hours_2 = os.getenv("HFT_RECONNECT_HOURS_2", "")
         self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ") or timebase.TZ_NAME or "Asia/Taipei"
@@ -252,10 +107,10 @@ class MarketDataService:
         self._pending_reconnect_reason: str | None = None
         self._pending_reconnect_gap: float = 0.0
         self._pending_reconnect_since: float | None = None
-        self.metrics = {"count": 0, "start_ts": timebase.now_s()}
+        self.metrics: dict[str, Any] = {"count": 0, "start_ts": timebase.now_s()}
         self.metrics_registry = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
-        self._trace_sampler = _get_trace_sampler()
+        self._trace_sampler = get_trace_sampler()
         self._feed_last_event_metric_child = None
         self._feed_reconnect_gap_metric_child = None
         self._md_callback_parse_metric_children: dict[str, Any] = {}
@@ -299,12 +154,14 @@ class MarketDataService:
         self._record_degrade_last_check: float = 0.0
 
         # Per-symbol feed gap monitoring
-        self._symbol_last_tick: dict[str, float] = {}  # symbol -> monotonic timestamp
+        self._symbol_last_tick: dict[str, float] = {}
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "6.0"))
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
         self._symbol_gap_min_stale_count = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_STALE_COUNT", "5")))
         self._symbol_gap_min_active_symbols = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_ACTIVE_SYMBOLS", "24")))
-        self._symbol_gap_active_lookback_s = max(0.0, float(os.getenv("HFT_SYMBOL_GAP_ACTIVE_LOOKBACK_S", "90.0")))
+        self._symbol_gap_active_lookback_s = max(
+            0.0, float(os.getenv("HFT_SYMBOL_GAP_ACTIVE_LOOKBACK_S", "90.0"))
+        )
         self._symbol_gap_stale_ratio_threshold = min(
             1.0,
             max(0.0, float(os.getenv("HFT_SYMBOL_GAP_STALE_RATIO_THRESHOLD", "0.85"))),
@@ -312,7 +169,9 @@ class MarketDataService:
         self._symbol_gap_severe_gap_s = max(0.0, float(os.getenv("HFT_SYMBOL_GAP_SEVERE_GAP_S", "30.0")))
         self._symbol_gap_consecutive_cycles = max(1, int(os.getenv("HFT_SYMBOL_GAP_CONSECUTIVE_CYCLES", "5")))
         self._symbol_gap_consecutive_hits = 0
-        self._symbol_gap_resubscribe_cooldown_s = float(os.getenv("HFT_SYMBOL_GAP_RESUBSCRIBE_COOLDOWN_S", "120"))
+        self._symbol_gap_resubscribe_cooldown_s = float(
+            os.getenv("HFT_SYMBOL_GAP_RESUBSCRIBE_COOLDOWN_S", "120")
+        )
         self._last_symbol_gap_resubscribe_ts = 0.0
         self._symbol_gap_metric_cooldown_s = float(os.getenv("HFT_SYMBOL_GAP_METRIC_COOLDOWN_S", "30"))
         self._last_symbol_gap_metric_ts = 0.0
@@ -322,9 +181,10 @@ class MarketDataService:
             "no",
             "off",
         }
-        self._symbol_gap_off_hours_log_interval_s = float(os.getenv("HFT_SYMBOL_GAP_OFF_HOURS_LOG_INTERVAL_S", "300"))
+        self._symbol_gap_off_hours_log_interval_s = float(
+            os.getenv("HFT_SYMBOL_GAP_OFF_HOURS_LOG_INTERVAL_S", "300")
+        )
         self._last_symbol_gap_off_hours_log_ts = 0.0
-        # P0-2: Inline tick update (removes per-tick task creation)
         self._symbol_tick_inline = os.getenv("HFT_SYMBOL_TICK_INLINE", "1").lower() not in {
             "0",
             "false",
@@ -344,21 +204,29 @@ class MarketDataService:
         # Market open grace period (C4)
         self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))
         self._market_open_grace_gap_threshold_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_GAP_S", "30"))
-        policy = _obs_policy()
+
+        # Observability sampling
+        policy = obs_policy()
         md_metrics_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         md_latency_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         cb_parse_metrics_default = 64 if policy != "debug" else 1
         feature_metrics_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         feature_latency_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
-        self._md_metrics_sample_every = _env_int("HFT_MD_METRICS_SAMPLE_EVERY", md_metrics_default)
-        self._md_latency_sample_every = _env_int("HFT_MD_LATENCY_SAMPLE_EVERY", md_latency_default)
-        self._md_callback_parse_metrics_every = _env_int(
+        self._md_metrics_sample_every = env_int("HFT_MD_METRICS_SAMPLE_EVERY", md_metrics_default)
+        self._md_latency_sample_every = env_int("HFT_MD_LATENCY_SAMPLE_EVERY", md_latency_default)
+        self._md_callback_parse_metrics_every = env_int(
             "HFT_MD_CALLBACK_PARSE_METRICS_EVERY", cb_parse_metrics_default
         )
-        self._feature_metrics_sample_every = _env_int("HFT_FEATURE_METRICS_SAMPLE_EVERY", feature_metrics_default)
-        self._feature_latency_sample_every = _env_int("HFT_FEATURE_LATENCY_SAMPLE_EVERY", feature_latency_default)
-        self._feature_shadow_sample_every = _env_int("HFT_FEATURE_SHADOW_SAMPLE_EVERY", 64 if policy != "debug" else 1)
-        self._feature_shadow_warn_every = _env_int("HFT_FEATURE_SHADOW_WARN_EVERY", 100)
+        self._feature_metrics_sample_every = env_int(
+            "HFT_FEATURE_METRICS_SAMPLE_EVERY", feature_metrics_default
+        )
+        self._feature_latency_sample_every = env_int(
+            "HFT_FEATURE_LATENCY_SAMPLE_EVERY", feature_latency_default
+        )
+        self._feature_shadow_sample_every = env_int(
+            "HFT_FEATURE_SHADOW_SAMPLE_EVERY", 64 if policy != "debug" else 1
+        )
+        self._feature_shadow_warn_every = env_int("HFT_FEATURE_SHADOW_WARN_EVERY", 100)
         self._feature_shadow_abs_tolerance = float(os.getenv("HFT_FEATURE_SHADOW_ABS_TOL", "0"))
         self._md_metrics_counter = 0
         self._md_latency_counter = 0
@@ -370,55 +238,17 @@ class MarketDataService:
 
         self._init_feature_shadow_engine()
 
-    def _init_feature_shadow_engine(self) -> None:
-        if self.feature_engine is None:
-            return
-        enabled = os.getenv("HFT_FEATURE_SHADOW_PARITY", "0").strip().lower() in {"1", "true", "yes", "on"}
-        if not enabled:
-            return
-        try:
-            primary_backend = (
-                self.feature_engine.kernel_backend() if hasattr(self.feature_engine, "kernel_backend") else "python"
-            )
-        except Exception:
-            primary_backend = "python"
-        requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
-        shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
-        try:
-            shadow = FeatureEngine(
-                feature_set_id=(
-                    self.feature_engine.feature_set_id() if hasattr(self.feature_engine, "feature_set_id") else None
-                ),
-                emit_events=True,
-                kernel_backend=shadow_backend,
-            )
-            # If backend fallback happened and becomes identical to primary due missing Rust,
-            # still allow compare if explicitly requested.
-            if (
-                requested == ""
-                and hasattr(shadow, "kernel_backend")
-                and shadow.kernel_backend() == primary_backend == "python"
-            ):
-                # Auto mode could not create meaningful alternate backend.
-                return
-            self._feature_shadow_engine = shadow
-        except Exception as exc:
-            logger.warning("feature_shadow_engine_init_failed", reason=str(exc))
-            self._feature_shadow_engine = None
+    # -- main loop -----------------------------------------------------------
 
-    async def run(self):
+    async def run(self) -> None:
         self.running = True
         self.loop = asyncio.get_running_loop()
         logger.info("MarketDataService started")
         self.lob.start_metrics_worker(self.loop)
 
-        # Start Monitor
         monitor_task = asyncio.create_task(self._monitor_loop())
-
-        # Start per-symbol feed gap watchdog
         watchdog_task = asyncio.create_task(self._watchdog_loop())
 
-        # Connect
         await self._connect_sequence()
 
         try:
@@ -456,152 +286,21 @@ class MarketDataService:
                     elif utilization < self._raw_queue_high_watermark * 0.8:
                         self._high_watermark_warned = False
 
-                # logger.debug(f"MD Raw Type: {type(raw)}")
                 if self.log_raw:
                     self._raw_log_counter += 1
                     if self._raw_log_counter % self.log_raw_every == 0:
                         raw_type = type(raw).__name__
-                        sample = None
                         if isinstance(raw, dict):
-                            sample = {
-                                k: raw.get(k) for k in ("code", "close", "bid_price", "ask_price", "ts") if k in raw
+                            sample: Any = {
+                                k: raw.get(k)
+                                for k in ("code", "close", "bid_price", "ask_price", "ts")
+                                if k in raw
                             }
                         else:
                             sample = getattr(raw, "code", None) or raw_type
                         logger.info("MD Raw Recv", type=raw_type, sample=str(sample)[:200])
 
-                # Normalize
-                event = None
-                # Basic key check for dispatch
-                try:
-                    norm_start_ns = time.perf_counter_ns()
-                    if isinstance(raw, dict):
-                        is_bid = "bid_price" in raw or "bid_volume" in raw or "ask_price" in raw
-                        is_tick = "close" in raw or "price" in raw
-                    else:
-                        is_bid = hasattr(raw, "bid_price") or hasattr(raw, "bid_volume") or hasattr(raw, "ask_price")
-                        is_tick = hasattr(raw, "close") or hasattr(raw, "price")
-
-                    if is_bid:
-                        event = self.normalizer.normalize_bidask(raw)
-                    elif is_tick:
-                        event = self.normalizer.normalize_tick(raw)
-                    norm_duration = time.perf_counter_ns() - norm_start_ns
-                except Exception as ne:
-                    logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))
-                    self._emit_trace("md_normalize_error", "", {"raw_type": str(type(raw)), "error": str(ne)})
-                    norm_duration = 0
-
-                if event:
-                    if isinstance(event, TickEvent) and not self._first_tick_event:
-                        self._first_tick_event = True
-                        logger.info(
-                            "First Tick event",
-                            symbol=event.symbol,
-                            price=event.price,
-                            volume=event.volume,
-                        )
-                    elif isinstance(event, BidAskEvent) and not self._first_bidask_event:
-                        self._first_bidask_event = True
-                        bids_len = len(event.bids) if event.bids is not None else 0
-                        asks_len = len(event.asks) if event.asks is not None else 0
-                        logger.info(
-                            "First BidAsk event",
-                            symbol=event.symbol,
-                            snapshot=event.is_snapshot,
-                            bids_len=bids_len,
-                            asks_len=asks_len,
-                        )
-                    # Update per-symbol timestamp for watchdog
-                    # P0-2: Use inline update (CPython dict assignment is atomic)
-                    symbol = getattr(event, "symbol", None)
-                    if symbol:
-                        if self._symbol_tick_inline:
-                            # Direct assignment - atomic in CPython due to GIL
-                            self._symbol_last_tick[symbol] = time.monotonic()
-                        else:
-                            # Legacy path: async task (for backwards compatibility)
-                            asyncio.create_task(self._update_symbol_tick(symbol))
-
-                    trace_id = ""
-                    meta = getattr(event, "meta", None)
-                    if meta is not None:
-                        seq = getattr(meta, "seq", None)
-                        topic = getattr(meta, "topic", "event")
-                        if seq is not None:
-                            trace_id = f"{topic}:{seq}"
-                    self._md_latency_counter += 1
-                    if norm_duration and self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
-                        self.latency.record(
-                            "normalize",
-                            norm_duration,
-                            trace_id=trace_id,
-                            symbol=getattr(event, "symbol", ""),
-                        )
-                    if self.log_normalized:
-                        self._normalized_log_counter += 1
-                        if self._normalized_log_counter % self.log_normalized_every == 0:
-                            logger.info("MD Normalized", type=str(type(event)), symbol=event.symbol)
-
-                    # Update LOB
-                    # Hot path: update LOB
-                    lob_start_ns = time.perf_counter_ns()
-                    stats = self.lob.process_event(event)
-                    feature_update = self._maybe_update_features(event, stats)
-                    lob_duration = time.perf_counter_ns() - lob_start_ns
-                    if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
-                        self.latency.record(
-                            "lob_process",
-                            lob_duration,
-                            trace_id=trace_id,
-                            symbol=getattr(event, "symbol", ""),
-                        )
-                    self._emit_trace(
-                        "md_event",
-                        trace_id,
-                        {
-                            "symbol": getattr(event, "symbol", ""),
-                            "event_type": type(event).__name__,
-                            "norm_ns": int(norm_duration or 0),
-                            "lob_ns": int(lob_duration or 0),
-                            "has_stats": bool(stats is not None),
-                            "has_feature_update": bool(feature_update is not None),
-                        },
-                    )
-                    if feature_update is not None:
-                        self._emit_trace(
-                            "feature_update",
-                            trace_id,
-                            {
-                                "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
-                                "feature_set_id": getattr(
-                                    feature_update, "feature_set_id", self._feature_set_id_cached
-                                ),
-                                "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
-                                "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
-                            },
-                        )
-                    if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
-                        self._record_direct_event(event)
-
-                    if self.publish_full_events:
-                        if stats or feature_update:
-                            payload = [event]
-                            if stats:
-                                payload.append(stats)
-                            if feature_update:
-                                payload.append(feature_update)
-                            self._publish_many_nowait(payload)
-                        else:
-                            self._publish_nowait(event)
-                    elif stats or feature_update:
-                        payload = []
-                        if stats:
-                            payload.append(stats)
-                        if feature_update:
-                            payload.append(feature_update)
-                        self._publish_many_nowait(payload)
-
+                self._process_raw(raw)
                 self.raw_queue.task_done()
         except asyncio.CancelledError:
             pass
@@ -611,14 +310,158 @@ class MarketDataService:
             monitor_task.cancel()
             watchdog_task.cancel()
 
-    async def _connect_sequence(self):
+    def _process_raw(self, raw: Any) -> None:
+        """Normalize, update LOB/features, publish, and record a single raw message."""
+        event = None
+        try:
+            norm_start_ns = time.perf_counter_ns()
+            if isinstance(raw, dict):
+                is_bid = "bid_price" in raw or "bid_volume" in raw or "ask_price" in raw
+                is_tick = "close" in raw or "price" in raw
+            else:
+                is_bid = hasattr(raw, "bid_price") or hasattr(raw, "bid_volume") or hasattr(raw, "ask_price")
+                is_tick = hasattr(raw, "close") or hasattr(raw, "price")
+
+            if is_bid:
+                event = self.normalizer.normalize_bidask(raw)
+            elif is_tick:
+                event = self.normalizer.normalize_tick(raw)
+            norm_duration = time.perf_counter_ns() - norm_start_ns
+        except Exception as ne:
+            logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))
+            self._emit_trace("md_normalize_error", "", {"raw_type": str(type(raw)), "error": str(ne)})
+            norm_duration = 0
+
+        if not event:
+            return
+
+        self._log_first_event(event)
+        self._update_symbol_tick_inline(event)
+
+        trace_id = self._build_trace_id(event)
+        self._md_latency_counter += 1
+        if norm_duration and self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
+            self.latency.record(
+                "normalize",
+                norm_duration,
+                trace_id=trace_id,
+                symbol=getattr(event, "symbol", ""),
+            )
+        if self.log_normalized:
+            self._normalized_log_counter += 1
+            if self._normalized_log_counter % self.log_normalized_every == 0:
+                logger.info("MD Normalized", type=str(type(event)), symbol=event.symbol)
+
+        lob_start_ns = time.perf_counter_ns()
+        stats = self.lob.process_event(event)
+        feature_update = self._maybe_update_features(event, stats)
+        lob_duration = time.perf_counter_ns() - lob_start_ns
+        if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
+            self.latency.record(
+                "lob_process",
+                lob_duration,
+                trace_id=trace_id,
+                symbol=getattr(event, "symbol", ""),
+            )
+        self._emit_trace(
+            "md_event",
+            trace_id,
+            {
+                "symbol": getattr(event, "symbol", ""),
+                "event_type": type(event).__name__,
+                "norm_ns": int(norm_duration or 0),
+                "lob_ns": int(lob_duration or 0),
+                "has_stats": bool(stats is not None),
+                "has_feature_update": bool(feature_update is not None),
+            },
+        )
+        if feature_update is not None:
+            self._emit_trace(
+                "feature_update",
+                trace_id,
+                {
+                    "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
+                    "feature_set_id": getattr(
+                        feature_update, "feature_set_id", self._feature_set_id_cached
+                    ),
+                    "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
+                    "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
+                },
+            )
+        if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
+            self._record_direct_event(event)
+
+        self._publish_events(event, stats, feature_update)
+
+    # -- helpers for _process_raw -------------------------------------------
+
+    def _log_first_event(self, event: TickEvent | BidAskEvent) -> None:
+        if isinstance(event, TickEvent) and not self._first_tick_event:
+            self._first_tick_event = True
+            logger.info("First Tick event", symbol=event.symbol, price=event.price, volume=event.volume)
+        elif isinstance(event, BidAskEvent) and not self._first_bidask_event:
+            self._first_bidask_event = True
+            bids_len = len(event.bids) if event.bids is not None else 0
+            asks_len = len(event.asks) if event.asks is not None else 0
+            logger.info(
+                "First BidAsk event",
+                symbol=event.symbol,
+                snapshot=event.is_snapshot,
+                bids_len=bids_len,
+                asks_len=asks_len,
+            )
+
+    def _update_symbol_tick_inline(self, event: TickEvent | BidAskEvent) -> None:
+        symbol = getattr(event, "symbol", None)
+        if not symbol:
+            return
+        if self._symbol_tick_inline:
+            self._symbol_last_tick[symbol] = time.monotonic()
+        else:
+            asyncio.create_task(self._update_symbol_tick(symbol))
+
+    @staticmethod
+    def _build_trace_id(event: TickEvent | BidAskEvent) -> str:
+        meta = getattr(event, "meta", None)
+        if meta is not None:
+            seq = getattr(meta, "seq", None)
+            topic = getattr(meta, "topic", "event")
+            if seq is not None:
+                return f"{topic}:{seq}"
+        return ""
+
+    def _publish_events(
+        self,
+        event: TickEvent | BidAskEvent,
+        stats: object | None,
+        feature_update: FeatureUpdateEvent | None,
+    ) -> None:
+        if self.publish_full_events:
+            if stats or feature_update:
+                payload: list[Any] = [event]
+                if stats:
+                    payload.append(stats)
+                if feature_update:
+                    payload.append(feature_update)
+                self._publish_many_nowait(payload)
+            else:
+                self._publish_nowait(event)
+        elif stats or feature_update:
+            payload = []
+            if stats:
+                payload.append(stats)
+            if feature_update:
+                payload.append(feature_update)
+            self._publish_many_nowait(payload)
+
+    # -- connect sequence ----------------------------------------------------
+
+    async def _connect_sequence(self) -> None:
         try:
             self._set_state(FeedState.CONNECTING)
-            # Always offload blocking API calls to a worker thread.
             await self._call_client(self.client.login)
             await self._call_client(self.client.validate_symbols)
 
-            # Snapshots
             self._set_state(FeedState.SNAPSHOTTING)
             try:
                 snapshots = await self._call_client(self.client.fetch_snapshots)
@@ -626,9 +469,6 @@ class MarketDataService:
                 logger.warning("Snapshot fetch failed; continuing", error=str(exc))
                 snapshots = []
 
-            # Apply snapshots to seed the LOB state before live quotes arrive.
-            # MarketDataNormalizer.normalize_snapshot() is implemented; failures
-            # are caught individually so one bad snapshot does not abort the sequence.
             for snap in snapshots:
                 try:
                     normalize_fn = getattr(self.normalizer, "normalize_snapshot", None)
@@ -640,23 +480,7 @@ class MarketDataService:
                         continue
                     stats = self.lob.process_event(event)
                     feature_update = self._maybe_update_features(event, stats)
-                    if self.publish_full_events:
-                        if stats or feature_update:
-                            payload = [event]
-                            if stats:
-                                payload.append(stats)
-                            if feature_update:
-                                payload.append(feature_update)
-                            self._publish_many_nowait(payload)
-                        else:
-                            self._publish_nowait(event)
-                    elif stats or feature_update:
-                        payload = []
-                        if stats:
-                            payload.append(stats)
-                        if feature_update:
-                            payload.append(feature_update)
-                        self._publish_many_nowait(payload)
+                    self._publish_events(event, stats, feature_update)
                 except Exception as exc:
                     logger.warning("Snapshot normalize failed; skipping", error=str(exc))
 
@@ -667,11 +491,10 @@ class MarketDataService:
             logger.error("Connect failed", error=str(e))
             self._set_state(FeedState.DISCONNECTED)
 
-    def _on_shioaji_event(self, *args, **kwargs):
-        """
-        Unified callback for Shioaji events.
-        Signature can vary: (exchange, msg) or (topic, msg, ...)
-        """
+    # -- broker callback -----------------------------------------------------
+
+    def _on_shioaji_event(self, *args: Any, **kwargs: Any) -> None:
+        """Unified callback for Shioaji events."""
         try:
             if not self._raw_first_seen:
                 self._raw_first_seen = True
@@ -680,31 +503,29 @@ class MarketDataService:
                     args_types=[type(a).__name__ for a in args],
                     kwargs_keys=list(kwargs.keys()),
                 )
-            # DEBUG: Log every callback to confirm flow
             if self.log_raw:
                 logger.debug("Callback hit", args_len=len(args))
 
-            exchange, msg = _try_fast_extract_callback_payload(*args, **kwargs)
+            exchange, msg = try_fast_extract_callback_payload(*args, **kwargs)
             parse_result = "fast" if msg is not None else "fallback"
 
             if msg is None:
-                # Generic fallback for signature drift across Shioaji versions.
                 if exchange is None and "exchange" in kwargs:
                     exchange = kwargs["exchange"]
                 for arg in args:
-                    candidate = _unwrap_md(arg)
-                    looks_like = _looks_like_md(candidate)
-                    if exchange is None and not looks_like and (hasattr(arg, "name") or isinstance(arg, str)):
+                    candidate = unwrap_md(arg)
+                    is_md = looks_like_md(candidate)
+                    if exchange is None and not is_md and (hasattr(arg, "name") or isinstance(arg, str)):
                         exchange = arg
-                    if looks_like:
+                    if is_md:
                         msg = candidate
                 if msg is None:
                     if len(args) >= 2:
-                        msg = _unwrap_md(args[-1])
+                        msg = unwrap_md(args[-1])
                     elif len(args) == 1:
-                        msg = _unwrap_md(args[0])
+                        msg = unwrap_md(args[0])
                 if msg is not None:
-                    msg = _unwrap_md(msg)
+                    msg = unwrap_md(msg)
                 parse_result = "fallback" if msg is not None else "miss"
 
             if self.metrics_registry:
@@ -729,13 +550,11 @@ class MarketDataService:
                     msg_type=type(msg).__name__,
                     msg_code=getattr(msg, "code", None),
                     exchange=str(exchange) if exchange is not None else None,
-                    msg_fields=_summarize_md(msg),
+                    msg_fields=summarize_md(msg),
                 )
 
-            # Enqueue as tuple (exchange, msg) to match consumer
             if hasattr(self, "loop"):
                 if msg is not None:
-                    # P0-1: Handle QueueFull with backpressure in loop context
                     self.loop.call_soon_threadsafe(self._enqueue_raw, exchange, msg)
                 else:
                     if self.log_raw:
@@ -750,47 +569,25 @@ class MarketDataService:
             self._record_shioaji_crash_signature(str(e), context="md_callback")
             logger.error(f"Error in Shioaji callback: {e}")
 
-    async def _monitor_loop(self):
-        while self.running:
-            await asyncio.sleep(5.0)  # 5s interval
+    # -- monitor loop -------------------------------------------------------
 
-            # 1. Throughput
+    async def _monitor_loop(self) -> None:
+        while self.running:
+            await asyncio.sleep(5.0)
+
             now = timebase.now_s()
             elapsed = now - self.metrics["start_ts"]
             count = self.metrics["count"]
             eps = count / elapsed if elapsed > 0 else 0
 
-            # Reset
             self.metrics["count"] = 0
             self.metrics["start_ts"] = now
 
             raw_q = self.raw_queue.qsize()
-
-            # 3. Log
             logger.info("Metrics", eps=round(eps, 2), raw_queue=raw_q, state=self.state)
 
             gap = time.monotonic() - self.last_event_mono
-            if self._pending_reconnect_reason and self._within_reconnect_window():
-                ok = await self._trigger_reconnect(self._pending_reconnect_gap, reason=self._pending_reconnect_reason)
-                if ok:
-                    if self._pending_reconnect_reason == "session_rollover":
-                        self._last_rollover_reconnect_date = dt.datetime.now(tz=self._reconnect_tzinfo).date()
-                    self._pending_reconnect_reason = None
-                    self._pending_reconnect_gap = 0.0
-                    self._pending_reconnect_since = None
-            if self.state == FeedState.CONNECTED:
-                if gap > self.heartbeat_threshold_s:
-                    logger.warning("Heartbeat missing", gap=gap)
-                if gap > self.resubscribe_gap_s:
-                    await self._attempt_resubscribe(gap, reason="heartbeat_gap")
-                if gap > self.force_reconnect_gap_s or (gap > self.reconnect_gap_s and self._resubscribe_attempts > 2):
-                    await self._request_reconnect(gap, reason="heartbeat_gap")
-
-                if self._should_rollover_reconnect():
-                    await self._request_reconnect(gap, reason="session_rollover")
-
-            if self.state in {FeedState.DISCONNECTED, FeedState.RECOVERING}:
-                await self._request_reconnect(gap, reason="recovering")
+            await self._run_monitor_reconnect_checks(gap)
 
             if self.symbol_metadata.reload_if_changed():
                 logger.info("Symbols config reloaded", count=len(self.symbol_metadata.meta))
@@ -799,117 +596,29 @@ class MarketDataService:
                 except Exception as exc:
                     logger.error("Symbol reload failed", error=str(exc))
 
-    async def _update_symbol_tick(self, symbol: str) -> None:
-        """Update symbol tick timestamp (legacy async path).
+    # -- symbol tick (legacy async path) ------------------------------------
 
-        Note: With P0-2 inline updates enabled (HFT_SYMBOL_TICK_INLINE=1),
-        this method is only called when the legacy path is used.
-        """
+    async def _update_symbol_tick(self, symbol: str) -> None:
         self._symbol_last_tick[symbol] = time.monotonic()
 
-    async def _watchdog_loop(self):
-        """Per-symbol feed gap watchdog.
+    # -- bus publish helpers -------------------------------------------------
 
-        Checks each symbol's last tick timestamp and triggers reconnection
-        if any symbol exceeds the gap threshold.
-        """
-        while self.running:
-            await asyncio.sleep(self._watchdog_interval_s)
-
-            if self.state != FeedState.CONNECTED:
-                continue
-
-            if self._symbol_gap_skip_off_hours and not self._is_trading_hours():
-                self._symbol_gap_consecutive_hits = 0
-                now_s = timebase.now_s()
-                if now_s - self._last_symbol_gap_off_hours_log_ts >= self._symbol_gap_off_hours_log_interval_s:
-                    logger.info("Skipping symbol gap watchdog outside trading hours")
-                    self._last_symbol_gap_off_hours_log_ts = now_s
-                continue
-
-            # P1-4: Lock-free snapshot (CPython dict copy is safe during iteration)
-            if not self._symbol_last_tick:
-                self._symbol_gap_consecutive_hits = 0
-                continue
-            try:
-                tick_snapshot = dict(self._symbol_last_tick)
-            except RuntimeError:
-                # Dict changed size during iteration - skip this cycle
-                continue
-
-            now = time.monotonic()
-            if self._symbol_gap_active_lookback_s > 0:
-                active_snapshot = {
-                    symbol: last_ts
-                    for symbol, last_ts in tick_snapshot.items()
-                    if (now - last_ts) <= self._symbol_gap_active_lookback_s
-                }
-            else:
-                active_snapshot = tick_snapshot
-            if len(active_snapshot) < self._symbol_gap_min_active_symbols:
-                self._symbol_gap_consecutive_hits = 0
-                continue
-            stale_symbols: list[tuple[str, float]] = []
-
-            # Use relaxed threshold during market open grace period (C4)
-            threshold = self._symbol_gap_threshold_s
-            if self._is_market_open_grace_period():
-                threshold = max(threshold, self._market_open_grace_gap_threshold_s)
-
-            for symbol, last_ts in active_snapshot.items():
-                gap = now - last_ts
-                if gap > threshold:
-                    stale_symbols.append((symbol, gap))
-
-            if stale_symbols:
-                self._symbol_gap_consecutive_hits += 1
-                symbols_str = ", ".join(f"{s}({g:.1f}s)" for s, g in stale_symbols[:5])
-                active_count = len(active_snapshot)
-                stale_ratio = (len(stale_symbols) / active_count) if active_count > 0 else 0.0
-                max_stale_gap = max(g for _, g in stale_symbols)
-                if self._symbol_gap_consecutive_hits == 1 or self._symbol_gap_consecutive_hits % 10 == 0:
-                    logger.warning(
-                        "Feed gap detected for symbols",
-                        stale_count=len(stale_symbols),
-                        active_count=active_count,
-                        stale_ratio=round(stale_ratio, 3),
-                        symbols=symbols_str,
-                        threshold_s=self._symbol_gap_threshold_s,
-                        consecutive_cycles=self._symbol_gap_consecutive_hits,
-                    )
-
-                # Trigger resubscription only when stale condition is sustained and cooldown elapsed.
-                if (
-                    len(stale_symbols) >= self._symbol_gap_min_stale_count
-                    and stale_ratio >= self._symbol_gap_stale_ratio_threshold
-                    and max_stale_gap >= max(self._symbol_gap_severe_gap_s, threshold)
-                    and self._symbol_gap_consecutive_hits >= self._symbol_gap_consecutive_cycles
-                    and (timebase.now_s() - self._last_symbol_gap_resubscribe_ts)
-                    >= self._symbol_gap_resubscribe_cooldown_s
-                ):
-                    self._last_symbol_gap_resubscribe_ts = timebase.now_s()
-                    await self._attempt_resubscribe(max_stale_gap, reason="symbol_gap")
-            else:
-                self._symbol_gap_consecutive_hits = 0
-
-    async def _publish(self, event):
-        """Publish to bus and handle both async and sync publishers."""
+    async def _publish(self, event: Any) -> None:
         publish_fn = getattr(self.bus, "publish", None)
         if not publish_fn:
             return
-
         result = publish_fn(event)
         if asyncio.iscoroutine(result):
             await result
 
-    def _publish_nowait(self, event) -> None:
+    def _publish_nowait(self, event: Any) -> None:
         publish_nowait = getattr(self.bus, "publish_nowait", None)
         if publish_nowait:
             publish_nowait(event)
             return
         asyncio.create_task(self._publish(event))
 
-    def _publish_many_nowait(self, events) -> None:
+    def _publish_many_nowait(self, events: list[Any]) -> None:
         publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
         if publish_many_nowait:
             publish_many_nowait(events)
@@ -917,252 +626,7 @@ class MarketDataService:
         for event in events:
             self._publish_nowait(event)
 
-    def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
-        sampler = getattr(self, "_trace_sampler", None)
-        if sampler is None:
-            return
-        try:
-            sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
-        except Exception:
-            return
-
-    def _record_shioaji_crash_signature(self, text: str | None, *, context: str) -> None:
-        if not self.metrics_registry or not hasattr(self.metrics_registry, "shioaji_crash_signature_total"):
-            return
-        signature = detect_crash_signature(text)
-        if not signature:
-            return
-        try:
-            self.metrics_registry.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
-        except Exception:
-            return
-
-    def _maybe_update_features(
-        self,
-        event: TickEvent | BidAskEvent,
-        stats: object | None,
-    ) -> FeatureUpdateEvent | None:
-        if self.feature_engine is None or stats is None:
-            return None
-        if not hasattr(stats, "best_bid") or not hasattr(stats, "best_ask"):
-            return None
-        meta = getattr(event, "meta", None)
-        local_ts_ns = int(getattr(meta, "local_ts", 0) or 0) if meta is not None else 0
-        start_ns = time.perf_counter_ns()
-        try:
-            process_lob_update = getattr(self.feature_engine, "process_lob_update", None)
-            if callable(process_lob_update):
-                feature_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
-            else:
-                feature_update = self.feature_engine.process_lob_stats(
-                    cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns
-                )
-            self._maybe_run_feature_shadow_parity(event, stats, local_ts_ns, feature_update)
-            self._feature_latency_counter += 1
-            self._feature_metrics_counter += 1
-            if self.metrics_registry:
-                if self._feature_latency_counter % self._feature_latency_sample_every == 0:
-                    try:
-                        if self._feature_latency_metric_child is None and hasattr(
-                            self.metrics_registry, "feature_plane_latency_ns"
-                        ):
-                            self._feature_latency_metric_child = self.metrics_registry.feature_plane_latency_ns
-                        if self._feature_latency_metric_child is not None:
-                            self._feature_latency_metric_child.observe(time.perf_counter_ns() - start_ns)
-                    except Exception:
-                        pass
-                if self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
-                    try:
-                        if feature_update is not None:
-                            feature_set_id = str(getattr(feature_update, "feature_set_id", self._feature_set_id_cached))
-                            self._feature_set_id_cached = feature_set_id
-                            result = "emitted"
-                            qflags = int(getattr(feature_update, "quality_flags", 0) or 0)
-                        else:
-                            feature_set_id = self._feature_set_id_cached
-                            result = "updated"
-                            state_view = None
-                            qflags = 0
-                            try:
-                                if hasattr(self.feature_engine, "get_feature_view"):
-                                    state_view = self.feature_engine.get_feature_view(getattr(event, "symbol", ""))
-                            except Exception:
-                                state_view = None
-                            if isinstance(state_view, dict):
-                                qflags = int(state_view.get("quality_flags", 0) or 0)
-                        if hasattr(self.metrics_registry, "feature_plane_updates_total"):
-                            key = (result, feature_set_id)
-                            child = self._feature_update_metric_children.get(key)
-                            if child is None:
-                                child = self.metrics_registry.feature_plane_updates_total.labels(
-                                    result=result,
-                                    feature_set=feature_set_id,
-                                )
-                                self._feature_update_metric_children[key] = child
-                            child.inc()
-                        if qflags and hasattr(self.metrics_registry, "feature_quality_flags_total"):
-                            for bit, label in _FEATURE_QUALITY_FLAG_LABELS:
-                                if qflags & bit:
-                                    qchild = self._feature_quality_flag_metric_children.get(label)
-                                    if qchild is None:
-                                        qchild = self.metrics_registry.feature_quality_flags_total.labels(flag=label)
-                                        self._feature_quality_flag_metric_children[label] = qchild
-                                    qchild.inc()
-                    except Exception:
-                        pass
-            return feature_update
-        except Exception as exc:
-            self._emit_trace(
-                "feature_update_error",
-                "",
-                {"symbol": getattr(event, "symbol", ""), "reason": str(exc)},
-            )
-            self._feature_metrics_counter += 1
-            if self.metrics_registry and self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
-                try:
-                    if hasattr(self.metrics_registry, "feature_plane_updates_total"):
-                        key = ("error", self._feature_set_id_cached)
-                        child = self._feature_update_metric_children.get(key)
-                        if child is None:
-                            child = self.metrics_registry.feature_plane_updates_total.labels(
-                                result="error",
-                                feature_set=self._feature_set_id_cached,
-                            )
-                            self._feature_update_metric_children[key] = child
-                        child.inc()
-                except Exception:
-                    pass
-            logger.warning("feature_engine_update_failed", reason=str(exc))
-            return None
-
-    def _maybe_run_feature_shadow_parity(
-        self,
-        event: TickEvent | BidAskEvent,
-        stats: object,
-        local_ts_ns: int,
-        primary_update: FeatureUpdateEvent | None,
-    ) -> None:
-        shadow = self._feature_shadow_engine
-        if shadow is None:
-            return
-        self._feature_shadow_counter += 1
-        compare_now = self._feature_shadow_counter % self._feature_shadow_sample_every == 0
-        try:
-            process_lob_update = getattr(shadow, "process_lob_update", None)
-            if callable(process_lob_update):
-                shadow_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
-            else:
-                shadow_update = shadow.process_lob_stats(cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns)
-        except Exception as exc:
-            logger.warning("feature_shadow_engine_update_failed", reason=str(exc))
-            self._emit_feature_shadow_check_metric("skipped")
-            return
-
-        if not compare_now:
-            return
-        self._emit_feature_shadow_check_metric("checked")
-        primary_feature_set = str(getattr(primary_update, "feature_set_id", self._feature_set_id_cached))
-        primary_values = None
-        primary_ids = None
-        if primary_update is not None:
-            primary_values = tuple(primary_update.values)
-            primary_ids = tuple(primary_update.feature_ids)
-        else:
-            try:
-                view = (
-                    self.feature_engine.get_feature_view(getattr(event, "symbol", "")) if self.feature_engine else None
-                )
-            except Exception:
-                view = None
-            if isinstance(view, dict):
-                primary_values = tuple(view.get("values", ()))
-                primary_ids = tuple(view.get("feature_ids", ()))
-                primary_feature_set = str(view.get("feature_set_id", primary_feature_set))
-
-        shadow_values = None
-        shadow_ids = None
-        if shadow_update is not None:
-            shadow_values = tuple(shadow_update.values)
-            shadow_ids = tuple(shadow_update.feature_ids)
-        else:
-            try:
-                sview = shadow.get_feature_view(getattr(event, "symbol", ""))
-            except Exception:
-                sview = None
-            if isinstance(sview, dict):
-                shadow_values = tuple(sview.get("values", ()))
-                shadow_ids = tuple(sview.get("feature_ids", ()))
-
-        if primary_values is None or shadow_values is None or primary_ids is None or shadow_ids is None:
-            return
-        if primary_ids != shadow_ids or len(primary_values) != len(shadow_values):
-            for fid in primary_ids:
-                self._emit_feature_shadow_mismatch_metric(primary_feature_set, str(fid))
-            return
-        mismatched: list[str] = []
-        tol = float(self._feature_shadow_abs_tolerance)
-        for fid, pv, sv in zip(primary_ids, primary_values, shadow_values):
-            if isinstance(pv, float) or isinstance(sv, float):
-                if abs(float(pv) - float(sv)) > tol:
-                    mismatched.append(str(fid))
-            else:
-                if int(pv) != int(sv):
-                    mismatched.append(str(fid))
-        if mismatched:
-            self._feature_shadow_mismatch_counter += 1
-            for fid in mismatched:
-                self._emit_feature_shadow_mismatch_metric(primary_feature_set, fid)
-            self._emit_trace(
-                "feature_shadow_mismatch",
-                "",
-                {
-                    "symbol": getattr(event, "symbol", ""),
-                    "feature_set_id": primary_feature_set,
-                    "mismatch_count": len(mismatched),
-                    "mismatched_features": mismatched[:16],
-                },
-            )
-            if self._feature_shadow_mismatch_counter % self._feature_shadow_warn_every == 1:
-                logger.warning(
-                    "feature_shadow_parity_mismatch",
-                    symbol=getattr(event, "symbol", ""),
-                    feature_set=primary_feature_set,
-                    mismatch_count=len(mismatched),
-                    mismatched_features=mismatched[:8],
-                )
-
-    def _emit_feature_shadow_check_metric(self, result: str) -> None:
-        if not self.metrics_registry or not hasattr(self.metrics_registry, "feature_shadow_parity_checks_total"):
-            return
-        feature_set_id = self._feature_set_id_cached
-        key = (feature_set_id, str(result))
-        try:
-            child = self._feature_shadow_checks_metric_children.get(key)
-            if child is None:
-                child = self.metrics_registry.feature_shadow_parity_checks_total.labels(
-                    feature_set=feature_set_id,
-                    result=str(result),
-                )
-                self._feature_shadow_checks_metric_children[key] = child
-            child.inc()
-        except Exception:
-            pass
-
-    def _emit_feature_shadow_mismatch_metric(self, feature_set_id: str, feature_id: str) -> None:
-        if not self.metrics_registry or not hasattr(self.metrics_registry, "feature_shadow_parity_mismatch_total"):
-            return
-        key = (str(feature_set_id), str(feature_id))
-        try:
-            child = self._feature_shadow_mismatch_metric_children.get(key)
-            if child is None:
-                child = self.metrics_registry.feature_shadow_parity_mismatch_total.labels(
-                    feature_set=str(feature_set_id),
-                    feature_id=str(feature_id),
-                )
-                self._feature_shadow_mismatch_metric_children[key] = child
-            child.inc()
-        except Exception:
-            pass
+    # -- recorder direct event -----------------------------------------------
 
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
         if self.recorder_queue is None:
@@ -1205,7 +669,6 @@ class MarketDataService:
                 self.recorder_queue.put_nowait({"topic": topic, "data": payload})
             except asyncio.QueueFull:
                 self._dropped_count += 1
-                # EC-3: Enter degraded mode if consecutive drops exceed threshold
                 if self._dropped_count >= self._record_degrade_threshold and not self._record_degraded:
                     self._record_degraded = True
                     self._record_degraded_since = time.monotonic()
@@ -1219,7 +682,7 @@ class MarketDataService:
         else:
             asyncio.create_task(self.recorder_queue.put({"topic": topic, "data": payload}))
 
-    def _enqueue_raw(self, exchange, msg) -> None:
+    def _enqueue_raw(self, exchange: Any, msg: Any) -> None:
         """Enqueue raw quote messages with backpressure handling."""
         try:
             self.raw_queue.put_nowait((exchange, msg))
@@ -1234,164 +697,28 @@ class MarketDataService:
                     queue_size=self._raw_queue_size,
                 )
 
-    def _set_state(self, new_state):
+    def _set_state(self, new_state: FeedState) -> None:
         if self.state != new_state:
             logger.info("State change", old=self.state, new=new_state)
             self.state = new_state
 
-    async def _attempt_resubscribe(self, gap: float, reason: str = "heartbeat_gap") -> None:
-        if not self._within_reconnect_window():
-            return
-        now = timebase.now_s()
-        if now - self._last_resubscribe_ts < self.resubscribe_cooldown_s:
-            return
-        if self.metrics_registry:
-            if reason == "heartbeat_gap":
-                if self._feed_reconnect_gap_metric_child is None:
-                    self._feed_reconnect_gap_metric_child = self.metrics_registry.feed_reconnect_total.labels(
-                        result="gap"
-                    )
-                gap_metric_child = self._feed_reconnect_gap_metric_child
-                if gap_metric_child is not None:
-                    gap_metric_child.inc()
-            elif reason == "symbol_gap":
-                self.metrics_registry.feed_reconnect_total.labels(result="symbol_gap").inc()
-        self._last_resubscribe_ts = now
-        ok = await asyncio.to_thread(self.client.resubscribe)
-        if ok:
-            self._resubscribe_attempts = 0
-        else:
-            self._resubscribe_attempts += 1
-        logger.info("Resubscribe attempt", gap=gap, reason=reason, ok=ok, attempts=self._resubscribe_attempts)
-
-    async def _request_reconnect(self, gap: float, reason: str | None = None) -> None:
-        if self._within_reconnect_window():
-            await self._trigger_reconnect(gap, reason=reason)
-            return
-        self._mark_pending_reconnect(gap, reason=reason)
-
-    async def _trigger_reconnect(self, gap: float, reason: str | None = None) -> bool:
-        now = timebase.now_s()
-        if now - self._last_reconnect_ts < self.reconnect_cooldown_s:
-            return False
-        if not self._within_reconnect_window():
-            return False
-        self._last_reconnect_ts = now
-        reason_label = reason or "heartbeat_gap"
-        logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
-        self._set_state(FeedState.RECOVERING)
-        force_login = reason_label == "session_rollover"
-        try:
-            ok = await asyncio.wait_for(
-                asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s", force_login),
-                timeout=max(0.1, float(self.reconnect_timeout_s)),
-            )
-        except asyncio.TimeoutError:
-            logger.error("Reconnect timed out", reason=reason_label, timeout_s=self.reconnect_timeout_s)
-            if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_timeout_total"):
-                self.metrics_registry.feed_reconnect_timeout_total.labels(reason=reason_label).inc()
-            self._set_state(FeedState.DISCONNECTED)
-            return False
-        except Exception as exc:
-            logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
-            if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_exception_total"):
-                self.metrics_registry.feed_reconnect_exception_total.labels(
-                    reason=reason_label,
-                    exception_type=type(exc).__name__,
-                ).inc()
-            self._set_state(FeedState.DISCONNECTED)
-            return False
-        if ok:
-            self._set_state(FeedState.CONNECTED)
-            self.last_event_ts = timebase.now_s()
-            self.last_event_mono = time.monotonic()
-            self._resubscribe_attempts = 0
-        else:
-            self._set_state(FeedState.DISCONNECTED)
-        return ok
-
-    def _should_rollover_reconnect(self) -> bool:
-        now_dt = dt.datetime.now(tz=self._reconnect_tzinfo)
-        last_event_dt = dt.datetime.fromtimestamp(self.last_event_ts, tz=self._reconnect_tzinfo)
-        if last_event_dt.date() == now_dt.date():
-            return False
-        if self._last_rollover_seen_date == now_dt.date():
-            return False
-        self._last_rollover_seen_date = now_dt.date()
-        return True
-
-    def _within_reconnect_window(self) -> bool:
-        if not self.reconnect_days and not self.reconnect_hours and not self.reconnect_hours_2:
-            return True
-        now = dt.datetime.now(tz=self._reconnect_tzinfo)
-        if os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}:
-            try:
-                from hft_platform.core.market_calendar import get_calendar
-
-                calendar = get_calendar()
-                if calendar.available and calendar.days_until_trading(now.date()) > 1:
-                    return False
-            except Exception:
-                pass
-        weekday = now.strftime("%a").lower()
-        if self.reconnect_days and weekday not in self.reconnect_days:
-            return False
-
-        windows = [w for w in (self.reconnect_hours, self.reconnect_hours_2) if w]
-        if not windows:
-            return True
-        for window in windows:
-            try:
-                start_str, end_str = window.split("-", 1)
-                start = dt.time.fromisoformat(start_str)
-                end = dt.time.fromisoformat(end_str)
-                now_t = now.timetz().replace(tzinfo=None)
-                if start <= end:
-                    if start <= now_t <= end:
-                        return True
-                else:
-                    if now_t >= start or now_t <= end:
-                        return True
-            except Exception:
-                continue
-        return False
-
-    def _mark_pending_reconnect(self, gap: float, reason: str | None = None) -> None:
-        reason_label = reason or "heartbeat_gap"
-        if self._pending_reconnect_reason != reason_label:
-            logger.warning("Reconnect pending (outside window)", gap=gap, reason=reason_label)
-        self._pending_reconnect_reason = reason_label
-        self._pending_reconnect_gap = gap
-        if self._pending_reconnect_since is None:
-            self._pending_reconnect_since = timebase.now_s()
-
-    async def _call_client(self, func, *args):
+    async def _call_client(self, func: Any, *args: Any) -> Any:
         if os.getenv("HFT_MD_SYNC_CONNECT") == "1":
             return func(*args)
         if hasattr(func, "assert_called") or getattr(func, "_mock_name", None):
             return func(*args)
         return await asyncio.to_thread(func, *args)
 
-    def within_reconnect_window(self) -> bool:
-        """Public hook for supervisors to check whether reconnection should be active."""
-        return self._within_reconnect_window()
+    # -- public API ----------------------------------------------------------
 
     def get_max_feed_gap_s(self) -> float:
-        """Return the maximum feed gap across all symbols in seconds.
-
-        Used by StormGuard to detect stale data.
-        Note: This is a sync method that reads a snapshot. For thread-safe
-        access in async code, use get_max_feed_gap_s_async().
-        """
-        # Take a snapshot of values to avoid iteration during modification
+        """Return the maximum feed gap across all symbols in seconds."""
         try:
             tick_values = list(self._symbol_last_tick.values())
         except RuntimeError:
-            # Dict changed during iteration - return 0 as safe default
             return 0.0
 
         if not tick_values:
-            # No symbols subscribed yet — return configurable sentinel value
             return float(os.getenv("HFT_FEED_GAP_NO_DATA_S", "0.0"))
 
         now = time.monotonic()
@@ -1403,78 +730,12 @@ class MarketDataService:
         return max_gap
 
     def get_feed_gaps_by_symbol(self) -> dict[str, float]:
-        """Return feed gap for each symbol in seconds.
-
-        Used for per-symbol gap monitoring metrics.
-        Note: This is a sync method that reads a snapshot. For thread-safe
-        access in async code, use get_feed_gaps_by_symbol_async().
-        """
-        # Take a snapshot to avoid iteration during modification
+        """Return feed gap for each symbol in seconds."""
         try:
             tick_snapshot = dict(self._symbol_last_tick)
         except RuntimeError:
-            # Dict changed during iteration - return empty as safe default
             return {}
-
         if not tick_snapshot:
             return {}
-
         now = time.monotonic()
         return {symbol: now - last_ts for symbol, last_ts in tick_snapshot.items()}
-
-    def _is_trading_hours(self) -> bool:
-        # Use the broadest product-type session window so the symbol-gap watchdog
-        # stays active during futures/options hours (08:45–13:45 + night session).
-        # Configurable via HFT_WATCHDOG_PRODUCT_TYPE (default: "future").
-        product_type = os.getenv("HFT_WATCHDOG_PRODUCT_TYPE", "future")
-        try:
-            from hft_platform.core.market_calendar import get_calendar
-
-            calendar = get_calendar()
-            now_dt = dt.datetime.now(calendar._tz)
-            return calendar.is_trading_hours(now_dt, product_type=product_type)
-        except Exception:
-            now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
-            if now_dt.weekday() >= 5:
-                return False
-            minute = now_dt.hour * 60 + now_dt.minute
-            # Fallback: futures day session 08:45–13:45
-            return (8 * 60 + 45) <= minute <= (13 * 60 + 45)
-
-    def _is_market_open_grace_period(self) -> bool:
-        """Check if within grace period after market open (C4).
-
-        Returns:
-            True if within grace period
-        """
-        if self._market_open_grace_s <= 0:
-            return False
-
-        try:
-            from hft_platform.core.market_calendar import get_calendar
-
-            calendar = get_calendar()
-        except ImportError:
-            return False
-
-        try:
-            now = dt.datetime.now(calendar._tz)
-
-            if not calendar.is_trading_day(now.date()):
-                return False
-
-            open_time = calendar.get_session_open(now.date())
-            if open_time is None:
-                return False
-
-            # Check if we're within grace period after open
-            elapsed = (now - open_time).total_seconds()
-            in_grace = 0 <= elapsed <= self._market_open_grace_s
-
-            # Update gauge
-            if self.metrics_registry and hasattr(self.metrics_registry, "market_open_grace_active"):
-                self.metrics_registry.market_open_grace_active.set(1 if in_grace else 0)
-
-            return in_grace
-        except Exception:
-            return False
