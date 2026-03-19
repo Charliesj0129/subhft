@@ -1,0 +1,16 @@
+# Signal Monitor TUI — LIVE watchlist (near-month futures only)
+# Capital: 50,000 NTD | Broker: Shioaji | No on-call
+# Gate E approved alphas only
+
+monitor:
+  poll_interval_s: 2.0
+  warmup_ticks: 32
+  stale_threshold_s: 6.0
+  max_retries: 20
+  data_source: auto
+
+symbols:
+  - code: MXFD6
+    alpha_ids: [queue_imbalance, flow_mode_decomp, depth_concentration_index]
+  - code: TXFD6
+    alpha_ids: [queue_imbalance, flow_mode_decomp, depth_concentration_index]

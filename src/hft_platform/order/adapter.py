@@ -14,9 +14,10 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
-from hft_platform.order.circuit_breaker import CircuitBreaker
+from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
-from hft_platform.order.rate_limiter import RateLimiter
+from hft_platform.order.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult, RateLimiter
+from hft_platform.order.shadow import ShadowOrderSink
 
 logger = get_logger("order_adapter")
 
@@ -92,6 +93,11 @@ class OrderAdapter:
 
         # Dead Letter Queue for rejected orders
         self._dlq: DeadLetterQueue = get_dlq()
+
+        # Per-symbol rate limiter, per-strategy circuit breaker, shadow mode
+        self.per_symbol_rate_limiter = PerSymbolRateLimiter()
+        self.strategy_cb_mgr = StrategyCircuitBreakerManager()
+        self.shadow_sink = ShadowOrderSink()
 
         self.load_config()
 
@@ -241,6 +247,17 @@ class OrderAdapter:
     async def execute(self, cmd: OrderCommand):
         intent = cmd.intent
 
+        # Per-symbol rate limit check (WU-06)
+        ps_result = self.per_symbol_rate_limiter.check(intent.symbol)
+        if ps_result == PerSymbolRateResult.HARD:
+            await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Per-symbol hard rate limit")
+            return
+
+        # Per-strategy circuit breaker check (WU-09)
+        if self.strategy_cb_mgr.is_open(intent.strategy_id):
+            await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Per-strategy circuit breaker open")
+            return
+
         # Circuit Breaker Check
         if self.circuit_breaker.is_open():
             logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
@@ -250,6 +267,12 @@ class OrderAdapter:
         if not self.check_rate_limit():
             # Rate limit exceeded
             await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Rate limit exceeded")
+            return
+
+        # Shadow mode intercept (WU-10)
+        if self.shadow_sink.enabled:
+            self.shadow_sink.intercept(intent)
+            self.per_symbol_rate_limiter.record(intent.symbol)
             return
 
         if not self._validate_client(intent):
