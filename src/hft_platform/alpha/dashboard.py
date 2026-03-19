@@ -16,7 +16,7 @@ from structlog import get_logger
 logger = get_logger("alpha.dashboard")
 
 
-def build_alpha_status_report(
+def build_alpha_status_report( # noqa: C901
     *,
     alphas_dir: str = "research/alphas",
     experiments_dir: str = "research/experiments",
