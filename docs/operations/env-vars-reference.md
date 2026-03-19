@@ -238,6 +238,14 @@ Base YAML (config/base/main.yaml)
 
 ---
 
+## 12. 部署
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_ENGINE_IMAGE` | — | Docker image for hft-engine（含 tag/SHA） | 部署時指定已知穩定版本 |
+
+---
+
 ## 快速參考：故障對照表
 
 | 症狀 | 優先檢查 | Runbook |
