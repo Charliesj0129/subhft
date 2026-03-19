@@ -555,6 +555,14 @@ class SystemBootstrapper:
     def build(self) -> ServiceRegistry:
         role = self._get_runtime_role()
         self.settings.setdefault("runtime_role", role)
+
+        # Fail-fast secret validation: live mode raises, sim/replay warn only
+        if role in _FEED_ALLOWED_ROLES:
+            from hft_platform.core.secret_validator import validate_secrets_for_mode
+
+            mode = os.getenv("HFT_MODE", "sim").strip().lower()
+            validate_secrets_for_mode(mode=mode, require_broker=True, require_infra=False)
+
         if role == "maintenance":
             logger.warning("Runtime role maintenance: broker feed creation is disabled", role=role)
         elif role not in _FEED_ALLOWED_ROLES:
