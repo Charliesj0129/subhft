@@ -254,9 +254,10 @@ class HFTSystem:
                 # 3. Get P99 latency estimate (convert event loop lag to microseconds as proxy)
                 latency_us = int(lag_s * 1_000_000)
 
-                # 4. Update StormGuard state
+                # 4. Update StormGuard state (convert drawdown % to bps at boundary)
+                drawdown_bps = int(drawdown_pct * 10_000)
                 self.storm_guard.update(
-                    drawdown_pct=drawdown_pct,
+                    drawdown_bps=drawdown_bps,
                     latency_us=latency_us,
                     feed_gap_s=feed_gap_s,
                 )
