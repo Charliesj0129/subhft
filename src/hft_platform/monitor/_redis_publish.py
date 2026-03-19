@@ -58,7 +58,7 @@ class MonitorLivePublisher:
         ring_size: int = 256,
         queue_size: int = 2048,
     ) -> None:
-        self._client = RedisClient(host=host, port=port, password=password, timeout_s=0.5)
+        self._client = RedisClient(host=host, port=port, password=password)
         self._key_prefix = key_prefix.rstrip(":")
         self._ring_size = max(16, int(ring_size))
         self._queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=max(64, int(queue_size)))

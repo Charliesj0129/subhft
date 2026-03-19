@@ -841,6 +841,26 @@ def cmd_alpha_list(args: argparse.Namespace):
             print(f"- {msg}")
 
 
+def cmd_alpha_status(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.dashboard import build_alpha_status_report
+    except Exception as exc:
+        print(f"Failed to import alpha dashboard: {exc}")
+        sys.exit(1)
+
+    payload = build_alpha_status_report(
+        alphas_dir=str(getattr(args, "alphas_dir", "research/alphas")),
+        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+        promotions_dir=str(getattr(args, "promotions_dir", "config/strategy_promotions")),
+    )
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
 def cmd_alpha_validate(args: argparse.Namespace):
     try:
         from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
@@ -905,6 +925,73 @@ def cmd_alpha_validate(args: argparse.Namespace):
     print(json.dumps(summary, indent=2, sort_keys=True))
     if not result.passed:
         sys.exit(2)
+
+
+def cmd_alpha_batch_validate(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.validation import batch_validate
+    except Exception as exc:
+        print(f"Failed to import batch validation: {exc}")
+        sys.exit(1)
+
+    alpha_ids: list[str]
+    if getattr(args, "all", False):
+        try:
+            from research.registry.alpha_registry import AlphaRegistry
+
+            registry = AlphaRegistry()
+            loaded = registry.discover("research/alphas")
+            alpha_ids = sorted(loaded.keys())
+        except Exception as exc:
+            print(f"Failed to discover alphas: {exc}")
+            sys.exit(1)
+    else:
+        raw = getattr(args, "alphas", "") or ""
+        alpha_ids = [a.strip() for a in raw.split(",") if a.strip()]
+
+    if not alpha_ids:
+        print("No alphas specified. Use --alphas X,Y,Z or --all")
+        sys.exit(2)
+
+    data_paths = list(getattr(args, "data", []) or [])
+    payload = batch_validate(
+        alpha_ids=alpha_ids,
+        data_paths=data_paths,
+        gate=str(getattr(args, "gate", "c")),
+        parallel=int(getattr(args, "parallel", 1)),
+        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+        skip_gate_b_tests=bool(getattr(args, "skip_gate_b_tests", False)),
+    )
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+    if payload.get("failed", 0) > 0:
+        sys.exit(2)
+
+
+def cmd_alpha_experiments_gc(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.experiments import gc_experiment_runs
+    except Exception as exc:
+        print(f"Failed to import experiment GC: {exc}")
+        sys.exit(1)
+
+    payload = gc_experiment_runs(
+        base_dir=str(args.base_dir),
+        older_than_days=int(args.older_than_days),
+        apply=bool(getattr(args, "apply", False)),
+        promotions_dir=str(getattr(args, "promotions_dir", "config/strategy_promotions")),
+    )
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def cmd_alpha_promote(args: argparse.Namespace):
@@ -1207,6 +1294,35 @@ def cmd_alpha_canary_evaluate(args: argparse.Namespace):
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_canary_update_metrics(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.canary_metrics_writer import CanaryMetricsWriter
+    except Exception as exc:
+        print(f"Failed to import CanaryMetricsWriter: {exc}")
+        sys.exit(1)
+
+    writer = CanaryMetricsWriter(
+        promotions_dir=args.promotions_dir,
+        clickhouse_client=None,  # CLI runs offline; CH client injected at runtime.
+    )
+    result = writer.update(args.alpha_id)
+
+    payload: dict[str, Any] = {
+        "alpha_id": result.alpha_id,
+        "yaml_path": result.yaml_path,
+        "updated": result.updated,
+        "error": result.error,
+        "metrics": result.metrics.to_dict() if result.metrics is not None else None,
+    }
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if not result.updated:
+        sys.exit(2)
 
 
 def cmd_alpha_ab_compare(args: argparse.Namespace):
@@ -1763,6 +1879,14 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_list = alpha_sub.add_parser("list", help="List discovered research alphas")
     alpha_list.set_defaults(func=cmd_alpha_list)
 
+    alpha_status = alpha_sub.add_parser("status", help="Show unified alpha pipeline status dashboard")
+    alpha_status.add_argument("--alphas-dir", default="research/alphas", help="Alpha artifacts directory")
+    alpha_status.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    alpha_status.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory")
+    alpha_status.add_argument("--format", choices=["json", "table"], default="json", help="Output format")
+    alpha_status.add_argument("--out", help="Optional JSON output path")
+    alpha_status.set_defaults(func=cmd_alpha_status)
+
     alpha_scaffold = alpha_sub.add_parser("scaffold", help="Scaffold a new research alpha artifact")
     alpha_scaffold.add_argument("alpha_id", help="Immutable alpha id (e.g. ofi_mc_v2)")
     alpha_scaffold.add_argument("--paper", action="append", default=[], help="Paper reference (repeatable)")
@@ -2060,6 +2184,16 @@ def build_parser() -> argparse.ArgumentParser:
     canary_eval.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory")
     canary_eval.add_argument("--out", help="Optional JSON output path")
     canary_eval.set_defaults(func=cmd_alpha_canary_evaluate)
+
+    canary_update_metrics = alpha_canary_sub.add_parser(
+        "update-metrics", help="Fetch live metrics from ClickHouse and write them to the promotion YAML"
+    )
+    canary_update_metrics.add_argument("--alpha-id", required=True, help="Alpha id to update")
+    canary_update_metrics.add_argument(
+        "--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory"
+    )
+    canary_update_metrics.add_argument("--out", help="Optional JSON output path")
+    canary_update_metrics.set_defaults(func=cmd_alpha_canary_update_metrics)
 
     alpha_ab_compare = alpha_sub.add_parser("ab-compare", help="A/B compare two experiment runs with delta table")
     alpha_ab_compare.add_argument("run_id_a", help="First run ID (A)")

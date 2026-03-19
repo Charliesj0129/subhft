@@ -337,6 +337,34 @@ groups:
         summary: "ClickHouse system log table > 10 GB"
         description: "system.{{ $labels.table }} has exceeded 10 GB. TTL may not be running. Consider TRUNCATE."
 
+  # Reconciliation / Execution Router Health
+  - alert: ReconciliationDiscrepancyDetected
+    expr: reconciliation_discrepancy_count > 0
+    for: 1m
+    labels:
+        severity: critical
+    annotations:
+        summary: "Reconciliation discrepancy detected"
+        description: "reconciliation_discrepancy_count has been > 0 for more than 1 minute; position state may diverge from broker."
+
+  - alert: ExecutionRouterHeartbeatStale
+    expr: time() - execution_router_heartbeat_ts > 120
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Execution router heartbeat stale"
+        description: "Execution router heartbeat has not been updated for > 120s; router may be hung or crashed."
+
+  - alert: ExecutionRouterLagP99High
+    expr: histogram_quantile(0.99, sum(rate(execution_router_lag_ns_bucket[1m])) by (le)) > 5e7
+    for: 1m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Execution router lag p99 high"
+        description: "Execution router lag p99 exceeded 50ms for 1m."
+
   # CE-M3 WAL SLO
   - alert: WALReplayLagHigh
     expr: wal_replay_lag_seconds > 600

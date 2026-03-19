@@ -148,6 +148,8 @@ class StrategyRunner:
                 pass
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
+        # Unit 10: Strategy-by-id index for O(1) targeted dispatch
+        self._strat_index: dict[str, list[int]] = {}
         self._feature_compat_fail_fast = os.getenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "1").lower() not in {
             "0",
             "false",
@@ -209,7 +211,9 @@ class StrategyRunner:
         self.strategies.append(strategy)
         self._resolve_strategy_symbols(strategy)
         self._strat_executors.append(self._build_executor_entry(strategy))
+        idx = len(self._strat_executors) - 1
         sid = strategy.strategy_id
+        self._strat_index.setdefault(sid, []).append(idx)
         self._strategy_metrics_seq.setdefault(sid, 0)
         self._strategy_pending_intents.setdefault(sid, 0)
         self._strategy_pending_alpha_intent.setdefault(sid, 0)
@@ -247,6 +251,9 @@ class StrategyRunner:
     def _rebuild_executors(self):
         """Rebuild executor cache when strategies are replaced externally."""
         self._strat_executors = [self._build_executor_entry(strategy) for strategy in self.strategies]
+        self._strat_index = {}
+        for idx, strategy in enumerate(self.strategies):
+            self._strat_index.setdefault(strategy.strategy_id, []).append(idx)
 
     def _flush_pending_strategy_metrics(self) -> None:
         if not self.metrics:
@@ -381,6 +388,13 @@ class StrategyRunner:
     def _build_positions_by_strategy(self):
         if not self.position_store:
             return {}
+        # Unit 9: Use Rust fast-path if available
+        rust_tracker = getattr(self.position_store, "_rust_tracker", None)
+        if rust_tracker is not None and hasattr(rust_tracker, "get_positions_by_strategy"):
+            try:
+                return rust_tracker.get_positions_by_strategy()
+            except Exception:
+                pass  # Fallback to Python path
         raw = getattr(self.position_store, "positions", None)
         if not isinstance(raw, dict):
             return {}
@@ -441,8 +455,14 @@ class StrategyRunner:
         if not self._executors_match_strategy_list():
             self._rebuild_executors()
 
+        # Unit 10: Use index for O(1) targeted dispatch when target_strat_id is set
+        if target_strat_id and target_strat_id in self._strat_index:
+            executors_iter = [self._strat_executors[i] for i in self._strat_index[target_strat_id]]
+        else:
+            executors_iter = self._strat_executors
+
         # Use cached executors
-        for strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g in self._strat_executors:
+        for strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g in executors_iter:
             if not strategy.enabled:
                 # S4: Check if halted strategy is eligible for cooldown recovery
                 sid = strategy.strategy_id

@@ -55,7 +55,7 @@ class RedisPoller:
         batch_limit: int = 200,
         max_retries: int = 20,
     ) -> None:
-        self._client = RedisClient(host=host, port=port, password=password, timeout_s=0.5)
+        self._client = RedisClient(host=host, port=port, password=password)
         self._symbols = symbols
         self._retry_count = 0
         self._max_retries = max_retries

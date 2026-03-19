@@ -46,7 +46,7 @@ class RedisClient:
 
     __slots__ = ("host", "port", "password", "timeout_s", "_sock", "_stream")
 
-    def __init__(self, host: str, port: int, password: str = "", timeout_s: float = 0.5) -> None:
+    def __init__(self, host: str, port: int, password: str = "", timeout_s: float = 5.0) -> None:
         self.host = host
         self.port = int(port)
         self.password = password

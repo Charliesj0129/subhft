@@ -218,7 +218,16 @@ class MarketDataService:
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
-        self.feature_engine = feature_engine or (FeatureEngine() if feature_enabled else None)
+        if feature_engine is not None:
+            self.feature_engine = feature_engine
+        elif feature_enabled:
+            try:
+                self.feature_engine = FeatureEngine()
+            except Exception:
+                logger.error("feature_engine_init_failed", exc_info=True)
+                self.feature_engine = None
+        else:
+            self.feature_engine = None
         try:
             setattr(self.lob, "feature_engine", self.feature_engine)
         except Exception:
