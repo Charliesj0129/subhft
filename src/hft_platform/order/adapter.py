@@ -158,7 +158,10 @@ class OrderAdapter:
         """Sliding window check."""
         return self.rate_limiter.check()
 
-    async def drain_and_cancel(self, timeout_s: float = 5.0  # precision-ok: timing) -> int:
+    async def drain_and_cancel(
+        self,
+        timeout_s: float = 5.0,  # precision-ok: timing
+    ) -> int:
         """Drain pending orders and cancel all live orders."""
         cancelled = 0
         while not self.order_queue.empty():
