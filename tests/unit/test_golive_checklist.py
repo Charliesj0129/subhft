@@ -1,7 +1,6 @@
 """Tests for go-live checklist CLI commands (WU-20)."""
 
 import json
-import os
 from argparse import Namespace
 
 import pytest

@@ -4,17 +4,16 @@ import json
 import os
 import time
 from argparse import Namespace
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
 from hft_platform.cli._health import (
     _check_checkpoint_recent,
     _check_clickhouse,
+    _check_config_valid,
     _check_disk_space,
     _check_kill_switch,
-    _check_config_valid,
-    _check_prometheus,
     _check_wal_backlog,
     cmd_health_preflight,
 )

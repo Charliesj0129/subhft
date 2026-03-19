@@ -62,7 +62,7 @@ def _compute_backoff_delay(
     base: float,  # precision-ok
     max_delay: float,  # precision-ok
     jitter: float,  # precision-ok
-) -> float:
+) -> float:  # precision-ok: timing
     """Compute exponential backoff delay with jitter.
 
     ``attempt`` is 0-indexed (first failure = attempt 0).

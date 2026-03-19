@@ -19,7 +19,11 @@ def _check_kill_switch() -> dict[str, Any]:
     """Kill switch must not be active."""
     path = os.getenv("HFT_KILL_SWITCH_PATH", _DEFAULT_KILL_SWITCH_PATH)
     active = os.path.exists(path)
-    return {"name": "kill_switch", "ok": not active, "detail": "ACTIVE — deactivate before go-live" if active else "inactive"}
+    return {
+        "name": "kill_switch",
+        "ok": not active,
+        "detail": "ACTIVE — deactivate before go-live" if active else "inactive",
+    }
 
 
 def _check_position_checkpoint() -> dict[str, Any]:
@@ -49,7 +53,7 @@ def _check_config_not_sim() -> dict[str, Any]:
 def _check_disk_space(min_gb: float = 2.0) -> dict[str, Any]:
     """Sufficient disk space for go-live."""
     usage = shutil.disk_usage(".")
-    free_gb = usage.free / (1024 ** 3)
+    free_gb = usage.free / (1024**3)
     ok = free_gb >= min_gb
     return {"name": "disk_space", "ok": ok, "detail": f"free={free_gb:.1f}GB (min={min_gb:.1f}GB)"}
 

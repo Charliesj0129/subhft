@@ -33,6 +33,8 @@ from ._feature import (
     cmd_feature_rollout_status,
     cmd_feature_validate,
 )
+from ._golive import cmd_golive_check
+from ._health import cmd_health_preflight
 from ._ops import (
     cmd_backtest,
     cmd_contracts_status,
@@ -41,8 +43,6 @@ from ._ops import (
     cmd_recorder_status,
     cmd_strat_test,
 )
-from ._golive import cmd_golive_check
-from ._health import cmd_health_preflight
 from ._risk import cmd_risk_halt, cmd_risk_resume, cmd_risk_status
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
