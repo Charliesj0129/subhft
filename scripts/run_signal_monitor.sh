@@ -47,6 +47,17 @@ open_tunnel() {
         ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -f -N \
             -L "${local_port}:localhost:${remote_port}" \
             "${REMOTE_USER}@${REMOTE_HOST}"
+        # Wait for tunnel to become ready (up to 5s)
+        local retries=0
+        while [ $retries -lt 10 ]; do
+            if ss -tlnp 2>/dev/null | grep -q ":${local_port} " || \
+               lsof -iTCP:${local_port} -sTCP:LISTEN >/dev/null 2>&1; then
+                echo "${label} tunnel ready on ${local_port}."
+                break
+            fi
+            retries=$((retries + 1))
+            sleep 0.5
+        done
     fi
 }
 

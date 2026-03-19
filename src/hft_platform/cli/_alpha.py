@@ -706,3 +706,114 @@ def cmd_alpha_experiments_best(args: argparse.Namespace) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_validate_batch(args: argparse.Namespace) -> None:
+    """Run Gate A-C validation across multiple alphas sequentially."""
+    import time
+
+    try:
+        from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
+    except Exception as exc:
+        print(f"Failed to import alpha validation pipeline: {exc}")
+        sys.exit(1)
+
+    try:
+        from research.registry.alpha_registry import AlphaRegistry
+    except Exception as exc:
+        print(f"Failed to import alpha registry: {exc}")
+        sys.exit(1)
+
+    alphas_dir = getattr(args, "alphas_dir", "research/alphas")
+    registry = AlphaRegistry()
+    all_alphas = registry.discover(alphas_dir)
+
+    alpha_ids_filter = getattr(args, "alpha_ids", None)
+    if alpha_ids_filter:
+        target_ids = sorted(set(alpha_ids_filter) & set(all_alphas.keys()))
+        missing = set(alpha_ids_filter) - set(all_alphas.keys())
+        if missing:
+            print(f"Warning: alpha IDs not found: {sorted(missing)}")
+    else:
+        target_ids = sorted(all_alphas.keys())
+
+    gates = getattr(args, "gates", "ABC").upper()
+    skip_gate_c = "C" not in gates
+    skip_gate_b = "B" not in gates
+    data_paths = [str(p) for p in args.data]
+
+    print(f"Batch validation: {len(target_ids)} alphas, gates={gates}, data={data_paths}")
+
+    results: list[dict[str, Any]] = []
+    passed_ids: list[str] = []
+    failed_ids: list[str] = []
+    errored_ids: list[str] = []
+    t0 = time.monotonic()
+
+    for i, alpha_id in enumerate(target_ids, 1):
+        print(f"\n[{i}/{len(target_ids)}] Validating {alpha_id} ...", flush=True)
+        try:
+            config = ValidationConfig(
+                alpha_id=alpha_id,
+                data_paths=data_paths,
+                skip_gate_b_tests=skip_gate_b,
+                min_sharpe_oos=float(getattr(args, "min_sharpe_oos", 0.0)),
+                max_abs_drawdown=float(getattr(args, "max_abs_drawdown", 0.3)),
+                project_root=".",
+                experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+            )
+            result = run_alpha_validation(config)
+            entry = result.to_dict()
+
+            if skip_gate_c and result.gate_a.passed and (skip_gate_b or result.gate_b.passed):
+                entry["passed"] = True
+                entry["note"] = "Gate C skipped per --gates flag"
+
+            results.append(entry)
+            if entry.get("passed"):
+                passed_ids.append(alpha_id)
+                print(f"  PASS {alpha_id}")
+            else:
+                failed_ids.append(alpha_id)
+                print(f"  FAIL {alpha_id}")
+
+            if getattr(args, "fail_fast", False) and not entry.get("passed"):
+                print("Stopping early (--fail-fast)")
+                break
+
+        except Exception as exc:
+            errored_ids.append(alpha_id)
+            results.append({"alpha_id": alpha_id, "passed": False, "error": str(exc)})
+            print(f"  ERROR {alpha_id}: {exc}")
+
+    elapsed_s = time.monotonic() - t0
+    report = {
+        "summary": {
+            "total": len(target_ids),
+            "passed": len(passed_ids),
+            "failed": len(failed_ids),
+            "errored": len(errored_ids),
+            "elapsed_s": round(elapsed_s, 1),
+            "gates": gates,
+        },
+        "passed_alphas": passed_ids,
+        "failed_alphas": failed_ids,
+        "errored_alphas": errored_ids,
+        "results": results,
+    }
+
+    out_path = getattr(args, "out", None)
+    if out_path:
+        p = Path(out_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(report, indent=2, sort_keys=True))
+        print(f"\nReport written to {out_path}")
+
+    print(f"\n{'='*60}")
+    print(
+        f"Batch complete: {len(passed_ids)} passed, {len(failed_ids)} failed, "
+        f"{len(errored_ids)} errors ({elapsed_s:.1f}s)"
+    )
+
+    if failed_ids or errored_ids:
+        sys.exit(2)
