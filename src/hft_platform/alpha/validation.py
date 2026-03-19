@@ -5,6 +5,7 @@ import datetime as _dt
 import json
 import os
 import pickle
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -14,9 +15,12 @@ from typing import Any
 from uuid import uuid4
 
 import numpy as np
+import structlog
 from scipy import stats
 
 from hft_platform.core import timebase
+
+_log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -162,6 +166,8 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
 
     gate_a = run_gate_a(alpha.manifest, resolved_data_paths, config=config, root=root)
     _write_json(validation_dir / "feasibility_report.json", asdict(gate_a))
+    if gate_a.passed:
+        _update_manifest_status(config.alpha_id, "GATE_A", root)
 
     gate_b = run_gate_b(
         alpha_id=config.alpha_id,
@@ -170,6 +176,8 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
         timeout_s=config.pytest_timeout_s,
     )
     _write_json(validation_dir / "correctness_report.json", asdict(gate_b))
+    if gate_b.passed:
+        _update_manifest_status(config.alpha_id, "GATE_B", root)
 
     if gate_a.passed and gate_b.passed:
         gate_c, run_id, cfg_hash, scorecard_path, experiment_meta_path = run_gate_c(
@@ -216,6 +224,8 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
         experiment_meta_path = None
 
     _write_json(validation_dir / "backtest_report.json", asdict(gate_c))
+    if gate_c.passed:
+        _update_manifest_status(config.alpha_id, "GATE_C", root)
 
     overall = gate_a.passed and gate_b.passed and gate_c.passed
 
@@ -1391,6 +1401,66 @@ def _evaluate_parameter_robustness(
         "median_neighbor_sharpe": median_neighbor_sharpe if np.isfinite(median_neighbor_sharpe) else None,
         "risks": risks,
     }
+
+
+def _update_manifest_status(alpha_id: str, new_status: str, project_root: Path) -> bool:
+    """Regex-replace ``status=AlphaStatus.<X>`` in an alpha's impl.py.
+
+    Returns True if the file was updated, False if already at the target status
+    or if the file does not exist.  The function is idempotent: calling it
+    again with the same *new_status* is a no-op.
+
+    Raises no exceptions — all errors are logged and False is returned.
+    """
+    impl_path = project_root / "research" / "alphas" / alpha_id / "impl.py"
+    if not impl_path.exists():
+        _log.warning(
+            "alpha_status_autoupdate.impl_not_found",
+            alpha_id=alpha_id,
+            impl_path=str(impl_path),
+        )
+        return False
+
+    try:
+        original = impl_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _log.warning(
+            "alpha_status_autoupdate.read_error",
+            alpha_id=alpha_id,
+            error=str(exc),
+        )
+        return False
+
+    pattern = r"status=AlphaStatus\.\w+"
+    replacement = f"status=AlphaStatus.{new_status}"
+    updated = re.sub(pattern, replacement, original)
+
+    if updated == original:
+        # Either already at target status or pattern not found — both are fine.
+        _log.debug(
+            "alpha_status_autoupdate.no_change",
+            alpha_id=alpha_id,
+            new_status=new_status,
+        )
+        return False
+
+    try:
+        impl_path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        _log.warning(
+            "alpha_status_autoupdate.write_error",
+            alpha_id=alpha_id,
+            error=str(exc),
+        )
+        return False
+
+    _log.info(
+        "alpha_status_autoupdate.updated",
+        alpha_id=alpha_id,
+        new_status=new_status,
+        impl_path=str(impl_path),
+    )
+    return True
 
 
 def _make_validation_artifact_dir(experiments_base: Path, alpha_id: str) -> Path:
