@@ -3,19 +3,32 @@ route:
   group_wait: 10s
   group_interval: 1m
   repeat_interval: 1h
-  receiver: 'slack-notifications'
+  receiver: 'default-noop'
   routes:
   - match:
       severity: critical
-    receiver: 'pager-notifications'
+    receiver: 'default-noop'
+    repeat_interval: 5m
 
 receivers:
-- name: 'slack-notifications'
-  slack_configs:
-  - channel: '#trading-alerts'
-    # api_url set via env var or secret in production
-    api_url: 'https://hooks.slack.com/services/YOUR_WORKSPACE/YOUR_CHANNEL/YOUR_KEY'
-
-- name: 'pager-notifications'
+- name: 'default-noop'
   webhook_configs:
-  - url: 'http://pagerduty.mock/adapter'
+  - url: 'http://localhost:9099/noop'
+    send_resolved: true
+
+# PRODUCTION OVERRIDE:
+# Mount a production alertmanager.yml with real Slack/PagerDuty URLs:
+#   volumes:
+#     - ./config/monitoring/alerts/alertmanager.prod.yml:/etc/alertmanager/alertmanager.yml
+#
+# Example production config:
+# receivers:
+# - name: 'slack-notifications'
+#   slack_configs:
+#   - channel: '#trading-alerts'
+#     api_url: 'https://hooks.slack.com/services/REAL/WEBHOOK/URL'
+#     send_resolved: true
+#
+# - name: 'pager-notifications'
+#   pagerduty_configs:
+#   - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
