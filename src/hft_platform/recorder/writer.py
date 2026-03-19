@@ -4,6 +4,7 @@ import random
 import socket
 import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -47,13 +48,27 @@ class DataWriter:
         self._ch_heartbeat_lock = threading.Lock()
         # Determine protocol based on port (9000=native, 8123=HTTP)
         use_native = ch_port == self.DEFAULT_NATIVE_PORT
-        ch_username = (
-            os.getenv("HFT_CLICKHOUSE_USER")
-            or os.getenv("HFT_CLICKHOUSE_USERNAME")
-            or os.getenv("CLICKHOUSE_USER")
-            or os.getenv("CLICKHOUSE_USERNAME")
-            or "default"
-        )
+        ch_username = os.getenv("HFT_CLICKHOUSE_USER")
+        if not ch_username and os.getenv("HFT_CLICKHOUSE_USERNAME"):
+            ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME")
+            warnings.warn(
+                "HFT_CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            logger.warning("Deprecated env var HFT_CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
+        if not ch_username and os.getenv("CLICKHOUSE_USER"):
+            ch_username = os.getenv("CLICKHOUSE_USER")
+        if not ch_username and os.getenv("CLICKHOUSE_USERNAME"):
+            ch_username = os.getenv("CLICKHOUSE_USERNAME")
+            warnings.warn(
+                "CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            logger.warning("Deprecated env var CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
+        if not ch_username:
+            ch_username = "default"
         ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
         self.ch_params = {
             "host": ch_host,
@@ -70,6 +85,12 @@ class DataWriter:
         # ClickHouse is opt-in; enable by setting HFT_CLICKHOUSE_ENABLED=1
         self.ch_enabled = str(os.getenv("HFT_CLICKHOUSE_ENABLED", "")).lower() in ("1", "true", "yes", "on")
         if os.getenv("HFT_DISABLE_CLICKHOUSE"):
+            warnings.warn(
+                "HFT_DISABLE_CLICKHOUSE is deprecated, use HFT_CLICKHOUSE_ENABLED=0 instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            logger.warning("Deprecated env var HFT_DISABLE_CLICKHOUSE used; migrate to HFT_CLICKHOUSE_ENABLED=0")
             self.ch_enabled = False
         # Allow host/port override via env
         self.ch_params["host"] = os.getenv("HFT_CLICKHOUSE_HOST", self.ch_params["host"])

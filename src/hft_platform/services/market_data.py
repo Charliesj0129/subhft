@@ -4,6 +4,7 @@ import asyncio
 import datetime as dt
 import os
 import time
+import warnings
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
@@ -284,7 +285,15 @@ class MarketDataService:
             else "unknown"
         )
         self._monitor_live_publisher: MonitorLivePublisher | None = None
-        _live_tap = os.getenv("HFT_MONITOR_LIVE_ENABLED", os.getenv("HFT_MONITOR_REDIS_TAP", "0"))
+        _live_tap_legacy = os.getenv("HFT_MONITOR_REDIS_TAP")
+        if _live_tap_legacy is not None and os.getenv("HFT_MONITOR_LIVE_ENABLED") is None:
+            warnings.warn(
+                "HFT_MONITOR_REDIS_TAP is deprecated, use HFT_MONITOR_LIVE_ENABLED instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            logger.warning("Deprecated env var HFT_MONITOR_REDIS_TAP used; migrate to HFT_MONITOR_LIVE_ENABLED")
+        _live_tap = os.getenv("HFT_MONITOR_LIVE_ENABLED", _live_tap_legacy or "0")
         if _live_tap.lower() in {"1", "true", "yes", "on"}:
             try:
                 from hft_platform.monitor._redis_publish import MonitorLivePublisher
