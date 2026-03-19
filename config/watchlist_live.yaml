@@ -1,7 +1,4 @@
 # Signal Monitor TUI — LIVE watchlist (near-month futures only)
-# Capital: 50,000 NTD | Broker: Shioaji | No on-call
-# Gate E approved alphas only
-
 monitor:
   poll_interval_s: 2.0
   warmup_ticks: 32
