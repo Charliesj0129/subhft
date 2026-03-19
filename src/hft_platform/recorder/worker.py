@@ -54,6 +54,20 @@ FILL_COLUMNS = [
     "ingest_ts",
 ]
 
+PNL_SNAPSHOT_COLUMNS = [
+    "snapshot_ts",
+    "account_id",
+    "strategy_id",
+    "symbol",
+    "net_qty",
+    "avg_price_scaled",
+    "realized_pnl_scaled",
+    "fees_scaled",
+    "total_pnl_scaled",
+    "peak_equity_scaled",
+    "drawdown_pct",
+]
+
 
 def _extract_market_data_values(row) -> list | None:
     """Fast extractor for market_data events — bypasses generic serialize()."""
@@ -158,6 +172,29 @@ def _extract_fill_values(row) -> list | None:
         return None
 
 
+def _extract_pnl_snapshot_values(row) -> list | None:
+    """Fast extractor for PnL snapshot events."""
+    try:
+        if isinstance(row, dict):
+            get = row.get
+            return [
+                get("snapshot_ts"),
+                get("account_id"),
+                get("strategy_id"),
+                get("symbol"),
+                get("net_qty"),
+                get("avg_price_scaled"),
+                get("realized_pnl_scaled"),
+                get("fees_scaled"),
+                get("total_pnl_scaled"),
+                get("peak_equity_scaled"),
+                get("drawdown_pct"),
+            ]
+        return None
+    except Exception:
+        return None
+
+
 def _values_to_dict(columns: list[str], values: list | None):
     if values is None:
         return None
@@ -184,12 +221,14 @@ _EXTRACTORS = {
     "market_data": _extract_market_data_values,
     "orders": _extract_order_values,
     "fills": _extract_fill_values,
+    "pnl_snapshots": _extract_pnl_snapshot_values,
 }
 
 _EXTRACTOR_COLUMNS = {
     "market_data": MARKET_DATA_COLUMNS,
     "orders": ORDER_COLUMNS,
     "fills": FILL_COLUMNS,
+    "pnl_snapshots": PNL_SNAPSHOT_COLUMNS,
 }
 
 
@@ -261,6 +300,14 @@ class RecorderService:
             "latency_spans": Batcher(
                 "hft.latency_spans",
                 writer=self.writer,
+                memory_guard=self.memory_guard,
+                health_tracker=self.health_tracker,
+            ),
+            "pnl_snapshots": Batcher(
+                "hft.pnl_snapshots",
+                writer=self.writer,
+                extractor=_EXTRACTORS.get("pnl_snapshots") if extract_enabled else None,
+                extractor_columns=_EXTRACTOR_COLUMNS.get("pnl_snapshots") if extract_enabled else None,
                 memory_guard=self.memory_guard,
                 health_tracker=self.health_tracker,
             ),
