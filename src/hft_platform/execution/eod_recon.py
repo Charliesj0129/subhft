@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from typing import Any
 
 from structlog import get_logger
 
@@ -153,7 +154,7 @@ def _get_or_create_gauge(
     metrics: MetricsRegistry,
     name: str,
     doc: str,
-) -> object:
+) -> Any:
     """Return an existing gauge attribute on *metrics*, or create a new one."""
     from prometheus_client import Gauge
 
