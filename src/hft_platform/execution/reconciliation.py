@@ -19,10 +19,10 @@ logger = get_logger("reconciliation")
 # ---------------------------------------------------------------------------
 # Environment-configurable resilience defaults (WU-04)
 # ---------------------------------------------------------------------------
-_DEFAULT_CHECK_INTERVAL_S = float(os.environ.get("HFT_RECON_CHECK_INTERVAL", "5"))  # precision-ok
+_DEFAULT_CHECK_INTERVAL_S = float(os.environ.get("HFT_RECON_CHECK_INTERVAL", "5"))  # precision-ok: time
 _DEFAULT_GRACE_FAILURES = int(os.environ.get("HFT_RECON_GRACE_FAILURES", "10"))
-_DEFAULT_BACKOFF_BASE = float(os.environ.get("HFT_RECON_BACKOFF_BASE", "2"))  # precision-ok
-_DEFAULT_BACKOFF_MAX = float(os.environ.get("HFT_RECON_BACKOFF_MAX", "60"))  # precision-ok
+_DEFAULT_BACKOFF_BASE = float(os.environ.get("HFT_RECON_BACKOFF_BASE", "2"))  # precision-ok: time
+_DEFAULT_BACKOFF_MAX = float(os.environ.get("HFT_RECON_BACKOFF_MAX", "60"))  # precision-ok: time
 _BACKOFF_JITTER = 0.2
 
 
@@ -59,10 +59,10 @@ class PositionDiscrepancy:
 
 def _compute_backoff_delay(  # precision-ok: time durations
     attempt: int,
-    base: float,  # precision-ok: timing
-    max_delay: float,  # precision-ok: timing
-    jitter: float,  # precision-ok: timing
-) -> float:  # precision-ok: timing
+    base: float,  # precision-ok: time
+    max_delay: float,  # precision-ok: time
+    jitter: float,  # precision-ok: time
+) -> float:
     """Compute exponential backoff delay with jitter.
 
     ``attempt`` is 0-indexed (first failure = attempt 0).
@@ -88,7 +88,8 @@ class ReconciliationService:
         recon_cfg = config.get("reconciliation", {})
 
         # WU-04: resilient defaults (precision-ok: all time durations, not money)
-        self.check_interval_s: float = recon_cfg.get(
+        self.check_interval_s: float  # precision-ok: time
+ = recon_cfg.get(
             "check_interval_s",
             _DEFAULT_CHECK_INTERVAL_S,
         )
@@ -96,11 +97,11 @@ class ReconciliationService:
             "grace_failures",
             _DEFAULT_GRACE_FAILURES,
         )
-        self.backoff_base: float = recon_cfg.get(  # precision-ok: timing
+        self.backoff_base: float = recon_cfg  # precision-ok: time.get(
             "backoff_base",
             _DEFAULT_BACKOFF_BASE,
         )
-        self.backoff_max: float = recon_cfg.get(  # precision-ok: timing
+        self.backoff_max: float = recon_cfg  # precision-ok: time.get(
             "backoff_max",
             _DEFAULT_BACKOFF_MAX,
         )
