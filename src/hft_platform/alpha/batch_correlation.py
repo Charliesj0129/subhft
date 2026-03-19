@@ -77,7 +77,7 @@ def batch_compute_correlations(
             continue
 
         # Patch scorecard if we have the run
-        run = latest_runs.get(alpha_id)
+        run: Any | None = latest_runs.get(alpha_id)
         if run is None:
             continue
         scorecard_path = Path(run.scorecard_path)
