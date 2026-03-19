@@ -64,12 +64,12 @@ class PerSymbolRateLimiter:
         self,
         soft_limit: int | None = None,
         hard_limit: int | None = None,
-        window_s: float | None = None,
+        window_s: float | None = None,  # precision-ok: time
         max_symbols: int = 10_000,
     ):
         self._soft_limit = soft_limit or int(os.getenv("HFT_PER_SYMBOL_RATE_SOFT", "30"))
         self._hard_limit = hard_limit or int(os.getenv("HFT_PER_SYMBOL_RATE_HARD", "50"))
-        self._window_s = window_s or float(os.getenv("HFT_PER_SYMBOL_RATE_WINDOW", "10"))
+        self._window_s = window_s or float(os.getenv("HFT_PER_SYMBOL_RATE_WINDOW", "10"))  # precision-ok: time
         self._windows: dict[str, deque[float]] = {}
         self._call_count = 0
         self._max_symbols = max_symbols

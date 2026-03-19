@@ -57,7 +57,7 @@ class PositionDiscrepancy:
         return "info"
 
 
-def _compute_backoff_delay(
+def _compute_backoff_delay(  # precision-ok: time durations
     attempt: int,
     base: float,  # precision-ok: timing
     max_delay: float,  # precision-ok: timing
@@ -87,8 +87,8 @@ class ReconciliationService:
 
         recon_cfg = config.get("reconciliation", {})
 
-        # WU-04: resilient defaults
-        self.check_interval_s: float = recon_cfg.get(  # precision-ok: timing
+        # WU-04: resilient defaults (precision-ok: all time durations, not money)
+        self.check_interval_s: float = recon_cfg.get(
             "check_interval_s",
             _DEFAULT_CHECK_INTERVAL_S,
         )
@@ -105,7 +105,7 @@ class ReconciliationService:
             _DEFAULT_BACKOFF_MAX,
         )
 
-        self.last_heartbeat: float = timebase.now_s()  # precision-ok: timing
+        self.last_heartbeat: float = timebase.now_s()  # precision-ok: timestamp
         self.running: bool = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._consecutive_failures: int = 0
@@ -122,7 +122,7 @@ class ReconciliationService:
     def _record_sync_result(self, result: str) -> None:
         self._metrics().reconciliation_sync_total.labels(result=result).inc()
 
-    def _record_sync_duration(self, duration_s: float) -> None:  # precision-ok
+    def _record_sync_duration(self, duration_s: float  # precision-ok: time) -> None:
         self._metrics().reconciliation_sync_duration_seconds.observe(duration_s)
 
     def _record_discrepancy(self, severity: str) -> None:
