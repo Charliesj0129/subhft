@@ -92,6 +92,8 @@ class HFTSystem:
             self._start_service("strat", self.strategy_runner.run())
             self._start_service("recorder", self.recorder.run())
             self._start_service("recorder_bridge", self._recorder_bridge())
+            if os.getenv("HFT_PNL_EXPORTER_ENABLED", "1").lower() not in {"0", "false", "no", "off"}:
+                self._start_service("pnl_exporter", self._pnl_snapshot_exporter())
 
             # Start Monitor/Supervisor Loop
             await self._supervise()
@@ -132,6 +134,39 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("Bootstrap teardown failed", error=str(exc))
 
+    async def _pnl_snapshot_exporter(self):
+        """Periodically dump position state to hft.pnl_snapshots via recorder."""
+        interval_s = float(os.getenv("HFT_PNL_SNAPSHOT_INTERVAL_S", "60"))
+        logger.info("PnL snapshot exporter started", interval_s=interval_s)
+        while self.running:
+            await asyncio.sleep(interval_s)
+            try:
+                now_ns = timebase.now_ns()
+                total_pnl = self.position_store.total_pnl
+                peak_equity = self.position_store._peak_equity_scaled
+                drawdown_pct = self.position_store.get_drawdown_pct()
+                positions_snap = dict(self.position_store.positions)
+                for pos in positions_snap.values():
+                    row = {
+                        "snapshot_ts": now_ns,
+                        "account_id": pos.account_id,
+                        "strategy_id": pos.strategy_id,
+                        "symbol": pos.symbol,
+                        "net_qty": pos.net_qty,
+                        "avg_price_scaled": pos.avg_price_scaled,
+                        "realized_pnl_scaled": pos.realized_pnl_scaled,
+                        "fees_scaled": pos.fees_scaled,
+                        "total_pnl_scaled": total_pnl,
+                        "peak_equity_scaled": peak_equity,
+                        "drawdown_pct": drawdown_pct,
+                    }
+                    try:
+                        self.recorder_queue.put_nowait({"topic": "pnl_snapshots", "data": row})
+                    except asyncio.QueueFull:
+                        pass
+            except Exception:
+                logger.warning("PnL snapshot export failed", exc_info=True)
+
     def _iter_supervised_services(self) -> list[tuple[str, str, Any]]:
         services: list[tuple[str, str, Any]] = [
             ("md", "MarketDataService", self.md_service.run),
@@ -142,6 +177,7 @@ class HFTSystem:
             ("strat", "StrategyRunner", self.strategy_runner.run),
             ("recorder", "RecorderService", self.recorder.run),
             ("recorder_bridge", "RecorderBridge", self._recorder_bridge),
+            ("pnl_exporter", "PnLSnapshotExporter", self._pnl_snapshot_exporter),
         ]
         if self.gateway_service is not None:
             services.append(("gateway", "GatewayService", self.gateway_service.run))
