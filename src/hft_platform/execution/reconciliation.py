@@ -19,10 +19,10 @@ logger = get_logger("reconciliation")
 # ---------------------------------------------------------------------------
 # Environment-configurable resilience defaults (WU-04)
 # ---------------------------------------------------------------------------
-_DEFAULT_CHECK_INTERVAL_S = float(os.environ.get("HFT_RECON_CHECK_INTERVAL", "5"))  # precision-ok: time
+_DEFAULT_CHECK_INTERVAL_S = float(os.environ.get("HFT_RECON_CHECK_INTERVAL", "5"))
 _DEFAULT_GRACE_FAILURES = int(os.environ.get("HFT_RECON_GRACE_FAILURES", "10"))
-_DEFAULT_BACKOFF_BASE = float(os.environ.get("HFT_RECON_BACKOFF_BASE", "2"))  # precision-ok: time
-_DEFAULT_BACKOFF_MAX = float(os.environ.get("HFT_RECON_BACKOFF_MAX", "60"))  # precision-ok: time
+_DEFAULT_BACKOFF_BASE = float(os.environ.get("HFT_RECON_BACKOFF_BASE", "2"))
+_DEFAULT_BACKOFF_MAX = float(os.environ.get("HFT_RECON_BACKOFF_MAX", "60"))
 _BACKOFF_JITTER = 0.2
 
 
@@ -57,11 +57,11 @@ class PositionDiscrepancy:
         return "info"
 
 
-def _compute_backoff_delay(  # precision-ok: time durations
+def _compute_backoff_delay(
     attempt: int,
-    base: float,  # precision-ok: time
-    max_delay: float,  # precision-ok: time
-    jitter: float,  # precision-ok: time
+    base: float,
+    max_delay: float,
+    jitter: float,
 ) -> float:
     """Compute exponential backoff delay with jitter.
 
@@ -87,9 +87,8 @@ class ReconciliationService:
 
         recon_cfg = config.get("reconciliation", {})
 
-        # WU-04: resilient defaults (precision-ok: all time durations, not money)
-        self.check_interval_s: float  # precision-ok: time
- = recon_cfg.get(
+        # WU-04: resilient defaults
+        self.check_interval_s: float = recon_cfg.get(
             "check_interval_s",
             _DEFAULT_CHECK_INTERVAL_S,
         )
@@ -97,16 +96,16 @@ class ReconciliationService:
             "grace_failures",
             _DEFAULT_GRACE_FAILURES,
         )
-        self.backoff_base: float = recon_cfg  # precision-ok: time.get(
+        self.backoff_base: float = recon_cfg.get(
             "backoff_base",
             _DEFAULT_BACKOFF_BASE,
         )
-        self.backoff_max: float = recon_cfg  # precision-ok: time.get(
+        self.backoff_max: float = recon_cfg.get(
             "backoff_max",
             _DEFAULT_BACKOFF_MAX,
         )
 
-        self.last_heartbeat: float = timebase.now_s()  # precision-ok: timestamp
+        self.last_heartbeat: float = timebase.now_s()
         self.running: bool = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._consecutive_failures: int = 0
@@ -123,7 +122,7 @@ class ReconciliationService:
     def _record_sync_result(self, result: str) -> None:
         self._metrics().reconciliation_sync_total.labels(result=result).inc()
 
-    def _record_sync_duration(self, duration_s: float  # precision-ok: time) -> None:
+    def _record_sync_duration(self, duration_s: float) -> None:
         self._metrics().reconciliation_sync_duration_seconds.observe(duration_s)
 
     def _record_discrepancy(self, severity: str) -> None:
@@ -169,7 +168,10 @@ class ReconciliationService:
                 )
 
                 if self._consecutive_failures >= self.grace_failures and not self._halt_triggered:
-                    reason = f"RECONCILIATION_UNAVAILABLE: {self._consecutive_failures} consecutive failures"
+                    reason = (
+                        f"RECONCILIATION_UNAVAILABLE: "
+                        f"{self._consecutive_failures} consecutive failures"
+                    )
                     self._halt_triggered = True
                     logger.critical(
                         "Triggering HALT due to reconciliation unavailability",
@@ -178,7 +180,10 @@ class ReconciliationService:
                     if self.storm_guard:
                         self.storm_guard.trigger_halt(reason)
                     else:
-                        logger.error("No StormGuard configured - HALT not triggered (manual intervention required)")
+                        logger.error(
+                            "No StormGuard configured - HALT not triggered "
+                            "(manual intervention required)"
+                        )
                 else:
                     # Exponential backoff before next retry (WU-04)
                     delay = _compute_backoff_delay(
