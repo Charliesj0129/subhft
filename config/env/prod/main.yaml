@@ -1,2 +1,45 @@
-# Prod environment overlay (HFT_ENV=prod, HFT_MODE=live)
+# Production environment overlay (HFT_ENV=prod, HFT_MODE=live)
+# Scope: TXFD6 (Mini-TAIEX futures) + queue_imbalance alpha
+# Launch date: 2026-03-19
+
+broker: shioaji
+
 mode: live
+
+symbols:
+  - "TXFD6"
+
+paths:
+  symbols: config/base/symbols.yaml
+  strategy_limits: config/base/strategy_limits.yaml
+  order_adapter: config/base/order_adapter.yaml
+  strategies: config/env/prod/strategies.yaml
+  risk: config/env/prod/risk.yaml
+
+prometheus_port: 9090
+
+shioaji:
+  # Enable CA activation for live trading
+  activate_ca: true
+  # Path to Sinopac CA certificate (do NOT commit actual path)
+  ca_path: "${SHIOAJI_CA_PATH}"
+  # Read CA password from environment variable
+  ca_password_env: CA_PASSWORD
+
+# Production feature flags
+feature_engine:
+  enabled: true
+  backend: python
+
+# Gateway enabled for production order flow
+gateway:
+  enabled: true
+
+# Recorder: WAL-first for durability
+recorder:
+  mode: wal_first
+
+# Replay disabled in production
+replay:
+  start_date: null
+  end_date: null

@@ -1,10 +1,12 @@
-# AlertManager Production Configuration (WU-11)
+# AlertManager Production Configuration
 # Copy to alertmanager.prod.yml and set environment variables before deploying.
 #
 # Required env vars:
 #   ALERTMANAGER_TELEGRAM_BOT_TOKEN  - Telegram bot token for critical alerts
 #   ALERTMANAGER_TELEGRAM_CHAT_ID    - Telegram chat/group ID for critical alerts
 #   ALERTMANAGER_SLACK_WEBHOOK_URL   - Slack incoming webhook URL for warnings
+#   ALERTMANAGER_LINE_NOTIFY_TOKEN   - LINE Notify token for production alerts
+#   ALERTMANAGER_WEBHOOK_URL         - Generic webhook URL for all alerts
 
 global:
   resolve_timeout: 5m
@@ -16,44 +18,52 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    # Critical alerts: Telegram + LINE Notify + webhook (immediate)
     - match:
         severity: critical
-      receiver: telegram-critical
+      receiver: production-critical
       group_wait: 10s
       group_interval: 1m
       repeat_interval: 15m
       continue: false
 
+    # Warning alerts: Slack + webhook
     - match:
         severity: warning
-      receiver: slack-warning
+      receiver: production-warning
       group_wait: 30s
       group_interval: 5m
       repeat_interval: 1h
       continue: false
 
+    # Info alerts: suppressed
     - match:
         severity: info
       receiver: "null"
       continue: false
 
 receivers:
-  - name: telegram-critical
+  - name: production-critical
     webhook_configs:
-      - url: "https://api.telegram.org/bot$ALERTMANAGER_TELEGRAM_BOT_TOKEN/sendMessage"
+      # Telegram critical channel
+      - url: "https://api.telegram.org/bot${ALERTMANAGER_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${ALERTMANAGER_TELEGRAM_CHAT_ID}"
         send_resolved: true
         http_config:
           follow_redirects: true
-        # POST body is rendered by AlertManager template; configure
-        # a custom template or use an intermediary webhook bridge
-        # (e.g. alertmanager-telegram-bot) that accepts AlertManager
-        # JSON and forwards formatted messages to the chat.
-        # Chat ID is injected via the bridge config or query param:
-        #   ?chat_id=$ALERTMANAGER_TELEGRAM_CHAT_ID
+      # LINE Notify critical
+      - url: "https://notify-api.line.me/api/notify"
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: "${ALERTMANAGER_LINE_NOTIFY_TOKEN}"
+      # Generic webhook (for custom integrations / incident management)
+      - url: "${ALERTMANAGER_WEBHOOK_URL}/critical"
+        send_resolved: true
 
-  - name: slack-warning
+  - name: production-warning
     slack_configs:
-      - api_url: "$ALERTMANAGER_SLACK_WEBHOOK_URL"
+      - api_url: "${ALERTMANAGER_SLACK_WEBHOOK_URL}"
         send_resolved: true
         channel: "#hft-alerts"
         title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
@@ -62,10 +72,15 @@ receivers:
           *Symbol*: {{ .CommonLabels.symbol | default "N/A" }}
           *Summary*: {{ .CommonAnnotations.summary }}
           *Description*: {{ .CommonAnnotations.description }}
+    webhook_configs:
+      # Generic webhook for warnings
+      - url: "${ALERTMANAGER_WEBHOOK_URL}/warning"
+        send_resolved: true
 
   - name: "null"
 
 inhibit_rules:
+  # Critical inhibits warning for the same alert
   - source_matchers:
       - severity = critical
     target_matchers:
