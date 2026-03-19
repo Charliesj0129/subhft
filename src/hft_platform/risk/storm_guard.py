@@ -19,9 +19,9 @@ class StormGuardState(IntEnum):
 
 @dataclass
 class RiskThresholds:
-    warm_drawdown: float = -0.005  # -0.5%  precision-ratio
-    storm_drawdown: float = -0.010  # -1.0%  precision-ratio
-    halt_drawdown: float = -0.020  # -2.0%  precision-ratio
+    warm_drawdown_bps: int = -50  # -0.5% = -50 bps
+    storm_drawdown_bps: int = -100  # -1.0% = -100 bps
+    halt_drawdown_bps: int = -200  # -2.0% = -200 bps
 
     latency_warm_us: int = 5_000
     latency_storm_us: int = 20_000
@@ -54,24 +54,30 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
-    def update(  # precision-ratio
-        self, drawdown_pct: float = 0.0, latency_us: int = 0, feed_gap_s: float = 0.0
+    def update(
+        self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0
     ) -> StormGuardState:
         """
         Evaluate inputs and transition state.
         Priority: HALT > STORM > WARM > NORMAL
+
+        Args:
+            drawdown_bps: Drawdown in basis points (1 bps = 0.01% = 0.0001).
+                          E.g. -50 means -0.5%.
+            latency_us: Latency in microseconds.
+            feed_gap_s: Feed gap in seconds.
         """
         new_state = StormGuardState.NORMAL
 
         # 1. HALT Check
-        if drawdown_pct <= self.thresholds.halt_drawdown:
+        if drawdown_bps <= self.thresholds.halt_drawdown_bps:
             new_state = StormGuardState.HALT
-            reason = f"Drawdown {drawdown_pct:.2%}"
+            reason = f"Drawdown {drawdown_bps}bps"
 
         # 2. STORM Check
-        elif drawdown_pct <= self.thresholds.storm_drawdown:
+        elif drawdown_bps <= self.thresholds.storm_drawdown_bps:
             new_state = StormGuardState.STORM
-            reason = f"Drawdown {drawdown_pct:.2%}"
+            reason = f"Drawdown {drawdown_bps}bps"
         elif latency_us >= self.thresholds.latency_storm_us:
             new_state = StormGuardState.STORM
             reason = f"Latency {latency_us}us"
@@ -81,7 +87,7 @@ class StormGuard:
             reason = f"Feed Gap {feed_gap_s:.3f}s"
 
         # 3. WARM Check
-        elif drawdown_pct <= self.thresholds.warm_drawdown:
+        elif drawdown_bps <= self.thresholds.warm_drawdown_bps:
             new_state = StormGuardState.WARM
             reason = "Drawdown Warning"
         elif latency_us >= self.thresholds.latency_warm_us:
