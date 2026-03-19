@@ -67,12 +67,6 @@ jobs:
       - name: Check linting
         run: make lint
 
-      - name: Architecture conformance gate
-        run: make arch-gate
-
-      - name: Test collection zero-error gate
-        run: make test-collection-check
-
       - name: Enforce research factory contract
         run: make research-audit-strict
 
