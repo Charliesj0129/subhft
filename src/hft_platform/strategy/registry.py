@@ -8,7 +8,7 @@ from structlog import get_logger
 logger = get_logger("strategy.registry")
 
 
-@dataclass(slots=True)
+@dataclass
 class StrategyConfig:
     strategy_id: str
     module: str

@@ -38,7 +38,7 @@ class RejectionReason(str, Enum):
     UNKNOWN = "unknown"
 
 
-@dataclass(slots=True)
+@dataclass
 class DeadLetterEntry:
     """A rejected order entry in the dead letter queue."""
 
