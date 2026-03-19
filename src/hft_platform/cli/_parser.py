@@ -606,11 +606,14 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_exp_best.add_argument("--out", help="Optional JSON output path")
     alpha_exp_best.set_defaults(func=cmd_alpha_experiments_best)
 
-
     # -- Batch pipeline automation --
-    alpha_batch_corr = alpha_sub.add_parser("batch-correlation", help="Batch compute correlation_pool_max across all alphas")
+    alpha_batch_corr = alpha_sub.add_parser(
+        "batch-correlation", help="Batch compute correlation_pool_max across all alphas"
+    )
     alpha_batch_corr.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
-    alpha_batch_corr.add_argument("--dry-run", action="store_true", help="Show correlations without patching scorecards")
+    alpha_batch_corr.add_argument(
+        "--dry-run", action="store_true", help="Show correlations without patching scorecards"
+    )
     alpha_batch_corr.add_argument("--out", help="Optional JSON output path")
     alpha_batch_corr.set_defaults(func=cmd_alpha_batch_correlation)
 
@@ -631,16 +634,24 @@ def build_parser() -> argparse.ArgumentParser:
     pt_record.add_argument("--out", help="Optional JSON output path")
     pt_record.set_defaults(func=cmd_alpha_paper_trade_batch)
 
-    alpha_promote_batch = alpha_sub.add_parser("promote-batch", help="Batch run promotion pipeline across multiple alphas")
-    alpha_promote_batch.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    alpha_promote_batch = alpha_sub.add_parser(
+        "promote-batch", help="Batch run promotion pipeline across multiple alphas"
+    )
+    alpha_promote_batch.add_argument(
+        "--experiments-dir", default="research/experiments", help="Experiment base directory"
+    )
     alpha_promote_batch.add_argument("--owner", default="batch", help="Promotion owner name")
     alpha_promote_batch.add_argument("--alpha-ids", nargs="+", help="Specific alpha IDs to promote")
     alpha_promote_batch.add_argument("--top-n", type=int, default=50, help="Max alphas to process")
     alpha_promote_batch.add_argument("--min-sharpe-oos", type=float, default=1.0, help="Minimum OOS Sharpe threshold")
     alpha_promote_batch.add_argument("--max-abs-drawdown", type=float, default=0.2, help="Maximum absolute drawdown")
     alpha_promote_batch.add_argument("--max-correlation", type=float, default=0.7, help="Maximum pool correlation")
-    alpha_promote_batch.add_argument("--dry-run", action="store_true", default=True, help="Evaluate without writing configs")
-    alpha_promote_batch.add_argument("--no-dry-run", dest="dry_run", action="store_false", help="Write promotion configs")
+    alpha_promote_batch.add_argument(
+        "--dry-run", action="store_true", default=True, help="Evaluate without writing configs"
+    )
+    alpha_promote_batch.add_argument(
+        "--no-dry-run", dest="dry_run", action="store_false", help="Write promotion configs"
+    )
     alpha_promote_batch.add_argument("--out", help="Optional JSON output path")
     alpha_promote_batch.set_defaults(func=cmd_alpha_promote_batch)
 
