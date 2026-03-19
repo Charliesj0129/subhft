@@ -364,3 +364,72 @@ groups:
     annotations:
         summary: "WAL drain ETA high"
         description: "Estimated WAL drain ETA exceeds 15 minutes."
+
+  # ClickHouse connection health
+  - alert: ClickHouseConnectionDown
+    expr: clickhouse_connection_health == 0
+    for: 2m
+    labels:
+        severity: critical
+    annotations:
+        summary: "ClickHouse connection down"
+        description: "ClickHouse heartbeat failed for >2m. Engine may be falling back to WAL-only writes."
+
+  # WAL disk pressure
+  - alert: WALDiskPressureCritical
+    expr: disk_pressure_level >= 2
+    for: 30s
+    labels:
+        severity: critical
+    annotations:
+        summary: "WAL disk pressure critical"
+        description: "WAL disk pressure at CRITICAL or HALT level. Data may be dropped."
+
+  # Event loop lag
+  - alert: EventLoopLagHigh
+    expr: event_loop_lag_ms > 5
+    for: 1m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Event loop lag high"
+        description: "asyncio event loop lag > 5ms for 1 minute. Hot path latency degraded."
+
+  # Strategy exceptions
+  - alert: StrategyExceptionsRateHigh
+    expr: rate(strategy_exceptions_total[5m]) > 0.1
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Strategy exceptions rate high"
+        description: "Strategy exception rate > 0.1/s for 2 minutes."
+
+  # Portfolio drawdown
+  - alert: PortfolioDrawdownHigh
+    expr: portfolio_drawdown_pct > 0.05
+    for: 1m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Portfolio drawdown > 5%"
+        description: "Portfolio has drawn down more than 5% from peak realized PnL."
+
+  - alert: PortfolioDrawdownCritical
+    expr: portfolio_drawdown_pct > 0.10
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Portfolio drawdown > 10%"
+        description: "Portfolio drawdown exceeded 10%. StormGuard should be in HALT."
+
+  # Redis health
+  - alert: RedisConnectionDown
+    expr: redis_connection_health == 0
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Redis connection down"
+        description: "Redis connectivity lost. Monitor live cache and session lease unavailable."
