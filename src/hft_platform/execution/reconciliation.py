@@ -6,6 +6,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.execution.positions import PositionStore
+from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.storm_guard import StormGuard
 
 logger = get_logger("reconciliation")
@@ -119,6 +120,9 @@ class ReconciliationService:
             discrepancies = self._compute_discrepancies(local_map, broker_map)
             self._last_discrepancies = discrepancies
 
+            # 5. Update reconciliation discrepancy metric
+            MetricsRegistry.get().reconciliation_discrepancy_count.set(len(discrepancies))
+
             if discrepancies:
                 logger.warning(
                     "Position discrepancies detected",
@@ -129,7 +133,7 @@ class ReconciliationService:
                     ],
                 )
 
-                # 5. Check for critical discrepancies and trigger HALT if needed
+                # 6. Check for critical discrepancies and trigger HALT if needed
                 critical = [d for d in discrepancies if d.is_critical]
                 if critical:
                     await self._trigger_halt(critical)
