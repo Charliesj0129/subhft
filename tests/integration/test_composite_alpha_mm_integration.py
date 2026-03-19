@@ -69,9 +69,11 @@ class TestCompositeAlphaMMIntegration:
         book_event = self._make_book_event()
         strat.on_book_update(book_event)
 
-        with patch.object(strat, "position", return_value=0), patch.object(
-            strat, "buy"
-        ) as mock_buy, patch.object(strat, "sell") as mock_sell:
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             feat_event = self._make_feature_event()
             # Multiple iterations to build EMA variance
             for _ in range(20):
@@ -110,9 +112,11 @@ class TestCompositeAlphaMMIntegration:
 
         # Run with zero position
         prices_zero_pos: list[tuple] = []
-        with patch.object(strat, "position", return_value=0), patch.object(
-            strat, "buy"
-        ) as mock_buy, patch.object(strat, "sell") as mock_sell:
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             for _ in range(20):
                 feat_event = self._make_feature_event()
                 strat.on_features(feat_event)
@@ -130,9 +134,7 @@ class TestCompositeAlphaMMIntegration:
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple()
 
-        with patch.object(strat, "position", return_value=0), patch.object(
-            strat, "buy"
-        ), patch.object(strat, "sell"):
+        with patch.object(strat, "position", return_value=0), patch.object(strat, "buy"), patch.object(strat, "sell"):
             # Simulate 100 rapid events
             for _i in range(100):
                 book_event = self._make_book_event()
@@ -146,16 +148,12 @@ class TestCompositeAlphaMMIntegration:
         strat = self._make_strategy(max_position=10, qty=1)
         strat.ctx = MagicMock()
 
-        with patch.object(strat, "position", return_value=0), patch.object(
-            strat, "buy"
-        ), patch.object(strat, "sell"):
+        with patch.object(strat, "position", return_value=0), patch.object(strat, "buy"), patch.object(strat, "sell"):
             for ofi in [-100, -50, 0, 50, 100]:
                 for depth in [-5000, 0, 5000, 10000]:
-                    strat.ctx.get_feature_tuple.return_value = (
-                        self._make_feature_tuple(
-                            ofi_ema8=ofi,
-                            depth_imb_ema8=depth,
-                        )
+                    strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple(
+                        ofi_ema8=ofi,
+                        depth_imb_ema8=depth,
                     )
                     book_event = self._make_book_event()
                     strat.on_book_update(book_event)
@@ -171,21 +169,19 @@ class TestCompositeAlphaMMIntegration:
         book_event = self._make_book_event()
         strat.on_book_update(book_event)
 
-        with patch.object(strat, "position", return_value=0), patch.object(
-            strat, "buy"
-        ) as mock_buy, patch.object(strat, "sell") as mock_sell:
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             for _ in range(20):
                 feat_event = self._make_feature_event()
                 strat.on_features(feat_event)
 
             for call in mock_buy.call_args_list:
                 price = call[0][1]  # second positional arg
-                assert isinstance(price, int), (
-                    f"Buy price must be int, got {type(price)}"
-                )
+                assert isinstance(price, int), f"Buy price must be int, got {type(price)}"
 
             for call in mock_sell.call_args_list:
                 price = call[0][1]
-                assert isinstance(price, int), (
-                    f"Sell price must be int, got {type(price)}"
-                )
+                assert isinstance(price, int), f"Sell price must be int, got {type(price)}"

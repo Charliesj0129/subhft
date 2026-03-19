@@ -38,9 +38,11 @@ class TestBatchArxivSearcher:
         monkeypatch.setattr(_fp, "NOTES_DIR", tmp_path / "notes")
         monkeypatch.setattr(_fp, "KNOWLEDGE_DIR", tmp_path)
 
-        xml_resp = self._make_xml_response([
-            {"arxiv_id": "2408.03594", "title": "OFI Paper"},
-        ])
+        xml_resp = self._make_xml_response(
+            [
+                {"arxiv_id": "2408.03594", "title": "OFI Paper"},
+            ]
+        )
 
         from research.tools.batch_search import BatchArxivSearcher
 
@@ -55,23 +57,29 @@ class TestBatchArxivSearcher:
     def test_existing_paper_marked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Papers already in index should be marked as existing."""
         index_path = tmp_path / "paper_index.json"
-        index_path.write_text(json.dumps({
-            "120": {
-                "ref": "120",
-                "arxiv_id": "2408.03594",
-                "title": "OFI Paper",
-                "status": "reviewed",
-                "alphas": [],
-                "tags": [],
-            },
-        }))
+        index_path.write_text(
+            json.dumps(
+                {
+                    "120": {
+                        "ref": "120",
+                        "arxiv_id": "2408.03594",
+                        "title": "OFI Paper",
+                        "status": "reviewed",
+                        "alphas": [],
+                        "tags": [],
+                    },
+                }
+            )
+        )
         monkeypatch.setattr(_fp, "PAPER_INDEX", index_path)
         monkeypatch.setattr(_fp, "NOTES_DIR", tmp_path / "notes")
         monkeypatch.setattr(_fp, "KNOWLEDGE_DIR", tmp_path)
 
-        xml_resp = self._make_xml_response([
-            {"arxiv_id": "2408.03594", "title": "OFI Paper"},
-        ])
+        xml_resp = self._make_xml_response(
+            [
+                {"arxiv_id": "2408.03594", "title": "OFI Paper"},
+            ]
+        )
 
         from research.tools.batch_search import BatchArxivSearcher
 
@@ -93,9 +101,11 @@ class TestBatchArxivSearcher:
         monkeypatch.setattr(_fp, "NOTES_DIR", notes_dir)
         monkeypatch.setattr(_fp, "KNOWLEDGE_DIR", tmp_path)
 
-        xml_resp = self._make_xml_response([
-            {"arxiv_id": "2501.00001", "title": "New Trading Paper"},
-        ])
+        xml_resp = self._make_xml_response(
+            [
+                {"arxiv_id": "2501.00001", "title": "New Trading Paper"},
+            ]
+        )
 
         from research.tools.batch_search import BatchArxivSearcher
 
@@ -147,9 +157,11 @@ class TestBatchArxivSearcher:
         monkeypatch.setattr(_fp, "NOTES_DIR", tmp_path / "notes")
         monkeypatch.setattr(_fp, "KNOWLEDGE_DIR", tmp_path)
 
-        xml_resp = self._make_xml_response([
-            {"arxiv_id": "2501.00001", "title": "Some Paper"},
-        ])
+        xml_resp = self._make_xml_response(
+            [
+                {"arxiv_id": "2501.00001", "title": "Some Paper"},
+            ]
+        )
 
         from research.tools.batch_search import BatchArxivSearcher
 
@@ -170,9 +182,11 @@ class TestBatchArxivSearcher:
         monkeypatch.setattr(_fp, "NOTES_DIR", tmp_path / "notes")
         monkeypatch.setattr(_fp, "KNOWLEDGE_DIR", tmp_path)
 
-        good_xml = self._make_xml_response([
-            {"arxiv_id": "2501.00002", "title": "Good Paper"},
-        ])
+        good_xml = self._make_xml_response(
+            [
+                {"arxiv_id": "2501.00002", "title": "Good Paper"},
+            ]
+        )
 
         call_count = 0
 
