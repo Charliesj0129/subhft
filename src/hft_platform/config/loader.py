@@ -149,8 +149,7 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
 
     # 6. Validate merged config (fail-fast unless bypassed)
     skip_validation = (
-        cli_overrides.get("skip_config_validation", False)
-        or os.getenv("HFT_SKIP_CONFIG_VALIDATION", "0") == "1"
+        cli_overrides.get("skip_config_validation", False) or os.getenv("HFT_SKIP_CONFIG_VALIDATION", "0") == "1"
     )
     if not skip_validation:
         from hft_platform.config.schema import validate_config_or_exit

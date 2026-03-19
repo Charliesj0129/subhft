@@ -70,9 +70,7 @@ class ConfigWatcher:
         Raises ``RuntimeError`` if the callback limit is exceeded.
         """
         if len(self._callbacks) >= _MAX_CALLBACKS:
-            raise RuntimeError(
-                f"ConfigWatcher: callback limit exceeded ({_MAX_CALLBACKS})"
-            )
+            raise RuntimeError(f"ConfigWatcher: callback limit exceeded ({_MAX_CALLBACKS})")
         self._callbacks.append(callback)
 
     @property

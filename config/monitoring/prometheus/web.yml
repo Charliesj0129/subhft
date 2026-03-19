@@ -1,0 +1,2 @@
+basic_auth_users:
+  admin: "$2y$10$placeholder_replace_with_real_bcrypt_hash"

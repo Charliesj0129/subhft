@@ -1,0 +1,12 @@
+groups:
+- name: slo_recording
+  interval: 30s
+  rules:
+  - record: slo:feed_availability:ratio_rate5m
+    expr: clamp_min(1 - (sum(increase(feed_events_total[5m])) == bool 0), 0)
+  - record: slo:order_success:ratio_rate5m
+    expr: (sum(rate(order_actions_total[5m])) or vector(0)) / clamp_min((sum(rate(order_actions_total[5m])) or vector(0)) + (sum(rate(order_reject_total[5m])) or vector(0)), 0.001)
+  - record: slo:recorder_success:ratio_rate5m
+    expr: 1 - ((sum(rate(recorder_failures_total[5m])) or vector(0)) / clamp_min((sum(rate(recorder_batches_flushed_total[5m])) or vector(0)), 0.001))
+  - record: slo:normalize_latency_p99_us
+    expr: histogram_quantile(0.99, sum(rate(pipeline_latency_ns_bucket{stage="normalize"}[5m])) by (le)) / 1000

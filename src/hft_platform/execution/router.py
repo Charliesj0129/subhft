@@ -107,7 +107,15 @@ class ExecutionRouter:
                 elif raw.topic == "deal":
                     norm = self.normalizer.normalize_fill(raw)
                     if norm:
-                        _pre_realized = 0
+                        if norm.strategy_id == "UNKNOWN":
+                            from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
+
+                            dlq = get_orphaned_fill_dlq()
+                            dlq.add(norm)
+                            self.metrics.orphaned_fill_total.inc()
+                            logger.warning("Orphaned fill routed to DLQ", symbol=norm.symbol, order_id=norm.order_id)
+                            continue
+
                         if self._risk_engine is not None:
                             _pos_key = f"{norm.account_id}:{norm.strategy_id}:{norm.symbol}"
                             _pre_pos = self.position_store.positions.get(_pos_key)

@@ -242,6 +242,7 @@ class MetricsRegistry:
         self.execution_events_total = Counter("execution_events_total", "Execution callbacks", ["type"])
         self.execution_router_errors_total = Counter("execution_router_errors_total", "Execution router errors")
         self.execution_gateway_errors_total = Counter("execution_gateway_errors_total", "Execution gateway errors")
+        self.orphaned_fill_total = Counter("orphaned_fill_total", "Orphaned fills routed to DLQ")
         self.execution_router_lag_ns = Histogram(
             "execution_router_lag_ns",
             "Execution report lag (ns)",

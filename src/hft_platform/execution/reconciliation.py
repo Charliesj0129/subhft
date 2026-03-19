@@ -168,10 +168,7 @@ class ReconciliationService:
                 )
 
                 if self._consecutive_failures >= self.grace_failures and not self._halt_triggered:
-                    reason = (
-                        f"RECONCILIATION_UNAVAILABLE: "
-                        f"{self._consecutive_failures} consecutive failures"
-                    )
+                    reason = f"RECONCILIATION_UNAVAILABLE: {self._consecutive_failures} consecutive failures"
                     self._halt_triggered = True
                     logger.critical(
                         "Triggering HALT due to reconciliation unavailability",
@@ -180,10 +177,7 @@ class ReconciliationService:
                     if self.storm_guard:
                         self.storm_guard.trigger_halt(reason)
                     else:
-                        logger.error(
-                            "No StormGuard configured - HALT not triggered "
-                            "(manual intervention required)"
-                        )
+                        logger.error("No StormGuard configured - HALT not triggered (manual intervention required)")
                 else:
                     # Exponential backoff before next retry (WU-04)
                     delay = _compute_backoff_delay(

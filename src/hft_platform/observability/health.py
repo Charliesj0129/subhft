@@ -140,9 +140,7 @@ class HealthServer:
 
     # -- HTTP protocol handler (minimal HTTP/1.1) ---------------------------
 
-    async def _handle_connection(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle a single HTTP connection."""
         try:
             # Read request line (up to 4 KiB)
@@ -169,9 +167,7 @@ class HealthServer:
                 is_ready, checks = self._check_readiness()
                 code = 200 if is_ready else 503
                 status_label = "ok" if is_ready else "unavailable"
-                self._send_response(
-                    writer, code, _json_dumps({"status": status_label, "checks": checks})
-                )
+                self._send_response(writer, code, _json_dumps({"status": status_label, "checks": checks}))
             elif path == "/status":
                 body = _json_dumps(self._build_status())
                 self._send_response(writer, 200, body)
@@ -192,9 +188,7 @@ class HealthServer:
     @staticmethod
     def _send_response(writer: asyncio.StreamWriter, status: int, body: bytes) -> None:
         """Write a minimal HTTP/1.1 response."""
-        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 503: "Service Unavailable"}.get(
-            status, "Unknown"
-        )
+        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 503: "Service Unavailable"}.get(status, "Unknown")
         header = (
             f"HTTP/1.1 {status} {reason}\r\n"
             f"Content-Type: application/json\r\n"
@@ -209,9 +203,7 @@ class HealthServer:
     async def run(self) -> None:
         """Start the health HTTP server and serve until cancelled."""
         try:
-            self._server = await asyncio.start_server(
-                self._handle_connection, "0.0.0.0", self._port
-            )
+            self._server = await asyncio.start_server(self._handle_connection, "0.0.0.0", self._port)
         except OSError as exc:
             logger.error("health_server_bind_failed", port=self._port, error=str(exc))
             return

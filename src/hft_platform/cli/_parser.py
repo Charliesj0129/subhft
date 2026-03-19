@@ -41,6 +41,7 @@ from ._ops import (
     cmd_recorder_status,
     cmd_strat_test,
 )
+from ._risk import cmd_risk_halt, cmd_risk_resume, cmd_risk_status
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
     cmd_resolve_symbols,
@@ -251,6 +252,20 @@ def build_parser() -> argparse.ArgumentParser:
     recorder_status.add_argument("--wal-dir", help="Override WAL directory path")
     recorder_status.add_argument("--ck-host", help="Override ClickHouse host")
     recorder_status.set_defaults(func=cmd_recorder_status)
+
+    # ── Risk Management ────────────────────────────────────────────────
+    risk = sub.add_parser("risk", help="Risk management utilities")
+    risk_sub = risk.add_subparsers(dest="risk_cmd")
+
+    risk_halt = risk_sub.add_parser("halt", help="Activate kill switch (halt all orders)")
+    risk_halt.add_argument("--reason", required=True, help="Reason for halting")
+    risk_halt.set_defaults(func=cmd_risk_halt)
+
+    risk_resume = risk_sub.add_parser("resume", help="Deactivate kill switch")
+    risk_resume.set_defaults(func=cmd_risk_resume)
+
+    risk_status = risk_sub.add_parser("status", help="Check kill switch status")
+    risk_status.set_defaults(func=cmd_risk_status)
 
     alpha = sub.add_parser("alpha", help="Alpha research pipeline utilities")
     alpha_sub = alpha.add_subparsers(dest="alpha_cmd")

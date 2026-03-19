@@ -1,10 +1,5 @@
-"""Tests for config schema validation (WU-01)."""
-
-from __future__ import annotations
-
-import textwrap
-
 import pytest
+<<<<<<< HEAD
 
 from hft_platform.config import loader
 from hft_platform.config.schema import (
@@ -260,3 +255,21 @@ class TestLoaderIntegration:
             cli_overrides={"skip_config_validation": True}
         )
         assert settings["mode"] == "bad_mode"
+=======
+from hft_platform.config.schema import ConfigValidationError, validate_config
+class TestSchema:
+    def _valid(self):
+        return {"mode": "sim", "symbols": ["2330"], "strategy": {"id": "t"}, "prometheus_port": 9090}
+    def test_valid(self):
+        r = validate_config(self._valid())
+        assert r.mode == "sim"
+    def test_missing_mode(self):
+        c = self._valid(); del c["mode"]
+        with pytest.raises(ConfigValidationError): validate_config(c)
+    def test_empty_symbols(self):
+        c = self._valid(); c["symbols"] = []
+        with pytest.raises(ConfigValidationError): validate_config(c)
+    def test_bad_port(self):
+        c = self._valid(); c["prometheus_port"] = 99999
+        with pytest.raises(ConfigValidationError): validate_config(c)
+>>>>>>> f9a620f (feat: production hardening batch — 16 work units)

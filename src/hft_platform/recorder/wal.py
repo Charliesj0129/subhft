@@ -46,7 +46,7 @@ class WALWriter:
         self._disk_check_interval_s = 60.0
         self._last_disk_check_ts = 0.0
         self._disk_full_count = 0
-        self._disk_pressure_policy = os.getenv("HFT_WAL_DISK_PRESSURE_POLICY", "drop").strip().lower()
+        self._disk_pressure_policy = os.getenv("HFT_WAL_DISK_PRESSURE_POLICY", "halt").strip().lower()
         self._fsync_file_enabled = os.getenv("HFT_WAL_FILE_FSYNC", "1").lower() not in {"0", "false", "no", "off"}
         self._dir_fsync_min_ms = float(os.getenv("HFT_WAL_DIR_FSYNC_MIN_MS", "0") or "0")
         self._last_dir_fsync_ts = 0.0
@@ -247,7 +247,7 @@ class WALBatchWriter:
         self._disk_check_interval_s = 60.0
         self._last_disk_check_ts = 0.0
         self._disk_full_count = 0
-        self._disk_pressure_policy = os.getenv("HFT_WAL_DISK_PRESSURE_POLICY", "drop").strip().lower()
+        self._disk_pressure_policy = os.getenv("HFT_WAL_DISK_PRESSURE_POLICY", "halt").strip().lower()
         self._fsync_file_enabled = os.getenv("HFT_WAL_FILE_FSYNC", "1").lower() not in {"0", "false", "no", "off"}
         self._dir_fsync_min_ms = float(os.getenv("HFT_WAL_DIR_FSYNC_MIN_MS", "0") or "0")
         self._last_dir_fsync_ts = 0.0
