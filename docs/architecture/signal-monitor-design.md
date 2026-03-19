@@ -1,8 +1,8 @@
 # Signal Monitor Dashboard — 技術設計文件
 
 > ADR: `docs/adr/001_signal_monitor_tui.md`
-> 狀態: Accepted, 待實作
-> 更新日期: 2026-03-17
+> 狀態: Accepted, 已實作
+> 更新日期: 2026-03-19
 
 ## 1. 目標
 
@@ -23,19 +23,27 @@
 
 ### 2.1 模組結構
 
+> **實作位置**: 已從設計階段的 `research/monitor/` 移至正式模組 `src/hft_platform/monitor/`。
+
 ```
-research/monitor/
+src/hft_platform/monitor/
 ├── __init__.py
-├── __main__.py          # 入口: uv run python -m research.monitor
-├── app.py               # Textual TUI 主應用
-├── config.py            # 設定 dataclass + YAML loader
-├── watchlist.yaml       # 使用者可編輯的追蹤清單
-├── source.py            # DataSource protocol + 實作
-├── engine.py            # Alpha 計算引擎
-└── widgets/
-    ├── __init__.py
-    ├── signal_table.py  # 主表格 widget
-    └── detail_panel.py  # 單一標的詳情面板
+├── cli.py               # CLI 入口: uv run hft monitor
+├── _engine.py           # Alpha 計算引擎
+├── _renderer.py         # TUI 渲染引擎
+├── _tui.py              # Textual TUI 主應用
+├── _config_loader.py    # 設定 YAML loader
+├── _data_source.py      # DataSource protocol + 實作（CH/SHM/Hybrid）
+├── _ch_poller.py        # ClickHouse 輪詢
+├── _redis_poller.py     # Redis 即時資料輪詢
+├── _redis_publish.py    # Redis live publisher
+├── _redis_wire.py       # Redis wire protocol
+├── _alpha_dispatcher.py # Alpha 信號分發
+├── _enrichment.py       # 資料豐富化
+├── _events.py           # Monitor 內部事件
+├── _session.py          # Session 管理
+├── _detail_panel.py     # 單一標的詳情面板
+└── _types.py            # 型別定義
 ```
 
 ### 2.2 資料流
@@ -466,7 +474,7 @@ monitor = [
 
 1. **Polling 延遲**: 3 秒 (非 tick-level 即時)。手動操盤可接受；高頻策略不應依賴此工具。
 2. **ClickHouse 負載**: 每 3 秒 × N symbols 查詢。N=6 時負載可忽略；N>50 需考慮 batch query。
-3. **Alpha 簽名不一致**: 79 個 alpha 的 `update()` 參數各異，透過 full-payload + fallback 模式相容。
+3. **Alpha 簽名不一致**: 102+ 個 alpha 的 `update()` 參數各異，透過 full-payload + fallback 模式相容。
 4. **夜盤 Session 辨識**: 需依時間判斷 (15:00~05:00 = night, 08:45~13:30 = day)，目前由 TUI 顯示但不影響信號計算。
 
 ## 9. Hybrid Data Source Architecture (Phase 6.5)
