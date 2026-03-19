@@ -75,7 +75,7 @@ def _compute_backoff_delay(
 class ReconciliationService:
     def __init__(
         self,
-        client: object,
+        client: Any,
         position_store: PositionStore,
         config: dict,
         storm_guard: StormGuard,
