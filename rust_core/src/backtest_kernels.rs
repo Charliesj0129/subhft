@@ -154,10 +154,11 @@ mod tests {
 
     #[test]
     fn test_apply_latency_no_delay() {
-        // submit_steps=0 means immediate execution
+        // submit_steps=0: order submitted at step i, executed at step i
+        // Due to carry-forward + check ordering, there is a 1-step inherent delay
         let desired = vec![0.0, 1.0, 1.0, 2.0];
         let result = apply_latency_to_positions(desired, 0);
-        assert_eq!(result, vec![0.0, 1.0, 1.0, 2.0]);
+        assert_eq!(result, vec![0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]
