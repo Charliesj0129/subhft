@@ -54,6 +54,23 @@ class StormGuard:
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._on_halt_callback = on_halt_callback
 
+    def reload_thresholds(self, config: dict) -> None:
+        """Update thresholds from new config."""
+        risk_cfg = config.get("risk", config.get("global_defaults", {}))
+        for key in (
+            "warm_drawdown_bps",
+            "storm_drawdown_bps",
+            "halt_drawdown_bps",
+            "latency_warm_us",
+            "latency_storm_us",
+        ):
+            if key in risk_cfg:
+                setattr(self.thresholds, key, int(risk_cfg[key]))
+        if "feed_gap_halt_s" in risk_cfg:
+            self.thresholds.feed_gap_halt_s = float(risk_cfg["feed_gap_halt_s"])
+        self._apply_env_overrides()
+        logger.info("StormGuard thresholds reloaded")
+
     def _apply_env_overrides(self) -> None:
         feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
         if feed_gap_override:
@@ -62,9 +79,7 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
-    def update(
-        self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0
-    ) -> StormGuardState:
+    def update(self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0) -> StormGuardState:
         """
         Evaluate inputs and transition state.
         Priority: HALT > STORM > WARM > NORMAL
@@ -155,11 +170,13 @@ class StormGuard:
         # Audit guardrail transition
         try:
             audit = get_audit_writer()
-            audit.log_guardrail_transition({
-                "old_state": old_state.name,
-                "new_state": new_state.name,
-                "reason": reason,
-            })
+            audit.log_guardrail_transition(
+                {
+                    "old_state": old_state.name,
+                    "new_state": new_state.name,
+                    "reason": reason,
+                }
+            )
         except Exception as exc:
             logger.debug("audit_guardrail_transition_failed", error=str(exc))
 

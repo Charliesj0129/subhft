@@ -66,12 +66,8 @@ class SessionHookManager:
             "yes",
             "on",
         }
-        self._poll_interval_s = float(
-            os.getenv("HFT_SESSION_HOOKS_POLL_S", str(_DEFAULT_POLL_INTERVAL_S))
-        )
-        self._hook_timeout_s = float(
-            os.getenv("HFT_SESSION_HOOKS_TIMEOUT_S", str(_DEFAULT_HOOK_TIMEOUT_S))
-        )
+        self._poll_interval_s = float(os.getenv("HFT_SESSION_HOOKS_POLL_S", str(_DEFAULT_POLL_INTERVAL_S)))
+        self._hook_timeout_s = float(os.getenv("HFT_SESSION_HOOKS_TIMEOUT_S", str(_DEFAULT_HOOK_TIMEOUT_S)))
         self._pre_market_hooks: list[tuple[str, HookCallback]] = []
         self._post_market_hooks: list[tuple[str, HookCallback]] = []
         self._phase: SessionPhase | None = None
@@ -138,9 +134,7 @@ class SessionHookManager:
 
     # -- Hook execution -----------------------------------------------------
 
-    async def _fire_hooks(
-        self, hooks: list[tuple[str, HookCallback]], label: str
-    ) -> None:
+    async def _fire_hooks(self, hooks: list[tuple[str, HookCallback]], label: str) -> None:
         """Run a list of hooks sequentially with timeout."""
         for name, cb in hooks:
             t0 = timebase.now_ns()

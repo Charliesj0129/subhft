@@ -85,14 +85,10 @@ def _semantic_checks(cfg: HftConfig) -> List[str]:
     errors: List[str] = []
 
     if cfg.mode not in _VALID_MODES:
-        errors.append(
-            f"mode must be one of {_VALID_MODES}, got {cfg.mode!r}"
-        )
+        errors.append(f"mode must be one of {_VALID_MODES}, got {cfg.mode!r}")
 
     if cfg.broker not in _VALID_BROKERS:
-        errors.append(
-            f"broker must be one of {_VALID_BROKERS}, got {cfg.broker!r}"
-        )
+        errors.append(f"broker must be one of {_VALID_BROKERS}, got {cfg.broker!r}")
 
     if not cfg.symbols:
         errors.append("symbols list must not be empty")
@@ -101,9 +97,7 @@ def _semantic_checks(cfg: HftConfig) -> List[str]:
         errors.append("every symbol must be a non-empty string")
 
     if cfg.prometheus_port < 1 or cfg.prometheus_port > 65535:
-        errors.append(
-            f"prometheus_port must be 1..65535, got {cfg.prometheus_port}"
-        )
+        errors.append(f"prometheus_port must be 1..65535, got {cfg.prometheus_port}")
 
     if cfg.strategy is not None:
         if not cfg.strategy.id:
@@ -136,16 +130,12 @@ def validate_config(config_dict: Dict[str, Any]) -> HftConfig:
     try:
         cfg = msgspec.convert(clean, HftConfig, strict=False)
     except msgspec.ValidationError as exc:
-        raise ConfigValidationError(
-            f"Config structure invalid: {exc}"
-        ) from exc
+        raise ConfigValidationError(f"Config structure invalid: {exc}") from exc
 
     # Semantic validation
     errors = _semantic_checks(cfg)
     if errors:
-        raise ConfigValidationError(
-            "Config semantic errors:\n  - " + "\n  - ".join(errors)
-        )
+        raise ConfigValidationError("Config semantic errors:\n  - " + "\n  - ".join(errors))
 
     return cfg
 

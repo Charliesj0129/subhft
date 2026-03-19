@@ -6,7 +6,6 @@ asserts >5k/sec throughput.
 
 from __future__ import annotations
 
-import asyncio
 import time
 
 import pytest
@@ -83,7 +82,5 @@ class TestGatewayThroughput:
         elapsed = time.perf_counter() - t0
 
         throughput = count / elapsed if elapsed > 0 else float("inf")
-        assert throughput >= self.MIN_THROUGHPUT / 2, (
-            f"Dedup-miss throughput {throughput:.0f}/sec too low"
-        )
+        assert throughput >= self.MIN_THROUGHPUT / 2, f"Dedup-miss throughput {throughput:.0f}/sec too low"
         assert mock_adapter._api_queue.qsize() == count

@@ -158,6 +158,33 @@ class OrderAdapter:
         """Sliding window check."""
         return self.rate_limiter.check()
 
+    async def drain_and_cancel(self, timeout_s: float = 5.0) -> int:
+        """Drain pending orders and cancel all live orders."""
+        cancelled = 0
+        while not self.order_queue.empty():
+            try:
+                self.order_queue.get_nowait()
+                self.order_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+        async with self._live_orders_lock:
+            live_keys = list(self.live_orders.keys())
+        for key in live_keys:
+            async with self._live_orders_lock:
+                trade = self.live_orders.get(key)
+            if trade is None:
+                continue
+            try:
+                await asyncio.wait_for(asyncio.to_thread(self.client.cancel_order, trade), timeout=timeout_s)
+                cancelled += 1
+                logger.info("Drained live order", order_key=key)
+            except asyncio.TimeoutError:
+                logger.warning("Cancel timeout during drain", order_key=key)
+            except Exception as exc:
+                logger.warning("Cancel failed during drain", order_key=key, error=str(exc))
+        logger.info("Order drain complete", cancelled=cancelled, total=len(live_keys))
+        return cancelled
+
     async def on_terminal_state(self, strategy_id: str, order_id: str):
         """Called when an order reaches a terminal state (Filled, Cancelled, Rejected)."""
         async with self._live_orders_lock:

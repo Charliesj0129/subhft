@@ -1,7 +1,7 @@
 """Unit tests for AlphaDrivenMMStrategy base strategy."""
 
-import pytest
 import numpy as np
+import pytest
 
 try:
     from hftbacktest import GTX, LIMIT  # noqa: F401

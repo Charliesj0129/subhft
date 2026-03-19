@@ -283,13 +283,9 @@ class PerSymbolNotionalValidator(RiskValidator):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._default_per_symbol_max_notional_raw: int = int(
-            self.defaults.get("per_symbol_max_notional", 50_000_000)
-        )
+        self._default_per_symbol_max_notional_raw: int = int(self.defaults.get("per_symbol_max_notional", 50_000_000))
         self._per_symbol_notional_cache: Dict[tuple[str, str], int] = {}
-        self._MAX_CACHE_ENTRIES: int = int(
-            os.getenv("HFT_RISK_PER_SYMBOL_CACHE_MAX", "10000")
-        )
+        self._MAX_CACHE_ENTRIES: int = int(os.getenv("HFT_RISK_PER_SYMBOL_CACHE_MAX", "10000"))
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         if intent.intent_type == IntentType.CANCEL:
@@ -326,9 +322,7 @@ class PerSymbolNotionalValidator(RiskValidator):
         # the comparison is direct: price_scaled * qty vs max_notional_raw * scale.
         notional_scaled = intent.price * intent.qty
         if notional_scaled > max_notional_scaled:
-            return False, (
-                f"PER_SYMBOL_NOTIONAL_EXCEEDED: {notional_scaled} > {max_notional_scaled}"
-            )
+            return False, (f"PER_SYMBOL_NOTIONAL_EXCEEDED: {notional_scaled} > {max_notional_scaled}")
 
         return True, "OK"
 

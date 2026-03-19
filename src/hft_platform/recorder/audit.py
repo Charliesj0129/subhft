@@ -60,9 +60,7 @@ class AuditWriter:
         flush_interval_ms: int = _DEFAULT_FLUSH_INTERVAL_MS,
         writer: Any = None,
     ) -> None:
-        resolved_size = queue_size or int(
-            os.getenv("HFT_AUDIT_QUEUE_SIZE", str(_DEFAULT_QUEUE_SIZE))
-        )
+        resolved_size = queue_size or int(os.getenv("HFT_AUDIT_QUEUE_SIZE", str(_DEFAULT_QUEUE_SIZE)))
         self._queues: dict[str, asyncio.Queue[dict[str, Any]]] = {
             name: asyncio.Queue(maxsize=resolved_size) for name in self._TABLE_NAMES
         }
@@ -196,9 +194,7 @@ class AuditWriter:
         if batch:
             await self._flush_batch(table_name, batch)
 
-    async def _flush_batch(
-        self, table_name: str, batch: list[dict[str, Any]]
-    ) -> None:
+    async def _flush_batch(self, table_name: str, batch: list[dict[str, Any]]) -> None:
         """Write batch to ClickHouse or fall back to structlog."""
         if not batch:
             return

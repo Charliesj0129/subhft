@@ -125,9 +125,7 @@ class TestHealthServerHTTP:
         server._port = 0  # Let OS pick a free port
 
         # Start server
-        srv = await asyncio.start_server(
-            server._handle_connection, "127.0.0.1", 0
-        )
+        srv = await asyncio.start_server(server._handle_connection, "127.0.0.1", 0)
         addr = srv.sockets[0].getsockname()
         port = addr[1]
 
@@ -152,9 +150,7 @@ class TestHealthServerHTTP:
         system = _make_mock_system()
         server = HealthServer(system=system)
 
-        srv = await asyncio.start_server(
-            server._handle_connection, "127.0.0.1", 0
-        )
+        srv = await asyncio.start_server(server._handle_connection, "127.0.0.1", 0)
         addr = srv.sockets[0].getsockname()
         port = addr[1]
 
@@ -178,9 +174,7 @@ class TestHealthServerHTTP:
         system = _make_mock_system(running=False)
         server = HealthServer(system=system)
 
-        srv = await asyncio.start_server(
-            server._handle_connection, "127.0.0.1", 0
-        )
+        srv = await asyncio.start_server(server._handle_connection, "127.0.0.1", 0)
         addr = srv.sockets[0].getsockname()
         port = addr[1]
 
@@ -204,9 +198,7 @@ class TestHealthServerHTTP:
         system = _make_mock_system()
         server = HealthServer(system=system)
 
-        srv = await asyncio.start_server(
-            server._handle_connection, "127.0.0.1", 0
-        )
+        srv = await asyncio.start_server(server._handle_connection, "127.0.0.1", 0)
         addr = srv.sockets[0].getsockname()
         port = addr[1]
 
@@ -235,9 +227,7 @@ class TestHealthServerHTTP:
     async def test_404_for_unknown_path(self) -> None:
         server = HealthServer(system=None)
 
-        srv = await asyncio.start_server(
-            server._handle_connection, "127.0.0.1", 0
-        )
+        srv = await asyncio.start_server(server._handle_connection, "127.0.0.1", 0)
         addr = srv.sockets[0].getsockname()
         port = addr[1]
 
