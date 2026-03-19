@@ -22,7 +22,7 @@ except ImportError:
     _dumps = json.dumps  # type: ignore[assignment]
 
 from hft_platform.core import timebase
-from hft_platform.monitor._redis_wire import RedisClient
+from hft_platform.monitor._redis_wire import _DEFAULT_TIMEOUT_S, RedisClient
 
 logger = get_logger("monitor.redis_publish")
 
@@ -58,7 +58,7 @@ class MonitorLivePublisher:
         ring_size: int = 256,
         queue_size: int = 2048,
     ) -> None:
-        self._client = RedisClient(host=host, port=port, password=password, timeout_s=0.5)
+        self._client = RedisClient(host=host, port=port, password=password, timeout_s=_DEFAULT_TIMEOUT_S)
         self._key_prefix = key_prefix.rstrip(":")
         self._ring_size = max(16, int(ring_size))
         self._queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=max(64, int(queue_size)))
