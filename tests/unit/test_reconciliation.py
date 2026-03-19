@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hft_platform.execution.reconciliation import ReconciliationService
+from hft_platform.risk.storm_guard import StormGuard
 
 
 class MockPosition:
@@ -19,7 +20,7 @@ async def test_recon_sync_portfolio():
     mock_store = MagicMock()
     mock_store.positions = {}
 
-    service = ReconciliationService(mock_client, mock_store, {})
+    service = ReconciliationService(mock_client, mock_store, {}, storm_guard=StormGuard())
 
     await service.sync_portfolio()
     mock_client.get_positions.assert_called_once()
@@ -34,7 +35,7 @@ async def test_recon_discrepancy_logging():
         # but to_thread runs sync function in thread.
         mock_client.get_positions.return_value = [MockPosition("2330", 10, "Action.Buy")]
 
-        service = ReconciliationService(mock_client, MagicMock(), {})
+        service = ReconciliationService(mock_client, MagicMock(), {}, storm_guard=StormGuard())
 
         await service.sync_portfolio()
 

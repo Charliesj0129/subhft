@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hft_platform.execution.reconciliation import ReconciliationService
+from hft_platform.risk.storm_guard import StormGuard
 
 
 class MockPosition:
@@ -30,7 +31,7 @@ async def test_reconciliation_metric_updated_with_discrepancy_count() -> None:
         "hft_platform.execution.reconciliation.MetricsRegistry.get",
         return_value=mock_metrics,
     ):
-        service = ReconciliationService(mock_client, mock_store, {})
+        service = ReconciliationService(mock_client, mock_store, {}, storm_guard=StormGuard())
         await service.sync_portfolio()
 
     mock_metrics.reconciliation_discrepancy_count.set.assert_called_once_with(1)
@@ -54,7 +55,7 @@ async def test_reconciliation_metric_zero_when_no_discrepancies() -> None:
         "hft_platform.execution.reconciliation.MetricsRegistry.get",
         return_value=mock_metrics,
     ):
-        service = ReconciliationService(mock_client, mock_store, {})
+        service = ReconciliationService(mock_client, mock_store, {}, storm_guard=StormGuard())
         await service.sync_portfolio()
 
     mock_metrics.reconciliation_discrepancy_count.set.assert_called_once_with(0)
@@ -78,7 +79,7 @@ async def test_reconciliation_metric_reflects_multiple_discrepancies() -> None:
         "hft_platform.execution.reconciliation.MetricsRegistry.get",
         return_value=mock_metrics,
     ):
-        service = ReconciliationService(mock_client, mock_store, {})
+        service = ReconciliationService(mock_client, mock_store, {}, storm_guard=StormGuard())
         await service.sync_portfolio()
 
     mock_metrics.reconciliation_discrepancy_count.set.assert_called_once_with(2)
@@ -99,7 +100,7 @@ async def test_reconciliation_metric_not_updated_on_sync_failure() -> None:
         "hft_platform.execution.reconciliation.MetricsRegistry.get",
         return_value=mock_metrics,
     ):
-        service = ReconciliationService(mock_client, mock_store, {})
+        service = ReconciliationService(mock_client, mock_store, {}, storm_guard=StormGuard())
         # sync_portfolio now raises on failure (WU-04 resilience change)
         with pytest.raises(RuntimeError, match="broker unavailable"):
             await service.sync_portfolio()

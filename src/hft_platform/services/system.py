@@ -93,6 +93,15 @@ class HFTSystem:
         self.recorder = self.registry.recorder
         self.gateway_service = self.registry.gateway_service
 
+        self._mtm_calculator = None
+        try:
+            from hft_platform.execution.mtm import MarkToMarketCalculator
+            lob_engine = getattr(self.md_service, "lob", None)
+            if lob_engine is not None:
+                self._mtm_calculator = MarkToMarketCalculator(self.position_store, lob_engine=lob_engine)
+        except Exception as exc:
+            logger.warning("MTM calculator init failed", error=str(exc))
+
         self.tasks: Dict[str, asyncio.Task[Any]] = {}
         self._recorder_drop_on_full = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1").lower() not in {
             "0",
@@ -289,8 +298,16 @@ class HFTSystem:
                 # 1. Get feed gap from market data service
                 feed_gap_s = self._get_max_feed_gap_s(self.md_service)
 
-                # 2. Get drawdown from position store
+                # 2. Get drawdown from position store (realized + unrealized)
                 drawdown_pct = self._get_drawdown_pct(self.position_store, self.settings)
+                if self._mtm_calculator is not None:
+                    try:
+                        unrealized = self._mtm_calculator.total_unrealized_pnl()
+                        base_capital = self.settings.get("base_capital", 10_000_000)
+                        if base_capital > 0 and unrealized < 0:
+                            drawdown_pct = drawdown_pct + unrealized / base_capital
+                    except Exception:
+                        pass
 
                 # 3. Get P99 latency estimate (convert event loop lag to microseconds as proxy)
                 latency_us = int(lag_s * 1_000_000)
