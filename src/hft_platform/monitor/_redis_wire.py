@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import socket
 from typing import Any
+
+_DEFAULT_TIMEOUT_S = float(os.getenv("HFT_MONITOR_REDIS_TIMEOUT_S", "5.0"))
 
 
 def encode_resp(*parts: str) -> bytes:
@@ -46,7 +49,7 @@ class RedisClient:
 
     __slots__ = ("host", "port", "password", "timeout_s", "_sock", "_stream")
 
-    def __init__(self, host: str, port: int, password: str = "", timeout_s: float = 0.5) -> None:
+    def __init__(self, host: str, port: int, password: str = "", timeout_s: float = _DEFAULT_TIMEOUT_S) -> None:
         self.host = host
         self.port = int(port)
         self.password = password
