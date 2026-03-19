@@ -1,0 +1,472 @@
+{
+  "uid": "hft-production",
+  "title": "HFT Production Overview",
+  "description": "Production monitoring dashboard for the HFT Platform",
+  "tags": ["hft", "production", "trading"],
+  "timezone": "Asia/Taipei",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "fiscalYearStartMonth": 0,
+  "liveNow": true,
+  "templating": {
+    "list": [
+      {
+        "name": "strategy",
+        "type": "query",
+        "label": "Strategy",
+        "query": "label_values(hft_strategy_latency_ns_count, strategy)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "multi": true
+      },
+      {
+        "name": "symbol",
+        "type": "query",
+        "label": "Symbol",
+        "query": "label_values(hft_feed_ticks_total, symbol)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "multi": true
+      },
+      {
+        "name": "interval",
+        "type": "interval",
+        "label": "Interval",
+        "query": "5s,10s,30s,1m,5m,15m",
+        "current": { "text": "10s", "value": "10s" },
+        "auto": true,
+        "auto_min": "5s",
+        "auto_count": 100
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "StormGuard State Timeline",
+      "description": "FSM state transitions: NORMAL -> DEGRADED -> HALT",
+      "type": "state-timeline",
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "NORMAL", "color": "green" } } },
+            { "type": "value", "options": { "1": { "text": "DEGRADED", "color": "yellow" } } },
+            { "type": "value", "options": { "2": { "text": "HALT", "color": "red" } } }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "hft_storm_guard_state{state=\"HALT\"} * 2 + hft_storm_guard_state{state=\"DEGRADED\"}",
+          "legendFormat": "StormGuard",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showValue": "always",
+        "mergeValues": true,
+        "alignValue": "center"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Order Throughput",
+      "description": "Orders submitted, filled, and rejected per interval",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": { "mode": "normal" },
+            "fillOpacity": 80
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(hft_orders_submitted_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
+          "legendFormat": "submitted ({{strategy}})",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(hft_orders_filled_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
+          "legendFormat": "filled ({{strategy}})",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(hft_orders_rejected_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
+          "legendFormat": "rejected ({{strategy}})",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Risk Rejection Rate",
+      "description": "Percentage of order intents rejected by risk engine",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 0.1, "color": "yellow" },
+              { "value": 0.3, "color": "red" }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": { "mode": "area" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(hft_risk_rejections_total{strategy=~\"$strategy\"}[$interval])) by (strategy, reason) / clamp_min(sum(rate(hft_risk_evaluations_total{strategy=~\"$strategy\"}[$interval])) by (strategy), 1)",
+          "legendFormat": "{{strategy}} ({{reason}})",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Market Data Feed Rate",
+      "description": "Ticks per second by symbol",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(hft_feed_ticks_total{symbol=~\"$symbol\"}[$interval])) by (symbol)",
+          "legendFormat": "{{symbol}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Gateway / Order Latency",
+      "description": "P50, P95, P99 latency from intent to broker submission",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ns",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "P99" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(hft_gateway_latency_ns_bucket{strategy=~\"$strategy\"}[$interval])) by (le))",
+          "legendFormat": "P50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(hft_gateway_latency_ns_bucket{strategy=~\"$strategy\"}[$interval])) by (le))",
+          "legendFormat": "P95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(hft_gateway_latency_ns_bucket{strategy=~\"$strategy\"}[$interval])) by (le))",
+          "legendFormat": "P99",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Queue Depths",
+      "description": "Bounded queue utilization across pipeline stages",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 800, "color": "yellow" },
+              { "value": 950, "color": "red" }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "hft_raw_queue_depth",
+          "legendFormat": "raw_queue",
+          "refId": "A"
+        },
+        {
+          "expr": "hft_recorder_queue_depth",
+          "legendFormat": "recorder_queue",
+          "refId": "B"
+        },
+        {
+          "expr": "hft_risk_queue_depth",
+          "legendFormat": "risk_queue",
+          "refId": "C"
+        },
+        {
+          "expr": "hft_gateway_intent_channel_depth",
+          "legendFormat": "gateway_intent",
+          "refId": "D"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Circuit Breaker Status",
+      "description": "Per-symbol circuit breaker state (0=closed, 1=open)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "CLOSED", "color": "green" } } },
+            { "type": "value", "options": { "1": { "text": "OPEN", "color": "red" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 1, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "hft_circuit_breaker_state{symbol=~\"$symbol\"}",
+          "legendFormat": "{{symbol}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 8,
+      "title": "Position Reconciliation Delta",
+      "description": "Difference between internal and broker-reported positions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 1, "color": "red" }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "thresholdsStyle": { "mode": "line+area" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "abs(hft_reconciliation_position_delta{symbol=~\"$symbol\"})",
+          "legendFormat": "{{symbol}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 9,
+      "title": "ClickHouse Insert Latency",
+      "description": "P50 and P95 latency for ClickHouse batch inserts",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 500, "color": "yellow" },
+              { "value": 2000, "color": "red" }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "thresholdsStyle": { "mode": "line" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(hft_clickhouse_insert_latency_ms_bucket[$interval])) by (le))",
+          "legendFormat": "P50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(hft_clickhouse_insert_latency_ms_bucket[$interval])) by (le))",
+          "legendFormat": "P95",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 10,
+      "title": "WAL File Count",
+      "description": "Number of pending WAL files awaiting replay into ClickHouse",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 10, "color": "yellow" },
+              { "value": 50, "color": "red" }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "thresholdsStyle": { "mode": "line+area" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "hft_wal_pending_files",
+          "legendFormat": "pending WAL files",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(hft_wal_writes_total[$interval])",
+          "legendFormat": "WAL write rate",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Deployments",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "changes(hft_build_info[1m]) > 0",
+        "titleFormat": "Deploy",
+        "textFormat": "Build: {{version}}",
+        "iconColor": "blue"
+      },
+      {
+        "name": "HALT Events",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "changes(hft_storm_guard_state{state=\"HALT\"}[1m]) > 0",
+        "titleFormat": "HALT",
+        "textFormat": "StormGuard entered HALT state",
+        "iconColor": "red"
+      }
+    ]
+  }
+}
