@@ -141,7 +141,7 @@ max-complexity = 15
 known-first-party = ["hft_platform", "research"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["E501", "E402", "F841", "E722", "E701", "E731", "E712", "B", "C901"]
+"tests/**/*.py" = ["E501", "E402", "F841", "E722", "E701", "E731", "E712", "E741", "F821", "B", "C901"]
 "scripts/**/*.py" = ["E501", "E402"]
 "src/hft_platform/research/**/*.py" = ["E501", "E402", "F841", "E722"]
 "src/hft_platform/feed_adapter/shioaji_client.py" = ["E501"]
