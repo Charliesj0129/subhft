@@ -14,9 +14,11 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
-from hft_platform.order.circuit_breaker import CircuitBreaker
+from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
-from hft_platform.order.rate_limiter import RateLimiter
+from hft_platform.order.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult, RateLimiter
+from hft_platform.order.shadow import ShadowOrderSink
+from hft_platform.recorder.audit import get_audit_writer
 
 logger = get_logger("order_adapter")
 
@@ -75,6 +77,9 @@ class OrderAdapter:
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
         self.circuit_breaker = CircuitBreaker(threshold=5, timeout_s=60)
+        self.per_symbol_rate_limiter = PerSymbolRateLimiter()
+        self.strategy_circuit_breaker = StrategyCircuitBreakerManager()
+        self.shadow_sink = ShadowOrderSink()
         self.order_id_resolver = OrderIdResolver(self.order_id_map)
         self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))  # precision-time
         self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))  # precision-time
@@ -214,7 +219,35 @@ class OrderAdapter:
     async def execute(self, cmd: OrderCommand):
         intent = cmd.intent
 
-        # Circuit Breaker Check
+        # --- WU-06: Per-symbol rate limit check (before global) ---
+        symbol_rate_result = self.per_symbol_rate_limiter.check(intent.symbol)
+        if symbol_rate_result == PerSymbolRateResult.HARD:
+            logger.warning(
+                "Per-symbol rate limit hard reject",
+                cmd_id=cmd.cmd_id,
+                symbol=intent.symbol,
+            )
+            await self._add_to_dlq(
+                intent, RejectionReason.RATE_LIMIT, f"Per-symbol hard rate limit: {intent.symbol}"
+            )
+            return
+        # Soft limit: logged inside check(), order proceeds
+
+        # --- WU-09: Per-strategy circuit breaker check (before global) ---
+        if self.strategy_circuit_breaker.is_open(intent.strategy_id):
+            logger.warning(
+                "Per-strategy circuit breaker open - rejecting",
+                cmd_id=cmd.cmd_id,
+                strategy_id=intent.strategy_id,
+            )
+            await self._add_to_dlq(
+                intent,
+                RejectionReason.CIRCUIT_BREAKER,
+                f"Per-strategy circuit breaker open: {intent.strategy_id}",
+            )
+            return
+
+        # Global Circuit Breaker Check
         if self.circuit_breaker.is_open():
             logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
             await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Circuit breaker open")
@@ -225,9 +258,16 @@ class OrderAdapter:
             await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Rate limit exceeded")
             return
 
+        # --- WU-10: Shadow mode intercept (after all validations, before broker) ---
+        if self.shadow_sink.enabled:
+            self.shadow_sink.capture(cmd)
+            self.per_symbol_rate_limiter.record(intent.symbol)
+            return
+
         if not self._validate_client(intent):
             self.metrics.order_reject_total.inc()
             self.circuit_breaker.record_failure()
+            self.strategy_circuit_breaker.record_failure(intent.strategy_id)
             await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Client validation failed")
             return
 
@@ -415,7 +455,9 @@ class OrderAdapter:
                 await self._register_broker_ids(order_key, trade)
 
                 self.rate_limiter.record()
+                self.per_symbol_rate_limiter.record(intent.symbol)
                 self.circuit_breaker.record_success()
+                self.strategy_circuit_breaker.record_success(intent.strategy_id)
 
             elif intent.intent_type == IntentType.CANCEL:
                 async with self._live_orders_lock:
@@ -431,6 +473,7 @@ class OrderAdapter:
                         return
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
+                    self.per_symbol_rate_limiter.record(intent.symbol)
                 else:
                     logger.warning("Cancel target not found", target=target_key)
 
@@ -457,6 +500,7 @@ class OrderAdapter:
                         return
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
+                    self.per_symbol_rate_limiter.record(intent.symbol)
                 else:
                     logger.warning("Amend target not found", target=target_key)
 
@@ -464,9 +508,12 @@ class OrderAdapter:
             logger.error("Broker Error", error=str(e))
             self.metrics.order_reject_total.inc()
             self.circuit_breaker.record_failure()
+            self.strategy_circuit_breaker.record_failure(intent.strategy_id)
             self._emit_trace("order_dispatch_error", intent, {"cmd_id": int(cmd.cmd_id), "error": str(e)})
+            self._audit_order_dispatch(cmd, status="error", error=str(e))
         else:
             self._emit_trace("order_dispatch_ok", intent, {"cmd_id": int(cmd.cmd_id)})
+            self._audit_order_dispatch(cmd, status="ok")
 
     async def _enqueue_api(self, cmd: OrderCommand) -> None:
         try:
@@ -662,6 +709,27 @@ class OrderAdapter:
             return None
         finally:
             self._api_semaphore.release()
+
+    def _audit_order_dispatch(
+        self, cmd: OrderCommand, *, status: str = "ok", error: str = ""
+    ) -> None:
+        """Non-blocking audit log of order dispatch."""
+        try:
+            intent = cmd.intent
+            audit = get_audit_writer()
+            audit.log_order({
+                "cmd_id": int(cmd.cmd_id),
+                "strategy_id": intent.strategy_id,
+                "symbol": intent.symbol,
+                "intent_type": int(intent.intent_type),
+                "side": int(intent.side),
+                "price": intent.price,
+                "qty": intent.qty,
+                "status": status,
+                "error": error,
+            })
+        except Exception as exc:
+            logger.debug("audit_order_dispatch_failed", error=str(exc))
 
     def _emit_trace(self, stage: str, intent: OrderIntent, payload: dict[str, Any]) -> None:
         sampler = getattr(self, "_trace_sampler", None)
