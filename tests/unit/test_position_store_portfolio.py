@@ -58,6 +58,7 @@ def store():
 # test_get_drawdown_pct_no_fills
 # ---------------------------------------------------------------------------
 
+
 def test_get_drawdown_pct_no_fills(store):
     """Empty store should return 0.0 — no peak, no drawdown."""
     assert store.get_drawdown_pct() == 0.0
@@ -67,6 +68,7 @@ def test_get_drawdown_pct_no_fills(store):
 # ---------------------------------------------------------------------------
 # test_get_drawdown_pct_at_peak
 # ---------------------------------------------------------------------------
+
 
 def test_get_drawdown_pct_at_peak(store):
     """After a profit fill with no subsequent loss, drawdown must be 0.0."""
@@ -82,6 +84,7 @@ def test_get_drawdown_pct_at_peak(store):
 # ---------------------------------------------------------------------------
 # test_get_drawdown_pct_after_profit_then_loss
 # ---------------------------------------------------------------------------
+
 
 def test_get_drawdown_pct_after_profit_then_loss(store):
     """After profit then loss, drawdown fraction must be positive and <= 1.0."""
@@ -123,6 +126,7 @@ def test_get_drawdown_pct_partial_drawdown(store):
 # test_total_pnl_aggregates_across_positions
 # ---------------------------------------------------------------------------
 
+
 def test_total_pnl_aggregates_across_positions(store):
     """total_pnl must be the sum of realized PnL across all symbol positions."""
     # SYM_A: buy 5 @ 1_000_000, sell 5 @ 1_010_000 -> PnL = 50_000
@@ -150,6 +154,7 @@ def test_total_pnl_aggregates_across_positions(store):
 # ---------------------------------------------------------------------------
 # test_peak_equity_tracking
 # ---------------------------------------------------------------------------
+
 
 def test_peak_equity_tracking(store):
     """Peak equity must track the high watermark and never decrease."""
@@ -187,6 +192,7 @@ def test_peak_equity_never_negative_start(store):
 # test_drawdown_resets_on_new_peak
 # ---------------------------------------------------------------------------
 
+
 def test_drawdown_resets_on_new_peak(store):
     """Drawdown should return to 0.0 when equity recovers to a new peak."""
     # Build peak: 100_000
@@ -209,6 +215,7 @@ def test_drawdown_resets_on_new_peak(store):
 # ---------------------------------------------------------------------------
 # test_multiple_strategies_independent_positions
 # ---------------------------------------------------------------------------
+
 
 def test_multiple_strategies_independent_positions(store):
     """Fills for different strategy IDs must produce independent positions
