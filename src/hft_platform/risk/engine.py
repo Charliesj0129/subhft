@@ -12,7 +12,13 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
-from hft_platform.risk.validators import MaxNotionalValidator, PriceBandValidator, StormGuardFSM
+from hft_platform.risk.validators import (
+    DailyLossLimitValidator,
+    MaxNotionalValidator,
+    PositionLimitValidator,
+    PriceBandValidator,
+    StormGuardFSM,
+)
 
 logger = get_logger("risk_engine")
 
@@ -83,6 +89,8 @@ class RiskEngine:
         self.validators = [
             PriceBandValidator(self.config, price_scale_provider),
             MaxNotionalValidator(self.config, price_scale_provider),
+            PositionLimitValidator(self.config, price_scale_provider),
+            DailyLossLimitValidator(self.config, price_scale_provider),
         ]
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
