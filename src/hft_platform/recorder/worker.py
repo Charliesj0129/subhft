@@ -320,9 +320,18 @@ class RecorderService:
     async def recover_wal(self):
         """Replay any unprocesed WAL files to ClickHouse on startup."""
         import os
+        import warnings
 
         ch_enabled = str(os.getenv("HFT_CLICKHOUSE_ENABLED", "")).lower() in ("1", "true", "yes", "on")
-        if self._mode == RecorderMode.WAL_FIRST or os.getenv("HFT_DISABLE_CLICKHOUSE") or not ch_enabled:
+        _disable_ch = os.getenv("HFT_DISABLE_CLICKHOUSE")
+        if _disable_ch:
+            warnings.warn(
+                "HFT_DISABLE_CLICKHOUSE is deprecated, use HFT_CLICKHOUSE_ENABLED=0 instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            logger.warning("Deprecated env var HFT_DISABLE_CLICKHOUSE used; migrate to HFT_CLICKHOUSE_ENABLED=0")
+        if self._mode == RecorderMode.WAL_FIRST or _disable_ch or not ch_enabled:
             logger.info("Skipping WAL Recovery (ClickHouse disabled or wal_first mode)", mode=self._mode.value)
             return
 
