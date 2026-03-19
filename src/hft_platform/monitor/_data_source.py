@@ -132,6 +132,11 @@ class CHDataSource:
 # Scale factor: SHM uses platform x10000, CH uses x1000000
 _PLATFORM_TO_CH_SCALE = CH_PRICE_SCALE // PLATFORM_SCALE  # 100
 
+# Exponential backoff constants for ShmDataSource.try_reconnect()
+_SHM_BACKOFF_MIN_S: float = 1.0
+_SHM_BACKOFF_MAX_S: float = 60.0
+_SHM_BACKOFF_FACTOR: float = 2.0
+
 
 class ShmDataSource:
     """Reads ShmSnapshotReader, converts slots to RowView format.
@@ -141,6 +146,8 @@ class ShmDataSource:
 
     __slots__ = (
         "_reader",
+        "_shm_name",
+        "_max_symbols",
         "_symbols",
         "_symbol_to_slot",
         "_slot_versions",
@@ -148,6 +155,7 @@ class ShmDataSource:
         "_connected",
         "_retry_count",
         "_last_error",
+        "_next_retry_at",
     )
 
     def __init__(
@@ -157,6 +165,8 @@ class ShmDataSource:
         symbols: tuple[str, ...] = (),
     ) -> None:
         self._reader: Any = None
+        self._shm_name = shm_name
+        self._max_symbols = max_symbols
         self._symbols = symbols
         self._symbol_to_slot: dict[str, int] = {}
         self._slot_versions: dict[int, int] = {}
@@ -164,6 +174,7 @@ class ShmDataSource:
         self._connected = False
         self._retry_count = 0
         self._last_error = ""
+        self._next_retry_at: float = 0.0
 
         try:
             from hft_platform.ipc.shm_snapshot import ShmSnapshotReader, _symbol_hash
@@ -251,7 +262,67 @@ class ShmDataSource:
         raise NotImplementedError("ShmDataSource does not support historical replay; use CH")
 
     def try_reconnect(self) -> bool:
-        return self._connected
+        """Attempt to re-initialize the SHM connection.
+
+        Returns True if already connected or reconnect succeeds.
+        Applies exponential backoff (1s..60s) between attempts.
+        Never raises — failed reconnect is logged and returns False.
+        """
+        if self._connected:
+            return True
+
+        now = time.monotonic()
+        if now < self._next_retry_at:
+            return False
+
+        logger.info(
+            "shm_data_source_reconnect_attempt",
+            shm_name=self._shm_name,
+            retry_count=self._retry_count,
+        )
+
+        try:
+            from hft_platform.ipc.shm_snapshot import ShmSnapshotReader, _symbol_hash
+
+            reader = ShmSnapshotReader(self._shm_name, max_symbols=self._max_symbols)
+            sym_hashes = {_symbol_hash(s): s for s in self._symbols}
+            new_symbol_to_slot: dict[str, int] = {}
+            for slot_idx in range(self._max_symbols):
+                snap = reader.read_slot(slot_idx)
+                if snap is not None and snap.symbol_hash in sym_hashes:
+                    sym = sym_hashes[snap.symbol_hash]
+                    new_symbol_to_slot[sym] = slot_idx
+
+            # Commit new state atomically
+            self._reader = reader
+            self._symbol_to_slot = new_symbol_to_slot
+            self._slot_versions.clear()
+            self._connected = True
+            self._retry_count = 0
+            self._next_retry_at = 0.0
+            self._last_error = ""
+            logger.info(
+                "shm_data_source_reconnected",
+                shm_name=self._shm_name,
+                mapped_symbols=list(new_symbol_to_slot.keys()),
+            )
+            return True
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._retry_count += 1
+            backoff = min(
+                _SHM_BACKOFF_MIN_S * (_SHM_BACKOFF_FACTOR ** (self._retry_count - 1)),
+                _SHM_BACKOFF_MAX_S,
+            )
+            self._next_retry_at = time.monotonic() + backoff
+            logger.warning(
+                "shm_data_source_reconnect_failed",
+                shm_name=self._shm_name,
+                retry_count=self._retry_count,
+                backoff_s=backoff,
+                error=str(exc),
+            )
+            return False
 
     @property
     def connected(self) -> bool:
@@ -266,7 +337,7 @@ class ShmDataSource:
         return self._last_error
 
     def remaining_backoff_seconds(self) -> float:
-        return 0.0
+        return max(0.0, self._next_retry_at - time.monotonic())
 
     @property
     def heartbeat_stale(self) -> bool:
