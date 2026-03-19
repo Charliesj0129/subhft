@@ -57,7 +57,8 @@ class StormGuard:
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
         risk_cfg = config.get("risk", config.get("global_defaults", {}))
-        for key in ("warm_drawdown_bps", "storm_drawdown_bps", "halt_drawdown_bps", "latency_warm_us", "latency_storm_us"):
+        _keys = ("warm_drawdown_bps", "storm_drawdown_bps", "halt_drawdown_bps", "latency_warm_us", "latency_storm_us")
+        for key in _keys:
             if key in risk_cfg:
                 setattr(self.thresholds, key, int(risk_cfg[key]))
         if "feed_gap_halt_s" in risk_cfg:
