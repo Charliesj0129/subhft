@@ -67,6 +67,9 @@ jobs:
       - name: Check linting
         run: make lint
 
+      - name: Discipline enforcement (AST-based)
+        run: make discipline
+
       - name: Enforce research factory contract
         run: make research-audit-strict
 
@@ -682,6 +685,9 @@ jobs:
 
       - name: Run pip-audit
         run: make security-audit
+
+      - name: Code security scan (bandit)
+        run: uv run bandit -r src/hft_platform/ -c pyproject.toml -ll -q
 
       - name: Security Summary
         if: always()

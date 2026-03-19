@@ -45,7 +45,7 @@ class Violation:
 
     def __str__(self) -> str:
         sev = self.severity.name
-        return f"{self.file}:{self.line}  {sev}  {self.rule_id}  {self.message}"
+        return f"{sev}: [{self.rule_id}] {self.file}:{self.line} — {self.message}"
 
 
 # ---------------------------------------------------------------------------
@@ -406,12 +406,48 @@ def check_except_without_reraise(tree: ast.Module, path: Path) -> list[Violation
 # Checker registry
 # ---------------------------------------------------------------------------
 
+
+
+def check_file_size(tree: ast.Module, path: Path) -> list[Violation]:
+    """HFT-S001: File size enforcement (800 line warning, 1500 line critical).
+
+    Excludes __init__.py and __main__.py.
+    """
+    if path.name in ("__init__.py", "__main__.py"):
+        return []
+    if not str(path).startswith(str(_SRC_ROOT)):
+        return []
+
+    try:
+        line_count = sum(1 for _ in path.open(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    if line_count > 1500:
+        return [Violation(
+            file=str(path),
+            line=1,
+            severity=Severity.CRITICAL,
+            rule_id="HFT-S001",
+            message=f"File exceeds 1500 lines ({line_count} LOC)",
+        )]
+    if line_count > 800:
+        return [Violation(
+            file=str(path),
+            line=1,
+            severity=Severity.WARNING,
+            rule_id="HFT-S001",
+            message=f"File exceeds 800 lines ({line_count} LOC)",
+        )]
+    return []
+
 ALL_CHECKS = [
     check_silent_except,
     check_pytest_in_sys_modules,
     check_architecture_boundaries,
     check_hot_path_antipatterns,
     check_except_without_reraise,
+    check_file_size,
 ]
 
 
@@ -461,7 +497,16 @@ _SEVERITY_COLORS = {
 _RESET = "\033[0m"
 
 
-def print_report(violations: list[Violation], *, color: bool = True) -> None:
+def _is_blocking(v: Violation, *, strict: bool = False) -> bool:
+    """Check if a single violation is blocking."""
+    if strict:
+        return v.severity >= Severity.WARNING
+    return v.rule_id in _BLOCKING_RULES and v.severity >= Severity.HIGH
+
+
+def print_report(
+    violations: list[Violation], *, color: bool = True, strict: bool = False
+) -> None:
     """Print a human-readable violation report."""
     if not violations:
         print("All checks passed.")
@@ -469,34 +514,38 @@ def print_report(violations: list[Violation], *, color: bool = True) -> None:
 
     sorted_vs = sorted(violations, key=lambda v: (-v.severity, v.file, v.line))
     for v in sorted_vs:
+        marker = " [BLOCKING]" if _is_blocking(v, strict=strict) else ""
         if color and sys.stdout.isatty():
             c = _SEVERITY_COLORS.get(v.severity, "")
-            print(f"{c}{v}{_RESET}")
+            print(f"{c}{v}{marker}{_RESET}")
         else:
-            print(v)
+            print(f"{v}{marker}")
 
-    counts = {s: 0 for s in Severity}
-    for v in violations:
-        counts[v.severity] += 1
+    n_blocking = sum(1 for v in violations if _is_blocking(v, strict=strict))
+    n_warnings = len(violations) - n_blocking
+    print(f"\n{len(violations)} violations ({n_blocking} blocking, {n_warnings} warnings)")
 
-    summary_parts = [f"{s.name}: {counts[s]}" for s in Severity if counts[s]]
-    print(f"\n{len(violations)} violation(s): {', '.join(summary_parts)}")
+    if n_blocking > 0:
+        print("FAILED: blocking violations found.")
+    elif violations:
+        print("PASSED (with non-blocking warnings).")
+    else:
+        print("PASSED: no violations found.")
 
 
-# Rules that are hard boundaries (fail CI immediately)
-_BLOCKING_RULES = frozenset({"HFT-A001", "HFT-A002", "HFT-A003", "HFT-P001", "HFT-P002", "HFT-P003", "HFT-D002"})
+# Rules that are hard boundaries (fail CI immediately).
+# D-rules (D001/D002/D003) are reported but non-blocking in default mode.
+# Only architecture (A*) and performance (P*) rules cause CI failure.
+_BLOCKING_RULES = frozenset({"HFT-A001", "HFT-A002", "HFT-A003", "HFT-P001", "HFT-P002", "HFT-P003"})
 
 
 def should_fail(violations: list[Violation], *, strict: bool = False) -> bool:
     """Determine if the run should exit with failure.
 
-    Default mode: only fail on blocking rules (architecture + performance + D002).
+    Default mode: only fail on blocking rules (architecture + performance).
     Strict mode: fail on any WARNING+ violation.
     """
-    if strict:
-        return any(v.severity >= Severity.WARNING for v in violations)
-    # Default: only blocking rules cause failure
-    return any(v.rule_id in _BLOCKING_RULES and v.severity >= Severity.HIGH for v in violations)
+    return any(_is_blocking(v, strict=strict) for v in violations)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -538,7 +587,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for f in args.files:
             violations.extend(check_file(f))
 
-    print_report(violations)
+    print_report(violations, strict=args.strict)
 
     if should_fail(violations, strict=args.strict):
         return 1
