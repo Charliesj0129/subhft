@@ -6,6 +6,8 @@ import time
 
 from structlog import get_logger
 
+from hft_platform.monitor._redis_wire import _DEFAULT_TIMEOUT_S
+
 try:
     import orjson
 
@@ -55,7 +57,7 @@ class RedisPoller:
         batch_limit: int = 200,
         max_retries: int = 20,
     ) -> None:
-        self._client = RedisClient(host=host, port=port, password=password, timeout_s=0.5)
+        self._client = RedisClient(host=host, port=port, password=password, timeout_s=_DEFAULT_TIMEOUT_S)
         self._symbols = symbols
         self._retry_count = 0
         self._max_retries = max_retries

@@ -527,6 +527,32 @@ research-validate-data-meta: ## Validate data metadata sidecar for dataset
 	fi
 	$(PY) -m research validate-data-meta "$(DATA_PATH)" $(ARGS)
 
+
+research-batch-correlation: ## Batch compute pool correlations across all alpha scorecards
+	$(PY) -m hft_platform alpha batch-correlation $(ARGS)
+
+research-paper-trade-batch: ## Batch paper-trade session management (discover/record)
+	$(PY) -m hft_platform alpha paper-trade-batch $(ARGS)
+
+research-promote-batch: ## Batch run promotion pipeline across alphas (dry-run by default)
+	$(PY) -m hft_platform alpha promote-batch $(ARGS)
+
+research-batch-search: ## Batch search arXiv papers (QUERIES="query1;query2;query3")
+	@if [ -z "$(QUERIES)" ]; then \
+		echo "Usage: make research-batch-search QUERIES=\"order flow imbalance;market microstructure\""; \
+		exit 2; \
+	fi
+	$(PY) -m research batch-search $(subst ;, ,$(QUERIES)) $(ARGS)
+
+research-hypothesis-ingest: ## Ingest hypotheses from paper index into queue
+	$(PY) -m research hypothesis-queue ingest $(ARGS)
+
+research-hypothesis-top: ## Show top-N pending hypotheses (default N=5)
+	$(PY) -m research hypothesis-queue top $(ARGS)
+
+research-auto-scaffold: ## Auto-scaffold top-N alpha packages from hypothesis queue
+	$(PY) -m research auto-scaffold $(ARGS)
+
 # ============================================================================
 # Help
 # ============================================================================
