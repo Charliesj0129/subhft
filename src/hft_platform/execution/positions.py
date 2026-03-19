@@ -34,7 +34,7 @@ if _RUST_POSITIONS:
         _RustPositionTracker = getattr(_rust_mod, "RustPositionTracker", None)
 
 
-@dataclass
+@dataclass(slots=True)
 class Position:
     """Position state using integer fixed-point arithmetic (no float for financial calc).
 

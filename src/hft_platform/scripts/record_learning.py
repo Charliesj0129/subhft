@@ -1,5 +1,6 @@
 import argparse
 import datetime
+from datetime import timezone
 import os
 
 BRAIN_PATH = "/home/charlie/hft_platform/brain/knowledge_base"
@@ -22,7 +23,7 @@ def record(args):
     # Create dir if not exists
     os.makedirs(os.path.dirname(target_file), exist_ok=True)
 
-    timestamp = datetime.datetime.now().isoformat()
+    timestamp = datetime.datetime.now(tz=timezone.utc).isoformat()
 
     entry = f"\n\n## {args.title}\n"
     entry += f"**Date**: {timestamp}\n"
