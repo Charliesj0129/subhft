@@ -172,3 +172,4 @@ def build_alpha_status_report(
         "active_canaries": with_canary,
         "alphas": entries,
     }
+
