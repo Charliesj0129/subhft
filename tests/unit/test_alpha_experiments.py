@@ -297,11 +297,17 @@ class TestExperimentGC:
         import json as _json
 
         from hft_platform.alpha.experiments import gc_experiment_runs
+
         tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
         tracker.log_run(
-            run_id="old-run", alpha_id="alpha_old", config_hash="h",
-            data_paths=["d.npy"], metrics={"sharpe_oos": 0.5},
-            gate_status={"gate_c": False}, scorecard_payload={}, backtest_report_payload={},
+            run_id="old-run",
+            alpha_id="alpha_old",
+            config_hash="h",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 0.5},
+            gate_status={"gate_c": False},
+            scorecard_payload={},
+            backtest_report_payload={},
         )
         meta_path = tmp_path / "experiments" / "runs" / "old-run" / "meta.json"
         meta = _json.loads(meta_path.read_text())
@@ -316,11 +322,17 @@ class TestExperimentGC:
         import json as _json
 
         from hft_platform.alpha.experiments import gc_experiment_runs
+
         tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
         tracker.log_run(
-            run_id="old-run", alpha_id="alpha_old", config_hash="h",
-            data_paths=["d.npy"], metrics={"sharpe_oos": 0.5},
-            gate_status={"gate_c": False}, scorecard_payload={}, backtest_report_payload={},
+            run_id="old-run",
+            alpha_id="alpha_old",
+            config_hash="h",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 0.5},
+            gate_status={"gate_c": False},
+            scorecard_payload={},
+            backtest_report_payload={},
         )
         meta_path = tmp_path / "experiments" / "runs" / "old-run" / "meta.json"
         meta = _json.loads(meta_path.read_text())
@@ -335,11 +347,17 @@ class TestExperimentGC:
         import json as _json
 
         from hft_platform.alpha.experiments import gc_experiment_runs
+
         tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
         tracker.log_run(
-            run_id="good-run", alpha_id="alpha_good", config_hash="h",
-            data_paths=["d.npy"], metrics={"sharpe_oos": 1.5},
-            gate_status={"gate_c": True}, scorecard_payload={}, backtest_report_payload={},
+            run_id="good-run",
+            alpha_id="alpha_good",
+            config_hash="h",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.5},
+            gate_status={"gate_c": True},
+            scorecard_payload={},
+            backtest_report_payload={},
         )
         meta_path = tmp_path / "experiments" / "runs" / "good-run" / "meta.json"
         meta = _json.loads(meta_path.read_text())
@@ -352,11 +370,17 @@ class TestExperimentGC:
 
     def test_gc_recent_runs_not_eligible(self, tmp_path: Path) -> None:
         from hft_platform.alpha.experiments import gc_experiment_runs
+
         tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
         tracker.log_run(
-            run_id="recent-run", alpha_id="alpha_recent", config_hash="h",
-            data_paths=["d.npy"], metrics={"sharpe_oos": 0.5},
-            gate_status={"gate_c": False}, scorecard_payload={}, backtest_report_payload={},
+            run_id="recent-run",
+            alpha_id="alpha_recent",
+            config_hash="h",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 0.5},
+            gate_status={"gate_c": False},
+            scorecard_payload={},
+            backtest_report_payload={},
         )
         result = gc_experiment_runs(base_dir=str(tmp_path / "experiments"), older_than_days=30, apply=True)
         assert result["candidates"] == 0

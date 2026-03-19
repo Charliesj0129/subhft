@@ -860,15 +860,20 @@ def test_gate_a_data_ul_warns_when_target_not_met(tmp_path: Path):
 class TestBatchValidate:
     def test_batch_validate_empty_list(self):
         from hft_platform.alpha.validation import batch_validate
+
         result = batch_validate(alpha_ids=[], data_paths=[], gate="a")
         assert result["total"] == 0
         assert result["results"] == []
 
     def test_batch_validate_unknown_alpha(self, tmp_path: Path):
         from hft_platform.alpha.validation import batch_validate
+
         result = batch_validate(
-            alpha_ids=["nonexistent_alpha"], data_paths=[], gate="a",
-            project_root=str(tmp_path), experiments_dir=str(tmp_path / "experiments"),
+            alpha_ids=["nonexistent_alpha"],
+            data_paths=[],
+            gate="a",
+            project_root=str(tmp_path),
+            experiments_dir=str(tmp_path / "experiments"),
         )
         assert result["total"] == 1
         assert result["failed"] == 1

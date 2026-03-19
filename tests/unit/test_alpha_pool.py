@@ -165,16 +165,24 @@ class TestRecomputePoolCorrelations:
         base = tmp_path / "experiments"
         tracker = ExperimentTracker(base_dir=base)
         tracker.log_run(
-            run_id="run-a", alpha_id="alpha_a", config_hash="a",
-            data_paths=["d.npy"], metrics={"sharpe_oos": 1.0},
-            gate_status={"gate_c": True}, scorecard_payload={"sharpe_oos": 1.0},
+            run_id="run-a",
+            alpha_id="alpha_a",
+            config_hash="a",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.0},
+            gate_status={"gate_c": True},
+            scorecard_payload={"sharpe_oos": 1.0},
             backtest_report_payload={},
             signals=np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
         )
         tracker.log_run(
-            run_id="run-b", alpha_id="alpha_b", config_hash="b",
-            data_paths=["d.npy"], metrics={"sharpe_oos": 1.1},
-            gate_status={"gate_c": True}, scorecard_payload={"sharpe_oos": 1.1},
+            run_id="run-b",
+            alpha_id="alpha_b",
+            config_hash="b",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.1},
+            gate_status={"gate_c": True},
+            scorecard_payload={"sharpe_oos": 1.1},
             backtest_report_payload={},
             signals=np.array([1.1, 2.1, 3.1, 4.1], dtype=np.float64),
         )
@@ -186,19 +194,28 @@ class TestRecomputePoolCorrelations:
 
     def test_recompute_with_apply(self, tmp_path: Path):
         import json
+
         base = tmp_path / "experiments"
         tracker = ExperimentTracker(base_dir=base)
         tracker.log_run(
-            run_id="run-a", alpha_id="alpha_a", config_hash="a",
-            data_paths=["d.npy"], metrics={"sharpe_oos": 1.0},
-            gate_status={"gate_c": True}, scorecard_payload={"sharpe_oos": 1.0},
+            run_id="run-a",
+            alpha_id="alpha_a",
+            config_hash="a",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.0},
+            gate_status={"gate_c": True},
+            scorecard_payload={"sharpe_oos": 1.0},
             backtest_report_payload={},
             signals=np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
         )
         tracker.log_run(
-            run_id="run-b", alpha_id="alpha_b", config_hash="b",
-            data_paths=["d.npy"], metrics={"sharpe_oos": 1.1},
-            gate_status={"gate_c": True}, scorecard_payload={"sharpe_oos": 1.1},
+            run_id="run-b",
+            alpha_id="alpha_b",
+            config_hash="b",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.1},
+            gate_status={"gate_c": True},
+            scorecard_payload={"sharpe_oos": 1.1},
             backtest_report_payload={},
             signals=np.array([1.1, 2.1, 3.1, 4.1], dtype=np.float64),
         )

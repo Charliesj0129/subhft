@@ -1862,7 +1862,9 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_status = alpha_sub.add_parser("status", help="Show unified alpha pipeline status dashboard")
     alpha_status.add_argument("--alphas-dir", default="research/alphas", help="Alpha artifacts directory")
     alpha_status.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
-    alpha_status.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory")
+    alpha_status.add_argument(
+        "--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory"
+    )
     alpha_status.add_argument("--format", choices=["json", "table"], default="json", help="Output format")
     alpha_status.add_argument("--out", help="Optional JSON output path")
     alpha_status.set_defaults(func=cmd_alpha_status)
@@ -2040,7 +2042,9 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_batch_validate.add_argument("--data", nargs="+", help="npy/npz data paths for validation")
     alpha_batch_validate.add_argument("--gate", choices=["a", "b", "c"], default="c", help="Maximum gate to run")
     alpha_batch_validate.add_argument("--parallel", type=int, default=1, help="Number of parallel workers")
-    alpha_batch_validate.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    alpha_batch_validate.add_argument(
+        "--experiments-dir", default="research/experiments", help="Experiment base directory"
+    )
     alpha_batch_validate.add_argument("--skip-gate-b-tests", action="store_true", help="Skip pytest in Gate B")
     alpha_batch_validate.add_argument("--out", help="Optional JSON output path")
     alpha_batch_validate.set_defaults(func=cmd_alpha_batch_validate)
@@ -2218,7 +2222,9 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_exp_gc.add_argument("--older-than-days", type=int, default=90, help="Minimum age in days for GC eligibility")
     alpha_exp_gc.add_argument("--apply", action="store_true", help="Actually delete (default is dry-run)")
     alpha_exp_gc.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
-    alpha_exp_gc.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions dir (preserved runs)")
+    alpha_exp_gc.add_argument(
+        "--promotions-dir", default="config/strategy_promotions", help="Promotions dir (preserved runs)"
+    )
     alpha_exp_gc.add_argument("--out", help="Optional JSON output path")
     alpha_exp_gc.set_defaults(func=cmd_alpha_experiments_gc)
 

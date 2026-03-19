@@ -239,6 +239,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
     manifest_fsv = str(config.manifest_feature_set_version or "").strip() or None
     _LIVE_FSV: str | None = None
     import contextlib
+
     with contextlib.suppress(Exception):
         from hft_platform.feature.registry import FEATURE_SET_VERSION as _LIVE_FSV
     if manifest_fsv is not None and _LIVE_FSV is not None:
