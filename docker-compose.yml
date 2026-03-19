@@ -32,14 +32,14 @@ x-hft-common: &hft-common
     - HFT_INSERT_MAX_RETRIES=${HFT_WAL_INSERT_MAX_RETRIES:-4}
     - HFT_INSERT_BASE_DELAY_S=${HFT_WAL_INSERT_BASE_DELAY_S:-0.6}
     - HFT_INSERT_MAX_BACKOFF_S=${HFT_WAL_INSERT_MAX_BACKOFF_S:-8.0}
-    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
     - HFT_RECONNECT_DAYS=${HFT_RECONNECT_DAYS:-}
     - HFT_RECONNECT_HOURS=${HFT_RECONNECT_HOURS:-}
     - HFT_RECONNECT_HOURS_2=${HFT_RECONNECT_HOURS_2:-}
     - HFT_RECONNECT_TZ=${HFT_RECONNECT_TZ:-Asia/Taipei}
     - TZ=${TZ:-Asia/Taipei}
     - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
-    - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
     - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-1}
     - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-rust}
@@ -108,8 +108,8 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
     ulimits:
       nofile: 262144
     volumes:
@@ -145,7 +145,7 @@ services:
     container_name: redis
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "--save", "", "--appendonly", "no"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     restart: always
     deploy:
       resources:
@@ -157,6 +157,11 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   wal-loader:
     <<: *hft-common
@@ -180,7 +185,7 @@ services:
       - HFT_CLICKHOUSE_HOST=clickhouse
       - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
       - HFT_CLICKHOUSE_USER=${HFT_CLICKHOUSE_USER:-default}
-      - HFT_CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
+      - HFT_CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
       - HFT_MONITOR_INTERVAL_S=${HFT_MONITOR_INTERVAL_S:-10}
       - HFT_MONITOR_MAX_INGEST_LAG_S=${HFT_MONITOR_MAX_INGEST_LAG_S:-5}
       - HFT_MONITOR_FUTURE_TOLERANCE_S=${HFT_MONITOR_FUTURE_TOLERANCE_S:-60}
@@ -277,7 +282,7 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
     volumes:
       - ./config/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
       - ./config/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro

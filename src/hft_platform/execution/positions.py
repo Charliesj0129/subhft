@@ -160,6 +160,39 @@ class PositionStore:
         # 2. The critical section is very short (microseconds for Rust path)
         # 3. For async contexts, use on_fill_async() which runs this in a thread pool
         self._fill_lock = threading.Lock()
+        # Portfolio-level tracking for StormGuard drawdown
+        self._peak_equity_scaled: int = 0  # High watermark of total realized PnL
+        self._total_realized_pnl_scaled: int = 0  # Sum across all positions
+
+    @property
+    def total_pnl(self) -> int:
+        """Total realized PnL across all positions (scaled int)."""
+        return self._total_realized_pnl_scaled
+
+    def get_drawdown_pct(self) -> float:
+        """Portfolio drawdown from peak equity as a fraction (0.0 to 1.0).
+
+        Returns 0.0 when no drawdown (at or above peak).
+        Only meaningful after at least one profitable fill has been processed
+        (i.e., _peak_equity_scaled > 0).
+        """
+        if self._peak_equity_scaled <= 0:
+            # No positive peak yet — cannot compute meaningful drawdown %
+            return 0.0
+        current = self._total_realized_pnl_scaled
+        if current >= self._peak_equity_scaled:
+            return 0.0
+        return (self._peak_equity_scaled - current) / self._peak_equity_scaled
+
+    def _update_portfolio_aggregates(self) -> None:
+        """Recompute portfolio-level PnL totals and update high-watermark.
+
+        O(n) over active positions — acceptable since fills are infrequent
+        relative to tick frequency.
+        """
+        self._total_realized_pnl_scaled = sum(p.realized_pnl_scaled for p in self.positions.values())
+        if self._total_realized_pnl_scaled > self._peak_equity_scaled:
+            self._peak_equity_scaled = self._total_realized_pnl_scaled
 
     def on_fill(self, fill: FillEvent) -> PositionDelta:
         """Process fill with atomic tracker access.
@@ -217,10 +250,17 @@ class PositionStore:
                 rust=True,
             )
 
+        # Update portfolio-level aggregates (must happen after position cache is updated)
+        self._update_portfolio_aggregates()
+
         if self.metrics:
             self.metrics.position_pnl_realized.labels(strategy=fill.strategy_id, symbol=fill.symbol).set(
                 realized_pnl_scaled
             )
+            if hasattr(self.metrics, "portfolio_total_pnl"):
+                self.metrics.portfolio_total_pnl.set(self._total_realized_pnl_scaled)
+            if hasattr(self.metrics, "portfolio_drawdown_pct"):
+                self.metrics.portfolio_drawdown_pct.set(self.get_drawdown_pct())
 
         return PositionDelta(
             account_id=fill.account_id,
@@ -246,11 +286,18 @@ class PositionStore:
         if self._log_fills:
             logger.info("Fill processed", key=key, net_qty=pos.net_qty, pnl=pos.realized_pnl_scaled)
 
+        # Update portfolio-level aggregates (must happen after position update)
+        self._update_portfolio_aggregates()
+
         # Emit delta / Update PnL Gauge (all values are already scaled integers)
         if self.metrics:
             self.metrics.position_pnl_realized.labels(strategy=pos.strategy_id, symbol=pos.symbol).set(
                 pos.realized_pnl_scaled
             )
+            if hasattr(self.metrics, "portfolio_total_pnl"):
+                self.metrics.portfolio_total_pnl.set(self._total_realized_pnl_scaled)
+            if hasattr(self.metrics, "portfolio_drawdown_pct"):
+                self.metrics.portfolio_drawdown_pct.set(self.get_drawdown_pct())
 
         # Emit delta (all values are already in scaled fixed-point form)
         return PositionDelta(
