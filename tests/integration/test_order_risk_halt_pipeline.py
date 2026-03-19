@@ -25,7 +25,6 @@ from hft_platform.contracts.strategy import (
 from hft_platform.core import timebase
 from hft_platform.risk.engine import RiskEngine
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

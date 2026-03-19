@@ -11,7 +11,6 @@ from hft_platform.core import timebase
 from hft_platform.events import MetaData, TickEvent
 from hft_platform.testing.shadow_runner import RecordingOrderAdapter, ShadowResult, run
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

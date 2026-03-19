@@ -1,6 +1,7 @@
 "Tests for WU-06: Per-Symbol Rate Limiter."
 
 from unittest.mock import patch
+
 from hft_platform.order.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult
 
 
