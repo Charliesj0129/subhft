@@ -33,10 +33,10 @@ try:
 except ImportError:
     import json
 
-    def _dumps(obj: Any) -> bytes:  # type: ignore[misc]
+    def _dumps(obj: Any) -> bytes:
         return json.dumps(obj, separators=(",", ":")).encode("utf-8")
 
-    def _loads(data: bytes) -> Any:  # type: ignore[misc]
+    def _loads(data: bytes) -> Any:
         return json.loads(data)
 
 
@@ -64,7 +64,7 @@ class PositionCheckpointWriter:
             "HFT_POSITION_CHECKPOINT_PATH",
             ".runtime/position_checkpoint.json",
         )
-        self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60"))
+        self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60"))  # type: ignore[arg-type]
         self.running = False
 
     # ------------------------------------------------------------------
@@ -117,7 +117,7 @@ class PositionCheckpointWriter:
         final_bytes = _dumps(body_obj)
 
         # Ensure parent directory exists
-        parent = os.path.dirname(self._path)
+        parent = os.path.dirname(self._path)  # type: ignore[type-var]
         if parent:
             os.makedirs(parent, exist_ok=True)
 
@@ -131,7 +131,7 @@ class PositionCheckpointWriter:
             os.write(fd, final_bytes)
             os.fsync(fd)
             os.close(fd)
-            os.rename(tmp_path, self._path)
+            os.rename(tmp_path, self._path)  # type: ignore[arg-type]
         except BaseException:
             os.close(fd) if not _is_closed(fd) else None
             if os.path.exists(tmp_path):
@@ -144,7 +144,7 @@ class PositionCheckpointWriter:
             positions=len(positions_payload),
             sha256=sha,
         )
-        return self._path
+        return self._path  # type: ignore[return-value]
 
     # ------------------------------------------------------------------
     # Static loader
