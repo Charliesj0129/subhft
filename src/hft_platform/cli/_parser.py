@@ -41,6 +41,9 @@ from ._ops import (
     cmd_recorder_status,
     cmd_strat_test,
 )
+from ._golive import cmd_golive_check
+from ._health import cmd_health_preflight
+from ._risk import cmd_risk_halt, cmd_risk_resume, cmd_risk_status
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
     cmd_resolve_symbols,
@@ -251,6 +254,33 @@ def build_parser() -> argparse.ArgumentParser:
     recorder_status.add_argument("--wal-dir", help="Override WAL directory path")
     recorder_status.add_argument("--ck-host", help="Override ClickHouse host")
     recorder_status.set_defaults(func=cmd_recorder_status)
+
+    # ── Risk Management ────────────────────────────────────────────────
+    risk_cmd_p = sub.add_parser("risk", help="Risk management utilities")
+    risk_sub_p = risk_cmd_p.add_subparsers(dest="risk_cmd")
+    risk_halt_p = risk_sub_p.add_parser("halt", help="Activate kill switch (halt all orders)")
+    risk_halt_p.add_argument("--reason", required=True, help="Reason for halting")
+    risk_halt_p.set_defaults(func=cmd_risk_halt)
+    risk_resume_p = risk_sub_p.add_parser("resume", help="Deactivate kill switch")
+    risk_resume_p.set_defaults(func=cmd_risk_resume)
+    risk_status_p = risk_sub_p.add_parser("status", help="Check kill switch status")
+    risk_status_p.set_defaults(func=cmd_risk_status)
+
+    # ── Health Preflight ───────────────────────────────────────────────
+    health_cmd_p = sub.add_parser("health", help="Health check utilities")
+    health_sub_p = health_cmd_p.add_subparsers(dest="health_cmd")
+    health_pf = health_sub_p.add_parser("preflight", help="Run pre-trading health checks")
+    health_pf.add_argument("--timeout", type=float, default=5.0, help="HTTP check timeout seconds")
+    health_pf.add_argument("--json", action="store_true", help="Output as JSON")
+    health_pf.set_defaults(func=cmd_health_preflight)
+
+    # ── Go-Live Checklist ──────────────────────────────────────────────
+    golive_cmd_p = sub.add_parser("golive", help="Go-live checklist utilities")
+    golive_sub_p = golive_cmd_p.add_subparsers(dest="golive_cmd")
+    golive_chk = golive_sub_p.add_parser("check", help="Run go-live checklist")
+    golive_chk.add_argument("--skip", nargs="*", default=[], help="Checks to skip")
+    golive_chk.add_argument("--json", action="store_true", help="Output as JSON")
+    golive_chk.set_defaults(func=cmd_golive_check)
 
     alpha = sub.add_parser("alpha", help="Alpha research pipeline utilities")
     alpha_sub = alpha.add_subparsers(dest="alpha_cmd")
