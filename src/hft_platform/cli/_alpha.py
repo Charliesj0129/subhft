@@ -454,6 +454,37 @@ def cmd_alpha_canary_evaluate(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def cmd_alpha_canary_auto_evaluate(args: argparse.Namespace) -> None:
+    """Run one-shot auto-evaluation of all active canaries."""
+    try:
+        from hft_platform.alpha.canary import CanaryMonitor
+        from hft_platform.alpha.canary_scheduler import CanaryAutoScheduler
+    except Exception as exc:
+        print(f"Failed to import canary auto-scheduler: {exc}")
+        sys.exit(1)
+
+    monitor = CanaryMonitor(promotions_dir=args.promotions_dir)
+    dry_run = args.dry_run
+    scheduler = CanaryAutoScheduler(monitor=monitor, dry_run=dry_run)
+
+    import asyncio
+
+    results = asyncio.run(scheduler.evaluate_all())
+
+    payload: list[dict[str, Any]] = [s.to_dict() for s in results]
+    summary = {
+        "count": len(payload),
+        "dry_run": dry_run,
+        "results": payload,
+    }
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(summary, indent=2, sort_keys=True))
+
+
 def cmd_alpha_ab_compare(args: argparse.Namespace) -> None:
     try:
         from hft_platform.alpha.experiments import ExperimentTracker

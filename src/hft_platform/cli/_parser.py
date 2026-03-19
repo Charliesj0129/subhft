@@ -7,6 +7,7 @@ import os
 
 from ._alpha import (
     cmd_alpha_ab_compare,
+    cmd_alpha_canary_auto_evaluate,
     cmd_alpha_canary_evaluate,
     cmd_alpha_canary_status,
     cmd_alpha_experiments_best,
@@ -550,6 +551,29 @@ def build_parser() -> argparse.ArgumentParser:
     canary_eval.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory")
     canary_eval.add_argument("--out", help="Optional JSON output path")
     canary_eval.set_defaults(func=cmd_alpha_canary_evaluate)
+
+    canary_auto_eval = alpha_canary_sub.add_parser(
+        "auto-evaluate", help="Auto-evaluate all active canaries (one-shot)"
+    )
+    canary_auto_eval.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        dest="dry_run",
+        help="Evaluate only, do not apply decisions (default)",
+    )
+    canary_auto_eval.add_argument(
+        "--no-dry-run",
+        action="store_false",
+        dest="dry_run",
+        help="Evaluate and apply decisions",
+    )
+    canary_auto_eval.add_argument(
+        "--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory"
+    )
+    canary_auto_eval.add_argument("--config", default=None, help="Config path (reserved)")
+    canary_auto_eval.add_argument("--out", help="Optional JSON output path")
+    canary_auto_eval.set_defaults(func=cmd_alpha_canary_auto_evaluate)
 
     alpha_ab_compare = alpha_sub.add_parser("ab-compare", help="A/B compare two experiment runs with delta table")
     alpha_ab_compare.add_argument("run_id_a", help="First run ID (A)")
