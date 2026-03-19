@@ -77,10 +77,10 @@ def batch_compute_correlations(
             continue
 
         # Patch scorecard if we have the run
-        run = latest_runs.get(alpha_id)
-        if run is None:
+        latest_run = latest_runs.get(alpha_id)
+        if latest_run is None:
             continue
-        scorecard_path = Path(run.scorecard_path)
+        scorecard_path = Path(latest_run.scorecard_path)
         if not scorecard_path.exists():
             logger.warning(
                 "batch_correlation: scorecard not found",
@@ -92,9 +92,7 @@ def batch_compute_correlations(
         try:
             scorecard = json.loads(scorecard_path.read_text())
             scorecard["correlation_pool_max"] = round(corr, 6)
-            scorecard_path.write_text(
-                json.dumps(scorecard, indent=2, sort_keys=True)
-            )
+            scorecard_path.write_text(json.dumps(scorecard, indent=2, sort_keys=True))
             logger.info(
                 "batch_correlation.patched",
                 alpha_id=alpha_id,

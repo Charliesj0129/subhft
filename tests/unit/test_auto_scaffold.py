@@ -9,9 +9,7 @@ from research.tools.hypothesis_queue import Hypothesis, HypothesisQueue
 
 
 class TestAutoScaffoldPipeline:
-    def _make_queue_with_hypotheses(
-        self, tmp_path: Path, count: int = 3
-    ) -> HypothesisQueue:
+    def _make_queue_with_hypotheses(self, tmp_path: Path, count: int = 3) -> HypothesisQueue:
         queue_path = tmp_path / "hypothesis_queue.json"
         queue = HypothesisQueue(queue_path=queue_path)
         for i in range(count):
@@ -43,9 +41,7 @@ class TestAutoScaffoldPipeline:
         # Queue entries should NOT be marked as scaffolded
         assert all(h.status == "pending" for h in queue.all_hypotheses())
 
-    def test_already_exists_marks_scaffolded(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_already_exists_marks_scaffolded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from research.tools import auto_scaffold as _as_mod
 
         queue = self._make_queue_with_hypotheses(tmp_path, count=1)
@@ -65,9 +61,7 @@ class TestAutoScaffoldPipeline:
         reloaded = HypothesisQueue(queue_path=tmp_path / "hypothesis_queue.json")
         assert reloaded.all_hypotheses()[0].status == "scaffolded"
 
-    def test_scaffold_via_subprocess(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_scaffold_via_subprocess(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from research.tools import auto_scaffold as _as_mod
 
         queue = self._make_queue_with_hypotheses(tmp_path, count=1)
@@ -87,9 +81,7 @@ class TestAutoScaffoldPipeline:
         assert results[0]["status"] == "scaffolded"
         mock_run.assert_called_once()
 
-    def test_scaffold_failure_reported(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_scaffold_failure_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from research.tools import auto_scaffold as _as_mod
 
         queue = self._make_queue_with_hypotheses(tmp_path, count=1)
@@ -141,9 +133,7 @@ class TestAutoScaffoldPipeline:
         results = pipeline.scaffold_top(n=2, dry_run=True)
         assert len(results) == 2
 
-    def test_timeout_reported(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_timeout_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import subprocess as _sp
 
         from research.tools import auto_scaffold as _as_mod

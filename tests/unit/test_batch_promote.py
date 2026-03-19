@@ -98,9 +98,7 @@ class TestBatchPromoter:
 
         exp_dir = None
         for i in range(5):
-            exp_dir = _setup_experiment(
-                tmp_path, f"alpha_{i}", sharpe_oos=2.0 + i * 0.1
-            )
+            exp_dir = _setup_experiment(tmp_path, f"alpha_{i}", sharpe_oos=2.0 + i * 0.1)
 
         mock_result = MagicMock()
         mock_result.approved = False

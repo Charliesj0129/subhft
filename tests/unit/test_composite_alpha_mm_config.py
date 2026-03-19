@@ -41,6 +41,7 @@ class TestCompositeAlphaMMConfig:
             _IDX_DEPTH_IMBALANCE_EMA8_PPM,
             _IDX_OFI_L1_EMA8,
         )
+
         # Verify indices are valid non-negative integers
         assert _IDX_BEST_BID >= 0
         assert _IDX_BEST_ASK >= 0
@@ -51,6 +52,7 @@ class TestCompositeAlphaMMConfig:
         """Strategy should construct with no params (all have defaults)."""
         with patch.dict("os.environ", {"HFT_FEATURE_ENGINE_ENABLED": "0"}):
             from hft_platform.strategies.composite_alpha_mm import CompositeAlphaMM
+
             strat = CompositeAlphaMM("test_config_mm")
         assert strat._max_position == 50
         assert strat._qty == 1
@@ -60,6 +62,7 @@ class TestCompositeAlphaMMConfig:
         """Strategy should accept custom params matching YAML config keys."""
         with patch.dict("os.environ", {"HFT_FEATURE_ENGINE_ENABLED": "1"}):
             from hft_platform.strategies.composite_alpha_mm import CompositeAlphaMM
+
             strat = CompositeAlphaMM(
                 "test_config_mm",
                 w_ofi=0.5,

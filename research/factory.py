@@ -87,6 +87,8 @@ ALLOWED_ROOT_FILES: set[str] = {
 
 CORE_TOOL_FILES: set[str] = {
     "alpha_scaffold.py",
+    "auto_scaffold.py",
+    "batch_search.py",
     "alpha_trader_walk_forward.py",
     "batch_alpha_eval.py",
     "bayesian_opt.py",
@@ -105,6 +107,7 @@ CORE_TOOL_FILES: set[str] = {
     "feature_promotion_check.py",
     "feature_screener.py",
     "fetch_paper.py",
+    "hypothesis_queue.py",
     "kalman_filter.py",
     "latency_profiles.py",
     "maintenance.py",
