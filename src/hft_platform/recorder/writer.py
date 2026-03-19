@@ -175,7 +175,7 @@ class DataWriter:
             from hft_platform.observability.metrics import MetricsRegistry
 
             self.metrics = MetricsRegistry.get()
-        except Exception:
+        except ImportError:
             self.metrics = None
 
     @classmethod
@@ -248,7 +248,7 @@ class DataWriter:
                 from hft_platform.recorder.wal import WALBatchWriter
 
                 self._wal_batch_writer = WALBatchWriter(self.wal.wal_dir)
-            except Exception:
+            except ImportError:
                 self._wal_batch_writer = None
         return self._wal_batch_writer
 
@@ -722,7 +722,8 @@ class DataWriter:
                     ingest_ts = row.get("ingest_ts")
                     if exch_ts and ingest_ts and int(ingest_ts) < int(exch_ts):
                         row["ingest_ts"] = int(exch_ts)
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     continue
             return data
 
@@ -744,7 +745,8 @@ class DataWriter:
                 if exch_ts_i and ingest_ts_i and ingest_ts_i < exch_ts_i:
                     row["ingest_ts"] = exch_ts_i
                 kept.append(row)
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 kept.append(row)
         if dropped:
             logger.warning(
@@ -799,7 +801,8 @@ class DataWriter:
                 if exch_idx is not None and ingest_idx is not None and exch_ts_i and ingest_ts_i:
                     if ingest_ts_i < exch_ts_i:
                         column_data[ingest_idx][i] = exch_ts_i
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
 
             keep_indices.append(i)

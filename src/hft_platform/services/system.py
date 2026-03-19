@@ -151,7 +151,7 @@ class HFTSystem:
                     metrics.execution_router_alive.set(1)
                 elif name == "exec_gateway":
                     metrics.execution_gateway_alive.set(1)
-            except Exception:
+            except ImportError:
                 pass
         self.tasks[name] = asyncio.create_task(coro)
 
@@ -159,7 +159,8 @@ class HFTSystem:
     def _env_float(name: str, default: float, min_value: float) -> float:
         try:
             value = float(os.getenv(name, str(default)))
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             value = default
         return max(min_value, value)
 

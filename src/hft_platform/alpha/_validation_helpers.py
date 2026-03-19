@@ -146,7 +146,7 @@ def _dataset_row_count(path: Path) -> int | None:
         if arr.ndim == 0:
             return int(arr.size)
         return int(arr.shape[0])
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
     finally:
         if isinstance(source, np.lib.npyio.NpzFile):

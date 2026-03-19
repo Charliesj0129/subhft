@@ -114,7 +114,7 @@ class LatencyRecorder:
                         stage_metric = self.metrics.pipeline_latency_ns.labels(stage=stage)
                         self._stage_metric_cache[stage] = stage_metric
                     stage_metric.observe(latency_ns)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
 
         if not self._should_sample():
@@ -140,7 +140,7 @@ class LatencyRecorder:
 
         try:
             self._queue.put_nowait({"topic": "latency_spans", "data": payload})
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             # Queue full, add to retry buffer
             if len(self._retry_buffer) >= self._retry_buffer_size:
                 # Buffer also full, increment dropped counter
@@ -149,7 +149,7 @@ class LatencyRecorder:
                     try:
                         if hasattr(self.metrics, "latency_spans_dropped_total"):
                             self.metrics.latency_spans_dropped_total.inc(100)
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
             else:
                 self._retry_buffer.append({"topic": "latency_spans", "data": payload})
@@ -163,6 +163,6 @@ class LatencyRecorder:
                 item = self._retry_buffer[0]
                 self._queue.put_nowait(item)
                 self._retry_buffer.popleft()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 # Queue still full, stop draining
                 break

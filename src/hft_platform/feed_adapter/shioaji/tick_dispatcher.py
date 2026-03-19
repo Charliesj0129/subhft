@@ -147,7 +147,8 @@ class TickDispatcher:
             if metrics and hasattr(metrics, "shioaji_quote_callback_ingress_latency_ns"):
                 try:
                     metrics.shioaji_quote_callback_ingress_latency_ns.observe(max(0, time.perf_counter_ns() - start_ns))
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
 
     def _enqueue_queue(
@@ -168,7 +169,8 @@ class TickDispatcher:
                 try:
                     if hasattr(metrics, "shioaji_quote_callback_queue_depth"):
                         metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
         except queue.Full:
             self._on_drop(metrics)
@@ -202,7 +204,8 @@ class TickDispatcher:
             try:
                 if hasattr(metrics, "shioaji_quote_callback_queue_depth"):
                     metrics.shioaji_quote_callback_queue_depth.set(len(dq))
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
         # Wake the consumer.  ``Event.set()`` is very cheap when already set.
         ev.set()
@@ -215,7 +218,8 @@ class TickDispatcher:
                 metrics.raw_queue_dropped_total.inc()
                 if hasattr(metrics, "shioaji_quote_callback_queue_dropped_total"):
                     metrics.shioaji_quote_callback_queue_dropped_total.inc()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
         if self._dropped % 100 == 1:
             logger.warning(
@@ -287,7 +291,8 @@ class TickDispatcher:
                     try:
                         if hasattr(metrics, "shioaji_quote_callback_queue_depth"):
                             metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("operation_fallback", error=str(exc))
                         pass
 
         self._thread = threading.Thread(
@@ -342,7 +347,8 @@ class TickDispatcher:
                         try:
                             if hasattr(metrics, "shioaji_quote_callback_queue_depth"):
                                 metrics.shioaji_quote_callback_queue_depth.set(len(dq))
-                        except Exception:
+                        except Exception as exc:
+                            logger.debug("operation_fallback", error=str(exc))
                             pass
                     # If this batch was smaller than batch_max, deque is
                     # empty — break out to the outer ev.wait() loop.
@@ -371,7 +377,8 @@ class TickDispatcher:
             if q is not None:
                 try:
                     q.put_nowait(None)
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
         t = self._thread
         if t and t.is_alive():

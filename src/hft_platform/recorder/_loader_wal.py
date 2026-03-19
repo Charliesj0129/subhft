@@ -78,7 +78,7 @@ def save_manifest(svc: Any) -> None:
                 f.flush()
                 os.fsync(f.fileno())
             os.rename(tmp_path, svc._manifest_path)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
             raise
@@ -242,7 +242,7 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
                         continue
                     try:
                         all_lines.append(_loads(line))
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         corrupt_lines += 1
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)

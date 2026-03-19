@@ -41,7 +41,7 @@ class PriceCodec:
     def _scale(self, symbol: str) -> int:
         try:
             scale = int(self.provider.price_scale(symbol))
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             scale = 0
         return scale or 1
 

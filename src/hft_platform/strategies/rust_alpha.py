@@ -15,7 +15,7 @@ except ImportError:
 
 try:
     from hft_platform.observability.metrics import MetricsRegistry as _MetricsRegistry
-except Exception:
+except ImportError:
     _MetricsRegistry = None  # type: ignore[misc,assignment]
 
 logger = get_logger("rust_alpha")
@@ -83,7 +83,8 @@ class Strategy(BaseStrategy):
             if _MetricsRegistry is not None:
                 m = _MetricsRegistry.get()
                 self._exc_metrics = getattr(m, "strategy_exceptions_total", None)
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             pass
 
         logger.info("RustAlphaStrategy Initialized", params=self.params)
@@ -183,7 +184,8 @@ class Strategy(BaseStrategy):
                         exception_type=type(e).__name__,
                         method="on_book_update",
                     ).inc()
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
 
     def on_tick(self, event: TickEvent) -> None:
@@ -231,7 +233,8 @@ class Strategy(BaseStrategy):
                         exception_type=type(e).__name__,
                         method="on_tick",
                     ).inc()
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
 
     def _execute_on_signal(self, symbol: str, signal: float) -> None:

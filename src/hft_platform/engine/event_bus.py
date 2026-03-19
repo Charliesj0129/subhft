@@ -27,14 +27,16 @@ if not _BUS_MODE:
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         _rust_core = importlib.import_module("rust_core")
 
     _RUST_RING_FACTORY: Optional[Callable[[int], Any]] = getattr(_rust_core, "FastRingBuffer", None)
     _RUST_TICK_RING_FACTORY: Optional[Callable[[int], Any]] = getattr(_rust_core, "FastTickRingBuffer", None)
     _RUST_BIDASK_RING_FACTORY: Optional[Callable[[int], Any]] = getattr(_rust_core, "FastBidAskRingBuffer", None)
     _RUST_LOBSTATS_RING_FACTORY: Optional[Callable[[int], Any]] = getattr(_rust_core, "FastLOBStatsRingBuffer", None)
-except Exception:
+except Exception as exc:
+    logger.debug("operation_fallback", error=str(exc))
     _rust_core = None  # type: ignore[assignment]
     _RUST_RING_FACTORY = None
     _RUST_TICK_RING_FACTORY = None
@@ -241,12 +243,14 @@ def _pack_book_levels(levels: Any, max_levels: int = _TYPED_BIDASK_PACKED_LEVELS
             try:
                 price = int(row[0])
                 vol = int(row[1])
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 return None
             flat.extend((price, vol))
             rows += 1
         return tuple(flat), rows
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return None
 
 
@@ -422,7 +426,8 @@ class RingBufferBus:
                 if self._kind_ring is not None:
                     self._kind_ring[next_seq % self.size] = 1
                 handled_by_typed_ring = True
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 handled_by_typed_ring = False
         elif (
             self._use_typed_book_rings
@@ -487,7 +492,8 @@ class RingBufferBus:
                 if self._kind_ring is not None:
                     self._kind_ring[next_seq % self.size] = 2
                 handled_by_typed_ring = True
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 handled_by_typed_ring = False
         elif (
             self._use_typed_book_rings
@@ -513,7 +519,8 @@ class RingBufferBus:
                 if self._kind_ring is not None:
                     self._kind_ring[next_seq % self.size] = 3
                 handled_by_typed_ring = True
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 handled_by_typed_ring = False
 
         if not handled_by_typed_ring:

@@ -7,7 +7,6 @@ from unittest.mock import patch
 from hft_platform.alpha._gate_d import _evaluate_gate_d
 from hft_platform.alpha._promotion_types import PromotionConfig
 
-
 _PROFILES = {
     "sim_p95_v2026-02-26": {
         "submit_ack_latency_ms": 36.0,

@@ -40,7 +40,8 @@ def _get_trace_sampler():
         from hft_platform.diagnostics.trace import get_trace_sampler
 
         return get_trace_sampler()
-    except Exception:
+    except ImportError as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return None
 
 
@@ -258,7 +259,7 @@ class OrderAdapter:
                 intent_type=str(intent.intent_type.name if hasattr(intent.intent_type, "name") else intent.intent_type),
                 trace_id=getattr(intent, "trace_id", ""),
             )
-        except Exception as e:
+        except (TypeError, ValueError, OSError) as e:
             logger.error("Failed to add to DLQ", error=str(e))
 
     def _validate_client(self, intent: OrderIntent) -> bool:
@@ -287,7 +288,7 @@ class OrderAdapter:
                 if hasattr(meta, "exchange"):
                     try:
                         meta_exchange = meta.exchange(intent.symbol)
-                    except Exception as ex_err:
+                    except (KeyError, TypeError, AttributeError) as ex_err:
                         logger.warning(
                             "Metadata exchange lookup failed",
                             symbol=intent.symbol,
@@ -310,7 +311,7 @@ class OrderAdapter:
                 if hasattr(meta, "product_type"):
                     try:
                         product_type = meta.product_type(intent.symbol) or None
-                    except Exception as pt_err:
+                    except (KeyError, TypeError, AttributeError) as pt_err:
                         logger.warning(
                             "Product type lookup failed",
                             symbol=intent.symbol,
@@ -322,7 +323,7 @@ class OrderAdapter:
                 if hasattr(meta, "order_params"):
                     try:
                         order_params = meta.order_params(intent.symbol) or {}
-                    except Exception as op_err:
+                    except (KeyError, TypeError, AttributeError) as op_err:
                         logger.warning(
                             "Order params lookup failed",
                             symbol=intent.symbol,
@@ -396,7 +397,7 @@ class OrderAdapter:
                         trade["timestamp"] = trade_ts
                     else:
                         trade.timestamp = trade_ts
-                except Exception as ts_err:
+                except (AttributeError, TypeError) as ts_err:
                     logger.warning(
                         "Failed to set trade timestamp - TTL tracking may be affected",
                         order_key=order_key,
@@ -460,7 +461,7 @@ class OrderAdapter:
                 else:
                     logger.warning("Amend target not found", target=target_key)
 
-        except Exception as e:
+        except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
             logger.error("Broker Error", error=str(e))
             self.metrics.order_reject_total.inc()
             self.circuit_breaker.record_failure()
@@ -619,7 +620,7 @@ class OrderAdapter:
                     self.circuit_breaker.record_success()
                     return result
 
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — broker SDK retry
                     is_transient = self._is_transient_error(exc)
 
                     if is_transient and attempt < max_retries:
@@ -678,5 +679,6 @@ class OrderAdapter:
                     **payload,
                 },
             )
-        except Exception:
+        except (TypeError, ValueError, AttributeError) as exc:
+            logger.debug("operation_fallback", error=str(exc))
             pass

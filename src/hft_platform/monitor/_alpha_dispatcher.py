@@ -200,7 +200,8 @@ def _call_alpha(astate: AlphaState, payload: dict[str, Any]) -> float | None:
         if result is not None and math.isfinite(result):
             return float(result)
         return float(result) if result is not None else None
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return None
 
 

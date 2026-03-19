@@ -35,7 +35,8 @@ class ScannerGateway:
             from hft_platform.feed_adapter import shioaji_client as client_module
 
             return getattr(client_module, "sj", None)
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return None
 
     def scan(

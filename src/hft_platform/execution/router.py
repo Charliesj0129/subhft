@@ -119,7 +119,7 @@ class ExecutionRouter:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — supervisor catch-all
                 self.metrics.execution_router_errors_total.inc()
                 logger.error("ExecutionRouter Error", error=str(e))
             finally:

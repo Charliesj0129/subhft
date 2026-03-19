@@ -13,7 +13,7 @@ from typing import Any
 import structlog
 
 from hft_platform.alpha._validation_types import ScreenConfig
-from hft_platform.alpha.screener import ScreenResult, run_screen
+from hft_platform.alpha.screener import run_screen
 
 _log = structlog.get_logger(__name__)
 

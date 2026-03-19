@@ -254,7 +254,8 @@ class CanaryMetricsWriter:
         for yaml_path in self.promotions_dir.rglob("*.yaml"):
             try:
                 payload = yaml.safe_load(yaml_path.read_text())
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 continue
             if isinstance(payload, dict) and payload.get("alpha_id") == alpha_id:
                 matches.append(yaml_path)
@@ -273,7 +274,8 @@ class CanaryMetricsWriter:
         """
         try:
             existing = yaml.safe_load(yaml_path.read_text()) or {}
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             existing = {}
 
         if not isinstance(existing, dict):

@@ -321,7 +321,8 @@ class HybridDataSource:
                 # Periodic CH backfill for sparkline history
                 self._maybe_backfill(result, cursors)
                 return result
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 self._shm_ok = False
                 self._update_mode_label()
 
@@ -517,7 +518,8 @@ class RedisHybridSource:
                 self._redis.connect()
                 self._redis_ok = True
                 self._update_mode_label()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
 
         # Try CH (RuntimeError propagates to caller for max-retry exhaustion)

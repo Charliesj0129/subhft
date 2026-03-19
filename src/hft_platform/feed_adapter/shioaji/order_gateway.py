@@ -45,7 +45,8 @@ class OrderGateway:
             from hft_platform.feed_adapter import shioaji_client as client_module
 
             return getattr(client_module, "sj", None)
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return None
 
     def place_order(
@@ -118,7 +119,8 @@ class OrderGateway:
             result = self._client.api.place_order(contract, order, **self._async_kwargs(timeout, cb))
             self._client._record_api_latency("place_order", start_ns, ok=True)
             return result
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             self._client._record_api_latency("place_order", start_ns, ok=False)
             raise
 
@@ -215,7 +217,8 @@ class OrderGateway:
             result = self._client.api.place_order(contract, order, **self._async_kwargs(timeout, cb))
             self._client._record_api_latency("place_order", start_ns, ok=True)
             return result
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             self._client._record_api_latency("place_order", start_ns, ok=False)
             raise
 

@@ -12,11 +12,11 @@ from hft_platform.feature.registry import FeatureRegistry, default_feature_regis
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         _rust_core = importlib.import_module("rust_core")
     _RUST_LOB_FEATURE_KERNEL_V1 = getattr(_rust_core, "LobFeatureKernelV1", None)
     _RUST_FEATURE_PIPELINE_V1 = getattr(_rust_core, "RustFeaturePipelineV1", None)
-except Exception:
+except Exception as _exc:  # noqa: BLE001
     _RUST_LOB_FEATURE_KERNEL_V1 = None
     _RUST_FEATURE_PIPELINE_V1 = None
 
@@ -235,7 +235,7 @@ class FeatureEngine:
                 reset = getattr(kernel, "reset", None)
                 if callable(reset):
                     reset()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         pipeline = self._rust_pipelines.pop(symbol, None)
         if pipeline is not None:
@@ -243,7 +243,7 @@ class FeatureEngine:
                 reset = getattr(pipeline, "reset", None)
                 if callable(reset):
                     reset()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
 
@@ -542,7 +542,7 @@ class FeatureEngine:
                 warm_count,
             )
             return (tuple(int(v) for v in values_list), int(changed_mask), int(warmup_mask))
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return None
 
     def _extract_l1_qty(
@@ -567,7 +567,7 @@ class FeatureEngine:
                     return 0
                 top = side[0]
                 return int(top[1]) if len(top) > 1 else 0
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 return None
 
         bq = _top_qty(bids)

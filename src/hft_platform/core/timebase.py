@@ -111,6 +111,7 @@ def coerce_ns(ts_val: Any) -> int:
             if abs_ts < 1e17:
                 return int(ts_val * 1e3)
             return int(ts_val)
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return 0
     return 0

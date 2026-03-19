@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -16,8 +17,6 @@ from hft_platform.alpha._promotion_types import PromotionConfig
 
 _log = structlog.get_logger(__name__)
 
-# Latency fields validated for realism.
-# Each scorecard value must be >= profile * _LATENCY_FLOOR_RATIO.
 _LATENCY_FLOOR_RATIO: float = 0.8
 _LATENCY_FIELDS: tuple[str, ...] = (
     "submit_ack_latency_ms",
@@ -27,127 +26,81 @@ _LATENCY_FIELDS: tuple[str, ...] = (
 
 
 def _load_latency_profiles(project_root: str) -> dict[str, Any]:
-    """Load latency profiles YAML from config/research/latency_profiles.yaml.
-
-    Returns an empty dict on any IO / parse error so that a missing file
-    degrades gracefully (warn-only, non-blocking).
-    """
-    profiles_path = Path(project_root) / "config" / "research" / "latency_profiles.yaml"
-    try:
-        raw = yaml.safe_load(profiles_path.read_text())
-        return dict(raw.get("profiles", {})) if isinstance(raw, dict) else {}
-    except FileNotFoundError:
-        _log.warning(
-            "gate_d.latency_profiles_missing",
-            path=str(profiles_path),
-            detail="latency_profiles.yaml not found — latency value check skipped",
-        )
-        return {}
-    except Exception as exc:
-        _log.warning(
-            "gate_d.latency_profiles_load_error",
-            path=str(profiles_path),
-            error=str(exc),
-        )
-        return {}
+    yaml_path = Path(project_root) / "config" / "research" / "latency_profiles.yaml"
+    with contextlib.suppress(Exception):
+        raw = yaml.safe_load(yaml_path.read_text())
+        if isinstance(raw, dict) and isinstance(raw.get("profiles"), dict):
+            profiles: dict[str, Any] = raw["profiles"]
+            return profiles if profiles else {}
+    return {}
 
 
 def _check_latency_values(
     latency_profile: dict[str, Any],
     profiles: dict[str, Any],
 ) -> dict[str, Any]:
-    """Verify backtest latency values are not unrealistically low vs the named profile.
-
-    Scorecard latency >= profile_latency * _LATENCY_FLOOR_RATIO for each ACK field.
-    Returns a Gate D check dict.
-
-    Degrades gracefully (non-blocking, pass=True) when:
-    - latency_profile_id key is absent from the dict
-    - latency_profiles.yaml is unavailable
-    - profile_id is not found in the YAML
-    """
-    profile_id: str | None = latency_profile.get("latency_profile_id")
+    profile_id = latency_profile.get("latency_profile_id")
     if not profile_id:
         return {
-            "required": False,
             "pass": True,
-            "profile_id": None,
-            "detail": (
-                "SKIPPED — latency_profile dict has no latency_profile_id key; value realism check could not run"
-            ),
+            "required": False,
+            "detail": "SKIPPED — no latency_profile_id in scorecard",
+            "field_results": {},
         }
-
     if not profiles:
-        _log.warning(
-            "gate_d.latency_values_check_skipped",
-            profile_id=profile_id,
-            reason="latency_profiles.yaml unavailable",
-        )
         return {
-            "required": False,
             "pass": True,
-            "profile_id": profile_id,
-            "detail": "SKIPPED — latency_profiles.yaml unavailable; value realism check could not run",
+            "required": False,
+            "detail": "SKIPPED — no profiles registry available",
+            "field_results": {},
         }
-
-    profile_data = profiles.get(profile_id)
-    if profile_data is None:
-        _log.warning(
-            "gate_d.latency_profile_id_not_found",
-            profile_id=profile_id,
-            available=list(profiles.keys()),
-        )
+    canonical = profiles.get(str(profile_id))
+    if canonical is None:
         return {
-            "required": False,
             "pass": True,
-            "profile_id": profile_id,
-            "detail": (f"SKIPPED — profile_id '{profile_id}' not found in latency_profiles.yaml; check skipped"),
+            "required": False,
+            "detail": f"SKIPPED — profile_id '{profile_id}' not found in registry",
+            "field_results": {},
         }
-
-    failures: list[str] = []
     field_results: dict[str, Any] = {}
+    unrealistic: list[str] = []
     for field in _LATENCY_FIELDS:
-        scorecard_val = _to_float(latency_profile.get(field))
-        profile_val = _to_float(profile_data.get(field))
-        if scorecard_val is None or profile_val is None:
-            field_results[field] = {
-                "scorecard": scorecard_val,
-                "profile": profile_val,
-                "pass": True,
-                "skipped": True,
-            }
+        sc_val = latency_profile.get(field)
+        profile_val = canonical.get(field)
+        if sc_val is None or profile_val is None:
+            field_results[field] = {"skipped": True, "reason": "missing in scorecard or profile"}
             continue
         floor = profile_val * _LATENCY_FLOOR_RATIO
-        field_pass = scorecard_val >= floor
+        ok = float(sc_val) >= floor
         field_results[field] = {
-            "scorecard": scorecard_val,
+            "skipped": False,
+            "scorecard": sc_val,
             "profile": profile_val,
             "floor": floor,
-            "pass": field_pass,
+            "pass": ok,
         }
-        if not field_pass:
-            failures.append(
-                f"{field}: scorecard={scorecard_val}ms < floor={floor:.1f}ms "
+        if not ok:
+            unrealistic.append(
+                f"{field}={sc_val}ms < floor {floor:.1f}ms "
                 f"(profile={profile_val}ms x {_LATENCY_FLOOR_RATIO})"
             )
-
-    overall_pass = len(failures) == 0
-    if failures:
-        detail = "UNREALISTIC — backtest used latency values below 80% of broker P95 profile: " + "; ".join(failures)
-    else:
-        detail = f"OK — all latency values >= {int(_LATENCY_FLOOR_RATIO * 100)}% of profile '{profile_id}'"
-
+    if unrealistic:
+        return {
+            "pass": False,
+            "required": True,
+            "detail": f"UNREALISTIC — {'; '.join(unrealistic)}",
+            "field_results": field_results,
+        }
+    floor_pct = int(_LATENCY_FLOOR_RATIO * 100)
     return {
+        "pass": True,
         "required": True,
-        "pass": overall_pass,
-        "profile_id": profile_id,
+        "detail": f"OK — all latency values >= {floor_pct}% of profile '{profile_id}'",
         "field_results": field_results,
-        "detail": detail,
     }
 
 
 def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tuple[bool, dict[str, Any]]:
-    # Allow env var override for min_sharpe_oos threshold
     env_sharpe = os.getenv("HFT_GATE_D_MIN_SHARPE_OOS")
     if env_sharpe is not None:
         try:
@@ -190,7 +143,6 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
                 else "MISSING — scorecard.correlation_pool_max must be populated before promotion"
             ),
         },
-        # Latency realism governance (CLAUDE.md constitution requirement).
         "latency_profile": {
             "value": latency_profile,
             "required": True,
@@ -204,12 +156,9 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
         },
     }
 
-    # --- Unit 1: Latency value realism check ---
     if isinstance(latency_profile, dict):
         profiles = _load_latency_profiles(config.project_root)
         checks["latency_values_realistic"] = _check_latency_values(latency_profile, profiles)
-
-        # latency_profile_id_known check (warn-only, non-blocking)
         lp_id = latency_profile.get("latency_profile_id")
         if lp_id is not None:
             lp_valid, lp_detail = validate_latency_profile_id(str(lp_id), profiles if profiles else None)
@@ -217,11 +166,10 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
                 "value": str(lp_id),
                 "valid": lp_valid,
                 "required": False,
-                "pass": True,  # warn-only: never blocks Gate D
+                "pass": True,
                 "detail": lp_detail if lp_valid else f"WARN — {lp_detail}",
             }
 
-    # Stress test validation — warn-only, non-blocking.
     stress_test = scorecard.get("stress_test") or {}
     stress_passed = bool(stress_test.get("passed")) if isinstance(stress_test, dict) else False
     checks["stress_test_validated"] = {
@@ -231,17 +179,16 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
         "detail": (
             "OK"
             if stress_passed
-            else "WARN — stress_test.passed not True; stress testing is recommended before production promotion"
+            else "WARN — stress_test.passed not True; stress testing is recommended"
         ),
     }
 
-    # Feature set version parity check (warn-only: does NOT block Gate D).
     manifest_fsv = str(config.manifest_feature_set_version or "").strip() or None
     _LIVE_FSV: str | None = None
-    import contextlib
-
-    with contextlib.suppress(Exception):
+    try:
         from hft_platform.feature.registry import FEATURE_SET_VERSION as _LIVE_FSV
+    except Exception as exc:
+        _log.debug("optional_feature_unavailable", error=str(exc))
     if manifest_fsv is not None and _LIVE_FSV is not None:
         fsv_match = manifest_fsv == _LIVE_FSV
         checks["feature_set_version"] = {
@@ -257,42 +204,6 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             ),
         }
 
-    # --- Unit 2: Half-life vs broker RTT check ---
-    halflife_ms = _to_float(scorecard.get("signal_halflife_ms"))
-    _lp = scorecard.get("latency_profile") if isinstance(scorecard.get("latency_profile"), dict) else None
-    submit_ack_ms = _to_float(_lp.get("submit_ack_latency_ms") if _lp else None)
-
-    if halflife_ms is not None and submit_ack_ms is not None:
-        _threshold = submit_ack_ms * 2.0
-        _hl_pass = halflife_ms >= _threshold
-        checks["halflife_vs_rtt"] = {
-            "value": halflife_ms,
-            "submit_ack_latency_ms": submit_ack_ms,
-            "threshold_ms": _threshold,
-            "required": True,
-            "pass": _hl_pass,
-            "detail": (
-                "OK"
-                if _hl_pass
-                else f"FAIL — signal_halflife_ms={halflife_ms:.2f} < submit_ack_latency_ms*2.0={_threshold:.2f}; "
-                "alpha edge decays before order can execute"
-            ),
-        }
-    else:
-        _missing = []
-        if halflife_ms is None:
-            _missing.append("signal_halflife_ms")
-        if submit_ack_ms is None:
-            _missing.append("latency_profile.submit_ack_latency_ms")
-        checks["halflife_vs_rtt"] = {
-            "value": halflife_ms,
-            "submit_ack_latency_ms": submit_ack_ms,
-            "required": False,
-            "pass": True,
-            "detail": f"WARN — cannot evaluate half-life vs RTT: missing {', '.join(_missing)}",
-        }
-
-    # Diagnostic: adjusted Sharpe assuming 2x latency (non-blocking)
     adjusted_sharpe: float | None = None
     if sharpe is not None:
         adjusted_sharpe = sharpe * 0.7
@@ -302,6 +213,43 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
         "pass": True,
         "detail": "diagnostic: Sharpe under 2x latency assumption",
     }
+
+    signal_halflife = scorecard.get("signal_halflife_ms")
+    submit_ack: float | None = None
+    if isinstance(latency_profile, dict):
+        submit_ack = latency_profile.get("submit_ack_latency_ms")
+
+    if signal_halflife is None:
+        checks["halflife_vs_rtt"] = {
+            "pass": True,
+            "required": False,
+            "detail": (
+                "WARN — signal_halflife_ms not recorded in scorecard; "
+                "recommend recording to enforce RTT realism gate"
+            ),
+        }
+    elif submit_ack is None:
+        checks["halflife_vs_rtt"] = {
+            "pass": True,
+            "required": False,
+            "detail": "WARN — submit_ack_latency_ms not available; cannot check half-life vs RTT",
+        }
+    else:
+        threshold_ms = float(submit_ack) * 2.0
+        hl_val = float(signal_halflife)
+        hl_pass = hl_val >= threshold_ms
+        checks["halflife_vs_rtt"] = {
+            "pass": hl_pass,
+            "required": True,
+            "value_ms": hl_val,
+            "threshold_ms": threshold_ms,
+            "detail": (
+                f"OK — signal_halflife_ms={hl_val}ms >= threshold={threshold_ms}ms (2x submit_ack)"
+                if hl_pass
+                else f"FAIL — signal_halflife_ms={hl_val}ms < threshold={threshold_ms}ms (2x submit_ack); "
+                "alpha half-life too short relative to broker RTT"
+            ),
+        }
 
     passed = all(bool(v["pass"]) for v in checks.values())
     return passed, checks

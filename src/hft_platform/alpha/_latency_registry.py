@@ -1,75 +1,42 @@
-"""Latency profile registry for alpha governance.
-
-Validates that latency_profile_id references a known profile from
-``config/research/latency_profiles.yaml``.
-"""
+"""Latency profile registry — load and validate broker latency profiles."""
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
-import structlog
-
-logger = structlog.get_logger("alpha_latency_registry")
-
-_DEFAULT_PROFILES_REL = "config/research/latency_profiles.yaml"
+import yaml
 
 
 def load_latency_profiles(
-    project_root: str | None = None,
+    project_root: str | Path | None = None,
     *,
-    path: str | None = None,
+    path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Load latency profiles from YAML config.
-
-    Args:
-        project_root: Project root directory.
-        path: Explicit path override for the profiles file.
-
-    Returns:
-        Dict of profile_id -> profile data.  Empty dict if file missing.
-    """
+    """Load latency profiles from config/research/latency_profiles.yaml."""
     if path is not None:
-        profiles_path = Path(path)
+        yaml_path = Path(path)
     elif project_root is not None:
-        profiles_path = Path(project_root) / _DEFAULT_PROFILES_REL
+        yaml_path = Path(project_root) / "config" / "research" / "latency_profiles.yaml"
     else:
-        profiles_path = Path(".") / _DEFAULT_PROFILES_REL
-
-    if not profiles_path.exists():
         return {}
-
-    try:
-        import yaml
-
-        with open(profiles_path) as f:
-            data = yaml.safe_load(f)
-        if isinstance(data, dict):
-            return data
-        return {}
-    except Exception:
-        logger.warning("Failed to load latency profiles", path=str(profiles_path))
-        return {}
+    with contextlib.suppress(Exception):
+        raw = yaml.safe_load(yaml_path.read_text())
+        if isinstance(raw, dict) and isinstance(raw.get("profiles"), dict):
+            profiles: dict[str, Any] = raw["profiles"]
+            return profiles if profiles else {}
+    return {}
 
 
 def validate_latency_profile_id(
     profile_id: str,
-    profiles: dict[str, Any] | None = None,
+    profiles: dict[str, Any] | None,
 ) -> tuple[bool, str]:
-    """Check if a latency_profile_id is known in the registry.
-
-    Args:
-        profile_id: The profile ID to validate.
-        profiles: Pre-loaded profiles dict.  If None, validation is skipped.
-
-    Returns:
-        Tuple of (is_valid, detail_message).
-    """
-    if profiles is None or len(profiles) == 0:
-        return True, "skipped — no profiles loaded"
-
+    """Validate profile_id is in the registry."""
+    if not profiles:
+        return True, "SKIPPED — no profiles registry available"
     if profile_id in profiles:
-        return True, f"profile_id '{profile_id}' found in registry"
-
-    return False, f"profile_id '{profile_id}' not found in registry"
+        return True, f"OK — profile '{profile_id}' found in registry"
+    known = ", ".join(sorted(profiles.keys()))
+    return False, f"profile_id '{profile_id}' not in registry; known: {known}"

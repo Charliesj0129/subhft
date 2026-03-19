@@ -116,5 +116,5 @@ class GatewayPolicy:
             from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().gateway_policy_mode.set(self.mode_int())
-        except Exception:
+        except ImportError:
             pass

@@ -88,7 +88,8 @@ def _extract_market_data_values(row) -> list | None:
             getattr(row, "asks_vol", None),
             getattr(row, "seq_no", None) or getattr(row, "seq", None) or 0,
         ]
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return None
 
 
@@ -123,7 +124,8 @@ def _extract_order_values(row) -> list | None:
             getattr(row, "exch_ts", None) or getattr(row, "ts", None),
             getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
         ]
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return None
 
 
@@ -154,7 +156,8 @@ def _extract_fill_values(row) -> list | None:
             getattr(row, "exch_ts", None) or getattr(row, "ts", None),
             getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
         ]
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return None
 
 
@@ -313,7 +316,7 @@ class RecorderService:
             from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
-        except Exception:
+        except ImportError:
             pass
 
         # CE3-02: init WAL-first writer when in wal_first mode
@@ -358,7 +361,7 @@ class RecorderService:
                             from hft_platform.observability.metrics import MetricsRegistry
 
                             MetricsRegistry.get().recorder_failures_total.inc()
-                        except Exception:
+                        except ImportError:
                             pass
                 elif topic in self.batchers:
                     await self.batchers[topic].add(data)

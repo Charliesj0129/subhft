@@ -51,7 +51,7 @@ class PipelineHealthTracker:
             from hft_platform.observability.metrics import MetricsRegistry
 
             self._metrics = MetricsRegistry.get()
-        except Exception:
+        except ImportError:
             pass
 
     @property
@@ -91,7 +91,8 @@ class PipelineHealthTracker:
                     try:
                         self._metrics.pipeline_health_state.set(int(self._state))
                         self._metrics.pipeline_degradation_events_total.inc()
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("operation_fallback", error=str(exc))
                         pass
 
     def _compute_state(self, now: float) -> PipelineState:

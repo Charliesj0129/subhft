@@ -17,11 +17,13 @@ logger = structlog.get_logger(__name__)
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         _rust_core = importlib.import_module("rust_core")
     _RUST_LOB_FEATURE_KERNEL_V1 = getattr(_rust_core, "LobFeatureKernelV1", None)
     _RUST_FEATURE_PIPELINE_V1 = getattr(_rust_core, "RustFeaturePipelineV1", None)
-except Exception:
+except Exception as exc:
+    logger.debug("operation_fallback", error=str(exc))
     _RUST_LOB_FEATURE_KERNEL_V1 = None
     _RUST_FEATURE_PIPELINE_V1 = None
 
@@ -43,7 +45,8 @@ def _top_qty(side: Any) -> int | None:
             return 0
         top = side[0]
         return int(top[1]) if len(top) > 1 else 0
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return None
 
 
@@ -265,7 +268,8 @@ class RustFeatureKernelAdapter:
                 reset = getattr(kernel, "reset", None)
                 if callable(reset):
                     reset()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
         pipeline = self._pipelines.pop(symbol, None)
         if pipeline is not None:
@@ -273,7 +277,8 @@ class RustFeatureKernelAdapter:
                 reset = getattr(pipeline, "reset", None)
                 if callable(reset):
                     reset()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
 
     def reset_all(self) -> None:

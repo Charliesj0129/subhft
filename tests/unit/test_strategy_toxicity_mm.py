@@ -4,8 +4,8 @@ These strategies use numpy feature arrays and hftbacktest framework.
 Tests cover import, instantiation, and basic parameter validation.
 """
 
-import pytest
 import numpy as np
+import pytest
 
 try:
     from hftbacktest import GTX, LIMIT  # noqa: F401

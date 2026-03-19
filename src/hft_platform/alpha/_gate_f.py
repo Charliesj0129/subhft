@@ -107,5 +107,5 @@ def _load_rust_module_name(root: Path, alpha_id: str) -> str:
             return ""
         rust_module = getattr(alpha.manifest, "rust_module", None)
         return str(rust_module or "").strip()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return ""

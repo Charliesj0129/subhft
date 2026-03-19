@@ -134,7 +134,7 @@ class DiskPressureMonitor:
             from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().disk_pressure_level.set(int(new_level))
-        except Exception:
+        except ImportError:
             pass
 
         for hook in hooks:

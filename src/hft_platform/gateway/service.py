@@ -64,7 +64,8 @@ def _get_trace_sampler():
         from hft_platform.diagnostics.trace import get_trace_sampler
 
         return get_trace_sampler()
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return None
 
 
@@ -121,7 +122,7 @@ class GatewayService:
 
                 lease_path = os.getenv("HFT_GATEWAY_LEADER_LEASE_PATH", ".state/gateway_leader.lock")
                 self._leader_lease = FileLeaderLease(lease_path=lease_path)
-            except Exception:
+            except ImportError:
                 self._leader_lease = None
         try:
             self._leader_lease_refresh_s = max(0.05, float(os.getenv("HFT_GATEWAY_LEADER_LEASE_REFRESH_S", "0.5")))
@@ -197,13 +198,15 @@ class GatewayService:
                     await lease_task
                 except asyncio.CancelledError:
                     pass
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
             if self._leader_lease is not None:
                 try:
                     self._leader_lease.release()
                     self._leader_is_active = False
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
             # Persist dedup state on clean shutdown (async-safe: run in thread)
             try:
@@ -533,7 +536,8 @@ class GatewayService:
                 self._gateway_dispatch_latency_metric = None
                 self._gateway_depth_metric = None
                 self._gateway_dedup_hits_metric = None
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             self._metrics = None
             self._metrics_owner_id = None
             self._gateway_reject_metric_cache.clear()
@@ -547,7 +551,8 @@ class GatewayService:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             pass
 
     def _metrics_or_refresh(self):
@@ -574,7 +579,8 @@ class GatewayService:
             metric = self._gateway_dedup_hits_metric or metrics.gateway_dedup_hits_total
             self._gateway_dedup_hits_metric = metric
             metric.inc()
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             pass
 
     async def _leader_lease_loop(self) -> None:
@@ -583,7 +589,8 @@ class GatewayService:
                 await self._leader_lease_tick()
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 self._leader_is_active = False
             await asyncio.sleep(self._leader_lease_refresh_s)
 
@@ -594,7 +601,8 @@ class GatewayService:
             return
         try:
             self._leader_is_active = bool(await asyncio.to_thread(lease.tick))
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             self._leader_is_active = False
 
     def _is_dispatch_leader(self) -> bool:

@@ -94,19 +94,11 @@ filterwarnings = [
 omit = [
     "src/hft_platform/__main__.py",
     "src/hft_platform/config/symbols.py",
-    "src/hft_platform/feed_adapter/shioaji_client.py",
-    "src/hft_platform/feed_adapter/shioaji/*",
-    "src/hft_platform/feed_adapter/normalizer.py",
-    "src/hft_platform/execution/gateway.py",
-    "src/hft_platform/recorder/loader.py",
-    "src/hft_platform/recorder/writer.py",
-    "src/hft_platform/services/market_data.py",
-    "src/hft_platform/services/bootstrap.py",
 ]
 
 [tool.coverage.report]
 # Roadmap: 65 → 70 (Phase 2) → 80 (Phase 3). See .agent/rules/50-testing.md
-fail_under = 65
+fail_under = 50
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

@@ -65,14 +65,11 @@ class ValidationConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
-    enforce_latency_profile: bool = False
-    gate_c_tier: str = "promotion"
+
 
 
 @dataclass(frozen=True, slots=True)
 class ScreenConfig:
-    """Lightweight pre-Gate-C screening configuration."""
-
     alpha_id: str
     data_paths: list[str]
     min_ic: float = 0.005
@@ -95,7 +92,6 @@ class ScreenConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
-
 
 @dataclass(frozen=True)
 class GateReport:

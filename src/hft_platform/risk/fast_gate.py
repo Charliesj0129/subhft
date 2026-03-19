@@ -69,7 +69,7 @@ class FastGate:
         # Setup Kill Switch SHM with proper cleanup on failure
         try:
             self._init_shared_memory(create_shm)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             # Ensure cleanup if initialization fails partway through
             self._cleanup_shm()
             raise

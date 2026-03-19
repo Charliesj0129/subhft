@@ -57,7 +57,7 @@ def write_to_dlq(
         if svc.metrics:
             try:
                 svc.metrics.dlq_size_total.labels(source="recorder").inc()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
     except Exception as e:
         logger.error("Failed to write to DLQ", table=table, error=str(e))
@@ -125,7 +125,7 @@ def replay_dlq(
                         continue
                     try:
                         obj = _loads(line)
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         continue
                     if isinstance(obj, dict) and obj.get("_dlq_meta"):
                         continue
@@ -250,7 +250,7 @@ def cleanup_old_dlq_files(svc: Any) -> None:
             if svc.metrics:
                 try:
                     svc.metrics.dlq_size_total.labels(source="cleanup").inc(archived + deleted)
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
     except Exception as e:
         logger.warning("DLQ cleanup failed", error=str(e))

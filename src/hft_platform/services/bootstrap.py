@@ -185,7 +185,8 @@ class SystemBootstrapper:
     def _read_int_resp(value: str | int | None, default: int = -2) -> int:
         try:
             return int(value)  # type: ignore[arg-type]
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return int(default)
 
     @staticmethod
@@ -204,7 +205,8 @@ class SystemBootstrapper:
             m = MetricsRegistry.get()
             if hasattr(m, "feed_session_lease_ops_total"):
                 m.feed_session_lease_ops_total.labels(op=op, result=result).inc()
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return
 
     def _check_session_ownership(self, role: str) -> bool:
@@ -278,7 +280,7 @@ class SystemBootstrapper:
                     m = MetricsRegistry.get()
                     if hasattr(m, "feed_session_conflict_total"):
                         m.feed_session_conflict_total.labels(role=role).inc()
-                except Exception:
+                except ImportError:
                     pass
                 self._record_lease_metric("preflight", "conflict")
                 return False
@@ -518,11 +520,13 @@ class SystemBootstrapper:
         if os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}:
             try:
                 feature_profile_registry = load_feature_profile_registry()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 feature_profile_registry = None
             try:
                 feature_rollout_controller = load_feature_rollout_controller()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 feature_rollout_controller = None
             feature_engine = FeatureEngine()
             if feature_profile_registry is not None:
@@ -539,7 +543,8 @@ class SystemBootstrapper:
                     elif override_profile_id:
                         try:
                             feature_profile = feature_profile_registry.get(override_profile_id)
-                        except Exception:
+                        except Exception as exc:
+                            logger.debug("operation_fallback", error=str(exc))
                             feature_profile = None
                     else:
                         feature_profile = feature_profile_registry.get_active_for_set(feature_engine.feature_set_id())
@@ -567,7 +572,8 @@ class SystemBootstrapper:
                                     feature_set=feature_profile.feature_set_id,
                                     profile_id=feature_profile.profile_id,
                                 ).set(float(state_map.get(str(rollout_state), 0)))
-                        except Exception:
+                        except Exception as exc:
+                            logger.debug("operation_fallback", error=str(exc))
                             pass
                     elif feature_rollout_assignment is not None:
                         try:
@@ -580,9 +586,11 @@ class SystemBootstrapper:
                                     feature_set=feature_rollout_assignment.feature_set_id,
                                     profile_id=str(feature_rollout_assignment.active_profile_id or ""),
                                 ).set(float(state_map.get(str(feature_rollout_assignment.state), 0)))
-                        except Exception:
+                        except Exception as exc:
+                            logger.debug("operation_fallback", error=str(exc))
                             pass
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     feature_profile = None
 
         md_service = MarketDataService(
