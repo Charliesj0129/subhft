@@ -23,9 +23,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import structlog
 import yaml
 
+from hft_platform.alpha.validation import _update_manifest_status
 from hft_platform.core import timebase
+
+_log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -139,7 +143,13 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
         "blocking": False,
     }
     gate_d_passed, gate_d_checks = _evaluate_gate_d(scorecard, config)
+    if gate_d_passed:
+        _update_manifest_status(config.alpha_id, "GATE_D", root)
+
     gate_e_passed, gate_e_checks = _evaluate_gate_e(config, root)
+    if gate_e_passed:
+        _update_manifest_status(config.alpha_id, "GATE_E", root)
+
     gate_f_passed, gate_f_checks = _evaluate_gate_f(config, root)
 
     approved = gate_d_passed and gate_e_passed and gate_f_passed
