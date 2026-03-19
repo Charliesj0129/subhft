@@ -13,7 +13,7 @@ from hft_platform.risk.portfolio_monitor import (
     portfolio_gross_exposure,
     portfolio_net_exposure,
     portfolio_open_positions,
-    portfolio_unrealized_pnl,
+    portfolio_unrealized_pnl_monitor,
 )
 
 # ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ async def test_metrics_with_positions():
     # concentration = 60_000_000 / 65_000_000
     assert portfolio_concentration_ratio._value.get() == pytest.approx(60_000_000 / 65_000_000, abs=1e-6)
     # unrealized: (600_0000-590_0000)*10 + (100_0000-110_0000)*(-5) = 100_0000 + 50_0000
-    assert portfolio_unrealized_pnl._value.get() == 150_0000
+    assert portfolio_unrealized_pnl_monitor._value.get() == 150_0000
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_empty_portfolio():
     assert portfolio_net_exposure._value.get() == 0
     assert portfolio_open_positions._value.get() == 0
     assert portfolio_concentration_ratio._value.get() == 0.0
-    assert portfolio_unrealized_pnl._value.get() == 0
+    assert portfolio_unrealized_pnl_monitor._value.get() == 0
 
 
 @pytest.mark.asyncio
@@ -165,4 +165,4 @@ async def test_no_mid_price_callback():
 
     assert portfolio_open_positions._value.get() == 1
     assert portfolio_gross_exposure._value.get() == 0
-    assert portfolio_unrealized_pnl._value.get() == 0
+    assert portfolio_unrealized_pnl_monitor._value.get() == 0
