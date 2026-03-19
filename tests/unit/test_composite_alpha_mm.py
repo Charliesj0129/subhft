@@ -33,8 +33,8 @@ class TestCompositeAlphaMM:
         feat[1] = best_ask
         feat[2] = mid_price_x2
         feat[3] = spread_scaled
-        feat[8] = 100   # ofi_l1_raw
-        feat[9] = 500   # ofi_l1_cum
+        feat[8] = 100  # ofi_l1_raw
+        feat[9] = 500  # ofi_l1_cum
         feat[13] = ofi_l1_ema8
         feat[15] = depth_imb_ema8_ppm
         return tuple(feat)
@@ -57,11 +57,21 @@ class TestCompositeAlphaMM:
         """Build a mock BidAskEvent."""
         event = MagicMock()
         event.symbol = symbol
-        event.bids = bids if bids is not None else np.array(
-            [[100_0000, 10], [99_0000, 20]], dtype=np.int64,
+        event.bids = (
+            bids
+            if bids is not None
+            else np.array(
+                [[100_0000, 10], [99_0000, 20]],
+                dtype=np.int64,
+            )
         )
-        event.asks = asks if asks is not None else np.array(
-            [[101_0000, 15], [102_0000, 25]], dtype=np.int64,
+        event.asks = (
+            asks
+            if asks is not None
+            else np.array(
+                [[101_0000, 15], [102_0000, 25]],
+                dtype=np.int64,
+            )
         )
         return event
 
@@ -80,8 +90,11 @@ class TestCompositeAlphaMM:
 
     def test_construction_custom_params(self) -> None:
         strat = self._make_strategy(
-            w_ofi=0.5, w_depth=0.3, w_slope=0.2,
-            max_position=10, qty=2,
+            w_ofi=0.5,
+            w_depth=0.3,
+            w_slope=0.2,
+            max_position=10,
+            qty=2,
             base_half_spread_ticks=3,
             inv_skew_per_lot=3000,
             signal_threshold=0.05,
@@ -177,10 +190,11 @@ class TestCompositeAlphaMM:
         # Populate LOB cache
         strat.on_book_update(self._make_book_event())
 
-        with patch.object(strat, "position", return_value=0), \
-             patch.object(strat, "buy") as mock_buy, \
-             patch.object(strat, "sell") as mock_sell:
-
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             event = self._make_feature_event()
 
             # Run multiple times to build up EMA variance
@@ -206,10 +220,11 @@ class TestCompositeAlphaMM:
         def capture_sell(_sym, price, _qty, _tif):
             sell_prices.append(price)
 
-        with patch.object(strat, "position", return_value=0), \
-             patch.object(strat, "buy", side_effect=capture_buy), \
-             patch.object(strat, "sell", side_effect=capture_sell):
-
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy", side_effect=capture_buy),
+            patch.object(strat, "sell", side_effect=capture_sell),
+        ):
             event = self._make_feature_event()
             for _ in range(20):
                 strat.on_features(event)
@@ -217,9 +232,7 @@ class TestCompositeAlphaMM:
         all_prices = buy_prices + sell_prices
         for p in all_prices:
             assert isinstance(p, int), f"Price must be int, got {type(p)}: {p}"
-            assert p % strat._tick_size_scaled == 0, (
-                f"Price {p} not on tick grid (tick={strat._tick_size_scaled})"
-            )
+            assert p % strat._tick_size_scaled == 0, f"Price {p} not on tick grid (tick={strat._tick_size_scaled})"
 
     # --- Position limits ---
 
@@ -228,10 +241,11 @@ class TestCompositeAlphaMM:
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple()
 
-        with patch.object(strat, "position", return_value=5), \
-             patch.object(strat, "buy") as mock_buy, \
-             patch.object(strat, "sell"):
-
+        with (
+            patch.object(strat, "position", return_value=5),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell"),
+        ):
             event = self._make_feature_event()
             for _ in range(20):
                 strat.on_features(event)
@@ -244,10 +258,11 @@ class TestCompositeAlphaMM:
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple()
 
-        with patch.object(strat, "position", return_value=-5), \
-             patch.object(strat, "buy"), \
-             patch.object(strat, "sell") as mock_sell:
-
+        with (
+            patch.object(strat, "position", return_value=-5),
+            patch.object(strat, "buy"),
+            patch.object(strat, "sell") as mock_sell,
+        ):
             event = self._make_feature_event()
             for _ in range(20):
                 strat.on_features(event)
@@ -261,10 +276,11 @@ class TestCompositeAlphaMM:
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple()
 
-        with patch.object(strat, "position", return_value=0), \
-             patch.object(strat, "buy") as mock_buy, \
-             patch.object(strat, "sell") as mock_sell:
-
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             event = self._make_feature_event()
             for _ in range(10):
                 strat.on_features(event)
@@ -279,14 +295,17 @@ class TestCompositeAlphaMM:
         strat = self._make_strategy()
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple(
-            best_bid=100_0000, best_ask=100_0000,
-            mid_price_x2=200_0000, spread_scaled=0,
+            best_bid=100_0000,
+            best_ask=100_0000,
+            mid_price_x2=200_0000,
+            spread_scaled=0,
         )
 
-        with patch.object(strat, "position", return_value=0), \
-             patch.object(strat, "buy") as mock_buy, \
-             patch.object(strat, "sell") as mock_sell:
-
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             event = self._make_feature_event()
             strat.on_features(event)
 
@@ -297,13 +316,15 @@ class TestCompositeAlphaMM:
         strat = self._make_strategy()
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple(
-            best_bid=0, best_ask=101_0000,
+            best_bid=0,
+            best_ask=101_0000,
         )
 
-        with patch.object(strat, "position", return_value=0), \
-             patch.object(strat, "buy") as mock_buy, \
-             patch.object(strat, "sell") as mock_sell:
-
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             event = self._make_feature_event()
             strat.on_features(event)
 
@@ -315,9 +336,7 @@ class TestCompositeAlphaMM:
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = (1, 2, 3)  # too short
 
-        with patch.object(strat, "buy") as mock_buy, \
-             patch.object(strat, "sell") as mock_sell:
-
+        with patch.object(strat, "buy") as mock_buy, patch.object(strat, "sell") as mock_sell:
             event = self._make_feature_event()
             strat.on_features(event)
 
@@ -329,9 +348,7 @@ class TestCompositeAlphaMM:
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = None
 
-        with patch.object(strat, "buy") as mock_buy, \
-             patch.object(strat, "sell") as mock_sell:
-
+        with patch.object(strat, "buy") as mock_buy, patch.object(strat, "sell") as mock_sell:
             event = self._make_feature_event()
             strat.on_features(event)
 
@@ -345,10 +362,11 @@ class TestCompositeAlphaMM:
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple()
         # No on_book_update called — empty LOB cache
 
-        with patch.object(strat, "position", return_value=0), \
-             patch.object(strat, "buy") as mock_buy, \
-             patch.object(strat, "sell") as mock_sell:
-
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             event = self._make_feature_event()
             for _ in range(20):
                 strat.on_features(event)
@@ -425,10 +443,11 @@ class TestCompositeAlphaMM:
         def capture_sell(_sym, price, _qty, _tif):
             placed_prices.append(price)
 
-        with patch.object(strat, "position", return_value=0), \
-             patch.object(strat, "buy", side_effect=capture_buy), \
-             patch.object(strat, "sell", side_effect=capture_sell):
-
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy", side_effect=capture_buy),
+            patch.object(strat, "sell", side_effect=capture_sell),
+        ):
             event = self._make_feature_event()
             strat.on_features(event)
 
@@ -457,10 +476,11 @@ class TestCompositeAlphaMM:
         def capture_sell(_sym, price, _qty, _tif):
             sell_prices.append(price)
 
-        with patch.object(strat, "position", return_value=0), \
-             patch.object(strat, "buy", side_effect=capture_buy), \
-             patch.object(strat, "sell", side_effect=capture_sell):
-
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy", side_effect=capture_buy),
+            patch.object(strat, "sell", side_effect=capture_sell),
+        ):
             event = self._make_feature_event()
             for _ in range(20):
                 strat.on_features(event)
@@ -469,6 +489,4 @@ class TestCompositeAlphaMM:
         # verify bid < ask
         n = min(len(buy_prices), len(sell_prices))
         for i in range(n):
-            assert buy_prices[i] < sell_prices[i], (
-                f"Iteration {i}: bid={buy_prices[i]} >= ask={sell_prices[i]}"
-            )
+            assert buy_prices[i] < sell_prices[i], f"Iteration {i}: bid={buy_prices[i]} >= ask={sell_prices[i]}"

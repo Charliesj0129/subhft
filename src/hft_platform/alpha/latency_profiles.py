@@ -65,18 +65,11 @@ def resolve_profile(
         if len(candidates) == 1:
             profile = dict(profiles[candidates[0]])
         elif len(candidates) > 1:
-            raise KeyError(
-                f"Ambiguous latency profile id {profile_id!r}: matches {candidates}"
-            )
+            raise KeyError(f"Ambiguous latency profile id {profile_id!r}: matches {candidates}")
         else:
-            raise KeyError(
-                f"Latency profile {profile_id!r} not found. "
-                f"Available: {sorted(profiles.keys())}"
-            )
+            raise KeyError(f"Latency profile {profile_id!r} not found. Available: {sorted(profiles.keys())}")
 
     missing = [f for f in _REQUIRED_FIELDS if f not in profile]
     if missing:
-        raise ValueError(
-            f"Latency profile {profile_id!r} missing required fields: {missing}"
-        )
+        raise ValueError(f"Latency profile {profile_id!r} missing required fields: {missing}")
     return profile

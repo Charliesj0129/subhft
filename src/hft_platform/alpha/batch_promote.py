@@ -123,14 +123,16 @@ class BatchPromoter:
                     force=False,
                 )
                 result = promote_alpha(config)
-                results.append({
-                    "alpha_id": alpha_id,
-                    "approved": result.approved,
-                    "dry_run": dry_run,
-                    "scorecard_path": str(run.scorecard_path),
-                    "sharpe_oos": float(scorecard.get("sharpe_oos", 0.0)),
-                    "details": result.to_dict(),
-                })
+                results.append(
+                    {
+                        "alpha_id": alpha_id,
+                        "approved": result.approved,
+                        "dry_run": dry_run,
+                        "scorecard_path": str(run.scorecard_path),
+                        "sharpe_oos": float(scorecard.get("sharpe_oos", 0.0)),
+                        "details": result.to_dict(),
+                    }
+                )
                 logger.info(
                     "batch_promote.result",
                     alpha_id=alpha_id,
@@ -142,12 +144,14 @@ class BatchPromoter:
                     alpha_id=alpha_id,
                     error=str(exc),
                 )
-                results.append({
-                    "alpha_id": alpha_id,
-                    "approved": False,
-                    "dry_run": dry_run,
-                    "error": str(exc),
-                })
+                results.append(
+                    {
+                        "alpha_id": alpha_id,
+                        "approved": False,
+                        "dry_run": dry_run,
+                        "error": str(exc),
+                    }
+                )
 
         approved_count = sum(1 for r in results if r.get("approved"))
         logger.info(
