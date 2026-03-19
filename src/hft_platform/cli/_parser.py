@@ -552,9 +552,7 @@ def build_parser() -> argparse.ArgumentParser:
     canary_eval.add_argument("--out", help="Optional JSON output path")
     canary_eval.set_defaults(func=cmd_alpha_canary_evaluate)
 
-    canary_auto_eval = alpha_canary_sub.add_parser(
-        "auto-evaluate", help="Auto-evaluate all active canaries (one-shot)"
-    )
+    canary_auto_eval = alpha_canary_sub.add_parser("auto-evaluate", help="Auto-evaluate all active canaries (one-shot)")
     canary_auto_eval.add_argument(
         "--dry-run",
         action="store_true",
