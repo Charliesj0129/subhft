@@ -1,4 +1,4 @@
-"""Verify zero test collection errors. Exit 0 always (warn-only)."""
+"""Verify zero test collection errors. Warn-only (exit 0)."""
 
 from __future__ import annotations
 

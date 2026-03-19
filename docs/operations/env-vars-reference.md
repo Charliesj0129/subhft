@@ -239,12 +239,20 @@ Base YAML (config/base/main.yaml)
 
 ---
 
+<<<<<<< HEAD
+## 12. Deployment
+
+| Variable | Default | Description |
+|---|---|---|
+| `HFT_ENGINE_IMAGE` | `hft-engine:latest` | Docker image tag for HFT engine container |
+=======
 ## 12. 部署
 
 | 變數 | 預設值 | 用途 | 調整建議 |
 |---|---|---|---|
 | `HFT_ENGINE_IMAGE` | — | Docker image for hft-engine（含 tag/SHA） | 部署時指定已知穩定版本 |
 | `HFT_AUTO_FLATTEN_DISABLED` | `0` | `1` = 禁用 HALT 自動平倉（手動介入模式） | 事故排查時暫時設為 `1` |
+>>>>>>> origin/main
 
 ---
 
