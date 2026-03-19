@@ -22,7 +22,6 @@ x-hft-common: &hft-common
     - HFT_SYMBOLS=${HFT_SYMBOLS:-}
     - LOG_LEVEL=${LOG_LEVEL:-INFO}
     - SYMBOLS_CONFIG=${SYMBOLS_CONFIG:-config/base/symbols.yaml}
-    - HFT_EVENT_MODE=${HFT_EVENT_MODE:-event}
     - HFT_CLICKHOUSE_HOST=clickhouse
     - HFT_CLICKHOUSE_PORT=${HFT_CLICKHOUSE_PORT:-8123}
     - HFT_CLICKHOUSE_ENABLED=1

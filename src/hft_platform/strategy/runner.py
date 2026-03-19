@@ -30,10 +30,10 @@ _RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not 
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except ImportError:
         _rust_core = importlib.import_module("rust_core")
     _RustCircuitBreaker = getattr(_rust_core, "RustCircuitBreaker", None)
-except Exception:
+except (ImportError, ModuleNotFoundError):
     _RustCircuitBreaker = None
 
 
@@ -144,8 +144,8 @@ class StrategyRunner:
                     self._circuit_recovery_threshold,
                     self._circuit_cooldown_ns,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("rust_circuit_breaker_init_failed", error=str(exc))
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
         self._feature_compat_fail_fast = os.getenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "1").lower() not in {
@@ -199,8 +199,8 @@ class StrategyRunner:
                         strategy=str(issue.strategy_id),
                         code=str(issue.code),
                     ).inc()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("compat_metric_emit_failed", error=str(exc))
         if self._feature_compat_fail_fast and any(i.level == "error" for i in compat_issues):
             raise RuntimeError(
                 f"Strategy '{strategy.strategy_id}' failed feature compatibility checks: "
@@ -295,7 +295,8 @@ class StrategyRunner:
                     alpha_flat_m = alpha_events_total.labels(strategy=strategy.strategy_id, outcome="flat")
                 if alpha_last_signal_ts is not None:
                     alpha_last_ts_g = alpha_last_signal_ts.labels(strategy=strategy.strategy_id)
-            except Exception:
+            except Exception as exc:
+                logger.debug("alpha_metrics_init_failed", strategy=strategy.strategy_id, error=str(exc))
                 alpha_intent_m = None
                 alpha_flat_m = None
                 alpha_last_ts_g = None
@@ -651,7 +652,8 @@ class StrategyRunner:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
-        except Exception:
+        except Exception as exc:
+            logger.debug("trace_emit_failed", error=str(exc))
             return
 
     def _extract_event_trace(self, event: Any) -> tuple[int, str]:
@@ -667,7 +669,7 @@ class StrategyRunner:
         elif hasattr(event, "ts"):
             try:
                 source_ts_ns = int(getattr(event, "ts") or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 source_ts_ns = 0
         if not source_ts_ns:
             source_ts_ns = timebase.now_ns()

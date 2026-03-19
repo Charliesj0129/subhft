@@ -175,4 +175,7 @@ notebooks/.ipynb_checkpoints
 .claude/agents/
 .claude/skills/
 
+# ArXiv paper storage (local only)
+arxiv_papers/
+
 gha-creds-*.json

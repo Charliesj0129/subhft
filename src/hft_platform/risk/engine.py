@@ -51,6 +51,7 @@ def _get_trace_sampler():
 
         return get_trace_sampler()
     except Exception:
+        logger.debug("Trace sampler unavailable", exc_info=True)
         return None
 
 
@@ -181,8 +182,8 @@ class RiskEngine:
 
                     codec = PriceCodec(price_scale_provider)
                     scale = int(codec.scale_factor("default")) or 10_000
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to resolve price scale from provider, using default 10000", error=str(exc))
             max_price_cap_scaled = int(max_price_cap_raw * scale)
             tick_size_scaled = int(tick_size_raw * scale)
             max_notional_scaled = int(max_notional_raw * scale)
@@ -318,8 +319,9 @@ class RiskEngine:
             from hft_platform.gateway.channel import typed_frame_to_view
 
             return typed_frame_to_view(frame)
-        except Exception:
+        except Exception as exc:
             # Fallback: materialize full OrderIntent if frame is malformed/unsupported
+            logger.warning("typed_frame_to_view failed, falling back to full materialization", error=str(exc))
             from hft_platform.gateway.channel import typed_frame_to_intent
 
             return typed_frame_to_intent(frame)
@@ -332,8 +334,8 @@ class RiskEngine:
                 return self.create_command(intent_view)
             try:
                 return self.create_command(typed_view_to_intent(intent_view))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("typed_view_to_intent failed, falling back to frame materialization", error=str(exc))
         return self.create_command(typed_frame_to_intent(frame))
 
     def create_typed_command_frame_from_typed_frame(self, frame: Any) -> tuple[Any, ...]:
@@ -402,8 +404,8 @@ class RiskEngine:
                 child = metrics.risk_reject_total.labels(strategy=key[0], reason=key[1])
                 self._reject_metric_cache[key] = child
             child.inc()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("reject_metric_emit_failed", error=str(exc))
 
     def _emit_trace(self, stage: str, intent: Any, payload: dict[str, Any]) -> None:
         sampler = getattr(self, "_trace_sampler", None)
@@ -419,5 +421,5 @@ class RiskEngine:
                     **payload,
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("trace_emit_failed", error=str(exc))
