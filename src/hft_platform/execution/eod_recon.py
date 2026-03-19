@@ -153,7 +153,7 @@ def _get_or_create_gauge(
     metrics: MetricsRegistry,
     name: str,
     doc: str,
-) -> object:
+) -> "Gauge":
     """Return an existing gauge attribute on *metrics*, or create a new one."""
     from prometheus_client import Gauge
 
