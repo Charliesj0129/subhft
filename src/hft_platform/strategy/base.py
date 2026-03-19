@@ -14,7 +14,7 @@ logger = get_logger("strategy")
 
 # When HFT_STRICT_PRICE_MODE=1, float prices raise TypeError instead of warning.
 # Enables CI enforcement of the Precision Law (no float prices in production).
-_STRICT_PRICE = os.getenv("HFT_STRICT_PRICE_MODE", "0") == "1"
+_STRICT_PRICE = os.getenv("HFT_STRICT_PRICE_MODE", "1") == "1"
 
 
 class StrategyContext:

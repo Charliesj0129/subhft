@@ -5,6 +5,7 @@ import pytest
 
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
+from hft_platform.risk.storm_guard import StormGuard
 
 
 @pytest.mark.asyncio
@@ -14,7 +15,9 @@ async def test_reconciliation_sync_portfolio_logs_remote_positions(tmp_path):
     client.get_positions.return_value = [{"code": "AAA", "quantity": 2}, pos_sell]
 
     store = PositionStore()
-    service = ReconciliationService(client, store, {"reconciliation": {"heartbeat_threshold_ms": 1}})
+    service = ReconciliationService(
+        client, store, {"reconciliation": {"heartbeat_threshold_ms": 1}}, storm_guard=StormGuard()
+    )
 
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()

@@ -6,6 +6,8 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
+from hft_platform.core.session_hooks import SessionHookManager
+from hft_platform.observability.health import HealthServer
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
 from hft_platform.utils.logging import configure_logging
@@ -91,6 +93,16 @@ class HFTSystem:
         self.recorder = self.registry.recorder
         self.gateway_service = self.registry.gateway_service
 
+        self._mtm_calculator = None
+        try:
+            from hft_platform.execution.mtm import MarkToMarketCalculator
+
+            lob_engine = getattr(self.md_service, "lob", None)
+            if lob_engine is not None:
+                self._mtm_calculator = MarkToMarketCalculator(self.position_store, lob_engine=lob_engine)
+        except Exception as exc:
+            logger.warning("MTM calculator init failed", error=str(exc))
+
         self.tasks: Dict[str, asyncio.Task[Any]] = {}
         self._recorder_drop_on_full = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1").lower() not in {
             "0",
@@ -106,9 +118,23 @@ class HFTSystem:
         self._queue_log_every_s = self._env_float("HFT_SUPERVISOR_QUEUE_LOG_EVERY_S", 30.0, min_value=1.0)
         self._last_queue_log_s = 0.0
 
+        # WU-11: Session hooks (disabled by default)
+        self.session_hook_manager = SessionHookManager()
+
+        # WU-17: Structured health endpoint
+        self.health_server = HealthServer(system=self)
+
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
+
+        import signal
+
+        try:
+            self.loop.add_signal_handler(signal.SIGHUP, self._on_sighup)
+        except (NotImplementedError, OSError):
+            pass
+
         logger.info("System Starting...")
 
         # Hooks for Shioaji
@@ -134,6 +160,13 @@ class HFTSystem:
             self._start_service("recorder_bridge", self._recorder_bridge())
             if os.getenv("HFT_PNL_EXPORTER_ENABLED", "1").lower() not in {"0", "false", "no", "off"}:
                 self._start_service("pnl_exporter", self._pnl_snapshot_exporter())
+
+            # WU-11: Session hooks
+            if self.session_hook_manager.enabled:
+                self._start_service("session_hooks", self.session_hook_manager.run())
+
+            # WU-17: Structured health endpoint
+            self._start_service("health_server", self.health_server.run())
 
             # Start Monitor/Supervisor Loop
             await self._supervise()
@@ -165,10 +198,30 @@ class HFTSystem:
             value = default
         return max(min_value, value)
 
+    def _close_broker_client(self, client_name: str) -> None:
+        """Close a broker client with logout if available."""
+        client = getattr(self, client_name, None)
+        if client is not None and hasattr(client, "close"):
+            try:
+                client.close(logout=True)
+                logger.info("Broker client closed", client=client_name)
+            except Exception as exc:
+                logger.warning("Broker logout failed", client=client_name, error=str(exc))
+
+    def _on_sighup(self) -> None:
+        """Handle SIGHUP: reload risk config."""
+        logger.info("SIGHUP received - reloading risk config")
+        try:
+            self.risk_engine.reload_config()
+        except Exception as exc:
+            logger.error("SIGHUP risk config reload failed", error=str(exc))
+
     def _teardown_bootstrap(self) -> None:
         if self._bootstrap_torn_down:
             return
         self._bootstrap_torn_down = True
+        for cn in ("md_client", "order_client"):
+            self._close_broker_client(cn)
         try:
             self.bootstrapper.teardown()
         except Exception as exc:
@@ -274,8 +327,16 @@ class HFTSystem:
                 # 1. Get feed gap from market data service
                 feed_gap_s = self._get_max_feed_gap_s(self.md_service)
 
-                # 2. Get drawdown from position store
+                # 2. Get drawdown from position store (realized + unrealized)
                 drawdown_pct = self._get_drawdown_pct(self.position_store, self.settings)
+                if self._mtm_calculator is not None:
+                    try:
+                        unrealized = self._mtm_calculator.total_unrealized_pnl()
+                        base_capital = self.settings.get("base_capital", 10_000_000)
+                        if base_capital > 0 and unrealized < 0:
+                            drawdown_pct = drawdown_pct + unrealized / base_capital
+                    except Exception:
+                        pass
 
                 # 3. Get P99 latency estimate (convert event loop lag to microseconds as proxy)
                 latency_us = int(lag_s * 1_000_000)
@@ -296,6 +357,21 @@ class HFTSystem:
 
             except Exception as e:
                 logger.warning("StormGuard update failed", error=str(e))
+
+            # Kill-switch file check
+            kill_switch_path = os.getenv("HFT_KILL_SWITCH_PATH", ".runtime/kill_switch")
+            if os.path.exists(kill_switch_path):
+                if self.storm_guard.state != StormGuardState.HALT:
+                    try:
+                        import json as _json
+
+                        with open(kill_switch_path, "r") as _ksf:
+                            _ks_data = _json.load(_ksf)
+                        _ks_reason = _ks_data.get("reason", "unknown")
+                    except Exception:
+                        _ks_reason = "kill_switch_file_present"
+                    self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
+                    logger.critical("Kill switch file detected", path=kill_switch_path, reason=_ks_reason)
 
             t_gateway = self.tasks.get("exec_gateway")
             # Check Health for all critical services
@@ -381,6 +457,12 @@ class HFTSystem:
         self.recon_service.running = False
         self.strategy_runner.running = False
         self.execution_gateway.stop()  # Clean shutdown
+        self.session_hook_manager.stop()
+        self.health_server.stop()
+
+        # WU-01: Broker logout before task cancellation
+        for cn in ("md_client", "order_client"):
+            self._close_broker_client(cn)
 
         # Cancel and await all tasks for clean shutdown
         for name, task in list(self.tasks.items()):
@@ -408,6 +490,10 @@ class HFTSystem:
         self.recon_service.running = False
         self.strategy_runner.running = False
         self.execution_gateway.stop()  # Clean shutdown
+        self.session_hook_manager.stop()
+        self.health_server.stop()
+        for cn in ("md_client", "order_client"):
+            self._close_broker_client(cn)
         self._teardown_bootstrap()
 
         # Schedule async cleanup if event loop is available

@@ -147,6 +147,17 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
     if "mode" in settings:
         settings["mode"] = mode if os.getenv("HFT_MODE") else settings["mode"]
 
+    # 6. Validate merged config (fail-fast unless bypassed)
+    skip_validation = (
+        cli_overrides.get("skip_config_validation", False) or os.getenv("HFT_SKIP_CONFIG_VALIDATION", "0") == "1"
+    )
+    if not skip_validation:
+        from hft_platform.config.schema import validate_config_or_exit
+
+        validate_config_or_exit(settings)
+    else:
+        logger.warning("config_validation_skipped")
+
     return settings, applied_defaults
 
 

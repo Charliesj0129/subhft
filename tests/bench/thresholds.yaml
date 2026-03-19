@@ -1,0 +1,10 @@
+# Latency regression thresholds (WU-19).
+# P99 values in microseconds. CI fails if measured P99 exceeds these.
+# Update these after verified performance improvements.
+
+risk_evaluate_p99_us: 50
+gateway_process_envelope_p99_us: 100
+normalize_tick_p99_us: 10
+
+# Number of iterations per benchmark
+iterations: 1000

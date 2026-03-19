@@ -263,6 +263,74 @@ class DailyLossLimitValidator(RiskValidator):
         return True, "OK"
 
 
+class PerSymbolNotionalValidator(RiskValidator):
+    """Reject orders where per-symbol notional (price * qty / scale) exceeds the configured limit.
+
+    Config resolution order:
+      1. strategies.<id>.symbol_limits.<symbol>.max_notional
+      2. global_defaults.per_symbol_max_notional
+      3. Hard-coded fallback (50_000_000)
+
+    Cache is keyed by (strategy_id, symbol) with a bounded cardinality of
+    ``_MAX_CACHE_ENTRIES`` (default 10_000) per CE2-12 governance rule.
+    """
+
+    __slots__ = (
+        "_default_per_symbol_max_notional_raw",
+        "_per_symbol_notional_cache",
+        "_MAX_CACHE_ENTRIES",
+    )
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._default_per_symbol_max_notional_raw: int = int(self.defaults.get("per_symbol_max_notional", 50_000_000))
+        self._per_symbol_notional_cache: Dict[tuple[str, str], int] = {}
+        self._MAX_CACHE_ENTRIES: int = int(os.getenv("HFT_RISK_PER_SYMBOL_CACHE_MAX", "10000"))
+
+    def check(self, intent: OrderIntent) -> Tuple[bool, str]:
+        if intent.intent_type == IntentType.CANCEL:
+            return True, "OK"
+
+        cache_key = (intent.strategy_id, intent.symbol)
+        max_notional_scaled = self._per_symbol_notional_cache.get(cache_key)
+        if max_notional_scaled is None:
+            # Resolve config: strategy-level symbol_limits > global default
+            strat_cfg = self.strat_configs.get(intent.strategy_id, {})
+            symbol_limits = strat_cfg.get("symbol_limits", {})
+            sym_cfg = symbol_limits.get(intent.symbol, {})
+            max_notional_raw = sym_cfg.get(
+                "max_notional",
+                self._default_per_symbol_max_notional_raw,
+            )
+
+            scale = self._scale_factor(intent.symbol)
+            max_notional_scaled = int(int(max_notional_raw) * scale)
+
+            # Bounded cache — evict all on overflow (simple, safe)
+            if len(self._per_symbol_notional_cache) >= self._MAX_CACHE_ENTRIES:
+                logger.warning(
+                    "PerSymbolNotionalValidator cache overflow, clearing",
+                    size=len(self._per_symbol_notional_cache),
+                    max=self._MAX_CACHE_ENTRIES,
+                )
+                self._per_symbol_notional_cache.clear()
+
+            self._per_symbol_notional_cache[cache_key] = max_notional_scaled
+
+        # notional = price * qty (both in scaled-int space).
+        # To compare against a raw-currency limit that was also pre-scaled,
+        # the comparison is direct: price_scaled * qty vs max_notional_raw * scale.
+        notional_scaled = intent.price * intent.qty
+        if notional_scaled > max_notional_scaled:
+            return False, (f"PER_SYMBOL_NOTIONAL_EXCEEDED: {notional_scaled} > {max_notional_scaled}")
+
+        return True, "OK"
+
+    def clear_cache(self) -> None:
+        """Clear the per-symbol notional cache (used by config hot-reload)."""
+        self._per_symbol_notional_cache.clear()
+
+
 class StormGuardFSM:
     def __init__(self, config: Dict[str, Any]):
         self.config = config

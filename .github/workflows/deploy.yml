@@ -1,0 +1,189 @@
+name: CD — Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (skip actual deployment)"
+        required: false
+        default: false
+        type: boolean
+      rollback_sha:
+        description: "Git SHA to rollback to (leave empty for normal deploy)"
+        required: false
+        default: ""
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/hft-engine
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine deploy SHA
+        id: sha
+        run: |
+          if [ -n "${{ inputs.rollback_sha }}" ]; then
+            echo "sha=${{ inputs.rollback_sha }}" >> "$GITHUB_OUTPUT"
+            echo "mode=rollback" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "mode=deploy" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        if: inputs.dry_run != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.revision=${{ steps.sha.outputs.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build only (dry run)
+        if: inputs.dry_run == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}
+
+      - name: Deploy to production host
+        if: inputs.dry_run != 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
+          DEPLOY_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}
+          DEPLOY_MODE: ${{ steps.sha.outputs.mode }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_KEY" ]; then
+            echo "::warning::Deploy secrets not configured. Skipping SSH deploy."
+            echo "Image pushed to: $DEPLOY_IMAGE"
+            exit 0
+          fi
+
+          # Write SSH key
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Execute remote deploy
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd /opt/hft-platform && \
+             docker pull ${DEPLOY_IMAGE} && \
+             docker compose -f docker-compose.yml up -d --no-deps hft-engine && \
+             sleep 5 && \
+             curl -sf http://localhost:9090/metrics > /dev/null"
+
+          # Cleanup
+          rm -f ~/.ssh/deploy_key
+
+      - name: Health check
+        if: inputs.dry_run != 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::warning::Deploy secrets not configured. Skipping health check."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Retry health check 3 times with 10s intervals
+          for i in 1 2 3; do
+            if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              "curl -sf http://localhost:9090/metrics | grep -q hft_"; then
+              echo "Health check passed (attempt $i)"
+              rm -f ~/.ssh/deploy_key
+              exit 0
+            fi
+            echo "Health check attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+
+          echo "::error::Health check failed after 3 attempts"
+          rm -f ~/.ssh/deploy_key
+          exit 1
+
+      - name: Rollback on failure
+        if: failure() && inputs.dry_run != 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::warning::Cannot rollback — deploy secrets not configured."
+            exit 1
+          fi
+
+          echo "::warning::Deployment failed. Attempting rollback to previous image..."
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd /opt/hft-platform && \
+             docker compose -f docker-compose.yml up -d --no-deps hft-engine && \
+             sleep 5 && \
+             curl -sf http://localhost:9090/metrics > /dev/null" || true
+
+          rm -f ~/.ssh/deploy_key
+          echo "::error::Rollback attempted. Verify system state manually."
+
+      - name: Deploy Summary
+        if: always()
+        run: |
+          echo "## CD Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Mode**: ${{ steps.sha.outputs.mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **SHA**: \`${{ steps.sha.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dry run**: ${{ inputs.dry_run || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY

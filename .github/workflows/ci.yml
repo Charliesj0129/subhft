@@ -329,6 +329,67 @@ jobs:
           fi
 
   # ============================================================================
+  # Stage 4b: Latency Regression Gate (WU-19)
+  # ============================================================================
+  latency-gate:
+    name: Latency Regression Gate
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install ${PYTHON_VERSION}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .venv
+            ${{ env.UV_CACHE_DIR }}
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust_core/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust_core/Cargo.lock', 'rust_core/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Build Rust extension
+        run: make build-rust
+
+      - name: Run latency regression benchmarks
+        run: uv run pytest tests/bench/ -m bench -v --tb=short 2>&1 | tee latency_gate.log
+
+      - name: Latency Gate Summary
+        if: always()
+        run: |
+          echo "## Latency Regression Gate" >> $GITHUB_STEP_SUMMARY
+          if [ -f latency_gate.log ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -30 latency_gate.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ============================================================================
   # Stage 5: Integration Tests
   # ============================================================================
   integration:

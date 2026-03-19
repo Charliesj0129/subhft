@@ -143,6 +143,12 @@ class MetricsRegistry:
                 "feature_profile_compat_failures_total",
                 "contract_refresh_total",
                 "contract_refresh_symbols_changed_total",
+                # WU-04/WU-18 Reconciliation resilience metrics
+                "reconciliation_sync_total",
+                "reconciliation_sync_duration_seconds",
+                "reconciliation_discrepancy_total",
+                "reconciliation_consecutive_failures",
+                "reconciliation_last_success_ts",
             ]
         )
         # Market Data
@@ -236,6 +242,7 @@ class MetricsRegistry:
         self.execution_events_total = Counter("execution_events_total", "Execution callbacks", ["type"])
         self.execution_router_errors_total = Counter("execution_router_errors_total", "Execution router errors")
         self.execution_gateway_errors_total = Counter("execution_gateway_errors_total", "Execution gateway errors")
+        self.orphaned_fill_total = Counter("orphaned_fill_total", "Orphaned fills routed to DLQ")
         self.execution_router_lag_ns = Histogram(
             "execution_router_lag_ns",
             "Execution report lag (ns)",
@@ -307,6 +314,30 @@ class MetricsRegistry:
         self.reconciliation_discrepancy_count = Gauge(
             "reconciliation_discrepancy_count",
             "Number of position discrepancies detected",
+        )
+        # WU-04/WU-18: Reconciliation resilience & Prometheus metrics
+        self.reconciliation_sync_total = Counter(
+            "reconciliation_sync_total",
+            "Reconciliation sync outcomes",
+            ["result"],  # success|failure|skip
+        )
+        self.reconciliation_sync_duration_seconds = Histogram(
+            "reconciliation_sync_duration_seconds",
+            "Reconciliation sync duration in seconds",
+            buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+        )
+        self.reconciliation_discrepancy_total = Counter(
+            "reconciliation_discrepancy_total",
+            "Reconciliation discrepancies by severity",
+            ["severity"],  # info|warning|critical
+        )
+        self.reconciliation_consecutive_failures = Gauge(
+            "reconciliation_consecutive_failures",
+            "Current number of consecutive reconciliation failures",
+        )
+        self.reconciliation_last_success_ts = Gauge(
+            "reconciliation_last_success_ts",
+            "Unix epoch seconds of last successful reconciliation",
         )
         # Recorder batch insert retry count
         self.recorder_insert_retry_total = Counter(

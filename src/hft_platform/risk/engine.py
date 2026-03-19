@@ -12,9 +12,11 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.recorder.audit import get_audit_writer
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
     MaxNotionalValidator,
+    PerSymbolNotionalValidator,
     PositionLimitValidator,
     PriceBandValidator,
     StormGuardFSM,
@@ -90,6 +92,7 @@ class RiskEngine:
         self.validators = [
             PriceBandValidator(self.config, price_scale_provider),
             MaxNotionalValidator(self.config, price_scale_provider),
+            PerSymbolNotionalValidator(self.config, price_scale_provider),
             PositionLimitValidator(self.config, price_scale_provider),
             DailyLossLimitValidator(self.config, price_scale_provider),
         ]
@@ -213,6 +216,37 @@ class RiskEngine:
         with open(self.config_path, "r") as f:
             self.config = yaml.safe_load(f)
 
+    def reload_config(self) -> None:
+        """Re-read config and update validators."""
+        try:
+            self.load_config()
+            self.on_config_reload(self.config)
+            if hasattr(self.storm_guard, "reload_thresholds"):
+                self.storm_guard.reload_thresholds(self.config)
+            logger.info("Risk config reloaded")
+        except Exception as exc:
+            logger.error("Risk config reload failed", error=str(exc))
+
+    def on_config_reload(self, new_config: dict[str, Any]) -> None:
+        """Callback invoked by ConfigWatcher when strategy_limits.yaml changes.
+
+        Updates internal config and clears all validator caches so that
+        subsequent checks pick up the new limits.
+        """
+        self.config = new_config
+        for v in self.validators:
+            # Clear per-validator caches
+            for attr in list(vars(v)):
+                if "cache" in attr.lower():
+                    obj = getattr(v, attr, None)
+                    if isinstance(obj, dict):
+                        obj.clear()
+            # Also update the config references on each validator
+            v.config = new_config
+            v.defaults = new_config.get("global_defaults", {})
+            v.strat_configs = new_config.get("strategies", {})
+        logger.info("RiskEngine config reloaded", strategies=list(new_config.get("strategies", {}).keys()))
+
     async def run(self):
         self.running = True
         logger.info("RiskEngine started")
@@ -249,6 +283,11 @@ class RiskEngine:
                 self.intent_queue.task_done()
 
     def evaluate(self, intent: Any) -> RiskDecision:
+        price = getattr(intent, "price", None)
+        if isinstance(price, float):
+            self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
+            return RiskDecision(False, intent, "FLOAT_PRICE")
+
         if self._fast_gate is not None:
             try:
                 if int(getattr(intent, "intent_type", IntentType.NEW)) != int(IntentType.CANCEL):
@@ -291,17 +330,9 @@ class RiskEngine:
                     self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
                     return RiskDecision(False, intent, reason)
             except Exception as exc:
-                logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
-                # Fall through to Python validators on error
-                for v in self.validators:
-                    ok, reason = v.check(intent)
-                    if not ok:
-                        self._emit_trace(
-                            "risk_reject",
-                            intent,
-                            {"stage": "validator", "reason": reason, "validator": type(v).__name__},
-                        )
-                        return RiskDecision(False, intent, reason)
+                logger.error("RustRiskValidator error — rejecting order (fail-closed)", error=str(exc))
+                self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": "RUST_VALIDATOR_ERROR"})
+                return RiskDecision(False, intent, "RUST_VALIDATOR_ERROR")
         else:
             for v in self.validators:
                 ok, reason = v.check(intent)
@@ -314,7 +345,9 @@ class RiskEngine:
                     return RiskDecision(False, intent, reason)
 
         self._emit_trace("risk_approve", intent, {"stage": "evaluate"})
-        return RiskDecision(True, intent)
+        decision = RiskDecision(True, intent)
+        self._audit_risk_decision(intent, decision)
+        return decision
 
     def evaluate_typed_frame(self, frame: Any, *, intent_view: Any | None = None) -> RiskDecision:
         """Risk evaluation on a typed intent frame using a lightweight view object."""
@@ -415,6 +448,24 @@ class RiskEngine:
         except Exception as exc:
             logger.debug("reject_metric_emit_failed", error=str(exc))
 
+    def _audit_risk_decision(self, intent: Any, decision: RiskDecision) -> None:
+        """Non-blocking audit log of risk evaluation result."""
+        try:
+            audit = get_audit_writer()
+            audit.log_risk_decision(
+                {
+                    "strategy_id": str(getattr(intent, "strategy_id", "")),
+                    "symbol": str(getattr(intent, "symbol", "")),
+                    "intent_type": int(getattr(intent, "intent_type", 0)),
+                    "price": int(getattr(intent, "price", 0)),
+                    "qty": int(getattr(intent, "qty", 0)),
+                    "approved": decision.approved,
+                    "reason_code": decision.reason_code,
+                }
+            )
+        except Exception as exc:
+            logger.debug("audit_risk_decision_failed", error=str(exc))
+
     def _emit_trace(self, stage: str, intent: Any, payload: dict[str, Any]) -> None:
         sampler = getattr(self, "_trace_sampler", None)
         if sampler is None:
@@ -431,3 +482,10 @@ class RiskEngine:
             )
         except Exception as exc:
             logger.debug("trace_emit_failed", error=str(exc))
+
+    def notify_fill_pnl(self, strategy_id: str, pnl_delta: int) -> None:
+        """Forward realized PnL delta to the DailyLossLimitValidator."""
+        for v in self.validators:
+            if isinstance(v, DailyLossLimitValidator):
+                v.record_pnl(strategy_id, pnl_delta)
+                return

@@ -433,3 +433,26 @@ groups:
     annotations:
         summary: "Redis connection down"
         description: "Redis connectivity lost. Monitor live cache and session lease unavailable."
+
+  - alert: OrphanedFillDetected
+    expr: increase(orphaned_fill_total[5m]) > 0
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: Orphaned fills detected
+        runbook_url: docs/runbooks/OrphanedFillDetected.md
+  - alert: SLOFeedAvailabilityBurnRateHigh
+    expr: 1 - slo:feed_availability:ratio_rate5m > 0.01
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: Feed availability SLO burn rate high
+  - alert: SLOOrderSuccessRateLow
+    expr: slo:order_success:ratio_rate5m < 0.995
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: Order success rate below SLO

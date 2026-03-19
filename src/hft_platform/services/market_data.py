@@ -225,14 +225,14 @@ class MarketDataService:
         elif feature_enabled:
             try:
                 self.feature_engine = FeatureEngine()
-            except Exception as exc:
+            except Exception as metric_exc:
                 logger.error("feature_engine_init_failed", error=str(exc), exc_info=True)
                 self.feature_engine = None
         else:
             self.feature_engine = None
         try:
             setattr(self.lob, "feature_engine", self.feature_engine)
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("feature_engine_attach_failed", error=str(exc))
         self._feature_shadow_engine: FeatureEngine | None = None
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
@@ -257,7 +257,7 @@ class MarketDataService:
         self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ") or timebase.TZ_NAME or "Asia/Taipei"
         try:
             self._reconnect_tzinfo: dt.tzinfo = ZoneInfo(self.reconnect_tz)
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.warning("Invalid reconnect tz, defaulting to UTC", tz=self.reconnect_tz, error=str(exc))
             self._reconnect_tzinfo = dt.UTC
         self._last_reconnect_ts = 0.0
@@ -323,7 +323,7 @@ class MarketDataService:
                     queue_size=int(os.getenv("HFT_MONITOR_LIVE_QUEUE_SIZE", "2048")),
                 )
                 self._monitor_live_publisher.start()
-            except Exception as exc:
+            except Exception as metric_exc:
                 logger.warning("monitor_live_publisher_init_failed", error=str(exc))
                 self._monitor_live_publisher = None
         self.log_raw = os.getenv("HFT_MD_LOG_RAW", "0") == "1"
@@ -453,7 +453,7 @@ class MarketDataService:
                     if idx < max_symbols:
                         self._shm_symbol_index[sym_str] = idx
                         self._shm_symbol_hashes[sym_str] = _symbol_hash(sym_str)
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.warning("shm_publisher_init_failed", error=str(exc))
             self._shm_publisher = None
 
@@ -498,7 +498,7 @@ class MarketDataService:
 
         try:
             publisher.publish(idx, ts_ns, sym_hash, lob_fields, features)
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("shm_publish_failed", error=str(exc))  # fire-and-forget — never block hot path
 
     def _init_feature_shadow_engine(self) -> None:
@@ -511,7 +511,7 @@ class MarketDataService:
             primary_backend = (
                 self.feature_engine.kernel_backend() if hasattr(self.feature_engine, "kernel_backend") else "python"
             )
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("shadow_backend_detect_fallback", error=str(exc))
             primary_backend = "python"
         requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
@@ -534,7 +534,7 @@ class MarketDataService:
                 # Auto mode could not create meaningful alternate backend.
                 return
             self._feature_shadow_engine = shadow
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.warning("feature_shadow_engine_init_failed", reason=str(exc))
             self._feature_shadow_engine = None
 
@@ -760,7 +760,7 @@ class MarketDataService:
             self._set_state(FeedState.SNAPSHOTTING)
             try:
                 snapshots = await self._call_client(self.client.fetch_snapshots)
-            except Exception as exc:
+            except Exception as metric_exc:
                 logger.warning("Snapshot fetch failed; continuing", error=str(exc))
                 snapshots = []
 
@@ -799,7 +799,7 @@ class MarketDataService:
                         if feature_update:
                             payload.append(feature_update)
                         self._publish_many_nowait(payload)
-                except Exception as exc:
+                except Exception as metric_exc:
                     logger.warning("Snapshot normalize failed; skipping", error=str(exc))
 
             await self._call_client(self.client.subscribe_basket, self._on_shioaji_event)
@@ -861,7 +861,7 @@ class MarketDataService:
                                 )
                                 self._md_callback_parse_metric_children[parse_result] = child
                             child.inc()
-                    except Exception as exc:
+                    except Exception as metric_exc:
                         logger.debug("callback_parse_metric_failed", error=str(exc))
 
             if not self.log_raw and msg is not None and not self._raw_first_parsed:
@@ -938,7 +938,7 @@ class MarketDataService:
                 logger.info("Symbols config reloaded", count=len(self.symbol_metadata.meta))
                 try:
                     await asyncio.to_thread(self.client.reload_symbols)
-                except Exception as exc:
+                except Exception as metric_exc:
                     logger.error("Symbol reload failed", error=str(exc))
 
     async def _update_symbol_tick(self, symbol: str) -> None:
@@ -1065,7 +1065,7 @@ class MarketDataService:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("trace_emit_failed", error=str(exc))
             return
 
@@ -1077,7 +1077,7 @@ class MarketDataService:
             return
         try:
             self.metrics_registry.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("crash_signature_metric_failed", error=str(exc))
             return
 
@@ -1113,7 +1113,7 @@ class MarketDataService:
                             self._feature_latency_metric_child = self.metrics_registry.feature_plane_latency_ns
                         if self._feature_latency_metric_child is not None:
                             self._feature_latency_metric_child.observe(time.perf_counter_ns() - start_ns)
-                    except Exception as exc:
+                    except Exception as metric_exc:
                         logger.debug("feature_latency_metric_failed", error=str(exc))
                 if self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
                     try:
@@ -1130,7 +1130,7 @@ class MarketDataService:
                             try:
                                 if hasattr(self.feature_engine, "get_feature_view"):
                                     state_view = self.feature_engine.get_feature_view(getattr(event, "symbol", ""))
-                            except Exception as exc:
+                            except Exception as metric_exc:
                                 logger.debug("feature_view_lookup_failed", error=str(exc))
                                 state_view = None
                             if isinstance(state_view, dict):
@@ -1153,15 +1153,14 @@ class MarketDataService:
                                         qchild = self.metrics_registry.feature_quality_flags_total.labels(flag=label)
                                         self._feature_quality_flag_metric_children[label] = qchild
                                     qchild.inc()
-                    except Exception as exc:
+                    except Exception as metric_exc:
                         logger.debug("feature_metrics_failed", error=str(exc))
             return feature_update
-        except Exception as exc:
-            exc_reason = str(exc)
+        except Exception as metric_exc:
             self._emit_trace(
                 "feature_update_error",
                 "",
-                {"symbol": getattr(event, "symbol", ""), "reason": exc_reason},
+                {"symbol": getattr(event, "symbol", ""), "reason": str(exc)},
             )
             self._feature_metrics_counter += 1
             if self.metrics_registry and self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
@@ -1178,7 +1177,7 @@ class MarketDataService:
                         child.inc()
                 except Exception as metric_exc:
                     logger.debug("feature_error_metric_failed", error=str(metric_exc))
-            logger.warning("feature_engine_update_failed", reason=exc_reason)
+            logger.warning("feature_engine_update_failed", reason=str(exc))
             return None
 
     def _maybe_run_feature_shadow_parity(
@@ -1199,7 +1198,7 @@ class MarketDataService:
                 shadow_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
             else:
                 shadow_update = shadow.process_lob_stats(cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns)
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.warning("feature_shadow_engine_update_failed", reason=str(exc))
             self._emit_feature_shadow_check_metric("skipped")
             return
@@ -1218,7 +1217,7 @@ class MarketDataService:
                 view = (
                     self.feature_engine.get_feature_view(getattr(event, "symbol", "")) if self.feature_engine else None
                 )
-            except Exception as exc:
+            except Exception as metric_exc:
                 logger.debug("feature_view_primary_failed", error=str(exc))
                 view = None
             if isinstance(view, dict):
@@ -1234,7 +1233,7 @@ class MarketDataService:
         else:
             try:
                 sview = shadow.get_feature_view(getattr(event, "symbol", ""))
-            except Exception as exc:
+            except Exception as metric_exc:
                 logger.debug("feature_view_shadow_failed", error=str(exc))
                 sview = None
             if isinstance(sview, dict):
@@ -1293,7 +1292,7 @@ class MarketDataService:
                 )
                 self._feature_shadow_checks_metric_children[key] = child
             child.inc()
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("shadow_check_metric_failed", error=str(exc))
 
     def _emit_feature_shadow_mismatch_metric(self, feature_set_id: str, feature_id: str) -> None:
@@ -1309,7 +1308,7 @@ class MarketDataService:
                 )
                 self._feature_shadow_mismatch_metric_children[key] = child
             child.inc()
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("shadow_mismatch_metric_failed", error=str(exc))
 
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
@@ -1342,7 +1341,7 @@ class MarketDataService:
             from hft_platform.recorder.mapper import map_event_to_record
 
             mapped = map_event_to_record(event, self.symbol_metadata, self.normalizer.price_codec)
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.warning("Direct record mapping failed", error=str(exc), event_type=type(event).__name__)
             return
         if not mapped:
@@ -1442,7 +1441,7 @@ class MarketDataService:
                 self.metrics_registry.feed_reconnect_timeout_total.labels(reason=reason_label).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
             if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_exception_total"):
                 self.metrics_registry.feed_reconnect_exception_total.labels(
@@ -1481,7 +1480,7 @@ class MarketDataService:
                 calendar = get_calendar()
                 if calendar.available and calendar.days_until_trading(now.date()) > 1:
                     return False
-            except Exception as exc:
+            except Exception as metric_exc:
                 logger.debug("market_calendar_check_failed", error=str(exc))
         weekday = now.strftime("%a").lower()
         if self.reconnect_days and weekday not in self.reconnect_days:
@@ -1502,7 +1501,7 @@ class MarketDataService:
                 else:
                     if now_t >= start or now_t <= end:
                         return True
-            except Exception as exc:
+            except Exception as metric_exc:
                 logger.debug("reconnect_window_parse_failed", window=window, error=str(exc))
                 continue
         return False
@@ -1584,7 +1583,7 @@ class MarketDataService:
             calendar = get_calendar()
             now_dt = dt.datetime.now(calendar._tz)
             return calendar.is_trading_hours(now_dt, product_type=product_type)
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("trading_hours_calendar_fallback", error=str(exc))
             now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
@@ -1628,6 +1627,6 @@ class MarketDataService:
                 self.metrics_registry.market_open_grace_active.set(1 if in_grace else 0)
 
             return in_grace
-        except Exception as exc:
+        except Exception as metric_exc:
             logger.debug("market_open_grace_check_failed", error=str(exc))
             return False
