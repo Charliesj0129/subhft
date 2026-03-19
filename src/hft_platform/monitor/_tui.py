@@ -58,13 +58,36 @@ async def run_monitor(
         return 1
 
     def _make_display() -> Layout:
+        from hft_platform.monitor._health_panel import (
+            build_health_panel,
+            get_cached_health,
+            is_health_visible,
+            poll_health,
+        )
+
         layout = Layout()
         header_size = 4 if engine.get_header_context().event_ticker else 3
 
         parts = [
             Layout(Panel(engine.get_header(), style="dim"), size=header_size, name="header"),
-            Layout(engine.get_table(), name="table"),
         ]
+
+        # System health panel (self-contained module)
+        if is_health_visible():
+            _live = _stale = _total = 0
+            for _ss in engine._sym_states:
+                if _ss.session_active:
+                    _total += 1
+                    if _ss.is_stale:
+                        _stale += 1
+                    elif _ss.tick_count > 0:
+                        _live += 1
+            poll_health(feed_live=_live, feed_stale=_stale, feed_total=_total)
+            _health = get_cached_health()
+            if _health is not None:
+                parts.append(Layout(build_health_panel(_health), size=8, name="health"))
+
+        parts.append(Layout(engine.get_table(), name="table"))
 
         # Phase 3: detail panel
         if engine._detail_visible:
@@ -155,6 +178,10 @@ async def _key_listener(engine: MonitorEngine, stop_event: asyncio.Event) -> Non
                 engine.cycle_sort_mode()
             elif char in ("c", "C"):
                 engine.toggle_closed_collapse()
+            elif char in ("h", "H"):
+                from hft_platform.monitor._health_panel import toggle_health_visible
+
+                toggle_health_visible()
             elif char in ("j",):
                 engine.move_selection(1)
             elif char in ("k",):
