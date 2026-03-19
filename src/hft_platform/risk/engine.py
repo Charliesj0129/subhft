@@ -314,17 +314,9 @@ class RiskEngine:
                     self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
                     return RiskDecision(False, intent, reason)
             except Exception as exc:
-                logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
-                # Fall through to Python validators on error
-                for v in self.validators:
-                    ok, reason = v.check(intent)
-                    if not ok:
-                        self._emit_trace(
-                            "risk_reject",
-                            intent,
-                            {"stage": "validator", "reason": reason, "validator": type(v).__name__},
-                        )
-                        return RiskDecision(False, intent, reason)
+                logger.error("RustRiskValidator error — rejecting order (fail-closed)", error=str(exc))
+                self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": "RUST_VALIDATOR_ERROR"})
+                return RiskDecision(False, intent, "RUST_VALIDATOR_ERROR")
         else:
             for v in self.validators:
                 ok, reason = v.check(intent)
@@ -472,3 +464,10 @@ class RiskEngine:
             )
         except Exception as exc:
             logger.debug("trace_emit_failed", error=str(exc))
+
+    def notify_fill_pnl(self, strategy_id: str, pnl_delta: int) -> None:
+        """Forward realized PnL delta to the DailyLossLimitValidator."""
+        for v in self.validators:
+            if isinstance(v, DailyLossLimitValidator):
+                v.record_pnl(strategy_id, pnl_delta)
+                return

@@ -5,7 +5,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from structlog import get_logger
 
@@ -78,7 +78,7 @@ class ReconciliationService:
         client: object,
         position_store: PositionStore,
         config: dict,
-        storm_guard: Optional[StormGuard] = None,
+        storm_guard: StormGuard,
     ) -> None:
         self.client = client
         self.store = position_store
@@ -109,6 +109,7 @@ class ReconciliationService:
         self.running: bool = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._consecutive_failures: int = 0
+        self._halt_triggered: bool = False
 
     # ------------------------------------------------------------------
     # Metrics helpers (WU-18)
@@ -166,11 +167,12 @@ class ReconciliationService:
                     remaining_before_halt=max(remaining, 0),
                 )
 
-                if self._consecutive_failures >= self.grace_failures:
+                if self._consecutive_failures >= self.grace_failures and not self._halt_triggered:
                     reason = (
                         f"RECONCILIATION_UNAVAILABLE: "
                         f"{self._consecutive_failures} consecutive failures"
                     )
+                    self._halt_triggered = True
                     logger.critical(
                         "Triggering HALT due to reconciliation unavailability",
                         consecutive_failures=self._consecutive_failures,
@@ -302,7 +304,4 @@ class ReconciliationService:
             symbols=symbols,
         )
 
-        if self.storm_guard:
-            self.storm_guard.trigger_halt(reason)
-        else:
-            logger.error("No StormGuard configured - HALT not triggered (manual intervention required)")
+        self.storm_guard.trigger_halt(reason)

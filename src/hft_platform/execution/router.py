@@ -57,12 +57,14 @@ class ExecutionRouter:
         order_id_map: Dict[str, str],
         position_store: PositionStore,
         terminal_handler: Union[Callable[[str, str], None], object],
+        risk_engine: Optional[object] = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
         self.normalizer = ExecutionNormalizer(raw_queue, order_id_map)
         self.position_store = position_store
         self.terminal_handler = terminal_handler
+        self._risk_engine = risk_engine
         self.running = False
         self.metrics = MetricsRegistry.get()
 
@@ -105,11 +107,25 @@ class ExecutionRouter:
                 elif raw.topic == "deal":
                     norm = self.normalizer.normalize_fill(raw)
                     if norm:
-                        # Use async version to avoid blocking event loop with Rust FFI lock
+                        _pre_realized = 0
+                        if self._risk_engine is not None:
+                            _pos_key = f"{norm.account_id}:{norm.strategy_id}:{norm.symbol}"
+                            _pre_pos = self.position_store.positions.get(_pos_key)
+                            if _pre_pos is not None:
+                                _pre_realized = _pre_pos.realized_pnl_scaled
+
                         if hasattr(self.position_store, "on_fill_async"):
                             delta = await self.position_store.on_fill_async(norm)
                         else:
                             delta = self.position_store.on_fill(norm)
+
+                        if self._risk_engine is not None:
+                            pnl_delta = delta.realized_pnl - _pre_realized
+                            if pnl_delta != 0:
+                                notify = getattr(self._risk_engine, "notify_fill_pnl", None)
+                                if callable(notify):
+                                    notify(norm.strategy_id, pnl_delta)
+
                         publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
                         if publish_many_nowait:
                             publish_many_nowait([delta, norm])
