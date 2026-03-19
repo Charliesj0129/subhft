@@ -37,7 +37,13 @@ def _passing_scorecard() -> dict[str, Any]:
         "max_drawdown": -0.10,
         "turnover": 1.0,
         "correlation_pool_max": 0.3,
-        "latency_profile": {"place_order_p95_ms": 35.0},
+        "latency_profile": {
+            "latency_profile_id": "shioaji_sim_p95_v2026-03-04",
+            "place_order_p95_ms": 35.0,
+            "submit_ack_latency_ms": 36.0,
+            "modify_ack_latency_ms": 43.0,
+            "cancel_ack_latency_ms": 47.0,
+        },
     }
 
 

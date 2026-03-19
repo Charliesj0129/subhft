@@ -218,7 +218,16 @@ class MarketDataService:
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
-        self.feature_engine = feature_engine or (FeatureEngine() if feature_enabled else None)
+        if feature_engine is not None:
+            self.feature_engine = feature_engine
+        elif feature_enabled:
+            try:
+                self.feature_engine = FeatureEngine()
+            except Exception:
+                logger.error("feature_engine_init_failed", exc_info=True)
+                self.feature_engine = None
+        else:
+            self.feature_engine = None
         try:
             setattr(self.lob, "feature_engine", self.feature_engine)
         except Exception:
@@ -248,7 +257,7 @@ class MarketDataService:
             self._reconnect_tzinfo: dt.tzinfo = ZoneInfo(self.reconnect_tz)
         except Exception:
             logger.warning("Invalid reconnect tz, defaulting to UTC", tz=self.reconnect_tz)
-            self._reconnect_tzinfo = dt.timezone.utc
+            self._reconnect_tzinfo = dt.UTC
         self._last_reconnect_ts = 0.0
         self._last_resubscribe_ts = 0.0
         self._resubscribe_attempts = 0
@@ -1410,7 +1419,7 @@ class MarketDataService:
                 asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s", force_login),
                 timeout=max(0.1, float(self.reconnect_timeout_s)),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("Reconnect timed out", reason=reason_label, timeout_s=self.reconnect_timeout_s)
             if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_timeout_total"):
                 self.metrics_registry.feed_reconnect_timeout_total.labels(reason=reason_label).inc()
