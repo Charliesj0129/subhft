@@ -1,11 +1,14 @@
+import asyncio
 import os
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Any, Callable
 
 from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.recorder.audit import get_audit_writer
 
 logger = get_logger("risk.storm_guard")
 
@@ -17,7 +20,7 @@ class StormGuardState(IntEnum):
     HALT = 3
 
 
-@dataclass
+@dataclass(slots=True)
 class RiskThresholds:
     warm_drawdown_bps: int = -50  # -0.5% = -50 bps
     storm_drawdown_bps: int = -100  # -1.0% = -100 bps
@@ -35,7 +38,11 @@ class StormGuard:
     Monitors System Health and Enforces Defcon Levels.
     """
 
-    def __init__(self, thresholds: RiskThresholds | None = None):
+    def __init__(
+        self,
+        thresholds: RiskThresholds | None = None,
+        on_halt_callback: Callable[[], Any] | None = None,
+    ):
         self.state = StormGuardState.NORMAL
         self.thresholds = thresholds or RiskThresholds()
         self._apply_env_overrides()
@@ -45,6 +52,7 @@ class StormGuard:
         self._storm_entry_ts: float = 0.0  # precision-time
         self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
+        self._on_halt_callback = on_halt_callback
 
     def _apply_env_overrides(self) -> None:
         feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
@@ -143,6 +151,36 @@ class StormGuard:
 
         # Update Metric
         self.metrics.stormguard_mode.labels(strategy="system").set(int(new_state))
+
+        # Audit guardrail transition
+        try:
+            audit = get_audit_writer()
+            audit.log_guardrail_transition({
+                "old_state": old_state.name,
+                "new_state": new_state.name,
+                "reason": reason,
+            })
+        except Exception as exc:
+            logger.debug("audit_guardrail_transition_failed", error=str(exc))
+
+        # Fire on_halt_callback when entering HALT
+        if new_state == StormGuardState.HALT and self._on_halt_callback is not None:
+            try:
+                result = self._on_halt_callback()
+                # If callback is a coroutine, schedule it
+                if asyncio.iscoroutine(result):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(result)
+                    except RuntimeError:
+                        # No running event loop; log and discard
+                        logger.warning("halt_callback_coroutine_no_loop")
+            except Exception as exc:
+                logger.error(
+                    "on_halt_callback_error",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
 
     def trigger_halt(self, reason: str):
         """Manual or Supervisor override to force HALT."""

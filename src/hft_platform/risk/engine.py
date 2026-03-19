@@ -12,6 +12,7 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.recorder.audit import get_audit_writer
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
     MaxNotionalValidator,
@@ -336,7 +337,9 @@ class RiskEngine:
                     return RiskDecision(False, intent, reason)
 
         self._emit_trace("risk_approve", intent, {"stage": "evaluate"})
-        return RiskDecision(True, intent)
+        decision = RiskDecision(True, intent)
+        self._audit_risk_decision(intent, decision)
+        return decision
 
     def evaluate_typed_frame(self, frame: Any, *, intent_view: Any | None = None) -> RiskDecision:
         """Risk evaluation on a typed intent frame using a lightweight view object."""
@@ -436,6 +439,22 @@ class RiskEngine:
             child.inc()
         except Exception as exc:
             logger.debug("reject_metric_emit_failed", error=str(exc))
+
+    def _audit_risk_decision(self, intent: Any, decision: RiskDecision) -> None:
+        """Non-blocking audit log of risk evaluation result."""
+        try:
+            audit = get_audit_writer()
+            audit.log_risk_decision({
+                "strategy_id": str(getattr(intent, "strategy_id", "")),
+                "symbol": str(getattr(intent, "symbol", "")),
+                "intent_type": int(getattr(intent, "intent_type", 0)),
+                "price": int(getattr(intent, "price", 0)),
+                "qty": int(getattr(intent, "qty", 0)),
+                "approved": decision.approved,
+                "reason_code": decision.reason_code,
+            })
+        except Exception as exc:
+            logger.debug("audit_risk_decision_failed", error=str(exc))
 
     def _emit_trace(self, stage: str, intent: Any, payload: dict[str, Any]) -> None:
         sampler = getattr(self, "_trace_sampler", None)
