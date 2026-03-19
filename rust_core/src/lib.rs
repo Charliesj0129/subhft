@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 
 mod alpha;
 mod alpha_flow; // New module
+mod backtest_kernels;
 mod alpha_markov; // New module
 mod alpha_meta; // Meta Alpha module
 mod alpha_ofi;
@@ -100,5 +101,8 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<gateway_fused::RustGatewayFusedCheck>()?;
     m.add_class::<normalizer_lob_fused::RustNormalizerLobFused>()?;
     m.add_class::<normalizer_feature_fused::RustNormalizerFeatureFusedV1>()?;
+    // Backtest kernels
+    m.add_function(wrap_pyfunction!(backtest_kernels::signals_to_positions, m)?)?;
+    m.add_function(wrap_pyfunction!(backtest_kernels::apply_latency_to_positions, m)?)?;
     Ok(())
 }
