@@ -1,7 +1,11 @@
 """Tests for WU-15: FaultInjector."""
+
 from __future__ import annotations
+
 import os
+
 import pytest
+
 from hft_platform.testing.fault_injector import FaultInjector
 
 
@@ -9,8 +13,12 @@ from hft_platform.testing.fault_injector import FaultInjector
 def _reset_singleton():
     FaultInjector.reset()
     env_keys = [
-        "HFT_MODE", "HFT_FAULT_QUEUE_DROP_PCT", "HFT_FAULT_LATENCY_MS",
-        "HFT_FAULT_BROKER_ERROR_PCT", "HFT_FAULT_FEED_GAP_S", "HFT_FAULT_SEED",
+        "HFT_MODE",
+        "HFT_FAULT_QUEUE_DROP_PCT",
+        "HFT_FAULT_LATENCY_MS",
+        "HFT_FAULT_BROKER_ERROR_PCT",
+        "HFT_FAULT_FEED_GAP_S",
+        "HFT_FAULT_SEED",
     ]
     saved = {k: os.environ.get(k) for k in env_keys}
     for k in env_keys:
@@ -102,6 +110,7 @@ class TestLatencyInjection:
     @pytest.mark.asyncio
     async def test_nonzero_latency_sleeps(self) -> None:
         import time
+
         os.environ["HFT_MODE"] = "sim"
         os.environ["HFT_FAULT_LATENCY_MS"] = "50"
         fi = FaultInjector()
@@ -120,6 +129,7 @@ class TestFeedGap:
     @pytest.mark.asyncio
     async def test_nonzero_gap_sleeps(self) -> None:
         import time
+
         os.environ["HFT_MODE"] = "sim"
         os.environ["HFT_FAULT_FEED_GAP_S"] = "0.05"
         fi = FaultInjector()
