@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import os
+from dataclasses import replace
 from typing import Any
+
+import structlog
 
 from hft_platform.alpha._promotion_helpers import _to_float
 from hft_platform.alpha._promotion_types import PromotionConfig
 
+_log = structlog.get_logger(__name__)
+
 
 def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tuple[bool, dict[str, Any]]:
+    # Allow env var override for min_sharpe_oos threshold
+    env_sharpe = os.getenv("HFT_GATE_D_MIN_SHARPE_OOS")
+    if env_sharpe is not None:
+        try:
+            override_val = float(env_sharpe)
+            _log.info("gate_d_sharpe_override", env_value=override_val, original=config.min_sharpe_oos)
+            config = replace(config, min_sharpe_oos=override_val)
+        except ValueError:
+            _log.warning("gate_d_sharpe_override_invalid", env_value=env_sharpe)
+
     sharpe = _to_float(scorecard.get("sharpe_oos"))
     max_dd = _to_float(scorecard.get("max_drawdown"))
     turnover = _to_float(scorecard.get("turnover"))
@@ -78,6 +94,18 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
                 "Re-run backtest with the current feature set before promoting to live."
             ),
         }
+
+    # Diagnostic: adjusted Sharpe assuming 2x latency (non-blocking)
+    adjusted_sharpe: float | None = None
+    if sharpe is not None:
+        # Conservative heuristic: 2x latency degrades Sharpe by ~30%
+        adjusted_sharpe = sharpe * 0.7
+    checks["adjusted_sharpe_2x_latency"] = {
+        "value": adjusted_sharpe,
+        "threshold": None,
+        "pass": True,  # Always passes (diagnostic only)
+        "detail": "diagnostic: Sharpe under 2x latency assumption",
+    }
 
     passed = all(bool(v["pass"]) for v in checks.values())
     return passed, checks
