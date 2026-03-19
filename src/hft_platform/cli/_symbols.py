@@ -12,48 +12,21 @@ from ._utils import _print_issues
 def _resolve_symbols_shioaji(args: argparse.Namespace) -> None:
     """Resolve TSE/OTC exchanges via Shioaji broker."""
 
-    try:
-        import shioaji as sj
-    except ImportError:
-        print("Error: shioaji not installed. pip install shioaji")
-        sys.exit(1)
-
-    api_key = os.environ.get("SHIOAJI_API_KEY")
-    secret_key = os.environ.get("SHIOAJI_SECRET_KEY")
-
-    if not api_key or not secret_key:
-        print("Error: SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY env vars required.")
-        sys.exit(1)
-
-    print("Initializing Shioaji (Simulation mode)...")
-    api = sj.Shioaji(simulation=True)
-    try:
-        api.login(api_key=api_key, secret_key=secret_key, contracts_timeout=60000)
-    except Exception as e:
-        print(f"Login failed: {e}")
-        sys.exit(1)
+    from hft_platform.feed_adapter.contract_fetcher import resolve_symbol_exchanges
 
     symbols = args.symbols
     if not symbols:
         print("No symbols provided via args, please provide list.")
         sys.exit(1)
 
-    print("Building contract map...")
-    code_map: dict[str, str] = {}
     try:
-        for c in api.Contracts.Stocks.TSE:
-            code_map[c.code] = "TSE"
-        for c in api.Contracts.Stocks.OTC:
-            code_map[c.code] = "OTC"
-    except Exception as e:
-        print(f"Contract fetch warning: {e}")
+        result = resolve_symbol_exchanges(symbols)
+    except RuntimeError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
-    result = []
     for code in symbols:
-        exch = code_map.get(code)
-        if exch:
-            result.append({"code": code, "exchange": exch})
-        else:
+        if not any(r["code"] == code for r in result):
             print(f"Warning: {code} not found in TSE/OTC contracts.")
 
     output_data = {"symbols": result}
