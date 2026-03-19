@@ -81,13 +81,9 @@ class TestDiscoverGateDCandidates:
     def test_top_n_limit(self, tmp_path: Path) -> None:
         exp_dir = None
         for i in range(5):
-            exp_dir = _setup_experiment(
-                tmp_path, f"alpha_{i}", sharpe_oos=2.0 + i * 0.1
-            )
+            exp_dir = _setup_experiment(tmp_path, f"alpha_{i}", sharpe_oos=2.0 + i * 0.1)
         assert exp_dir is not None
-        candidates = discover_gate_d_candidates(
-            experiments_dir=str(exp_dir), top_n=3
-        )
+        candidates = discover_gate_d_candidates(experiments_dir=str(exp_dir), top_n=3)
         assert len(candidates) <= 3
 
 

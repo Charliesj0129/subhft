@@ -146,7 +146,8 @@ class CompositeAlphaMM(BaseStrategy):
 
         # Feature engine gate
         self._enabled_flag: bool = os.getenv(
-            "HFT_FEATURE_ENGINE_ENABLED", "0",
+            "HFT_FEATURE_ENGINE_ENABLED",
+            "0",
         ).lower() in {"1", "true", "yes", "on"}
 
         # LOB cache: symbol -> (bids_array, asks_array)
@@ -168,10 +169,7 @@ class CompositeAlphaMM(BaseStrategy):
             assert feature_id_to_index(_fs, "best_bid") == _IDX_BEST_BID
             assert feature_id_to_index(_fs, "best_ask") == _IDX_BEST_ASK
             assert feature_id_to_index(_fs, "ofi_l1_ema8") == _IDX_OFI_L1_EMA8
-            assert (
-                feature_id_to_index(_fs, "depth_imbalance_ema8_ppm")
-                == _IDX_DEPTH_IMBALANCE_EMA8_PPM
-            )
+            assert feature_id_to_index(_fs, "depth_imbalance_ema8_ppm") == _IDX_DEPTH_IMBALANCE_EMA8_PPM
         except ImportError:
             pass
 
@@ -233,11 +231,7 @@ class CompositeAlphaMM(BaseStrategy):
         slope_diff = slope_ask - slope_bid
 
         # --- Composite signal ---
-        raw_signal = (
-            self._w_ofi * ofi_norm
-            + self._w_depth * depth_norm
-            + self._w_slope * slope_diff
-        )
+        raw_signal = self._w_ofi * ofi_norm + self._w_depth * depth_norm + self._w_slope * slope_diff
 
         # Online normalization via EMA
         alpha = self._ema_alpha
