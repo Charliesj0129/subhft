@@ -59,10 +59,10 @@ class PositionDiscrepancy:
 
 def _compute_backoff_delay(
     attempt: int,
-    base: float,
-    max_delay: float,
-    jitter: float,
-) -> float:
+    base: float,  # precision-ok: timing
+    max_delay: float,  # precision-ok: timing
+    jitter: float,  # precision-ok: timing
+) -> float:  # precision-ok: timing
     """Compute exponential backoff delay with jitter.
 
     ``attempt`` is 0-indexed (first failure = attempt 0).
