@@ -68,8 +68,13 @@ Environment variables for Fubon:
 
 ### Impact on Existing Code
 
-- `ShioajiClient` is **not modified** -- it is wrapped by
-  `ShioajiFacade` which delegates all calls.
+- `ShioajiClient` has been **fully decomposed** into subpackage
+  `feed_adapter/shioaji/` with `session_runtime.py`, `quote_runtime.py`,
+  `order_gateway.py`, `account_gateway.py`, and `contracts_runtime.py`.
+  The legacy `shioaji_client.py` remains for backward compatibility.
+- Fubon uses the same subpackage decomposition under `feed_adapter/fubon/`.
+- Both brokers register via `broker_registry.py` and conform to
+  `BrokerProtocol` from `feed_adapter/protocol.py`.
 - `Normalizer` remains broker-agnostic; each facade normalizes to
   canonical events before publishing to the ring buffer.
 - `OrderAdapter` receives `OrderCommand` regardless of broker; the
@@ -102,4 +107,8 @@ Environment variables for Fubon:
 
 - `docs/architecture/current-architecture.md` -- canonical architecture
 - `config/research/latency_profiles.yaml` -- per-broker latency models
-- `src/hft_platform/feed_adapter/shioaji_client.py` -- existing broker impl
+- `src/hft_platform/feed_adapter/shioaji/` -- Shioaji broker subpackage
+- `src/hft_platform/feed_adapter/fubon/` -- Fubon broker subpackage
+- `src/hft_platform/feed_adapter/broker_registry.py` -- broker registration
+- `src/hft_platform/feed_adapter/protocol.py` -- BrokerProtocol definition
+- `.agent/rules/26-multi-broker-governance.md` -- governance rules

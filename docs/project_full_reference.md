@@ -1,6 +1,6 @@
 # HFT Platform — Full Project Reference
 
-本文件是「全域索引版」說明，對齊 2026-03-01 代碼狀態。
+本文件是「全域索引版」說明，對齊 2026-03-19 代碼狀態。
 
 ## 1) 專案定位
 
@@ -41,8 +41,12 @@ Feed -> Normalize -> LOB -> EventBus -> Strategy -> Risk -> Order -> Broker
 - `services/bootstrap.py`：服務初始化與 queue 容量配置
 - `services/system.py`：系統生命週期協調
 
-### 3.2 Feed / Market Data
-- `feed_adapter/shioaji_client.py`：登入、訂閱、重連、quote watchdog
+### 3.2 Feed / Market Data (Multi-Broker)
+- `feed_adapter/broker_registry.py`：Broker 註冊與選擇（`HFT_BROKER` env var）
+- `feed_adapter/shioaji/`：Shioaji broker 子套件（session, quote, order, account, contracts）
+- `feed_adapter/fubon/`：Fubon broker 子套件（session, quote, order, account, contracts）
+- `feed_adapter/_base/`：共用 broker 基礎模組
+- `feed_adapter/protocol.py`：BrokerProtocol 定義
 - `feed_adapter/normalizer.py`：行情 payload 正規化
 - `feed_adapter/lob_engine.py`：LOB 更新與統計
 - `services/market_data.py`：市場資料流程主協調
@@ -70,6 +74,22 @@ Feed -> Normalize -> LOB -> EventBus -> Strategy -> Risk -> Order -> Broker
 
 ### 3.7 Alpha 治理
 - `alpha/validation.py`, `alpha/promotion.py`, `alpha/canary.py`, `alpha/experiments.py`, `alpha/pool.py`
+- 102+ alpha 實作位於 `research/alphas/`
+
+### 3.8 Monitor（Live Signal TUI）
+- `monitor/_engine.py`, `monitor/_renderer.py`, `monitor/_data_source.py`
+- `monitor/_tui.py`, `monitor/_ch_poller.py`, `monitor/_redis_poller.py`
+- `monitor/cli.py`：CLI 入口
+- 雙資料源架構：ClickHouse（歷史）+ Redis（即時）
+
+### 3.9 其他模組
+- `ipc/`：共享記憶體 SPSC ring buffer（ShmRingBuffer）
+- `portfolio/`：投資組合層級管理
+- `adaptive/`：自適應參數調整
+- `cross_symbol/`：跨標的分析
+- `broker/`：Broker 抽象與翻譯工具
+- `utils/`：共用工具函式
+- `scripts/`：延遲基準、運維腳本
 
 ## 4) 設定系統（`config/`）
 

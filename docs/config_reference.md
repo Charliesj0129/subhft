@@ -31,6 +31,7 @@
 ### 3.1 模式與入口
 - `HFT_MODE=sim|live|replay`
 - `HFT_ENV=dev|staging|prod`
+- `HFT_BROKER=shioaji|fubon`（預設 `shioaji`，選擇 broker 後端）
 - `HFT_SYMBOLS=2330,2317`
 - `SYMBOLS_CONFIG=config/symbols.yaml`
 - `HFT_PROM_PORT=9090`
@@ -44,6 +45,11 @@
 - `SHIOAJI_CA_PATH` / `CA_CERT_PATH`
 - `SHIOAJI_CA_PASSWORD` / `CA_PASSWORD`
 - `SHIOAJI_ACTIVATE_CA=1` 或 `HFT_ACTIVATE_CA=1`
+
+### 3.2a Fubon / 帳密
+- `HFT_FUBON_CERT_PATH`（API 憑證檔路徑）
+- `HFT_FUBON_ACCOUNT`（交易帳號）
+- `HFT_FUBON_PASSWORD`（帳號密碼，建議使用 secret manager）
 
 ### 3.3 Quote / Feed 健康
 - `HFT_QUOTE_VERSION=auto|v0|v1`
@@ -108,6 +114,14 @@
 - `HFT_GATEWAY_LEADER_LEASE_PATH`
 - `HFT_GATEWAY_LEADER_LEASE_REFRESH_S`
 - `HFT_GATEWAY_METRICS`
+
+### 3.10 Monitor（Live Signal TUI）
+- `HFT_MONITOR_SOURCE=clickhouse|redis|hybrid`（Monitor 資料來源，預設 `clickhouse`）
+- `HFT_MONITOR_LIVE_ENABLED=0|1`（`1` = 啟用 Redis live publisher）
+- `HFT_MONITOR_REDIS_HOST`（Redis 主機，預設 `localhost`）
+- `HFT_MONITOR_REDIS_PORT`（Redis 埠號，預設 `6379`）
+- `HFT_MONITOR_REDIS_PASSWORD`（Redis 密碼）
+- `HFT_MONITOR_DATA_SOURCE=ch|shm|auto`（資料源層級，預設 `auto`）
 
 ## 4. symbols 工作流
 ```bash

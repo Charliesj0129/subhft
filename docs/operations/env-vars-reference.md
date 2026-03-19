@@ -30,6 +30,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_MD_RECORD_DIRECT` | `1` | `0` = 所有 BidAsk/Tick 經由 bus 錄製（非直接路徑） |
 | `HFT_RECORDER_DROP_ON_FULL` | `1` | `0` = recorder queue 滿時等待（背壓）；`1` = 丟棄 |
 | `HFT_BUS_BATCH_SIZE` | `0` | >1 時使用 batch consumer，減少事件迴圈喚醒次數 |
+| `HFT_BROKER` | `shioaji` | Broker 後端選擇：`shioaji` / `fubon` |
 | `SYMBOLS_CONFIG` | `config/symbols.yaml` | 交易標的設定檔路徑 |
 
 ---
@@ -210,6 +211,30 @@ Base YAML (config/base/main.yaml)
 | `HFT_ALPHA_AUDIT_ENABLED` | `0` | `1` = 啟用 Alpha 審計模式（release gate 必須設置） | `release-first-ops-gate` 前必須設為 `1` |
 
 **Runbook 參考**: [Section 8 — 時間偏移](../runbooks.md#8-時間偏移--未來時間資料), [incident-diagnostics](../runbooks/incident-diagnostics.md)
+
+---
+
+## 10. Broker 選擇與 Fubon 帳密
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_BROKER` | `shioaji` | Broker 後端：`shioaji` / `fubon` | 切換 broker 需重啟 |
+| `HFT_FUBON_CERT_PATH` | — | Fubon API 憑證檔路徑 | 使用 Fubon 時必填 |
+| `HFT_FUBON_ACCOUNT` | — | Fubon 交易帳號 | 使用 Fubon 時必填 |
+| `HFT_FUBON_PASSWORD` | — | Fubon 帳號密碼 | 使用 secret manager |
+
+---
+
+## 11. Monitor（Live Signal TUI）
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_MONITOR_SOURCE` | `clickhouse` | Monitor 資料來源：`clickhouse` / `redis` / `hybrid` | hybrid 模式結合即時與歷史 |
+| `HFT_MONITOR_LIVE_ENABLED` | `0` | `1` = 啟用 Redis live publisher（在 MarketDataService 中） | 需 Redis 可用 |
+| `HFT_MONITOR_REDIS_HOST` | `localhost` | Monitor Redis 主機 | — |
+| `HFT_MONITOR_REDIS_PORT` | `6379` | Monitor Redis 埠號 | — |
+| `HFT_MONITOR_REDIS_PASSWORD` | — | Monitor Redis 密碼 | 使用 secret manager |
+| `HFT_MONITOR_DATA_SOURCE` | `auto` | 資料源層級：`ch` / `shm` / `auto` | `auto` 自動偵測 SHM 可用性 |
 
 ---
 
