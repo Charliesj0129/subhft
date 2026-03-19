@@ -216,6 +216,17 @@ class RiskEngine:
         with open(self.config_path, "r") as f:
             self.config = yaml.safe_load(f)
 
+    def reload_config(self) -> None:
+        """Re-read config and update validators."""
+        try:
+            self.load_config()
+            self.on_config_reload(self.config)
+            if hasattr(self.storm_guard, "reload_thresholds"):
+                self.storm_guard.reload_thresholds(self.config)
+            logger.info("Risk config reloaded")
+        except Exception as exc:
+            logger.error("Risk config reload failed", error=str(exc))
+
     def on_config_reload(self, new_config: dict[str, Any]) -> None:
         """Callback invoked by ConfigWatcher when strategy_limits.yaml changes.
 
@@ -272,6 +283,11 @@ class RiskEngine:
                 self.intent_queue.task_done()
 
     def evaluate(self, intent: Any) -> RiskDecision:
+        price = getattr(intent, "price", None)
+        if isinstance(price, float):
+            self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
+            return RiskDecision(False, intent, "FLOAT_PRICE")
+
         if self._fast_gate is not None:
             try:
                 if int(getattr(intent, "intent_type", IntentType.NEW)) != int(IntentType.CANCEL):

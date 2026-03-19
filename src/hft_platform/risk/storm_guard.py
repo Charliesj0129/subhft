@@ -54,6 +54,17 @@ class StormGuard:
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._on_halt_callback = on_halt_callback
 
+    def reload_thresholds(self, config: dict) -> None:
+        """Update thresholds from new config."""
+        risk_cfg = config.get("risk", config.get("global_defaults", {}))
+        for key in ("warm_drawdown_bps", "storm_drawdown_bps", "halt_drawdown_bps", "latency_warm_us", "latency_storm_us"):
+            if key in risk_cfg:
+                setattr(self.thresholds, key, int(risk_cfg[key]))
+        if "feed_gap_halt_s" in risk_cfg:
+            self.thresholds.feed_gap_halt_s = float(risk_cfg["feed_gap_halt_s"])
+        self._apply_env_overrides()
+        logger.info("StormGuard thresholds reloaded")
+
     def _apply_env_overrides(self) -> None:
         feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
         if feed_gap_override:
