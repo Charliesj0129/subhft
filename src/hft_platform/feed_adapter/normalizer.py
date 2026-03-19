@@ -1,7 +1,6 @@
 import importlib
 import os
 import re
-import sys
 from typing import Any, Dict, Iterable, Optional, cast
 
 from structlog import get_logger
@@ -19,9 +18,7 @@ logger = get_logger("feed_adapter.normalizer")
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
 _RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
-_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "tuple").lower()
-if "pytest" in sys.modules:
-    _EVENT_MODE = "event"
+_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "tuple").lower()  # "tuple" = production fast path, "event" = object mode
 _RETURN_TUPLE = _EVENT_MODE in {"tuple", "raw"}
 _RUST_STATS_TUPLE = os.getenv("HFT_RUST_STATS_TUPLE", "1").lower() not in {
     "0",
@@ -66,7 +63,7 @@ _FUSED_ENABLED = os.environ.get("HFT_FUSED_NORMALIZER", "0") == "1"
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except ImportError:
         _rust_core = importlib.import_module("rust_core")
 
     _RUST_SCALE_BOOK = _rust_core.scale_book
@@ -102,7 +99,8 @@ if _FUSED_ENABLED and _RUST_SCALE_BOOK is not None:  # _rust_core loaded success
     try:
         _RustNormalizerLobFused = getattr(_rust_core, "RustNormalizerLobFused", None)
         _HAS_FUSED = _RustNormalizerLobFused is not None
-    except Exception:
+    except Exception as exc:
+        logger.debug("fused_normalizer_init_failed", error=str(exc))
         _HAS_FUSED = False
 
 
@@ -166,8 +164,8 @@ class SymbolMetadata:
                         self.tags_by_symbol[code] = normalized
                         for tag in normalized:
                             self.symbols_by_tag.setdefault(tag, set()).add(code)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("symbol_metadata_load_failed", config_path=self.config_path, error=str(exc))
 
     def reload(self) -> None:
         self._load()
@@ -323,7 +321,8 @@ class MarketDataNormalizer:
         if _HAS_FUSED and _RustNormalizerLobFused is not None:
             try:
                 self._fused = _RustNormalizerLobFused()
-            except Exception:
+            except Exception as exc:
+                logger.debug("fused_instance_init_failed", error=str(exc))
                 self._fused = None
         self._fixed5_scratch_enabled = False
         self._fixed5_bid_prices_np = None
@@ -339,7 +338,8 @@ class MarketDataNormalizer:
                 self._fixed5_ask_prices_np = np.empty(5, dtype=np.float64)
                 self._fixed5_ask_vols_np = np.empty(5, dtype=np.int64)
                 self._fixed5_scratch_enabled = True
-            except Exception:
+            except Exception as exc:
+                logger.debug("fixed5_scratch_init_failed", error=str(exc))
                 self._fixed5_scratch_enabled = False
 
     def _next_seq(self) -> int:
@@ -352,8 +352,8 @@ class MarketDataNormalizer:
                 value = _RUST_GET_FIELD(payload, keys)
                 if value is not None:
                     return value
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("rust_get_field_fallback", error=str(exc))
 
         if isinstance(payload, dict):
             get = payload.get
@@ -535,8 +535,8 @@ class MarketDataNormalizer:
                                 is_simtrade=bool(is_simtrade),
                                 is_odd_lot=bool(is_odd_lot),
                             )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("rust_normalize_tick_fallback", symbol=symbol, error=str(exc))
                 price = int(float(close_val) * scale)
             else:
                 price = 0
@@ -728,8 +728,8 @@ class MarketDataNormalizer:
                             stats=compat_stats,
                             fused_stats=fused_stats,
                         )
-                except Exception:
-                    pass  # Fall through to standard path
+                except Exception as exc:
+                    logger.debug("fused_bidask_fallback", symbol=symbol, error=str(exc))
 
             # Convert to numpy
             # We need to scale prices. Using numpy vectorization for scaling is faster.
@@ -818,7 +818,8 @@ class MarketDataNormalizer:
                             float(spread),
                             float(imbalance),
                         )
-                except Exception:
+                except Exception as exc:
+                    logger.debug("rust_fallback", line=821, error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -835,7 +836,8 @@ class MarketDataNormalizer:
             ):
                 try:
                     bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
-                except Exception:
+                except Exception as exc:
+                    logger.debug("rust_fallback", line=839, error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -909,7 +911,8 @@ class MarketDataNormalizer:
                             float(spread),
                             float(imbalance),
                         )
-                except Exception:
+                except Exception as exc:
+                    logger.debug("rust_fallback", line=914, error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -945,7 +948,8 @@ class MarketDataNormalizer:
                             float(spread),
                             float(imbalance),
                         )
-                except Exception:
+                except Exception as exc:
+                    logger.debug("rust_fallback", line=951, error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -955,14 +959,16 @@ class MarketDataNormalizer:
             if stats is None and use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
                 try:
                     bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
-                except Exception:
+                except Exception as exc:
+                    logger.debug("rust_fallback", line=962, error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
             if bids_final is None and use_rust and _RUST_SCALE_BOOK_PAIR:
                 try:
                     bids_final, asks_final = _RUST_SCALE_BOOK_PAIR(bp, bv, ap, av, scale)
-                except Exception:
+                except Exception as exc:
+                    logger.debug("rust_fallback", line=970, error=str(exc))
                     bids_final = None
                     asks_final = None
 
@@ -970,7 +976,8 @@ class MarketDataNormalizer:
                 if use_rust and _RUST_SCALE_BOOK_SEQ:
                     try:
                         bids_final = _RUST_SCALE_BOOK_SEQ(bp, bv, scale)
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("rust_fallback", line=979, error=str(exc))
                         bids_final = None
                 if bids_final is None:
                     bids_final = [
@@ -981,7 +988,8 @@ class MarketDataNormalizer:
                 if use_rust and _RUST_SCALE_BOOK_SEQ:
                     try:
                         asks_final = _RUST_SCALE_BOOK_SEQ(ap, av, scale)
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("rust_fallback", line=991, error=str(exc))
                         asks_final = None
                 if asks_final is None:
                     asks_final = [
