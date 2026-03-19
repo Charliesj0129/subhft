@@ -456,8 +456,13 @@ class SystemBootstrapper:
         feature_rollout_assignment = None
 
         if os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() not in {"1", "true", "yes", "on"}:
-            return (feature_engine, feature_profile_registry, feature_profile,
-                    feature_rollout_controller, feature_rollout_assignment)
+            return (
+                feature_engine,
+                feature_profile_registry,
+                feature_profile,
+                feature_rollout_controller,
+                feature_rollout_assignment,
+            )
 
         try:
             feature_profile_registry = load_feature_profile_registry()
@@ -531,7 +536,7 @@ class SystemBootstrapper:
                     except Exception as exc:
                         logger.warning("feature_rollout_metrics_emit_failed", error=str(exc))
         except Exception as exc:
-            feature_set_id = getattr(locals().get('feature_engine'), 'feature_set_id', lambda: 'unknown')()
+            feature_set_id = getattr(locals().get("feature_engine"), "feature_set_id", lambda: "unknown")()
             logger.warning("feature_engine_init_failed", error=str(exc), feature_set_id=feature_set_id)
             feature_engine = None
             feature_profile = None
@@ -539,8 +544,13 @@ class SystemBootstrapper:
             feature_rollout_controller = None
             feature_rollout_assignment = None
 
-        return (feature_engine, feature_profile_registry, feature_profile,
-                feature_rollout_controller, feature_rollout_assignment)
+        return (
+            feature_engine,
+            feature_profile_registry,
+            feature_profile,
+            feature_rollout_controller,
+            feature_rollout_assignment,
+        )
 
     def build(self) -> ServiceRegistry:
         role = self._get_runtime_role()
