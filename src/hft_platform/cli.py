@@ -1330,6 +1330,70 @@ def cmd_alpha_experiments_best(args: argparse.Namespace):
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def cmd_alpha_gate_e_batch(args: argparse.Namespace) -> None:
+    """Discover Gate-D-passed, Gate-E-pending alphas and run paper-trade campaigns."""
+    try:
+        from hft_platform.alpha.gate_e_batch import (
+            GateEBatchConfig,
+            GateEBatchRunner,
+            make_paper_trade_campaign_runner,
+        )
+    except Exception as exc:
+        print(f"Failed to import gate_e_batch: {exc}")
+        sys.exit(1)
+
+    project_root = Path(getattr(args, "project_root", ".")).resolve()
+    dry_run: bool = bool(getattr(args, "dry_run", False))
+    max_concurrent: int = int(getattr(args, "max_concurrent", 4))
+    session_duration: int = int(getattr(args, "session_duration_minutes", 240))
+    max_sessions: int = int(getattr(args, "max_sessions", 10))
+    out_path: str | None = getattr(args, "out", None)
+    no_runner: bool = bool(getattr(args, "no_runner", False))
+
+    if dry_run or no_runner:
+        campaign_runner = None
+    else:
+        try:
+            campaign_runner = make_paper_trade_campaign_runner(
+                project_root=project_root,
+                session_duration_minutes=session_duration,
+                max_sessions=max_sessions,
+            )
+        except Exception as exc:
+            print(f"Failed to build campaign runner: {exc}")
+            sys.exit(1)
+
+    config = GateEBatchConfig(
+        project_root=project_root,
+        dry_run=dry_run,
+        max_concurrent=max_concurrent,
+    )
+    runner = GateEBatchRunner(campaign_runner=campaign_runner)
+    report = runner.run(config)
+
+    payload = {
+        "candidates": list(report.candidates),
+        "completed": list(report.completed),
+        "failed": list(report.failed),
+        "skipped": list(report.skipped),
+        "summary": {
+            "total_candidates": len(report.candidates),
+            "completed": len(report.completed),
+            "failed": len(report.failed),
+            "skipped": len(report.skipped),
+        },
+    }
+
+    if out_path:
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+    if report.failed:
+        sys.exit(1)
+
+
 def _resolve_symbols_shioaji(args: argparse.Namespace) -> None:
     """Resolve TSE/OTC exchanges via Shioaji broker."""
     import yaml
@@ -2090,6 +2154,46 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_exp_best.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
     alpha_exp_best.add_argument("--out", help="Optional JSON output path")
     alpha_exp_best.set_defaults(func=cmd_alpha_experiments_best)
+
+    alpha_gate_e_batch = alpha_sub.add_parser(
+        "gate-e-batch",
+        help="Discover Gate-D-passed alphas and dispatch Gate E paper-trade campaigns",
+    )
+    alpha_gate_e_batch.add_argument(
+        "--project-root",
+        default=".",
+        help="Repository root (default: current directory)",
+    )
+    alpha_gate_e_batch.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List candidates without running campaigns",
+    )
+    alpha_gate_e_batch.add_argument(
+        "--no-runner",
+        action="store_true",
+        help="Skip campaign execution (skip all candidates even in non-dry-run mode)",
+    )
+    alpha_gate_e_batch.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=4,
+        help="Max concurrent campaigns (reserved for future parallel execution)",
+    )
+    alpha_gate_e_batch.add_argument(
+        "--session-duration-minutes",
+        type=int,
+        default=240,
+        help="Duration of each paper-trade session in minutes",
+    )
+    alpha_gate_e_batch.add_argument(
+        "--max-sessions",
+        type=int,
+        default=10,
+        help="Maximum number of sessions per campaign",
+    )
+    alpha_gate_e_batch.add_argument("--out", help="Optional JSON output path for batch report")
+    alpha_gate_e_batch.set_defaults(func=cmd_alpha_gate_e_batch)
 
     return parser
 
