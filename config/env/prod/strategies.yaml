@@ -1,0 +1,31 @@
+# Production Strategy Configuration
+# Scope: queue_imbalance alpha only — TXFD6 (Mini-TAIEX futures)
+# Promotion reference: config/strategy_promotions/20260301/queue_imbalance.yaml
+
+strategies:
+  - id: queue_imbalance
+    enabled: true
+    module: hft_platform.alpha.queue_imbalance
+    class: QueueImbalanceAlpha
+    weight: 0.1
+    symbols:
+      - "TXFD6"
+    params:
+      subscribe_symbols:
+        - "TXFD6"
+    promotion:
+      config_path: config/strategy_promotions/20260301/queue_imbalance.yaml
+      config_version: v1
+      source_commit: c7b6c37
+    guardrails:
+      max_live_slippage_bps: 3.0
+      max_live_drawdown_contribution: 0.02
+      max_execution_error_rate: 0.01
+    rollback:
+      trigger:
+        live_slippage_bps_gt: 3.0
+        live_drawdown_contribution_gt: 0.02
+        execution_error_rate_gt: 0.01
+      action:
+        set_weight_to_zero: true
+        open_incident: true

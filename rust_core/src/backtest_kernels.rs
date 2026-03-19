@@ -105,6 +105,12 @@ pub fn apply_latency_to_positions(desired: Vec<f64>, submit_steps: i32) -> Vec<f
         let due = i + steps;
         pending_due = if due < n { due } else { n - 1 };
         pending_target = target;
+
+        // Apply immediately if no latency (due == current step)
+        if i >= pending_due {
+            executed[i] = pending_target;
+            pending_due = usize::MAX;
+        }
     }
 
     executed
