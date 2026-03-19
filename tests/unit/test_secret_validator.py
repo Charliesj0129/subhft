@@ -236,9 +236,7 @@ class TestValidateSecretsForMode:
     def test_require_broker_false_skips_broker_check(self) -> None:
         env = {"HFT_BROKER": "shioaji"}
         with patch.dict(os.environ, env, clear=True):
-            errors = validate_secrets_for_mode(
-                mode="live", require_broker=False, require_infra=False
-            )
+            errors = validate_secrets_for_mode(mode="live", require_broker=False, require_infra=False)
         assert errors == []
 
 

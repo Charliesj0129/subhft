@@ -1,7 +1,11 @@
 """Tests for kill switch detection in supervisor loop (WU-07)."""
-import json, os
+
+import json
+import os
 from unittest.mock import MagicMock
+
 from hft_platform.risk.storm_guard import StormGuardState
+
 
 class TestKillSwitchSupervisor:
     def test_kill_switch_file_triggers_halt(self, tmp_path, monkeypatch):

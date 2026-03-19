@@ -441,15 +441,17 @@ class RiskEngine:
         """Non-blocking audit log of risk evaluation result."""
         try:
             audit = get_audit_writer()
-            audit.log_risk_decision({
-                "strategy_id": str(getattr(intent, "strategy_id", "")),
-                "symbol": str(getattr(intent, "symbol", "")),
-                "intent_type": int(getattr(intent, "intent_type", 0)),
-                "price": int(getattr(intent, "price", 0)),
-                "qty": int(getattr(intent, "qty", 0)),
-                "approved": decision.approved,
-                "reason_code": decision.reason_code,
-            })
+            audit.log_risk_decision(
+                {
+                    "strategy_id": str(getattr(intent, "strategy_id", "")),
+                    "symbol": str(getattr(intent, "symbol", "")),
+                    "intent_type": int(getattr(intent, "intent_type", 0)),
+                    "price": int(getattr(intent, "price", 0)),
+                    "qty": int(getattr(intent, "qty", 0)),
+                    "approved": decision.approved,
+                    "reason_code": decision.reason_code,
+                }
+            )
         except Exception as exc:
             logger.debug("audit_risk_decision_failed", error=str(exc))
 

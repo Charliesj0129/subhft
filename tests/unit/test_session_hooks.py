@@ -92,6 +92,7 @@ class TestSessionPhaseDetection:
 
         try:
             from zoneinfo import ZoneInfo
+
             tz = ZoneInfo("Asia/Taipei")
         except Exception:
             tz = dt.timezone(dt.timedelta(hours=8))
@@ -180,11 +181,13 @@ class TestSessionHookManagerRunLoop:
         pre_hook = MagicMock()
         mgr.register_pre_market("test_pre", pre_hook)
 
-        phases = iter([
-            SessionPhase.PRE_MARKET,   # initial detection
-            SessionPhase.PRE_MARKET,   # first poll: no change
-            SessionPhase.MARKET_OPEN,  # second poll: transition!
-        ])
+        phases = iter(
+            [
+                SessionPhase.PRE_MARKET,  # initial detection
+                SessionPhase.PRE_MARKET,  # first poll: no change
+                SessionPhase.MARKET_OPEN,  # second poll: transition!
+            ]
+        )
 
         def mock_detect(self_arg):
             try:
@@ -207,10 +210,12 @@ class TestSessionHookManagerRunLoop:
         post_hook = MagicMock()
         mgr.register_post_market("test_post", post_hook)
 
-        phases = iter([
-            SessionPhase.MARKET_OPEN,   # initial
-            SessionPhase.POST_MARKET,   # transition
-        ])
+        phases = iter(
+            [
+                SessionPhase.MARKET_OPEN,  # initial
+                SessionPhase.POST_MARKET,  # transition
+            ]
+        )
 
         def mock_detect(self_arg):
             try:

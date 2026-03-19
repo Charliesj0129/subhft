@@ -1,4 +1,5 @@
 """Unit tests for ShmDataSource.try_reconnect() with exponential backoff."""
+
 from __future__ import annotations
 
 import time
@@ -275,9 +276,7 @@ class TestBackoffBehavior:
             src.try_reconnect()
         backoff = src.remaining_backoff_seconds()
         # retry_count=1 → backoff = 1.0 * 2^0 = 1.0s
-        assert 0.9 <= backoff <= _SHM_BACKOFF_MIN_S + 0.1, (
-            f"Expected ~1s backoff, got {backoff:.3f}s"
-        )
+        assert 0.9 <= backoff <= _SHM_BACKOFF_MIN_S + 0.1, f"Expected ~1s backoff, got {backoff:.3f}s"
 
     def test_second_failure_sets_2s_backoff(self) -> None:
         src = self._src(retry_count=1)  # first failure already counted
@@ -286,18 +285,14 @@ class TestBackoffBehavior:
         # retry_count becomes 2 → backoff = 1.0 * 2^1 = 2.0s
         backoff = src.remaining_backoff_seconds()
         expected = _SHM_BACKOFF_MIN_S * (_SHM_BACKOFF_FACTOR**1)
-        assert abs(backoff - expected) < 0.1, (
-            f"Expected ~{expected}s backoff, got {backoff:.3f}s"
-        )
+        assert abs(backoff - expected) < 0.1, f"Expected ~{expected}s backoff, got {backoff:.3f}s"
 
     def test_backoff_capped_at_max(self) -> None:
         src = self._src(retry_count=100)  # large count → would overflow without cap
         with patch(_READER_CLS, side_effect=OSError("fail")):
             src.try_reconnect()
         backoff = src.remaining_backoff_seconds()
-        assert backoff <= _SHM_BACKOFF_MAX_S + 0.1, (
-            f"Backoff {backoff:.1f}s exceeds max {_SHM_BACKOFF_MAX_S}s"
-        )
+        assert backoff <= _SHM_BACKOFF_MAX_S + 0.1, f"Backoff {backoff:.1f}s exceeds max {_SHM_BACKOFF_MAX_S}s"
 
     def test_try_reconnect_skipped_during_backoff(self) -> None:
         src = self._src()
@@ -328,7 +323,7 @@ class TestBackoffBehavior:
         # Each backoff must be >= previous (monotonically non-decreasing)
         for i in range(1, len(backoffs)):
             assert backoffs[i] >= backoffs[i - 1] - 0.05, (
-                f"Backoff[{i}]={backoffs[i]:.3f}s < Backoff[{i-1}]={backoffs[i-1]:.3f}s"
+                f"Backoff[{i}]={backoffs[i]:.3f}s < Backoff[{i - 1}]={backoffs[i - 1]:.3f}s"
             )
 
 

@@ -77,10 +77,12 @@ class TestHaltFlattener:
 
     @pytest.mark.asyncio
     async def test_on_halt_skips_flat_positions(self) -> None:
-        store = FakePositionStore({
-            "k1": FakePosition("2330", "s1", 0),
-            "k2": FakePosition("2317", "s1", 0),
-        })
+        store = FakePositionStore(
+            {
+                "k1": FakePosition("2330", "s1", 0),
+                "k2": FakePosition("2317", "s1", 0),
+            }
+        )
         submit = AsyncMock()
         flattener = HaltFlattener(store, submit, enabled=True)
         result = await flattener.on_halt()
@@ -93,9 +95,11 @@ class TestHaltFlattener:
 
     @pytest.mark.asyncio
     async def test_on_halt_long_emits_sell(self) -> None:
-        store = FakePositionStore({
-            "k1": FakePosition("2330", "s1", 5),
-        })
+        store = FakePositionStore(
+            {
+                "k1": FakePosition("2330", "s1", 5),
+            }
+        )
         submit = AsyncMock()
         flattener = HaltFlattener(store, submit, enabled=True)
         result = await flattener.on_halt()
@@ -114,9 +118,11 @@ class TestHaltFlattener:
 
     @pytest.mark.asyncio
     async def test_on_halt_short_emits_buy(self) -> None:
-        store = FakePositionStore({
-            "k1": FakePosition("2454", "s2", -3),
-        })
+        store = FakePositionStore(
+            {
+                "k1": FakePosition("2454", "s2", -3),
+            }
+        )
         submit = AsyncMock()
         flattener = HaltFlattener(store, submit, enabled=True)
         result = await flattener.on_halt()
@@ -132,11 +138,13 @@ class TestHaltFlattener:
 
     @pytest.mark.asyncio
     async def test_on_halt_multiple_positions(self) -> None:
-        store = FakePositionStore({
-            "k1": FakePosition("2330", "s1", 10),
-            "k2": FakePosition("2317", "s1", -5),
-            "k3": FakePosition("2454", "s2", 0),  # Flat, should skip
-        })
+        store = FakePositionStore(
+            {
+                "k1": FakePosition("2330", "s1", 10),
+                "k2": FakePosition("2317", "s1", -5),
+                "k3": FakePosition("2454", "s2", 0),  # Flat, should skip
+            }
+        )
         submit = AsyncMock()
         flattener = HaltFlattener(store, submit, enabled=True)
         result = await flattener.on_halt()
@@ -150,10 +158,12 @@ class TestHaltFlattener:
     @pytest.mark.asyncio
     async def test_on_halt_continues_on_submit_error(self) -> None:
         """If one submit fails, flattener should continue to next position."""
-        store = FakePositionStore({
-            "k1": FakePosition("2330", "s1", 10),
-            "k2": FakePosition("2317", "s1", 5),
-        })
+        store = FakePositionStore(
+            {
+                "k1": FakePosition("2330", "s1", 10),
+                "k2": FakePosition("2317", "s1", 5),
+            }
+        )
 
         call_count = 0
 
@@ -175,10 +185,12 @@ class TestHaltFlattener:
 
     @pytest.mark.asyncio
     async def test_intent_ids_are_unique(self) -> None:
-        store = FakePositionStore({
-            "k1": FakePosition("2330", "s1", 1),
-            "k2": FakePosition("2317", "s1", 1),
-        })
+        store = FakePositionStore(
+            {
+                "k1": FakePosition("2330", "s1", 1),
+                "k2": FakePosition("2317", "s1", 1),
+            }
+        )
         submitted: list = []
         submit = AsyncMock(side_effect=lambda i: submitted.append(i))
         flattener = HaltFlattener(store, submit, enabled=True)

@@ -18,9 +18,7 @@ async def test_reconciliation_metric_updated_with_discrepancy_count() -> None:
     """When broker and local positions differ, reconciliation_discrepancy_count is set to the discrepancy count."""
     mock_client = MagicMock()
     # Broker has 10 shares of 2330; local store is empty → 1 discrepancy
-    mock_client.get_positions.return_value = [
-        SimpleNamespace(code="2330", quantity=10, direction="Action.Buy")
-    ]
+    mock_client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=10, direction="Action.Buy")]
 
     mock_store = MagicMock()
     mock_store.positions = {}
@@ -41,9 +39,7 @@ async def test_reconciliation_metric_updated_with_discrepancy_count() -> None:
 async def test_reconciliation_metric_zero_when_no_discrepancies() -> None:
     """When broker and local positions match exactly, reconciliation_discrepancy_count is set to 0."""
     mock_client = MagicMock()
-    mock_client.get_positions.return_value = [
-        SimpleNamespace(code="2330", quantity=5, direction="Action.Buy")
-    ]
+    mock_client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=5, direction="Action.Buy")]
 
     local_pos = MockPosition(symbol="2330", net_qty=5)
     mock_store = MagicMock()

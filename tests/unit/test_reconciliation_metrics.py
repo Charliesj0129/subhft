@@ -1,11 +1,11 @@
 """WU-18: Reconciliation data structure tests."""
+
 from __future__ import annotations
 
 from hft_platform.execution.reconciliation import PositionDiscrepancy
 
 
 class TestPositionDiscrepancySeverity:
-
     def test_critical_on_sign_mismatch(self) -> None:
         d = PositionDiscrepancy(symbol="X", local_qty=10, broker_qty=-5, diff=15)
         assert d.is_critical is True

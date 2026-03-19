@@ -62,9 +62,7 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
-    def update(
-        self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0
-    ) -> StormGuardState:
+    def update(self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0) -> StormGuardState:
         """
         Evaluate inputs and transition state.
         Priority: HALT > STORM > WARM > NORMAL
@@ -155,11 +153,13 @@ class StormGuard:
         # Audit guardrail transition
         try:
             audit = get_audit_writer()
-            audit.log_guardrail_transition({
-                "old_state": old_state.name,
-                "new_state": new_state.name,
-                "reason": reason,
-            })
+            audit.log_guardrail_transition(
+                {
+                    "old_state": old_state.name,
+                    "new_state": new_state.name,
+                    "reason": reason,
+                }
+            )
         except Exception as exc:
             logger.debug("audit_guardrail_transition_failed", error=str(exc))
 
