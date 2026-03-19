@@ -1175,8 +1175,8 @@ class MarketDataService:
                             )
                             self._feature_update_metric_children[key] = child
                         child.inc()
-                except Exception as exc:
-                    logger.debug("feature_error_metric_failed", error=str(exc))
+                except Exception as _metric_exc:
+                    logger.debug("feature_error_metric_failed", error=str(_metric_exc))
             logger.warning("feature_engine_update_failed", reason=str(exc))
             return None
 

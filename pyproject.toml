@@ -102,7 +102,6 @@ omit = [
     "src/hft_platform/execution/gateway.py",
     "src/hft_platform/recorder/loader.py",
     "src/hft_platform/recorder/writer.py",
-    "src/hft_platform/services/market_data.py",
     "src/hft_platform/services/bootstrap.py",
 ]
 
@@ -146,7 +145,6 @@ known-first-party = ["hft_platform", "research"]
 "src/hft_platform/research/**/*.py" = ["E501", "E402", "F841", "E722"]
 "src/hft_platform/feed_adapter/shioaji_client.py" = ["E501"]
 "src/hft_platform/observability/metrics.py" = ["F401"]
-"src/hft_platform/services/market_data.py" = ["F821", "F841"]  # pre-existing: except blocks missing "as exc"
 "src/hft_platform/features/**/*.py" = ["E501"]
 "src/hft_platform/config/wizard.py" = ["E501"]
 "src/hft_platform/cli.py" = ["F841", "F401", "E501", "C901"]
