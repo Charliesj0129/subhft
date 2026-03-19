@@ -217,13 +217,31 @@ class RiskEngine:
             self.config = yaml.safe_load(f)
 
     def reload_config(self) -> None:
-        """Re-read config and update validators."""
+        """Re-read strategy_limits.yaml and update validators with new thresholds."""
         try:
+            old_config = self.config
             self.load_config()
-            self.on_config_reload(self.config)
+            new_config = self.config
+
+            # Log diff of key settings
+            old_defaults = old_config.get("global_defaults", {})
+            new_defaults = new_config.get("global_defaults", {})
+            changed: dict[str, dict[str, Any]] = {}
+            for key in set(old_defaults) | set(new_defaults):
+                if old_defaults.get(key) != new_defaults.get(key):
+                    changed[key] = {"old": old_defaults.get(key), "new": new_defaults.get(key)}
+
+            self.on_config_reload(new_config)
+
+            # Reload StormGuard thresholds
             if hasattr(self.storm_guard, "reload_thresholds"):
-                self.storm_guard.reload_thresholds(self.config)
-            logger.info("Risk config reloaded")
+                self.storm_guard.reload_thresholds(new_config)
+
+            logger.info(
+                "Risk config reloaded via SIGHUP",
+                changed_keys=list(changed.keys()),
+                changes=changed,
+            )
         except Exception as exc:
             logger.error("Risk config reload failed", error=str(exc))
 

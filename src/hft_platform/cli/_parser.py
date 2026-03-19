@@ -33,6 +33,8 @@ from ._feature import (
     cmd_feature_rollout_status,
     cmd_feature_validate,
 )
+from ._golive import cmd_golive_check
+from ._health import cmd_health_preflight
 from ._ops import (
     cmd_backtest,
     cmd_contracts_status,
@@ -264,8 +266,26 @@ def build_parser() -> argparse.ArgumentParser:
     risk_resume = risk_sub.add_parser("resume", help="Deactivate kill switch")
     risk_resume.set_defaults(func=cmd_risk_resume)
 
-    risk_status = risk_sub.add_parser("status", help="Check kill switch status")
-    risk_status.set_defaults(func=cmd_risk_status)
+    risk_status_cmd = risk_sub.add_parser("status", help="Check kill switch status")
+    risk_status_cmd.set_defaults(func=cmd_risk_status)
+
+    # ── Health Preflight ───────────────────────────────────────────────
+    health = sub.add_parser("health", help="Health check utilities")
+    health_sub = health.add_subparsers(dest="health_cmd")
+
+    health_preflight = health_sub.add_parser("preflight", help="Run pre-trading health checks")
+    health_preflight.add_argument("--timeout", type=float, default=5.0, help="HTTP check timeout seconds")
+    health_preflight.add_argument("--json", action="store_true", help="Output as JSON")
+    health_preflight.set_defaults(func=cmd_health_preflight)
+
+    # ── Go-Live Checklist ──────────────────────────────────────────────
+    golive = sub.add_parser("golive", help="Go-live checklist utilities")
+    golive_sub = golive.add_subparsers(dest="golive_cmd")
+
+    golive_check = golive_sub.add_parser("check", help="Run go-live checklist")
+    golive_check.add_argument("--skip", nargs="*", default=[], help="Checks to skip")
+    golive_check.add_argument("--json", action="store_true", help="Output as JSON")
+    golive_check.set_defaults(func=cmd_golive_check)
 
     alpha = sub.add_parser("alpha", help="Alpha research pipeline utilities")
     alpha_sub = alpha.add_subparsers(dest="alpha_cmd")

@@ -122,6 +122,7 @@ Base YAML (config/base/main.yaml)
 | 變數 | 預設值 | 用途 | 調整建議 |
 |---|---|---|---|
 | `HFT_WAL_POLL_INTERVAL_S` | `1.0` | WAL 目錄輪詢間隔（秒） | 降至 0.5s 加速追回堆積 |
+| `HFT_WAL_RETENTION_DAYS` | `7` | WAL 檔案自動清理天數 | 磁碟空間不足時縮短 |
 | `HFT_WAL_SIZE_WARNING_MB` | `100` | WAL 目錄大小告警閾值（MB） | 磁碟小時縮小至 50 |
 | `HFT_WAL_SIZE_CRITICAL_MB` | `500` | WAL 目錄大小緊急閾值（MB） | 磁碟小時縮小至 200 |
 | `HFT_WAL_LOADER_CONCURRENCY` | `4` | 並行 WAL 檔案處理數 | SSD 環境可增至 8 |
@@ -238,11 +239,20 @@ Base YAML (config/base/main.yaml)
 
 ---
 
+<<<<<<< HEAD
 ## 12. Deployment
 
 | Variable | Default | Description |
 |---|---|---|
 | `HFT_ENGINE_IMAGE` | `hft-engine:latest` | Docker image tag for HFT engine container |
+=======
+## 12. 部署
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_ENGINE_IMAGE` | — | Docker image for hft-engine（含 tag/SHA） | 部署時指定已知穩定版本 |
+| `HFT_AUTO_FLATTEN_DISABLED` | `0` | `1` = 禁用 HALT 自動平倉（手動介入模式） | 事故排查時暫時設為 `1` |
+>>>>>>> origin/main
 
 ---
 
