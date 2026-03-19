@@ -515,7 +515,7 @@ class SystemBootstrapper:
         feature_profile = None
         feature_rollout_controller = None
         feature_rollout_assignment = None
-        if os.getenv("HFT_FEATURE_ENGINE_ENABLED", "0").lower() in {"1", "true", "yes", "on"}:
+        if os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}:
             try:
                 feature_profile_registry = load_feature_profile_registry()
             except Exception:

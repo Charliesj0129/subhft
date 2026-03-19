@@ -112,7 +112,7 @@ class LobShapeStrategy(BaseStrategy):
         self._max_position: int = int(kwargs.get("max_position", _MAX_POSITION_DEFAULT))
         self._qty: int = int(kwargs.get("qty", _QTY_DEFAULT))
         self._n_levels: int = int(kwargs.get("n_levels", _LOB_DEPTH_LEVELS))
-        self._enabled_flag: bool = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+        self._enabled_flag: bool = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
         # Per-symbol LOB cache: populated by on_book_update, consumed by on_features.
         self._lob_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
