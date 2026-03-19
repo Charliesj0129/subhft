@@ -22,7 +22,7 @@ class EODReconciliationRunner:
 
     def __init__(self, order_adapter: Any, position_store: Any) -> None:
         self._eod_hour_utc = int(os.getenv("HFT_EOD_CLOSE_HOUR_UTC", "5"))
-        self._poll_interval_s = float(os.getenv("HFT_EOD_POLL_INTERVAL_S", "30"))
+        self._poll_interval_s = float(os.getenv("HFT_EOD_POLL_INTERVAL_S", "30"))  # precision-ok
         self._last_triggered_day: int = -1
         self._order_adapter = order_adapter
         self._position_store = position_store
