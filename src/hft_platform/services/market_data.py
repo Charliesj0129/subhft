@@ -218,6 +218,7 @@ class MarketDataService:
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+        self.feature_engine: FeatureEngine | None
         if feature_engine is not None:
             self.feature_engine = feature_engine
         elif feature_enabled:
