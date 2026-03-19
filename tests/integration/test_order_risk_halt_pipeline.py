@@ -30,6 +30,7 @@ from hft_platform.risk.engine import RiskEngine
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_risk_config(
     *,
     halt_threshold: int = -1_000_000,
@@ -121,7 +122,7 @@ class MockBroker:
         self.cancelled: list[Any] = []
 
     def place_order(self, **kwargs: Any) -> dict[str, Any]:
-        trade = {"order_id": f"B{len(self.placed)+1}", **kwargs}
+        trade = {"order_id": f"B{len(self.placed) + 1}", **kwargs}
         self.placed.append(trade)
         return trade
 
@@ -136,6 +137,7 @@ class MockBroker:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def risk_config_path() -> str:

@@ -1,4 +1,5 @@
 """Shadow Order Mode - logs orders without sending to broker."""
+
 import os
 
 from structlog import get_logger
@@ -43,9 +44,7 @@ class ShadowOrderSink:
             "side": str(intent.side.name if hasattr(intent.side, "name") else intent.side),
             "price": intent.price,
             "qty": intent.qty,
-            "intent_type": str(
-                intent.intent_type.name if hasattr(intent.intent_type, "name") else intent.intent_type
-            ),
+            "intent_type": str(intent.intent_type.name if hasattr(intent.intent_type, "name") else intent.intent_type),
             "intent_id": str(intent.intent_id),
             "shadow": True,
         }
