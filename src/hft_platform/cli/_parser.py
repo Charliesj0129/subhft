@@ -7,6 +7,7 @@ import os
 
 from ._alpha import (
     cmd_alpha_ab_compare,
+    cmd_alpha_batch_correlation,
     cmd_alpha_canary_auto_evaluate,
     cmd_alpha_canary_evaluate,
     cmd_alpha_canary_status,
@@ -14,8 +15,10 @@ from ._alpha import (
     cmd_alpha_experiments_compare,
     cmd_alpha_experiments_list,
     cmd_alpha_list,
+    cmd_alpha_paper_trade_batch,
     cmd_alpha_pool,
     cmd_alpha_promote,
+    cmd_alpha_promote_batch,
     cmd_alpha_rl_promote,
     cmd_alpha_scaffold,
     cmd_alpha_search,
@@ -602,6 +605,44 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_exp_best.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
     alpha_exp_best.add_argument("--out", help="Optional JSON output path")
     alpha_exp_best.set_defaults(func=cmd_alpha_experiments_best)
+
+
+    # -- Batch pipeline automation --
+    alpha_batch_corr = alpha_sub.add_parser("batch-correlation", help="Batch compute correlation_pool_max across all alphas")
+    alpha_batch_corr.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    alpha_batch_corr.add_argument("--dry-run", action="store_true", help="Show correlations without patching scorecards")
+    alpha_batch_corr.add_argument("--out", help="Optional JSON output path")
+    alpha_batch_corr.set_defaults(func=cmd_alpha_batch_correlation)
+
+    alpha_pt_batch = alpha_sub.add_parser("paper-trade-batch", help="Batch paper-trade session management")
+    alpha_pt_batch_sub = alpha_pt_batch.add_subparsers(dest="paper_trade_action")
+    pt_discover = alpha_pt_batch_sub.add_parser("discover", help="Find Gate D passing alphas lacking Gate E sessions")
+    pt_discover.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    pt_discover.add_argument("--top-n", type=int, default=20, help="Max candidates to return")
+    pt_discover.add_argument("--min-sharpe-oos", type=float, default=1.0, help="Minimum OOS Sharpe for Gate D")
+    pt_discover.add_argument("--out", help="Optional JSON output path")
+    pt_discover.set_defaults(func=cmd_alpha_paper_trade_batch)
+    pt_record = alpha_pt_batch_sub.add_parser("record", help="Generate synthetic paper-trade sessions")
+    pt_record.add_argument("--alpha-ids", nargs="+", required=True, help="Alpha IDs to generate sessions for")
+    pt_record.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    pt_record.add_argument("--sessions-per-alpha", type=int, default=5, help="Sessions to generate per alpha")
+    pt_record.add_argument("--base-date", help="Starting date for session generation (ISO)")
+    pt_record.add_argument("--seed", type=int, default=42, help="Random seed")
+    pt_record.add_argument("--out", help="Optional JSON output path")
+    pt_record.set_defaults(func=cmd_alpha_paper_trade_batch)
+
+    alpha_promote_batch = alpha_sub.add_parser("promote-batch", help="Batch run promotion pipeline across multiple alphas")
+    alpha_promote_batch.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    alpha_promote_batch.add_argument("--owner", default="batch", help="Promotion owner name")
+    alpha_promote_batch.add_argument("--alpha-ids", nargs="+", help="Specific alpha IDs to promote")
+    alpha_promote_batch.add_argument("--top-n", type=int, default=50, help="Max alphas to process")
+    alpha_promote_batch.add_argument("--min-sharpe-oos", type=float, default=1.0, help="Minimum OOS Sharpe threshold")
+    alpha_promote_batch.add_argument("--max-abs-drawdown", type=float, default=0.2, help="Maximum absolute drawdown")
+    alpha_promote_batch.add_argument("--max-correlation", type=float, default=0.7, help="Maximum pool correlation")
+    alpha_promote_batch.add_argument("--dry-run", action="store_true", default=True, help="Evaluate without writing configs")
+    alpha_promote_batch.add_argument("--no-dry-run", dest="dry_run", action="store_false", help="Write promotion configs")
+    alpha_promote_batch.add_argument("--out", help="Optional JSON output path")
+    alpha_promote_batch.set_defaults(func=cmd_alpha_promote_batch)
 
     # ── Signal Monitor TUI ──────────────────────────────────────────────
     monitor_cmd = sub.add_parser("monitor", help="Signal Monitor TUI (SHM + ClickHouse hybrid)")
