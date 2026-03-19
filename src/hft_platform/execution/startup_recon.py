@@ -166,9 +166,7 @@ class StartupPositionVerifier:
                 error=str(exc),
             )
             if self.blocking:
-                raise RuntimeError(
-                    f"startup_recon: verification error in blocking mode — {exc}"
-                ) from exc
+                raise RuntimeError(f"startup_recon: verification error in blocking mode — {exc}") from exc
 
         return self.discrepancies
 
@@ -181,12 +179,8 @@ class StartupPositionVerifier:
         raw_positions = await asyncio.to_thread(self.client.get_positions)
         broker_map: Dict[str, int] = {}
         for pos in raw_positions:
-            code = getattr(pos, "code", None) or (
-                pos.get("code") if isinstance(pos, dict) else None
-            )
-            qty = getattr(pos, "quantity", None) or (
-                pos.get("quantity", 0) if isinstance(pos, dict) else 0
-            )
+            code = getattr(pos, "code", None) or (pos.get("code") if isinstance(pos, dict) else None)
+            qty = getattr(pos, "quantity", None) or (pos.get("quantity", 0) if isinstance(pos, dict) else 0)
             direction = getattr(pos, "direction", "")
             if str(direction) == "Action.Sell":
                 qty = -qty

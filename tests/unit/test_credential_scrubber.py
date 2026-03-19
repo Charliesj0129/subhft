@@ -1,4 +1,5 @@
 """Tests for structlog credential scrubbing (WU-07)."""
+
 from hft_platform.utils.logging import _SENSITIVE_PATTERNS, credential_scrubber
 
 

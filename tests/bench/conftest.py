@@ -8,20 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
 from typing import Any
 
 import pytest
 import yaml
 
 from hft_platform.contracts.strategy import (
+    TIF,
     IntentType,
     OrderCommand,
     OrderIntent,
     RiskDecision,
     Side,
     StormGuardState,
-    TIF,
 )
 from hft_platform.core import timebase
 from hft_platform.gateway.channel import IntentEnvelope, LocalIntentChannel

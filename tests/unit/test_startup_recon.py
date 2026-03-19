@@ -12,7 +12,6 @@ import pytest
 from hft_platform.execution.positions import Position, PositionStore
 from hft_platform.execution.startup_recon import StartupPositionVerifier, startup_recon_status
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -55,10 +54,12 @@ def _make_store_with_positions(entries: dict[str, int]) -> PositionStore:
 @pytest.mark.asyncio
 async def test_matching_positions() -> None:
     """No discrepancies when broker and local positions match."""
-    client = FakeBrokerClient([
-        FakeBrokerPosition("2330", 100),
-        FakeBrokerPosition("2317", 50),
-    ])
+    client = FakeBrokerClient(
+        [
+            FakeBrokerPosition("2330", 100),
+            FakeBrokerPosition("2317", 50),
+        ]
+    )
     store = _make_store_with_positions({"2330": 100, "2317": 50})
     verifier = StartupPositionVerifier(client, store)
 
@@ -72,10 +73,12 @@ async def test_matching_positions() -> None:
 @pytest.mark.asyncio
 async def test_mismatch_detected() -> None:
     """Discrepancies are reported when positions differ."""
-    client = FakeBrokerClient([
-        FakeBrokerPosition("2330", 100),
-        FakeBrokerPosition("2454", 200),
-    ])
+    client = FakeBrokerClient(
+        [
+            FakeBrokerPosition("2330", 100),
+            FakeBrokerPosition("2454", 200),
+        ]
+    )
     store = _make_store_with_positions({"2330": 100, "2454": 150})
     verifier = StartupPositionVerifier(client, store)
 
@@ -153,9 +156,7 @@ async def test_checkpoint_loading(tmp_path) -> None:
     # Broker has 2454=300 but local store is empty — checkpoint fills the gap
     client = FakeBrokerClient([FakeBrokerPosition("2454", 300)])
     store = _make_store_with_positions({})
-    verifier = StartupPositionVerifier(
-        client, store, checkpoint_path=str(checkpoint_file)
-    )
+    verifier = StartupPositionVerifier(client, store, checkpoint_path=str(checkpoint_file))
 
     result = await verifier.verify()
 
@@ -171,9 +172,7 @@ async def test_checkpoint_does_not_override_store(tmp_path) -> None:
 
     client = FakeBrokerClient([FakeBrokerPosition("2330", 100)])
     store = _make_store_with_positions({"2330": 100})
-    verifier = StartupPositionVerifier(
-        client, store, checkpoint_path=str(checkpoint_file)
-    )
+    verifier = StartupPositionVerifier(client, store, checkpoint_path=str(checkpoint_file))
 
     result = await verifier.verify()
 
@@ -186,9 +185,7 @@ async def test_checkpoint_missing_file() -> None:
     """Missing checkpoint file is handled gracefully."""
     client = FakeBrokerClient([])
     store = _make_store_with_positions({})
-    verifier = StartupPositionVerifier(
-        client, store, checkpoint_path="/nonexistent/checkpoint.json"
-    )
+    verifier = StartupPositionVerifier(client, store, checkpoint_path="/nonexistent/checkpoint.json")
 
     result = await verifier.verify()
 

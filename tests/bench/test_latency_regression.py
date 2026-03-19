@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 import yaml
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.core import timebase
 from hft_platform.gateway.service import GatewayService
 from hft_platform.risk.engine import RiskEngine
@@ -71,9 +71,7 @@ class TestRiskEvaluateLatency:
         durations_us = sorted(d / 1000.0 for d in durations_ns)
         p99 = _percentile(durations_us, 99)
 
-        assert p99 < _RISK_P99_US, (
-            f"RiskEngine.evaluate() P99={p99:.1f}us exceeds threshold {_RISK_P99_US}us"
-        )
+        assert p99 < _RISK_P99_US, f"RiskEngine.evaluate() P99={p99:.1f}us exceeds threshold {_RISK_P99_US}us"
 
     def test_evaluate_cancel_fast_path(self, risk_engine: RiskEngine) -> None:
         """CANCEL intents should be even faster (skip validators)."""
@@ -98,9 +96,7 @@ class TestRiskEvaluateLatency:
         p99 = _percentile(durations_us, 99)
 
         # CANCEL should be faster than the general threshold
-        assert p99 < _RISK_P99_US, (
-            f"RiskEngine.evaluate(CANCEL) P99={p99:.1f}us exceeds threshold {_RISK_P99_US}us"
-        )
+        assert p99 < _RISK_P99_US, f"RiskEngine.evaluate(CANCEL) P99={p99:.1f}us exceeds threshold {_RISK_P99_US}us"
 
 
 @pytest.mark.bench
@@ -108,9 +104,7 @@ class TestGatewayEnvelopeLatency:
     """GatewayService._process_envelope() P99 must be < 100us."""
 
     @pytest.mark.asyncio
-    async def test_process_envelope_p99_under_threshold(
-        self, gateway_for_bench: GatewayService
-    ) -> None:
+    async def test_process_envelope_p99_under_threshold(self, gateway_for_bench: GatewayService) -> None:
         svc = gateway_for_bench
 
         # Warm up
@@ -164,6 +158,4 @@ class TestNormalizeTickLatency:
         durations_us = sorted(d / 1000.0 for d in durations_ns)
         p99 = _percentile(durations_us, 99)
 
-        assert p99 < _NORMALIZE_P99_US, (
-            f"normalize_tick() P99={p99:.1f}us exceeds threshold {_NORMALIZE_P99_US}us"
-        )
+        assert p99 < _NORMALIZE_P99_US, f"normalize_tick() P99={p99:.1f}us exceeds threshold {_NORMALIZE_P99_US}us"

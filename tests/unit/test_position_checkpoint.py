@@ -12,7 +12,6 @@ import pytest
 
 from hft_platform.execution.checkpoint import PositionCheckpointWriter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -41,9 +40,7 @@ def _make_store(positions: dict | None = None) -> MagicMock:
 class TestWriteCheckpoint:
     def test_writes_valid_json(self, tmp_path):
         path = str(tmp_path / "ckpt.json")
-        store = _make_store(
-            {"acc:strat:2330": _make_position("2330", 10, 5000000, 100000)}
-        )
+        store = _make_store({"acc:strat:2330": _make_position("2330", 10, 5000000, 100000)})
         writer = PositionCheckpointWriter(store, path=path, interval_s=1)
         writer.write_checkpoint()
 
@@ -78,9 +75,7 @@ class TestWriteCheckpoint:
 
     def test_sha256_hash_is_correct(self, tmp_path):
         path = str(tmp_path / "ckpt.json")
-        store = _make_store(
-            {"k1": _make_position("AAPL", 5, 1500000, 0)}
-        )
+        store = _make_store({"k1": _make_position("AAPL", 5, 1500000, 0)})
         writer = PositionCheckpointWriter(store, path=path, interval_s=1)
         writer.write_checkpoint()
 
@@ -91,6 +86,7 @@ class TestWriteCheckpoint:
         # Re-serialize without sha256 and verify
         try:
             import orjson
+
             body = orjson.dumps(data)
         except ImportError:
             body = json.dumps(data, separators=(",", ":")).encode("utf-8")
@@ -134,9 +130,7 @@ class TestLoadCheckpoint:
         assert loaded["positions"]["a:s:Y"]["net_qty"] == -2
 
     def test_missing_file_returns_none(self, tmp_path):
-        result = PositionCheckpointWriter.load_checkpoint(
-            str(tmp_path / "nonexistent.json")
-        )
+        result = PositionCheckpointWriter.load_checkpoint(str(tmp_path / "nonexistent.json"))
         assert result is None
 
     def test_corrupted_file_returns_none(self, tmp_path):
@@ -176,9 +170,7 @@ class TestConfiguration:
         assert writer._interval_s == 30.0
 
     def test_env_defaults(self, tmp_path, monkeypatch):
-        monkeypatch.setenv(
-            "HFT_POSITION_CHECKPOINT_PATH", str(tmp_path / "env.json")
-        )
+        monkeypatch.setenv("HFT_POSITION_CHECKPOINT_PATH", str(tmp_path / "env.json"))
         monkeypatch.setenv("HFT_CHECKPOINT_INTERVAL_S", "120")
         store = _make_store()
         writer = PositionCheckpointWriter(store)

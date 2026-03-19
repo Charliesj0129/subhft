@@ -1,4 +1,5 @@
 """Unit 2: Test MTM drawdown integration."""
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 
 def test_drawdown_includes_unrealized_pnl():
     from hft_platform.services.system import HFTSystem
+
     mtm = MagicMock()
     mtm.total_unrealized_pnl.return_value = -500_000
     ps = MagicMock(spec=["get_drawdown_pct", "total_pnl"])

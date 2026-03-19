@@ -16,7 +16,6 @@ from hft_platform.risk.portfolio_monitor import (
     portfolio_unrealized_pnl,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -70,9 +69,7 @@ async def test_metrics_with_positions():
     assert portfolio_net_exposure._value.get() == 55_000_000
     assert portfolio_open_positions._value.get() == 2
     # concentration = 60_000_000 / 65_000_000
-    assert portfolio_concentration_ratio._value.get() == pytest.approx(
-        60_000_000 / 65_000_000, abs=1e-6
-    )
+    assert portfolio_concentration_ratio._value.get() == pytest.approx(60_000_000 / 65_000_000, abs=1e-6)
     # unrealized: (600_0000-590_0000)*10 + (100_0000-110_0000)*(-5) = 100_0000 + 50_0000
     assert portfolio_unrealized_pnl._value.get() == 150_0000
 
@@ -94,9 +91,7 @@ async def test_empty_portfolio():
 @pytest.mark.asyncio
 async def test_concentration_ratio_single_position():
     """Single open position has concentration ratio = 1.0."""
-    store = _make_store(
-        {"acc1:s:2330": _make_position("2330", 5, 500_0000)}
-    )
+    store = _make_store({"acc1:s:2330": _make_position("2330", 5, 500_0000)})
     monitor = PortfolioRiskMonitor(store, mid_price_cb=lambda _s: 510_0000)
     monitor._snapshot()
 
@@ -114,9 +109,7 @@ async def test_missing_mid_prices_skipped():
         }
     )
     # Only 2330 has a mid-price
-    monitor = PortfolioRiskMonitor(
-        store, mid_price_cb=lambda s: 510_0000 if s == "2330" else None
-    )
+    monitor = PortfolioRiskMonitor(store, mid_price_cb=lambda s: 510_0000 if s == "2330" else None)
     monitor._snapshot()
 
     assert portfolio_open_positions._value.get() == 2
@@ -127,9 +120,7 @@ async def test_missing_mid_prices_skipped():
 @pytest.mark.asyncio
 async def test_flat_positions_not_counted():
     """Positions with net_qty=0 are ignored."""
-    store = _make_store(
-        {"acc1:s:2330": _make_position("2330", 0, 500_0000)}
-    )
+    store = _make_store({"acc1:s:2330": _make_position("2330", 0, 500_0000)})
     monitor = PortfolioRiskMonitor(store, mid_price_cb=lambda _s: 510_0000)
     monitor._snapshot()
 
@@ -149,9 +140,7 @@ async def test_configurable_interval():
 @pytest.mark.asyncio
 async def test_run_loop_publishes_and_stops():
     """run() publishes at least one snapshot and respects running flag."""
-    store = _make_store(
-        {"acc1:s:2330": _make_position("2330", 1, 100_0000)}
-    )
+    store = _make_store({"acc1:s:2330": _make_position("2330", 1, 100_0000)})
     monitor = PortfolioRiskMonitor(store, mid_price_cb=lambda _s: 110_0000)
 
     with patch.dict("os.environ", {"HFT_PORTFOLIO_MONITOR_INTERVAL_S": "0.05"}):
@@ -170,9 +159,7 @@ async def test_run_loop_publishes_and_stops():
 @pytest.mark.asyncio
 async def test_no_mid_price_callback():
     """When mid_price_cb is None, exposure is zero but open count works."""
-    store = _make_store(
-        {"acc1:s:2330": _make_position("2330", 5, 500_0000)}
-    )
+    store = _make_store({"acc1:s:2330": _make_position("2330", 5, 500_0000)})
     monitor = PortfolioRiskMonitor(store, mid_price_cb=None)
     monitor._snapshot()
 

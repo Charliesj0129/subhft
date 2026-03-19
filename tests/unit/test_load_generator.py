@@ -1,8 +1,12 @@
 """Tests for WU-14: SyntheticTickGenerator."""
+
 from __future__ import annotations
+
 import asyncio
+
 import numpy as np
 import pytest
+
 from hft_platform.events import BidAskEvent, TickEvent
 from hft_platform.testing.load_generator import SyntheticTickGenerator
 

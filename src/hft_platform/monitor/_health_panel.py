@@ -116,7 +116,9 @@ def _parse_counter_total(lines: Sequence[str], name: str, labels: str = "") -> f
 
 
 def _fetch_from_prometheus(
-    host: str | None = None, port: int | None = None, feed_total: int = 0,
+    host: str | None = None,
+    port: int | None = None,
+    feed_total: int = 0,
 ) -> HealthState:
     host = host or os.getenv("HFT_HEALTH_HOST", "localhost")
     port = port or int(os.getenv("HFT_HEALTH_PORT", "9090"))
@@ -175,14 +177,12 @@ def build_health_panel(health: HealthState) -> Panel:
     st = health.feed_stale_count
     f_s = _GREEN if st == 0 else _YELLOW
     lines.append(
-        f" Feed: {health.feed_live_count}/{health.feed_total_count}"
-        f"  Stale: {st}  Recon: {health.feed_reconnects}\n", f_s,
+        f" Feed: {health.feed_live_count}/{health.feed_total_count}  Stale: {st}  Recon: {health.feed_reconnects}\n",
+        f_s,
     )
     cb = health.circuit_breaker_state == 0
     lines.append(
-        f" Orders: {'OK' if cb else 'BLOCKED'}"
-        f"  Rej: {health.order_rejects}"
-        f"  CB: {'CLOSED' if cb else 'OPEN'}\n",
+        f" Orders: {'OK' if cb else 'BLOCKED'}  Rej: {health.order_rejects}  CB: {'CLOSED' if cb else 'OPEN'}\n",
         _GREEN if cb else _BRIGHT_RED,
     )
     if health.recon_consecutive_failures > 0:

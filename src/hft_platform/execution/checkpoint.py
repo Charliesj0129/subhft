@@ -64,11 +64,7 @@ class PositionCheckpointWriter:
             "HFT_POSITION_CHECKPOINT_PATH",
             ".runtime/position_checkpoint.json",
         )
-        self._interval_s = float(
-            interval_s
-            if interval_s is not None
-            else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60")
-        )
+        self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60"))
         self.running = False
 
     # ------------------------------------------------------------------

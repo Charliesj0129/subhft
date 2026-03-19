@@ -1,7 +1,5 @@
 """Unit tests for SimpleMarketMaker strategy."""
 
-import pytest
-
 from hft_platform.events import LOBStatsEvent
 from hft_platform.strategies.simple_mm import SimpleMarketMaker
 

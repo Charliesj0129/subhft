@@ -60,9 +60,7 @@ class EODReconciliationRunner:
     ) -> None:
         self._recon_service = recon_service
         self.close_hour_utc = (
-            close_hour_utc
-            if close_hour_utc is not None
-            else int(os.environ.get("HFT_EOD_CLOSE_HOUR_UTC", "5"))
+            close_hour_utc if close_hour_utc is not None else int(os.environ.get("HFT_EOD_CLOSE_HOUR_UTC", "5"))
         )
         self.running: bool = False
         self._last_trigger_date: str = ""

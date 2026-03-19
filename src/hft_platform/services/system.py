@@ -96,6 +96,7 @@ class HFTSystem:
         self._mtm_calculator = None
         try:
             from hft_platform.execution.mtm import MarkToMarketCalculator
+
             lob_engine = getattr(self.md_service, "lob", None)
             if lob_engine is not None:
                 self._mtm_calculator = MarkToMarketCalculator(self.position_store, lob_engine=lob_engine)

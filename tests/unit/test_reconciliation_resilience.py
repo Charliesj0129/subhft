@@ -1,4 +1,5 @@
 """WU-04: Reconciliation Resilience tests."""
+
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +30,6 @@ def _make_service(
 
 
 class TestReconciliationResilience:
-
     def test_default_grace_failures(self) -> None:
         svc = _make_service()
         assert svc.grace_failures == 10

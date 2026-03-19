@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.execution.positions import Position, PositionStore
 from hft_platform.risk.symbol_position_validator import SymbolPositionLimitValidator
 
@@ -128,15 +128,15 @@ class TestSymbolPositionLimitValidator:
 @pytest.mark.parametrize(
     "current_net, side, qty, limit, expected_ok",
     [
-        (0, Side.BUY, 100, 100, True),       # exactly at limit
-        (0, Side.BUY, 101, 100, False),       # one over
-        (0, Side.SELL, 100, 100, True),       # short exactly at limit
-        (0, Side.SELL, 101, 100, False),      # short one over
-        (-50, Side.BUY, 50, 100, True),       # closing short to flat
-        (-50, Side.SELL, 50, 100, True),      # deepening short exactly at limit
-        (-50, Side.SELL, 51, 100, False),     # deepening short one over
-        (99, Side.BUY, 1, 100, True),         # boundary: 100 = limit
-        (100, Side.BUY, 1, 100, False),       # boundary: 101 > limit
+        (0, Side.BUY, 100, 100, True),  # exactly at limit
+        (0, Side.BUY, 101, 100, False),  # one over
+        (0, Side.SELL, 100, 100, True),  # short exactly at limit
+        (0, Side.SELL, 101, 100, False),  # short one over
+        (-50, Side.BUY, 50, 100, True),  # closing short to flat
+        (-50, Side.SELL, 50, 100, True),  # deepening short exactly at limit
+        (-50, Side.SELL, 51, 100, False),  # deepening short one over
+        (99, Side.BUY, 1, 100, True),  # boundary: 100 = limit
+        (100, Side.BUY, 1, 100, False),  # boundary: 101 > limit
     ],
     ids=[
         "flat_buy_exact",

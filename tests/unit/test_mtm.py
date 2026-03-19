@@ -12,6 +12,7 @@ from hft_platform.execution.positions import Position, PositionStore
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_store_with_positions(positions: dict[str, Position]) -> PositionStore:
     """Build a PositionStore pre-loaded with given positions (no fills needed)."""
     store = PositionStore.__new__(PositionStore)
@@ -21,8 +22,10 @@ def _make_store_with_positions(positions: dict[str, Position]) -> PositionStore:
 
 def _mid_prices(mapping: dict[str, int]):
     """Return a mid-price callback backed by *mapping*."""
+
     def _fn(symbol: str) -> int | None:
         return mapping.get(symbol)
+
     return _fn
 
 
@@ -32,6 +35,7 @@ SCALE = 10_000  # price scale factor
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestLongPnL:
     def test_long_positive_pnl(self):
@@ -96,10 +100,12 @@ class TestMultiplePositions:
         pos_b.net_qty = -5
         pos_b.avg_price_scaled = 200 * SCALE
 
-        store = _make_store_with_positions({
-            "acc:strat:A": pos_a,
-            "acc:strat:B": pos_b,
-        })
+        store = _make_store_with_positions(
+            {
+                "acc:strat:A": pos_a,
+                "acc:strat:B": pos_b,
+            }
+        )
         mid_prices = {"A": 110 * SCALE, "B": 190 * SCALE}
         calc = MarkToMarketCalculator(store, _mid_prices(mid_prices))
 

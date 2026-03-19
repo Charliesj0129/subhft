@@ -6,6 +6,7 @@ Tests cover:
 - File not found: returns False without raising.
 - Pattern not present in file: returns False.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,6 +18,7 @@ from hft_platform.alpha.validation import _update_manifest_status
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_impl(tmp_path: Path, alpha_id: str, status: str = "DRAFT") -> Path:
     """Create a minimal impl.py for *alpha_id* inside *tmp_path*."""
@@ -44,6 +46,7 @@ _MANIFEST = AlphaManifest(
 # ---------------------------------------------------------------------------
 # Tests — successful status transitions
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "target_status",
@@ -79,6 +82,7 @@ def test_update_manifest_status_intermediate_transition(tmp_path: Path) -> None:
 # Tests — idempotency
 # ---------------------------------------------------------------------------
 
+
 def test_update_manifest_status_already_at_target_returns_false(tmp_path: Path) -> None:
     """No-op when the status is already the desired target."""
     alpha_id = "idem_alpha"
@@ -108,6 +112,7 @@ def test_update_manifest_status_idempotent_double_call(tmp_path: Path) -> None:
 # Tests — file not found
 # ---------------------------------------------------------------------------
 
+
 def test_update_manifest_status_file_not_found_returns_false(tmp_path: Path) -> None:
     """Missing impl.py must return False without raising."""
     result = _update_manifest_status("nonexistent_alpha", "GATE_A", tmp_path)
@@ -123,6 +128,7 @@ def test_update_manifest_status_alpha_dir_missing(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Tests — pattern not found in file
 # ---------------------------------------------------------------------------
+
 
 def test_update_manifest_status_no_pattern_in_file(tmp_path: Path) -> None:
     """If impl.py exists but has no status=AlphaStatus.<X> line, return False."""
@@ -141,6 +147,7 @@ def test_update_manifest_status_no_pattern_in_file(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Tests — content integrity
 # ---------------------------------------------------------------------------
+
 
 def test_update_manifest_status_only_replaces_status_line(tmp_path: Path) -> None:
     """Surrounding content must be preserved after replacement."""

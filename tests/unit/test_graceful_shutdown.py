@@ -1,4 +1,5 @@
 """Tests for graceful shutdown broker logout (WU-01)."""
+
 import asyncio
 from unittest.mock import MagicMock, patch
 

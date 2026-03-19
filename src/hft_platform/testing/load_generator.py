@@ -141,7 +141,10 @@ def main() -> None:
         queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=100_000)
         gen = SyntheticTickGenerator(symbol=args.symbol, seed=args.seed)
         produced = await gen.generate(
-            queue, rate=args.rate, duration_s=args.duration, symbol=args.symbol,
+            queue,
+            rate=args.rate,
+            duration_s=args.duration,
+            symbol=args.symbol,
         )
         print(f"Produced {produced} events, queue size: {queue.qsize()}")  # noqa: T201
 

@@ -18,6 +18,7 @@ from hft_platform.config.schema import (
 # Minimal valid config fixture
 # ---------------------------------------------------------------------------
 
+
 def _minimal_config() -> dict:
     return {
         "mode": "sim",
@@ -41,6 +42,7 @@ def _minimal_config() -> dict:
 # ===================================================================
 # Structural validation
 # ===================================================================
+
 
 class TestConfigSchemaStructural:
     """Structural (msgspec.convert) validation tests."""
@@ -99,6 +101,7 @@ class TestConfigSchemaStructural:
 # Semantic validation
 # ===================================================================
 
+
 class TestConfigSchemaSemantic:
     """Semantic (business rule) validation tests."""
 
@@ -128,15 +131,19 @@ class TestConfigSchemaSemantic:
 
     def test_strategy_empty_id(self):
         with pytest.raises(ConfigValidationError, match="strategy.id"):
-            validate_config({
-                "strategy": {"id": "", "module": "m", "class": "C"},
-            })
+            validate_config(
+                {
+                    "strategy": {"id": "", "module": "m", "class": "C"},
+                }
+            )
 
     def test_strategy_empty_module(self):
         with pytest.raises(ConfigValidationError, match="strategy.module"):
-            validate_config({
-                "strategy": {"id": "x", "module": "", "class": "C"},
-            })
+            validate_config(
+                {
+                    "strategy": {"id": "x", "module": "", "class": "C"},
+                }
+            )
 
     def test_valid_modes(self):
         for mode in ("sim", "live", "replay"):
@@ -152,6 +159,7 @@ class TestConfigSchemaSemantic:
 # ===================================================================
 # validate_config_or_exit
 # ===================================================================
+
 
 class TestValidateConfigOrExit:
     """Tests for the exit-on-failure wrapper."""
@@ -176,6 +184,7 @@ class TestValidateConfigOrExit:
 # Integration with loader.load_settings
 # ===================================================================
 
+
 class TestLoaderIntegration:
     """Ensure loader.load_settings calls validation."""
 
@@ -183,7 +192,8 @@ class TestLoaderIntegration:
         """Valid config passes without error."""
         base = tmp_path / "config" / "base" / "main.yaml"
         base.parent.mkdir(parents=True, exist_ok=True)
-        base.write_text(textwrap.dedent("""\
+        base.write_text(
+            textwrap.dedent("""\
             mode: sim
             symbols: ["2330"]
             broker: shioaji
@@ -192,7 +202,8 @@ class TestLoaderIntegration:
               module: m
               class: C
             prometheus_port: 9090
-        """))
+        """)
+        )
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(loader, "DEFAULT_YAML_PATH", "config/base/main.yaml")
@@ -207,10 +218,12 @@ class TestLoaderIntegration:
         """Invalid config causes SystemExit(1)."""
         base = tmp_path / "config" / "base" / "main.yaml"
         base.parent.mkdir(parents=True, exist_ok=True)
-        base.write_text(textwrap.dedent("""\
+        base.write_text(
+            textwrap.dedent("""\
             mode: bad_mode
             symbols: ["2330"]
-        """))
+        """)
+        )
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(loader, "DEFAULT_YAML_PATH", "config/base/main.yaml")
@@ -226,10 +239,12 @@ class TestLoaderIntegration:
         """HFT_SKIP_CONFIG_VALIDATION=1 bypasses validation."""
         base = tmp_path / "config" / "base" / "main.yaml"
         base.parent.mkdir(parents=True, exist_ok=True)
-        base.write_text(textwrap.dedent("""\
+        base.write_text(
+            textwrap.dedent("""\
             mode: bad_mode
             symbols: ["2330"]
-        """))
+        """)
+        )
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(loader, "DEFAULT_YAML_PATH", "config/base/main.yaml")
@@ -245,10 +260,12 @@ class TestLoaderIntegration:
         """skip_config_validation CLI override bypasses validation."""
         base = tmp_path / "config" / "base" / "main.yaml"
         base.parent.mkdir(parents=True, exist_ok=True)
-        base.write_text(textwrap.dedent("""\
+        base.write_text(
+            textwrap.dedent("""\
             mode: bad_mode
             symbols: ["2330"]
-        """))
+        """)
+        )
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(loader, "DEFAULT_YAML_PATH", "config/base/main.yaml")
@@ -256,7 +273,5 @@ class TestLoaderIntegration:
         monkeypatch.delenv("HFT_SYMBOLS", raising=False)
         monkeypatch.delenv("HFT_SKIP_CONFIG_VALIDATION", raising=False)
 
-        settings, _ = loader.load_settings(
-            cli_overrides={"skip_config_validation": True}
-        )
+        settings, _ = loader.load_settings(cli_overrides={"skip_config_validation": True})
         assert settings["mode"] == "bad_mode"

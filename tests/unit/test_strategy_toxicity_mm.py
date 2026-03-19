@@ -4,8 +4,8 @@ These strategies use numpy feature arrays and hftbacktest framework.
 Tests cover import, instantiation, and basic parameter validation.
 """
 
-import pytest
 import numpy as np
+import pytest
 
 try:
     from hftbacktest import GTX, LIMIT  # noqa: F401
@@ -33,8 +33,14 @@ def test_toxicity_mm_v1_instantiation():
     n_features = 6
     ts = np.arange(n, dtype=np.int64) * 1_000_000_000
     feats = np.random.randn(n, n_features)
-    names = ["queue_imbalance", "toxicity_timescale_div", "microprice_spread_ratio",
-             "cross_ema_qi", "depth_velocity_diff", "adverse_momentum"]
+    names = [
+        "queue_imbalance",
+        "toxicity_timescale_div",
+        "microprice_spread_ratio",
+        "cross_ema_qi",
+        "depth_velocity_diff",
+        "adverse_momentum",
+    ]
 
     strat = ToxicityAwareMM(
         feature_timestamps=ts,

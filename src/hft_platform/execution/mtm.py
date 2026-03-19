@@ -75,9 +75,7 @@ class MarkToMarketCalculator:
                     )
                     continue
 
-                result[key] = self._unrealized(
-                    pos.net_qty, pos.avg_price_scaled, mid
-                )
+                result[key] = self._unrealized(pos.net_qty, pos.avg_price_scaled, mid)
 
         return result
 

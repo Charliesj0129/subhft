@@ -40,8 +40,8 @@ portfolio_concentration_ratio = Gauge(
     "portfolio_concentration_ratio",
     "Largest single-position abs exposure / gross exposure (0-1)",
 )
-portfolio_unrealized_pnl = Gauge(
-    "portfolio_unrealized_pnl",
+portfolio_unrealized_pnl_monitor = Gauge(
+    "portfolio_unrealized_pnl_monitor",
     "Sum of unrealized PnL across all positions (scaled int)",
 )
 
@@ -73,9 +73,7 @@ class PortfolioRiskMonitor:
     ) -> None:
         self._position_store = position_store
         self._mid_price_cb = mid_price_cb
-        self._interval_s: float = float(
-            os.getenv("HFT_PORTFOLIO_MONITOR_INTERVAL_S", "5")
-        )
+        self._interval_s: float = float(os.getenv("HFT_PORTFOLIO_MONITOR_INTERVAL_S", "5"))
         self.running: bool = False
         self._log = logger.bind(component="portfolio_monitor")
 
@@ -132,7 +130,7 @@ class PortfolioRiskMonitor:
         portfolio_net_exposure.set(net_exposure)
         portfolio_open_positions.set(open_count)
         portfolio_concentration_ratio.set(concentration)
-        portfolio_unrealized_pnl.set(total_unrealized_pnl)
+        portfolio_unrealized_pnl_monitor.set(total_unrealized_pnl)
 
         self._log.debug(
             "portfolio_snapshot",
@@ -150,9 +148,7 @@ class PortfolioRiskMonitor:
     async def run(self) -> None:
         """Run the periodic monitor until ``self.running`` is set to False."""
         self.running = True
-        self._log.info(
-            "portfolio_monitor_started", interval_s=self._interval_s
-        )
+        self._log.info("portfolio_monitor_started", interval_s=self._interval_s)
         try:
             while self.running:
                 try:
