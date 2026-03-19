@@ -12,7 +12,7 @@ def _cfg(**overrides: object) -> PromotionConfig:
     defaults = {
         "alpha_id": "test_alpha",
         "owner": "tester",
-        "min_sharpe_oos": 1.0,
+        "min_sharpe_oos": 0.7,
         "max_abs_drawdown": 0.2,
         "max_turnover": 2.0,
         "max_correlation": 0.7,
@@ -48,14 +48,14 @@ class TestGateDAllPass:
         assert checks["latency_profile"]["pass"] is True
 
     def test_at_exact_thresholds(self) -> None:
-        sc = _scorecard(sharpe=1.0, max_drawdown=-0.2, turnover=2.0, corr=0.7)
+        sc = _scorecard(sharpe=0.7, max_drawdown=-0.2, turnover=2.0, corr=0.7)
         passed, checks = _evaluate_gate_d(sc, _cfg())
         assert passed is True
 
 
 class TestGateDSharpe:
     def test_sharpe_below_threshold_fails(self) -> None:
-        sc = _scorecard(sharpe=0.9)
+        sc = _scorecard(sharpe=0.6)
         passed, checks = _evaluate_gate_d(sc, _cfg())
         assert passed is False
         assert checks["sharpe_oos"]["pass"] is False
@@ -215,3 +215,90 @@ class TestGateDMultipleFailures:
         }
         passed, checks = _evaluate_gate_d(sc, _cfg())
         assert passed is True
+
+
+class TestGateDDefaultThreshold:
+    def test_default_min_sharpe_is_0_7(self) -> None:
+        """Default min_sharpe_oos should be 0.7 after threshold lowering."""
+        cfg = PromotionConfig(alpha_id="test", owner="tester")
+        assert cfg.min_sharpe_oos == 0.7
+
+    def test_sharpe_0_7_passes_with_default(self) -> None:
+        sc = _scorecard(sharpe=0.7)
+        passed, checks = _evaluate_gate_d(sc, _cfg())
+        assert passed is True
+        assert checks["sharpe_oos"]["pass"] is True
+
+    def test_sharpe_0_69_fails_with_default(self) -> None:
+        sc = _scorecard(sharpe=0.69)
+        passed, checks = _evaluate_gate_d(sc, _cfg())
+        assert passed is False
+        assert checks["sharpe_oos"]["pass"] is False
+
+
+class TestGateDEnvVarOverride:
+    def test_env_var_overrides_min_sharpe(self, monkeypatch: object) -> None:
+        """HFT_GATE_D_MIN_SHARPE_OOS env var overrides config threshold."""
+        mp = monkeypatch  # type: ignore[assignment]
+        mp.setenv("HFT_GATE_D_MIN_SHARPE_OOS", "1.5")
+        sc = _scorecard(sharpe=1.2)
+        passed, checks = _evaluate_gate_d(sc, _cfg())
+        assert passed is False
+        assert checks["sharpe_oos"]["pass"] is False
+        assert checks["sharpe_oos"]["min"] == 1.5
+
+    def test_env_var_lower_threshold(self, monkeypatch: object) -> None:
+        """Env var can lower threshold below config default."""
+        mp = monkeypatch  # type: ignore[assignment]
+        mp.setenv("HFT_GATE_D_MIN_SHARPE_OOS", "0.3")
+        sc = _scorecard(sharpe=0.4)
+        passed, checks = _evaluate_gate_d(sc, _cfg())
+        assert passed is True
+        assert checks["sharpe_oos"]["pass"] is True
+
+    def test_invalid_env_var_ignored(self, monkeypatch: object) -> None:
+        """Invalid env var value is ignored, config default used."""
+        mp = monkeypatch  # type: ignore[assignment]
+        mp.setenv("HFT_GATE_D_MIN_SHARPE_OOS", "not_a_number")
+        sc = _scorecard(sharpe=0.8)
+        passed, checks = _evaluate_gate_d(sc, _cfg())
+        assert passed is True  # 0.8 >= 0.7 default
+
+
+class TestGateDLatencyDiagnostic:
+    def test_diagnostic_field_present(self) -> None:
+        """adjusted_sharpe_2x_latency diagnostic must be in checks."""
+        sc = _scorecard(sharpe=1.5)
+        _, checks = _evaluate_gate_d(sc, _cfg())
+        assert "adjusted_sharpe_2x_latency" in checks
+
+    def test_diagnostic_always_passes(self) -> None:
+        """Diagnostic is non-blocking — always passes."""
+        sc = _scorecard(sharpe=0.3)
+        _, checks = _evaluate_gate_d(sc, _cfg(min_sharpe_oos=0.1))
+        diag = checks["adjusted_sharpe_2x_latency"]
+        assert diag["pass"] is True
+
+    def test_diagnostic_value_is_70pct_of_sharpe(self) -> None:
+        """Adjusted Sharpe is 70% of original (30% haircut for 2x latency)."""
+        sc = _scorecard(sharpe=2.0)
+        _, checks = _evaluate_gate_d(sc, _cfg())
+        diag = checks["adjusted_sharpe_2x_latency"]
+        assert diag["value"] == 2.0 * 0.7
+        assert diag["threshold"] is None
+        assert "diagnostic" in diag["detail"]
+
+    def test_diagnostic_none_sharpe(self) -> None:
+        """When sharpe is None, diagnostic value is None."""
+        sc = _scorecard(sharpe=None)
+        _, checks = _evaluate_gate_d(sc, _cfg())
+        diag = checks["adjusted_sharpe_2x_latency"]
+        assert diag["value"] is None
+        assert diag["pass"] is True  # Still non-blocking
+
+    def test_diagnostic_does_not_block_gate(self) -> None:
+        """Even with very low adjusted Sharpe, diagnostic doesn't block Gate D."""
+        sc = _scorecard(sharpe=0.7)  # adjusted = 0.49
+        passed, checks = _evaluate_gate_d(sc, _cfg())
+        assert passed is True  # Gate passes based on raw Sharpe
+        assert checks["adjusted_sharpe_2x_latency"]["pass"] is True

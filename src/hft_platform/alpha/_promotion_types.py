@@ -23,7 +23,7 @@ class PromotionConfig:
     min_paper_trade_calendar_days: int = 7
     min_paper_trade_trading_days: int = 5
     min_paper_trade_session_minutes: int = 60
-    min_sharpe_oos: float = 1.0
+    min_sharpe_oos: float = 0.7
     max_abs_drawdown: float = 0.2
     max_turnover: float = 2.0
     max_correlation: float = 0.7
