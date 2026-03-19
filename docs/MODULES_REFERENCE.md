@@ -10,7 +10,8 @@ These modules run the primary event loop. Any changes here must adhere strictly 
 
 | Subpackage       | Key Classes / Files                                       | Responsibility                                                                                                                                                       |
 | ---------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **feed_adapter** | `ShioajiClient`, `MarketDataNormalizer`, `LOBEngine`      | Ingests broker data. Normalizes to `TickEvent`/`BidAskEvent`. Maintains Level 2 Book State. Emits `LOBStatsEvent`. Contains extensive Rust fast-paths (`rust_core`). |
+| **feed_adapter** | `BrokerFacade(Shioaji\|Fubon)`, `Normalizer`, `LOBEngine`, `broker_registry` | Multi-broker ingestion via registry pattern (`HFT_BROKER`). Normalizes to `TickEvent`/`BidAskEvent`. Maintains Level 2 Book State. Emits `LOBStatsEvent`. Contains extensive Rust fast-paths (`rust_core`). |
+| **monitor**      | `MonitorEngine`, `Renderer`, `DataSource`, `TUI`          | Live signal monitoring TUI (18 files). Dual data sources: ClickHouse (historical) + Redis (live). Computes alpha signals with warmup, renders sparklines and composite scores. |
 | **engine**       | `RingBufferBus`                                           | Event bus using Disruptor-pattern ring buffer (`publish_nowait`, `consume`). Routes MD events to StrategyRunner.                                                     |
 | **strategy**     | `BaseStrategy`, `StrategyRunner`, `StrategyContext`       | Houses the `StrategyRunner` which consumes bus events, triggers strategy user logic (`handle_event`), and outputs `OrderIntent`.                                     |
 | **risk**         | `RiskEngine`, `StormGuardFSM`, validators                 | Synchronous CPU checks. Evaluates `OrderIntent`. If approved, outputs `OrderCommand`. `StormGuardFSM` handles global HALT/WARM risk states.                          |
@@ -46,4 +47,11 @@ These modules run the primary event loop. Any changes here must adhere strictly 
 | **cli** / **main** | `cli.py`, `__main__.py`                 | CLI Entry point. Commands: `run sim`, `run live`, `init`, `strat test`, `check`.           |
 | **strategies**     | `simple_mm.py`, `rust_alpha.py`         | Built-in implementations of strategies. You can use these as templates.                    |
 | **backtest**       | `adapter.py`, `convert.py`, `runner.py` | Integration with `hftbacktest`. Converts JSONL → NPZ and generates HTML scorecard reports. |
-| **alpha**          | `validation.py`, `promotion.py`, `canary.py`, `audit.py`, `experiments.py`, `pool.py` | Alpha governance pipeline: Gate A-E validation, promotion decisions, canary lifecycle, experiment tracking, pool management. 48+ alpha implementations in `research/alphas/`. |
+| **alpha**          | `validation.py`, `promotion.py`, `canary.py`, `audit.py`, `experiments.py`, `pool.py` | Alpha governance pipeline: Gate A-E validation, promotion decisions, canary lifecycle, experiment tracking, pool management. 102+ alpha implementations in `research/alphas/`. |
+| **adaptive**       | Adaptive parameter tuning                               | Runtime adaptive parameter adjustment for strategies.                                      |
+| **cross_symbol**   | Cross-symbol analytics                                  | Multi-symbol correlation and cross-asset signal computation.                               |
+| **diagnostics**    | `trace.py`, `replay.py`                                 | Decision trace sampling, event replay for post-mortem analysis.                            |
+| **portfolio**      | Portfolio-level management                              | Portfolio-level position aggregation and risk attribution.                                 |
+| **scripts**        | Operational scripts                                     | Latency benchmarks, ops utilities, and diagnostic helpers.                                 |
+| **utils**          | Shared utilities                                        | Common helpers used across modules (not hot-path).                                         |
+| **broker**         | Broker abstractions                                     | Shared broker protocol definitions and translation utilities.                              |
