@@ -1,0 +1,25 @@
+name: Canary Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  canary-evaluate:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install structlog pyyaml
+
+      - name: Evaluate canary promotion
+        run: |
+          python scripts/auto_release_orchestrator.py --project-root . --dry-run

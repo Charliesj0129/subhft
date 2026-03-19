@@ -82,6 +82,7 @@ research/experiments/*
 !research/experiments/runs/.gitkeep
 !research/experiments/comparisons/.gitkeep
 !research/experiments/validations/
+research/experiments/validations/**/20*Z_*/
 !research/knowledge/
 research/knowledge/*
 !research/knowledge/paper_index.json
@@ -168,5 +169,10 @@ notebooks/.ipynb_checkpoints
 # Agent prompts (local only)
 /.agent/
 /agent_prompts/
+
+# Claude Code local state
+.claude/worktrees/
+.claude/agents/
+.claude/skills/
 
 gha-creds-*.json
