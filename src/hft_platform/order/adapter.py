@@ -678,5 +678,5 @@ class OrderAdapter:
                     **payload,
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("order_trace_emit_failed", error=str(exc))

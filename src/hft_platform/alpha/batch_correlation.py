@@ -77,10 +77,10 @@ def batch_compute_correlations(
             continue
 
         # Patch scorecard if we have the run
-        run = latest_runs.get(alpha_id)
-        if run is None:
+        matched_run = latest_runs.get(alpha_id)
+        if matched_run is None:
             continue
-        scorecard_path = Path(run.scorecard_path)
+        scorecard_path = Path(matched_run.scorecard_path)
         if not scorecard_path.exists():
             logger.warning(
                 "batch_correlation: scorecard not found",

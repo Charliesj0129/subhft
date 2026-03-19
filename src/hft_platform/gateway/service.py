@@ -197,14 +197,14 @@ class GatewayService:
                     await lease_task
                 except asyncio.CancelledError:
                     pass
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("lease_cancel_failed",error=str(exc))
             if self._leader_lease is not None:
                 try:
                     self._leader_lease.release()
                     self._leader_is_active = False
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("lease_release_failed",error=str(exc))
             # Persist dedup state on clean shutdown (async-safe: run in thread)
             try:
                 await asyncio.to_thread(self._dedup.persist)
@@ -483,8 +483,8 @@ class GatewayService:
                 child = metrics.gateway_reject_total.labels(reason=reason)
                 self._gateway_reject_metric_cache[reason] = child
             child.inc()
-        except Exception:  # noqa: BLE001  # best-effort metrics: never break hot path
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("metrics_emit_failed", error=str(exc))
 
     def _record_latency(self, t0: int) -> None:
         if not self._metrics_enabled:
@@ -499,8 +499,8 @@ class GatewayService:
             metric = self._gateway_dispatch_latency_metric or metrics.gateway_dispatch_latency_ns
             self._gateway_dispatch_latency_metric = metric
             metric.observe(time.perf_counter_ns() - t0)
-        except Exception:  # noqa: BLE001  # best-effort metrics: never break hot path
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("metrics_emit_failed", error=str(exc))
 
     def _update_channel_depth_metric(self) -> None:
         if not self._metrics_enabled:
@@ -515,8 +515,8 @@ class GatewayService:
             metric = self._gateway_depth_metric or metrics.gateway_intent_channel_depth
             self._gateway_depth_metric = metric
             metric.set(self._channel.qsize())
-        except Exception:  # noqa: BLE001  # best-effort metrics: never break hot path
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("metrics_emit_failed", error=str(exc))
 
     def _refresh_metrics_registry(self) -> None:
         try:
@@ -547,8 +547,8 @@ class GatewayService:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("trace_emit_failed",error=str(exc))
 
     def _metrics_or_refresh(self):
         metrics = self._metrics
@@ -574,8 +574,8 @@ class GatewayService:
             metric = self._gateway_dedup_hits_metric or metrics.gateway_dedup_hits_total
             self._gateway_dedup_hits_metric = metric
             metric.inc()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("dedup_metric_failed",error=str(exc))
 
     async def _leader_lease_loop(self) -> None:
         while self.running and self._leader_lease is not None:
