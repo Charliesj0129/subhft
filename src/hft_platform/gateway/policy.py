@@ -117,4 +117,4 @@ class GatewayPolicy:
 
             MetricsRegistry.get().gateway_policy_mode.set(self.mode_int())
         except Exception as exc:
-            logger.warning("policy_metrics_failed",error=str(exc))
+            logger.warning("policy_metrics_failed", error=str(exc))
