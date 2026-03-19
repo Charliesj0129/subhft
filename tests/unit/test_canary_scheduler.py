@@ -6,7 +6,6 @@ import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 import yaml
 
 from hft_platform.alpha.canary import CanaryMonitor, CanaryStatus
