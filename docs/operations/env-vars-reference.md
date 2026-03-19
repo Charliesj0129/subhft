@@ -179,7 +179,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_GATEWAY_HA_ENABLED` | `0` | `1` = 啟用 active/standby leader lease gating | 單節點維持 `0` |
 | `HFT_GATEWAY_LEADER_LEASE_PATH` | `.state/gateway_leader.lock` | Gateway leader lease 檔案路徑 | 主備需共享同一路徑 |
 | `HFT_GATEWAY_LEADER_LEASE_REFRESH_S` | `0.5` | Leader lease heartbeat 週期（秒） | 小於 0.5 可加速切換但增加 I/O |
-| `HFT_FEATURE_ENGINE_ENABLED` | `0` | `1` = 啟用 Feature Engine（16 個 LOB 特徵） | 安全 rollout：先影子模式測試 |
+| `HFT_FEATURE_ENGINE_ENABLED` | `1` | `1` = 啟用 Feature Engine（16 個 LOB 特徵）；`0` = 停用 | 預設 on；停用請設 `HFT_FEATURE_ENGINE_ENABLED=0` |
 | `HFT_FEATURE_ENGINE_BACKEND` | `python` | FeatureEngine 核心後端：`python`/`rust` | 先 shadow 驗證後再切 `rust` |
 | `HFT_FEATURE_ENGINE_EMIT_EVENTS` | `1` | `0` = 停用 FeatureUpdateEvent 發送 | 僅在診斷性能時暫停 |
 | `HFT_FEATURE_PROFILE_ID` | — | 指定 Feature Profile ID | — |
