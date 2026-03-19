@@ -73,14 +73,16 @@ def discover_gate_d_candidates(
         if session_count >= 5:
             continue  # Already has enough sessions
 
-        candidates.append({
-            "alpha_id": alpha_id,
-            "sharpe_oos": sharpe_oos,
-            "max_drawdown": drawdown,
-            "correlation_pool_max": corr,
-            "session_count": session_count,
-            "scorecard_path": str(scorecard_path),
-        })
+        candidates.append(
+            {
+                "alpha_id": alpha_id,
+                "sharpe_oos": sharpe_oos,
+                "max_drawdown": drawdown,
+                "correlation_pool_max": corr,
+                "session_count": session_count,
+                "scorecard_path": str(scorecard_path),
+            }
+        )
 
     candidates.sort(key=lambda c: c["sharpe_oos"], reverse=True)
     return candidates[:top_n]
@@ -160,14 +162,16 @@ def batch_record_sessions(
                 notes=f"synthetic session from batch runner (seed={seed}, i={i})",
             )
 
-            results.append({
-                "alpha_id": alpha_id,
-                "trading_day": trading_day,
-                "fills": fills,
-                "pnl_bps": pnl_bps,
-                "regime": regime,
-                "path": str(path),
-            })
+            results.append(
+                {
+                    "alpha_id": alpha_id,
+                    "trading_day": trading_day,
+                    "fills": fills,
+                    "pnl_bps": pnl_bps,
+                    "regime": regime,
+                    "path": str(path),
+                }
+            )
             logger.info(
                 "paper_trade_batch.recorded",
                 alpha_id=alpha_id,
