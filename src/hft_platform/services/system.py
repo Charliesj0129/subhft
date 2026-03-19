@@ -127,6 +127,13 @@ class HFTSystem:
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
+
+        import signal
+        try:
+            self.loop.add_signal_handler(signal.SIGHUP, self._on_sighup)
+        except (NotImplementedError, OSError):
+            pass
+
         logger.info("System Starting...")
 
         # Hooks for Shioaji
@@ -190,10 +197,30 @@ class HFTSystem:
             value = default
         return max(min_value, value)
 
+    def _close_broker_client(self, client_name: str) -> None:
+        """Close a broker client with logout if available."""
+        client = getattr(self, client_name, None)
+        if client is not None and hasattr(client, "close"):
+            try:
+                client.close(logout=True)
+                logger.info("Broker client closed", client=client_name)
+            except Exception as exc:
+                logger.warning("Broker logout failed", client=client_name, error=str(exc))
+
+    def _on_sighup(self) -> None:
+        """Handle SIGHUP: reload risk config."""
+        logger.info("SIGHUP received - reloading risk config")
+        try:
+            self.risk_engine.reload_config()
+        except Exception as exc:
+            logger.error("SIGHUP risk config reload failed", error=str(exc))
+
     def _teardown_bootstrap(self) -> None:
         if self._bootstrap_torn_down:
             return
         self._bootstrap_torn_down = True
+        for cn in ("md_client", "order_client"):
+            self._close_broker_client(cn)
         try:
             self.bootstrapper.teardown()
         except Exception as exc:
@@ -432,6 +459,9 @@ class HFTSystem:
         self.session_hook_manager.stop()
         self.health_server.stop()
 
+        for cn in ("md_client", "order_client"):
+            self._close_broker_client(cn)
+
         # Cancel and await all tasks for clean shutdown
         for name, task in list(self.tasks.items()):
             if task and not task.done():
@@ -460,6 +490,8 @@ class HFTSystem:
         self.execution_gateway.stop()  # Clean shutdown
         self.session_hook_manager.stop()
         self.health_server.stop()
+        for cn in ("md_client", "order_client"):
+            self._close_broker_client(cn)
         self._teardown_bootstrap()
 
         # Schedule async cleanup if event loop is available
