@@ -67,7 +67,7 @@ class StormGuard:
             if key in risk_cfg:
                 setattr(self.thresholds, key, int(risk_cfg[key]))
         if "feed_gap_halt_s" in risk_cfg:
-            self.thresholds.feed_gap_halt_s = float(risk_cfg["feed_gap_halt_s"])
+            self.thresholds.feed_gap_halt_s = float(risk_cfg["feed_gap_halt_s"])  # precision-ok
         self._apply_env_overrides()
         logger.info("StormGuard thresholds reloaded")
 
@@ -79,7 +79,9 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
-    def update(self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0) -> StormGuardState:
+    def update(
+        self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0
+    ) -> StormGuardState:  # precision-ok
         """
         Evaluate inputs and transition state.
         Priority: HALT > STORM > WARM > NORMAL

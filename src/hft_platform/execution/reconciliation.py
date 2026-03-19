@@ -5,7 +5,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from structlog import get_logger
 
@@ -19,10 +19,10 @@ logger = get_logger("reconciliation")
 # ---------------------------------------------------------------------------
 # Environment-configurable resilience defaults (WU-04)
 # ---------------------------------------------------------------------------
-_DEFAULT_CHECK_INTERVAL_S = float(os.environ.get("HFT_RECON_CHECK_INTERVAL", "5"))
+_DEFAULT_CHECK_INTERVAL_S = float(os.environ.get("HFT_RECON_CHECK_INTERVAL", "5"))  # precision-ok
 _DEFAULT_GRACE_FAILURES = int(os.environ.get("HFT_RECON_GRACE_FAILURES", "10"))
-_DEFAULT_BACKOFF_BASE = float(os.environ.get("HFT_RECON_BACKOFF_BASE", "2"))
-_DEFAULT_BACKOFF_MAX = float(os.environ.get("HFT_RECON_BACKOFF_MAX", "60"))
+_DEFAULT_BACKOFF_BASE = float(os.environ.get("HFT_RECON_BACKOFF_BASE", "2"))  # precision-ok
+_DEFAULT_BACKOFF_MAX = float(os.environ.get("HFT_RECON_BACKOFF_MAX", "60"))  # precision-ok
 _BACKOFF_JITTER = 0.2
 
 
@@ -75,7 +75,7 @@ def _compute_backoff_delay(
 class ReconciliationService:
     def __init__(
         self,
-        client: object,
+        client: Any,
         position_store: PositionStore,
         config: dict,
         storm_guard: StormGuard,
@@ -88,7 +88,7 @@ class ReconciliationService:
         recon_cfg = config.get("reconciliation", {})
 
         # WU-04: resilient defaults
-        self.check_interval_s: float = recon_cfg.get(
+        self.check_interval_s: float = recon_cfg.get(  # precision-ok: timing
             "check_interval_s",
             _DEFAULT_CHECK_INTERVAL_S,
         )
@@ -96,16 +96,16 @@ class ReconciliationService:
             "grace_failures",
             _DEFAULT_GRACE_FAILURES,
         )
-        self.backoff_base: float = recon_cfg.get(
+        self.backoff_base: float = recon_cfg.get(  # precision-ok: timing
             "backoff_base",
             _DEFAULT_BACKOFF_BASE,
         )
-        self.backoff_max: float = recon_cfg.get(
+        self.backoff_max: float = recon_cfg.get(  # precision-ok: timing
             "backoff_max",
             _DEFAULT_BACKOFF_MAX,
         )
 
-        self.last_heartbeat: float = timebase.now_s()
+        self.last_heartbeat: float = timebase.now_s()  # precision-ok: timing
         self.running: bool = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._consecutive_failures: int = 0
@@ -122,7 +122,7 @@ class ReconciliationService:
     def _record_sync_result(self, result: str) -> None:
         self._metrics().reconciliation_sync_total.labels(result=result).inc()
 
-    def _record_sync_duration(self, duration_s: float) -> None:
+    def _record_sync_duration(self, duration_s: float) -> None:  # precision-ok
         self._metrics().reconciliation_sync_duration_seconds.observe(duration_s)
 
     def _record_discrepancy(self, severity: str) -> None:
