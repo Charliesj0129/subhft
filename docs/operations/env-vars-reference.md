@@ -238,6 +238,14 @@ Base YAML (config/base/main.yaml)
 
 ---
 
+## 12. Deployment
+
+| Variable | Default | Description |
+|---|---|---|
+| `HFT_ENGINE_IMAGE` | `hft-engine:latest` | Docker image tag for HFT engine container |
+
+---
+
 ## 快速參考：故障對照表
 
 | 症狀 | 優先檢查 | Runbook |
