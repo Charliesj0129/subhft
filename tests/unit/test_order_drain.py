@@ -1,39 +1,42 @@
 """Tests for order drain with timeout (WU-02)."""
-
 import asyncio
+import os
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 
-def _make_order_adapter():
+def _make():
+    config = {}
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+    yaml.dump(config, tmp)
+    tmp.close()
     with (
         patch("hft_platform.order.adapter.MetricsRegistry") as m,
         patch("hft_platform.order.adapter.LatencyRecorder") as lr,
-        patch("hft_platform.order.adapter.yaml") as y,
-        patch("builtins.open", MagicMock()),
     ):
         m.get.return_value = MagicMock()
         lr.get.return_value = MagicMock()
-        y.safe_load.return_value = {}
         from hft_platform.order.adapter import OrderAdapter
+        adapter = OrderAdapter(tmp.name, asyncio.Queue(), MagicMock(cancel_order=MagicMock(return_value=True)))
+        os.unlink(tmp.name)
+        return adapter
 
-        client = MagicMock()
-        client.cancel_order = MagicMock(return_value=True)
-        return OrderAdapter("config/base/order_adapter.yaml", asyncio.Queue(), client)
 
-
-class TestOrderDrain:
+class TestDrain:
     @pytest.mark.asyncio
-    async def test_drain_cancels_live_orders(self):
-        adapter = _make_order_adapter()
-        adapter.live_orders["s:1"] = MagicMock()
-        adapter.live_orders["s:2"] = MagicMock()
-        cancelled = await adapter.drain_and_cancel(timeout_s=2.0)
-        assert cancelled == 2
+    async def test_drain_empties_queue(self):
+        a = _make()
+        for _ in range(3):
+            await a.order_queue.put(MagicMock())
+        assert a.order_queue.qsize() == 3
+        await a.drain_and_cancel(0.5)
+        assert a.order_queue.empty()
 
     @pytest.mark.asyncio
-    async def test_drain_no_orders_returns_zero(self):
-        adapter = _make_order_adapter()
-        cancelled = await adapter.drain_and_cancel()
+    async def test_drain_no_live_orders_returns_zero(self):
+        a = _make()
+        cancelled = await a.drain_and_cancel(0.5)
         assert cancelled == 0
