@@ -10,7 +10,6 @@ Each run is stored as a directory under ``base_dir/runs/<run_id>/`` containing:
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -116,7 +115,7 @@ class ExperimentTracker:
             run_id=run_id,
             alpha_id=alpha_id,
             config_hash=config_hash,
-            timestamp=datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).isoformat(),
+            timestamp=datetime.fromtimestamp(timebase.now_s(), tz=UTC).isoformat(),
             data_paths=tuple(str(p) for p in data_paths),
             metrics=dict(metrics),
             gate_status=dict(gate_status),
@@ -426,7 +425,7 @@ def _paper_session_from_dict(payload: dict[str, Any], *, alpha_id: str) -> Paper
     alpha = str(payload.get("alpha_id") or alpha_id)
     started_at = str(payload.get("started_at", ""))
     ended_at = str(payload.get("ended_at", ""))
-    duration_seconds = payload.get("duration_seconds", None)
+    duration_seconds = payload.get("duration_seconds")
     if duration_seconds is None:
         duration = _session_duration_seconds(started_at, ended_at, strict=False)
         if duration <= 0 and _is_legacy_zero_duration_session(payload, started_at=started_at, ended_at=ended_at):
@@ -474,7 +473,7 @@ def _trading_day_from_iso(ts: str) -> str:
     try:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).date().isoformat()
     except ValueError:
-        return datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).date().isoformat()
+        return datetime.fromtimestamp(timebase.now_s(), tz=UTC).date().isoformat()
 
 
 def _coerce_utc(ts: datetime) -> datetime:
@@ -490,7 +489,7 @@ def _resolve_session_window(
     default_minutes: int,
 ) -> tuple[datetime, datetime]:
     default_delta = timedelta(minutes=max(1, int(default_minutes)))
-    now = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
+    now = datetime.fromtimestamp(timebase.now_s(), tz=UTC)
 
     start = _parse_iso_timestamp(started_at) if started_at else None
     end = _parse_iso_timestamp(ended_at) if ended_at else None
@@ -561,3 +560,91 @@ def _parse_iso_timestamp(ts: str) -> datetime | None:
         return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def gc_experiment_runs(
+    *,
+    base_dir: str | Path = "research/experiments",
+    older_than_days: int = 90,
+    apply: bool = False,
+    promotions_dir: str = "config/strategy_promotions",
+) -> dict[str, Any]:
+    """Garbage-collect old experiment run artifacts."""
+    import shutil
+
+    tracker = ExperimentTracker(base_dir=base_dir)
+    runs = tracker.list_runs()
+    cutoff = datetime.now(tz=UTC) - timedelta(days=max(0, int(older_than_days)))
+
+    promoted_run_ids: set[str] = set()
+    promo_path = Path(promotions_dir)
+    if promo_path.exists():
+        import yaml
+
+        for yaml_file in promo_path.rglob("*.yaml"):
+            try:
+                payload = yaml.safe_load(yaml_file.read_text())
+                if isinstance(payload, dict):
+                    rid = payload.get("run_id")
+                    if rid:
+                        promoted_run_ids.add(str(rid))
+            except Exception:
+                continue
+
+    candidates: list[dict[str, Any]] = []
+    preserved: list[dict[str, Any]] = []
+    deleted: list[dict[str, Any]] = []
+    total_freed: int = 0
+
+    for run in runs:
+        run_dir = Path(base_dir) / "runs" / run.run_id
+        if not run_dir.exists():
+            continue
+        try:
+            run_ts = datetime.fromisoformat(run.timestamp.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        if run_ts >= cutoff:
+            continue
+
+        gate_c_passed = bool(run.gate_status.get("gate_c", False))
+        is_promoted = run.run_id in promoted_run_ids
+        if gate_c_passed or is_promoted:
+            preserved.append(
+                {
+                    "run_id": run.run_id,
+                    "alpha_id": run.alpha_id,
+                    "reason": "gate_c_passed" if gate_c_passed else "promoted",
+                    "timestamp": run.timestamp,
+                }
+            )
+            continue
+
+        dir_size = sum(f.stat().st_size for f in run_dir.rglob("*") if f.is_file())
+        entry = {
+            "run_id": run.run_id,
+            "alpha_id": run.alpha_id,
+            "timestamp": run.timestamp,
+            "size_bytes": dir_size,
+        }
+        candidates.append(entry)
+        if apply:
+            try:
+                shutil.rmtree(run_dir)
+                deleted.append(entry)
+                total_freed += dir_size
+            except OSError as exc:
+                logger.warning("gc_experiment_runs: delete failed", run_id=run.run_id, error=str(exc))
+
+    return {
+        "older_than_days": older_than_days,
+        "applied": apply,
+        "candidates": len(candidates),
+        "preserved": len(preserved),
+        "deleted": len(deleted),
+        "freed_bytes": total_freed,
+        "freed_mb": round(total_freed / (1024 * 1024), 2),
+        "candidate_runs": candidates,
+        "preserved_runs": preserved,
+        "deleted_runs": deleted if apply else [],
+    }

@@ -181,7 +181,48 @@ def run_gate_a(
             f"(valid skills are defined in research.registry.schemas.VALID_SKILLS)"
         )
 
-    passed = not missing_fields_by_path and complexity_ok and paper_governance_passed and data_governance_passed
+    # Latency profile advisory check
+    enforce_latency = bool(config.enforce_latency_profile) if config is not None else False
+    latency_warnings: list[str] = []
+    latency_profile_present = False
+    latency_profile_valid = False
+
+    manifest_latency = getattr(manifest, "latency_profile", None)
+    if not manifest_latency:
+        latency_warnings.append(
+            "manifest.latency_profile is missing — add a latency profile reference "
+            "to avoid Gate D rejection (see config/research/latency_profiles.yaml)"
+        )
+    else:
+        latency_profile_present = True
+        try:
+            from hft_platform.alpha.latency_profiles import _ALIASES, load_profiles
+
+            profiles = load_profiles()
+            if profiles:
+                profile_id = str(manifest_latency)
+                resolved_id = _ALIASES.get(profile_id, profile_id)
+                if resolved_id in profiles or profile_id in profiles:
+                    latency_profile_valid = True
+                else:
+                    latency_warnings.append(
+                        f"manifest.latency_profile '{profile_id}' not found in "
+                        f"latency_profiles.yaml (available: {sorted(profiles.keys())})"
+                    )
+            else:
+                latency_profile_valid = True
+        except Exception:
+            latency_profile_valid = True
+
+    latency_profile_passed = (not enforce_latency) or latency_profile_present
+
+    passed = (
+        not missing_fields_by_path
+        and complexity_ok
+        and paper_governance_passed
+        and data_governance_passed
+        and latency_profile_passed
+    )
     achieved_values = list(data_ul_achieved_by_path.values())
     data_ul_achieved_min = min(achieved_values) if achieved_values else None
     return GateReport(
@@ -227,6 +268,14 @@ def run_gate_a(
                 "invalid_roles": invalid_roles_list,
                 "invalid_skills": invalid_skills_list,
                 "warnings": skills_warnings,
+            },
+            "latency_profile": {
+                "enforce": enforce_latency,
+                "present": latency_profile_present,
+                "valid": latency_profile_valid,
+                "manifest_value": str(manifest_latency) if manifest_latency else None,
+                "warnings": latency_warnings,
+                "passed": latency_profile_passed,
             },
         },
     )

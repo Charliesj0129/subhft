@@ -62,7 +62,7 @@ def cmd_run(args: argparse.Namespace):
         )
 
     mode = args.mode or args.mode_flag or _resolve_default_mode()
-    cli_overrides: Dict[str, Any] = {
+    cli_overrides: dict[str, Any] = {
         "mode": mode,
         "symbols": args.symbols or None,
     }
@@ -515,8 +515,8 @@ def cmd_contracts_status(args: argparse.Namespace):
         try:
             dt = _dt.datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=_dt.timezone.utc)
-            age_s = (_dt.datetime.now(_dt.timezone.utc) - dt).total_seconds()
+                dt = dt.replace(tzinfo=_dt.UTC)
+            age_s = (_dt.datetime.now(_dt.UTC) - dt).total_seconds()
         except Exception:
             age_s = None
     try:
@@ -841,6 +841,26 @@ def cmd_alpha_list(args: argparse.Namespace):
             print(f"- {msg}")
 
 
+def cmd_alpha_status(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.dashboard import build_alpha_status_report
+    except Exception as exc:
+        print(f"Failed to import alpha dashboard: {exc}")
+        sys.exit(1)
+
+    payload = build_alpha_status_report(
+        alphas_dir=str(getattr(args, "alphas_dir", "research/alphas")),
+        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+        promotions_dir=str(getattr(args, "promotions_dir", "config/strategy_promotions")),
+    )
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
 def cmd_alpha_validate(args: argparse.Namespace):
     try:
         from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
@@ -895,6 +915,7 @@ def cmd_alpha_validate(args: argparse.Namespace):
         stress_fee_multiplier=float(getattr(args, "stress_fee_multiplier", 1.5)),
         min_stress_sharpe_ratio=float(getattr(args, "min_stress_sharpe_ratio", 0.5)),
         stress_drawdown_limit_multiplier=float(getattr(args, "stress_drawdown_limit_multiplier", 1.25)),
+        enforce_latency_profile=bool(getattr(args, "enforce_latency_profile", False)),
     )
     result = run_alpha_validation(config)
     summary = result.to_dict()
@@ -905,6 +926,73 @@ def cmd_alpha_validate(args: argparse.Namespace):
     print(json.dumps(summary, indent=2, sort_keys=True))
     if not result.passed:
         sys.exit(2)
+
+
+def cmd_alpha_batch_validate(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.validation import batch_validate
+    except Exception as exc:
+        print(f"Failed to import batch validation: {exc}")
+        sys.exit(1)
+
+    alpha_ids: list[str]
+    if getattr(args, "all", False):
+        try:
+            from research.registry.alpha_registry import AlphaRegistry
+
+            registry = AlphaRegistry()
+            loaded = registry.discover("research/alphas")
+            alpha_ids = sorted(loaded.keys())
+        except Exception as exc:
+            print(f"Failed to discover alphas: {exc}")
+            sys.exit(1)
+    else:
+        raw = getattr(args, "alphas", "") or ""
+        alpha_ids = [a.strip() for a in raw.split(",") if a.strip()]
+
+    if not alpha_ids:
+        print("No alphas specified. Use --alphas X,Y,Z or --all")
+        sys.exit(2)
+
+    data_paths = list(getattr(args, "data", []) or [])
+    payload = batch_validate(
+        alpha_ids=alpha_ids,
+        data_paths=data_paths,
+        gate=str(getattr(args, "gate", "c")),
+        parallel=int(getattr(args, "parallel", 1)),
+        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+        skip_gate_b_tests=bool(getattr(args, "skip_gate_b_tests", False)),
+    )
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+    if payload.get("failed", 0) > 0:
+        sys.exit(2)
+
+
+def cmd_alpha_experiments_gc(args: argparse.Namespace):
+    try:
+        from hft_platform.alpha.experiments import gc_experiment_runs
+    except Exception as exc:
+        print(f"Failed to import experiment GC: {exc}")
+        sys.exit(1)
+
+    payload = gc_experiment_runs(
+        base_dir=str(args.base_dir),
+        older_than_days=int(args.older_than_days),
+        apply=bool(getattr(args, "apply", False)),
+        promotions_dir=str(getattr(args, "promotions_dir", "config/strategy_promotions")),
+    )
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def cmd_alpha_promote(args: argparse.Namespace):
@@ -1030,6 +1118,14 @@ def cmd_alpha_pool(args: argparse.Namespace):
             ridge_alpha=ridge_alpha,
         )
         payload = {"optimization": result.to_dict()}
+    elif pool_cmd == "recompute":
+        do_apply = bool(getattr(args, "apply", False))
+        payload = {
+            "recompute": pool_mod.recompute_pool_correlations(
+                base_dir=args.base_dir,
+                apply=do_apply,
+            )
+        }
     elif pool_cmd == "marginal":
         if not alpha_id:
             print("alpha pool marginal requires --alpha-id")
@@ -1486,7 +1582,7 @@ def cmd_symbols_validate(args: argparse.Namespace):
     if args.symbols_path:
         import yaml
 
-        with open(args.symbols_path, "r") as f:
+        with open(args.symbols_path) as f:
             data = yaml.safe_load(f) or {}
         symbols = data.get("symbols", [])
     else:
@@ -1763,6 +1859,14 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_list = alpha_sub.add_parser("list", help="List discovered research alphas")
     alpha_list.set_defaults(func=cmd_alpha_list)
 
+    alpha_status = alpha_sub.add_parser("status", help="Show unified alpha pipeline status dashboard")
+    alpha_status.add_argument("--alphas-dir", default="research/alphas", help="Alpha artifacts directory")
+    alpha_status.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    alpha_status.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory")
+    alpha_status.add_argument("--format", choices=["json", "table"], default="json", help="Output format")
+    alpha_status.add_argument("--out", help="Optional JSON output path")
+    alpha_status.set_defaults(func=cmd_alpha_status)
+
     alpha_scaffold = alpha_sub.add_parser("scaffold", help="Scaffold a new research alpha artifact")
     alpha_scaffold.add_argument("alpha_id", help="Immutable alpha id (e.g. ofi_mc_v2)")
     alpha_scaffold.add_argument("--paper", action="append", default=[], help="Paper reference (repeatable)")
@@ -1921,7 +2025,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to store experiment run artifacts",
     )
     alpha_validate.add_argument("--out", help="Optional summary JSON output path")
+    alpha_validate.add_argument(
+        "--enforce-latency-profile",
+        action="store_true",
+        help="Gate A: make missing latency_profile in manifest a blocking failure",
+    )
     alpha_validate.set_defaults(func=cmd_alpha_validate)
+
+    alpha_batch_validate = alpha_sub.add_parser(
+        "batch-validate", help="Batch-validate multiple alphas through Gate A-C"
+    )
+    alpha_batch_validate.add_argument("--alphas", help="Comma-separated alpha IDs")
+    alpha_batch_validate.add_argument("--all", action="store_true", help="Validate all discovered alphas")
+    alpha_batch_validate.add_argument("--data", nargs="+", help="npy/npz data paths for validation")
+    alpha_batch_validate.add_argument("--gate", choices=["a", "b", "c"], default="c", help="Maximum gate to run")
+    alpha_batch_validate.add_argument("--parallel", type=int, default=1, help="Number of parallel workers")
+    alpha_batch_validate.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    alpha_batch_validate.add_argument("--skip-gate-b-tests", action="store_true", help="Skip pytest in Gate B")
+    alpha_batch_validate.add_argument("--out", help="Optional JSON output path")
+    alpha_batch_validate.set_defaults(func=cmd_alpha_batch_validate)
 
     alpha_promote = alpha_sub.add_parser("promote", help="Run promotion pipeline (Gate D-E) and write canary config")
     alpha_promote.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")
@@ -2016,9 +2138,9 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_pool.add_argument(
         "pool_cmd",
         nargs="?",
-        choices=["matrix", "redundant", "optimize", "marginal"],
+        choices=["matrix", "redundant", "optimize", "marginal", "recompute"],
         default="matrix",
-        help="pool mode (matrix/redundant/optimize/marginal)",
+        help="pool mode (matrix/redundant/optimize/marginal/recompute)",
     )
     alpha_pool.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
     alpha_pool.add_argument("--threshold", type=float, default=None, help="Redundant correlation threshold")
@@ -2037,6 +2159,7 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_pool.add_argument(
         "--min-uplift", type=float, default=0.05, help="Minimum uplift for marginal contribution pass"
     )
+    alpha_pool.add_argument("--apply", action="store_true", help="Apply computed values to scorecard files")
     alpha_pool.add_argument("--out", help="Optional JSON output path")
     alpha_pool.set_defaults(func=cmd_alpha_pool)
 
@@ -2090,6 +2213,14 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_exp_best.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
     alpha_exp_best.add_argument("--out", help="Optional JSON output path")
     alpha_exp_best.set_defaults(func=cmd_alpha_experiments_best)
+
+    alpha_exp_gc = alpha_exp_sub.add_parser("gc", help="Garbage-collect old experiment run artifacts")
+    alpha_exp_gc.add_argument("--older-than-days", type=int, default=90, help="Minimum age in days for GC eligibility")
+    alpha_exp_gc.add_argument("--apply", action="store_true", help="Actually delete (default is dry-run)")
+    alpha_exp_gc.add_argument("--base-dir", default="research/experiments", help="Experiment base dir")
+    alpha_exp_gc.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions dir (preserved runs)")
+    alpha_exp_gc.add_argument("--out", help="Optional JSON output path")
+    alpha_exp_gc.set_defaults(func=cmd_alpha_experiments_gc)
 
     return parser
 
