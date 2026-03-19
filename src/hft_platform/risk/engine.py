@@ -15,6 +15,7 @@ from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
     MaxNotionalValidator,
+    PerSymbolNotionalValidator,
     PositionLimitValidator,
     PriceBandValidator,
     StormGuardFSM,
@@ -90,6 +91,7 @@ class RiskEngine:
         self.validators = [
             PriceBandValidator(self.config, price_scale_provider),
             MaxNotionalValidator(self.config, price_scale_provider),
+            PerSymbolNotionalValidator(self.config, price_scale_provider),
             PositionLimitValidator(self.config, price_scale_provider),
             DailyLossLimitValidator(self.config, price_scale_provider),
         ]
@@ -212,6 +214,26 @@ class RiskEngine:
     def load_config(self):
         with open(self.config_path, "r") as f:
             self.config = yaml.safe_load(f)
+
+    def on_config_reload(self, new_config: dict[str, Any]) -> None:
+        """Callback invoked by ConfigWatcher when strategy_limits.yaml changes.
+
+        Updates internal config and clears all validator caches so that
+        subsequent checks pick up the new limits.
+        """
+        self.config = new_config
+        for v in self.validators:
+            # Clear per-validator caches
+            for attr in list(vars(v)):
+                if "cache" in attr.lower():
+                    obj = getattr(v, attr, None)
+                    if isinstance(obj, dict):
+                        obj.clear()
+            # Also update the config references on each validator
+            v.config = new_config
+            v.defaults = new_config.get("global_defaults", {})
+            v.strat_configs = new_config.get("strategies", {})
+        logger.info("RiskEngine config reloaded", strategies=list(new_config.get("strategies", {}).keys()))
 
     async def run(self):
         self.running = True
