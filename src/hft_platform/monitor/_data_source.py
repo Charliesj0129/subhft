@@ -321,7 +321,7 @@ class HybridDataSource:
                 # Periodic CH backfill for sparkline history
                 self._maybe_backfill(result, cursors)
                 return result
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 self._shm_ok = False
                 self._update_mode_label()
 
@@ -517,7 +517,7 @@ class RedisHybridSource:
                 self._redis.connect()
                 self._redis_ok = True
                 self._update_mode_label()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
 
         # Try CH (RuntimeError propagates to caller for max-retry exhaustion)

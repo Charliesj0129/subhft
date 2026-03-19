@@ -218,7 +218,7 @@ def cmd_check(args: argparse.Namespace) -> None:
                 import yaml
 
                 payload = yaml.safe_dump(settings)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 payload = json.dumps(settings, indent=2)
         else:
             payload = json.dumps(settings, indent=2)

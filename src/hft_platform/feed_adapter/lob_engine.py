@@ -43,7 +43,7 @@ _FUSED_BYPASS = os.environ.get("HFT_FUSED_NORMALIZER", "0") == "1"
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         _rust_core = importlib.import_module("rust_core")
 
     _RUST_COMPUTE_STATS = _rust_core.compute_book_stats
@@ -114,7 +114,7 @@ class BookState:
         if _RUST_BOOK_STATE_ENABLED and _RustBookState is not None:
             try:
                 self._rust_state = _RustBookState(symbol)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
 
     def apply_update(self, bids: Union[np.ndarray, list], asks: Union[np.ndarray, list], exch_ts: int):
@@ -170,7 +170,7 @@ class BookState:
                         self.ask_depth_total = rs.ask_depth_total
                         self.version += 1
                         return
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
                 self._recompute()
             self.version += 1
@@ -209,7 +209,7 @@ class BookState:
                 self.spread = int(best_ask) - int(best_bid)
                 self.imbalance = float(imbalance)
                 return
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
 
         # 1. Depth (Pure Python Sum)
@@ -295,7 +295,7 @@ class BookState:
             if rs is not None:
                 try:
                     return rs.get_stats_tuple()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
             if isinstance(self.bids, np.ndarray):
                 best_bid = int(self.bids[0, 0]) if self.bids.size > 0 else 0
@@ -614,7 +614,7 @@ class LOBEngine:
             if rs is not None:
                 try:
                     return rs.get_l1_scaled()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
             if isinstance(book.bids, np.ndarray):
                 best_bid = int(book.bids[0, 0]) if book.bids.size > 0 else 0

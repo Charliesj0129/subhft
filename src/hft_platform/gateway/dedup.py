@@ -214,7 +214,7 @@ class IdempotencyStore:
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, self._persist_path)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
                 raise
@@ -245,7 +245,7 @@ class IdempotencyStore:
                         if rec.key:
                             self._records[rec.key] = rec
                             loaded += 1
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         continue
             logger.info("IdempotencyStore loaded", count=loaded)
         except Exception as exc:

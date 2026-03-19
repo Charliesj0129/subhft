@@ -50,6 +50,6 @@ class SystemPoller:
                     cpu_gauge.set(psutil.cpu_percent())
                 if mem_gauge is not None:
                     mem_gauge.set(psutil.virtual_memory().percent)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
             time.sleep(self._interval_s)

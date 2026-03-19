@@ -203,7 +203,7 @@ class DeadLetterQueue:
                             entries.append(DeadLetterEntry.from_dict(data))
                         except (json.JSONDecodeError, TypeError):
                             continue
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 continue
 
         return entries

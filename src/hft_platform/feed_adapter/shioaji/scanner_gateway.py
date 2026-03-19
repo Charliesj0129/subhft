@@ -35,7 +35,7 @@ class ScannerGateway:
             from hft_platform.feed_adapter import shioaji_client as client_module
 
             return getattr(client_module, "sj", None)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return None
 
     def scan(

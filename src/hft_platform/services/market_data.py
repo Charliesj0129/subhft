@@ -62,7 +62,7 @@ def _get_trace_sampler():
         from hft_platform.diagnostics.trace import get_trace_sampler
 
         return get_trace_sampler()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
 
 
@@ -179,7 +179,7 @@ def _try_fast_extract_callback_payload(*args: Any, **kwargs: Any) -> tuple[objec
 def _env_int(name: str, default: int) -> int:
     try:
         return max(1, int(os.getenv(name, str(default))))
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return max(1, int(default))
 
 
@@ -224,14 +224,14 @@ class MarketDataService:
         elif feature_enabled:
             try:
                 self.feature_engine = FeatureEngine()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 logger.error("feature_engine_init_failed", exc_info=True)
                 self.feature_engine = None
         else:
             self.feature_engine = None
         try:
             setattr(self.lob, "feature_engine", self.feature_engine)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass
         self._feature_shadow_engine: FeatureEngine | None = None
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
@@ -256,7 +256,7 @@ class MarketDataService:
         self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ") or timebase.TZ_NAME or "Asia/Taipei"
         try:
             self._reconnect_tzinfo: dt.tzinfo = ZoneInfo(self.reconnect_tz)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             logger.warning("Invalid reconnect tz, defaulting to UTC", tz=self.reconnect_tz)
             self._reconnect_tzinfo = dt.UTC
         self._last_reconnect_ts = 0.0
@@ -489,7 +489,7 @@ class MarketDataService:
 
         try:
             publisher.publish(idx, ts_ns, sym_hash, lob_fields, features)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass  # fire-and-forget — never block hot path
 
     def _init_feature_shadow_engine(self) -> None:
@@ -502,7 +502,7 @@ class MarketDataService:
             primary_backend = (
                 self.feature_engine.kernel_backend() if hasattr(self.feature_engine, "kernel_backend") else "python"
             )
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             primary_backend = "python"
         requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
         shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
@@ -851,7 +851,7 @@ class MarketDataService:
                                 )
                                 self._md_callback_parse_metric_children[parse_result] = child
                             child.inc()
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
 
             if not self.log_raw and msg is not None and not self._raw_first_parsed:
@@ -1055,7 +1055,7 @@ class MarketDataService:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _record_shioaji_crash_signature(self, text: str | None, *, context: str) -> None:
@@ -1066,7 +1066,7 @@ class MarketDataService:
             return
         try:
             self.metrics_registry.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _maybe_update_features(
@@ -1101,7 +1101,7 @@ class MarketDataService:
                             self._feature_latency_metric_child = self.metrics_registry.feature_plane_latency_ns
                         if self._feature_latency_metric_child is not None:
                             self._feature_latency_metric_child.observe(time.perf_counter_ns() - start_ns)
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
                 if self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
                     try:
@@ -1118,7 +1118,7 @@ class MarketDataService:
                             try:
                                 if hasattr(self.feature_engine, "get_feature_view"):
                                     state_view = self.feature_engine.get_feature_view(getattr(event, "symbol", ""))
-                            except Exception:
+                            except Exception as _exc:  # noqa: BLE001
                                 state_view = None
                             if isinstance(state_view, dict):
                                 qflags = int(state_view.get("quality_flags", 0) or 0)
@@ -1140,7 +1140,7 @@ class MarketDataService:
                                         qchild = self.metrics_registry.feature_quality_flags_total.labels(flag=label)
                                         self._feature_quality_flag_metric_children[label] = qchild
                                     qchild.inc()
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
             return feature_update
         except Exception as exc:
@@ -1162,7 +1162,7 @@ class MarketDataService:
                             )
                             self._feature_update_metric_children[key] = child
                         child.inc()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
             logger.warning("feature_engine_update_failed", reason=str(exc))
             return None
@@ -1204,7 +1204,7 @@ class MarketDataService:
                 view = (
                     self.feature_engine.get_feature_view(getattr(event, "symbol", "")) if self.feature_engine else None
                 )
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 view = None
             if isinstance(view, dict):
                 primary_values = tuple(view.get("values", ()))
@@ -1219,7 +1219,7 @@ class MarketDataService:
         else:
             try:
                 sview = shadow.get_feature_view(getattr(event, "symbol", ""))
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 sview = None
             if isinstance(sview, dict):
                 shadow_values = tuple(sview.get("values", ()))
@@ -1277,7 +1277,7 @@ class MarketDataService:
                 )
                 self._feature_shadow_checks_metric_children[key] = child
             child.inc()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass
 
     def _emit_feature_shadow_mismatch_metric(self, feature_set_id: str, feature_id: str) -> None:
@@ -1293,7 +1293,7 @@ class MarketDataService:
                 )
                 self._feature_shadow_mismatch_metric_children[key] = child
             child.inc()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass
 
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
@@ -1465,7 +1465,7 @@ class MarketDataService:
                 calendar = get_calendar()
                 if calendar.available and calendar.days_until_trading(now.date()) > 1:
                     return False
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         weekday = now.strftime("%a").lower()
         if self.reconnect_days and weekday not in self.reconnect_days:
@@ -1486,7 +1486,7 @@ class MarketDataService:
                 else:
                     if now_t >= start or now_t <= end:
                         return True
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 continue
         return False
 
@@ -1567,7 +1567,7 @@ class MarketDataService:
             calendar = get_calendar()
             now_dt = dt.datetime.now(calendar._tz)
             return calendar.is_trading_hours(now_dt, product_type=product_type)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
                 return False
@@ -1610,5 +1610,5 @@ class MarketDataService:
                 self.metrics_registry.market_open_grace_active.set(1 if in_grace else 0)
 
             return in_grace
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return False

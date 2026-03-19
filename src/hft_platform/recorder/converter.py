@@ -90,7 +90,7 @@ class WALConverter:
                         if date_bounds is not None and exch_ts_ns:
                             try:
                                 exch_ts_i = int(exch_ts_ns)
-                            except Exception:
+                            except Exception as _exc:  # noqa: BLE001
                                 continue
                             if exch_ts_i < date_bounds[0] or exch_ts_i >= date_bounds[1]:
                                 continue

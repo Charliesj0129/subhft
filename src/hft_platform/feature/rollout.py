@@ -174,13 +174,13 @@ class FeatureRolloutController:
             return ctrl
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return ctrl
         if not isinstance(data, dict):
             return ctrl
         try:
             ctrl._version = int(data.get("version", 0) or 0)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             ctrl._version = 0
         for entry in data.get("sets", []) or []:
             if not isinstance(entry, dict):

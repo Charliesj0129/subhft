@@ -211,7 +211,7 @@ def run_gate_a(
                     )
             else:
                 latency_profile_valid = True
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             latency_profile_valid = True
 
     latency_profile_passed = (not enforce_latency) or latency_profile_present

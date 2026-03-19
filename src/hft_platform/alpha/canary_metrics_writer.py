@@ -174,7 +174,7 @@ class CanaryMetricsWriter:
         )
         try:
             rows = self._ch_client.execute(query, {"alpha_id": alpha_id})
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             logger.warning("canary_metrics_writer.ch_query_failed", alpha_id=alpha_id, exc_info=True)
             return {}
 
@@ -254,7 +254,7 @@ class CanaryMetricsWriter:
         for yaml_path in self.promotions_dir.rglob("*.yaml"):
             try:
                 payload = yaml.safe_load(yaml_path.read_text())
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 continue
             if isinstance(payload, dict) and payload.get("alpha_id") == alpha_id:
                 matches.append(yaml_path)
@@ -273,7 +273,7 @@ class CanaryMetricsWriter:
         """
         try:
             existing = yaml.safe_load(yaml_path.read_text()) or {}
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             existing = {}
 
         if not isinstance(existing, dict):

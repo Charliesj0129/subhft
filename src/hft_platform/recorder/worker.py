@@ -88,7 +88,7 @@ def _extract_market_data_values(row) -> list | None:
             getattr(row, "asks_vol", None),
             getattr(row, "seq_no", None) or getattr(row, "seq", None) or 0,
         ]
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
 
 
@@ -123,7 +123,7 @@ def _extract_order_values(row) -> list | None:
             getattr(row, "exch_ts", None) or getattr(row, "ts", None),
             getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
         ]
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
 
 
@@ -154,7 +154,7 @@ def _extract_fill_values(row) -> list | None:
             getattr(row, "exch_ts", None) or getattr(row, "ts", None),
             getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
         ]
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
 
 

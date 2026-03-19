@@ -59,7 +59,7 @@ class CanaryMonitor:
         for yaml_path in sorted(self.promotions_dir.rglob("*.yaml")):
             try:
                 payload = yaml.safe_load(yaml_path.read_text())
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 logger.warning("canary: failed to parse YAML", path=str(yaml_path))
                 continue
 
@@ -239,7 +239,7 @@ class CanaryMonitor:
                 reason=status.reason,
                 checks=status.checks,
             )
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             logger.debug("canary.apply: audit log failed", exc_info=True)
 
     def _find_canary(self, alpha_id: str) -> dict[str, Any] | None:

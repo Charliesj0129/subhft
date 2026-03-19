@@ -588,7 +588,7 @@ def gc_experiment_runs(
                     rid = payload.get("run_id")
                     if rid:
                         promoted_run_ids.add(str(rid))
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 continue
 
     candidates: list[dict[str, Any]] = []

@@ -111,6 +111,6 @@ def coerce_ns(ts_val: Any) -> int:
             if abs_ts < 1e17:
                 return int(ts_val * 1e3)
             return int(ts_val)
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return 0
     return 0

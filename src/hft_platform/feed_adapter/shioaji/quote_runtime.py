@@ -356,7 +356,7 @@ class QuoteRuntime:
                                 c.metrics.quote_watchdog_recovery_attempts_total.labels(
                                     action="version_downgrade"
                                 ).inc()
-                            except Exception:
+                            except Exception as _exc:  # noqa: BLE001
                                 pass
                     else:
                         if downgrade_allowed and c._quote_version == "v1" and not c._supports_quote_v0():
@@ -371,7 +371,7 @@ class QuoteRuntime:
                                 c.metrics.quote_watchdog_recovery_attempts_total.labels(
                                     action="callback_reregister"
                                 ).inc()
-                            except Exception:
+                            except Exception as _exc:  # noqa: BLE001
                                 pass
                     if c.tick_callback:
                         c._callbacks_registered = False
@@ -408,7 +408,7 @@ class QuoteRuntime:
         if c.metrics and hasattr(c.metrics, "quote_watchdog_recovery_attempts_total"):
             try:
                 c.metrics.quote_watchdog_recovery_attempts_total.labels(action="skip_off_hours").inc()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         return False
 
@@ -626,7 +626,7 @@ class QuoteRuntime:
                 c._pending_quote_reason = delta.reason
                 if delta.pending and c._pending_quote_ts == 0.0:
                     c._pending_quote_ts = delta.ts
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 c._pending_quote_resubscribe = True
                 c._pending_quote_reason = reason
                 c._pending_quote_ts = now
@@ -643,7 +643,7 @@ class QuoteRuntime:
         if c._quote_event_handler is not None:
             try:
                 c._quote_event_handler.clear_pending()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         c._pending_quote_resubscribe = False
         c._pending_quote_reason = None
@@ -691,7 +691,7 @@ class QuoteRuntime:
                 try:
                     if c.metrics:
                         c.metrics.shioaji_keepalive_failures_total.inc()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
                 c._mark_quote_pending("event_12")
                 if c.tick_callback:
@@ -709,7 +709,7 @@ class QuoteRuntime:
                     try:
                         if c.metrics:
                             c.metrics.feed_resubscribe_total.labels(result="event_13").inc()
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
             elif event_code == 4:
                 if c._pending_quote_resubscribe:
@@ -718,7 +718,7 @@ class QuoteRuntime:
                 try:
                     if c.metrics:
                         c.metrics.feed_resubscribe_total.labels(result="event_4").inc()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
         except Exception as exc:
             c._record_crash_signature(str(exc), context="quote_event")

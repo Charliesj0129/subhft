@@ -369,7 +369,7 @@ class Batcher:
                 result = self._extractor(row)
                 if result is not None:
                     return result
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass  # Fall through to generic
         return self._serialize_row(row)
 

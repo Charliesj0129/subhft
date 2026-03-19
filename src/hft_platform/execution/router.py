@@ -125,7 +125,7 @@ class ExecutionRouter:
             finally:
                 try:
                     self.raw_queue.task_done()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
         self.metrics.execution_router_alive.set(0)
 

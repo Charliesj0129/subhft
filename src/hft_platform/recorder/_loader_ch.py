@@ -183,7 +183,7 @@ def is_duplicate(svc: Any, table: str, content_hash: str) -> bool:
                 f"SELECT count() FROM hft._wal_dedup WHERE table = '{table}' AND hash = '{content_hash}'"
             )
         return int(result) > 0
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return False
 
 

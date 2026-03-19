@@ -46,7 +46,7 @@ def _latest_scorecard_from_runs(root: Path, alpha_id: str) -> Path | None:
             scorecard = Path(row.scorecard_path)
             if scorecard.exists():
                 return scorecard
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
     return None
 
@@ -267,7 +267,7 @@ def _git_commit(root: Path) -> str:
         )
         if proc.returncode == 0:
             return proc.stdout.strip()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass
     return "unknown"
 

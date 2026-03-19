@@ -30,10 +30,10 @@ _RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not 
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         _rust_core = importlib.import_module("rust_core")
     _RustCircuitBreaker = getattr(_rust_core, "RustCircuitBreaker", None)
-except Exception:
+except Exception as _exc:  # noqa: BLE001
     _RustCircuitBreaker = None
 
 
@@ -42,7 +42,7 @@ def _get_trace_sampler():
         from hft_platform.diagnostics.trace import get_trace_sampler
 
         return get_trace_sampler()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
 
 
@@ -144,7 +144,7 @@ class StrategyRunner:
                     self._circuit_recovery_threshold,
                     self._circuit_cooldown_ns,
                 )
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
@@ -199,7 +199,7 @@ class StrategyRunner:
                         strategy=str(issue.strategy_id),
                         code=str(issue.code),
                     ).inc()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         if self._feature_compat_fail_fast and any(i.level == "error" for i in compat_issues):
             raise RuntimeError(
@@ -295,7 +295,7 @@ class StrategyRunner:
                     alpha_flat_m = alpha_events_total.labels(strategy=strategy.strategy_id, outcome="flat")
                 if alpha_last_signal_ts is not None:
                     alpha_last_ts_g = alpha_last_signal_ts.labels(strategy=strategy.strategy_id)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 alpha_intent_m = None
                 alpha_flat_m = None
                 alpha_last_ts_g = None
@@ -651,7 +651,7 @@ class StrategyRunner:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _extract_event_trace(self, event: Any) -> tuple[int, str]:
@@ -667,7 +667,7 @@ class StrategyRunner:
         elif hasattr(event, "ts"):
             try:
                 source_ts_ns = int(getattr(event, "ts") or 0)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 source_ts_ns = 0
         if not source_ts_ns:
             source_ts_ns = timebase.now_ns()

@@ -618,7 +618,7 @@ class ShioajiClient:
                 try:
                     if self.metrics and hasattr(self.metrics, "feed_first_quote_total"):
                         self.metrics.feed_first_quote_total.inc()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
             if self._pending_quote_resubscribe:
                 self._clear_quote_pending()

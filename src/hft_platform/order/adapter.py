@@ -40,7 +40,7 @@ def _get_trace_sampler():
         from hft_platform.diagnostics.trace import get_trace_sampler
 
         return get_trace_sampler()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
 
 

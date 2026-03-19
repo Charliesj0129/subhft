@@ -53,7 +53,7 @@ def build_alpha_status_report(
                     "latency_profile": manifest.get("latency_profile"),
                     "manifest_path": str(manifest_path),
                 }
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 logger.debug(
                     "dashboard: skipping manifest",
                     path=str(manifest_path),
@@ -77,7 +77,7 @@ def build_alpha_status_report(
                     "gate_status": meta.get("gate_status", {}),
                     "metrics": meta.get("metrics", {}),
                 }
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 continue
 
     # 3. Scan validation artifacts
@@ -103,21 +103,21 @@ def build_alpha_status_report(
                     try:
                         fr = json.loads(feasibility.read_text())
                         gate_results["gate_a"] = fr.get("passed")
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
                 correctness = run_dir / "correctness_report.json"
                 if correctness.exists():
                     try:
                         cr = json.loads(correctness.read_text())
                         gate_results["gate_b"] = cr.get("passed")
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
                 backtest = run_dir / "backtest_report.json"
                 if backtest.exists():
                     try:
                         br = json.loads(backtest.read_text())
                         gate_results["gate_c"] = br.get("passed")
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         pass
                 validation_status[alpha_id] = {
                     "run_dir": str(run_dir),
@@ -141,7 +141,7 @@ def build_alpha_status_report(
                     "weight": payload.get("weight", 0.0),
                     "path": str(yaml_path),
                 }
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 continue
 
     # 5. Merge into unified report

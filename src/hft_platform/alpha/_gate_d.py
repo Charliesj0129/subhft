@@ -78,7 +78,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
     _LIVE_FSV: str | None = None
     try:
         from hft_platform.feature.registry import FEATURE_SET_VERSION as _LIVE_FSV
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass
     if manifest_fsv is not None and _LIVE_FSV is not None:
         fsv_match = manifest_fsv == _LIVE_FSV

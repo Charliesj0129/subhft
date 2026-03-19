@@ -204,7 +204,7 @@ class RedisPoller:
             hb = _loads(raw)
             age_s = (timebase.now_ns() - int(hb["ts_ns"])) / 1e9
             self._heartbeat_stale = age_s > _HEARTBEAT_MAX_AGE_S
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             self._heartbeat_stale = True
 
     def _latest_key(self, symbol: str) -> str:

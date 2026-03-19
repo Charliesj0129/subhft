@@ -117,7 +117,7 @@ class CanaryAutoScheduler:
             await asyncio.sleep(self._interval)
             try:
                 await self.evaluate_all()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 logger.error("canary_auto_evaluate_loop_error", exc_info=True)
 
     # ------------------------------------------------------------------
@@ -167,7 +167,7 @@ class CanaryAutoScheduler:
                         alpha_id=alpha_id,
                         state=status.state,
                     )
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 logger.error(
                     "canary_auto_evaluate_error",
                     alpha_id=alpha_id,

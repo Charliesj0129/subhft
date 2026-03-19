@@ -154,7 +154,7 @@ class DataWriter:
             from hft_platform.observability.metrics import MetricsRegistry
 
             self.metrics = MetricsRegistry.get()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             self.metrics = None
 
     @classmethod
@@ -227,7 +227,7 @@ class DataWriter:
                 from hft_platform.recorder.wal import WALBatchWriter
 
                 self._wal_batch_writer = WALBatchWriter(self.wal.wal_dir)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 self._wal_batch_writer = None
         return self._wal_batch_writer
 
@@ -701,7 +701,7 @@ class DataWriter:
                     ingest_ts = row.get("ingest_ts")
                     if exch_ts and ingest_ts and int(ingest_ts) < int(exch_ts):
                         row["ingest_ts"] = int(exch_ts)
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     continue
             return data
 
@@ -723,7 +723,7 @@ class DataWriter:
                 if exch_ts_i and ingest_ts_i and ingest_ts_i < exch_ts_i:
                     row["ingest_ts"] = exch_ts_i
                 kept.append(row)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 kept.append(row)
         if dropped:
             logger.warning(

@@ -125,7 +125,7 @@ def replay_dlq(
                         continue
                     try:
                         obj = _loads(line)
-                    except Exception:
+                    except Exception as _exc:  # noqa: BLE001
                         continue
                     if isinstance(obj, dict) and obj.get("_dlq_meta"):
                         continue

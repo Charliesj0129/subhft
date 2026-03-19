@@ -120,7 +120,7 @@ def write_contract_cache(contracts: list[dict[str, Any]], path: str = DEFAULT_CO
         try:
             existing = json.loads(dest.read_text(encoding="utf-8"))
             cache_version = int(existing.get("cache_version", 0))
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass
     cache_version += 1
 

@@ -110,7 +110,7 @@ class ReconnectOrchestrator:
                             if c.metrics and timed_out_sub:
                                 try:
                                     c.metrics.feed_reconnect_timeout_total.labels(reason="subscribe").inc()
-                                except Exception:
+                                except Exception as _exc:  # noqa: BLE001
                                     pass
                             logger.error(
                                 "Subscribe basket failed after reconnect",
@@ -141,7 +141,7 @@ class ReconnectOrchestrator:
                         reason=reason or "unknown",
                         exception_type=type(exc).__name__,
                     ).inc()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
             c._reconnect_backoff_s = min(c._reconnect_backoff_s * 2.0, c._reconnect_backoff_max_s)
             return False
@@ -162,7 +162,7 @@ class ReconnectOrchestrator:
         if c._session_policy is not None:
             try:
                 return bool(c._session_policy.request_reconnect(reason=reason, force=force))
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 return False
         # Fallback: direct call (only in legacy/test contexts)
         return bool(self.reconnect(reason=reason, force=force))
@@ -226,7 +226,7 @@ class ReconnectOrchestrator:
             calendar = get_calendar()
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
             return calendar.is_trading_hours(now_dt)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             # Conservative fallback: weekdays 09:00-13:30 Asia/Taipei.
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
@@ -242,7 +242,7 @@ class ReconnectOrchestrator:
         """Return the appropriate QuoteVersion enum value, or None."""
         try:
             import shioaji as sj
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return None
         if not sj or not hasattr(sj.constant, "QuoteVersion"):
             return None
@@ -265,7 +265,7 @@ class ReconnectOrchestrator:
                     child = c.metrics.quote_schema_mismatch_total.labels(expected="v1", reason=reason)
                     c._quote_schema_mismatch_metric_cache[key] = child
                 child.inc()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass
         if c._quote_schema_mismatch_count % c._quote_schema_mismatch_log_every == 1:
             logger.error(

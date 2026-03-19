@@ -178,7 +178,7 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
     try:
         try:
             from statsmodels.tsa.stattools import bds as sm_bds
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             from statsmodels.stats.stattools import bds as sm_bds
 
         stat, pvals = sm_bds(sample, max_dim=2, epsilon=epsilon)
@@ -197,7 +197,7 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
             "reject_iid": reject_iid,
             "pass": not reject_iid,
         }
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         # Fallback when statsmodels is unavailable: permutation proxy on BDS-style correlation integral delta.
         rng = np.random.default_rng(42)
         draws = 200

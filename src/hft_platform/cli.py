@@ -247,7 +247,7 @@ def cmd_check(args: argparse.Namespace):
                 import yaml
 
                 payload = yaml.safe_dump(settings)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 payload = json.dumps(settings, indent=2)
         else:
             payload = json.dumps(settings, indent=2)
@@ -517,7 +517,7 @@ def cmd_contracts_status(args: argparse.Namespace):
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=_dt.UTC)
             age_s = (_dt.datetime.now(_dt.UTC) - dt).total_seconds()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             age_s = None
     try:
         stale_after = float(os.getenv("HFT_CONTRACT_REFRESH_S", str(args.stale_after_s)))
@@ -1208,7 +1208,7 @@ def cmd_recorder_status(args: argparse.Namespace):
             disk_free_str = f"{free_mb / 1024:.1f} GB"
         else:
             disk_free_str = f"{free_mb:.0f} MB"
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass
 
     # WAL guard status
@@ -1217,7 +1217,7 @@ def cmd_recorder_status(args: argparse.Namespace):
         disk_free_mb_val = st_vfs.f_frsize * st_vfs.f_bavail / 1024 / 1024
         guard_active = disk_free_mb_val < guard_threshold_mb
         guard_str = "ACTIVE" if guard_active else "OFF"
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         guard_str = "unknown"
 
     if oldest_age_s is not None:
@@ -1231,7 +1231,7 @@ def cmd_recorder_status(args: argparse.Namespace):
         resp = urllib.request.urlopen(f"http://{ck_host}:{ck_port}/ping", timeout=2.0)
         if resp.status == 200:
             ck_status = "ok"
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass
 
     ck_pool = os.getenv("HFT_CLICKHOUSE_POOL_SIZE", "8")

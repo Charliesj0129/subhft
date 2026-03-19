@@ -135,7 +135,7 @@ class StrategyContext:
             return None
         try:
             return self._feature_set_source()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return None
 
     def get_feature_profile_id(self) -> Optional[str]:
@@ -143,7 +143,7 @@ class StrategyContext:
             return None
         try:
             return self._feature_profile_source()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return None
 
 

@@ -59,7 +59,7 @@ class MarketCalendar:
             from zoneinfo import ZoneInfo
 
             self._tz = ZoneInfo(self._tz_name)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             self._tz = dt.timezone(dt.timedelta(hours=8))  # Fallback to UTC+8
 
         xcals = _get_xcals()

@@ -15,7 +15,7 @@ try:
     from zoneinfo import ZoneInfo
 
     _TZ_TAIPEI: dt.tzinfo = ZoneInfo("Asia/Taipei")
-except Exception:
+except Exception as _exc:  # noqa: BLE001
     _TZ_TAIPEI = dt.timezone(dt.timedelta(hours=8))
 
 

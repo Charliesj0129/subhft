@@ -98,7 +98,7 @@ def _record_route_metric(kind: str) -> None:
             if _ROUTE_DROP_METRIC is None:
                 _ROUTE_DROP_METRIC = metrics.shioaji_quote_route_total.labels(result="drop")
             _ROUTE_DROP_METRIC.inc()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass
 
 

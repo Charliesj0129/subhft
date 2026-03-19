@@ -83,7 +83,7 @@ class SessionRuntime:
         """
         try:
             return bool(self._client.reconnect(reason=reason, force=force))
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return False
 
     def is_logged_in(self) -> bool:

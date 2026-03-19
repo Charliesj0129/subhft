@@ -55,7 +55,7 @@ class AccountGateway:
             self._client._record_api_latency("positions", start_ns, ok=True)
             self._client._cache_set("positions", self._client._positions_cache_ttl_s, positions)
             return positions
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             self._client._record_api_latency("positions", start_ns, ok=False)
             logger.warning("Failed to fetch positions")
             return cached or []

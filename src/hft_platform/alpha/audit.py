@@ -83,7 +83,7 @@ def log_gate_result(
                 "details",
             ],
         )
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         logger.warning("alpha_audit.log_gate_result failed", alpha_id=alpha_id, exc_info=True)
 
 
@@ -129,7 +129,7 @@ def log_promotion_result(
                 "scorecard",
             ],
         )
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         logger.warning(
             "alpha_audit.log_promotion_result failed",
             alpha_id=promotion_result.alpha_id,
@@ -174,5 +174,5 @@ def log_canary_action(
                 "checks",
             ],
         )
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         logger.warning("alpha_audit.log_canary_action failed", alpha_id=alpha_id, exc_info=True)

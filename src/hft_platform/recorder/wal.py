@@ -53,7 +53,7 @@ class WALWriter:
         self._fsync_state_lock = threading.Lock()
         try:
             self._metrics = MetricsRegistry.get()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             self._metrics = None
 
     def _set_disk_pressure_metrics(self, avail_mb: float | None, active: bool, writer: str) -> None:
@@ -64,7 +64,7 @@ class WALWriter:
                 self._metrics.wal_disk_available_mb.set(float(avail_mb))
             self._metrics.wal_disk_circuit_breaker_active.labels(writer=writer).set(1 if active else 0)
             self._metrics.disk_pressure_level.set(2 if active else 0)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _record_wal_write_latency(self, writer: str, mode: str, elapsed_ms: float) -> None:
@@ -72,7 +72,7 @@ class WALWriter:
             return
         try:
             self._metrics.recorder_wal_write_latency_ms.labels(writer=writer, mode=mode).observe(elapsed_ms)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _record_fsync_latency(self, writer: str, target: str, elapsed_ms: float) -> None:
@@ -80,7 +80,7 @@ class WALWriter:
             return
         try:
             self._metrics.recorder_wal_fsync_latency_ms.labels(writer=writer, target=target).observe(elapsed_ms)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _handle_disk_pressure_skip(self, table: str, rows: int, *, writer: str) -> bool:
@@ -200,7 +200,7 @@ class WALWriter:
             os.rename(tmp_path, filename)
             # fsync directory to ensure rename is durable on disk (coalesced when configured)
             self._maybe_fsync_dir(dir_path, writer="wal")
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             # Clean up temp file on failure
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
@@ -254,7 +254,7 @@ class WALBatchWriter:
         self._fsync_state_lock = threading.Lock()
         try:
             self._metrics = MetricsRegistry.get()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             self._metrics = None
 
         # Background flush timer
@@ -274,7 +274,7 @@ class WALBatchWriter:
                 self._metrics.wal_disk_available_mb.set(float(avail_mb))
             self._metrics.wal_disk_circuit_breaker_active.labels(writer="wal_batch").set(1 if active else 0)
             self._metrics.disk_pressure_level.set(2 if active else 0)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _record_wal_write_latency(self, mode: str, elapsed_ms: float) -> None:
@@ -282,7 +282,7 @@ class WALBatchWriter:
             return
         try:
             self._metrics.recorder_wal_write_latency_ms.labels(writer="wal_batch", mode=mode).observe(elapsed_ms)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _record_fsync_latency(self, target: str, elapsed_ms: float) -> None:
@@ -290,7 +290,7 @@ class WALBatchWriter:
             return
         try:
             self._metrics.recorder_wal_fsync_latency_ms.labels(writer="wal_batch", target=target).observe(elapsed_ms)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return
 
     def _handle_disk_pressure_skip(self, table: str, rows: int) -> bool:
@@ -486,7 +486,7 @@ class WALBatchWriter:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 os.rename(tmp_path, filename)
                 self._maybe_fsync_dir(dir_path)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
                 raise

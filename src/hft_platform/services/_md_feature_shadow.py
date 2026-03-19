@@ -48,7 +48,7 @@ def init_feature_shadow_engine(svc: Any) -> None:
         primary_backend = (
             svc.feature_engine.kernel_backend() if hasattr(svc.feature_engine, "kernel_backend") else "python"
         )
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         primary_backend = "python"
     requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
     shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
@@ -109,7 +109,7 @@ def maybe_update_features(
                         svc._feature_latency_metric_child = svc.metrics_registry.feature_plane_latency_ns
                     if svc._feature_latency_metric_child is not None:
                         svc._feature_latency_metric_child.observe(time.perf_counter_ns() - start_ns)
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
             if svc._feature_metrics_counter % svc._feature_metrics_sample_every == 0:
                 try:
@@ -127,7 +127,7 @@ def maybe_update_features(
                                 state_view = svc.feature_engine.get_feature_view(getattr(event, "symbol", ""))
                             else:
                                 state_view = None
-                        except Exception:
+                        except Exception as _exc:  # noqa: BLE001
                             state_view = None
                         if isinstance(state_view, dict):
                             qflags = int(state_view.get("quality_flags", 0) or 0)
@@ -149,7 +149,7 @@ def maybe_update_features(
                                     qchild = svc.metrics_registry.feature_quality_flags_total.labels(flag=label)
                                     svc._feature_quality_flag_metric_children[label] = qchild
                                 qchild.inc()
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
         return feature_update
     except Exception as exc:
@@ -171,7 +171,7 @@ def maybe_update_features(
                         )
                         svc._feature_update_metric_children[key] = child
                     child.inc()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         logger.warning("feature_engine_update_failed", reason=str(exc))
         return None
@@ -213,7 +213,7 @@ def maybe_run_feature_shadow_parity(
     else:
         try:
             view = svc.feature_engine.get_feature_view(getattr(event, "symbol", "")) if svc.feature_engine else None
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             view = None
         if isinstance(view, dict):
             primary_values = tuple(view.get("values", ()))
@@ -228,7 +228,7 @@ def maybe_run_feature_shadow_parity(
     else:
         try:
             sview = shadow.get_feature_view(getattr(event, "symbol", ""))
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             sview = None
         if isinstance(sview, dict):
             shadow_values = tuple(sview.get("values", ()))
@@ -288,7 +288,7 @@ def _emit_feature_shadow_check_metric(svc: Any, result: str) -> None:
             )
             svc._feature_shadow_checks_metric_children[key] = child
         child.inc()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass
 
 
@@ -306,5 +306,5 @@ def _emit_feature_shadow_mismatch_metric(svc: Any, feature_set_id: str, feature_
             )
             svc._feature_shadow_mismatch_metric_children[key] = child
         child.inc()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass

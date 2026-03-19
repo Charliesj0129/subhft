@@ -670,7 +670,7 @@ class MetricsRegistry:
 
             self.system_cpu_usage.set(psutil.cpu_percent())
             self.system_memory_usage.set(psutil.virtual_memory().percent)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass
 
 

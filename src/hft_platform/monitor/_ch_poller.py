@@ -108,7 +108,7 @@ class CHPoller:
         if self._client is not None:
             try:
                 self._client.close()
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
             self._client = None
 

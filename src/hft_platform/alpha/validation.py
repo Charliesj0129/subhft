@@ -226,7 +226,7 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
 
         for gate_report in (gate_a, gate_b, gate_c):
             log_gate_result(config.alpha_id, run_id, gate_report, cfg_hash)
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass  # audit must never break the research pipeline
 
     return ValidationResult(
@@ -426,7 +426,7 @@ def run_gate_a(
                     )
             else:
                 latency_profile_valid = True
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             latency_profile_valid = True
 
     latency_profile_passed = (not enforce_latency) or latency_profile_present
@@ -993,7 +993,7 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
     try:
         try:
             from statsmodels.tsa.stattools import bds as sm_bds
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             from statsmodels.stats.stattools import bds as sm_bds
 
         stat, pvals = sm_bds(sample, max_dim=2, epsilon=epsilon)
@@ -1012,7 +1012,7 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
             "reject_iid": reject_iid,
             "pass": not reject_iid,
         }
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         # Fallback when statsmodels is unavailable: permutation proxy on BDS-style correlation integral delta.
         rng = np.random.default_rng(42)
         draws = 200
@@ -1698,7 +1698,7 @@ def _dataset_row_count(path: Path) -> int | None:
         if arr.ndim == 0:
             return int(arr.size)
         return int(arr.shape[0])
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
     finally:
         if isinstance(source, np.lib.npyio.NpzFile):

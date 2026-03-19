@@ -54,7 +54,7 @@ def call_if_exists(obj: object, method_name: str, *args: object) -> object:
         return obj
     try:
         return method(*args)
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return obj
 
 
@@ -165,7 +165,7 @@ def detect_wait_status_mode() -> str:
     """
     try:
         version_text = importlib_metadata.version("hftbacktest")
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return "legacy"
 
     parts = []
@@ -197,7 +197,7 @@ def infer_tick_size_from_data(data_path: str) -> float:
         finally:
             if hasattr(loaded, "close"):
                 loaded.close()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return 1.0
 
     names = tuple(arr.dtype.names or ())

@@ -50,7 +50,7 @@ def _get_trace_sampler():
         from hft_platform.diagnostics.trace import get_trace_sampler
 
         return get_trace_sampler()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
 
 
@@ -181,7 +181,7 @@ class RiskEngine:
 
                     codec = PriceCodec(price_scale_provider)
                     scale = int(codec.scale_factor("default")) or 10_000
-                except Exception:
+                except Exception as _exc:  # noqa: BLE001
                     pass
             max_price_cap_scaled = int(max_price_cap_raw * scale)
             tick_size_scaled = int(tick_size_raw * scale)
@@ -318,7 +318,7 @@ class RiskEngine:
             from hft_platform.gateway.channel import typed_frame_to_view
 
             return typed_frame_to_view(frame)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             # Fallback: materialize full OrderIntent if frame is malformed/unsupported
             from hft_platform.gateway.channel import typed_frame_to_intent
 
@@ -332,7 +332,7 @@ class RiskEngine:
                 return self.create_command(intent_view)
             try:
                 return self.create_command(typed_view_to_intent(intent_view))
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 pass
         return self.create_command(typed_frame_to_intent(frame))
 
@@ -402,7 +402,7 @@ class RiskEngine:
                 child = metrics.risk_reject_total.labels(strategy=key[0], reason=key[1])
                 self._reject_metric_cache[key] = child
             child.inc()
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass
 
     def _emit_trace(self, stage: str, intent: Any, payload: dict[str, Any]) -> None:
@@ -419,5 +419,5 @@ class RiskEngine:
                     **payload,
                 },
             )
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             pass
