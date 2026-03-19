@@ -26,3 +26,29 @@
 #     signal_threshold: 0.05
 #     max_position: 50
 #     qty: 1
+
+# composite_alpha_mm: Composite signal market making (Phase 19)
+# Combines OFI EMA, depth imbalance EMA, and LOB slope for directional quoting
+# Requires HFT_FEATURE_ENGINE_ENABLED=1
+# strategy:
+#   id: "COMPOSITE_ALPHA_MM_V1"
+#   module: "hft_platform.strategies.composite_alpha_mm"
+#   class: "CompositeAlphaMM"
+#   required_feature_set_id: "lob_shared_v1"
+#   required_feature_ids:
+#     - "best_bid"
+#     - "best_ask"
+#     - "ofi_l1_ema8"
+#     - "depth_imbalance_ema8_ppm"
+#   params:
+#     subscribe_symbols: ["TXFC6", "MXFC6"]
+#     w_ofi: 0.4
+#     w_depth: 0.3
+#     w_slope: 0.3
+#     base_half_spread_ticks: 2
+#     inv_skew_per_lot: 5000
+#     signal_threshold: 0.02
+#     max_position: 50
+#     qty: 1
+#     tick_size_scaled: 10000
+#     ema_alpha: 0.01
