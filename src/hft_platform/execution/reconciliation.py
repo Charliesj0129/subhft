@@ -59,9 +59,9 @@ class PositionDiscrepancy:
 
 def _compute_backoff_delay(
     attempt: int,
-    base: float,  # precision-ok: timing
-    max_delay: float,  # precision-ok: timing
-    jitter: float,  # precision-ok: timing
+    base: float,  # precision-ok
+    max_delay: float,  # precision-ok
+    jitter: float,  # precision-ok
 ) -> float:  # precision-ok: timing
     """Compute exponential backoff delay with jitter.
 
@@ -88,7 +88,7 @@ class ReconciliationService:
         recon_cfg = config.get("reconciliation", {})
 
         # WU-04: resilient defaults
-        self.check_interval_s: float = recon_cfg.get(  # precision-ok: timing
+        self.check_interval_s: float = recon_cfg.get(  # precision-ok
             "check_interval_s",
             _DEFAULT_CHECK_INTERVAL_S,
         )
@@ -96,16 +96,16 @@ class ReconciliationService:
             "grace_failures",
             _DEFAULT_GRACE_FAILURES,
         )
-        self.backoff_base: float = recon_cfg.get(  # precision-ok: timing
+        self.backoff_base: float = recon_cfg.get(  # precision-ok
             "backoff_base",
             _DEFAULT_BACKOFF_BASE,
         )
-        self.backoff_max: float = recon_cfg.get(  # precision-ok: timing
+        self.backoff_max: float = recon_cfg.get(  # precision-ok
             "backoff_max",
             _DEFAULT_BACKOFF_MAX,
         )
 
-        self.last_heartbeat: float = timebase.now_s()  # precision-ok: timing
+        self.last_heartbeat: float = timebase.now_s()  # precision-ok
         self.running: bool = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._consecutive_failures: int = 0
