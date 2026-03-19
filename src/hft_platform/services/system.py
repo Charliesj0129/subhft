@@ -189,10 +189,21 @@ class HFTSystem:
             value = default
         return max(min_value, value)
 
+    def _close_broker_client(self, client_name: str) -> None:
+        client = getattr(self, client_name, None)
+        if client is not None and hasattr(client, "close"):
+            try:
+                client.close(logout=True)
+                logger.info("Broker client closed", client=client_name)
+            except Exception as exc:
+                logger.warning("Broker logout failed", client=client_name, error=str(exc))
+
     def _teardown_bootstrap(self) -> None:
         if self._bootstrap_torn_down:
             return
         self._bootstrap_torn_down = True
+        for cn in ("md_client", "order_client"):
+            self._close_broker_client(cn)
         try:
             self.bootstrapper.teardown()
         except Exception as exc:

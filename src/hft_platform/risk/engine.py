@@ -272,6 +272,11 @@ class RiskEngine:
                 self.intent_queue.task_done()
 
     def evaluate(self, intent: Any) -> RiskDecision:
+        price = getattr(intent, "price", None)
+        if isinstance(price, float):
+            self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
+            return RiskDecision(False, intent, "FLOAT_PRICE")
+
         if self._fast_gate is not None:
             try:
                 if int(getattr(intent, "intent_type", IntentType.NEW)) != int(IntentType.CANCEL):

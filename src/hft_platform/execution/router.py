@@ -107,6 +107,12 @@ class ExecutionRouter:
                 elif raw.topic == "deal":
                     norm = self.normalizer.normalize_fill(raw)
                     if norm:
+                        if norm.strategy_id == "UNKNOWN":
+                            from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
+                            get_orphaned_fill_dlq().add(norm)
+                            self.metrics.orphaned_fill_total.inc()
+                            continue
+
                         _pre_realized = 0
                         if self._risk_engine is not None:
                             _pos_key = f"{norm.account_id}:{norm.strategy_id}:{norm.symbol}"
