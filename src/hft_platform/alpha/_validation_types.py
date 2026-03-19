@@ -65,6 +65,36 @@ class ValidationConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
+    enforce_latency_profile: bool = False
+    gate_c_tier: str = "promotion"
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenConfig:
+    """Lightweight pre-Gate-C screening configuration."""
+
+    alpha_id: str
+    data_paths: list[str]
+    min_ic: float = 0.005
+    min_sharpe_oos: float = -0.5
+    signal_threshold: float = 0.3
+    is_oos_split: float = 0.7
+    max_position: int = 5
+    project_root: str = "."
+    experiments_dir: str = "research/experiments"
+    latency_profile_id: str = "sim_p95_v2026-02-26"
+    local_decision_pipeline_latency_us: int = 250
+    submit_ack_latency_ms: float = 36.0
+    modify_ack_latency_ms: float = 43.0
+    cancel_ack_latency_ms: float = 47.0
+    live_uplift_factor: float = 1.5
+    maker_fee_bps: float = -0.2
+    taker_fee_bps: float = 0.2
+    backtest_engine: str = "hftbacktest_v2"
+    queue_model: str = "PowerProbQueueModel(3.0)"
+    latency_model: str = "IntpOrderLatency"
+    exchange_model: str = "NoPartialFillExchange"
+    min_queue_survival_rate: float = 0.3
 
 
 @dataclass(frozen=True)

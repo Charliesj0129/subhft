@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -492,3 +494,46 @@ def _safe_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     if denom <= 1e-12:
         return 0.0
     return float(np.dot(x_centered, y_centered) / denom)
+
+
+def load_pool_signals_from_experiments(
+    experiments: Path,
+    exclude_alpha_id: str | None = None,
+) -> dict[str, list[float]]:
+    """Load latest signals per alpha from experiment run scorecards.
+
+    Scans ``experiments/runs/*/scorecard.json`` for ``signals`` fields,
+    picking the latest run directory (sorted lexicographically) per alpha.
+    """
+    runs_dir = experiments / "runs"
+    if not runs_dir.is_dir():
+        return {}
+
+    alpha_signals: dict[str, tuple[str, list[float]]] = {}
+
+    for run_dir in sorted(runs_dir.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        meta_path = run_dir / "meta.json"
+        scorecard_path = run_dir / "scorecard.json"
+        if not meta_path.exists() or not scorecard_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            alpha_id = meta.get("alpha_id")
+            if not alpha_id:
+                continue
+            scorecard = json.loads(scorecard_path.read_text(encoding="utf-8"))
+            signals = scorecard.get("signals")
+            if signals is None:
+                continue
+            alpha_signals[alpha_id] = (run_dir.name, list(signals))
+        except (OSError, ValueError, KeyError):
+            continue
+
+    result: dict[str, list[float]] = {}
+    for alpha_id, (_run_name, signals) in alpha_signals.items():
+        if exclude_alpha_id and alpha_id == exclude_alpha_id:
+            continue
+        result[alpha_id] = signals
+    return result
