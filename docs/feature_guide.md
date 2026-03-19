@@ -5,13 +5,13 @@
 ## 1. 系統資料流
 
 ```text
-Shioaji Feed -> Normalizer -> LOB -> EventBus -> Strategy -> Risk -> Order -> Broker
-                                      \-> Recorder (WAL/ClickHouse)
+Exchange → BrokerFacade(Shioaji|Fubon) → Normalizer → LOBEngine → FeatureEngine → EventBus → Strategy → Risk → Order → BrokerFacade
+                                                                         \→ Recorder (WAL/ClickHouse)
 ```
 
 ## 2. 核心模組
 - `src/hft_platform/services/market_data.py`：行情流程協調
-- `src/hft_platform/feed_adapter/`：Shioaji + normalizer + LOB
+- `src/hft_platform/feed_adapter/`：Multi-broker（Shioaji/Fubon）+ normalizer + LOB
 - `src/hft_platform/strategy/` + `src/hft_platform/strategies/`：策略 SDK 與策略
 - `src/hft_platform/risk/`：風控與 StormGuard
 - `src/hft_platform/order/` + `src/hft_platform/execution/`：下單與回報
@@ -20,6 +20,7 @@ Shioaji Feed -> Normalizer -> LOB -> EventBus -> Strategy -> Risk -> Order -> Br
 - `src/hft_platform/gateway/`：gateway 與 HA/去重/曝險
 - `src/hft_platform/feature/`：Feature Plane（profile/rollout/compat）
 - `src/hft_platform/alpha/`：研究治理與 promotion/canary
+- `src/hft_platform/monitor/`：Live signal monitoring TUI（ClickHouse/Redis 雙資料源）
 
 ## 3. 設定與啟動
 - 設定來源：`config/base` + `config/env/*` + `config/settings.py` + env + CLI
@@ -87,3 +88,27 @@ hft backtest run --data <npz> --symbol 2330 --report
 1. 更新 `src/hft_platform/cli.py`
 2. 補 `docs/cli_reference.md`
 3. 補對應測試
+
+## 10. Phase 18 FeatureEngine — 16 Features
+
+`FeatureEngine` 位於 `LOBEngine` 與 `EventBus` 之間，計算 16 個 LOB 衍生微結構特徵。
+
+### 啟用方式
+```bash
+HFT_FEATURE_ENGINE_ENABLED=1    # 啟用 FeatureEngine
+HFT_FEATURE_ENGINE_BACKEND=python|rust  # 後端選擇（預設 python）
+```
+
+### 特徵清單
+
+**8 Stateless Features**（無狀態，逐 tick 計算）：
+- Spread, Microprice, Imbalance, Mid Price, OFI L1, Bid/Ask Volume Ratio, Trade Intensity, Book Depth
+
+**8 Rolling Features**（滾動窗口）：
+- EMA Spread, EMA Imbalance, EMA OFI, EMA Microprice, Rolling VWAP, Rolling Volatility, Rolling Trade Flow, Rolling Depth Pressure
+
+### 架構
+- Python 實作：`src/hft_platform/feature/engine.py`
+- Rust 核心：`RustFeatureEngineV2`、`LobFeatureKernelV1`、`RustFeaturePipelineV1`
+- Feature Registry：`src/hft_platform/feature/registry.py`（版本化 feature-set）
+- Shadow parity 驗證：`HFT_FEATURE_SHADOW_PARITY=1` 啟用 Python/Rust 比對
