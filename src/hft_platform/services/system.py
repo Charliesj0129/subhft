@@ -329,6 +329,21 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard update failed", error=str(e))
 
+            # Kill-switch file check
+            kill_switch_path = os.getenv("HFT_KILL_SWITCH_PATH", ".runtime/kill_switch")
+            if os.path.exists(kill_switch_path):
+                if self.storm_guard.state != StormGuardState.HALT:
+                    try:
+                        import json as _json
+
+                        with open(kill_switch_path, "r") as _ksf:
+                            _ks_data = _json.load(_ksf)
+                        _ks_reason = _ks_data.get("reason", "unknown")
+                    except Exception:
+                        _ks_reason = "kill_switch_file_present"
+                    self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
+                    logger.critical("Kill switch file detected", path=kill_switch_path, reason=_ks_reason)
+
             t_gateway = self.tasks.get("exec_gateway")
             # Check Health for all critical services
             for name, component, coro_factory in self._iter_supervised_services():
