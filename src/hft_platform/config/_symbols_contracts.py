@@ -156,96 +156,10 @@ def write_symbols_yaml(symbols: list[dict[str, Any]], output_path: str = DEFAULT
 
 
 def fetch_contracts_from_broker() -> list[dict[str, Any]]:
-    """Fetch all available contracts from the Shioaji broker SDK."""
-    try:
-        import shioaji as sj
-    except Exception as exc:  # pragma: no cover - environment missing SDK
-        raise RuntimeError("shioaji SDK not available") from exc
+    """Fetch contracts (delegates to feed_adapter for MB-02)."""
+    from hft_platform.feed_adapter.contract_fetcher import fetch_all_contracts
 
-    api_key = os.getenv("SHIOAJI_API_KEY")
-    secret_key = os.getenv("SHIOAJI_SECRET_KEY")
-    if not api_key or not secret_key:
-        raise RuntimeError("SHIOAJI API credentials missing (env vars)")
-
-    api = sj.Shioaji(simulation=True)
-    api.login(api_key=api_key, secret_key=secret_key, contracts_timeout=60000)
-
-    if hasattr(api, "fetch_contracts"):
-        try:
-            api.fetch_contracts(contract_download=True)
-        except Exception as exc:  # pragma: no cover - broker dependent
-            logger.warning("Failed to refresh contracts", error=str(exc))
-
-    contracts: list[dict[str, Any]] = []
-
-    def normalize(contract: Any, exchange: str, kind: str) -> dict[str, Any]:
-        right = getattr(contract, "option_right", None) or getattr(contract, "right", None)
-        if right is not None:
-            right = getattr(right, "value", right)
-        payload: dict[str, Any] = {
-            "code": getattr(contract, "code", None),
-            "symbol": getattr(contract, "symbol", None),
-            "name": getattr(contract, "name", None),
-            "exchange": exchange,
-            "type": kind,
-            "root": getattr(contract, "category", None) or getattr(contract, "symbol", None),
-            "tick_size": getattr(contract, "tick_size", None),
-            "price_scale": getattr(contract, "price_scale", None),
-            "contract_size": getattr(contract, "contract_size", None),
-            "delivery_date": getattr(contract, "delivery_date", None),
-            "strike": getattr(contract, "strike_price", None) or getattr(contract, "strike", None),
-            "right": right,
-            "reference": getattr(contract, "reference", None),
-        }
-        return {k: v for k, v in payload.items() if v is not None}
-
-    try:
-        for contract in api.Contracts.Stocks.TSE:
-            contracts.append(normalize(contract, "TSE", "stock"))
-    except Exception as exc:
-        logger.warning("Failed to fetch TSE contracts", error=str(exc))
-
-    try:
-        for contract in api.Contracts.Stocks.OTC:
-            contracts.append(normalize(contract, "OTC", "stock"))
-    except Exception as exc:
-        logger.warning("Failed to fetch OTC contracts", error=str(exc))
-
-    try:
-        for root in api.Contracts.Futures.keys():
-            try:
-                group = api.Contracts.Futures[root]
-                for contract in group:
-                    contracts.append(normalize(contract, "FUT", "future"))
-            except Exception as exc:
-                logger.warning("Failed to fetch Futures contracts", root=root, error=str(exc))
-    except Exception as exc:
-        logger.warning("Failed to fetch Futures contracts", error=str(exc))
-
-    try:
-        for root in api.Contracts.Options.keys():
-            try:
-                group = api.Contracts.Options[root]
-                for contract in group:
-                    contracts.append(normalize(contract, "OPT", "option"))
-            except Exception as exc:
-                logger.warning("Failed to fetch Options contracts", root=root, error=str(exc))
-    except Exception as exc:
-        logger.warning("Failed to fetch Options contracts", error=str(exc))
-
-    try:
-        for contract in api.Contracts.Indexs.TSE:
-            contracts.append(normalize(contract, "IDX", "index"))
-    except Exception as exc:
-        logger.warning("Failed to fetch TSE Indexs contracts", error=str(exc))
-
-    try:
-        for contract in api.Contracts.Indexs.OTC:
-            contracts.append(normalize(contract, "IDX", "index"))
-    except Exception as exc:
-        logger.warning("Failed to fetch OTC Indexs contracts", error=str(exc))
-
-    return contracts
+    return fetch_all_contracts()
 
 
 # ---------------------------------------------------------------------------
