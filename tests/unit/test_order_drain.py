@@ -1,4 +1,5 @@
 """Tests for order drain with timeout (WU-02)."""
+
 import asyncio
 import os
 import tempfile
@@ -20,6 +21,7 @@ def _make():
         m.get.return_value = MagicMock()
         lr.get.return_value = MagicMock()
         from hft_platform.order.adapter import OrderAdapter
+
         adapter = OrderAdapter(tmp.name, asyncio.Queue(), MagicMock(cancel_order=MagicMock(return_value=True)))
         os.unlink(tmp.name)
         return adapter

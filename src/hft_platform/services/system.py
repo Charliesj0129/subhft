@@ -129,6 +129,7 @@ class HFTSystem:
         self.loop = asyncio.get_running_loop()
 
         import signal
+
         try:
             self.loop.add_signal_handler(signal.SIGHUP, self._on_sighup)
         except (NotImplementedError, OSError):

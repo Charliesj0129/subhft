@@ -1,8 +1,10 @@
 """Tests for WAL disk pressure policy (WU-05)."""
+
 import os
 import tempfile
 from unittest.mock import MagicMock, patch
 import pytest
+
 
 class TestWALPolicy:
     def test_default_halt(self):
@@ -11,5 +13,6 @@ class TestWALPolicy:
             with patch("hft_platform.recorder.wal.MetricsRegistry") as m:
                 m.get.return_value = MagicMock()
                 import importlib, hft_platform.recorder.wal as w
+
                 importlib.reload(w)
                 assert w.WALWriter(tempfile.mkdtemp())._disk_pressure_policy == "halt"

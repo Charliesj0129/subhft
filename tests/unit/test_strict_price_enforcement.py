@@ -1,4 +1,5 @@
 """Tests for strict price mode enforcement (WU-06)."""
+
 import asyncio
 import os
 import tempfile
@@ -10,7 +11,10 @@ import yaml
 class TestFloatReject:
     def test_rejects_float(self):
         """Risk engine evaluate() rejects float prices with FLOAT_PRICE."""
-        config = {"global_defaults": {"max_price_cap": 5000.0, "tick_size": 0.01, "price_band_ticks": 20}, "strategies": {}}
+        config = {
+            "global_defaults": {"max_price_cap": 5000.0, "tick_size": 0.01, "price_band_ticks": 20},
+            "strategies": {},
+        }
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
         yaml.dump(config, tmp)
         tmp.close()
@@ -22,6 +26,7 @@ class TestFloatReject:
             m.get.return_value = MagicMock()
             lr.get.return_value = MagicMock()
             from hft_platform.risk.engine import RiskEngine
+
             e = RiskEngine(tmp.name, asyncio.Queue(), asyncio.Queue())
             intent = MagicMock(price=100.5, qty=1, intent_type=0, strategy_id="t", symbol="2330", trace_id="")
             d = e.evaluate(intent)
