@@ -100,7 +100,8 @@ async def test_reconciliation_metric_not_updated_on_sync_failure() -> None:
         return_value=mock_metrics,
     ):
         service = ReconciliationService(mock_client, mock_store, {})
-        # sync_portfolio catches exceptions internally; should not raise
-        await service.sync_portfolio()
+        # sync_portfolio now raises on failure (WU-04 resilience change)
+        with pytest.raises(RuntimeError, match="broker unavailable"):
+            await service.sync_portfolio()
 
     mock_metrics.reconciliation_discrepancy_count.set.assert_not_called()
