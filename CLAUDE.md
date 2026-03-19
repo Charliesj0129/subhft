@@ -50,7 +50,7 @@ Exchange → BrokerFacade(Shioaji|Fubon) → Normalizer → LOBEngine → Featur
 
 > **Multi-broker**: The `BrokerFacade` is a polymorphic adapter selected at startup by `config.broker` / `HFT_BROKER`. Each implementation exposes identical `login()`, `subscribe()`, `place_order()`, `cancel_order()` interfaces. See `docs/architecture/multi-broker-support.md` for the ADR.
 
-**Feature Engine** (Phase 18): `FeatureEngine` sits between `LOBEngine` and `RingBufferBus`, computing 16 shared LOB-derived features (8 stateless + 8 rolling: OFI L1, EMA spread/imbalance). Feature-flagged via `HFT_FEATURE_ENGINE_ENABLED=1` (default off). See `feature/engine.py`, `feature/registry.py`. Production hardening (Rust kernel promotion, parity testing) tracked in `docs/TODO.md`.
+**Feature Engine** (Phase 18): `FeatureEngine` sits between `LOBEngine` and `RingBufferBus`, computing 16 shared LOB-derived features (8 stateless + 8 rolling: OFI L1, EMA spread/imbalance). Enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`); disable with `HFT_FEATURE_ENGINE_ENABLED=0`. See `feature/engine.py`, `feature/registry.py`. Production hardening (Rust kernel promotion, parity testing) tracked in `docs/TODO.md`.
 
 ### Latency Realism Guard (Research / Backtest / Promotion)
 
@@ -162,7 +162,7 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_CLICKHOUSE_HOST`      | `localhost` | ClickHouse host                           |
 | `HFT_EXPOSURE_MAX_SYMBOLS` | `10000`     | ExposureStore cardinality bound           |
 | `HFT_BROKER`               | `shioaji`   | Broker backend: `shioaji` / `fubon`       |
-| `HFT_FEATURE_ENGINE_ENABLED` | `0`         | `1` = enable FeatureEngine in runtime pipeline |
+| `HFT_FEATURE_ENGINE_ENABLED` | `1`         | `0` = disable FeatureEngine in runtime pipeline |
 | `HFT_FUBON_CERT_PATH`      | —           | Fubon API certificate file path           |
 | `HFT_FUBON_ACCOUNT`        | —           | Fubon trading account ID                  |
 | `HFT_FUBON_PASSWORD`       | —           | Fubon account password (use secret mgr)   |

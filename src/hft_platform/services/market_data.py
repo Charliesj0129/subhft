@@ -217,7 +217,7 @@ class MarketDataService:
         self.recorder_queue = recorder_queue
 
         self.lob = LOBEngine()
-        feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+        feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
         self.feature_engine = feature_engine or (FeatureEngine() if feature_enabled else None)
         try:
             setattr(self.lob, "feature_engine", self.feature_engine)
