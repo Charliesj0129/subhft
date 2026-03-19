@@ -6,6 +6,8 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
+from hft_platform.core.session_hooks import SessionHookManager
+from hft_platform.observability.health import HealthServer
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
 from hft_platform.utils.logging import configure_logging
@@ -106,6 +108,12 @@ class HFTSystem:
         self._queue_log_every_s = self._env_float("HFT_SUPERVISOR_QUEUE_LOG_EVERY_S", 30.0, min_value=1.0)
         self._last_queue_log_s = 0.0
 
+        # WU-11: Session hooks (disabled by default)
+        self.session_hook_manager = SessionHookManager()
+
+        # WU-17: Structured health endpoint
+        self.health_server = HealthServer(system=self)
+
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
@@ -134,6 +142,13 @@ class HFTSystem:
             self._start_service("recorder_bridge", self._recorder_bridge())
             if os.getenv("HFT_PNL_EXPORTER_ENABLED", "1").lower() not in {"0", "false", "no", "off"}:
                 self._start_service("pnl_exporter", self._pnl_snapshot_exporter())
+
+            # WU-11: Session hooks
+            if self.session_hook_manager.enabled:
+                self._start_service("session_hooks", self.session_hook_manager.run())
+
+            # WU-17: Structured health endpoint
+            self._start_service("health_server", self.health_server.run())
 
             # Start Monitor/Supervisor Loop
             await self._supervise()
@@ -381,6 +396,8 @@ class HFTSystem:
         self.recon_service.running = False
         self.strategy_runner.running = False
         self.execution_gateway.stop()  # Clean shutdown
+        self.session_hook_manager.stop()
+        self.health_server.stop()
 
         # Cancel and await all tasks for clean shutdown
         for name, task in list(self.tasks.items()):
@@ -408,6 +425,8 @@ class HFTSystem:
         self.recon_service.running = False
         self.strategy_runner.running = False
         self.execution_gateway.stop()  # Clean shutdown
+        self.session_hook_manager.stop()
+        self.health_server.stop()
         self._teardown_bootstrap()
 
         # Schedule async cleanup if event loop is available
