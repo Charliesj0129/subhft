@@ -79,13 +79,9 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
-<<<<<<< HEAD
-    def update(self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0) -> StormGuardState:
-=======
     def update(
         self, drawdown_bps: int = 0, latency_us: int = 0, feed_gap_s: float = 0.0
     ) -> StormGuardState:  # precision-ok
->>>>>>> origin/main
         """
         Evaluate inputs and transition state.
         Priority: HALT > STORM > WARM > NORMAL
