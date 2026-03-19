@@ -125,8 +125,8 @@ class ExecutionRouter:
             finally:
                 try:
                     self.raw_queue.task_done()
-                except Exception as _exc:  # noqa: BLE001
-                    pass
+                except ValueError:
+                    pass  # task_done called too many times
         self.metrics.execution_router_alive.set(0)
 
     def _publish_nowait(self, event) -> None:

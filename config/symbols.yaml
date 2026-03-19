@@ -205,6 +205,13 @@ symbols:
   product_type: future
   tags:
   - futures
+  - txf
+- code: TXFD6
+  name: "\u81FA\u80A1\u671F\u8CA804"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
   - front_month
   - txf
 - code: TXFE6
@@ -221,6 +228,13 @@ symbols:
   product_type: future
   tags:
   - futures
+  - mxf
+- code: MXFD6
+  name: "\u5C0F\u578B\u81FA\u630704"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
   - front_month
   - mxf
 - code: MXFE6
@@ -233,6 +247,13 @@ symbols:
   - mxf
 - code: TMFC6
   name: "\u5FAE\u578B\u81FA\u6307\u671F\u8CA803"
+  exchange: FUT
+  product_type: future
+  tags:
+  - futures
+  - tmf
+- code: TMFD6
+  name: "\u5FAE\u578B\u81FA\u6307\u671F\u8CA804"
   exchange: FUT
   product_type: future
   tags:

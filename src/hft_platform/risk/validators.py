@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from structlog import get_logger
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
+from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, PriceScaleProvider, SymbolMetadataPriceScaleProvider
 from hft_platform.observability.metrics import MetricsRegistry
 
@@ -142,6 +143,122 @@ class MaxNotionalValidator(RiskValidator):
         notional_scaled = intent.price * intent.qty
         if notional_scaled > max_notional_scaled:
             return False, f"MAX_NOTIONAL_EXCEEDED: {notional_scaled} > {max_notional_scaled}"
+
+        return True, "OK"
+
+
+class PositionLimitValidator(RiskValidator):
+    """Stateless validator: rejects orders where abs(qty) exceeds max_position_lots."""
+
+    __slots__ = ("_default_max_position_lots", "_max_position_cache")
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._default_max_position_lots: int = int(self.defaults.get("max_position_lots", 1_000))
+        self._max_position_cache: Dict[str, int] = {}
+
+    def check(self, intent: OrderIntent) -> Tuple[bool, str]:
+        if intent.intent_type == IntentType.CANCEL:
+            return True, "OK"
+
+        cache_key = intent.strategy_id
+        max_lots = self._max_position_cache.get(cache_key)
+        if max_lots is None:
+            strat_cfg = self.strat_configs.get(intent.strategy_id, {})
+            max_lots = int(strat_cfg.get("max_position_lots", self._default_max_position_lots))
+            self._max_position_cache[cache_key] = max_lots
+
+        if abs(intent.qty) > max_lots:
+            return False, f"POSITION_LIMIT_EXCEEDED: abs({intent.qty}) > {max_lots}"
+
+        return True, "OK"
+
+
+class DailyLossLimitValidator(RiskValidator):
+    """Stateful validator: rejects orders when accumulated daily realized loss exceeds limit.
+
+    Tracks cumulative PnL updates per strategy. Caller must invoke record_pnl() to
+    register realized PnL changes. Date-based reset occurs automatically on check().
+
+    Prices are scaled int x10000 per platform conventions.
+    Uses timebase.now_ns() for time — never datetime.now().
+    """
+
+    __slots__ = (
+        "_default_max_daily_loss",
+        "_accumulated_loss",
+        "_current_date_ns",
+        "_ns_per_day",
+    )
+
+    # Nanoseconds per calendar day
+    _NS_PER_DAY: int = 86_400 * 1_000_000_000
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Stored as a positive threshold; loss is compared as abs value
+        self._default_max_daily_loss: int = int(self.defaults.get("max_daily_loss", 500_000_000))
+        # Accumulated PnL per strategy (negative = loss, positive = gain); scaled int
+        self._accumulated_loss: Dict[str, int] = {}
+        # Epoch-ns of midnight UTC for the current trading day (cached)
+        self._current_date_ns: int = self._today_midnight_ns()
+
+    @staticmethod
+    def _today_midnight_ns() -> int:
+        """Return epoch nanoseconds for UTC midnight of the current day."""
+        now_ns = timebase.now_ns()
+        # Floor to day boundary
+        ns_per_day = 86_400 * 1_000_000_000
+        return (now_ns // ns_per_day) * ns_per_day
+
+    def _maybe_reset(self) -> None:
+        """Reset accumulated losses if the calendar date has rolled over."""
+        today_ns = self._today_midnight_ns()
+        if today_ns != self._current_date_ns:
+            logger.info(
+                "DailyLossLimitValidator: daily reset",
+                prev_date_ns=self._current_date_ns,
+                new_date_ns=today_ns,
+                strategies_reset=list(self._accumulated_loss.keys()),
+            )
+            self._accumulated_loss.clear()
+            self._current_date_ns = today_ns
+
+    def record_pnl(self, strategy_id: str, pnl_delta: int) -> None:
+        """Record a realized PnL delta (negative = loss) for a strategy.
+
+        Args:
+            strategy_id: Strategy identifier string.
+            pnl_delta: Realized PnL change in scaled int (x10000). Negative = loss.
+        """
+        self._maybe_reset()
+        current = self._accumulated_loss.get(strategy_id, 0)
+        self._accumulated_loss[strategy_id] = current + pnl_delta
+
+    def check(self, intent: OrderIntent) -> Tuple[bool, str]:
+        if intent.intent_type == IntentType.CANCEL:
+            return True, "OK"
+
+        self._maybe_reset()
+
+        accumulated = self._accumulated_loss.get(intent.strategy_id, 0)
+        if accumulated >= 0:
+            # Net gain or breakeven — no loss to check
+            return True, "OK"
+
+        loss_magnitude = -accumulated  # positive value representing loss
+
+        strat_cfg = self.strat_configs.get(intent.strategy_id, {})
+        max_daily_loss = int(strat_cfg.get("max_daily_loss", self._default_max_daily_loss))
+
+        if loss_magnitude >= max_daily_loss:
+            logger.warning(
+                "DailyLossLimitValidator: daily loss limit exceeded",
+                strategy_id=intent.strategy_id,
+                accumulated_loss=accumulated,
+                max_daily_loss=max_daily_loss,
+            )
+            return False, f"DAILY_LOSS_LIMIT_EXCEEDED: loss={loss_magnitude} >= limit={max_daily_loss}"
 
         return True, "OK"
 

@@ -71,7 +71,7 @@ Mandatory policy:
 | Plane         | Key Module                                                                           | Responsibility                              |
 | ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
 | Control       | `services/bootstrap.py`, `services/system.py`                                        | Bounded queues, service graph, supervision  |
-| Market Data   | `feed_adapter/shioaji_client.py`, `normalizer.py`, `lob_engine.py`                   | Ingest → normalize → LOB state              |
+| Market Data   | `feed_adapter/shioaji_client.py`, `normalizer.py`, `lob_engine.py`; fused path: `RustNormalizerLobFused` / `RustNormalizerFeatureFusedV1` | Ingest → normalize → LOB state (fused Rust path optional via `HFT_FUSED_NORMALIZER=1`) |
 | Feature       | `feature/engine.py`, `feature/registry.py`                                           | 16 LOB-derived features, research/live parity |
 | Decision      | `strategy/runner.py`, `risk/engine.py`                                               | Strategy dispatch → risk validation         |
 | Execution     | `order/adapter.py`, `execution/router.py`, `execution/positions.py`                  | Broker API, fill routing, position tracking |
@@ -127,15 +127,29 @@ Research artifacts: `research/alphas/<alpha_id>/` (48+ implementations), experim
 
 Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 
-| Export                                                                                                                                                               | Purpose                       |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `FastRingBuffer`, `EventBus`, `FastTickRingBuffer`                                                                                                                   | Lock-free event routing       |
-| `scale_book*`, `normalize_*`, `compute_book_stats`, `get_field`                                                                                                      | LOB normalization hot path    |
-| `RustPositionTracker`                                                                                                                                                | O(1) position accounting      |
-| `FastGate`                                                                                                                                                           | Numba-equivalent risk gate    |
-| `AlphaDepthSlope`, `AlphaOFI`, `AlphaRegimePressure`, `AlphaRegimeReversal`, `AlphaTransientReprice`, `AlphaMarkovTransition`, `MatchedFilterTradeFlow`, `MetaAlpha` | Alpha signal generators       |
-| `AlphaStrategy`                                                                                                                                                      | Rust-native strategy executor |
-| `ShmRingBuffer`                                                                                                                                                      | Shared memory IPC             |
+| Export                                                                                                                                                               | Purpose                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `FastRingBuffer`, `EventBus`, `FastTickRingBuffer`, `FastBidAskRingBuffer`, `FastLOBStatsRingBuffer`                                                                 | Lock-free event routing / typed ring buffers   |
+| `scale_book`, `scale_book_seq`, `scale_book_pair`, `scale_book_pair_stats`, `scale_book_pair_stats_np`, `compute_book_stats`, `get_field`                            | LOB scaling and book stats hot path            |
+| `normalize_tick_tuple`, `normalize_bidask_tuple`, `normalize_bidask_tuple_np`, `normalize_bidask_tuple_with_synth`, `normalize_tick_v2`, `normalize_bidask_v2`       | Tick/BidAsk normalization (Python + v2 paths)  |
+| `LimitOrderBook`                                                                                                                                                     | Full limit order book state                    |
+| `RustBookState`                                                                                                                                                      | Lightweight LOB snapshot state                 |
+| `RustPositionTracker`                                                                                                                                                | O(1) position accounting                       |
+| `FastGate`, `RustRiskValidator`, `RustExposureStore`, `RustCircuitBreaker`, `RustStormGuardValidator`                                                                | Risk gate, validator, exposure tracking, breaker, storm guard |
+| `RustDedupStore`                                                                                                                                                     | Idempotency / order deduplication              |
+| `LobFeatureKernelV1`, `RustFeaturePipelineV1`, `RustFeatureEngineV2`                                                                                                | LOB feature kernels and feature engine         |
+| `AlphaDepthSlope`, `AlphaOFI`, `AlphaRegimePressure`, `AlphaRegimeReversal`, `AlphaTransientReprice`, `AlphaMarkovTransition`, `MatchedFilterTradeFlow`, `MetaAlpha` | Alpha signal generators                        |
+| `AlphaStrategy`                                                                                                                                                      | Rust-native strategy executor                  |
+| `RustColumnarBuffer`                                                                                                                                                 | Columnar data buffer for batch recording       |
+| `RustMetricsSampler`                                                                                                                                                 | Low-overhead Prometheus metrics sampler        |
+| `to_ch_price_scaled`, `map_tick_record`, `map_bidask_record`, `map_order_record`, `map_fill_record`                                                                  | ClickHouse record mapping                      |
+| `coerce_ns_int`, `coerce_ns_float`                                                                                                                                   | Timestamp coercion utilities                   |
+| `ShmRingBuffer`, `ShmSnapshotTable`                                                                                                                                  | Shared memory IPC and snapshot table           |
+| `SymbolInternTable` *(Wave 4)*                                                                                                                                       | Symbol string interning (O(1) lookup)          |
+| `FastTypedRingBuffer` *(Wave 4)*                                                                                                                                     | Typed, cache-friendly ring buffer              |
+| `RustGatewayFusedCheck` *(Wave 4)*                                                                                                                                   | Fused gateway risk check (zero-copy)           |
+| `RustNormalizerLobFused` *(Wave 4)*                                                                                                                                  | Fused normalizer + LOB pipeline                |
+| `RustNormalizerFeatureFusedV1` *(Wave 4)*                                                                                                                            | Fused normalizer + LOB + feature pipeline      |
 
 ## 🤖 Commands
 
@@ -163,6 +177,8 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_EXPOSURE_MAX_SYMBOLS` | `10000`     | ExposureStore cardinality bound           |
 | `HFT_BROKER`               | `shioaji`   | Broker backend: `shioaji` / `fubon`       |
 | `HFT_FEATURE_ENGINE_ENABLED` | `1`         | `0` = disable FeatureEngine in runtime pipeline |
+| `HFT_FUSED_NORMALIZER`     | `0`         | `1` = enable fused Rust normalizer+LOB pipeline |
+| `HFT_FEATURE_ENGINE_BACKEND` | `python`  | Backend for FeatureEngine: `python` / `rust`    |
 | `HFT_FUBON_CERT_PATH`      | —           | Fubon API certificate file path           |
 | `HFT_FUBON_ACCOUNT`        | —           | Fubon trading account ID                  |
 | `HFT_FUBON_PASSWORD`       | —           | Fubon account password (use secret mgr)   |

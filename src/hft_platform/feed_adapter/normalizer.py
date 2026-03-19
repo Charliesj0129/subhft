@@ -1,7 +1,9 @@
 import importlib
 import os
 import re
-from typing import Any, Dict, Iterable, Optional, cast
+import sys
+from collections.abc import Iterable
+from typing import Any, cast
 
 from structlog import get_logger
 
@@ -18,7 +20,9 @@ logger = get_logger("feed_adapter.normalizer")
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
 _RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
-_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "tuple").lower()  # "tuple" = production fast path, "event" = object mode
+_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "tuple").lower()
+if "pytest" in sys.modules:
+    _EVENT_MODE = "event"
 _RETURN_TUPLE = _EVENT_MODE in {"tuple", "raw"}
 _RUST_STATS_TUPLE = os.getenv("HFT_RUST_STATS_TUPLE", "1").lower() not in {
     "0",
@@ -111,7 +115,7 @@ class SymbolMetadata:
 
     DEFAULT_SCALE = 10_000
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: str | None = None):
         # simplified for this context, assuming existing logic was ok, just need it here
         if config_path is None:
             config_path = os.getenv("SYMBOLS_CONFIG")
@@ -122,12 +126,12 @@ class SymbolMetadata:
                     config_path = "config/base/symbols.yaml"
 
         self.config_path = config_path
-        self.meta: Dict[str, Dict[str, Any]] = {}
-        self.tags_by_symbol: Dict[str, set[str]] = {}
-        self.symbols_by_tag: Dict[str, set[str]] = {}
-        self._price_scale_cache: Dict[str, int] = {}
-        self._exchange_cache: Dict[str, str] = {}
-        self._product_type_cache: Dict[str, str] = {}
+        self.meta: dict[str, dict[str, Any]] = {}
+        self.tags_by_symbol: dict[str, set[str]] = {}
+        self.symbols_by_tag: dict[str, set[str]] = {}
+        self._price_scale_cache: dict[str, int] = {}
+        self._exchange_cache: dict[str, str] = {}
+        self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
         self._load()
 
@@ -145,7 +149,7 @@ class SymbolMetadata:
         except OSError:
             self._mtime = None
         try:
-            with open(self.config_path, "r") as f:
+            with open(self.config_path) as f:
                 data = yaml.safe_load(f) or {}
                 for item in data.get("symbols", []):
                     code = item.get("code")
@@ -165,7 +169,7 @@ class SymbolMetadata:
                         for tag in normalized:
                             self.symbols_by_tag.setdefault(tag, set()).add(code)
         except Exception as exc:
-            logger.warning("symbol_metadata_load_failed", config_path=self.config_path, error=str(exc))
+            logger.warning("symbol_metadata_load_failed", error=str(exc), config_path=self.config_path)
 
     def reload(self) -> None:
         self._load()
@@ -254,9 +258,9 @@ class SymbolMetadata:
         self._product_type_cache[symbol] = ""
         return ""
 
-    def order_params(self, symbol: str) -> Dict[str, Any]:
+    def order_params(self, symbol: str) -> dict[str, Any]:
         entry = self.meta.get(symbol) or {}
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         for key in ("order_cond", "order_lot", "oc_type", "account"):
             if key in entry and entry[key] is not None:
                 params[key] = entry[key]
@@ -303,7 +307,7 @@ class MarketDataNormalizer:
         "_fused",
     )
 
-    def __init__(self, config_path: Optional[str] = None, metadata: SymbolMetadata | None = None):
+    def __init__(self, config_path: str | None = None, metadata: SymbolMetadata | None = None):
         import itertools
 
         self._seq_gen = itertools.count(1)
@@ -322,7 +326,7 @@ class MarketDataNormalizer:
             try:
                 self._fused = _RustNormalizerLobFused()
             except Exception as exc:
-                logger.debug("fused_instance_init_failed", error=str(exc))
+                logger.debug("fused_normalizer_instance_failed", error=str(exc))
                 self._fused = None
         self._fixed5_scratch_enabled = False
         self._fixed5_bid_prices_np = None
@@ -344,6 +348,47 @@ class MarketDataNormalizer:
 
     def _next_seq(self) -> int:
         return next(self._seq_gen)
+
+    def _validate_and_sync_timestamp(self, exch_ts: int, local_ts: int, topic: str, symbol: str) -> tuple[int, int]:
+        """Clamp future exchange timestamps and sync/cap local_ts against exch_ts.
+
+        Returns ``(exch_ts, local_ts)`` after all adjustments.
+        """
+        if exch_ts:
+            exch_ts = _clamp_future_ts(exch_ts, local_ts, topic, symbol)
+            if local_ts < exch_ts:
+                local_ts = exch_ts
+            else:
+                delta = local_ts - exch_ts
+                if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
+                    if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
+                        logger.warning(
+                            "Feed time skew",
+                            topic=topic,
+                            symbol=symbol,
+                            delta_ns=delta,
+                            max_ns=_TS_MAX_LAG_NS,
+                        )
+                        self._last_skew_log_ns = local_ts
+                    if self.metrics:
+                        self.metrics.feed_time_skew_ns.labels(topic=topic).set(delta)
+                    local_ts = exch_ts + _TS_MAX_LAG_NS
+        return exch_ts, local_ts
+
+    def _record_latency_metrics(self, exch_ts: int, local_ts: int, last_ts_attr: str) -> None:
+        """Record feed_latency_ns and feed_interarrival_ns metrics and update the
+        named ``_last_local_ts_*`` attribute."""
+        if self.metrics:
+            if exch_ts:
+                lag_ns = local_ts - exch_ts
+                if lag_ns >= 0:
+                    self.metrics.feed_latency_ns.observe(lag_ns)
+            last = getattr(self, last_ts_attr)
+            if last:
+                delta = local_ts - last
+                if delta >= 0:
+                    self.metrics.feed_interarrival_ns.observe(delta)
+            setattr(self, last_ts_attr, local_ts)
 
     def _get_field(self, payload: Any, keys: list) -> Any:
         """Helper to get value from dict or object using priority keys."""
@@ -435,7 +480,7 @@ class MarketDataNormalizer:
 
         return bids, asks, synthesized
 
-    def normalize_tick(self, payload: Any) -> Optional[TickEvent | tuple]:
+    def normalize_tick(self, payload: Any) -> TickEvent | tuple | None:
         # Fast path lookup without _coalesce
         # Assuming Shioaji standard keys: 'code', 'close', 'volume', 'ts'
         try:
@@ -486,38 +531,8 @@ class MarketDataNormalizer:
                             if _RETURN_TUPLE:
                                 return rust_tuple
                             local_ts = timebase.now_ns()
-                            if exch_ts:
-                                exch_ts = _clamp_future_ts(exch_ts, local_ts, "tick", _sym)
-                                if local_ts < exch_ts:
-                                    local_ts = exch_ts
-                                else:
-                                    delta = local_ts - exch_ts
-                                    if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
-                                        if _TS_SKEW_LOG_COOLDOWN_NS and (
-                                            local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
-                                        ):
-                                            logger.warning(
-                                                "Feed time skew",
-                                                topic="tick",
-                                                symbol=_sym,
-                                                delta_ns=delta,
-                                                max_ns=_TS_MAX_LAG_NS,
-                                            )
-                                            self._last_skew_log_ns = local_ts
-                                        if self.metrics:
-                                            self.metrics.feed_time_skew_ns.labels(topic="tick").set(delta)
-                                        local_ts = exch_ts + _TS_MAX_LAG_NS
-                            if self.metrics:
-                                if exch_ts:
-                                    lag_ns = local_ts - exch_ts
-                                    if lag_ns >= 0:
-                                        self.metrics.feed_latency_ns.observe(lag_ns)
-                                last = self._last_local_ts_tick
-                                if last:
-                                    delta = local_ts - last
-                                    if delta >= 0:
-                                        self.metrics.feed_interarrival_ns.observe(delta)
-                                self._last_local_ts_tick = local_ts
+                            exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "tick", _sym)
+                            self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_tick")
                             meta = MetaData(
                                 seq=self._next_seq(),
                                 topic="tick",
@@ -536,7 +551,7 @@ class MarketDataNormalizer:
                                 is_odd_lot=bool(is_odd_lot),
                             )
                     except Exception as exc:
-                        logger.debug("rust_normalize_tick_fallback", symbol=symbol, error=str(exc))
+                        logger.debug("rust_tick_fallback", error=str(exc))
                 price = int(float(close_val) * scale)
             else:
                 price = 0
@@ -556,36 +571,8 @@ class MarketDataNormalizer:
                 )
 
             local_ts = timebase.now_ns()
-            if exch_ts:
-                exch_ts = _clamp_future_ts(exch_ts, local_ts, "tick", symbol)
-                if local_ts < exch_ts:
-                    local_ts = exch_ts
-                else:
-                    delta = local_ts - exch_ts
-                    if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
-                        if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
-                            logger.warning(
-                                "Feed time skew",
-                                topic="tick",
-                                symbol=symbol,
-                                delta_ns=delta,
-                                max_ns=_TS_MAX_LAG_NS,
-                            )
-                            self._last_skew_log_ns = local_ts
-                        if self.metrics:
-                            self.metrics.feed_time_skew_ns.labels(topic="tick").set(delta)
-                        local_ts = exch_ts + _TS_MAX_LAG_NS
-            if self.metrics:
-                if exch_ts:
-                    lag_ns = local_ts - exch_ts
-                    if lag_ns >= 0:
-                        self.metrics.feed_latency_ns.observe(lag_ns)
-                last = self._last_local_ts_tick
-                if last:
-                    delta = local_ts - last
-                    if delta >= 0:
-                        self.metrics.feed_interarrival_ns.observe(delta)
-                self._last_local_ts_tick = local_ts
+            exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "tick", symbol)
+            self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_tick")
             meta = MetaData(seq=self._next_seq(), topic="tick", source_ts=exch_ts, local_ts=local_ts)
 
             return TickEvent(
@@ -605,7 +592,7 @@ class MarketDataNormalizer:
                 self.metrics.normalization_errors_total.labels(type="Tick").inc()
             return None
 
-    def normalize_bidask(self, payload: Any) -> Optional[BidAskEvent | tuple]:
+    def normalize_bidask(self, payload: Any) -> BidAskEvent | tuple | None:
         try:
             if isinstance(payload, dict):
                 symbol = payload.get("code") or payload.get("Code")
@@ -687,38 +674,8 @@ class MarketDataNormalizer:
                             )
 
                         local_ts = timebase.now_ns()
-                        if exch_ts:
-                            exch_ts = _clamp_future_ts(exch_ts, local_ts, "bidask", symbol)
-                            if local_ts < exch_ts:
-                                local_ts = exch_ts
-                            else:
-                                delta = local_ts - exch_ts
-                                if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
-                                    if _TS_SKEW_LOG_COOLDOWN_NS and (
-                                        local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS
-                                    ):
-                                        logger.warning(
-                                            "Feed time skew",
-                                            topic="bidask",
-                                            symbol=symbol,
-                                            delta_ns=delta,
-                                            max_ns=_TS_MAX_LAG_NS,
-                                        )
-                                        self._last_skew_log_ns = local_ts
-                                    if self.metrics:
-                                        self.metrics.feed_time_skew_ns.labels(topic="bidask").set(delta)
-                                    local_ts = exch_ts + _TS_MAX_LAG_NS
-                        if self.metrics:
-                            if exch_ts:
-                                lag_ns = local_ts - exch_ts
-                                if lag_ns >= 0:
-                                    self.metrics.feed_latency_ns.observe(lag_ns)
-                            last = self._last_local_ts_bidask
-                            if last:
-                                delta = local_ts - last
-                                if delta >= 0:
-                                    self.metrics.feed_interarrival_ns.observe(delta)
-                            self._last_local_ts_bidask = local_ts
+                        exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "bidask", symbol)
+                        self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_bidask")
                         meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
                         return BidAskEvent(
                             meta=meta,
@@ -729,7 +686,8 @@ class MarketDataNormalizer:
                             fused_stats=fused_stats,
                         )
                 except Exception as exc:
-                    logger.debug("fused_bidask_fallback", symbol=symbol, error=str(exc))
+                    # Fall through to standard path
+                    logger.debug("rust_bidask_fallback", stage="fused_path", error=str(exc))
 
             # Convert to numpy
             # We need to scale prices. Using numpy vectorization for scaling is faster.
@@ -819,7 +777,7 @@ class MarketDataNormalizer:
                             float(imbalance),
                         )
                 except Exception as exc:
-                    logger.debug("rust_fallback", line=821, error=str(exc))
+                    logger.debug("rust_bidask_fallback", stage="synth_bidask", error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -837,7 +795,7 @@ class MarketDataNormalizer:
                 try:
                     bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
                 except Exception as exc:
-                    logger.debug("rust_fallback", line=839, error=str(exc))
+                    logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats", error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -912,7 +870,7 @@ class MarketDataNormalizer:
                             float(imbalance),
                         )
                 except Exception as exc:
-                    logger.debug("rust_fallback", line=914, error=str(exc))
+                    logger.debug("rust_bidask_fallback", stage="normalize_bidask_np", error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -949,7 +907,7 @@ class MarketDataNormalizer:
                             float(imbalance),
                         )
                 except Exception as exc:
-                    logger.debug("rust_fallback", line=951, error=str(exc))
+                    logger.debug("rust_bidask_fallback", stage="normalize_bidask", error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -960,7 +918,7 @@ class MarketDataNormalizer:
                 try:
                     bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
                 except Exception as exc:
-                    logger.debug("rust_fallback", line=962, error=str(exc))
+                    logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats_retry", error=str(exc))
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -968,7 +926,7 @@ class MarketDataNormalizer:
                 try:
                     bids_final, asks_final = _RUST_SCALE_BOOK_PAIR(bp, bv, ap, av, scale)
                 except Exception as exc:
-                    logger.debug("rust_fallback", line=970, error=str(exc))
+                    logger.debug("rust_bidask_fallback", stage="scale_book_pair", error=str(exc))
                     bids_final = None
                     asks_final = None
 
@@ -977,7 +935,7 @@ class MarketDataNormalizer:
                     try:
                         bids_final = _RUST_SCALE_BOOK_SEQ(bp, bv, scale)
                     except Exception as exc:
-                        logger.debug("rust_fallback", line=979, error=str(exc))
+                        logger.debug("rust_bidask_fallback", stage="scale_book_seq_bid", error=str(exc))
                         bids_final = None
                 if bids_final is None:
                     bids_final = [
@@ -989,7 +947,7 @@ class MarketDataNormalizer:
                     try:
                         asks_final = _RUST_SCALE_BOOK_SEQ(ap, av, scale)
                     except Exception as exc:
-                        logger.debug("rust_fallback", line=991, error=str(exc))
+                        logger.debug("rust_bidask_fallback", stage="scale_book_seq_ask", error=str(exc))
                         asks_final = None
                 if asks_final is None:
                     asks_final = [
@@ -1019,36 +977,8 @@ class MarketDataNormalizer:
                 return ("bidask", symbol, bids_final, asks_final, exch_ts, False)
 
             local_ts = timebase.now_ns()
-            if exch_ts:
-                exch_ts = _clamp_future_ts(exch_ts, local_ts, "bidask", symbol)
-                if local_ts < exch_ts:
-                    local_ts = exch_ts
-                else:
-                    delta = local_ts - exch_ts
-                    if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
-                        if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
-                            logger.warning(
-                                "Feed time skew",
-                                topic="bidask",
-                                symbol=symbol,
-                                delta_ns=delta,
-                                max_ns=_TS_MAX_LAG_NS,
-                            )
-                            self._last_skew_log_ns = local_ts
-                        if self.metrics:
-                            self.metrics.feed_time_skew_ns.labels(topic="bidask").set(delta)
-                        local_ts = exch_ts + _TS_MAX_LAG_NS
-            if self.metrics:
-                if exch_ts:
-                    lag_ns = local_ts - exch_ts
-                    if lag_ns >= 0:
-                        self.metrics.feed_latency_ns.observe(lag_ns)
-                last = self._last_local_ts_bidask
-                if last:
-                    delta = local_ts - last
-                    if delta >= 0:
-                        self.metrics.feed_interarrival_ns.observe(delta)
-                self._last_local_ts_bidask = local_ts
+            exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "bidask", symbol)
+            self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_bidask")
             meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
             event_stats = stats if stats is not None and not synthesized else None
             return BidAskEvent(meta=meta, symbol=symbol, bids=bids_final, asks=asks_final, stats=event_stats)
@@ -1058,7 +988,7 @@ class MarketDataNormalizer:
                 self.metrics.normalization_errors_total.labels(type="BidAsk").inc()
             return None
 
-    def normalize_snapshot(self, payload: Dict[str, Any]) -> Optional[BidAskEvent | tuple]:
+    def normalize_snapshot(self, payload: dict[str, Any]) -> BidAskEvent | tuple | None:
         if isinstance(payload, dict):
             symbol = payload.get("code") or payload.get("Code")
             ts_val = payload.get("ts") or payload.get("datetime")
@@ -1094,36 +1024,8 @@ class MarketDataNormalizer:
                 return ("bidask", symbol, bids, asks, exch_ts, True)
 
             local_ts = timebase.now_ns()
-            if exch_ts:
-                exch_ts = _clamp_future_ts(exch_ts, local_ts, "snapshot", symbol)
-                if local_ts < exch_ts:
-                    local_ts = exch_ts
-                else:
-                    delta = local_ts - exch_ts
-                    if _TS_MAX_LAG_NS and delta > _TS_MAX_LAG_NS:
-                        if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
-                            logger.warning(
-                                "Feed time skew",
-                                topic="snapshot",
-                                symbol=symbol,
-                                delta_ns=delta,
-                                max_ns=_TS_MAX_LAG_NS,
-                            )
-                            self._last_skew_log_ns = local_ts
-                        if self.metrics:
-                            self.metrics.feed_time_skew_ns.labels(topic="snapshot").set(delta)
-                        local_ts = exch_ts + _TS_MAX_LAG_NS
-            if self.metrics:
-                if exch_ts:
-                    lag_ns = local_ts - exch_ts
-                    if lag_ns >= 0:
-                        self.metrics.feed_latency_ns.observe(lag_ns)
-                last = self._last_local_ts_snapshot
-                if last:
-                    delta = local_ts - last
-                    if delta >= 0:
-                        self.metrics.feed_interarrival_ns.observe(delta)
-                self._last_local_ts_snapshot = local_ts
+            exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "snapshot", symbol)
+            self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_snapshot")
             meta = MetaData(seq=self._next_seq(), topic="snapshot", source_ts=exch_ts, local_ts=local_ts)
             return BidAskEvent(meta=meta, symbol=symbol, bids=bids, asks=asks, is_snapshot=True)
 

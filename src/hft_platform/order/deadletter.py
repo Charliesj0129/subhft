@@ -74,7 +74,7 @@ class DeadLetterQueue:
     - JSON-lines file format for easy analysis
     """
 
-    DEFAULT_BUFFER_SIZE = 1000
+    DEFAULT_BUFFER_SIZE = 10_000
     DEFAULT_DIR = ".dlq"
 
     def __init__(
@@ -133,6 +133,16 @@ class DeadLetterQueue:
             # Flush to disk if buffer is full
             if len(self._buffer) >= self.max_buffer_size:
                 await self._flush_locked()
+
+            # Safety: drop oldest entries if buffer still exceeds bound (e.g. flush failed)
+            if len(self._buffer) > self.max_buffer_size:
+                overflow = len(self._buffer) - self.max_buffer_size
+                del self._buffer[:overflow]
+                logger.warning(
+                    "DLQ buffer overflow, dropped oldest entries",
+                    dropped=overflow,
+                    max_buffer_size=self.max_buffer_size,
+                )
 
         logger.warning(
             "Order added to DLQ",

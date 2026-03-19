@@ -337,7 +337,7 @@ jobs:
     needs: test
     services:
       clickhouse:
-        image: clickhouse/clickhouse-server:latest
+        image: clickhouse/clickhouse-server:25.12.3
         ports:
           - 8123:8123
           - 9000:9000
@@ -426,7 +426,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && (inputs.run_recorder_drills || inputs.run_research_drills || inputs.run_diagnostics_drills))
     services:
       clickhouse:
-        image: clickhouse/clickhouse-server:latest
+        image: clickhouse/clickhouse-server:25.12.3
         ports:
           - 8123:8123
           - 9000:9000

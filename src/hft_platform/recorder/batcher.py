@@ -136,6 +136,7 @@ class GlobalMemoryGuard:
         "hft.logs": 50,
         "hft.backtest_runs": 30,
         "hft.latency_spans": 10,
+        "hft.pnl_snapshots": 20,
     }
 
     _instance: "GlobalMemoryGuard | None" = None

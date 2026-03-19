@@ -250,6 +250,11 @@ class MetricsRegistry:
             "execution_gateway_heartbeat_ts", "Execution gateway heartbeat (unix seconds)"
         )
         self.position_pnl_realized = Gauge("position_pnl_realized", "Realized PnL", ["strategy", "symbol"])
+        self.portfolio_total_pnl = Gauge("portfolio_total_pnl", "Total realized PnL across all positions (scaled int)")
+        self.portfolio_drawdown_pct = Gauge(
+            "portfolio_drawdown_pct", "Portfolio drawdown from peak equity (0.0 to 1.0)"
+        )
+        self.portfolio_trade_count = Counter("portfolio_trade_count", "Total trade count", ["strategy", "side"])
 
         # Infra
         self.recorder_failures_total = Counter("recorder_failures_total", "Recorder write failures")

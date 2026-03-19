@@ -103,7 +103,7 @@ def _compute_summary(
         try:
             parsed = sorted(dt.date.fromisoformat(d) for d in dates)
             span_days = (parsed[-1] - parsed[0]).days + 1
-        except Exception as _exc:  # noqa: BLE001
+        except Exception:
             span_days = distinct_days
     else:
         span_days = 0

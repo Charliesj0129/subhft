@@ -14,6 +14,46 @@ logger = get_logger("system")
 
 
 class HFTSystem:
+    # -- Typed helpers to replace hasattr probes ----------------------------------
+
+    @staticmethod
+    def _get_max_feed_gap_s(md_service: Any) -> float:
+        """Return max feed gap from market data service, or 0.0 if unavailable."""
+        fn = getattr(md_service, "get_max_feed_gap_s", None)
+        if fn is None:
+            return 0.0
+        gap = fn()
+        within_fn = getattr(md_service, "within_reconnect_window", None)
+        if within_fn is not None and not within_fn():
+            return 0.0
+        return float(gap)
+
+    @staticmethod
+    def _get_feed_gaps_by_symbol(md_service: Any) -> Dict[str, float]:
+        """Return per-symbol feed gaps, or empty dict if unavailable."""
+        fn = getattr(md_service, "get_feed_gaps_by_symbol", None)
+        if fn is None:
+            return {}
+        return fn()
+
+    @staticmethod
+    def _get_drawdown_pct(position_store: Any, settings: Dict[str, Any]) -> float:
+        """Derive drawdown percentage from position store, or 0.0 if unavailable."""
+        dd_fn = getattr(position_store, "get_drawdown_pct", None)
+        if dd_fn is not None:
+            return float(dd_fn())
+        total_pnl = getattr(position_store, "total_pnl", None)
+        if total_pnl is not None and total_pnl < 0:
+            base_capital = settings.get("base_capital", 10_000_000)
+            return total_pnl / base_capital if base_capital > 0 else 0.0
+        return 0.0
+
+    @staticmethod
+    def _set_service_running(service: Any, value: bool) -> None:
+        """Set the ``running`` attribute on *service* if it exists."""
+        if hasattr(service, "running"):
+            service.running = value
+
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         configure_logging()
         self.settings = settings or {}
@@ -92,6 +132,8 @@ class HFTSystem:
             self._start_service("strat", self.strategy_runner.run())
             self._start_service("recorder", self.recorder.run())
             self._start_service("recorder_bridge", self._recorder_bridge())
+            if os.getenv("HFT_PNL_EXPORTER_ENABLED", "1").lower() not in {"0", "false", "no", "off"}:
+                self._start_service("pnl_exporter", self._pnl_snapshot_exporter())
 
             # Start Monitor/Supervisor Loop
             await self._supervise()
@@ -132,6 +174,39 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("Bootstrap teardown failed", error=str(exc))
 
+    async def _pnl_snapshot_exporter(self):
+        """Periodically dump position state to hft.pnl_snapshots via recorder."""
+        interval_s = float(os.getenv("HFT_PNL_SNAPSHOT_INTERVAL_S", "60"))
+        logger.info("PnL snapshot exporter started", interval_s=interval_s)
+        while self.running:
+            await asyncio.sleep(interval_s)
+            try:
+                now_ns = timebase.now_ns()
+                total_pnl = self.position_store.total_pnl
+                peak_equity = self.position_store._peak_equity_scaled
+                drawdown_pct = self.position_store.get_drawdown_pct()
+                positions_snap = dict(self.position_store.positions)
+                for pos in positions_snap.values():
+                    row = {
+                        "snapshot_ts": now_ns,
+                        "account_id": pos.account_id,
+                        "strategy_id": pos.strategy_id,
+                        "symbol": pos.symbol,
+                        "net_qty": pos.net_qty,
+                        "avg_price_scaled": pos.avg_price_scaled,
+                        "realized_pnl_scaled": pos.realized_pnl_scaled,
+                        "fees_scaled": pos.fees_scaled,
+                        "total_pnl_scaled": total_pnl,
+                        "peak_equity_scaled": peak_equity,
+                        "drawdown_pct": drawdown_pct,
+                    }
+                    try:
+                        self.recorder_queue.put_nowait({"topic": "pnl_snapshots", "data": row})
+                    except asyncio.QueueFull:
+                        pass
+            except Exception:
+                logger.warning("PnL snapshot export failed", exc_info=True)
+
     def _iter_supervised_services(self) -> list[tuple[str, str, Any]]:
         services: list[tuple[str, str, Any]] = [
             ("md", "MarketDataService", self.md_service.run),
@@ -142,6 +217,7 @@ class HFTSystem:
             ("strat", "StrategyRunner", self.strategy_runner.run),
             ("recorder", "RecorderService", self.recorder.run),
             ("recorder_bridge", "RecorderBridge", self._recorder_bridge),
+            ("pnl_exporter", "PnLSnapshotExporter", self._pnl_snapshot_exporter),
         ]
         if self.gateway_service is not None:
             services.append(("gateway", "GatewayService", self.gateway_service.run))
@@ -196,41 +272,27 @@ class HFTSystem:
             # A. Update StormGuard with real metrics
             try:
                 # 1. Get feed gap from market data service
-                feed_gap_s = 0.0
-                if hasattr(self.md_service, "get_max_feed_gap_s"):
-                    feed_gap_s = self.md_service.get_max_feed_gap_s()
-                    if hasattr(self.md_service, "within_reconnect_window"):
-                        if not self.md_service.within_reconnect_window():
-                            feed_gap_s = 0.0
+                feed_gap_s = self._get_max_feed_gap_s(self.md_service)
 
                 # 2. Get drawdown from position store
-                drawdown_pct = 0.0
-                if hasattr(self.position_store, "get_drawdown_pct"):
-                    drawdown_pct = self.position_store.get_drawdown_pct()
-                elif hasattr(self.position_store, "total_pnl"):
-                    # Simple drawdown approximation from PnL
-                    total_pnl = self.position_store.total_pnl
-                    if total_pnl < 0:
-                        # Assume a base capital for percentage calculation
-                        base_capital = self.settings.get("base_capital", 10_000_000)
-                        drawdown_pct = total_pnl / base_capital if base_capital > 0 else 0.0
+                drawdown_pct = self._get_drawdown_pct(self.position_store, self.settings)
 
                 # 3. Get P99 latency estimate (convert event loop lag to microseconds as proxy)
                 latency_us = int(lag_s * 1_000_000)
 
-                # 4. Update StormGuard state
+                # 4. Update StormGuard state (convert drawdown % to bps at boundary)
+                drawdown_bps = int(drawdown_pct * 10_000)
                 self.storm_guard.update(
-                    drawdown_pct=drawdown_pct,
+                    drawdown_bps=drawdown_bps,
                     latency_us=latency_us,
                     feed_gap_s=feed_gap_s,
                 )
 
                 # 5. Update per-symbol feed gap metrics
-                has_gaps_method = hasattr(self.md_service, "get_feed_gaps_by_symbol")
-                has_metric = hasattr(metrics, "feed_gap_by_symbol_seconds")
-                if has_gaps_method and has_metric:
-                    for symbol, gap in self.md_service.get_feed_gaps_by_symbol().items():
-                        metrics.feed_gap_by_symbol_seconds.labels(symbol=symbol).set(gap)
+                feed_gap_metric = getattr(metrics, "feed_gap_by_symbol_seconds", None)
+                if feed_gap_metric is not None:
+                    for symbol, gap in self._get_feed_gaps_by_symbol(self.md_service).items():
+                        feed_gap_metric.labels(symbol=symbol).set(gap)
 
             except Exception as e:
                 logger.warning("StormGuard update failed", error=str(e))
@@ -308,8 +370,7 @@ class HFTSystem:
                 if drained_count > 0:
                     logger.warning("Drained blocked orders during HALT", count=drained_count)
                 # Signal order adapter to stop processing
-                if hasattr(self.order_adapter, "running"):
-                    self.order_adapter.running = False
+                self._set_service_running(self.order_adapter, False)
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""
@@ -350,7 +411,8 @@ class HFTSystem:
         self._teardown_bootstrap()
 
         # Schedule async cleanup if event loop is available
-        if hasattr(self, "loop") and self.loop.is_running():
+        loop = getattr(self, "loop", None)
+        if loop is not None and loop.is_running():
             asyncio.create_task(self._cleanup_tasks())
 
     async def _cleanup_tasks(self):
@@ -370,11 +432,12 @@ class HFTSystem:
     def _on_exec(self, topic, data):
         # This callback runs in Shioaji thread.
         # We must schedule work on the main loop.
-        if self.running and hasattr(self, "loop"):
+        loop = getattr(self, "loop", None)
+        if self.running and loop is not None:
             from hft_platform.execution.normalizer import RawExecEvent
 
             event = RawExecEvent(topic, data, timebase.now_ns())
-            self.loop.call_soon_threadsafe(self.raw_exec_queue.put_nowait, event)
+            loop.call_soon_threadsafe(self.raw_exec_queue.put_nowait, event)
 
     async def _recorder_bridge(self):
         """Bridge all Bus events to Recorder."""

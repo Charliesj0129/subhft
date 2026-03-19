@@ -9,12 +9,12 @@ monitor:
   data_source: auto
 
 symbols:
-  # === Futures (night + day) ===
-  - code: MXFE6
+  # === Futures (night + day) — D6 = April 2026 front month ===
+  - code: MXFD6
     alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
-  - code: TMFE6
+  - code: TMFD6
     alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
-  - code: TXFE6
+  - code: TXFD6
     alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
   # === Top Stocks (day session) ===
   - code: "2330"
