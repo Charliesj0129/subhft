@@ -23,6 +23,7 @@ from ._alpha import (
     cmd_alpha_scaffold,
     cmd_alpha_search,
     cmd_alpha_validate,
+    cmd_alpha_validate_batch,
 )
 from ._feature import (
     cmd_feature_preflight,
@@ -416,6 +417,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alpha_validate.add_argument("--out", help="Optional summary JSON output path")
     alpha_validate.set_defaults(func=cmd_alpha_validate)
+
+    alpha_vb = alpha_sub.add_parser("validate-batch", help="Run Gate A-C across multiple alphas")
+    alpha_vb.add_argument("--data", nargs="+", required=True, help="npy/npz path(s)")
+    alpha_vb.add_argument("--alpha-ids", nargs="*", help="Specific alpha IDs (default: all)")
+    alpha_vb.add_argument("--gates", default="ABC", help="Gates: A, AB, or ABC")
+    alpha_vb.add_argument("--min-sharpe-oos", type=float, default=0.0)
+    alpha_vb.add_argument("--max-abs-drawdown", type=float, default=0.3)
+    alpha_vb.add_argument("--experiments-dir", default="research/experiments")
+    alpha_vb.add_argument("--alphas-dir", default="research/alphas")
+    alpha_vb.add_argument("--fail-fast", action="store_true", help="Stop on first failure")
+    alpha_vb.add_argument("--out", help="Batch report JSON path")
+    alpha_vb.set_defaults(func=cmd_alpha_validate_batch)
 
     alpha_promote = alpha_sub.add_parser("promote", help="Run promotion pipeline (Gate D-E) and write canary config")
     alpha_promote.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")

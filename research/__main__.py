@@ -48,6 +48,9 @@ _PAPER_PROTO_CMD = "paper-to-prototype"
 _PAPER_TRADE_CMDS = frozenset({"record-paper", "summarize-paper", "check-paper-governance"})
 _DATA_GOV_CMDS = frozenset({"stamp-data-meta", "validate-data-meta"})
 _MAINT_CMDS = frozenset({"audit-note-citations", "backfill-note-citations", "triage-pyspy"})
+_BATCH_CMDS = frozenset({"batch-search"})
+_HYPOTHESIS_CMD = "hypothesis-queue"
+_AUTO_SCAFFOLD_CMD = "auto-scaffold"
 
 _USAGE = """\
 Usage: python -m research <command> [options]
@@ -59,6 +62,7 @@ Paper:    fetch-paper <arxiv_id> | search-papers <query>
 Paper-prototype: paper-to-prototype <paper_ref>
 Paper-trade: record-paper --alpha-id <id> | summarize-paper --alpha-id <id> |
              check-paper-governance --alpha-id <id>
+Batch:    batch-search <queries> | hypothesis-queue {ingest|list|top} | auto-scaffold
 Data-governance: stamp-data-meta <data> | validate-data-meta <data>
 Maintenance: audit-note-citations | backfill-note-citations | triage-pyspy
 
@@ -114,6 +118,20 @@ def main() -> int:
         from research.tools.maintenance import main as _maint_main
 
         return int(_maint_main())
+
+    if cmd in _BATCH_CMDS:
+        from research.tools.batch_search import main as _batch_main
+        return int(_batch_main())
+
+    if cmd == _HYPOTHESIS_CMD:
+        sys.argv.pop(1)
+        from research.tools.hypothesis_queue import main as _hypothesis_main
+        return int(_hypothesis_main())
+
+    if cmd == _AUTO_SCAFFOLD_CMD:
+        sys.argv.pop(1)
+        from research.tools.auto_scaffold import main as _auto_scaffold_main
+        return int(_auto_scaffold_main())
 
     print(f"Unknown command: {cmd!r}\n\n{_USAGE}", file=sys.stderr)
     return 1

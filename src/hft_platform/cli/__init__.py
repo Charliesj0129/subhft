@@ -21,14 +21,17 @@ from hft_platform.utils.logging import configure_logging
 # ---------------------------------------------------------------------------
 from ._alpha import (  # noqa: F401
     cmd_alpha_ab_compare,
+    cmd_alpha_batch_correlation,
     cmd_alpha_canary_evaluate,
     cmd_alpha_canary_status,
     cmd_alpha_experiments_best,
     cmd_alpha_experiments_compare,
     cmd_alpha_experiments_list,
     cmd_alpha_list,
+    cmd_alpha_paper_trade_batch,
     cmd_alpha_pool,
     cmd_alpha_promote,
+    cmd_alpha_promote_batch,
     cmd_alpha_rl_promote,
     cmd_alpha_scaffold,
     cmd_alpha_search,

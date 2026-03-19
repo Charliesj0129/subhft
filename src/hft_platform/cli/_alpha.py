@@ -585,7 +585,6 @@ def cmd_alpha_experiments_list(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-
 def cmd_alpha_batch_correlation(args: argparse.Namespace) -> None:
     try:
         from hft_platform.alpha.batch_correlation import batch_compute_correlations
@@ -809,7 +808,7 @@ def cmd_alpha_validate_batch(args: argparse.Namespace) -> None:
         p.write_text(json.dumps(report, indent=2, sort_keys=True))
         print(f"\nReport written to {out_path}")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(
         f"Batch complete: {len(passed_ids)} passed, {len(failed_ids)} failed, "
         f"{len(errored_ids)} errors ({elapsed_s:.1f}s)"
