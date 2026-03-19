@@ -304,8 +304,8 @@ class RecorderService:
             from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("operation_failed", error=str(exc))
 
         # CE3-02: init WAL-first writer when in wal_first mode
         if self._mode == RecorderMode.WAL_FIRST:
@@ -349,8 +349,8 @@ class RecorderService:
                             from hft_platform.observability.metrics import MetricsRegistry
 
                             MetricsRegistry.get().recorder_failures_total.inc()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("operation_failed", error=str(exc))
                 elif topic in self.batchers:
                     await self.batchers[topic].add(data)
 

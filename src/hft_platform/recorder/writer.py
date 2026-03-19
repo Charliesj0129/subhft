@@ -778,8 +778,8 @@ class DataWriter:
                 if exch_idx is not None and ingest_idx is not None and exch_ts_i and ingest_ts_i:
                     if ingest_ts_i < exch_ts_i:
                         column_data[ingest_idx][i] = exch_ts_i
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("operation_failed", error=str(exc))
 
             keep_indices.append(i)
 

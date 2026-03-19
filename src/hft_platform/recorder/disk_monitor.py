@@ -134,8 +134,8 @@ class DiskPressureMonitor:
             from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().disk_pressure_level.set(int(new_level))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("operation_failed", error=str(exc))
 
         for hook in hooks:
             try:

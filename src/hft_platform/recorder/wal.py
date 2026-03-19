@@ -90,8 +90,8 @@ class WALWriter:
                 self._metrics.recorder_wal_skipped_rows_total.labels(
                     writer=writer, table=table, reason="disk_full"
                 ).inc(rows)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("operation_failed", error=str(exc))
         logger.warning(
             "WAL write skipped - disk full circuit breaker active",
             table=table,
@@ -302,8 +302,8 @@ class WALBatchWriter:
                     table=table,
                     reason="disk_full",
                 ).inc(rows)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("operation_failed", error=str(exc))
         logger.warning(
             "WAL batch add skipped - disk full circuit breaker active",
             table=table,
@@ -442,16 +442,16 @@ class WALBatchWriter:
             if self._metrics:
                 try:
                     self._metrics.wal_batch_flush_total.labels(result="ok").inc()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("operation_failed", error=str(exc))
             return True
         except Exception as e:
             logger.critical("WAL batch write failed", error=str(e))
             if self._metrics:
                 try:
                     self._metrics.wal_batch_flush_total.labels(result="error").inc()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("operation_failed", error=str(exc))
             return False
 
     def _write_batch_sync(
@@ -586,15 +586,15 @@ class WALBatchWriter:
                     if self._metrics:
                         try:
                             self._metrics.wal_batch_flush_total.labels(result="ok").inc()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("operation_failed", error=str(exc))
                 except Exception as e:
                     logger.error("WAL batch timer flush failed", error=str(e))
                     if self._metrics:
                         try:
                             self._metrics.wal_batch_flush_total.labels(result="error").inc()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("operation_failed", error=str(exc))
 
     def stop(self) -> None:
         """Stop the background timer and flush remaining data."""

@@ -198,13 +198,13 @@ class GatewayService:
                 except asyncio.CancelledError:
                     pass
                 except Exception as exc:
-                    logger.debug("lease_cancel_failed",error=str(exc))
+                    logger.warning("leader_lease_task_cleanup_failed", error=str(exc))
             if self._leader_lease is not None:
                 try:
                     self._leader_lease.release()
                     self._leader_is_active = False
                 except Exception as exc:
-                    logger.debug("lease_release_failed",error=str(exc))
+                    logger.warning("leader_lease_release_failed", error=str(exc))
             # Persist dedup state on clean shutdown (async-safe: run in thread)
             try:
                 await asyncio.to_thread(self._dedup.persist)
@@ -484,7 +484,7 @@ class GatewayService:
                 self._gateway_reject_metric_cache[reason] = child
             child.inc()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("metrics_emit_failed", error=str(exc))
+            logger.debug("metrics_emit_failed", stage="emit_reject", error=str(exc))
 
     def _record_latency(self, t0: int) -> None:
         if not self._metrics_enabled:
@@ -500,7 +500,7 @@ class GatewayService:
             self._gateway_dispatch_latency_metric = metric
             metric.observe(time.perf_counter_ns() - t0)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("metrics_emit_failed", error=str(exc))
+            logger.debug("metrics_emit_failed", stage="record_latency", error=str(exc))
 
     def _update_channel_depth_metric(self) -> None:
         if not self._metrics_enabled:
@@ -516,7 +516,7 @@ class GatewayService:
             self._gateway_depth_metric = metric
             metric.set(self._channel.qsize())
         except Exception as exc:  # noqa: BLE001
-            logger.debug("metrics_emit_failed", error=str(exc))
+            logger.debug("metrics_emit_failed", stage="channel_depth", error=str(exc))
 
     def _refresh_metrics_registry(self) -> None:
         try:
@@ -548,7 +548,7 @@ class GatewayService:
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
         except Exception as exc:
-            logger.debug("trace_emit_failed",error=str(exc))
+            logger.warning("trace_emit_failed", stage=stage, error=str(exc))
 
     def _metrics_or_refresh(self):
         metrics = self._metrics
@@ -575,7 +575,7 @@ class GatewayService:
             self._gateway_dedup_hits_metric = metric
             metric.inc()
         except Exception as exc:
-            logger.debug("dedup_metric_failed",error=str(exc))
+            logger.debug("metrics_emit_failed", stage="dedup_hit", error=str(exc))
 
     async def _leader_lease_loop(self) -> None:
         while self.running and self._leader_lease is not None:
