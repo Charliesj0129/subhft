@@ -12,12 +12,11 @@ from hft_platform.monitor._health_panel import (
 
 
 class TestParseMetric:
-    def test_simple_gauge(self) -> None:
+    def test_simple(self) -> None:
         assert _parse_metric(["pnl 12345.0"], "pnl") == 12345.0
 
     def test_labelled(self) -> None:
-        lines = ['stormguard_mode{strategy="system"} 2.0']
-        assert _parse_metric(lines, "stormguard_mode", 'strategy="system"') == 2.0
+        assert _parse_metric(['sg{s="x"} 2.0'], "sg", 's="x"') == 2.0
 
     def test_missing(self) -> None:
         assert _parse_metric(["other 42"], "pnl") is None
