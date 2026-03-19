@@ -43,7 +43,7 @@ _FUSED_BYPASS = os.environ.get("HFT_FUSED_NORMALIZER", "0") == "1"
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except ImportError:
         _rust_core = importlib.import_module("rust_core")
 
     _RUST_COMPUTE_STATS = _rust_core.compute_book_stats
@@ -114,8 +114,8 @@ class BookState:
         if _RUST_BOOK_STATE_ENABLED and _RustBookState is not None:
             try:
                 self._rust_state = _RustBookState(symbol)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("rust_book_state_init_failed", symbol=symbol, error=str(exc))
 
     def apply_update(self, bids: Union[np.ndarray, list], asks: Union[np.ndarray, list], exch_ts: int):
         """Atomic update (Snapshot style full-replace for Top-N streams)."""
@@ -170,8 +170,8 @@ class BookState:
                         self.ask_depth_total = rs.ask_depth_total
                         self.version += 1
                         return
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("rust_book_state_update_fallback", symbol=self.symbol, error=str(exc))
                 self._recompute()
             self.version += 1
 
@@ -209,8 +209,8 @@ class BookState:
                 self.spread = int(best_ask) - int(best_bid)
                 self.imbalance = float(imbalance)
                 return
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("rust_compute_stats_fallback", symbol=self.symbol, error=str(exc))
 
         # 1. Depth (Pure Python Sum)
         if isinstance(self.bids, np.ndarray):
@@ -295,8 +295,8 @@ class BookState:
             if rs is not None:
                 try:
                     return rs.get_stats_tuple()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("rust_stats_tuple_fallback", symbol=self.symbol, error=str(exc))
             if isinstance(self.bids, np.ndarray):
                 best_bid = int(self.bids[0, 0]) if self.bids.size > 0 else 0
             else:
@@ -614,8 +614,8 @@ class LOBEngine:
             if rs is not None:
                 try:
                     return rs.get_l1_scaled()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("rust_l1_scaled_fallback", symbol=symbol, error=str(exc))
             if isinstance(book.bids, np.ndarray):
                 best_bid = int(book.bids[0, 0]) if book.bids.size > 0 else 0
             else:

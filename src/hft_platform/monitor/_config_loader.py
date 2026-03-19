@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 
 import yaml
@@ -68,12 +69,19 @@ def load_watchlist(
 
     ch_host = os.getenv("HFT_CLICKHOUSE_HOST", monitor_cfg.get("ch_host", "localhost"))
     ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT", str(monitor_cfg.get("ch_port", 8123))))
-    ch_user = (
-        os.getenv("HFT_CLICKHOUSE_USER")
-        or os.getenv("HFT_CLICKHOUSE_USERNAME")
-        or os.getenv("CLICKHOUSE_USER")
-        or monitor_cfg.get("ch_user", "default")
-    )
+    ch_user = os.getenv("HFT_CLICKHOUSE_USER")
+    if not ch_user and os.getenv("HFT_CLICKHOUSE_USERNAME"):
+        ch_user = os.getenv("HFT_CLICKHOUSE_USERNAME")
+        warnings.warn(
+            "HFT_CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        logger.warning("Deprecated env var HFT_CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
+    if not ch_user and os.getenv("CLICKHOUSE_USER"):
+        ch_user = os.getenv("CLICKHOUSE_USER")
+    if not ch_user:
+        ch_user = monitor_cfg.get("ch_user", "default")
     ch_password = (
         os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or monitor_cfg.get("ch_password", "")
     )

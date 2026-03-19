@@ -169,4 +169,11 @@ notebooks/.ipynb_checkpoints
 /.agent/
 /agent_prompts/
 
+# Claude Code local state
+.claude/worktrees/
+.claude/agents/
+.claude/skills/
+
+# ArXiv paper storage (local only)
+arxiv_papers/
 gha-creds-*.json

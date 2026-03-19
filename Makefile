@@ -160,6 +160,7 @@ ci: format-check lint typecheck coverage ## Run full CI pipeline locally
 .PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
 .PHONY: benchmark-ci benchmark-darwin-gate drill-gateway-wal-hardening
 .PHONY: research-feature-benchmark-matrix render-research-promotion-report security-audit
+.PHONY: render-incident-timeline-json render-incident-timeline-md
 
 test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
 	uv run pytest tests/unit -q --cov=src/hft_platform --cov-branch --cov-report=term-missing --cov-report=xml
@@ -201,6 +202,12 @@ research-feature-benchmark-matrix: ## Research wrapper benchmark matrix artifact
 
 render-research-promotion-report: ## Render promotion markdown from synthetic/nightly JSON artifact
 	$(PY) research/tools/render_promotion_report.py research_feature_promotion_smoke.json --out research_feature_promotion_smoke.md
+
+render-incident-timeline-json: ## Render incident timeline JSON from nightly_trace.jsonl
+	PYTHONPATH=src $(PY) scripts/render_incident_timeline.py nightly_trace.jsonl --format json --out diagnostics_timeline.json
+
+render-incident-timeline-md: ## Render incident timeline markdown from nightly_trace.jsonl
+	PYTHONPATH=src $(PY) scripts/render_incident_timeline.py nightly_trace.jsonl --format md --out diagnostics_timeline.md
 
 security-audit: ## Dependency security scan with pip-audit fallback to pip check
 	@set -e; \
