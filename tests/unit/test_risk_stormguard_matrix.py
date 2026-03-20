@@ -52,9 +52,7 @@ def _make_intent(intent_type: IntentType) -> OrderIntent:
 
 def _make_fsm(state: StormGuardState) -> StormGuardFSM:
     """Create a StormGuardFSM and force it into *state*."""
-    with patch(
-        "hft_platform.risk.validators.MetricsRegistry"
-    ) as mock_registry_cls:
+    with patch("hft_platform.risk.validators.MetricsRegistry") as mock_registry_cls:
         mock_metrics = MagicMock()
         mock_registry_cls.get.return_value = mock_metrics
         fsm = StormGuardFSM(_DEFAULT_CONFIG)
@@ -91,10 +89,7 @@ _MATRIX: list[tuple[StormGuardState, IntentType, bool]] = [
 @pytest.mark.parametrize(
     ("state", "intent_type", "expected_ok"),
     _MATRIX,
-    ids=[
-        f"{s.name}-{it.name}"
-        for s, it, _ in _MATRIX
-    ],
+    ids=[f"{s.name}-{it.name}" for s, it, _ in _MATRIX],
 )
 def test_stormguard_validate_matrix(
     state: StormGuardState,
@@ -107,8 +102,7 @@ def test_stormguard_validate_matrix(
     ok, reason = fsm.validate(intent)
 
     assert ok is expected_ok, (
-        f"state={state.name}, intent={intent_type.name}: "
-        f"expected ok={expected_ok}, got ok={ok} reason={reason!r}"
+        f"state={state.name}, intent={intent_type.name}: expected ok={expected_ok}, got ok={ok} reason={reason!r}"
     )
 
     if expected_ok:

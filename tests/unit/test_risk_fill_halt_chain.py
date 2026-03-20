@@ -21,6 +21,7 @@ from hft_platform.risk.validators import DailyLossLimitValidator
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_config(tmp_path, *, max_daily_loss: int = 100_000_000, strategies: dict | None = None):
     """Write a minimal risk YAML config and return the path string."""
     cfg = {
@@ -76,6 +77,7 @@ def _get_daily_loss_validator(engine: RiskEngine) -> DailyLossLimitValidator:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def engine(tmp_path):
