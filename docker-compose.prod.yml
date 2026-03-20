@@ -1,0 +1,20 @@
+# Production overrides for HFT platform
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Enables: higher resource limits, production alertmanager config
+# Rust fused paths remain disabled until parity gate passes (tracked in docs/TODO.md)
+
+services:
+  hft-engine:
+    environment:
+      - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
+      - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
+    deploy:
+      resources:
+        limits:
+          cpus: '${HFT_CPU_LIMIT:-2.0}'
+          memory: ${HFT_MEM_LIMIT:-4096M}
+
+  alertmanager:
+    volumes:
+      - ${HFT_ALERTMANAGER_CONFIG:-./config/monitoring/alerts/alertmanager.production.yml}:/etc/alertmanager/alertmanager.yml:ro
