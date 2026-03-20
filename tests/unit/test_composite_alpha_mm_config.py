@@ -16,8 +16,9 @@ class TestCompositeAlphaMMConfig:
         if not config_path.exists():
             pytest.skip("strategies.yaml not found")
         content = config_path.read_text()
-        # Should not raise
-        yaml.safe_load(content)
+        # Should not raise — result may be None if all entries are commented out
+        result = yaml.safe_load(content)
+        assert result is None or isinstance(result, dict)
 
     def test_composite_mm_entry_present(self) -> None:
         """COMPOSITE_ALPHA_MM_V1 must be present in strategies.yaml (even if commented)."""

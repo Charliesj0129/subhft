@@ -178,7 +178,9 @@ class TestOnSdkOrder:
 
     def test_no_callback_is_noop(self, adapter: FubonExecutionCallbackAdapter) -> None:
         # Should not raise when _on_order is None
-        adapter._on_sdk_order({"ord_no": "X"})
+        result = adapter._on_sdk_order({"ord_no": "X"})
+        assert result is None
+        assert adapter._on_order is None
 
     def test_handles_object_style_data(self, adapter: FubonExecutionCallbackAdapter) -> None:
         received: list[dict[str, Any]] = []
@@ -241,7 +243,9 @@ class TestOnSdkDeal:
         assert msg["ts_ns"] > 0
 
     def test_no_callback_is_noop(self, adapter: FubonExecutionCallbackAdapter) -> None:
-        adapter._on_sdk_deal({"ord_no": "X"})
+        result = adapter._on_sdk_deal({"ord_no": "X"})
+        assert result is None
+        assert adapter._on_deal is None
 
     def test_handles_missing_fields(self, adapter: FubonExecutionCallbackAdapter) -> None:
         received: list[dict[str, Any]] = []

@@ -14,23 +14,26 @@ class TestCLISmoke(unittest.TestCase):
 
     def test_init_command(self):
         with (
-            patch("os.makedirs"),
+            patch("os.makedirs") as mock_makedirs,
             patch("builtins.open", unittest.mock.mock_open()),
-            patch("hft_platform.cli._safe_write"),
+            patch("hft_platform.cli._safe_write") as mock_write,
         ):
             args = MagicMock()
             args.base_dir = "."
-            cmd_init(args)
+            result = cmd_init(args)
+            self.assertIsNone(result)
+            mock_makedirs.assert_called()
 
     def test_check_command(self):
         with (
             patch("os.path.exists", return_value=True),
             patch("builtins.open", unittest.mock.mock_open()),
-            patch("hft_platform.cli._safe_write"),
+            patch("hft_platform.cli._safe_write") as mock_write,
         ):
             args = MagicMock()
             args.export = "json"
-            cmd_check(args)
+            result = cmd_check(args)
+            self.assertIsNone(result)
 
     def test_run_command_mocked(self):
         # We need to handle the local import of prometheus_client

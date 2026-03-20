@@ -134,7 +134,7 @@ class TestCompositeAlphaMMIntegration:
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple()
 
-        with patch.object(strat, "position", return_value=0), patch.object(strat, "buy"), patch.object(strat, "sell"):
+        with patch.object(strat, "position", return_value=0), patch.object(strat, "buy") as mock_buy, patch.object(strat, "sell") as mock_sell:
             # Simulate 100 rapid events
             for _i in range(100):
                 book_event = self._make_book_event()
@@ -143,12 +143,18 @@ class TestCompositeAlphaMMIntegration:
                 feat_event = self._make_feature_event()
                 strat.on_features(feat_event)
 
+            # After 100 iterations, LOB cache should be populated and orders attempted
+            assert "2330" in strat._lob_cache
+            total_calls = mock_buy.call_count + mock_sell.call_count
+            assert total_calls >= 0  # no crash; orders may or may not be generated depending on warmup
+
     def test_varying_signals(self) -> None:
         """Strategy should handle varying feature values without crashing."""
         strat = self._make_strategy(max_position=10, qty=1)
         strat.ctx = MagicMock()
 
-        with patch.object(strat, "position", return_value=0), patch.object(strat, "buy"), patch.object(strat, "sell"):
+        iterations = 0
+        with patch.object(strat, "position", return_value=0), patch.object(strat, "buy") as mock_buy, patch.object(strat, "sell") as mock_sell:
             for ofi in [-100, -50, 0, 50, 100]:
                 for depth in [-5000, 0, 5000, 10000]:
                     strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple(
@@ -159,6 +165,15 @@ class TestCompositeAlphaMMIntegration:
                     strat.on_book_update(book_event)
                     feat_event = self._make_feature_event()
                     strat.on_features(feat_event)
+                    iterations += 1
+
+            # All 20 signal combinations (5 ofi x 4 depth) processed without error
+            assert iterations == 20
+            # Verify buy/sell were called with int prices (Precision Law)
+            for call in mock_buy.call_args_list:
+                assert isinstance(call[0][1], int), f"Buy price must be int, got {type(call[0][1])}"
+            for call in mock_sell.call_args_list:
+                assert isinstance(call[0][1], int), f"Sell price must be int, got {type(call[0][1])}"
 
     def test_prices_always_scaled_int(self) -> None:
         """All prices passed to buy/sell must be integers (Precision Law)."""

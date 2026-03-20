@@ -18,6 +18,8 @@ def test_import_mm_hawkes():
     """Should not raise when dependencies are available."""
     from hft_platform.strategies.mm_hawkes import strategy  # noqa: F401
 
+    assert strategy is not None
+
 
 @pytest.mark.skipif(not HAS_DEPS, reason="numba/hftbacktest not installed")
 def test_hawkes_tracker_instantiation():

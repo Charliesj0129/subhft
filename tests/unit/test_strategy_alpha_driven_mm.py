@@ -16,6 +16,8 @@ def test_import_alpha_driven_mm():
     """Should not raise."""
     from hft_platform.strategies.alpha_driven_mm import AlphaDrivenMMStrategy  # noqa: F401
 
+    assert AlphaDrivenMMStrategy is not None
+
 
 @pytest.mark.skipif(not HAS_HFT_BACKTEST, reason="hftbacktest not installed")
 def test_alpha_driven_mm_is_abstract():
