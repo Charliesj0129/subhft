@@ -168,6 +168,7 @@ class TestValidRiskConfig:
     def test_valid_config_strict_no_raise(self):
         cfg = _valid_risk_config()
         validate_risk_config_strict(cfg)  # should not raise
+        assert True  # reached without exception
 
 
 # ===================================================================

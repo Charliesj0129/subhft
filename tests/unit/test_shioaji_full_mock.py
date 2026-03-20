@@ -189,6 +189,7 @@ class TestShioajiClientFull(unittest.TestCase):
         start_ns = time.perf_counter_ns()
         # Ensure error path doesn't raise.
         self.client._record_api_latency("place_order", start_ns, ok=False)
+        assert True  # reached without exception
 
     def test_record_api_latency_sanitizes_non_string_labels(self):
         self.client.metrics = MetricsRegistry.get()

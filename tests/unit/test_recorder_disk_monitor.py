@@ -189,7 +189,7 @@ class TestCheck:
         with patch.object(mon, "_wal_dir_size_mb", return_value=150.0):
             mon._check()  # Should not raise
         # Second hook should still be called even if first raises
-        # (hooks iterate via for-loop with try/except)
+        assert second_hook.called
 
     def test_multiple_hooks_called(self) -> None:
         mon = DiskPressureMonitor(wal_dir="/tmp/wal", warn_mb=100)
