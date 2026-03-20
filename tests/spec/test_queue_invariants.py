@@ -15,7 +15,6 @@ import asyncio
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # 1. Bounded queue rejects overflow
 # ---------------------------------------------------------------------------
@@ -243,7 +242,6 @@ class TestRawQueueBounded:
 
     def test_bounded_queue_with_raw_queue_size(self) -> None:
         """A queue created with the default raw queue size rejects overflow."""
-        from hft_platform.services.bootstrap import BootstrapService
 
         # Use a small queue to avoid allocating 65k items in test
         maxsize = 8
