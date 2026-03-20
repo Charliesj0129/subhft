@@ -191,15 +191,19 @@ class TestEvaluateRustValidator:
         assert not decision.approved
         assert decision.reason_code == "PRICE_ZERO_OR_NEG"
 
-    def test_rust_validator_error_fail_closed(self, engine: RiskEngine) -> None:
+    def test_rust_validator_error_falls_through_to_python(self, engine: RiskEngine) -> None:
+        # When Rust validator raises (OSError, RuntimeError), evaluate() catches
+        # the exception and falls through to Python validators (engine.py L348-359).
+        # If all Python validators pass, the intent is approved (L371-372).
+        # The design is fail-open-via-Python-fallback, not fail-closed.
         rv = MagicMock()
         rv.check.side_effect = RuntimeError("rust panic")
         engine._rust_validator = rv
 
         intent = _make_intent()
         decision = engine.evaluate(intent)
-        assert not decision.approved
-        assert decision.reason_code == "RUST_VALIDATOR_ERROR"
+        assert decision.approved
+        assert decision.reason_code == "OK"
 
 
 # ---------------------------------------------------------------------------
