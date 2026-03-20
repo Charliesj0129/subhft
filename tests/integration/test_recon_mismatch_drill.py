@@ -1,4 +1,5 @@
 """Reconciliation mismatch drill — verifies StormGuard HALT on position discrepancy."""
+
 from __future__ import annotations
 
 import asyncio

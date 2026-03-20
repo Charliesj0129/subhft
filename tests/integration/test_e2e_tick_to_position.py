@@ -17,6 +17,7 @@ from hft_platform.execution.positions import Position, PositionStore
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_fill(
     *,
     side: Side,
@@ -51,6 +52,7 @@ def _make_fill(
 # Test 1: Single fill updates position with scaled int
 # ---------------------------------------------------------------------------
 
+
 class TestFillUpdatesPosition:
     """Verify that a single BUY fill creates a position with correct scaled-int fields."""
 
@@ -60,8 +62,8 @@ class TestFillUpdatesPosition:
         fill = _make_fill(
             side=Side.BUY,
             qty=1,
-            price=6_000_000,   # 600.0000 in x10000
-            fee=1_425,         # 0.1425 in x10000
+            price=6_000_000,  # 600.0000 in x10000
+            fee=1_425,  # 0.1425 in x10000
             tax=0,
         )
 
@@ -84,6 +86,7 @@ class TestFillUpdatesPosition:
 # ---------------------------------------------------------------------------
 # Test 2: Buy then sell computes PnL
 # ---------------------------------------------------------------------------
+
 
 class TestBuyThenSellPnL:
     """Buy 1 @ 600.0000, sell 1 @ 610.0000 => realized PnL = 10.0000 * 10000 = 100_000."""
@@ -148,6 +151,7 @@ class TestBuyThenSellPnL:
 # Test 3: Multiple fills weighted average price
 # ---------------------------------------------------------------------------
 
+
 class TestMultipleFillsWeightedAverage:
     """BUY 2 @ 6_000_000 then BUY 3 @ 6_200_000 => avg = 6_120_000."""
 
@@ -185,6 +189,7 @@ class TestMultipleFillsWeightedAverage:
 # Test 4: Portfolio-level drawdown tracking
 # ---------------------------------------------------------------------------
 
+
 class TestPortfolioDrawdown:
     """Verify portfolio-level PnL aggregation and drawdown calculation."""
 
@@ -211,6 +216,7 @@ class TestPortfolioDrawdown:
 # Test 5: Partial close with remaining position
 # ---------------------------------------------------------------------------
 
+
 class TestPartialClose:
     """BUY 5, SELL 2 => net_qty=3, partial PnL realized."""
 
@@ -234,6 +240,7 @@ class TestPartialClose:
 # ---------------------------------------------------------------------------
 # Test 6: Position.update directly (unit-level)
 # ---------------------------------------------------------------------------
+
 
 class TestPositionUpdateDirect:
     """Test Position.update() method directly for correctness."""
@@ -269,6 +276,7 @@ class TestPositionUpdateDirect:
 # ---------------------------------------------------------------------------
 # Test 7: All prices are int (Precision Law enforcement)
 # ---------------------------------------------------------------------------
+
 
 class TestPrecisionLaw:
     """Ensure no float contamination in position accounting."""
