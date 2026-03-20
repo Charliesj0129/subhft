@@ -330,8 +330,7 @@ class TestStormGuardChaos:
                     final_states.append(s)
 
         threads = [
-            threading.Thread(target=_update, args=(dd,))
-            for dd in [-10, -60, -110, -210, 0, -60, -110, -210, 0, -10]
+            threading.Thread(target=_update, args=(dd,)) for dd in [-10, -60, -110, -210, 0, -60, -110, -210, 0, -10]
         ]
         for t in threads:
             t.start()
@@ -349,14 +348,10 @@ class TestStormGuardChaos:
         guard = StormGuard()
 
         guard.trigger_halt("metric-test")
-        mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(
-            int(StormGuardState.HALT)
-        )
+        mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.HALT))
 
         guard.transition(StormGuardState.NORMAL, "reset")
-        mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(
-            int(StormGuardState.NORMAL)
-        )
+        mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.NORMAL))
 
     # 15. HALT -> NORMAL recovery cycle --------------------------------------
     def test_halt_normal_recovery_cycle(self):

@@ -5,6 +5,7 @@ HFT_STRICT_PRICE_MODE, unknown symbol handling, scale factor application,
 Rust-disabled Python fallback, SymbolMetadata operations, timestamp clamping,
 event modes, and synthetic side generation.
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -16,6 +17,7 @@ from hft_platform.events import BidAskEvent, TickEvent
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_normalizer(tmp_path, symbols=None, monkeypatch=None):
     """Build a MarketDataNormalizer with Rust disabled and optional symbols config."""
@@ -82,15 +84,22 @@ def _make_normalizer_with_synthetic(tmp_path, monkeypatch):
 # SymbolMetadata tests
 # ===================================================================
 
+
 class TestSymbolMetadata:
     """Tests for SymbolMetadata configuration loading."""
 
     def test_load_basic(self, tmp_path):
         """Load symbols from YAML and verify metadata."""
         cfg = tmp_path / "symbols.yaml"
-        cfg.write_text(yaml.dump({"symbols": [
-            {"code": "2330", "name": "TSMC", "exchange": "TSE", "price_scale": 10000},
-        ]}))
+        cfg.write_text(
+            yaml.dump(
+                {
+                    "symbols": [
+                        {"code": "2330", "name": "TSMC", "exchange": "TSE", "price_scale": 10000},
+                    ]
+                }
+            )
+        )
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         meta = SymbolMetadata(str(cfg))
@@ -109,9 +118,15 @@ class TestSymbolMetadata:
     def test_tick_size_fallback(self, tmp_path):
         """When price_scale is missing, derive from tick_size."""
         cfg = tmp_path / "symbols.yaml"
-        cfg.write_text(yaml.dump({"symbols": [
-            {"code": "6666", "tick_size": 0.01},
-        ]}))
+        cfg.write_text(
+            yaml.dump(
+                {
+                    "symbols": [
+                        {"code": "6666", "tick_size": 0.01},
+                    ]
+                }
+            )
+        )
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         meta = SymbolMetadata(str(cfg))
@@ -120,9 +135,15 @@ class TestSymbolMetadata:
     def test_price_scale_cache(self, tmp_path):
         """Second lookup uses cached value."""
         cfg = tmp_path / "symbols.yaml"
-        cfg.write_text(yaml.dump({"symbols": [
-            {"code": "2330", "price_scale": 10000},
-        ]}))
+        cfg.write_text(
+            yaml.dump(
+                {
+                    "symbols": [
+                        {"code": "2330", "price_scale": 10000},
+                    ]
+                }
+            )
+        )
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         meta = SymbolMetadata(str(cfg))
@@ -133,10 +154,16 @@ class TestSymbolMetadata:
     def test_tags_loading(self, tmp_path):
         """Tags are parsed and accessible."""
         cfg = tmp_path / "symbols.yaml"
-        cfg.write_text(yaml.dump({"symbols": [
-            {"code": "2330", "tags": ["blue_chip", "semiconductor"]},
-            {"code": "2454", "tags": "blue_chip|tech"},
-        ]}))
+        cfg.write_text(
+            yaml.dump(
+                {
+                    "symbols": [
+                        {"code": "2330", "tags": ["blue_chip", "semiconductor"]},
+                        {"code": "2454", "tags": "blue_chip|tech"},
+                    ]
+                }
+            )
+        )
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         meta = SymbolMetadata(str(cfg))
@@ -149,10 +176,16 @@ class TestSymbolMetadata:
     def test_product_type_from_exchange(self, tmp_path):
         """Product type inferred from exchange when not explicit."""
         cfg = tmp_path / "symbols.yaml"
-        cfg.write_text(yaml.dump({"symbols": [
-            {"code": "2330", "exchange": "TSE"},
-            {"code": "TXF", "exchange": "TAIFEX"},
-        ]}))
+        cfg.write_text(
+            yaml.dump(
+                {
+                    "symbols": [
+                        {"code": "2330", "exchange": "TSE"},
+                        {"code": "TXF", "exchange": "TAIFEX"},
+                    ]
+                }
+            )
+        )
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         meta = SymbolMetadata(str(cfg))
@@ -181,9 +214,15 @@ class TestSymbolMetadata:
     def test_order_params(self, tmp_path):
         """Order params extraction from symbol config."""
         cfg = tmp_path / "symbols.yaml"
-        cfg.write_text(yaml.dump({"symbols": [
-            {"code": "2330", "order_cond": "Cash", "order_lot": "Common"},
-        ]}))
+        cfg.write_text(
+            yaml.dump(
+                {
+                    "symbols": [
+                        {"code": "2330", "order_cond": "Cash", "order_lot": "Common"},
+                    ]
+                }
+            )
+        )
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         meta = SymbolMetadata(str(cfg))
@@ -204,6 +243,7 @@ class TestSymbolMetadata:
 # ===================================================================
 # normalize_tick tests
 # ===================================================================
+
 
 class TestNormalizeTick:
     """Tests for MarketDataNormalizer.normalize_tick."""
@@ -293,6 +333,7 @@ class TestNormalizeTick:
 # ===================================================================
 # normalize_bidask tests
 # ===================================================================
+
 
 class TestNormalizeBidAsk:
     """Tests for MarketDataNormalizer.normalize_bidask."""
@@ -415,6 +456,7 @@ class TestNormalizeBidAsk:
 # Synthetic side generation tests
 # ===================================================================
 
+
 class TestSyntheticSide:
     """Tests for _maybe_synthesize_side."""
 
@@ -458,6 +500,7 @@ class TestSyntheticSide:
 # ===================================================================
 # Timestamp clamping tests
 # ===================================================================
+
 
 class TestTimestampClamping:
     """Tests for _clamp_future_ts and _validate_and_sync_timestamp."""
@@ -503,6 +546,7 @@ class TestTimestampClamping:
 # _get_scale and caching tests
 # ===================================================================
 
+
 class TestGetScale:
     """Tests for _get_scale caching behavior."""
 
@@ -532,6 +576,7 @@ class TestGetScale:
 # ===================================================================
 # normalize_snapshot tests
 # ===================================================================
+
 
 class TestNormalizeSnapshot:
     """Tests for normalize_snapshot."""
@@ -570,6 +615,7 @@ class TestNormalizeSnapshot:
 # ===================================================================
 # _get_field tests
 # ===================================================================
+
 
 class TestGetField:
     """Tests for _get_field helper."""

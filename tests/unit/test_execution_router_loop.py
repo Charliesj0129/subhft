@@ -16,6 +16,7 @@ from hft_platform.execution.router import ExecutionRouter, _create_task_with_err
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _stub_metrics() -> MagicMock:
     m = MagicMock()
     m.execution_router_alive = MagicMock()
@@ -134,6 +135,7 @@ def router(bus: MagicMock, position_store: MagicMock) -> ExecutionRouter:
 # Order event normalization + publish
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_order_event_normalized_and_published(router: ExecutionRouter, bus: MagicMock) -> None:
     raw = _make_order_raw(status="Submitted")
@@ -156,6 +158,7 @@ async def test_order_event_normalized_and_published(router: ExecutionRouter, bus
 # ---------------------------------------------------------------------------
 # Terminal state handlers
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_terminal_sync_handler_called(router: ExecutionRouter) -> None:
@@ -232,6 +235,7 @@ async def test_terminal_object_handler(router: ExecutionRouter) -> None:
 # Fill -> position -> PnL flow
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_fill_updates_position(router: ExecutionRouter, position_store: MagicMock, bus: MagicMock) -> None:
     raw = _make_deal_raw()
@@ -253,6 +257,7 @@ async def test_fill_updates_position(router: ExecutionRouter, position_store: Ma
 # ---------------------------------------------------------------------------
 # Non-terminal order skips handler
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_non_terminal_order_skips_handler(router: ExecutionRouter) -> None:
@@ -277,6 +282,7 @@ async def test_non_terminal_order_skips_handler(router: ExecutionRouter) -> None
 # ---------------------------------------------------------------------------
 # Error recovery
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_error_does_not_stop_loop(router: ExecutionRouter, bus: MagicMock) -> None:
@@ -303,6 +309,7 @@ async def test_error_does_not_stop_loop(router: ExecutionRouter, bus: MagicMock)
 # ---------------------------------------------------------------------------
 # Lifecycle: running flag, alive metric, heartbeat, lag metric
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_running_flag_lifecycle(router: ExecutionRouter) -> None:
@@ -378,6 +385,7 @@ async def test_lag_metric_recorded(router: ExecutionRouter) -> None:
 # Queue drain and cancellation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_cancellation_stops_loop(router: ExecutionRouter) -> None:
     task = asyncio.create_task(router.run())
@@ -394,6 +402,7 @@ async def test_cancellation_stops_loop(router: ExecutionRouter) -> None:
 # ---------------------------------------------------------------------------
 # Normalizer returns None
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_normalizer_returns_none_no_publish(router: ExecutionRouter, bus: MagicMock) -> None:
@@ -417,6 +426,7 @@ async def test_normalizer_returns_none_no_publish(router: ExecutionRouter, bus: 
 # ---------------------------------------------------------------------------
 # Fill with risk engine
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_fill_with_risk_engine_notifies_pnl(router: ExecutionRouter, position_store: MagicMock) -> None:
@@ -459,6 +469,7 @@ async def test_fill_with_risk_engine_notifies_pnl(router: ExecutionRouter, posit
 # Fill without risk engine
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_fill_without_risk_engine(router: ExecutionRouter, bus: MagicMock) -> None:
     router._risk_engine = None
@@ -481,6 +492,7 @@ async def test_fill_without_risk_engine(router: ExecutionRouter, bus: MagicMock)
 # ---------------------------------------------------------------------------
 # Handler exception isolation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_handler_exception_does_not_crash(router: ExecutionRouter, bus: MagicMock) -> None:
@@ -506,6 +518,7 @@ async def test_handler_exception_does_not_crash(router: ExecutionRouter, bus: Ma
 # ---------------------------------------------------------------------------
 # _create_task_with_error_handling
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_create_task_with_error_handling_logs_exception() -> None:

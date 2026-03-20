@@ -13,6 +13,7 @@ from hft_platform.execution.positions import Position, PositionStore
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_fill(
     *,
     side: Side = Side.BUY,
@@ -81,6 +82,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
 # Position: open / add long
 # ---------------------------------------------------------------------------
 
+
 class TestPositionLong:
     def test_open_long(self) -> None:
         pos = Position("a", "s", "2330")
@@ -103,6 +105,7 @@ class TestPositionLong:
 # Position: partial / full close long
 # ---------------------------------------------------------------------------
 
+
 class TestPositionCloseLong:
     def test_partial_close_long(self) -> None:
         pos = Position("a", "s", "2330")
@@ -124,6 +127,7 @@ class TestPositionCloseLong:
 # Position: open / add short
 # ---------------------------------------------------------------------------
 
+
 class TestPositionShort:
     def test_open_short(self) -> None:
         pos = Position("a", "s", "2330")
@@ -143,6 +147,7 @@ class TestPositionShort:
 # ---------------------------------------------------------------------------
 # Position: partial / full close short
 # ---------------------------------------------------------------------------
+
 
 class TestPositionCloseShort:
     def test_partial_close_short(self) -> None:
@@ -164,6 +169,7 @@ class TestPositionCloseShort:
 # ---------------------------------------------------------------------------
 # Position: flip long -> short, short -> long
 # ---------------------------------------------------------------------------
+
 
 class TestPositionFlip:
     def test_flip_long_to_short(self) -> None:
@@ -190,6 +196,7 @@ class TestPositionFlip:
 # Fee / tax accumulation
 # ---------------------------------------------------------------------------
 
+
 class TestFeeAccumulation:
     def test_fees_accumulate(self) -> None:
         pos = Position("a", "s", "2330")
@@ -201,6 +208,7 @@ class TestFeeAccumulation:
 # ---------------------------------------------------------------------------
 # last_update_ts
 # ---------------------------------------------------------------------------
+
 
 class TestLastUpdateTs:
     def test_last_update_ts_set(self) -> None:
@@ -214,6 +222,7 @@ class TestLastUpdateTs:
 # PositionStore: key format
 # ---------------------------------------------------------------------------
 
+
 class TestPositionStoreKey:
     def test_key_format(self, store: PositionStore) -> None:
         assert store._key("acct1", "strat1", "2330") == "acct1:strat1:2330"
@@ -222,6 +231,7 @@ class TestPositionStoreKey:
 # ---------------------------------------------------------------------------
 # PositionStore: on_fill creates position, returns PositionDelta
 # ---------------------------------------------------------------------------
+
 
 class TestPositionStoreOnFill:
     def test_on_fill_creates_position(self, store: PositionStore) -> None:
@@ -236,6 +246,7 @@ class TestPositionStoreOnFill:
 # ---------------------------------------------------------------------------
 # PositionStore: eviction at max_size, preserves active
 # ---------------------------------------------------------------------------
+
 
 class TestPositionStoreEviction:
     def test_eviction_at_max_size(self, store: PositionStore) -> None:
@@ -278,6 +289,7 @@ class TestPositionStoreEviction:
 # PositionStore: on_fill_async wrapper
 # ---------------------------------------------------------------------------
 
+
 class TestOnFillAsync:
     @pytest.mark.asyncio
     async def test_on_fill_async_returns_delta(self, store: PositionStore) -> None:
@@ -290,6 +302,7 @@ class TestOnFillAsync:
 # ---------------------------------------------------------------------------
 # Portfolio: total PnL, peak equity, drawdown
 # ---------------------------------------------------------------------------
+
 
 class TestPortfolio:
     def test_total_pnl_tracking(self, store: PositionStore) -> None:
