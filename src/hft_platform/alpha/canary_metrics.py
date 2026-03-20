@@ -33,12 +33,8 @@ class CanaryMetricsSnapshot:
 class CanaryMetricsSource(Protocol):
     """Protocol for canary metrics data sources."""
 
-    def fetch(self, alpha_id: str) -> CanaryMetricsSnapshot:
-        """Fetch the latest metrics snapshot for an alpha."""
-        ...
-
-    def source_name(self) -> str:
-        """Return the human-readable source name."""
+    def get_live_metrics(self, alpha_id: str) -> dict[str, Any]:
+        """Fetch the latest live metrics payload for an alpha."""
         ...
 
 

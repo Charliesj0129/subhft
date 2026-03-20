@@ -10,6 +10,7 @@ import asyncio
 import datetime as dt
 import os
 import time
+from typing import Any
 
 from structlog import get_logger
 
@@ -23,9 +24,15 @@ logger = get_logger("service.market_data")
 class MarketDataReconnectMixin:
     """Reconnection / rollover / watchdog methods for ``MarketDataService``."""
 
+    _last_rollover_reconnect_date: dt.date | None
+    _last_rollover_seen_date: dt.date | None
+    _pending_reconnect_reason: str | None
+    _pending_reconnect_gap: float
+    _pending_reconnect_since: float | None
+
     # -- rollover / window checks -------------------------------------------
 
-    def _should_rollover_reconnect(self) -> bool:
+    def _should_rollover_reconnect(self: Any) -> bool:
         tz = getattr(self, "_reconnect_tzinfo", dt.timezone.utc)
         now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=tz)
         last_event_dt = dt.datetime.fromtimestamp(
@@ -36,10 +43,10 @@ class MarketDataReconnectMixin:
             return False
         if getattr(self, "_last_rollover_seen_date", None) == now_dt.date():
             return False
-        self._last_rollover_seen_date = now_dt.date()  # type: ignore[attr-defined]
+        self._last_rollover_seen_date = now_dt.date()
         return True
 
-    def _within_reconnect_window(self) -> bool:
+    def _within_reconnect_window(self: Any) -> bool:
         reconnect_days: set[str] = getattr(self, "reconnect_days", set())
         reconnect_hours: str = getattr(self, "reconnect_hours", "")
         reconnect_hours_2: str = getattr(self, "reconnect_hours_2", "")
@@ -81,7 +88,7 @@ class MarketDataReconnectMixin:
 
     # -- reconnect / resubscribe actions ------------------------------------
 
-    async def _attempt_resubscribe(self, gap: float, reason: str = "heartbeat_gap") -> None:
+    async def _attempt_resubscribe(self: Any, gap: float, reason: str = "heartbeat_gap") -> None:
         if not self._within_reconnect_window():
             return
         now = timebase.now_s()
@@ -91,42 +98,43 @@ class MarketDataReconnectMixin:
         if metrics_registry:
             if reason == "heartbeat_gap":
                 if getattr(self, "_feed_reconnect_gap_metric_child", None) is None:
-                    self._feed_reconnect_gap_metric_child = metrics_registry.feed_reconnect_total.labels(  # type: ignore[attr-defined]
-                        result="gap"
-                    )
-                gap_metric_child = self._feed_reconnect_gap_metric_child  # type: ignore[attr-defined]
+                    self._feed_reconnect_gap_metric_child = metrics_registry.feed_reconnect_total.labels(result="gap")
+                gap_metric_child = self._feed_reconnect_gap_metric_child
                 if gap_metric_child is not None:
                     gap_metric_child.inc()
             elif reason == "symbol_gap":
                 metrics_registry.feed_reconnect_total.labels(result="symbol_gap").inc()
-        self._last_resubscribe_ts = now  # type: ignore[attr-defined]
+        self._last_resubscribe_ts = now
         client = getattr(self, "client", None)
         ok = await asyncio.to_thread(client.resubscribe) if client else False
         if ok:
-            self._resubscribe_attempts = 0  # type: ignore[attr-defined]
+            self._resubscribe_attempts = 0
         else:
-            self._resubscribe_attempts += 1  # type: ignore[attr-defined]
-        logger.info("Resubscribe attempt", gap=gap, reason=reason, ok=ok, attempts=self._resubscribe_attempts)  # type: ignore[attr-defined]
+            self._resubscribe_attempts += 1
+        logger.info("Resubscribe attempt", gap=gap, reason=reason, ok=ok, attempts=self._resubscribe_attempts)
 
-    async def _request_reconnect(self, gap: float, reason: str | None = None) -> None:
+    async def _request_reconnect(self: Any, gap: float, reason: str | None = None) -> None:
         if self._within_reconnect_window():
             await self._trigger_reconnect(gap, reason=reason)
             return
         self._mark_pending_reconnect(gap, reason=reason)
 
-    async def _trigger_reconnect(self, gap: float, reason: str | None = None) -> bool:
+    async def _trigger_reconnect(self: Any, gap: float, reason: str | None = None) -> bool:
         now = timebase.now_s()
         if now - getattr(self, "_last_reconnect_ts", 0.0) < getattr(self, "reconnect_cooldown_s", 60.0):
             return False
         if not self._within_reconnect_window():
             return False
-        self._last_reconnect_ts = now  # type: ignore[attr-defined]
+        self._last_reconnect_ts = now
         reason_label = reason or "heartbeat_gap"
         logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
-        self._set_state(FeedState.RECOVERING)  # type: ignore[attr-defined]
+        self._set_state(FeedState.RECOVERING)
         force_login = reason_label == "session_rollover"
         reconnect_timeout_s = getattr(self, "reconnect_timeout_s", 30.0)
         client = getattr(self, "client", None)
+        if client is None:
+            self._set_state(FeedState.DISCONNECTED)
+            return False
         metrics_registry = getattr(self, "metrics_registry", None)
         try:
             ok = await asyncio.wait_for(
@@ -137,7 +145,7 @@ class MarketDataReconnectMixin:
             logger.error("Reconnect timed out", reason=reason_label, timeout_s=reconnect_timeout_s)
             if metrics_registry and hasattr(metrics_registry, "feed_reconnect_timeout_total"):
                 metrics_registry.feed_reconnect_timeout_total.labels(reason=reason_label).inc()
-            self._set_state(FeedState.DISCONNECTED)  # type: ignore[attr-defined]
+            self._set_state(FeedState.DISCONNECTED)
             return False
         except Exception as exc:
             logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
@@ -146,35 +154,35 @@ class MarketDataReconnectMixin:
                     reason=reason_label,
                     exception_type=type(exc).__name__,
                 ).inc()
-            self._set_state(FeedState.DISCONNECTED)  # type: ignore[attr-defined]
+            self._set_state(FeedState.DISCONNECTED)
             return False
         if ok:
-            self._set_state(FeedState.CONNECTED)  # type: ignore[attr-defined]
-            self.last_event_ts = timebase.now_s()  # type: ignore[attr-defined]
-            self.last_event_mono = time.monotonic()  # type: ignore[attr-defined]
-            self._resubscribe_attempts = 0  # type: ignore[attr-defined]
+            self._set_state(FeedState.CONNECTED)
+            self.last_event_ts = timebase.now_s()
+            self.last_event_mono = time.monotonic()
+            self._resubscribe_attempts = 0
         else:
-            self._set_state(FeedState.DISCONNECTED)  # type: ignore[attr-defined]
+            self._set_state(FeedState.DISCONNECTED)
         return ok
 
-    def _mark_pending_reconnect(self, gap: float, reason: str | None = None) -> None:
+    def _mark_pending_reconnect(self: Any, gap: float, reason: str | None = None) -> None:
         reason_label = reason or "heartbeat_gap"
         if getattr(self, "_pending_reconnect_reason", None) != reason_label:
             logger.warning("Reconnect pending (outside window)", gap=gap, reason=reason_label)
-        self._pending_reconnect_reason = reason_label  # type: ignore[attr-defined]
-        self._pending_reconnect_gap = gap  # type: ignore[attr-defined]
+        self._pending_reconnect_reason = reason_label
+        self._pending_reconnect_gap = gap
         if getattr(self, "_pending_reconnect_since", None) is None:
-            self._pending_reconnect_since = timebase.now_s()  # type: ignore[attr-defined]
+            self._pending_reconnect_since = timebase.now_s()
 
     # -- public helpers ------------------------------------------------------
 
-    def within_reconnect_window(self) -> bool:
+    def within_reconnect_window(self: Any) -> bool:
         """Public hook for supervisors."""
         return self._within_reconnect_window()
 
     # -- trading hours / grace period ----------------------------------------
 
-    def _is_trading_hours(self) -> bool:
+    def _is_trading_hours(self: Any) -> bool:
         product_type = os.getenv("HFT_WATCHDOG_PRODUCT_TYPE", "future")
         try:
             from hft_platform.core.market_calendar import get_calendar
@@ -192,7 +200,7 @@ class MarketDataReconnectMixin:
             minute = now_dt.hour * 60 + now_dt.minute
             return (8 * 60 + 45) <= minute <= (13 * 60 + 45)
 
-    def _is_market_open_grace_period(self) -> bool:
+    def _is_market_open_grace_period(self: Any) -> bool:
         """Check if within grace period after market open (C4)."""
         grace_s = getattr(self, "_market_open_grace_s", 0.0)
         if grace_s <= 0:
@@ -221,7 +229,7 @@ class MarketDataReconnectMixin:
 
     # -- watchdog loop -------------------------------------------------------
 
-    async def _watchdog_loop(self) -> None:
+    async def _watchdog_loop(self: Any) -> None:
         """Per-symbol feed gap watchdog."""
         while getattr(self, "running", False):
             await asyncio.sleep(getattr(self, "_watchdog_interval_s", 1.0))
@@ -230,17 +238,17 @@ class MarketDataReconnectMixin:
                 continue
 
             if getattr(self, "_symbol_gap_skip_off_hours", True) and not self._is_trading_hours():
-                self._symbol_gap_consecutive_hits = 0  # type: ignore[attr-defined]
+                self._symbol_gap_consecutive_hits = 0
                 now_s = timebase.now_s()
                 interval = getattr(self, "_symbol_gap_off_hours_log_interval_s", 300.0)
                 if now_s - getattr(self, "_last_symbol_gap_off_hours_log_ts", 0.0) >= interval:
                     logger.info("Skipping symbol gap watchdog outside trading hours")
-                    self._last_symbol_gap_off_hours_log_ts = now_s  # type: ignore[attr-defined]
+                    self._last_symbol_gap_off_hours_log_ts = now_s
                 continue
 
             symbol_last_tick: dict[str, float] = getattr(self, "_symbol_last_tick", {})
             if not symbol_last_tick:
-                self._symbol_gap_consecutive_hits = 0  # type: ignore[attr-defined]
+                self._symbol_gap_consecutive_hits = 0
                 continue
             try:
                 tick_snapshot = dict(symbol_last_tick)
@@ -257,7 +265,7 @@ class MarketDataReconnectMixin:
                 active_snapshot = tick_snapshot
             min_active = getattr(self, "_symbol_gap_min_active_symbols", 24)
             if len(active_snapshot) < min_active:
-                self._symbol_gap_consecutive_hits = 0  # type: ignore[attr-defined]
+                self._symbol_gap_consecutive_hits = 0
                 continue
             stale_symbols: list[tuple[str, float]] = []
 
@@ -271,12 +279,12 @@ class MarketDataReconnectMixin:
                     stale_symbols.append((symbol, gap))
 
             if stale_symbols:
-                self._symbol_gap_consecutive_hits += 1  # type: ignore[attr-defined]
+                self._symbol_gap_consecutive_hits += 1
                 symbols_str = ", ".join(f"{s}({g:.1f}s)" for s, g in stale_symbols[:5])
                 active_count = len(active_snapshot)
                 stale_ratio = (len(stale_symbols) / active_count) if active_count > 0 else 0.0
                 max_stale_gap = max(g for _, g in stale_symbols)
-                hits = self._symbol_gap_consecutive_hits  # type: ignore[attr-defined]
+                hits = self._symbol_gap_consecutive_hits
                 if hits == 1 or hits % 10 == 0:
                     logger.warning(
                         "Feed gap detected for symbols",
@@ -300,14 +308,14 @@ class MarketDataReconnectMixin:
                     and hits >= consec_cycles
                     and (timebase.now_s() - getattr(self, "_last_symbol_gap_resubscribe_ts", 0.0)) >= cooldown
                 ):
-                    self._last_symbol_gap_resubscribe_ts = timebase.now_s()  # type: ignore[attr-defined]
+                    self._last_symbol_gap_resubscribe_ts = timebase.now_s()
                     await self._attempt_resubscribe(max_stale_gap, reason="symbol_gap")
             else:
-                self._symbol_gap_consecutive_hits = 0  # type: ignore[attr-defined]
+                self._symbol_gap_consecutive_hits = 0
 
     # -- monitor loop (reconnect portion) ------------------------------------
 
-    async def _run_monitor_reconnect_checks(self, gap: float) -> None:
+    async def _run_monitor_reconnect_checks(self: Any, gap: float) -> None:
         """Reconnection checks called from the monitor loop each cycle."""
         tz = getattr(self, "_reconnect_tzinfo", dt.timezone.utc)
         if getattr(self, "_pending_reconnect_reason", None) and self._within_reconnect_window():
@@ -317,13 +325,13 @@ class MarketDataReconnectMixin:
             )
             if ok:
                 if getattr(self, "_pending_reconnect_reason", None) == "session_rollover":
-                    self._last_rollover_reconnect_date = dt.datetime.fromtimestamp(  # type: ignore[attr-defined]
+                    self._last_rollover_reconnect_date = dt.datetime.fromtimestamp(
                         timebase.now_s(),
                         tz=tz,
                     ).date()
-                self._pending_reconnect_reason = None  # type: ignore[attr-defined]
-                self._pending_reconnect_gap = 0.0  # type: ignore[attr-defined]
-                self._pending_reconnect_since = None  # type: ignore[attr-defined]
+                self._pending_reconnect_reason = None
+                self._pending_reconnect_gap = 0.0
+                self._pending_reconnect_since = None
 
         state = getattr(self, "state", None)
         if state == FeedState.CONNECTED:

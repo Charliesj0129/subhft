@@ -67,5 +67,5 @@ async def test_component_restart_on_failure():
     t_sys.cancel()
     try:
         await t_sys
-    except:
+    except (asyncio.CancelledError, Exception):
         pass
