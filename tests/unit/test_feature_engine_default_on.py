@@ -5,6 +5,7 @@ Verifies:
 - Explicit HFT_FEATURE_ENGINE_ENABLED=0 → FeatureEngine is disabled
 - FeatureEngine init failure → graceful degradation (feature_engine=None), no crash
 """
+
 from __future__ import annotations
 
 import asyncio

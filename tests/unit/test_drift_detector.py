@@ -14,6 +14,7 @@ from hft_platform.alpha.drift_detector import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _feed(detector: DriftDetector, values: list[float]) -> list[DriftAlert]:
     """Feed a sequence of values and collect non-None alerts."""
     alerts = []
@@ -32,6 +33,7 @@ def _make_values(mean: float, count: int) -> list[float]:
 # ---------------------------------------------------------------------------
 # DriftDetectorConfig
 # ---------------------------------------------------------------------------
+
 
 class TestDriftDetectorConfig:
     def test_defaults(self) -> None:
@@ -56,6 +58,7 @@ class TestDriftDetectorConfig:
 # DriftAlert
 # ---------------------------------------------------------------------------
 
+
 class TestDriftAlert:
     def test_fields(self) -> None:
         alert = DriftAlert(
@@ -78,6 +81,7 @@ class TestDriftAlert:
 # ---------------------------------------------------------------------------
 # No drift — same distribution
 # ---------------------------------------------------------------------------
+
 
 class TestNoDrift:
     def test_same_distribution_no_alerts(self) -> None:
@@ -111,6 +115,7 @@ class TestNoDrift:
 # Window not full — no alerts yet
 # ---------------------------------------------------------------------------
 
+
 class TestWindowNotFull:
     def test_no_alert_before_window_full(self) -> None:
         """Detector must not emit alerts before the rolling window is filled."""
@@ -142,6 +147,7 @@ class TestWindowNotFull:
 # ---------------------------------------------------------------------------
 # Mean shift → alerts triggered
 # ---------------------------------------------------------------------------
+
 
 class TestMeanShift:
     def test_large_mean_shift_triggers_alert(self) -> None:
@@ -206,6 +212,7 @@ class TestMeanShift:
 # max_alerts cap
 # ---------------------------------------------------------------------------
 
+
 class TestMaxAlertsCap:
     def test_max_alerts_respected(self) -> None:
         """No more than max_alerts alerts must be emitted."""
@@ -241,6 +248,7 @@ class TestMaxAlertsCap:
 # Zero baseline_std — graceful no-op
 # ---------------------------------------------------------------------------
 
+
 class TestZeroBaselineStd:
     def test_zero_std_no_alerts(self) -> None:
         """A zero baseline_std must not cause division by zero or alerts."""
@@ -268,6 +276,7 @@ class TestZeroBaselineStd:
 # ---------------------------------------------------------------------------
 # reset()
 # ---------------------------------------------------------------------------
+
 
 class TestReset:
     def test_reset_clears_window(self) -> None:
@@ -316,6 +325,7 @@ class TestReset:
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestEdgeCases:
     def test_single_value_window(self) -> None:

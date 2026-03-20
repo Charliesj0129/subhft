@@ -96,6 +96,7 @@ class ScreenConfig:
     project_root: str = "."
     experiments_dir: str = "research/experiments"
 
+
 @dataclass(frozen=True)
 class GateReport:
     gate: str

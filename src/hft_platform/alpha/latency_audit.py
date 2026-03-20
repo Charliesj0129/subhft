@@ -123,9 +123,7 @@ def _validate_profile(
 
     ref = reference_profiles.get(profile_id)
     if ref is None:
-        issues.append(
-            f"latency_profile_id '{profile_id}' not found in config/research/latency_profiles.yaml"
-        )
+        issues.append(f"latency_profile_id '{profile_id}' not found in config/research/latency_profiles.yaml")
         return False, issues
 
     for field in _NUMERIC_LATENCY_FIELDS:
@@ -186,9 +184,7 @@ def _audit_scorecard(
     profile_valid = False
 
     if not has_profile:
-        issues.append(
-            "latency_profile is missing — must record P95 broker RTT assumptions before promotion"
-        )
+        issues.append("latency_profile is missing — must record P95 broker RTT assumptions before promotion")
     else:
         profile_valid, profile_issues = _validate_profile(latency_profile, reference_profiles)
         issues.extend(profile_issues)
@@ -298,11 +294,7 @@ def format_audit_report(results: list[LatencyAuditResult]) -> str:
         issue_summary = r.issues[0] if r.issues else "OK"
 
         lines.append(
-            f"{r.alpha_id:<{col_alpha}}"
-            f"{has_p:<{col_profile}}"
-            f"{valid:<{col_valid}}"
-            f"{stress:<{col_stress}}"
-            f"{issue_summary}"
+            f"{r.alpha_id:<{col_alpha}}{has_p:<{col_profile}}{valid:<{col_valid}}{stress:<{col_stress}}{issue_summary}"
         )
 
         # Append remaining issues indented under the first
@@ -329,9 +321,7 @@ def format_audit_report(results: list[LatencyAuditResult]) -> str:
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Audit alpha scorecard latency profiles for Gate D compliance."
-    )
+    parser = argparse.ArgumentParser(description="Audit alpha scorecard latency profiles for Gate D compliance.")
     parser.add_argument(
         "--project-root",
         type=Path,

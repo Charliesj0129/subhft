@@ -192,7 +192,7 @@ class TestRunSession:
 
 class TestRunCampaignSessionCount:
     def test_campaign_produces_correct_session_count(self) -> None:
-        sessions = [_make_session(session_id=f"s{i}", trading_day=f"2026-03-{i+1:02d}") for i in range(5)]
+        sessions = [_make_session(session_id=f"s{i}", trading_day=f"2026-03-{i + 1:02d}") for i in range(5)]
         runner = PaperTradeRunner(runner=FixedSessionRunner(sessions))
         config = PaperTradeRunnerConfig(alpha_id="test_alpha", max_sessions=5)
         summary = runner.run_campaign(config)
@@ -200,7 +200,7 @@ class TestRunCampaignSessionCount:
         assert len(summary.sessions) == 5
 
     def test_campaign_respects_max_sessions(self) -> None:
-        sessions = [_make_session(session_id=f"s{i}", trading_day=f"2026-03-{i+1:02d}") for i in range(10)]
+        sessions = [_make_session(session_id=f"s{i}", trading_day=f"2026-03-{i + 1:02d}") for i in range(10)]
         runner = PaperTradeRunner(runner=FixedSessionRunner(sessions))
         config = PaperTradeRunnerConfig(alpha_id="test_alpha", max_sessions=3)
         summary = runner.run_campaign(config)
@@ -315,9 +315,7 @@ class TestSummaryStatistics:
 class TestPersistenceWithTracker:
     def test_summary_file_created(self, tmp_path: Path) -> None:
         tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
-        sessions = [
-            _make_session(session_id=f"s{i}", trading_day=f"2026-03-{i+1:02d}") for i in range(3)
-        ]
+        sessions = [_make_session(session_id=f"s{i}", trading_day=f"2026-03-{i + 1:02d}") for i in range(3)]
         runner = PaperTradeRunner(
             runner=FixedSessionRunner(sessions),
             tracker=tracker,
@@ -333,9 +331,7 @@ class TestPersistenceWithTracker:
 
     def test_session_files_created(self, tmp_path: Path) -> None:
         tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
-        sessions = [
-            _make_session(session_id=f"s{i}", trading_day=f"2026-03-{i+1:02d}") for i in range(2)
-        ]
+        sessions = [_make_session(session_id=f"s{i}", trading_day=f"2026-03-{i + 1:02d}") for i in range(2)]
         runner = PaperTradeRunner(
             runner=FixedSessionRunner(sessions),
             tracker=tracker,
@@ -387,7 +383,7 @@ class TestPersistenceWithTracker:
 
 class TestCampaignWithoutTracker:
     def test_no_tracker_returns_summary(self) -> None:
-        sessions = [_make_session(session_id=f"s{i}", trading_day=f"2026-03-{i+1:02d}") for i in range(4)]
+        sessions = [_make_session(session_id=f"s{i}", trading_day=f"2026-03-{i + 1:02d}") for i in range(4)]
         runner = PaperTradeRunner(runner=FixedSessionRunner(sessions))
         config = PaperTradeRunnerConfig(alpha_id="alpha_nt", max_sessions=4)
         summary = runner.run_campaign(config)

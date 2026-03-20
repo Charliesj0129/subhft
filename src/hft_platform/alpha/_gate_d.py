@@ -73,8 +73,7 @@ def _check_latency_values(
             "pass": True,
             "profile_id": None,
             "detail": (
-                "SKIPPED — latency_profile dict has no latency_profile_id key; "
-                "value realism check could not run"
+                "SKIPPED — latency_profile dict has no latency_profile_id key; value realism check could not run"
             ),
         }
 
@@ -102,9 +101,7 @@ def _check_latency_values(
             "required": False,
             "pass": True,
             "profile_id": profile_id,
-            "detail": (
-                f"SKIPPED — profile_id '{profile_id}' not found in latency_profiles.yaml; check skipped"
-            ),
+            "detail": (f"SKIPPED — profile_id '{profile_id}' not found in latency_profiles.yaml; check skipped"),
         }
 
     failures: list[str] = []
@@ -136,10 +133,7 @@ def _check_latency_values(
 
     overall_pass = len(failures) == 0
     if failures:
-        detail = (
-            "UNREALISTIC — backtest used latency values below 80% of broker P95 profile: "
-            + "; ".join(failures)
-        )
+        detail = "UNREALISTIC — backtest used latency values below 80% of broker P95 profile: " + "; ".join(failures)
     else:
         detail = f"OK — all latency values >= {int(_LATENCY_FLOOR_RATIO * 100)}% of profile '{profile_id}'"
 
@@ -231,8 +225,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
         "detail": (
             "OK"
             if stress_passed
-            else "WARN — stress_test.passed not True; "
-            "stress testing is recommended before production promotion"
+            else "WARN — stress_test.passed not True; stress testing is recommended before production promotion"
         ),
     }
 
@@ -317,8 +310,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             "pass": True,
             "required": False,
             "detail": (
-                "WARN — signal_halflife_ms not recorded in scorecard; "
-                "recommend recording to enforce RTT realism gate"
+                "WARN — signal_halflife_ms not recorded in scorecard; recommend recording to enforce RTT realism gate"
             ),
         }
     elif submit_ack is None:
