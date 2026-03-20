@@ -167,6 +167,15 @@ Base YAML (config/base/main.yaml)
 | `HFT_API_MAX_INFLIGHT` | `16` | 下單 API 同時 in-flight 上限 | API 延遲升高時下調 |
 | `HFT_API_QUEUE_MAX` | `1024` | 下單 API 佇列上限 | 佇列爆滿時排查風控/下單耗時 |
 | `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` | `none` | contract refresh 後重訂閱策略：`none`/`diff`/`all` | 生產穩定期建議 `none` |
+| `HFT_RECONNECT_HOURS` | `""` | 排程 reconnect 時段 1（如 `08:30-09:00`） | 依交易所排程設定 |
+| `HFT_RECONNECT_HOURS_2` | `""` | 排程 reconnect 時段 2（如 `12:30-13:00`） | 午間盤 reconnect |
+| `HFT_RECONNECT_COOLDOWN` | `30` | 兩次 reconnect 間最短秒數 | 頻繁斷線時增至 60s |
+| `HFT_RECONNECT_BACKOFF_S` | `30.0` | 初始 reconnect backoff（失敗後加倍） | — |
+| `HFT_RECONNECT_BACKOFF_MAX_S` | `600.0` | Reconnect backoff 上限（秒） | — |
+| `HFT_QUOTE_FLAP_THRESHOLD` | `5` | Flap 偵測閾值：window 內 reconnect 次數 | 降低可更快觸發 cooldown |
+| `HFT_QUOTE_FLAP_WINDOW_S` | `60.0` | Flap 偵測時間窗口（秒） | — |
+| `HFT_QUOTE_FLAP_COOLDOWN_S` | `300.0` | Flap 觸發後 cooldown（秒，強制 relogin） | — |
+| `HFT_STORMGUARD_FEED_GAP_HALT_S` | `1.0` | Feed gap 超過此閾值觸發 StormGuard STORM | 低流動性標的可放寬 |
 
 **Runbook 參考**: [Section 1 — Feed Gap](../runbooks.md#1-feed-gap--無行情), [Section 2 — Shioaji API latency](../runbooks.md#2-shioaji-api-latency-激增), [Section 14 — Quote Schema 不符](../runbooks.md#14-quote-schema-不符version-mismatch), [shioaji-contract-refresh-operations](../runbooks/shioaji-contract-refresh-operations.md)
 
