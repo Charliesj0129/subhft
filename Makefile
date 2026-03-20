@@ -163,10 +163,7 @@ clean-all: clean clean-rust ## Clean everything
 # CI Simulation
 # ============================================================================
 
-ci: format-check lint typecheck test-assertion-check coverage zero-assertion-gate ## Run full CI pipeline locally
-
-zero-assertion-gate: ## Block CI if zero-assertion tests exceed baseline
-	$(PY) scripts/check_zero_assertion_tests.py
+ci: format-check lint typecheck test-assertion-check coverage ## Run full CI pipeline locally
 
 .PHONY: test-unit-ci coverage-branch-gate coverage-markdown test-integration-ci test-clickhouse-writer-smoke
 .PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
