@@ -28,15 +28,15 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import (
+    TIF,
     IntentType,
     OrderCommand,
     OrderIntent,
     Side,
     StormGuardState,
-    TIF,
 )
-from hft_platform.contracts.execution import FillEvent
 from hft_platform.events import BidAskEvent, MetaData, TickEvent
 
 # Default values (Precision Law: all prices scaled x10000)

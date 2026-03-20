@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 from hft_platform.alpha._latency_registry import (
     load_latency_profiles,
     validate_latency_profile_id,
