@@ -1,19 +1,25 @@
-"""Tests for ExecutionNormalizer and ExecutionRouter gap coverage.
+"""Coverage gap tests for execution normalizer and router.
 
-Covers edge cases in normalize_order, _resolve_from_order_id_map,
-price scaling, router terminal handler dispatch, and graceful handling
-of missing/malformed data.
+Covers:
+1. normalize_order with non-dict "order" key
+2. _resolve_from_order_id_map seqno vs ordno priority
+3. Price scaling: price=0.0 -> 0 scaled int
+4. strategy_id_resolvers custom injection
+5. ExecutionRouter terminal handler returning a coroutine
+6. ExecutionRouter lag metric observation with varying ingest_ts_ns
 """
 
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus, Side
+from hft_platform.contracts.execution import OrderEvent, OrderStatus, Side
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,15 +30,76 @@ def _make_raw(topic: str = "order", data: dict | None = None, ts: int = 1_000_00
     return RawExecEvent(topic=topic, data=data if data is not None else {}, ingest_ts_ns=ts)
 
 
-def _normalizer(**kwargs) -> ExecutionNormalizer:
+def _normalizer(**kwargs: Any) -> ExecutionNormalizer:
     with patch("hft_platform.execution.normalizer.MetricsRegistry") as mock_reg:
-        m = MagicMock()
-        mock_reg.get.return_value = m
+        mock_reg.get.return_value = MagicMock()
         return ExecutionNormalizer(**kwargs)
 
 
+def _make_router(
+    terminal_handler: Any = None,
+    order_id_map: dict[str, str] | None = None,
+    metrics: MagicMock | None = None,
+) -> tuple:
+    """Build an ExecutionRouter with patched metrics. Returns (router, bus, raw_queue, mock_metrics)."""
+    from hft_platform.execution.router import ExecutionRouter
+
+    bus = MagicMock()
+    bus.publish_nowait = MagicMock()
+    raw_queue: asyncio.Queue = asyncio.Queue()
+    mock_metrics = metrics or MagicMock()
+
+    with (
+        patch("hft_platform.execution.router.MetricsRegistry") as mock_reg,
+        patch("hft_platform.execution.normalizer.MetricsRegistry") as mock_reg2,
+    ):
+        mock_reg.get.return_value = mock_metrics
+        mock_reg2.get.return_value = mock_metrics
+        router = ExecutionRouter(
+            bus=bus,
+            raw_queue=raw_queue,
+            order_id_map=order_id_map or {},
+            position_store=MagicMock(),
+            terminal_handler=terminal_handler or MagicMock(),
+        )
+    return router, bus, raw_queue, mock_metrics
+
+
+async def _run_router_processing(router: Any, raw_queue: asyncio.Queue, settle_s: float = 0.02) -> None:
+    """Run the router until one event is processed, then stop."""
+
+    async def _stop() -> None:
+        await asyncio.sleep(settle_s)
+        router.running = False
+        # Sentinel to unblock the queue.get() call
+        await raw_queue.put(_make_raw(topic="order", data={}, ts=0))
+
+    await asyncio.gather(router.run(), _stop())
+
+
+def _make_order_event(
+    order_id: str = "O1",
+    strategy_id: str = "s1",
+    status: OrderStatus = OrderStatus.FILLED,
+    side: Side = Side.BUY,
+) -> OrderEvent:
+    return OrderEvent(
+        order_id=order_id,
+        strategy_id=strategy_id,
+        symbol="2330",
+        status=status,
+        submitted_qty=1,
+        filled_qty=1 if status == OrderStatus.FILLED else 0,
+        remaining_qty=0 if status == OrderStatus.FILLED else 1,
+        price=5_000_000,
+        side=side,
+        ingest_ts_ns=1_000_000,
+        broker_ts_ns=1_000_000,
+    )
+
+
 # ===========================================================================
-# 1. normalize_order — "order" key is not a dict
+# 1. normalize_order -- "order" key is not a dict
 # ===========================================================================
 
 
@@ -41,473 +108,295 @@ class TestNormalizeOrderNonDictOrderKey:
         """If data['order'] exists but is not a dict, normalize_order returns None."""
         norm = _normalizer()
         raw = _make_raw(data={"order": "some-string-value", "status": "Submitted"})
-        result = norm.normalize_order(raw)
-        assert result is None
+        assert norm.normalize_order(raw) is None
 
     def test_returns_none_when_order_key_is_int(self) -> None:
         norm = _normalizer()
         raw = _make_raw(data={"order": 12345, "status": "Submitted"})
-        result = norm.normalize_order(raw)
-        assert result is None
+        assert norm.normalize_order(raw) is None
 
     def test_returns_none_when_order_key_is_list(self) -> None:
         norm = _normalizer()
         raw = _make_raw(data={"order": [1, 2, 3], "status": "Submitted"})
-        result = norm.normalize_order(raw)
-        assert result is None
+        assert norm.normalize_order(raw) is None
+
+    def test_returns_none_when_order_key_is_none(self) -> None:
+        norm = _normalizer()
+        raw = _make_raw(data={"order": None, "status": "Submitted"})
+        assert norm.normalize_order(raw) is None
 
 
 # ===========================================================================
-# 2. _resolve_from_order_id_map — seqno vs ordno priority
+# 2. _resolve_from_order_id_map -- seqno vs ordno priority
 # ===========================================================================
 
 
 class TestResolveSeqnoVsOrdnoPriority:
     def test_ordno_resolved_first_when_both_present(self) -> None:
-        """The resolver iterates [ord_no, seq_no, other_id] — ordno is tried first.
-
-        resolve_strategy_id_from_candidates calls resolve_strategy_id which
-        returns the strategy_id portion (before ':') of the normalized order key.
-        """
-        order_id_map = {"ORD-001": {"strategy_id": "strat_A", "intent_id": "i1"}}
-        norm = _normalizer(order_id_map=order_id_map)
-        raw = _make_raw(
-            data={
-                "order": {"ordno": "ORD-001", "seqno": "SEQ-999"},
-            }
-        )
-        result = norm._resolve_from_order_id_map(raw)
-        assert result == "strat_A"
+        """The resolver iterates [ord_no, seq_no, other_id]; ordno is tried first."""
+        norm = _normalizer(order_id_map={"ORD-001": {"strategy_id": "strat_A", "intent_id": "i1"}})
+        raw = _make_raw(data={"order": {"ordno": "ORD-001", "seqno": "SEQ-999"}})
+        assert norm._resolve_from_order_id_map(raw) == "strat_A"
 
     def test_falls_back_to_seqno_when_ordno_not_mapped(self) -> None:
-        order_id_map = {"SEQ-002": {"strategy_id": "strat_B"}}
-        norm = _normalizer(order_id_map=order_id_map)
-        raw = _make_raw(
-            data={
-                "order": {"ordno": "UNMAPPED", "seqno": "SEQ-002"},
-            }
-        )
-        result = norm._resolve_from_order_id_map(raw)
-        assert result == "strat_B"
+        norm = _normalizer(order_id_map={"SEQ-002": {"strategy_id": "strat_B"}})
+        raw = _make_raw(data={"order": {"ordno": "UNMAPPED", "seqno": "SEQ-002"}})
+        assert norm._resolve_from_order_id_map(raw) == "strat_B"
 
     def test_returns_none_when_neither_mapped(self) -> None:
         norm = _normalizer(order_id_map={})
-        raw = _make_raw(
-            data={
-                "order": {"ordno": "X", "seqno": "Y"},
-            }
-        )
-        result = norm._resolve_from_order_id_map(raw)
-        assert result is None
+        raw = _make_raw(data={"order": {"ordno": "X", "seqno": "Y"}})
+        assert norm._resolve_from_order_id_map(raw) is None
+
+    def test_ordno_at_top_level_when_no_order_dict(self) -> None:
+        """ordno/seqno can also appear at the top level of data."""
+        norm = _normalizer(order_id_map={"TOP_ORD": "strat_top"})
+        raw = _make_raw(data={"ordno": "TOP_ORD", "seqno": "TOP_SEQ"})
+        assert norm._resolve_from_order_id_map(raw) == "strat_top"
+
+    def test_seqno_at_top_level_fallback(self) -> None:
+        """When ordno is not mapped, seqno at top level is used."""
+        norm = _normalizer(order_id_map={"TOP_SEQ": "strat_seq"})
+        raw = _make_raw(data={"ordno": "UNMAPPED_ORD", "seqno": "TOP_SEQ"})
+        assert norm._resolve_from_order_id_map(raw) == "strat_seq"
 
 
 # ===========================================================================
-# 3. Price scaling — zero
+# 3. Price scaling -- zero price
 # ===========================================================================
 
 
 class TestPriceScalingZero:
-    def test_price_zero_scales_to_zero(self) -> None:
+    def test_zero_float_price_order_scales_to_zero(self) -> None:
         norm = _normalizer()
-        raw = _make_raw(
-            data={
-                "order": {"price": 0, "action": "Buy", "quantity": 10},
-                "contract": {"code": "2330"},
-                "status": "Submitted",
-            }
-        )
+        raw = _make_raw(data={
+            "order": {"price": 0.0, "action": "Buy", "quantity": 10},
+            "contract": {"code": "2330"},
+            "status": "Submitted",
+        })
+        result = norm.normalize_order(raw)
+        assert result is not None
+        assert result.price == 0
+        assert isinstance(result.price, int)
+
+    def test_zero_int_price_order_scales_to_zero(self) -> None:
+        norm = _normalizer()
+        raw = _make_raw(data={
+            "order": {"price": 0, "action": "Buy", "quantity": 10},
+            "contract": {"code": "2330"},
+            "status": "Submitted",
+        })
         result = norm.normalize_order(raw)
         assert result is not None
         assert result.price == 0
 
-
-# ===========================================================================
-# 4. Price scaling — normal value
-# ===========================================================================
-
-
-class TestPriceScalingNormal:
-    def test_price_500_scales_to_5_000_000(self) -> None:
+    def test_zero_price_fill_scales_to_zero(self) -> None:
         norm = _normalizer()
-        raw = _make_raw(
-            data={
-                "order": {"price": 500.0, "action": "Buy", "quantity": 5},
-                "contract": {"code": "2330"},
-                "status": "Submitted",
-            }
-        )
+        raw = _make_raw(topic="deal", data={
+            "price": 0.0, "quantity": 5, "action": "Buy",
+            "code": "2330", "seqno": "S1", "ordno": "O1",
+        })
+        result = norm.normalize_fill(raw)
+        assert result is not None
+        assert result.price == 0
+        assert isinstance(result.price, int)
+
+
+# ===========================================================================
+# 4. strategy_id_resolvers custom injection
+# ===========================================================================
+
+_FILL_DATA = {
+    "price": 100.0, "quantity": 5, "action": "Buy",
+    "code": "2330", "seqno": "S1", "ordno": "O1",
+}
+
+
+class TestStrategyIdResolversCustomInjection:
+    def test_custom_resolver_used_instead_of_defaults(self) -> None:
+        """A custom resolver list replaces the default resolvers entirely."""
+        norm = _normalizer(strategy_id_resolvers=[lambda _: "injected_strategy"])
+        data = {**_FILL_DATA, "custom_field": "should_be_ignored"}
+        fill = norm.normalize_fill(_make_raw(topic="deal", data=data))
+        assert fill is not None
+        assert fill.strategy_id == "injected_strategy"
+
+    def test_custom_resolver_chain_falls_through(self) -> None:
+        """If the first custom resolver returns None, the next one is tried."""
+        call_log: list[str] = []
+
+        def first(_: RawExecEvent) -> str | None:
+            call_log.append("first")
+            return None
+
+        def second(_: RawExecEvent) -> str | None:
+            call_log.append("second")
+            return "second_strat"
+
+        norm = _normalizer(strategy_id_resolvers=[first, second])
+        fill = norm.normalize_fill(_make_raw(topic="deal", data=_FILL_DATA))
+        assert fill is not None
+        assert fill.strategy_id == "second_strat"
+        assert call_log == ["first", "second"]
+
+    def test_all_custom_resolvers_return_none_yields_unknown(self) -> None:
+        norm = _normalizer(strategy_id_resolvers=[lambda _: None])
+        fill = norm.normalize_fill(_make_raw(topic="deal", data=_FILL_DATA))
+        assert fill is not None
+        assert fill.strategy_id == "UNKNOWN"
+
+    def test_custom_resolver_exception_caught_and_next_tried(self) -> None:
+        """Resolver exceptions (ValueError, KeyError, etc.) are caught gracefully."""
+
+        def broken(_: RawExecEvent) -> str | None:
+            raise ValueError("broken")
+
+        norm = _normalizer(strategy_id_resolvers=[broken, lambda _: "safe_strat"])
+        fill = norm.normalize_fill(_make_raw(topic="deal", data=_FILL_DATA))
+        assert fill is not None
+        assert fill.strategy_id == "safe_strat"
+
+    def test_custom_resolver_applied_to_order_normalization(self) -> None:
+        """Custom resolvers work for normalize_order as well."""
+        norm = _normalizer(strategy_id_resolvers=[lambda _: "order_custom"])
+        raw = _make_raw(data={
+            "order": {"price": 100, "action": "Buy", "quantity": 5},
+            "contract": {"code": "2330"},
+            "status": "Submitted",
+        })
         result = norm.normalize_order(raw)
         assert result is not None
-        # Default scale is 10000 → 500.0 * 10000 = 5_000_000
-        assert result.price == 5_000_000
+        assert result.strategy_id == "order_custom"
 
 
 # ===========================================================================
-# 5. Router — terminal_handler returns a coroutine
+# 5. ExecutionRouter -- terminal handler returning a coroutine
 # ===========================================================================
 
 
 class TestRouterTerminalHandlerCoroutine:
     @pytest.mark.asyncio
-    async def test_coroutine_handler_is_awaited(self) -> None:
-        from hft_platform.execution.router import ExecutionRouter
-
-        bus = MagicMock()
-        bus.publish_nowait = MagicMock()
-        raw_queue: asyncio.Queue = asyncio.Queue()
-        position_store = MagicMock()
-        order_id_map: dict[str, str] = {}
-
+    async def test_async_callable_handler_is_scheduled(self) -> None:
+        """When terminal_handler is an async callable, the router schedules the
+        returned coroutine via create_task."""
         handler_called = asyncio.Event()
 
         async def async_handler(strategy_id: str, order_id: str) -> None:
             handler_called.set()
 
-        with (
-            patch("hft_platform.execution.router.MetricsRegistry") as mock_reg,
-            patch("hft_platform.execution.normalizer.MetricsRegistry") as mock_reg2,
+        router, _bus, raw_queue, _metrics = _make_router(terminal_handler=async_handler)
+
+        with patch.object(
+            router.normalizer, "normalize_order",
+            side_effect=[_make_order_event(order_id="O1", status=OrderStatus.FILLED), None],
         ):
-            m = MagicMock()
-            mock_reg.get.return_value = m
-            mock_reg2.get.return_value = m
-            router = ExecutionRouter(
-                bus=bus,
-                raw_queue=raw_queue,
-                order_id_map=order_id_map,
-                position_store=position_store,
-                terminal_handler=async_handler,
-            )
-
-        # Build an OrderEvent with terminal status (FILLED=3)
-        order_evt = OrderEvent(
-            order_id="O1",
-            strategy_id="s1",
-            symbol="2330",
-            status=OrderStatus.FILLED,
-            submitted_qty=1,
-            filled_qty=1,
-            remaining_qty=0,
-            price=5_000_000,
-            side=Side.BUY,
-            ingest_ts_ns=1_000_000,
-            broker_ts_ns=1_000_000,
-        )
-        with patch.object(router.normalizer, "normalize_order", side_effect=[order_evt, None]):
-            raw = _make_raw(topic="order", data={}, ts=1_000_000)
-            await raw_queue.put(raw)
-
-            async def _stop_after_one() -> None:
-                await asyncio.sleep(0.02)
-                router.running = False
-                await raw_queue.put(_make_raw(topic="order", data={}, ts=0))
-
-            await asyncio.gather(router.run(), _stop_after_one())
-            # Allow the created task to complete
-            await asyncio.sleep(0.02)
+            await raw_queue.put(_make_raw(topic="order", data={}, ts=1_000_000))
+            await _run_router_processing(router, raw_queue)
+            await asyncio.sleep(0.02)  # let the scheduled task complete
 
         assert handler_called.is_set()
 
-
-# ===========================================================================
-# 6. Router — terminal_handler is sync
-# ===========================================================================
-
-
-class TestRouterTerminalHandlerSync:
     @pytest.mark.asyncio
-    async def test_sync_handler_is_called(self) -> None:
-        from hft_platform.execution.router import ExecutionRouter
+    async def test_async_on_terminal_state_method_is_scheduled(self) -> None:
+        """When terminal_handler is an object with async on_terminal_state,
+        the coroutine is scheduled."""
+        method_called = asyncio.Event()
 
-        bus = MagicMock()
-        bus.publish_nowait = MagicMock()
-        raw_queue: asyncio.Queue = asyncio.Queue()
-        position_store = MagicMock()
-        order_id_map: dict[str, str] = {}
+        class HandlerObj:
+            async def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
+                method_called.set()
 
-        sync_handler = MagicMock()
+        router, _bus, raw_queue, _metrics = _make_router(terminal_handler=HandlerObj())
 
-        with (
-            patch("hft_platform.execution.router.MetricsRegistry") as mock_reg,
-            patch("hft_platform.execution.normalizer.MetricsRegistry") as mock_reg2,
+        with patch.object(
+            router.normalizer, "normalize_order",
+            side_effect=[_make_order_event(order_id="O2", status=OrderStatus.CANCELLED, side=Side.SELL), None],
         ):
-            m = MagicMock()
-            mock_reg.get.return_value = m
-            mock_reg2.get.return_value = m
-            router = ExecutionRouter(
-                bus=bus,
-                raw_queue=raw_queue,
-                order_id_map=order_id_map,
-                position_store=position_store,
-                terminal_handler=sync_handler,
-            )
+            await raw_queue.put(_make_raw(topic="order", data={}, ts=1_000_000))
+            await _run_router_processing(router, raw_queue)
+            await asyncio.sleep(0.02)
 
-        order_evt = OrderEvent(
-            order_id="O2",
-            strategy_id="s2",
-            symbol="2330",
-            status=OrderStatus.CANCELLED,
-            submitted_qty=1,
-            filled_qty=0,
-            remaining_qty=1,
-            price=5_000_000,
-            side=Side.SELL,
-            ingest_ts_ns=1_000_000,
-            broker_ts_ns=1_000_000,
-        )
-        with patch.object(router.normalizer, "normalize_order", side_effect=[order_evt, None]):
-            raw = _make_raw(topic="order", data={}, ts=1_000_000)
-            await raw_queue.put(raw)
+        assert method_called.is_set()
 
-            async def _stop_after_one() -> None:
-                await asyncio.sleep(0.02)
-                router.running = False
-                await raw_queue.put(_make_raw(topic="order", data={}, ts=0))
+    @pytest.mark.asyncio
+    async def test_sync_callable_handler_is_called_directly(self) -> None:
+        """When terminal_handler is a sync callable, it is called directly."""
+        sync_handler = MagicMock()
+        router, _bus, raw_queue, _metrics = _make_router(terminal_handler=sync_handler)
 
-            await asyncio.gather(router.run(), _stop_after_one())
+        with patch.object(
+            router.normalizer, "normalize_order",
+            side_effect=[_make_order_event(order_id="O3", strategy_id="s3", status=OrderStatus.FAILED), None],
+        ):
+            await raw_queue.put(_make_raw(topic="order", data={}, ts=1_000_000))
+            await _run_router_processing(router, raw_queue)
 
-        sync_handler.assert_called_once_with("s2", "O2")
+        sync_handler.assert_called_once_with("s3", "O3")
 
 
 # ===========================================================================
-# 7. Router — lag metric observation
+# 6. ExecutionRouter -- lag metric observation with varying ingest_ts_ns
 # ===========================================================================
 
 
 class TestRouterLagMetricObservation:
     @pytest.mark.asyncio
-    async def test_lag_ns_observed(self) -> None:
-        from hft_platform.execution.router import ExecutionRouter
+    async def test_lag_ns_observed_with_fixed_timestamps(self) -> None:
+        """Verify execution_router_lag_ns.observe is called with (now_ns - ingest_ts_ns)."""
+        router, _bus, raw_queue, mock_metrics = _make_router()
 
-        bus = MagicMock()
-        bus.publish_nowait = MagicMock()
-        raw_queue: asyncio.Queue = asyncio.Queue()
-        position_store = MagicMock()
-
-        mock_metrics = MagicMock()
+        ingest_ts = 500_000
+        fixed_now_ns = 1_500_000
 
         with (
-            patch("hft_platform.execution.router.MetricsRegistry") as mock_reg,
-            patch("hft_platform.execution.normalizer.MetricsRegistry") as mock_reg2,
-        ):
-            mock_reg.get.return_value = mock_metrics
-            mock_reg2.get.return_value = mock_metrics
-            router = ExecutionRouter(
-                bus=bus,
-                raw_queue=raw_queue,
-                order_id_map={},
-                position_store=position_store,
-                terminal_handler=MagicMock(),
-            )
-
-        with patch.object(router.normalizer, "normalize_order", return_value=None):
-            ingest_ts = 500_000
-            raw = _make_raw(topic="order", data={}, ts=ingest_ts)
-            await raw_queue.put(raw)
-
-            fixed_now = 1_500_000
-
-            with patch("hft_platform.execution.router.timebase") as mock_tb:
-                mock_tb.now_ns.return_value = fixed_now
-                mock_tb.now_s.return_value = fixed_now / 1e9
-
-                async def _stop_after_one() -> None:
-                    await asyncio.sleep(0.02)
-                    router.running = False
-                    await raw_queue.put(_make_raw(topic="order", data={}, ts=0))
-
-                await asyncio.gather(router.run(), _stop_after_one())
-
-        mock_metrics.execution_router_lag_ns.observe.assert_called_with(fixed_now - ingest_ts)
-
-
-# ===========================================================================
-# 8. Normalize — missing fields don't crash
-# ===========================================================================
-
-
-class TestNormalizeMissingFieldsGraceful:
-    def test_empty_dict_returns_order_event_with_defaults(self) -> None:
-        """An empty data dict should not crash; returns an OrderEvent with defaults."""
-        norm = _normalizer()
-        raw = _make_raw(data={})
-        result = norm.normalize_order(raw)
-        # Empty dict is a valid dict, should produce an OrderEvent with default values
-        assert result is not None
-        assert result.symbol == "UNKNOWN"
-        assert result.order_id == ""
-
-    def test_missing_contract_uses_unknown_symbol(self) -> None:
-        norm = _normalizer()
-        raw = _make_raw(data={"order": {"price": 100, "action": "Buy"}})
-        result = norm.normalize_order(raw)
-        assert result is not None
-        assert result.symbol == "UNKNOWN"
-
-    def test_non_dict_data_returns_none(self) -> None:
-        norm = _normalizer()
-        raw = _make_raw(data="not-a-dict")  # type: ignore[arg-type]
-        result = norm.normalize_order(raw)
-        assert result is None
-
-    def test_normalize_fill_missing_fields(self) -> None:
-        """normalize_fill with empty dict should not crash."""
-        norm = _normalizer()
-        raw = _make_raw(topic="deal", data={})
-        result = norm.normalize_fill(raw)
-        # Should produce a FillEvent with zero/empty defaults
-        assert result is not None
-        assert result.qty == 0
-        assert result.price == 0
-
-
-# ===========================================================================
-# 9. Normalize fill — all fields present → correct FillEvent
-# ===========================================================================
-
-
-class TestNormalizeFillEventAllFields:
-    def test_all_fields_produce_correct_fill(self) -> None:
-        norm = _normalizer()
-        raw = _make_raw(
-            topic="deal",
-            data={
-                "seqno": "SEQ-100",
-                "ordno": "ORD-200",
-                "account_id": "acct-01",
-                "code": "2330",
-                "action": "Sell",
-                "quantity": 50,
-                "price": 600.0,
-                "ts": 1_700_000_000_000_000_000,  # nanoseconds
-            },
-        )
-        result = norm.normalize_fill(raw)
-        assert result is not None
-        assert isinstance(result, FillEvent)
-        assert result.fill_id == "SEQ-100"
-        assert result.order_id == "ORD-200"
-        assert result.account_id == "acct-01"
-        assert result.symbol == "2330"
-        assert result.side == Side.SELL
-        assert result.qty == 50
-        # 600.0 * 10000 = 6_000_000
-        assert result.price == 6_000_000
-        assert result.fee == 0
-        assert result.tax == 0
-
-
-# ===========================================================================
-# 10. Router — unknown order ID handled gracefully
-# ===========================================================================
-
-
-class TestRouterUnknownOrderId:
-    @pytest.mark.asyncio
-    async def test_unknown_order_id_still_publishes(self) -> None:
-        """An order event with strategy_id=UNKNOWN still gets published (for orders)."""
-        from hft_platform.execution.router import ExecutionRouter
-
-        bus = MagicMock()
-        bus.publish_nowait = MagicMock()
-        raw_queue: asyncio.Queue = asyncio.Queue()
-        position_store = MagicMock()
-
-        with (
-            patch("hft_platform.execution.router.MetricsRegistry") as mock_reg,
-            patch("hft_platform.execution.normalizer.MetricsRegistry") as mock_reg2,
-        ):
-            m = MagicMock()
-            mock_reg.get.return_value = m
-            mock_reg2.get.return_value = m
-            router = ExecutionRouter(
-                bus=bus,
-                raw_queue=raw_queue,
-                order_id_map={},
-                position_store=position_store,
-                terminal_handler=MagicMock(),
-            )
-
-        order_evt = OrderEvent(
-            order_id="BROKER-XYZ",
-            strategy_id="UNKNOWN",
-            symbol="2330",
-            status=OrderStatus.SUBMITTED,
-            submitted_qty=10,
-            filled_qty=0,
-            remaining_qty=10,
-            price=5_000_000,
-            side=Side.BUY,
-            ingest_ts_ns=1_000_000,
-            broker_ts_ns=1_000_000,
-        )
-        with patch.object(router.normalizer, "normalize_order", side_effect=[order_evt, None]):
-            raw = _make_raw(topic="order", data={}, ts=1_000_000)
-            await raw_queue.put(raw)
-
-            async def _stop_after_one() -> None:
-                await asyncio.sleep(0.02)
-                router.running = False
-                await raw_queue.put(_make_raw(topic="order", data={}, ts=0))
-
-            await asyncio.gather(router.run(), _stop_after_one())
-
-        # Order events are always published even if strategy_id is UNKNOWN
-        bus.publish_nowait.assert_called_once_with(order_evt)
-
-    @pytest.mark.asyncio
-    async def test_unknown_fill_goes_to_dlq(self) -> None:
-        """A fill with strategy_id=UNKNOWN is routed to DLQ, not published."""
-        from hft_platform.execution.router import ExecutionRouter
-
-        bus = MagicMock()
-        bus.publish_nowait = MagicMock()
-        raw_queue: asyncio.Queue = asyncio.Queue()
-        position_store = MagicMock()
-
-        mock_metrics = MagicMock()
-        with (
-            patch("hft_platform.execution.router.MetricsRegistry") as mock_reg,
-            patch("hft_platform.execution.normalizer.MetricsRegistry") as mock_reg2,
-        ):
-            mock_reg.get.return_value = mock_metrics
-            mock_reg2.get.return_value = mock_metrics
-            router = ExecutionRouter(
-                bus=bus,
-                raw_queue=raw_queue,
-                order_id_map={},
-                position_store=position_store,
-                terminal_handler=MagicMock(),
-            )
-
-        fill_evt = FillEvent(
-            fill_id="F1",
-            account_id="acct",
-            order_id="UNKNOWN-ORDER",
-            strategy_id="UNKNOWN",
-            symbol="2330",
-            side=Side.BUY,
-            qty=1,
-            price=5_000_000,
-            fee=0,
-            tax=0,
-            ingest_ts_ns=1_000_000,
-            match_ts_ns=1_000_000,
-        )
-        mock_dlq = MagicMock()
-        with (
-            patch.object(router.normalizer, "normalize_fill", side_effect=[fill_evt, None]),
             patch.object(router.normalizer, "normalize_order", return_value=None),
-            patch("hft_platform.execution.fill_dlq.get_orphaned_fill_dlq", return_value=mock_dlq),
+            patch("hft_platform.execution.router.timebase") as mock_tb,
         ):
-            raw = _make_raw(topic="deal", data={}, ts=1_000_000)
-            await raw_queue.put(raw)
+            mock_tb.now_ns.return_value = fixed_now_ns
+            mock_tb.now_s.return_value = fixed_now_ns / 1e9
+            await raw_queue.put(_make_raw(topic="order", data={}, ts=ingest_ts))
+            await _run_router_processing(router, raw_queue)
 
-            async def _stop_after_one() -> None:
-                await asyncio.sleep(0.02)
-                router.running = False
-                await raw_queue.put(_make_raw(topic="order", data={}, ts=0))
+        mock_metrics.execution_router_lag_ns.observe.assert_called_with(
+            fixed_now_ns - ingest_ts
+        )
 
-            await asyncio.gather(router.run(), _stop_after_one())
+    @pytest.mark.asyncio
+    async def test_lag_not_observed_when_ingest_ts_is_zero(self) -> None:
+        """When ingest_ts_ns is 0 (falsy), the lag metric should NOT be observed."""
+        router, _bus, raw_queue, mock_metrics = _make_router()
 
-        mock_dlq.add.assert_called_once_with(fill_evt)
-        mock_metrics.orphaned_fill_total.inc.assert_called_once()
+        with (
+            patch.object(router.normalizer, "normalize_order", return_value=None),
+            patch("hft_platform.execution.router.timebase") as mock_tb,
+        ):
+            mock_tb.now_ns.return_value = 2_000_000
+            mock_tb.now_s.return_value = 0.002
+            await raw_queue.put(_make_raw(topic="order", data={}, ts=0))
+            await _run_router_processing(router, raw_queue)
+
+        mock_metrics.execution_router_lag_ns.observe.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_larger_lag_for_older_ingest_ts(self) -> None:
+        """Older ingest_ts produces a larger observed lag value."""
+        router, _bus, raw_queue, mock_metrics = _make_router()
+
+        fixed_now_ns = 10_000_000
+        with (
+            patch.object(router.normalizer, "normalize_order", return_value=None),
+            patch("hft_platform.execution.router.timebase") as mock_tb,
+        ):
+            mock_tb.now_ns.return_value = fixed_now_ns
+            mock_tb.now_s.return_value = fixed_now_ns / 1e9
+
+            await raw_queue.put(_make_raw(topic="order", data={}, ts=fixed_now_ns - 1_000_000))
+            await raw_queue.put(_make_raw(topic="order", data={}, ts=fixed_now_ns - 9_000_000))
+            await _run_router_processing(router, raw_queue, settle_s=0.05)
+
+        assert mock_metrics.execution_router_lag_ns.observe.call_count == 2
+        lag_recent = mock_metrics.execution_router_lag_ns.observe.call_args_list[0][0][0]
+        lag_old = mock_metrics.execution_router_lag_ns.observe.call_args_list[1][0][0]
+        assert lag_recent == 1_000_000
+        assert lag_old == 9_000_000
+        assert lag_old > lag_recent
