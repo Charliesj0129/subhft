@@ -7,6 +7,7 @@ Tests:
 2. Backend parity on synthetic data — Python vs Rust FeatureEngine produce identical outputs.
 3. Mismatch detection — ParityReport correctly identifies deliberate discrepancies.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -30,7 +31,7 @@ from hft_platform.feature.registry import default_feature_registry
 
 _SYMBOL = "TEST.SIM"
 _BASE_PRICE = 180_000_000  # 18000.0000 in x10000 scaled units (e.g. TAIEX futures)
-_TICK = 10_000              # 1 point in x10000 units
+_TICK = 10_000  # 1 point in x10000 units
 
 
 def _rust_available() -> bool:
@@ -135,12 +136,8 @@ class TestSchemaParity:
         report = check_schema_parity()
         assert isinstance(report, ParityReport)
         # Schema should pass — mismatches indicate a versioning drift.
-        assert report.passed, (
-            f"Schema parity failed with {len(report.mismatches)} mismatch(es):\n"
-            + "\n".join(
-                f"  [{m.event_idx}] {m.feature_id!r}: py={m.python_value} rust={m.rust_value}"
-                for m in report.mismatches
-            )
+        assert report.passed, f"Schema parity failed with {len(report.mismatches)} mismatch(es):\n" + "\n".join(
+            f"  [{m.event_idx}] {m.feature_id!r}: py={m.python_value} rust={m.rust_value}" for m in report.mismatches
         )
 
     def test_python_registry_has_expected_feature_ids(self) -> None:
@@ -223,12 +220,9 @@ class TestBackendParity:
         report = check_backend_parity(events)
 
         assert report.total_events == 100
-        assert report.passed, (
-            f"Backend parity failed with {len(report.mismatches)} mismatch(es):\n"
-            + "\n".join(
-                f"  event[{m.event_idx}] {m.feature_id!r}: py={m.python_value} rust={m.rust_value}"
-                for m in report.mismatches[:20]
-            )
+        assert report.passed, f"Backend parity failed with {len(report.mismatches)} mismatch(es):\n" + "\n".join(
+            f"  event[{m.event_idx}] {m.feature_id!r}: py={m.python_value} rust={m.rust_value}"
+            for m in report.mismatches[:20]
         )
         assert report.mismatches == ()
 
@@ -256,9 +250,7 @@ class TestBackendParity:
             )
 
         report = check_backend_parity(events)
-        assert report.passed, (
-            f"Multi-symbol backend parity failed: {len(report.mismatches)} mismatch(es)"
-        )
+        assert report.passed, f"Multi-symbol backend parity failed: {len(report.mismatches)} mismatch(es)"
 
     @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
     def test_check_backend_parity_edge_cases(self) -> None:
@@ -291,9 +283,8 @@ class TestBackendParity:
             ),
         ]
         report = check_backend_parity(edge_events)
-        assert report.passed, (
-            f"Edge-case backend parity failed: {len(report.mismatches)} mismatch(es)\n"
-            + "\n".join(str(m) for m in report.mismatches)
+        assert report.passed, f"Edge-case backend parity failed: {len(report.mismatches)} mismatch(es)\n" + "\n".join(
+            str(m) for m in report.mismatches
         )
 
 
@@ -376,9 +367,7 @@ class TestMismatchDetection:
 
         assert values_a is not None
         assert values_b is not None
-        assert values_a == values_b, (
-            "Two identical Python engines diverged — determinism broken"
-        )
+        assert values_a == values_b, "Two identical Python engines diverged — determinism broken"
 
     def test_parity_schema_report_no_mismatches_for_python_only(self) -> None:
         """When Rust is unavailable, check_schema_parity must have zero mismatches."""

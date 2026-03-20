@@ -227,7 +227,7 @@ def check_schema_parity(  # noqa: C901
                     event_idx=event_counter,
                     feature_id=fid,
                     python_value=1.0,  # present in Python
-                    rust_value=0.0,    # missing from Rust
+                    rust_value=0.0,  # missing from Rust
                 )
             )
             event_counter += 1
@@ -238,7 +238,7 @@ def check_schema_parity(  # noqa: C901
                     event_idx=event_counter,
                     feature_id=fid,
                     python_value=0.0,  # missing from Python
-                    rust_value=1.0,    # present in Rust
+                    rust_value=1.0,  # present in Rust
                 )
             )
             event_counter += 1

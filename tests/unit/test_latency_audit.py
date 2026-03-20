@@ -93,9 +93,7 @@ def _write_profiles(root: Path, data: dict | None = None) -> None:
     config_dir = root / "config" / "research"
     config_dir.mkdir(parents=True, exist_ok=True)
     payload = data if data is not None else _PROFILES_YAML
-    (config_dir / "latency_profiles.yaml").write_text(
-        yaml.dump(payload), encoding="utf-8"
-    )
+    (config_dir / "latency_profiles.yaml").write_text(yaml.dump(payload), encoding="utf-8")
 
 
 def _write_scorecard(base: Path, alpha_id: str, scorecard: dict, sub: str = "validations") -> Path:
@@ -111,6 +109,7 @@ def _write_scorecard(base: Path, alpha_id: str, scorecard: dict, sub: str = "val
 # Import check
 # ---------------------------------------------------------------------------
 
+
 def test_module_imports() -> None:
     """Module imports without error."""
     from hft_platform.alpha import latency_audit  # noqa: F401
@@ -119,6 +118,7 @@ def test_module_imports() -> None:
 # ---------------------------------------------------------------------------
 # LatencyAuditResult dataclass
 # ---------------------------------------------------------------------------
+
 
 class TestLatencyAuditResult:
     def test_frozen(self) -> None:
@@ -152,6 +152,7 @@ class TestLatencyAuditResult:
 # audit_alphas — empty directory
 # ---------------------------------------------------------------------------
 
+
 class TestAuditAlphasEmpty:
     def test_empty_returns_empty_list(self, tmp_path: Path) -> None:
         from hft_platform.alpha.latency_audit import audit_alphas
@@ -175,6 +176,7 @@ class TestAuditAlphasEmpty:
 # ---------------------------------------------------------------------------
 # audit_alphas — missing profiles YAML
 # ---------------------------------------------------------------------------
+
 
 class TestAuditAlpasMissingProfilesYaml:
     def test_missing_yaml_all_has_profile_false(self, tmp_path: Path) -> None:
@@ -219,6 +221,7 @@ class TestAuditAlpasMissingProfilesYaml:
 # audit_alphas — compliant alpha
 # ---------------------------------------------------------------------------
 
+
 class TestAuditAlphasCompliant:
     def test_compliant_alpha(self, tmp_path: Path) -> None:
         from hft_platform.alpha.latency_audit import audit_alphas
@@ -250,6 +253,7 @@ class TestAuditAlphasCompliant:
 # ---------------------------------------------------------------------------
 # audit_alphas — non-compliant cases
 # ---------------------------------------------------------------------------
+
 
 class TestAuditAlphasNonCompliant:
     def test_missing_profile(self, tmp_path: Path) -> None:
@@ -323,6 +327,7 @@ class TestAuditAlphasNonCompliant:
 # audit_alphas — mixed batch
 # ---------------------------------------------------------------------------
 
+
 class TestAuditAlphasMixedBatch:
     def test_mixed_compliant_and_non_compliant(self, tmp_path: Path) -> None:
         from hft_platform.alpha.latency_audit import audit_alphas
@@ -374,6 +379,7 @@ class TestAuditAlphasMixedBatch:
 # Gate D tolerance boundary
 # ---------------------------------------------------------------------------
 
+
 class TestGateDTolerance:
     def test_exactly_at_80_percent_threshold_passes(self, tmp_path: Path) -> None:
         from hft_platform.alpha.latency_audit import audit_alphas
@@ -419,6 +425,7 @@ class TestGateDTolerance:
 # ---------------------------------------------------------------------------
 # format_audit_report
 # ---------------------------------------------------------------------------
+
 
 class TestFormatAuditReport:
     def test_empty_results(self) -> None:
@@ -541,6 +548,7 @@ class TestFormatAuditReport:
 # ---------------------------------------------------------------------------
 # Malformed scorecard handling
 # ---------------------------------------------------------------------------
+
 
 class TestMalformedScorecard:
     def test_invalid_json_scorecard(self, tmp_path: Path) -> None:

@@ -340,6 +340,5 @@ def _build_summary(
     )
 
 
-
 # Alias for backward compatibility with code expecting _compute_summary
 _compute_summary = _build_summary

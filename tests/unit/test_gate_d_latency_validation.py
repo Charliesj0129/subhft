@@ -259,9 +259,9 @@ class TestGateDLatencyValuesRealistic:
         _standard_profiles(tmp_path)
         lp = {
             "latency_profile_id": _PROFILE_ID,
-            "submit_ack_latency_ms": 5.0,   # well below 36 * 0.8 = 28.8
-            "modify_ack_latency_ms": 5.0,   # well below 43 * 0.8 = 34.4
-            "cancel_ack_latency_ms": 5.0,   # well below 47 * 0.8 = 37.6
+            "submit_ack_latency_ms": 5.0,  # well below 36 * 0.8 = 28.8
+            "modify_ack_latency_ms": 5.0,  # well below 43 * 0.8 = 34.4
+            "cancel_ack_latency_ms": 5.0,  # well below 47 * 0.8 = 37.6
         }
         sc = _base_scorecard(latency_profile=lp)
         passed, checks = _evaluate_gate_d(sc, _cfg(project_root=str(tmp_path)))

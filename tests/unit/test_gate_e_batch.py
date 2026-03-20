@@ -266,9 +266,7 @@ class TestGateEBatchRunnerWithCampaignRunner:
     def test_mixed_results(self, tmp_path: Path) -> None:
         """Some candidates complete, some fail, none skipped when runner is provided."""
         _make_decision(tmp_path, "alpha_ok", gate_d_passed=True, gate_e_passed=False, timestamp="20260101T000000Z_aaa")
-        _make_decision(
-            tmp_path, "alpha_err", gate_d_passed=True, gate_e_passed=False, timestamp="20260101T000000Z_bbb"
-        )
+        _make_decision(tmp_path, "alpha_err", gate_d_passed=True, gate_e_passed=False, timestamp="20260101T000000Z_bbb")
 
         def campaign_runner(alpha_id: str) -> None:
             if alpha_id == "alpha_err":

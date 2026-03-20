@@ -96,9 +96,7 @@ class DriftDetector:
         self._baseline_mean: float = baseline_mean
         self._baseline_std: float = baseline_std
         self._config: DriftDetectorConfig = config if config is not None else DriftDetectorConfig()
-        self._window: collections.deque[float] = collections.deque(
-            maxlen=self._config.window_size
-        )
+        self._window: collections.deque[float] = collections.deque(maxlen=self._config.window_size)
         self._alerts: list[DriftAlert] = []
         self._alert_count: int = 0
 

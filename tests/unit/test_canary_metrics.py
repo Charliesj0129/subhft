@@ -217,6 +217,7 @@ class TestRedisCanarySource:
 
     def test_redis_get_exception_skips_key(self):
         client = MagicMock()
+
         # Raise for slippage_bps, return normally for sessions_live
         def side_effect(key: str) -> str | None:
             if "slippage_bps" in key:
