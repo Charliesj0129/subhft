@@ -349,9 +349,7 @@ class MarketDataObservabilityMixin:
         except Exception:
             pass
 
-    def _emit_feature_shadow_mismatch_metric(
-        self: Any, feature_set_id: str, feature_id: str
-    ) -> None:
+    def _emit_feature_shadow_mismatch_metric(self: Any, feature_set_id: str, feature_id: str) -> None:
         metrics_registry: MetricsRegistry | None = getattr(self, "metrics_registry", None)
         if not metrics_registry or not hasattr(metrics_registry, "feature_shadow_parity_mismatch_total"):
             return
