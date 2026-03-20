@@ -116,7 +116,7 @@ jobs:
 
       - name: Detect conflict markers (AWG-03)
         run: |
-          CONFLICTS=$(grep -rn '<<<<<<< \|=======$\|>>>>>>> ' src/ tests/ docs/ --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' --include='*.toml' || true)
+          CONFLICTS=$(grep -rnE '^<<<<<<< |^=======$|^>>>>>>> ' src/ tests/ docs/ --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' --include='*.toml' || true)
           if [ -n "$CONFLICTS" ]; then
             echo "::error::Conflict markers found in tracked files — resolve before merge:"
             echo "$CONFLICTS"
