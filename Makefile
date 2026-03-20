@@ -1,7 +1,7 @@
 # HFT Platform Makefile
 # Unified CLI for development, testing, and CI
 
-.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html arch-gate test-assertion-check test-collection-check lint lint-fix format format-check typecheck check benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta monitor-remote experiment-gc experiment-gc-dry-run help zero-assertion-gate pre-market-check post-market-check alert-test drill-recon-mismatch
+.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html arch-gate test-assertion-check test-collection-check lint lint-fix format format-check typecheck check benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta monitor-remote experiment-gc experiment-gc-dry-run help pre-market-check post-market-check alert-test drill-recon-mismatch
 
 PY ?= uv run python
 
@@ -163,10 +163,7 @@ clean-all: clean clean-rust ## Clean everything
 # CI Simulation
 # ============================================================================
 
-ci: format-check lint typecheck coverage zero-assertion-gate ## Run full CI pipeline locally
-
-zero-assertion-gate: ## Block CI if zero-assertion tests exceed baseline
-	$(PY) scripts/check_zero_assertion_tests.py
+ci: format-check lint typecheck test-assertion-check coverage ## Run full CI pipeline locally
 
 .PHONY: test-unit-ci coverage-branch-gate coverage-markdown test-integration-ci test-clickhouse-writer-smoke
 .PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
@@ -178,7 +175,7 @@ test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
 	uv run pytest tests/unit -q --cov=src/hft_platform --cov-branch --cov-report=term-missing --cov-report=xml
 
 coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
-	uv run coverage report --fail-under=65
+	uv run coverage report --fail-under=70
 
 coverage-markdown: ## Print coverage summary in markdown-friendly text
 	uv run coverage report
@@ -233,6 +230,18 @@ security-audit: ## Dependency security scan with pip-audit fallback to pip check
 # ============================================================================
 # Failure Simulation / Drill Targets
 # ============================================================================
+
+pre-market-check: ## Run pre-market health checks (Docker, ClickHouse, Redis, WAL, metrics)
+	$(PY) scripts/pre_market_check.py
+
+post-market-check: ## Run post-market health checks (WAL, recorder, ClickHouse records, PnL)
+	$(PY) scripts/post_market_check.py
+
+alert-test: ## Send test alert to alertmanager and verify delivery
+	$(PY) scripts/alert_test.py
+
+drill-recon-mismatch: ## Run reconciliation mismatch drill (integration test)
+	uv run pytest tests/integration/test_recon_mismatch_drill.py -v --no-cov
 
 recorder-status: ## Show recorder WAL backlog and ClickHouse status
 	uv run hft recorder status
