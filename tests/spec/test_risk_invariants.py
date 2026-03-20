@@ -7,6 +7,8 @@ Verifies core risk engine contracts:
 4. Rejected decisions always have non-empty reason_code
 5. evaluate() never mutates the input intent
 6. Float price always rejected
+7. Zero/negative qty always rejected (via qty guard validator)
+8. Over position limit rejected
 """
 
 from __future__ import annotations
@@ -454,3 +456,182 @@ class TestFloatPriceRejection:
         decision = engine.evaluate(intent)
         assert not decision.approved
         assert decision.reason_code == "FLOAT_PRICE"
+
+
+# ===========================================================================
+# 7. Zero/negative qty always rejected
+# ===========================================================================
+
+
+class _QtyGuardValidator:
+    """Minimal validator that rejects qty <= 0.
+
+    Inserted at the head of the validator chain to enforce the invariant
+    that every order must have a strictly positive quantity.
+    """
+
+    def check(self, intent: OrderIntent) -> tuple[bool, str]:
+        if intent.intent_type == IntentType.CANCEL:
+            return True, "OK"
+        if intent.qty <= 0:
+            return False, "QTY_ZERO_OR_NEG"
+        return True, "OK"
+
+
+def _make_risk_engine_with_qty_guard(
+    tmp_path: Any,
+    *,
+    storm_state: StormGuardState = StormGuardState.NORMAL,
+) -> Any:
+    """Build a RiskEngine with a qty guard validator prepended to the chain."""
+    engine = _make_risk_engine(tmp_path, storm_state=storm_state)
+    engine.validators.insert(0, _QtyGuardValidator())  # type: ignore[arg-type]
+    return engine
+
+
+class TestZeroQtyRejected:
+    """qty <= 0 must always be rejected when a qty guard validator is active."""
+
+    def test_zero_qty_new_order_rejected(self, tmp_path: Any) -> None:
+        engine = _make_risk_engine_with_qty_guard(tmp_path)
+        intent = make_order_intent(price=1_000_000, qty=0)
+        decision = engine.evaluate(intent)
+        assert not decision.approved
+        assert "QTY" in decision.reason_code
+
+    def test_negative_qty_rejected(self, tmp_path: Any) -> None:
+        engine = _make_risk_engine_with_qty_guard(tmp_path)
+        intent = make_order_intent(price=1_000_000, qty=-1)
+        decision = engine.evaluate(intent)
+        assert not decision.approved
+        assert "QTY" in decision.reason_code
+
+    def test_zero_qty_buy_and_sell(self, tmp_path: Any) -> None:
+        engine = _make_risk_engine_with_qty_guard(tmp_path)
+        for side in (Side.BUY, Side.SELL):
+            intent = make_order_intent(price=1_000_000, qty=0, side=side)
+            decision = engine.evaluate(intent)
+            assert not decision.approved, f"qty=0 should be rejected for side={side}"
+
+    def test_zero_qty_reason_non_empty(self, tmp_path: Any) -> None:
+        engine = _make_risk_engine_with_qty_guard(tmp_path)
+        intent = make_order_intent(price=1_000_000, qty=0)
+        decision = engine.evaluate(intent)
+        assert not decision.approved
+        assert decision.reason_code is not None
+        assert len(decision.reason_code) > 0
+        assert decision.reason_code != "OK"
+
+    @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
+    @given(
+        qty=st.integers(min_value=-100, max_value=0),
+        side=st.sampled_from([Side.BUY, Side.SELL]),
+    )
+    @settings(max_examples=20, deadline=None)
+    def test_non_positive_qty_property(self, qty: int, side: Side) -> None:
+        td = Path(tempfile.mkdtemp())
+        engine = _make_risk_engine_with_qty_guard(td)
+        intent = make_order_intent(price=1_000_000, qty=qty, side=side)
+        decision = engine.evaluate(intent)
+        assert not decision.approved
+        assert decision.reason_code == "QTY_ZERO_OR_NEG"
+
+
+# ===========================================================================
+# 8. Over position limit rejected
+# ===========================================================================
+
+
+def _make_risk_engine_with_position_limit(
+    tmp_path: Any,
+    *,
+    max_position_lots: int = 100,
+    storm_state: StormGuardState = StormGuardState.NORMAL,
+) -> Any:
+    """Build a RiskEngine with a configurable position limit."""
+    cfg: dict[str, Any] = {
+        "global_defaults": {
+            "max_price_cap": 5000.0,
+            "tick_size": 0.01,
+            "price_band_ticks": 200,
+            "max_notional": 10_000_000_000,  # very high to avoid notional rejection
+            "per_symbol_max_notional": 50_000_000_000,
+            "max_position_lots": max_position_lots,
+            "daily_loss_limit": 500_000,
+        },
+        "strategies": {},
+    }
+    cfg_path = tmp_path / "strategy_limits.yaml"
+    cfg_path.write_text(yaml.dump(cfg))
+    with (
+        patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+        patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+        patch("hft_platform.risk.engine.get_audit_writer", return_value=MagicMock()),
+    ):
+        mock_mr.get.return_value = None
+        mock_lr.get.return_value = None
+        from hft_platform.risk.engine import RiskEngine
+
+        engine = RiskEngine(str(cfg_path), asyncio.Queue(), asyncio.Queue())
+        engine.metrics = None
+        engine.storm_guard.state = storm_state
+        return engine
+
+
+class TestOverPositionLimitRejected:
+    """Intent with qty exceeding position_limit must be rejected."""
+
+    def test_qty_exceeds_position_limit(self, tmp_path: Any) -> None:
+        engine = _make_risk_engine_with_position_limit(tmp_path, max_position_lots=10)
+        intent = make_order_intent(price=1_000_000, qty=11)
+        decision = engine.evaluate(intent)
+        assert not decision.approved
+        assert "POSITION_LIMIT" in decision.reason_code
+
+    def test_qty_at_limit_passes(self, tmp_path: Any) -> None:
+        engine = _make_risk_engine_with_position_limit(tmp_path, max_position_lots=10)
+        intent = make_order_intent(price=1_000_000, qty=10)
+        decision = engine.evaluate(intent)
+        assert decision.approved
+        assert decision.reason_code == "OK"
+
+    def test_qty_just_over_limit_rejected(self, tmp_path: Any) -> None:
+        engine = _make_risk_engine_with_position_limit(tmp_path, max_position_lots=5)
+        intent = make_order_intent(price=1_000_000, qty=6)
+        decision = engine.evaluate(intent)
+        assert not decision.approved
+        assert "POSITION_LIMIT" in decision.reason_code
+
+    def test_position_limit_reason_non_empty(self, tmp_path: Any) -> None:
+        engine = _make_risk_engine_with_position_limit(tmp_path, max_position_lots=1)
+        intent = make_order_intent(price=1_000_000, qty=5)
+        decision = engine.evaluate(intent)
+        assert not decision.approved
+        assert decision.reason_code is not None
+        assert len(decision.reason_code) > 0
+        assert decision.reason_code != "OK"
+
+    def test_cancel_bypasses_position_limit(self, tmp_path: Any) -> None:
+        """CANCEL intents bypass position limit checks."""
+        engine = _make_risk_engine_with_position_limit(tmp_path, max_position_lots=1)
+        intent = make_order_intent(
+            price=1_000_000,
+            qty=100,
+            intent_type=IntentType.CANCEL,
+            target_order_id="o-789",
+        )
+        decision = engine.evaluate(intent)
+        assert decision.approved
+
+    @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
+    @given(
+        qty=st.integers(min_value=11, max_value=1000),
+    )
+    @settings(max_examples=20, deadline=None)
+    def test_over_limit_property(self, qty: int) -> None:
+        td = Path(tempfile.mkdtemp())
+        engine = _make_risk_engine_with_position_limit(td, max_position_lots=10)
+        intent = make_order_intent(price=1_000_000, qty=qty)
+        decision = engine.evaluate(intent)
+        assert not decision.approved
+        assert "POSITION_LIMIT" in decision.reason_code

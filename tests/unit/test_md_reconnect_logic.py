@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import time
 from enum import Enum
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -31,11 +33,47 @@ class FakeService(MarketDataReconnectMixin):
         self.reconnect_hours_2: str = ""
         self._reconnect_tzinfo: dt.tzinfo = dt.timezone(dt.timedelta(hours=8))
         self.last_event_ts: float = 0.0
+        self.last_event_mono: float = 0.0
         self._last_rollover_seen_date: dt.date | None = None
         self._last_rollover_reconnect_date: dt.date | None = None
         self.state: _FeedState | None = None
         self._market_open_grace_s: float = 0.0
         self.metrics_registry: object | None = None
+        # Reconnect / resubscribe state
+        self._last_resubscribe_ts: float = 0.0
+        self.resubscribe_cooldown_s: float = 15.0
+        self._resubscribe_attempts: int = 0
+        self._last_reconnect_ts: float = 0.0
+        self.reconnect_cooldown_s: float = 60.0
+        self.reconnect_timeout_s: float = 30.0
+        self._pending_reconnect_reason: str | None = None
+        self._pending_reconnect_gap: float = 0.0
+        self._pending_reconnect_since: float | None = None
+        self.client: object | None = None
+        self._feed_reconnect_gap_metric_child: object | None = None
+        # Watchdog state
+        self.running: bool = False
+        self._watchdog_interval_s: float = 0.01  # fast for tests
+        self._symbol_gap_skip_off_hours: bool = True
+        self._symbol_gap_consecutive_hits: int = 0
+        self._last_symbol_gap_off_hours_log_ts: float = 0.0
+        self._symbol_gap_off_hours_log_interval_s: float = 300.0
+        self._symbol_last_tick: dict[str, float] = {}
+        self._symbol_gap_active_lookback_s: float = 90.0
+        self._symbol_gap_min_active_symbols: int = 24
+        self._symbol_gap_threshold_s: float = 6.0
+        self._market_open_grace_gap_threshold_s: float = 30.0
+        self._symbol_gap_min_stale_count: int = 5
+        self._symbol_gap_stale_ratio_threshold: float = 0.85
+        self._symbol_gap_severe_gap_s: float = 30.0
+        self._symbol_gap_consecutive_cycles: int = 5
+        self._symbol_gap_resubscribe_cooldown_s: float = 120.0
+        self._last_symbol_gap_resubscribe_ts: float = 0.0
+        # Monitor loop state
+        self.heartbeat_threshold_s: float = 5.0
+        self.resubscribe_gap_s: float = 15.0
+        self.force_reconnect_gap_s: float = 300.0
+        self.reconnect_gap_s: float = 60.0
 
     # Stub _set_state so reconnect paths don't break
     def _set_state(self, new_state: object) -> None:

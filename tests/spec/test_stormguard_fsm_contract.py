@@ -319,6 +319,55 @@ class TestDeEscalation:
 
 
 # ---------------------------------------------------------------------------
+# 5b. TestHaltTerminal
+# ---------------------------------------------------------------------------
+
+
+class TestHaltTerminal:
+    """HALT is terminal without explicit reset (via clear update signals)."""
+
+    def test_halt_persists_on_repeated_storm_signals(self) -> None:
+        guard = _make_guard(storm_cooldown_s=0.0, de_escalate_n=1)
+        with _patch_audit():
+            guard.update(drawdown_bps=-200)
+            assert guard.state == StormGuardState.HALT
+
+            # Storm-level signals do not change HALT state
+            guard.update(drawdown_bps=-100)
+            assert guard.state == StormGuardState.HALT
+
+    def test_halt_steps_down_on_warm_signal(self) -> None:
+        guard = _make_guard(storm_cooldown_s=0.0, de_escalate_n=1)
+        with _patch_audit():
+            guard.update(drawdown_bps=-200)
+            assert guard.state == StormGuardState.HALT
+
+            # HALT allows immediate step-down when a lower-severity signal is present
+            guard.update(drawdown_bps=-50)
+            assert guard.state == StormGuardState.WARM
+
+    def test_halt_requires_clear_signal_to_leave(self) -> None:
+        guard = _make_guard(storm_cooldown_s=0.0, de_escalate_n=1)
+        with _patch_audit():
+            guard.update(drawdown_bps=-200)
+            assert guard.state == StormGuardState.HALT
+
+            # Only a fully clear signal can exit HALT
+            guard.update(drawdown_bps=0)
+            assert guard.state != StormGuardState.HALT
+
+    def test_trigger_halt_then_stays_halt_without_clear(self) -> None:
+        guard = _make_guard(storm_cooldown_s=0.0, de_escalate_n=1)
+        with _patch_audit():
+            guard.trigger_halt("manual")
+            assert guard.state == StormGuardState.HALT
+
+            # Re-evaluate with HALT-level signal: stays HALT
+            guard.update(drawdown_bps=-200)
+            assert guard.state == StormGuardState.HALT
+
+
+# ---------------------------------------------------------------------------
 # 6. TestIsSafeContract
 # ---------------------------------------------------------------------------
 
