@@ -57,9 +57,7 @@ class TestPricePrecisionInvariants:
         int_result = (price_scaled // SCALE) * SCALE + (price_scaled % SCALE)
 
         # Integer path MUST always be exact
-        assert int_result == price_scaled, (
-            f"Integer path failed for {price_scaled} — this should never happen"
-        )
+        assert int_result == price_scaled, f"Integer path failed for {price_scaled} — this should never happen"
 
         # We do NOT assert float_result == price_scaled because it can fail.
         # Instead, if it does fail, we note it (the property still passes).
@@ -74,9 +72,7 @@ class TestPricePrecisionInvariants:
         qty=st.integers(min_value=1, max_value=10_000),
     )
     @settings(max_examples=500, deadline=None)
-    def test_integer_multiplication_then_truncation_is_deterministic(
-        self, price: int, qty: int
-    ):
+    def test_integer_multiplication_then_truncation_is_deterministic(self, price: int, qty: int):
         """For any (price, qty), integer division truncation is deterministic
         and reproducible across runs."""
         result_a = (price * qty) // SCALE
@@ -104,9 +100,7 @@ class TestPricePrecisionInvariants:
         qty=st.integers(min_value=1, max_value=10_000),
     )
     @settings(max_examples=500, deadline=None)
-    def test_weighted_average_integer_division_is_stable(
-        self, a: int, b: int, qty: int
-    ):
+    def test_weighted_average_integer_division_is_stable(self, a: int, b: int, qty: int):
         """Weighted average via integer division is stable and bounded.
 
         avg = (qty * a + qty * b) // (2 * qty)
@@ -117,9 +111,7 @@ class TestPricePrecisionInvariants:
         avg = total // divisor
 
         lo, hi = min(a, b), max(a, b)
-        assert lo <= avg <= hi, (
-            f"Weighted average {avg} not in [{lo}, {hi}] for a={a}, b={b}, qty={qty}"
-        )
+        assert lo <= avg <= hi, f"Weighted average {avg} not in [{lo}, {hi}] for a={a}, b={b}, qty={qty}"
 
     @given(price_scaled=st.integers(min_value=1, max_value=10**9))
     @settings(max_examples=500, deadline=None)
@@ -181,9 +173,7 @@ class TestFloatCorruptionEvidence:
         price_b=st.integers(min_value=1, max_value=10**9),
     )
     @settings(max_examples=200, deadline=None)
-    def test_price_comparison_is_exact_with_integers(
-        self, price_a: int, price_b: int
-    ):
+    def test_price_comparison_is_exact_with_integers(self, price_a: int, price_b: int):
         """Integer price comparisons are always exact.
 
         Unlike floats where a == b can be unreliable for computed values,

@@ -402,7 +402,7 @@ class TestRustPythonParity:
         fills = [
             _make_fill(side=Side.BUY, qty=5, price=100_0000),
             _make_fill(side=Side.SELL, qty=10, price=110_0000),  # flip to short
-            _make_fill(side=Side.BUY, qty=5, price=105_0000),   # close short
+            _make_fill(side=Side.BUY, qty=5, price=105_0000),  # close short
         ]
 
         for fill in fills:

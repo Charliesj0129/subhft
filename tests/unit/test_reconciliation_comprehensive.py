@@ -110,10 +110,7 @@ class TestComputeBackoffDelay:
     def test_jitter_produces_variation(self):
         """With jitter > 0, repeated calls yield different values within bounds."""
         random.seed(1)
-        vals = [
-            _compute_backoff_delay(attempt=0, base=2.0, max_delay=60.0, jitter=0.2)
-            for _ in range(20)
-        ]
+        vals = [_compute_backoff_delay(attempt=0, base=2.0, max_delay=60.0, jitter=0.2) for _ in range(20)]
         # All values should be in [base*(1-jitter), base*(1+jitter)] = [1.6, 2.4]
         for v in vals:
             assert 1.6 <= v <= 2.4, f"value {v} outside jitter range"
