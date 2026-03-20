@@ -217,9 +217,7 @@ class TestDeEscalation:
         assert fsm.state == StormGuardState.STORM
 
     @patch("hft_platform.risk.validators.time.monotonic")
-    def test_storm_cooldown_elapsed_allows_de_escalation(
-        self, mock_monotonic: MagicMock
-    ) -> None:
+    def test_storm_cooldown_elapsed_allows_de_escalation(self, mock_monotonic: MagicMock) -> None:
         t = 1000.0
         mock_monotonic.return_value = t
         fsm = _fsm(cooldown_s=30.0, de_escalate_n=1)
