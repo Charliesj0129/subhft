@@ -126,10 +126,7 @@ class TestPositionInvariants:
             fill = _make_fill(side, qty, price, seq)
             pos.update(fill)
 
-        assert pos.net_qty == 0, (
-            f"Expected net_qty=0 after balanced fills, got {pos.net_qty}. "
-            f"Fills: {data}"
-        )
+        assert pos.net_qty == 0, f"Expected net_qty=0 after balanced fills, got {pos.net_qty}. Fills: {data}"
 
     @given(data=balanced_fill_sequences())
     @settings(max_examples=200, deadline=None)
