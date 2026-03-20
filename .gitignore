@@ -82,6 +82,7 @@ research/experiments/*
 !research/experiments/runs/.gitkeep
 !research/experiments/comparisons/.gitkeep
 !research/experiments/validations/
+research/experiments/validations/**/20*Z_*/
 !research/knowledge/
 research/knowledge/*
 !research/knowledge/paper_index.json
@@ -176,4 +177,5 @@ notebooks/.ipynb_checkpoints
 
 # ArXiv paper storage (local only)
 arxiv_papers/
+
 gha-creds-*.json

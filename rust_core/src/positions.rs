@@ -163,6 +163,32 @@ impl RustPositionTracker {
     pub fn len(&self) -> usize {
         self.positions.len()
     }
+
+    /// Group positions by strategy_id.
+    ///
+    /// Parses keys in "{account}:{strategy}:{symbol}" format and returns
+    /// a HashMap<strategy_id, HashMap<symbol, net_qty>>.
+    /// Keys that don't match the format are grouped under "*".
+    pub fn get_positions_by_strategy(&self) -> HashMap<String, HashMap<String, i64>> {
+        let mut result: HashMap<String, HashMap<String, i64>> = HashMap::new();
+        for (key, pos) in &self.positions {
+            let parts: Vec<&str> = key.splitn(3, ':').collect();
+            if parts.len() >= 3 {
+                let strategy_id = parts[1].to_string();
+                let symbol = parts[2].to_string();
+                result
+                    .entry(strategy_id)
+                    .or_default()
+                    .insert(symbol, pos.net_qty);
+            } else {
+                result
+                    .entry("*".to_string())
+                    .or_default()
+                    .insert(key.clone(), pos.net_qty);
+            }
+        }
+        result
+    }
 }
 
 #[cfg(test)]

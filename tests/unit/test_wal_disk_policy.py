@@ -1,3 +1,5 @@
+"""Tests for WAL disk pressure policy (WU-05)."""
+
 import os
 import tempfile
 from unittest.mock import MagicMock, patch

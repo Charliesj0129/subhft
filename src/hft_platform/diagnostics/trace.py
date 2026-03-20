@@ -62,7 +62,7 @@ class DecisionTraceSampler:
                     path = self._rollover_path(path)
                 with path.open("a", encoding="utf-8") as f:
                     f.write(line)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             # diagnostics must never break hot path
             return
 

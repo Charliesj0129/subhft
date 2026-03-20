@@ -13,20 +13,85 @@ from typing import Any
 
 import structlog
 
-from hft_platform.alpha._gate_e import _evaluate_gate_e
-from hft_platform.alpha._promotion_types import PromotionConfig
-
 logger = structlog.get_logger("alpha.gate_e_batch")
+
+
+def discover_gate_e_promotion_candidates(project_root: Path) -> list[dict[str, Any]]:
+    """Scan promotions directory for Gate-D-passed, Gate-E-pending alphas.
+
+    Walks ``research/experiments/promotions/<alpha_id>/<timestamp_hash>/``
+    subdirectories and loads each ``promotion_decision.json``.  A candidate is
+    included when ``gate_d_passed=True`` and ``gate_e_passed=False``.
+
+    Args:
+        project_root: Absolute path to the HFT platform repository root.
+
+    Returns:
+        List of dicts, each containing at minimum:
+        ``alpha_id``, ``decision_path``, ``gate_d_passed``, ``gate_e_passed``.
+        Invalid or unreadable JSON files are skipped with a warning log.
+    """
+    promotions_root = project_root / "research" / "experiments" / "promotions"
+    candidates: list[dict[str, Any]] = []
+
+    if not promotions_root.exists():
+        logger.info("promotions_root_missing", path=str(promotions_root))
+        return candidates
+
+    # Structure: promotions/<alpha_id>/<timestamp_hash>/promotion_decision.json
+    for decision_path in sorted(promotions_root.glob("*/*/promotion_decision.json")):
+        try:
+            raw = decision_path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "gate_e_batch.skip_invalid_json",
+                path=str(decision_path),
+                error=str(exc),
+            )
+            continue
+
+        if not isinstance(data, dict):
+            logger.warning(
+                "gate_e_batch.skip_non_dict",
+                path=str(decision_path),
+            )
+            continue
+
+        gate_d_passed = bool(data.get("gate_d_passed", False))
+        gate_e_passed = bool(data.get("gate_e_passed", False))
+
+        if gate_d_passed and not gate_e_passed:
+            alpha_id = str(data.get("alpha_id", decision_path.parts[-3]))
+            candidate: dict[str, Any] = {
+                "alpha_id": alpha_id,
+                "decision_path": str(decision_path),
+                "gate_d_passed": gate_d_passed,
+                "gate_e_passed": gate_e_passed,
+            }
+            # Preserve any extra fields from the JSON for downstream consumers.
+            for key, value in data.items():
+                if key not in candidate:
+                    candidate[key] = value
+
+            candidates.append(candidate)
+            logger.debug(
+                "gate_e_batch.candidate_found",
+                alpha_id=alpha_id,
+                decision_path=str(decision_path),
+            )
+
+    logger.info("gate_e_batch.discovery_complete", candidate_count=len(candidates))
+    return candidates
 
 
 @dataclass(frozen=True, slots=True)
 class GateEBatchConfig:
-    project_root: str = "."
+    """Configuration for a Gate E batch run."""
+
+    project_root: Path
     dry_run: bool = False
-    min_shadow_sessions: int = 5
-    max_execution_reject_rate: float = 0.01
-    require_paper_trade_governance: bool = False
-    owner: str = "batch"
+    max_concurrent: int = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,13 +205,15 @@ class GateEBatchRunner:
             }
 
         try:
+            from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_e
+
             promo_config = PromotionConfig(
                 alpha_id=alpha_id,
-                owner=self._config.owner,
+                owner=getattr(self._config, "owner", ""),
                 project_root=str(self._project_root),
-                min_shadow_sessions=self._config.min_shadow_sessions,
-                max_execution_reject_rate=self._config.max_execution_reject_rate,
-                require_paper_trade_governance=self._config.require_paper_trade_governance,
+                min_shadow_sessions=getattr(self._config, "min_shadow_sessions", 3),
+                max_execution_reject_rate=getattr(self._config, "max_execution_reject_rate", 0.05),
+                require_paper_trade_governance=getattr(self._config, "require_paper_trade_governance", True),
             )
             passed, result = _evaluate_gate_e(promo_config, self._project_root)
             return {

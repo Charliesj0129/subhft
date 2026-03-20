@@ -290,3 +290,98 @@ def test_summarize_paper_trade_includes_p95(tmp_path: Path):
     assert summary["execution_reject_rate_p95"] is not None
     # P95 of [0.01, 0.02, 0.03] ≈ 0.03
     assert summary["execution_reject_rate_p95"] > 0.02
+
+
+class TestExperimentGC:
+    def test_gc_dry_run(self, tmp_path: Path) -> None:
+        import json as _json
+
+        from hft_platform.alpha.experiments import gc_experiment_runs
+
+        tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+        tracker.log_run(
+            run_id="old-run",
+            alpha_id="alpha_old",
+            config_hash="h",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 0.5},
+            gate_status={"gate_c": False},
+            scorecard_payload={},
+            backtest_report_payload={},
+        )
+        meta_path = tmp_path / "experiments" / "runs" / "old-run" / "meta.json"
+        meta = _json.loads(meta_path.read_text())
+        meta["timestamp"] = "2025-01-01T00:00:00+00:00"
+        meta_path.write_text(_json.dumps(meta))
+        result = gc_experiment_runs(base_dir=str(tmp_path / "experiments"), older_than_days=30, apply=False)
+        assert result["candidates"] == 1
+        assert result["deleted"] == 0
+        assert (tmp_path / "experiments" / "runs" / "old-run").exists()
+
+    def test_gc_apply(self, tmp_path: Path) -> None:
+        import json as _json
+
+        from hft_platform.alpha.experiments import gc_experiment_runs
+
+        tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+        tracker.log_run(
+            run_id="old-run",
+            alpha_id="alpha_old",
+            config_hash="h",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 0.5},
+            gate_status={"gate_c": False},
+            scorecard_payload={},
+            backtest_report_payload={},
+        )
+        meta_path = tmp_path / "experiments" / "runs" / "old-run" / "meta.json"
+        meta = _json.loads(meta_path.read_text())
+        meta["timestamp"] = "2025-01-01T00:00:00+00:00"
+        meta_path.write_text(_json.dumps(meta))
+        result = gc_experiment_runs(base_dir=str(tmp_path / "experiments"), older_than_days=30, apply=True)
+        assert result["deleted"] == 1
+        assert result["freed_bytes"] > 0
+        assert not (tmp_path / "experiments" / "runs" / "old-run").exists()
+
+    def test_gc_preserves_gate_c_pass(self, tmp_path: Path) -> None:
+        import json as _json
+
+        from hft_platform.alpha.experiments import gc_experiment_runs
+
+        tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+        tracker.log_run(
+            run_id="good-run",
+            alpha_id="alpha_good",
+            config_hash="h",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.5},
+            gate_status={"gate_c": True},
+            scorecard_payload={},
+            backtest_report_payload={},
+        )
+        meta_path = tmp_path / "experiments" / "runs" / "good-run" / "meta.json"
+        meta = _json.loads(meta_path.read_text())
+        meta["timestamp"] = "2025-01-01T00:00:00+00:00"
+        meta_path.write_text(_json.dumps(meta))
+        result = gc_experiment_runs(base_dir=str(tmp_path / "experiments"), older_than_days=30, apply=True)
+        assert result["preserved"] == 1
+        assert result["deleted"] == 0
+        assert (tmp_path / "experiments" / "runs" / "good-run").exists()
+
+    def test_gc_recent_runs_not_eligible(self, tmp_path: Path) -> None:
+        from hft_platform.alpha.experiments import gc_experiment_runs
+
+        tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
+        tracker.log_run(
+            run_id="recent-run",
+            alpha_id="alpha_recent",
+            config_hash="h",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 0.5},
+            gate_status={"gate_c": False},
+            scorecard_payload={},
+            backtest_report_payload={},
+        )
+        result = gc_experiment_runs(base_dir=str(tmp_path / "experiments"), older_than_days=30, apply=True)
+        assert result["candidates"] == 0
+        assert result["deleted"] == 0

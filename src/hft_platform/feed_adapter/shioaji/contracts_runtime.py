@@ -339,7 +339,8 @@ class ContractsRuntime:
             tmp = p.with_suffix(p.suffix + ".tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(p)
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return
 
     def refresh_status(self) -> dict[str, object]:
@@ -366,7 +367,8 @@ class ContractsRuntime:
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
                     self._client.metrics.contract_refresh_total.labels(result="skipped_locked").inc()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
             return
 
@@ -376,7 +378,8 @@ class ContractsRuntime:
             if cache_path.exists():
                 old_cache = json.loads(cache_path.read_text(encoding="utf-8"))
                 codes_before = {str(c.get("code", "")) for c in old_cache.get("contracts", []) if c.get("code")}
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             pass
 
         try:
@@ -388,7 +391,8 @@ class ContractsRuntime:
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
                     self._client.metrics.contract_refresh_total.labels(result="error").inc()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
             self._client._contract_refresh_lock.release()
             return
@@ -428,19 +432,22 @@ class ContractsRuntime:
                     raw_contracts.append(_normalize(c, "TSE", "stock"))
                 for c in self._client.api.Contracts.Stocks.OTC:
                     raw_contracts.append(_normalize(c, "OTC", "stock"))
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
             try:
                 for root in self._client.api.Contracts.Futures.keys():
                     for c in self._client.api.Contracts.Futures[root]:
                         raw_contracts.append(_normalize(c, "TAIFEX", "future"))
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
             try:
                 for root in self._client.api.Contracts.Options.keys():
                     for c in self._client.api.Contracts.Options[root]:
                         raw_contracts.append(_normalize(c, "TAIFEX", "option"))
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
 
             write_contract_cache(raw_contracts, self._client._contract_cache_path)
@@ -474,7 +481,8 @@ class ContractsRuntime:
                         self._client.metrics.contract_refresh_symbols_changed_total.labels(change="added").inc()
                     if removed:
                         self._client.metrics.contract_refresh_symbols_changed_total.labels(change="removed").inc()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
 
             contract_index = ContractIndex(contracts=raw_contracts)
@@ -503,7 +511,8 @@ class ContractsRuntime:
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
                     self._client.metrics.contract_refresh_total.labels(result="ok").inc()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
             policy = self._client._contract_refresh_resubscribe_policy
             should_resub = policy == "all"

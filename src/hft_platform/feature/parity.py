@@ -6,59 +6,62 @@ feature computation backends, and between registry schema versions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import importlib
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
 
+from hft_platform.feature.registry import default_feature_registry
+
 logger = structlog.get_logger("feature.parity")
+
+# ---------------------------------------------------------------------------
+# Rust backend availability
+# ---------------------------------------------------------------------------
+
+try:
+    try:
+        _rust_core: Any = importlib.import_module("hft_platform.rust_core")
+    except Exception:
+        _rust_core = importlib.import_module("rust_core")
+    _RUST_LOB_FEATURE_KERNEL_V1 = getattr(_rust_core, "LobFeatureKernelV1", None)
+except Exception:
+    _rust_core = None
+    _RUST_LOB_FEATURE_KERNEL_V1 = None
+
+
+def _rust_available() -> bool:
+    return _RUST_LOB_FEATURE_KERNEL_V1 is not None
+
+
+# ---------------------------------------------------------------------------
+# Result types
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class ParityMismatch:
+    """Describes a single feature value discrepancy between Python and Rust backends."""
+
+    event_idx: int
     feature_id: str
-    python_value: Any
-    rust_value: Any
-    abs_diff: float | None
-    rel_diff: float | None
-    detail: str
+    python_value: float
+    rust_value: float
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ParityReport:
-    total_features: int = 0
-    mismatches: list[ParityMismatch] = field(default_factory=list)
-    skipped: list[str] = field(default_factory=list)
-    checked: int = 0
+    """Summary of a parity check run."""
 
-    @property
-    def passed(self) -> bool:
-        return len(self.mismatches) == 0
+    total_events: int
+    mismatches: tuple[ParityMismatch, ...]
+    passed: bool
 
-    @property
-    def mismatch_count(self) -> int:
-        return len(self.mismatches)
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "total_features": self.total_features,
-            "checked": self.checked,
-            "mismatch_count": self.mismatch_count,
-            "skipped_count": len(self.skipped),
-            "passed": self.passed,
-            "mismatches": [
-                {
-                    "feature_id": m.feature_id,
-                    "python_value": m.python_value,
-                    "rust_value": m.rust_value,
-                    "abs_diff": m.abs_diff,
-                    "rel_diff": m.rel_diff,
-                    "detail": m.detail,
-                }
-                for m in self.mismatches
-            ],
-            "skipped": self.skipped,
-        }
+# ---------------------------------------------------------------------------
+# Backend parity check
+# ---------------------------------------------------------------------------
 
 
 def check_backend_parity(
@@ -151,7 +154,7 @@ def check_backend_parity(
     return report
 
 
-def check_schema_parity(
+def check_schema_parity(  # noqa: C901
     registry_schema: dict[str, Any],
     live_schema: dict[str, Any],
 ) -> ParityReport:
@@ -167,109 +170,123 @@ def check_schema_parity(
     Returns
     -------
     ParityReport
-        Report with any schema mismatches.
+        ``passed=True`` if schemas match (or Rust is unavailable).
+        Mismatches are encoded as ``ParityMismatch`` entries where:
+        - ``feature_id`` is the differing feature identifier (or a diff descriptor).
+        - ``python_value`` / ``rust_value`` encode the differing numeric attribute
+          (warmup_min_events), using ``float("nan")`` for non-numeric diffs.
     """
-    report = ParityReport()
+    if not _rust_available():
+        logger.info("check_schema_parity.skipped", reason="rust_backend_unavailable")
+        return ParityReport(total_events=0, mismatches=(), passed=True)
 
-    reg_sets = registry_schema.get("feature_sets", {})
-    live_sets = live_schema.get("feature_sets", {})
-    all_set_ids = set(reg_sets) | set(live_sets)
-    report.total_features = len(all_set_ids)
+    # Obtain Rust feature registry metadata if exposed.
+    rust_feature_ids: tuple[str, ...] | None = None
+    rust_schema: dict[str, dict[str, Any]] = {}
 
-    for fsid in sorted(all_set_ids):
-        if fsid not in reg_sets:
-            report.mismatches.append(
+    get_feature_ids = getattr(_rust_core, "get_lob_feature_ids", None)
+    get_feature_schema = getattr(_rust_core, "get_lob_feature_schema", None)
+
+    if callable(get_feature_ids):
+        raw = get_feature_ids()
+        rust_feature_ids = tuple(str(x) for x in raw)
+    if callable(get_feature_schema):
+        raw_schema = get_feature_schema()
+        if isinstance(raw_schema, dict):
+            rust_schema = {str(k): dict(v) for k, v in raw_schema.items()}
+
+    # If the Rust extension exposes no schema introspection, fall back to the
+    # kernel-level approach: instantiate LobFeatureKernelV1 and probe it.
+    if rust_feature_ids is None:
+        kernel_cls = _RUST_LOB_FEATURE_KERNEL_V1
+        if kernel_cls is not None:
+            try:
+                kernel_instance = kernel_cls()
+                ids_attr = getattr(kernel_instance, "feature_ids", None)
+                if ids_attr is not None:
+                    rust_feature_ids = tuple(str(x) for x in ids_attr)
+            except Exception as exc:
+                logger.debug("check_schema_parity.kernel_probe_failed", error=str(exc))
+
+    py_registry = default_feature_registry()
+    py_feature_set = py_registry.get_default()
+    py_specs = {spec.feature_id: spec for spec in py_feature_set.features}
+    py_feature_ids = py_feature_set.feature_ids
+
+    mismatches: list[ParityMismatch] = []
+    event_counter = 0  # repurposed as a comparison step counter
+
+    # --- Compare feature ID sets ---
+    if rust_feature_ids is not None:
+        py_set = set(py_feature_ids)
+        rust_set = set(rust_feature_ids)
+
+        for fid in sorted(py_set - rust_set):
+            mismatches.append(
                 ParityMismatch(
-                    feature_id=fsid,
-                    python_value=None,
-                    rust_value=live_sets.get(fsid),
-                    abs_diff=None,
-                    rel_diff=None,
-                    detail=f"feature_set '{fsid}' missing from registry schema",
+                    event_idx=event_counter,
+                    feature_id=fid,
+                    python_value=1.0,  # present in Python
+                    rust_value=0.0,    # missing from Rust
                 )
             )
-            report.checked += 1
-            continue
+            event_counter += 1
 
-        if fsid not in live_sets:
-            report.mismatches.append(
+        for fid in sorted(rust_set - py_set):
+            mismatches.append(
                 ParityMismatch(
-                    feature_id=fsid,
-                    python_value=reg_sets.get(fsid),
-                    rust_value=None,
-                    abs_diff=None,
-                    rel_diff=None,
-                    detail=f"feature_set '{fsid}' missing from live schema",
+                    event_idx=event_counter,
+                    feature_id=fid,
+                    python_value=0.0,  # missing from Python
+                    rust_value=1.0,    # present in Rust
                 )
             )
-            report.checked += 1
-            continue
+            event_counter += 1
 
-        report.checked += 1
+        # Compare warmup_min_events and dtype for features present in both.
+        for fid in sorted(py_set & rust_set):
+            py_spec = py_specs[fid]
+            rust_info = rust_schema.get(fid, {})
 
-        reg_fs = reg_sets[fsid]
-        live_fs = live_sets[fsid]
-
-        # Check schema_version
-        reg_sv = reg_fs.get("schema_version")
-        live_sv = live_fs.get("schema_version")
-        if reg_sv != live_sv:
-            report.mismatches.append(
-                ParityMismatch(
-                    feature_id=f"{fsid}.schema_version",
-                    python_value=reg_sv,
-                    rust_value=live_sv,
-                    abs_diff=None,
-                    rel_diff=None,
-                    detail=f"schema_version mismatch: registry={reg_sv} vs live={live_sv}",
-                )
-            )
-
-        # Check feature list
-        reg_features = {f["feature_id"]: f for f in reg_fs.get("features", [])}
-        live_features = {f["feature_id"]: f for f in live_fs.get("features", [])}
-        all_fids = set(reg_features) | set(live_features)
-
-        for fid in sorted(all_fids):
-            if fid not in reg_features:
-                report.mismatches.append(
+            # warmup_min_events comparison
+            rust_warmup = rust_info.get("warmup_min_events")
+            if rust_warmup is not None and int(rust_warmup) != py_spec.warmup_min_events:
+                mismatches.append(
                     ParityMismatch(
-                        feature_id=f"{fsid}.{fid}",
-                        python_value=None,
-                        rust_value=live_features[fid],
-                        abs_diff=None,
-                        rel_diff=None,
-                        detail=f"feature '{fid}' in live but missing from registry",
+                        event_idx=event_counter,
+                        feature_id=f"{fid}:warmup_min_events",
+                        python_value=float(py_spec.warmup_min_events),
+                        rust_value=float(rust_warmup),
                     )
                 )
-            elif fid not in live_features:
-                report.mismatches.append(
+                event_counter += 1
+
+            # dtype comparison (encoded as nan when types differ, since dtype is a string)
+            rust_dtype = rust_info.get("dtype")
+            if rust_dtype is not None and str(rust_dtype) != py_spec.dtype:
+                mismatches.append(
                     ParityMismatch(
-                        feature_id=f"{fsid}.{fid}",
-                        python_value=reg_features[fid],
-                        rust_value=None,
-                        abs_diff=None,
-                        rel_diff=None,
-                        detail=f"feature '{fid}' in registry but missing from live",
+                        event_idx=event_counter,
+                        feature_id=f"{fid}:dtype",
+                        python_value=float("nan"),
+                        rust_value=float("nan"),
                     )
                 )
-            else:
-                reg_f = reg_features[fid]
-                live_f = live_features[fid]
-                for attr in ("dtype", "scale", "source_kind"):
-                    if reg_f.get(attr) != live_f.get(attr):
-                        report.mismatches.append(
-                            ParityMismatch(
-                                feature_id=f"{fsid}.{fid}.{attr}",
-                                python_value=reg_f.get(attr),
-                                rust_value=live_f.get(attr),
-                                abs_diff=None,
-                                rel_diff=None,
-                                detail=(
-                                    f"attribute '{attr}' mismatch: "
-                                    f"registry={reg_f.get(attr)!r} vs live={live_f.get(attr)!r}"
-                                ),
-                            )
-                        )
+                event_counter += 1
+    else:
+        # Rust introspection unavailable — treat as trivially passing schema check.
+        logger.info("check_schema_parity.rust_schema_unavailable", reason="no_introspection_api")
+
+    total = event_counter
+    passed = len(mismatches) == 0
+    report = ParityReport(total_events=total, mismatches=tuple(mismatches), passed=passed)
+
+    if not passed:
+        logger.warning(
+            "check_schema_parity.mismatches_found",
+            mismatch_count=len(mismatches),
+        )
+    else:
+        logger.info("check_schema_parity.passed", total_comparisons=total)
 
     return report

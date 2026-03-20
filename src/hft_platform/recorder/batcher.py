@@ -370,7 +370,8 @@ class Batcher:
                 result = self._extractor(row)
                 if result is not None:
                     return result
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass  # Fall through to generic
         return self._serialize_row(row)
 

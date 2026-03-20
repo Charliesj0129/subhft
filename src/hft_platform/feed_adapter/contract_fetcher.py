@@ -1,4 +1,8 @@
-"""Centralised broker contract fetching — keeps shioaji imports inside feed_adapter/."""
+"""Centralised broker contract fetching — keeps shioaji imports inside feed_adapter/.
+
+All Shioaji SDK usage for contract resolution and fetching lives here.
+Platform modules (cli, config) delegate to these functions.
+"""
 
 from __future__ import annotations
 

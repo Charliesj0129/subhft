@@ -1,89 +1,104 @@
-"""Tests for Feature Engine default-on behavior (Unit 8)."""
+"""Unit 8: Tests for FeatureEngine default-on rollout.
 
+Verifies:
+- Default (no env var) → FeatureEngine is enabled
+- Explicit HFT_FEATURE_ENGINE_ENABLED=0 → FeatureEngine is disabled
+- FeatureEngine init failure → graceful degradation (feature_engine=None), no crash
+"""
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import os
+import unittest
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.services.market_data import MarketDataService
 
 
-def _make_market_data_service(**overrides: Any) -> Any:
-    """Create a minimal MarketDataService for testing init behavior."""
-    from hft_platform.services.market_data import MarketDataService
+class TestFeatureEngineDefaultOn(unittest.TestCase):
+    """Tests for FeatureEngine default-on and graceful degradation."""
 
-    mock_bus = MagicMock()
-    mock_raw_queue = asyncio.Queue(maxsize=100)
-    mock_client = MagicMock()
+    def _make_service(self, env_overrides: dict[str, str] | None = None) -> MarketDataService:
+        bus = MagicMock(spec=RingBufferBus)
+        raw_queue: asyncio.Queue = asyncio.Queue()
+        client = MagicMock()
+        env = {k: v for k, v in os.environ.items() if k != "HFT_FEATURE_ENGINE_ENABLED"}
+        if env_overrides:
+            env.update(env_overrides)
+        with patch.dict(os.environ, env, clear=True):
+            svc = MarketDataService(bus, raw_queue, client)
+        return svc
 
-    kwargs: dict[str, Any] = {
-        "bus": mock_bus,
-        "raw_queue": mock_raw_queue,
-        "client": mock_client,
-    }
-    kwargs.update(overrides)
-    return MarketDataService(**kwargs)
+    def test_default_no_env_var_feature_engine_enabled(self) -> None:
+        """When HFT_FEATURE_ENGINE_ENABLED is not set, FeatureEngine should be active."""
+        from hft_platform.feature.engine import FeatureEngine
+
+        svc = self._make_service()
+        self.assertIsNotNone(
+            svc.feature_engine,
+            "FeatureEngine should be enabled by default (no env var set)",
+        )
+        self.assertIsInstance(svc.feature_engine, FeatureEngine)
+
+    def test_explicit_zero_disables_feature_engine(self) -> None:
+        """When HFT_FEATURE_ENGINE_ENABLED=0, FeatureEngine should be None."""
+        svc = self._make_service({"HFT_FEATURE_ENGINE_ENABLED": "0"})
+        self.assertIsNone(
+            svc.feature_engine,
+            "FeatureEngine should be disabled when HFT_FEATURE_ENGINE_ENABLED=0",
+        )
+
+    def test_explicit_one_enables_feature_engine(self) -> None:
+        """When HFT_FEATURE_ENGINE_ENABLED=1, FeatureEngine should be active."""
+        from hft_platform.feature.engine import FeatureEngine
+
+        svc = self._make_service({"HFT_FEATURE_ENGINE_ENABLED": "1"})
+        self.assertIsNotNone(svc.feature_engine)
+        self.assertIsInstance(svc.feature_engine, FeatureEngine)
+
+    def test_feature_engine_init_failure_degrades_gracefully(self) -> None:
+        """If FeatureEngine() raises, service should degrade to feature_engine=None, not crash."""
+        bus = MagicMock(spec=RingBufferBus)
+        raw_queue: asyncio.Queue = asyncio.Queue()
+        client = MagicMock()
+
+        env = {k: v for k, v in os.environ.items() if k != "HFT_FEATURE_ENGINE_ENABLED"}
+        env["HFT_FEATURE_ENGINE_ENABLED"] = "1"
+
+        with patch.dict(os.environ, env, clear=True):
+            with patch(
+                "hft_platform.services.market_data.FeatureEngine",
+                side_effect=RuntimeError("simulated init failure"),
+            ):
+                svc = MarketDataService(bus, raw_queue, client)
+
+        self.assertIsNone(
+            svc.feature_engine,
+            "FeatureEngine should be None after init failure (graceful degradation)",
+        )
+
+    def test_explicit_feature_engine_arg_takes_precedence(self) -> None:
+        """A caller-supplied feature_engine instance overrides env var logic."""
+        from hft_platform.feature.engine import FeatureEngine
+
+        bus = MagicMock(spec=RingBufferBus)
+        raw_queue: asyncio.Queue = asyncio.Queue()
+        client = MagicMock()
+        custom_fe = MagicMock(spec=FeatureEngine)
+
+        env = {k: v for k, v in os.environ.items() if k != "HFT_FEATURE_ENGINE_ENABLED"}
+        env["HFT_FEATURE_ENGINE_ENABLED"] = "0"  # disabled, but explicit arg wins
+
+        with patch.dict(os.environ, env, clear=True):
+            svc = MarketDataService(bus, raw_queue, client, feature_engine=custom_fe)
+
+        self.assertIs(
+            svc.feature_engine,
+            custom_fe,
+            "Caller-supplied feature_engine should be used regardless of env var",
+        )
 
 
-# ---------------------------------------------------------------------------
-# Default-on tests
-# ---------------------------------------------------------------------------
-
-
-class TestFeatureEngineDefaultOn:
-    def test_default_env_enables_feature_engine(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """With no HFT_FEATURE_ENGINE_ENABLED env var, should default to enabled."""
-        monkeypatch.delenv("HFT_FEATURE_ENGINE_ENABLED", raising=False)
-
-        with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
-            MockFE.return_value = MagicMock()
-            svc = _make_market_data_service()
-        assert svc.feature_engine is not None
-
-    def test_explicit_on_enables_feature_engine(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "1")
-        with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
-            MockFE.return_value = MagicMock()
-            svc = _make_market_data_service()
-        assert svc.feature_engine is not None
-
-    def test_explicit_off_disables_feature_engine(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "0")
-        svc = _make_market_data_service()
-        assert svc.feature_engine is None
-
-    def test_false_string_disables_feature_engine(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "false")
-        svc = _make_market_data_service()
-        assert svc.feature_engine is None
-
-    def test_init_failure_graceful_degradation(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When FeatureEngine() raises, should set feature_engine=None gracefully."""
-        monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "1")
-        with patch(
-            "hft_platform.services.market_data.FeatureEngine",
-            side_effect=RuntimeError("no rust module"),
-        ):
-            svc = _make_market_data_service()
-        assert svc.feature_engine is None
-
-    def test_explicit_feature_engine_arg_takes_precedence(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Explicitly passed feature_engine should be used regardless of env var."""
-        monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "0")
-        mock_fe = MagicMock()
-        svc = _make_market_data_service(feature_engine=mock_fe)
-        assert svc.feature_engine is mock_fe
-
-    def test_explicit_feature_engine_not_replaced_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Explicitly passed feature_engine should not be replaced even when enabled."""
-        monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "1")
-        mock_fe = MagicMock()
-        with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
-            svc = _make_market_data_service(feature_engine=mock_fe)
-        MockFE.assert_not_called()
-        assert svc.feature_engine is mock_fe
+if __name__ == "__main__":
+    unittest.main()

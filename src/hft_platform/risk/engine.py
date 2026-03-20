@@ -58,7 +58,7 @@ def _get_trace_sampler():
         from hft_platform.diagnostics.trace import get_trace_sampler
 
         return get_trace_sampler()
-    except Exception:
+    except ImportError:
         logger.debug("Trace sampler unavailable", exc_info=True)
         return None
 
@@ -141,7 +141,7 @@ class RiskEngine:
             return None
         try:
             from hft_platform.risk.fast_gate import FastGate
-        except Exception as exc:  # pragma: no cover - import/jit environment dependent
+        except ImportError as exc:  # pragma: no cover - import/jit environment dependent
             logger.warning("FastGate unavailable; disabling", error=str(exc))
             return None
 
@@ -169,7 +169,7 @@ class RiskEngine:
                 create_shm=create_shm,
             )
             return gate
-        except Exception as exc:  # pragma: no cover - environment dependent
+        except (OSError, RuntimeError) as exc:  # pragma: no cover - environment dependent
             logger.warning("FastGate init failed; disabling", error=str(exc))
             return None
 
@@ -193,7 +193,7 @@ class RiskEngine:
 
                     codec = PriceCodec(price_scale_provider)
                     scale = int(codec.scale_factor("default")) or 10_000
-                except Exception as exc:
+                except (ImportError, TypeError, ValueError) as exc:
                     logger.warning("Failed to resolve price scale from provider, using default 10000", error=str(exc))
             max_price_cap_scaled = int(max_price_cap_raw * scale)
             tick_size_scaled = int(tick_size_raw * scale)
@@ -208,7 +208,7 @@ class RiskEngine:
                     rv.set_max_notional(strat_id, "*", int(strat_cfg["max_notional"]) * scale)
             logger.info("RustRiskValidator enabled", max_price_cap_scaled=max_price_cap_scaled)
             return rv
-        except Exception as exc:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.warning("RustRiskValidator init failed; disabling", error=str(exc))
             return None
 
@@ -296,11 +296,11 @@ class RiskEngine:
             except asyncio.CancelledError:
                 logger.info("RiskEngine stopped")
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — wraps external risk validators
                 logger.exception("RiskEngine error", error=str(e), error_type=type(e).__name__)
                 self.intent_queue.task_done()
 
-    def evaluate(self, intent: Any) -> RiskDecision:
+    def evaluate(self, intent: Any) -> RiskDecision:  # noqa: C901
         price = getattr(intent, "price", None)
         if isinstance(price, float):
             self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
@@ -314,7 +314,7 @@ class RiskEngine:
                         reason = self._fast_gate_reason_map.get(int(code), "FASTGATE_REJECT")
                         self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": reason})
                         return RiskDecision(False, intent, reason)
-            except Exception as exc:
+            except (OSError, RuntimeError) as exc:
                 # FastGate failure must fail-closed: reject order when risk gate errors.
                 logger.error("FastGate check error — rejecting order (fail-closed)", error=str(exc))
                 self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": "FASTGATE_ERROR"})
@@ -347,10 +347,18 @@ class RiskEngine:
                     reason = self._rust_validator_reason_map.get(int(code), "RUST_VALIDATOR_REJECT")
                     self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
                     return RiskDecision(False, intent, reason)
-            except Exception as exc:
-                logger.error("RustRiskValidator error — rejecting order (fail-closed)", error=str(exc))
-                self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": "RUST_VALIDATOR_ERROR"})
-                return RiskDecision(False, intent, "RUST_VALIDATOR_ERROR")
+            except (OSError, RuntimeError) as exc:
+                logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
+                # Fall through to Python validators on error
+                for v in self.validators:
+                    ok, reason = v.check(intent)
+                    if not ok:
+                        self._emit_trace(
+                            "risk_reject",
+                            intent,
+                            {"stage": "validator", "reason": reason, "validator": type(v).__name__},
+                        )
+                        return RiskDecision(False, intent, reason)
         else:
             for v in self.validators:
                 ok, reason = v.check(intent)
@@ -378,7 +386,7 @@ class RiskEngine:
             from hft_platform.gateway.channel import typed_frame_to_view
 
             return typed_frame_to_view(frame)
-        except Exception as exc:
+        except (KeyError, TypeError, ValueError) as exc:
             # Fallback: materialize full OrderIntent if frame is malformed/unsupported
             logger.warning("typed_frame_to_view failed, falling back to full materialization", error=str(exc))
             from hft_platform.gateway.channel import typed_frame_to_intent
@@ -393,7 +401,7 @@ class RiskEngine:
                 return self.create_command(intent_view)
             try:
                 return self.create_command(typed_view_to_intent(intent_view))
-            except Exception as exc:
+            except (KeyError, TypeError, ValueError) as exc:
                 logger.warning("typed_view_to_intent failed, falling back to frame materialization", error=str(exc))
         return self.create_command(typed_frame_to_intent(frame))
 

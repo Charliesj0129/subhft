@@ -146,8 +146,9 @@ known-first-party = ["hft_platform", "research"]
 "src/hft_platform/config/wizard.py" = ["E501"]
 "src/hft_platform/cli.py" = ["F841", "F401", "E501", "C901"]
 "src/hft_platform/backtest/reporting.py" = ["E501"]
-# C901/B existing violations — grandfathered for future cleanup
+# C901 existing violations (max-complexity=15) — tracked for future cleanup
 "src/hft_platform/alpha/_gate_a.py" = ["C901"]
+"src/hft_platform/alpha/dashboard.py" = ["C901"]
 "src/hft_platform/alpha/validation.py" = ["C901"]
 "src/hft_platform/cli/_alpha.py" = ["C901"]
 "src/hft_platform/config/_symbols_contracts.py" = ["C901"]
@@ -181,6 +182,7 @@ known-first-party = ["hft_platform", "research"]
 "src/hft_platform/services/market_data.py" = ["C901", "B"]
 "src/hft_platform/services/system.py" = ["C901"]
 "src/hft_platform/strategy/runner.py" = ["C901", "B"]
+# B (bugbear) existing violations
 "src/hft_platform/alpha/pool.py" = ["B"]
 "src/hft_platform/backtest/adapter.py" = ["B"]
 "src/hft_platform/backtest/runner.py" = ["B"]

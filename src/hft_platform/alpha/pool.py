@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -492,3 +493,59 @@ def _safe_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     if denom <= 1e-12:
         return 0.0
     return float(np.dot(x_centered, y_centered) / denom)
+
+
+def recompute_pool_correlations(
+    *,
+    base_dir: str = "research/experiments",
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Batch-compute correlation_pool_max for all alphas with experiment runs."""
+    tracker = ExperimentTracker(base_dir=base_dir)
+    matrix_payload = compute_pool_matrix(base_dir=base_dir)
+    alpha_ids: list[str] = matrix_payload.get("alpha_ids", [])
+    pearson = np.asarray(matrix_payload.get("pearson_matrix", []), dtype=np.float64)
+
+    if not alpha_ids or pearson.ndim != 2:
+        return {
+            "alpha_ids": [],
+            "correlation_pool_max": {},
+            "updated_scorecards": [],
+            "applied": apply,
+        }
+
+    corr_max: dict[str, float] = {}
+    n = len(alpha_ids)
+    for i in range(n):
+        max_abs = 0.0
+        for j in range(n):
+            if i != j:
+                max_abs = max(max_abs, abs(float(pearson[i, j])))
+        corr_max[alpha_ids[i]] = max_abs
+
+    updated: list[str] = []
+    if apply:
+        import json as _json
+        from pathlib import Path as _Path
+
+        runs = tracker.list_runs()
+        for run in runs:
+            if run.alpha_id not in corr_max:
+                continue
+            scorecard_path = _Path(run.scorecard_path)
+            if not scorecard_path.exists():
+                continue
+            try:
+                scorecard = _json.loads(scorecard_path.read_text())
+                scorecard["correlation_pool_max"] = corr_max[run.alpha_id]
+                scorecard_path.write_text(_json.dumps(scorecard, indent=2, sort_keys=True))
+                updated.append(run.run_id)
+            except (OSError, ValueError):
+                continue
+
+    return {
+        "alpha_ids": alpha_ids,
+        "correlation_pool_max": corr_max,
+        "updated_scorecards": updated,
+        "applied": apply,
+    }

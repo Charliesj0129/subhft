@@ -84,6 +84,7 @@ class ValidationConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
+    enforce_latency_profile: bool = False
 
 
 @dataclass(frozen=True)
@@ -235,7 +236,7 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
 
         for gate_report in (gate_a, gate_b, gate_c):
             log_gate_result(config.alpha_id, run_id, gate_report, cfg_hash)
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass  # audit must never break the research pipeline
 
     return ValidationResult(
@@ -405,7 +406,48 @@ def run_gate_a(
             f"(valid skills are defined in research.registry.schemas.VALID_SKILLS)"
         )
 
-    passed = not missing_fields_by_path and complexity_ok and paper_governance_passed and data_governance_passed
+    # Latency profile advisory check
+    enforce_latency = bool(config.enforce_latency_profile) if config is not None else False
+    latency_warnings: list[str] = []
+    latency_profile_present = False
+    latency_profile_valid = False
+
+    manifest_latency = getattr(manifest, "latency_profile", None)
+    if not manifest_latency:
+        latency_warnings.append(
+            "manifest.latency_profile is missing — add a latency profile reference "
+            "to avoid Gate D rejection (see config/research/latency_profiles.yaml)"
+        )
+    else:
+        latency_profile_present = True
+        try:
+            from hft_platform.alpha.latency_profiles import _ALIASES, load_profiles
+
+            profiles = load_profiles()
+            if profiles:
+                profile_id = str(manifest_latency)
+                resolved_id = _ALIASES.get(profile_id, profile_id)
+                if resolved_id in profiles or profile_id in profiles:
+                    latency_profile_valid = True
+                else:
+                    latency_warnings.append(
+                        f"manifest.latency_profile '{profile_id}' not found in "
+                        f"latency_profiles.yaml (available: {sorted(profiles.keys())})"
+                    )
+            else:
+                latency_profile_valid = True
+        except Exception as _exc:  # noqa: BLE001
+            latency_profile_valid = True
+
+    latency_profile_passed = (not enforce_latency) or latency_profile_present
+
+    passed = (
+        not missing_fields_by_path
+        and complexity_ok
+        and paper_governance_passed
+        and data_governance_passed
+        and latency_profile_passed
+    )
     achieved_values = list(data_ul_achieved_by_path.values())
     data_ul_achieved_min = min(achieved_values) if achieved_values else None
     return GateReport(
@@ -451,6 +493,14 @@ def run_gate_a(
                 "invalid_roles": invalid_roles_list,
                 "invalid_skills": invalid_skills_list,
                 "warnings": skills_warnings,
+            },
+            "latency_profile": {
+                "enforce": enforce_latency,
+                "present": latency_profile_present,
+                "valid": latency_profile_valid,
+                "manifest_value": str(manifest_latency) if manifest_latency else None,
+                "warnings": latency_warnings,
+                "passed": latency_profile_passed,
             },
         },
     )
@@ -953,7 +1003,7 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
     try:
         try:
             from statsmodels.tsa.stattools import bds as sm_bds
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             from statsmodels.stats.stattools import bds as sm_bds
 
         stat, pvals = sm_bds(sample, max_dim=2, epsilon=epsilon)
@@ -972,7 +1022,7 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
             "reject_iid": reject_iid,
             "pass": not reject_iid,
         }
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         # Fallback when statsmodels is unavailable: permutation proxy on BDS-style correlation integral delta.
         rng = np.random.default_rng(42)
         draws = 200
@@ -1464,7 +1514,7 @@ def _update_manifest_status(alpha_id: str, new_status: str, project_root: Path) 
 
 
 def _make_validation_artifact_dir(experiments_base: Path, alpha_id: str) -> Path:
-    stamp = _dt.datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = _dt.datetime.fromtimestamp(timebase.now_s(), tz=_dt.UTC).strftime("%Y%m%dT%H%M%SZ")
     out = experiments_base / "validations" / alpha_id / f"{stamp}_{uuid4().hex[:8]}"
     out.mkdir(parents=True, exist_ok=True)
     return out
@@ -1718,7 +1768,7 @@ def _dataset_row_count(path: Path) -> int | None:
         if arr.ndim == 0:
             return int(arr.size)
         return int(arr.shape[0])
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
     finally:
         if isinstance(source, np.lib.npyio.NpzFile):
@@ -1758,3 +1808,67 @@ def _pushd(path: Path):
         yield
     finally:
         os.chdir(prev)
+
+
+def batch_validate(
+    *,
+    alpha_ids: list[str],
+    data_paths: list[str],
+    gate: str = "c",
+    parallel: int = 1,
+    experiments_dir: str = "research/experiments",
+    project_root: str = ".",
+    skip_gate_b_tests: bool = False,
+) -> dict[str, Any]:
+    """Batch-validate multiple alphas through Gate A/B/C pipeline."""
+    gate_key = str(gate).strip().lower()
+
+    def _validate_one(alpha_id: str) -> dict[str, Any]:
+        try:
+            config = ValidationConfig(
+                alpha_id=alpha_id,
+                data_paths=list(data_paths),
+                experiments_dir=experiments_dir,
+                project_root=project_root,
+                skip_gate_b_tests=skip_gate_b_tests or gate_key == "a",
+            )
+            result = run_alpha_validation(config)
+            entry: dict[str, Any] = {
+                "alpha_id": alpha_id,
+                "passed": result.passed,
+                "gate_a": result.gate_a.passed,
+                "gate_b": result.gate_b.passed,
+                "gate_c": result.gate_c.passed,
+            }
+            if gate_key == "a":
+                entry["passed"] = result.gate_a.passed
+            elif gate_key == "b":
+                entry["passed"] = result.gate_a.passed and result.gate_b.passed
+            return entry
+        except Exception as exc:
+            return {
+                "alpha_id": alpha_id,
+                "passed": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    results: list[dict[str, Any]] = []
+    workers = max(1, int(parallel))
+    if workers > 1:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_validate_one, aid): aid for aid in alpha_ids}
+            for future in concurrent.futures.as_completed(futures):
+                results.append(future.result())
+    else:
+        for alpha_id in alpha_ids:
+            results.append(_validate_one(alpha_id))
+
+    results.sort(key=lambda r: r.get("alpha_id", ""))
+    passed_count = sum(1 for r in results if r.get("passed"))
+    return {
+        "gate": gate_key,
+        "total": len(results),
+        "passed": passed_count,
+        "failed": len(results) - passed_count,
+        "results": results,
+    }

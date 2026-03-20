@@ -108,7 +108,8 @@ class CHPoller:
         if self._client is not None:
             try:
                 self._client.close()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
             self._client = None
 

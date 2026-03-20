@@ -143,7 +143,8 @@ class SubscriptionManager:
             if hasattr(c.metrics, "shioaji_contract_lookup_errors_total"):
                 try:
                     c.metrics.shioaji_contract_lookup_errors_total.labels(code=str(code)).inc()
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
             return False
 

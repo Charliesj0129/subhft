@@ -37,6 +37,9 @@ verify-ce3: ## Verify CE3 hardening (scale-out + replay contract + outage drills
 		tests/spec/test_replay_safety_contract.py \
 		tests/integration/test_wal_outage_drills.py -q
 
+test-collect: ## Verify all tests can be collected (no import errors)
+	uv run pytest tests/unit --collect-only -q
+
 coverage: ## Run tests with coverage (70% minimum)
 	uv run pytest tests/unit --cov-fail-under=70
 
@@ -72,7 +75,13 @@ format-check: ## Check code formatting without changes
 typecheck: ## Run mypy type checker
 	uv run mypy
 
-check: lint typecheck ## Run all code quality checks
+discipline: ## Run AST-based discipline enforcement (9 rules)
+	uv run python scripts/check_discipline.py --ci
+
+discipline-strict: ## Run discipline enforcement in strict mode (warnings block too)
+	uv run python scripts/check_discipline.py --ci --strict
+
+check: lint typecheck discipline ## Run all code quality checks
 
 # ============================================================================
 # Benchmarks
@@ -586,6 +595,9 @@ experiment-gc: ## Delete experiment artifacts older than 90 days (keep latest 3 
 
 experiment-gc-dry-run: ## Dry-run experiment GC (print what would be deleted)
 	uv run python scripts/experiment_gc.py --dry-run
+
+hotpath-profile: ## Profile per-stage latency: normalizer → LOB → feature → strategy → risk (10k iterations)
+	uv run python scripts/latency/hotpath_profile_matrix.py
 
 # ============================================================================
 # Help

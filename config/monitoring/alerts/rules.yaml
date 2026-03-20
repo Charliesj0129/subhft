@@ -337,7 +337,7 @@ groups:
         summary: "ClickHouse system log table > 10 GB"
         description: "system.{{ $labels.table }} has exceeded 10 GB. TTL may not be running. Consider TRUNCATE."
 
-  # Reconciliation / execution router health
+  # Reconciliation / Execution Router Health
   - alert: ReconciliationDiscrepancyDetected
     expr: reconciliation_discrepancy_count > 0
     for: 1m

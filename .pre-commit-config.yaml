@@ -5,3 +5,17 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml, -ll, -q]
+        additional_dependencies: ["bandit[toml]"]
+  - repo: local
+    hooks:
+      - id: hft-discipline
+        name: HFT discipline enforcement
+        entry: uv run python scripts/check_discipline.py --files
+        language: system
+        types: [python]
+        pass_filenames: true

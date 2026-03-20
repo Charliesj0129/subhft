@@ -57,7 +57,7 @@ class FubonSnapshotFetcher:
                 snapshot = self._translate(sym, resp)
                 results.append(snapshot)
                 logger.debug("fubon_snapshot_fetched", symbol=sym)
-            except Exception:
+            except Exception as _exc:  # noqa: BLE001
                 logger.warning("fubon_snapshot_fetch_failed", symbol=sym, exc_info=True)
         return results
 

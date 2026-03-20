@@ -135,7 +135,8 @@ class StrategyContext:
             return None
         try:
             return self._feature_set_source()
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return None
 
     def get_feature_profile_id(self) -> Optional[str]:
@@ -143,7 +144,8 @@ class StrategyContext:
             return None
         try:
             return self._feature_profile_source()
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return None
 
 

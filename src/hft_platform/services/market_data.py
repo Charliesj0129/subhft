@@ -12,23 +12,30 @@ import asyncio
 import datetime as dt
 import os
 import time
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.engine.event_bus import RingBufferBus
-from hft_platform.events import BidAskEvent, FeatureUpdateEvent, TickEvent
+from hft_platform.events import BidAskEvent, FeatureUpdateEvent, LOBStatsEvent, TickEvent
 from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 
 # TODO: replace with BrokerClientProtocol once WU-1 merges
+from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
+from hft_platform.ipc.shm_snapshot import ShmSnapshotWriter, _symbol_hash
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 
 from ._md_ingestion import (
+    _FEATURE_QUALITY_FLAG_LABELS,
+    _MD_CODE_FIELDS,
+    _MD_NESTED_FIELDS,
+    _MD_PRICE_FIELDS,
+    _MD_TIME_FIELDS,
     FeedState,
     env_int,
     get_trace_sampler,
@@ -38,8 +45,6 @@ from ._md_ingestion import (
     try_fast_extract_callback_payload,
     unwrap_md,
 )
-from ._md_observability import MarketDataObservabilityMixin
-from ._md_reconnect import MarketDataReconnectMixin
 
 logger = get_logger("service.market_data")
 
@@ -47,7 +52,145 @@ logger = get_logger("service.market_data")
 __all__ = ["FeedState", "MarketDataService"]
 
 
-class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
+def _get_trace_sampler():
+    try:
+        from hft_platform.diagnostics.trace import get_trace_sampler
+
+        return get_trace_sampler()
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
+        return None
+
+
+def _looks_like_md(obj: object) -> bool:
+    if obj is None:
+        return False
+    if isinstance(obj, dict):
+        keys = obj.keys()
+        if "code" in keys or "symbol" in keys:
+            return True
+        if (
+            "bid_price" in keys
+            or "ask_price" in keys
+            or "close" in keys
+            or "price" in keys
+            or "bid_volume" in keys
+            or "ask_volume" in keys
+            or "buy_price" in keys
+            or "sell_price" in keys
+        ):
+            return True
+        return "ts" in keys or "datetime" in keys
+    has_code = getattr(obj, "code", None) is not None or getattr(obj, "symbol", None) is not None
+    has_price = (
+        hasattr(obj, "bid_price")
+        or hasattr(obj, "ask_price")
+        or hasattr(obj, "close")
+        or hasattr(obj, "price")
+        or hasattr(obj, "bid_volume")
+        or hasattr(obj, "ask_volume")
+    )
+    has_time = hasattr(obj, "ts") or hasattr(obj, "datetime")
+    return bool(has_price or (has_code and (has_price or has_time)))
+
+
+def _unwrap_md(obj: object) -> object:
+    if obj is None:
+        return obj
+    if isinstance(obj, dict):
+        tick = obj.get("tick")
+        if _looks_like_md(tick):
+            return tick
+        bidask = obj.get("bidask")
+        if _looks_like_md(bidask):
+            return bidask
+        return obj
+    tick = getattr(obj, "tick", None)
+    if _looks_like_md(tick):
+        return tick
+    bidask = getattr(obj, "bidask", None)
+    if _looks_like_md(bidask):
+        return bidask
+    return obj
+
+
+def _summarize_md(obj: object) -> dict[str, Any]:
+    if obj is None:
+        return {}
+    nested: dict[str, str]
+    if isinstance(obj, dict):
+        keys = list(obj.keys())
+        present = [k for k in (*_MD_CODE_FIELDS, *_MD_PRICE_FIELDS, *_MD_TIME_FIELDS) if k in obj]
+        nested = {k: type(obj.get(k)).__name__ for k in _MD_NESTED_FIELDS if k in obj}
+        return {"keys": keys[:20], "present": present, "nested": nested}
+    present = [k for k in (*_MD_CODE_FIELDS, *_MD_PRICE_FIELDS, *_MD_TIME_FIELDS) if hasattr(obj, k)]
+    nested = {}
+    for k in _MD_NESTED_FIELDS:
+        if hasattr(obj, k):
+            nested[k] = type(getattr(obj, k)).__name__
+    return {"attrs": present, "nested": nested}
+
+
+def _try_fast_extract_callback_payload(*args: Any, **kwargs: Any) -> tuple[object | None, object | None]:
+    exchange = kwargs.get("exchange")
+
+    for key in ("quote", "tick", "bidask", "data", "msg"):
+        if key not in kwargs:
+            continue
+        candidate = _unwrap_md(kwargs[key])
+        if _looks_like_md(candidate):
+            return exchange, candidate
+
+    argc = len(args)
+    if argc == 2:
+        a0, a1 = args
+        # Common Shioaji shape: (exchange/topic, msg)
+        msg = _unwrap_md(a1)
+        if _looks_like_md(msg):
+            if exchange is None and (isinstance(a0, str) or hasattr(a0, "name")):
+                exchange = a0
+            return exchange, msg
+        # Alternate order fallback
+        msg = _unwrap_md(a0)
+        if _looks_like_md(msg):
+            if exchange is None and (isinstance(a1, str) or hasattr(a1, "name")):
+                exchange = a1
+            return exchange, msg
+    elif argc == 1:
+        msg = _unwrap_md(args[0])
+        if _looks_like_md(msg):
+            return exchange, msg
+    elif argc >= 3:
+        # Another common shape: (topic, quote, event) — pick the last MD-like payload quickly.
+        for candidate in (args[-1], args[-2], args[0]):
+            msg = _unwrap_md(candidate)
+            if _looks_like_md(msg):
+                if exchange is None and argc > 0 and (isinstance(args[0], str) or hasattr(args[0], "name")):
+                    exchange = args[0]
+                return exchange, msg
+
+    return exchange, None
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
+        return max(1, int(default))
+
+
+def _obs_policy() -> str:
+    policy = os.getenv("HFT_OBS_POLICY", "balanced").strip().lower()
+    if policy not in {"minimal", "balanced", "debug"}:
+        return "balanced"
+    return policy
+
+
+# FeedState imported from ._md_ingestion
+
+
+class MarketDataService:
     def __init__(
         self,
         bus: RingBufferBus,
@@ -65,11 +208,21 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self.recorder_queue = recorder_queue
 
         self.lob = LOBEngine()
-        feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
-        self.feature_engine = feature_engine or (FeatureEngine() if feature_enabled else None)
+        feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+        if feature_engine is not None:
+            self.feature_engine = feature_engine
+        elif feature_enabled:
+            try:
+                self.feature_engine = FeatureEngine()
+            except Exception:
+                logger.error("feature_engine_init_failed", exc_info=True)
+                self.feature_engine = None
+        else:
+            self.feature_engine = None
         try:
             setattr(self.lob, "feature_engine", self.feature_engine)
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             pass
         self._feature_shadow_engine: FeatureEngine | None = None
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
@@ -96,7 +249,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             self._reconnect_tzinfo: dt.tzinfo = ZoneInfo(self.reconnect_tz)
         except Exception:
             logger.warning("Invalid reconnect tz, defaulting to UTC", tz=self.reconnect_tz)
-            self._reconnect_tzinfo = dt.timezone.utc
+            self._reconnect_tzinfo = dt.UTC
         self._last_reconnect_ts = 0.0
         self._last_resubscribe_ts = 0.0
         self._resubscribe_attempts = 0
@@ -221,10 +374,114 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._feature_shadow_mismatch_counter = 0
 
         self._init_feature_shadow_engine()
+        self._init_shm_publisher()
+
+    def _init_shm_publisher(self) -> None:
+        """Initialise optional SHM publisher for monitor snapshots."""
+        try:
+            shm_name = os.getenv("HFT_MONITOR_SHM_NAME", "hft_monitor_snapshot")
+            max_symbols = int(os.getenv("HFT_MONITOR_SHM_MAX_SYMBOLS", "64"))
+            self._shm_publisher = ShmSnapshotWriter(shm_name, max_symbols=max_symbols)
+            logger.info("shm_publisher_enabled", shm_name=shm_name, max_symbols=max_symbols)
+            # Pre-build symbol->index mapping from client subscriptions
+            symbols = getattr(self.client, "subscribed_symbols", None)
+            if symbols is None:
+                symbols = getattr(self.client, "symbols", None)
+            if symbols:
+                for idx, sym in enumerate(symbols):
+                    sym_str = str(sym)
+                    if idx < max_symbols:
+                        self._shm_symbol_index[sym_str] = idx
+                        self._shm_symbol_hashes[sym_str] = _symbol_hash(sym_str)
+        except Exception as exc:
+            logger.warning("shm_publisher_init_failed", error=str(exc))
+            self._shm_publisher = None
 
     # -- main loop -----------------------------------------------------------
 
-    async def run(self) -> None:
+    def _publish_to_shm(self, symbol: str, stats: object, feature_tuple: tuple | None) -> None:
+        """Publish LOB stats + features to SHM snapshot table (~50ns)."""
+        publisher = self._shm_publisher
+        if publisher is None:
+            return
+        idx = self._shm_symbol_index.get(symbol)
+        if idx is None:
+            # Lazily assign next available slot
+            from hft_platform.ipc.shm_snapshot import _symbol_hash
+
+            next_idx = len(self._shm_symbol_index)
+            if next_idx >= publisher.max_symbols:
+                return
+            self._shm_symbol_index[symbol] = next_idx
+            self._shm_symbol_hashes[symbol] = _symbol_hash(symbol)
+            idx = next_idx
+
+        sym_hash = self._shm_symbol_hashes[symbol]
+        ts_ns = int(getattr(stats, "local_ts", 0) or 0) or time.time_ns()
+
+        # Extract 9 LOB fields from stats
+        lob_fields = [
+            int(getattr(stats, "best_bid", 0) or 0),
+            int(getattr(stats, "best_ask", 0) or 0),
+            int(getattr(stats, "mid_price_x2", 0) or 0),
+            int(getattr(stats, "spread_scaled", 0) or 0),
+            int(getattr(stats, "bid_depth", 0) or 0),
+            int(getattr(stats, "ask_depth", 0) or 0),
+            int(getattr(stats, "l1_bid_qty", 0) or 0),
+            int(getattr(stats, "l1_ask_qty", 0) or 0),
+            int(getattr(stats, "microprice_x2", 0) or 0),
+        ]
+
+        # Extract 16 features (pad with 0 if unavailable)
+        if feature_tuple is not None and len(feature_tuple) >= 16:
+            features = [int(v) for v in feature_tuple[:16]]
+        else:
+            features = [0] * 16
+
+        try:
+            publisher.publish(idx, ts_ns, sym_hash, lob_fields, features)
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            pass  # fire-and-forget — never block hot path
+
+    def _init_feature_shadow_engine(self) -> None:
+        if self.feature_engine is None:
+            return
+        enabled = os.getenv("HFT_FEATURE_SHADOW_PARITY", "0").strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return
+        try:
+            primary_backend = (
+                self.feature_engine.kernel_backend() if hasattr(self.feature_engine, "kernel_backend") else "python"
+            )
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            primary_backend = "python"
+        requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
+        shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
+        try:
+            shadow = FeatureEngine(
+                feature_set_id=(
+                    self.feature_engine.feature_set_id() if hasattr(self.feature_engine, "feature_set_id") else None
+                ),
+                emit_events=True,
+                kernel_backend=shadow_backend,
+            )
+            # If backend fallback happened and becomes identical to primary due missing Rust,
+            # still allow compare if explicitly requested.
+            if (
+                requested == ""
+                and hasattr(shadow, "kernel_backend")
+                and shadow.kernel_backend() == primary_backend == "python"
+            ):
+                # Auto mode could not create meaningful alternate backend.
+                return
+            self._feature_shadow_engine = shadow
+        except Exception as exc:
+            logger.warning("feature_shadow_engine_init_failed", reason=str(exc))
+            self._feature_shadow_engine = None
+
+    async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
         logger.info("MarketDataService started")
@@ -520,7 +777,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                                 )
                                 self._md_callback_parse_metric_children[parse_result] = child
                             child.inc()
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("operation_fallback", error=str(exc))
                         pass
 
             if not self.log_raw and msg is not None and not self._raw_first_parsed:
@@ -606,7 +864,262 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         for event in events:
             self._publish_nowait(event)
 
-    # -- recorder direct event -----------------------------------------------
+    def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
+        sampler = getattr(self, "_trace_sampler", None)
+        if sampler is None:
+            return
+        try:
+            sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            return
+
+    def _record_shioaji_crash_signature(self, text: str | None, *, context: str) -> None:
+        if not self.metrics_registry or not hasattr(self.metrics_registry, "shioaji_crash_signature_total"):
+            return
+        signature = detect_crash_signature(text)
+        if not signature:
+            return
+        try:
+            self.metrics_registry.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            return
+
+    def _maybe_update_features(
+        self,
+        event: TickEvent | BidAskEvent,
+        stats: object | None,
+    ) -> FeatureUpdateEvent | None:
+        if self.feature_engine is None or stats is None:
+            return None
+        if not hasattr(stats, "best_bid") or not hasattr(stats, "best_ask"):
+            return None
+        meta = getattr(event, "meta", None)
+        local_ts_ns = int(getattr(meta, "local_ts", 0) or 0) if meta is not None else 0
+        start_ns = time.perf_counter_ns()
+        try:
+            process_lob_update = getattr(self.feature_engine, "process_lob_update", None)
+            if callable(process_lob_update):
+                feature_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
+            else:
+                feature_update = self.feature_engine.process_lob_stats(
+                    cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns
+                )
+            self._maybe_run_feature_shadow_parity(event, stats, local_ts_ns, feature_update)
+            self._feature_latency_counter += 1
+            self._feature_metrics_counter += 1
+            if self.metrics_registry:
+                if self._feature_latency_counter % self._feature_latency_sample_every == 0:
+                    try:
+                        if self._feature_latency_metric_child is None and hasattr(
+                            self.metrics_registry, "feature_plane_latency_ns"
+                        ):
+                            self._feature_latency_metric_child = self.metrics_registry.feature_plane_latency_ns
+                        if self._feature_latency_metric_child is not None:
+                            self._feature_latency_metric_child.observe(time.perf_counter_ns() - start_ns)
+                    except Exception as exc:
+                        logger.debug("operation_fallback", error=str(exc))
+                        pass
+                if self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
+                    try:
+                        if feature_update is not None:
+                            feature_set_id = str(getattr(feature_update, "feature_set_id", self._feature_set_id_cached))
+                            self._feature_set_id_cached = feature_set_id
+                            result = "emitted"
+                            qflags = int(getattr(feature_update, "quality_flags", 0) or 0)
+                        else:
+                            feature_set_id = self._feature_set_id_cached
+                            result = "updated"
+                            state_view = None
+                            qflags = 0
+                            try:
+                                if hasattr(self.feature_engine, "get_feature_view"):
+                                    state_view = self.feature_engine.get_feature_view(getattr(event, "symbol", ""))
+                            except Exception as exc:
+                                logger.debug("operation_fallback", error=str(exc))
+                                state_view = None
+                            if isinstance(state_view, dict):
+                                qflags = int(state_view.get("quality_flags", 0) or 0)
+                        if hasattr(self.metrics_registry, "feature_plane_updates_total"):
+                            key = (result, feature_set_id)
+                            child = self._feature_update_metric_children.get(key)
+                            if child is None:
+                                child = self.metrics_registry.feature_plane_updates_total.labels(
+                                    result=result,
+                                    feature_set=feature_set_id,
+                                )
+                                self._feature_update_metric_children[key] = child
+                            child.inc()
+                        if qflags and hasattr(self.metrics_registry, "feature_quality_flags_total"):
+                            for bit, label in _FEATURE_QUALITY_FLAG_LABELS:
+                                if qflags & bit:
+                                    qchild = self._feature_quality_flag_metric_children.get(label)
+                                    if qchild is None:
+                                        qchild = self.metrics_registry.feature_quality_flags_total.labels(flag=label)
+                                        self._feature_quality_flag_metric_children[label] = qchild
+                                    qchild.inc()
+                    except Exception as exc:
+                        logger.debug("operation_fallback", error=str(exc))
+                        pass
+            return feature_update
+        except Exception as exc:
+            self._emit_trace(
+                "feature_update_error",
+                "",
+                {"symbol": getattr(event, "symbol", ""), "reason": str(exc)},
+            )
+            self._feature_metrics_counter += 1
+            if self.metrics_registry and self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
+                try:
+                    if hasattr(self.metrics_registry, "feature_plane_updates_total"):
+                        key = ("error", self._feature_set_id_cached)
+                        child = self._feature_update_metric_children.get(key)
+                        if child is None:
+                            child = self.metrics_registry.feature_plane_updates_total.labels(
+                                result="error",
+                                feature_set=self._feature_set_id_cached,
+                            )
+                            self._feature_update_metric_children[key] = child
+                        child.inc()
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                    pass
+            logger.warning("feature_engine_update_failed", reason=str(exc))
+            return None
+
+    def _maybe_run_feature_shadow_parity(
+        self,
+        event: TickEvent | BidAskEvent,
+        stats: object,
+        local_ts_ns: int,
+        primary_update: FeatureUpdateEvent | None,
+    ) -> None:
+        shadow = self._feature_shadow_engine
+        if shadow is None:
+            return
+        self._feature_shadow_counter += 1
+        compare_now = self._feature_shadow_counter % self._feature_shadow_sample_every == 0
+        try:
+            process_lob_update = getattr(shadow, "process_lob_update", None)
+            if callable(process_lob_update):
+                shadow_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
+            else:
+                shadow_update = shadow.process_lob_stats(cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns)
+        except Exception as exc:
+            logger.warning("feature_shadow_engine_update_failed", reason=str(exc))
+            self._emit_feature_shadow_check_metric("skipped")
+            return
+
+        if not compare_now:
+            return
+        self._emit_feature_shadow_check_metric("checked")
+        primary_feature_set = str(getattr(primary_update, "feature_set_id", self._feature_set_id_cached))
+        primary_values = None
+        primary_ids = None
+        if primary_update is not None:
+            primary_values = tuple(primary_update.values)
+            primary_ids = tuple(primary_update.feature_ids)
+        else:
+            try:
+                view = (
+                    self.feature_engine.get_feature_view(getattr(event, "symbol", "")) if self.feature_engine else None
+                )
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
+                view = None
+            if isinstance(view, dict):
+                primary_values = tuple(view.get("values", ()))
+                primary_ids = tuple(view.get("feature_ids", ()))
+                primary_feature_set = str(view.get("feature_set_id", primary_feature_set))
+
+        shadow_values = None
+        shadow_ids = None
+        if shadow_update is not None:
+            shadow_values = tuple(shadow_update.values)
+            shadow_ids = tuple(shadow_update.feature_ids)
+        else:
+            try:
+                sview = shadow.get_feature_view(getattr(event, "symbol", ""))
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
+                sview = None
+            if isinstance(sview, dict):
+                shadow_values = tuple(sview.get("values", ()))
+                shadow_ids = tuple(sview.get("feature_ids", ()))
+
+        if primary_values is None or shadow_values is None or primary_ids is None or shadow_ids is None:
+            return
+        if primary_ids != shadow_ids or len(primary_values) != len(shadow_values):
+            for fid in primary_ids:
+                self._emit_feature_shadow_mismatch_metric(primary_feature_set, str(fid))
+            return
+        mismatched: list[str] = []
+        tol = float(self._feature_shadow_abs_tolerance)
+        for fid, pv, sv in zip(primary_ids, primary_values, shadow_values):
+            if isinstance(pv, float) or isinstance(sv, float):
+                if abs(float(pv) - float(sv)) > tol:
+                    mismatched.append(str(fid))
+            else:
+                if int(pv) != int(sv):
+                    mismatched.append(str(fid))
+        if mismatched:
+            self._feature_shadow_mismatch_counter += 1
+            for fid in mismatched:
+                self._emit_feature_shadow_mismatch_metric(primary_feature_set, fid)
+            self._emit_trace(
+                "feature_shadow_mismatch",
+                "",
+                {
+                    "symbol": getattr(event, "symbol", ""),
+                    "feature_set_id": primary_feature_set,
+                    "mismatch_count": len(mismatched),
+                    "mismatched_features": mismatched[:16],
+                },
+            )
+            if self._feature_shadow_mismatch_counter % self._feature_shadow_warn_every == 1:
+                logger.warning(
+                    "feature_shadow_parity_mismatch",
+                    symbol=getattr(event, "symbol", ""),
+                    feature_set=primary_feature_set,
+                    mismatch_count=len(mismatched),
+                    mismatched_features=mismatched[:8],
+                )
+
+    def _emit_feature_shadow_check_metric(self, result: str) -> None:
+        if not self.metrics_registry or not hasattr(self.metrics_registry, "feature_shadow_parity_checks_total"):
+            return
+        feature_set_id = self._feature_set_id_cached
+        key = (feature_set_id, str(result))
+        try:
+            child = self._feature_shadow_checks_metric_children.get(key)
+            if child is None:
+                child = self.metrics_registry.feature_shadow_parity_checks_total.labels(
+                    feature_set=feature_set_id,
+                    result=str(result),
+                )
+                self._feature_shadow_checks_metric_children[key] = child
+            child.inc()
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            pass
+
+    def _emit_feature_shadow_mismatch_metric(self, feature_set_id: str, feature_id: str) -> None:
+        if not self.metrics_registry or not hasattr(self.metrics_registry, "feature_shadow_parity_mismatch_total"):
+            return
+        key = (str(feature_set_id), str(feature_id))
+        try:
+            child = self._feature_shadow_mismatch_metric_children.get(key)
+            if child is None:
+                child = self.metrics_registry.feature_shadow_parity_mismatch_total.labels(
+                    feature_set=str(feature_set_id),
+                    feature_id=str(feature_id),
+                )
+                self._feature_shadow_mismatch_metric_children[key] = child
+            child.inc()
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            pass
 
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
         if self.recorder_queue is None:
@@ -682,7 +1195,134 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             logger.info("State change", old=self.state, new=new_state)
             self.state = new_state
 
-    async def _call_client(self, func: Any, *args: Any) -> Any:
+    async def _attempt_resubscribe(self, gap: float, reason: str = "heartbeat_gap") -> None:
+        if not self._within_reconnect_window():
+            return
+        now = timebase.now_s()
+        if now - self._last_resubscribe_ts < self.resubscribe_cooldown_s:
+            return
+        if self.metrics_registry:
+            if reason == "heartbeat_gap":
+                if self._feed_reconnect_gap_metric_child is None:
+                    self._feed_reconnect_gap_metric_child = self.metrics_registry.feed_reconnect_total.labels(
+                        result="gap"
+                    )
+                gap_metric_child = self._feed_reconnect_gap_metric_child
+                if gap_metric_child is not None:
+                    gap_metric_child.inc()
+            elif reason == "symbol_gap":
+                self.metrics_registry.feed_reconnect_total.labels(result="symbol_gap").inc()
+        self._last_resubscribe_ts = now
+        ok = await asyncio.to_thread(self.client.resubscribe)
+        if ok:
+            self._resubscribe_attempts = 0
+        else:
+            self._resubscribe_attempts += 1
+        logger.info("Resubscribe attempt", gap=gap, reason=reason, ok=ok, attempts=self._resubscribe_attempts)
+
+    async def _request_reconnect(self, gap: float, reason: str | None = None) -> None:
+        if self._within_reconnect_window():
+            await self._trigger_reconnect(gap, reason=reason)
+            return
+        self._mark_pending_reconnect(gap, reason=reason)
+
+    async def _trigger_reconnect(self, gap: float, reason: str | None = None) -> bool:
+        now = timebase.now_s()
+        if now - self._last_reconnect_ts < self.reconnect_cooldown_s:
+            return False
+        if not self._within_reconnect_window():
+            return False
+        self._last_reconnect_ts = now
+        reason_label = reason or "heartbeat_gap"
+        logger.warning("Triggering reconnect", gap=gap, reason=reason_label)
+        self._set_state(FeedState.RECOVERING)
+        force_login = reason_label == "session_rollover"
+        try:
+            ok = await asyncio.wait_for(
+                asyncio.to_thread(self.client.reconnect, f"{reason_label} {gap:.1f}s", force_login),
+                timeout=max(0.1, float(self.reconnect_timeout_s)),
+            )
+        except TimeoutError:
+            logger.error("Reconnect timed out", reason=reason_label, timeout_s=self.reconnect_timeout_s)
+            if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_timeout_total"):
+                self.metrics_registry.feed_reconnect_timeout_total.labels(reason=reason_label).inc()
+            self._set_state(FeedState.DISCONNECTED)
+            return False
+        except Exception as exc:
+            logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
+            if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_exception_total"):
+                self.metrics_registry.feed_reconnect_exception_total.labels(
+                    reason=reason_label,
+                    exception_type=type(exc).__name__,
+                ).inc()
+            self._set_state(FeedState.DISCONNECTED)
+            return False
+        if ok:
+            self._set_state(FeedState.CONNECTED)
+            self.last_event_ts = timebase.now_s()
+            self.last_event_mono = time.monotonic()
+            self._resubscribe_attempts = 0
+        else:
+            self._set_state(FeedState.DISCONNECTED)
+        return ok
+
+    def _should_rollover_reconnect(self) -> bool:
+        now_dt = dt.datetime.now(tz=self._reconnect_tzinfo)
+        last_event_dt = dt.datetime.fromtimestamp(self.last_event_ts, tz=self._reconnect_tzinfo)
+        if last_event_dt.date() == now_dt.date():
+            return False
+        if self._last_rollover_seen_date == now_dt.date():
+            return False
+        self._last_rollover_seen_date = now_dt.date()
+        return True
+
+    def _within_reconnect_window(self) -> bool:
+        if not self.reconnect_days and not self.reconnect_hours and not self.reconnect_hours_2:
+            return True
+        now = dt.datetime.now(tz=self._reconnect_tzinfo)
+        if os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}:
+            try:
+                from hft_platform.core.market_calendar import get_calendar
+
+                calendar = get_calendar()
+                if calendar.available and calendar.days_until_trading(now.date()) > 1:
+                    return False
+            except ImportError:
+                pass
+        weekday = now.strftime("%a").lower()
+        if self.reconnect_days and weekday not in self.reconnect_days:
+            return False
+
+        windows = [w for w in (self.reconnect_hours, self.reconnect_hours_2) if w]
+        if not windows:
+            return True
+        for window in windows:
+            try:
+                start_str, end_str = window.split("-", 1)
+                start = dt.time.fromisoformat(start_str)
+                end = dt.time.fromisoformat(end_str)
+                now_t = now.timetz().replace(tzinfo=None)
+                if start <= end:
+                    if start <= now_t <= end:
+                        return True
+                else:
+                    if now_t >= start or now_t <= end:
+                        return True
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
+                continue
+        return False
+
+    def _mark_pending_reconnect(self, gap: float, reason: str | None = None) -> None:
+        reason_label = reason or "heartbeat_gap"
+        if self._pending_reconnect_reason != reason_label:
+            logger.warning("Reconnect pending (outside window)", gap=gap, reason=reason_label)
+        self._pending_reconnect_reason = reason_label
+        self._pending_reconnect_gap = gap
+        if self._pending_reconnect_since is None:
+            self._pending_reconnect_since = timebase.now_s()
+
+    async def _call_client(self, func, *args):
         if os.getenv("HFT_MD_SYNC_CONNECT") == "1":
             return func(*args)
         if hasattr(func, "assert_called") or getattr(func, "_mock_name", None):
@@ -719,3 +1359,62 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             return {}
         now = time.monotonic()
         return {symbol: now - last_ts for symbol, last_ts in tick_snapshot.items()}
+
+    def _is_trading_hours(self) -> bool:
+        # Use the broadest product-type session window so the symbol-gap watchdog
+        # stays active during futures/options hours (08:45–13:45 + night session).
+        # Configurable via HFT_WATCHDOG_PRODUCT_TYPE (default: "future").
+        product_type = os.getenv("HFT_WATCHDOG_PRODUCT_TYPE", "future")
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+            now_dt = dt.datetime.now(calendar._tz)
+            return calendar.is_trading_hours(now_dt, product_type=product_type)
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            now_dt = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+            if now_dt.weekday() >= 5:
+                return False
+            minute = now_dt.hour * 60 + now_dt.minute
+            # Fallback: futures day session 08:45–13:45
+            return (8 * 60 + 45) <= minute <= (13 * 60 + 45)
+
+    def _is_market_open_grace_period(self) -> bool:
+        """Check if within grace period after market open (C4).
+
+        Returns:
+            True if within grace period
+        """
+        if self._market_open_grace_s <= 0:
+            return False
+
+        try:
+            from hft_platform.core.market_calendar import get_calendar
+
+            calendar = get_calendar()
+        except ImportError:
+            return False
+
+        try:
+            now = dt.datetime.now(calendar._tz)
+
+            if not calendar.is_trading_day(now.date()):
+                return False
+
+            open_time = calendar.get_session_open(now.date())
+            if open_time is None:
+                return False
+
+            # Check if we're within grace period after open
+            elapsed = (now - open_time).total_seconds()
+            in_grace = 0 <= elapsed <= self._market_open_grace_s
+
+            # Update gauge
+            if self.metrics_registry and hasattr(self.metrics_registry, "market_open_grace_active"):
+                self.metrics_registry.market_open_grace_active.set(1 if in_grace else 0)
+
+            return in_grace
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+            return False

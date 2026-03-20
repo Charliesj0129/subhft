@@ -218,7 +218,8 @@ def cmd_check(args: argparse.Namespace) -> None:
                 import yaml
 
                 payload = yaml.safe_dump(settings)
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 payload = json.dumps(settings, indent=2)
         else:
             payload = json.dumps(settings, indent=2)

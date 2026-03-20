@@ -35,8 +35,8 @@ def validate_latency_profile_id(
 ) -> tuple[bool, str]:
     """Validate profile_id is in the registry."""
     if not profiles:
-        return True, "skipped — no profiles registry available"
+        return True, "SKIPPED — no profiles registry available"
     if profile_id in profiles:
         return True, f"OK — profile '{profile_id}' found in registry"
     known = ", ".join(sorted(profiles.keys()))
-    return False, f"profile_id '{profile_id}' not found in registry; known: {known}"
+    return False, f"profile_id '{profile_id}' not in registry; known: {known}"

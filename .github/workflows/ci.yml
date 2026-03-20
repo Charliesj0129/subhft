@@ -753,6 +753,9 @@ jobs:
       - name: Run pip-audit
         run: make security-audit
 
+      - name: Code security scan (bandit)
+        run: uv run bandit -r src/hft_platform/ -c pyproject.toml -ll -q
+
       - name: Security Summary
         if: always()
         run: |

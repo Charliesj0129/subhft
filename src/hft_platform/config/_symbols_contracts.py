@@ -120,7 +120,8 @@ def write_contract_cache(contracts: list[dict[str, Any]], path: str = DEFAULT_CO
         try:
             existing = json.loads(dest.read_text(encoding="utf-8"))
             cache_version = int(existing.get("cache_version", 0))
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             pass
     cache_version += 1
 
@@ -156,7 +157,10 @@ def write_symbols_yaml(symbols: list[dict[str, Any]], output_path: str = DEFAULT
 
 
 def fetch_contracts_from_broker() -> list[dict[str, Any]]:
-    """Fetch contracts from broker (delegates to feed_adapter for MB-02 compliance)."""
+    """Fetch all available contracts from the broker SDK.
+
+    Delegates to feed_adapter.contract_fetcher (MB-02 compliance).
+    """
     from hft_platform.feed_adapter.contract_fetcher import fetch_all_contracts
 
     return fetch_all_contracts()
