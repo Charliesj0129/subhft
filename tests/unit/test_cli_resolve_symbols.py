@@ -34,8 +34,9 @@ class TestCmdResolveSymbolsBrokerDispatch:
         monkeypatch.setenv("HFT_BROKER", "fubon")
         from hft_platform.cli import cmd_resolve_symbols
 
-        # Should NOT raise or exit
-        cmd_resolve_symbols(_make_args())
+        # Should NOT raise or exit — returns None
+        result = cmd_resolve_symbols(_make_args())
+        assert result is None
 
     def test_unknown_broker_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """With HFT_BROKER=unknown, exit with error."""

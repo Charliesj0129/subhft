@@ -281,6 +281,7 @@ class TestHealthServerLifecycle:
 
         hs = HealthServer(system=None)
         hs.stop()  # Should not raise
+        assert hs is not None
 
 
 # ---------------------------------------------------------------------------

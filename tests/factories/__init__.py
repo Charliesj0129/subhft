@@ -1,5 +1,11 @@
 """Shared test factories for HFT platform events and order objects."""
 
+from tests.factories.components import (
+    make_normalizer,
+    make_position_store,
+    make_risk_engine,
+    make_storm_guard,
+)
 from tests.factories.events import (
     make_bidask_event,
     make_fill_event,
@@ -16,8 +22,12 @@ __all__ = [
     "make_bidask_event",
     "make_fill_event",
     "make_lob_stats_event",
+    "make_normalizer",
     "make_order_command",
     "make_order_intent",
+    "make_position_store",
     "make_risk_config",
+    "make_risk_engine",
+    "make_storm_guard",
     "make_tick_event",
 ]

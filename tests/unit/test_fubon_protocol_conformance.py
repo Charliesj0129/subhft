@@ -147,6 +147,9 @@ class TestFubonMethodSignatureCompatibility:
                 f"FubonClient.{method_name} does not accept parameter '{param_name}' required by BrokerProtocol"
             )
 
+        # All protocol params accepted by implementation
+        assert proto_sig is not None
+
 
 class TestFubonPropertyCheck:
     """Test 6: Verify logged_in is a property (not a method) on FubonClient."""

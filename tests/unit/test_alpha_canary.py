@@ -287,6 +287,7 @@ class TestCanaryApplyDecision:
         )
         # Should not raise
         monitor.apply_decision(status)
+        assert not (tmp_path / "empty").exists()
 
 
 class TestCanaryStatusToDict:

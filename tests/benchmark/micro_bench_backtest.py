@@ -175,7 +175,7 @@ def test_bench_equity_core_100k():
     assert elapsed_ms < 50, f"Equity computation too slow: {elapsed_ms:.3f} ms"
 
 
-def test_bench_save_baseline(monkeypatch):
+def test_bench_save_baseline(monkeypatch):  # noqa: no-assert
     """Save baseline results for regression detection."""
     _patch(monkeypatch)
     adapter = hbt_adapter.HftBacktestAdapter(
@@ -209,3 +209,4 @@ def test_bench_save_baseline(monkeypatch):
     baseline_path = baseline_dir / "backtest_adapter.json"
     baseline_path.write_text(json.dumps(baseline, indent=2))
     print(f"\nBaseline saved: {baseline}")
+    # no-assert: benchmark-only

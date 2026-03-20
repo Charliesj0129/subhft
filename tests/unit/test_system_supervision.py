@@ -9,9 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+from hft_platform.contracts.strategy import IntentType, Side
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.system import HFTSystem
+from tests.factories.intents import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers (mirror test_system_lifecycle.py patterns)
@@ -92,11 +93,9 @@ def _make_order_intent(
     side: Side = Side.BUY,
     price: int = 100_0000,
     qty: int = 1,
-) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
+):
+    return make_order_intent(
         strategy_id="test",
-        symbol="2330",
         intent_type=intent_type,
         side=side,
         price=price,
@@ -119,16 +118,14 @@ class TestSupervisionCrashDetection:
 
         # Create a task that has already crashed
         loop = asyncio.new_event_loop()
+        caught = False
         try:
-
-            async def _crash():
-                raise RuntimeError("service exploded")
-
-            task = loop.run_until_complete(
-                asyncio.ensure_future(_crash(), loop=loop) if False else _run_failing_task(loop)
-            )
+            loop.run_until_complete(_run_failing_task(loop))
+        except RuntimeError:
+            caught = True
         finally:
             loop.close()
+        assert caught, "Expected RuntimeError from crashed task"
 
     def test_try_restart_calls_start_service(self):
         """_try_restart_service delegates to _start_service on first attempt."""

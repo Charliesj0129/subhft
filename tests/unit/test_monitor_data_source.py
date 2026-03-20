@@ -450,6 +450,7 @@ class TestShmDataSourceStubbed:
         reader = _StubReader()
         ds = self._make_source(reader)
         ds.connect()  # should not raise
+        assert ds.connected is True
 
 
 # ── HybridDataSource ───────────────────────────────────────────────────────

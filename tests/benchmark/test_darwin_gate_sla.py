@@ -127,7 +127,7 @@ class TestDarwinGateOrders:
         count, avg_latency, max_latency = result.result_rows[0]
         assert count > 0, "Expected order records with latency data"
 
-    def test_order_throughput(self, ch_client):
+    def test_order_throughput(self, ch_client):  # noqa: no-assert
         """Measure order throughput over last hour."""
         query = """
         SELECT
@@ -149,6 +149,7 @@ class TestDarwinGateOrders:
 
         # Log metrics (no assertion, just reporting)
         print(f"Order throughput - Peak: {peak}/min, Avg: {avg_per_min:.1f}/min")
+        # no-assert: benchmark-only
 
 
 @pytest.mark.benchmark
@@ -173,7 +174,7 @@ class TestDarwinGateMarketData:
         # (relaxed threshold for testing)
         assert age_s < 3600, f"Market data is {age_s:.0f}s old (> 1 hour)"
 
-    def test_ohlcv_aggregation(self, ch_client):
+    def test_ohlcv_aggregation(self, ch_client):  # noqa: no-assert
         """Verify OHLCV materialized view is producing data."""
         query = """
         SELECT count(), max(bucket)
@@ -186,3 +187,4 @@ class TestDarwinGateMarketData:
         # OHLCV might be empty if no tick data, that's ok
         if count > 0:
             print(f"OHLCV candles in last day: {count}")
+        # no-assert: benchmark-only

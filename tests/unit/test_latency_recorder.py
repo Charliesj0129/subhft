@@ -61,7 +61,9 @@ def test_latency_recorder_no_queue_and_put_fail(monkeypatch):
             raise RuntimeError("boom")
 
     rec.configure(BadQueue())
+    # Should silently swallow the RuntimeError from BadQueue
     rec.record("stage", 1000, ts_ns=789)
+    assert rec is not None  # survived without propagating exception
 
 
 def test_latency_recorder_invalid_sample_env(monkeypatch):

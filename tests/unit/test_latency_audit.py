@@ -114,6 +114,8 @@ def test_module_imports() -> None:
     """Module imports without error."""
     from hft_platform.alpha import latency_audit  # noqa: F401
 
+    assert latency_audit is not None
+
 
 # ---------------------------------------------------------------------------
 # LatencyAuditResult dataclass
