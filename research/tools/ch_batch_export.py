@@ -13,26 +13,26 @@ Usage::
     # Export all available dates for TXFC6 + 2330
     python research/tools/ch_batch_export.py \
         --symbols TXFC6,TXFB6,2330 \
-        --host 100.91.176.126 \
+        --host $CLICKHOUSE_HOST \
         --formats l1,l2
 
     # Export specific date range
     python research/tools/ch_batch_export.py \
         --symbols TXFC6 \
-        --host 100.91.176.126 \
+        --host $CLICKHOUSE_HOST \
         --date-from 2026-03-03 --date-to 2026-03-13
 
     # Dry-run: list what would be exported
     python research/tools/ch_batch_export.py \
-        --symbols TXFC6 --host 100.91.176.126 --dry-run
+        --symbols TXFC6 --host $CLICKHOUSE_HOST --dry-run
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,20 +44,22 @@ logger = get_logger("ch_batch_export")
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-CH_PRICE_SCALE_INT: float = 1_000_000.0   # market_data: price_scaled (Int64) → float
-CH_PRICE_SCALE_FLOAT: float = 1.0          # market_data_backup: price (Float64) already float
+CH_PRICE_SCALE_INT: float = 1_000_000.0  # market_data: price_scaled (Int64) → float
+CH_PRICE_SCALE_FLOAT: float = 1.0  # market_data_backup: price (Float64) already float
 
 # L1 research dtype (compatible with feature_precompute.py)
-L1_DTYPE = np.dtype([
-    ("bid_px", "f8"),
-    ("ask_px", "f8"),
-    ("bid_qty", "f8"),
-    ("ask_qty", "f8"),
-    ("mid_price", "f8"),
-    ("spread_bps", "f8"),
-    ("volume", "f8"),
-    ("local_ts", "i8"),
-])
+L1_DTYPE = np.dtype(
+    [
+        ("bid_px", "f8"),
+        ("ask_px", "f8"),
+        ("bid_qty", "f8"),
+        ("ask_qty", "f8"),
+        ("mid_price", "f8"),
+        ("spread_bps", "f8"),
+        ("volume", "f8"),
+        ("local_ts", "i8"),
+    ]
+)
 
 # hftbacktest event dtype
 try:
@@ -85,11 +87,16 @@ DEDUP_WINDOW_NS: int = 500_000  # 0.5 ms
 # ClickHouse helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_client(host: str, port: int = 8123, user: str = "default", password: str = ""):
     """Create ClickHouse client."""
     import clickhouse_connect
+
     return clickhouse_connect.get_client(
-        host=host, port=port, username=user, password=password,
+        host=host,
+        port=port,
+        username=user,
+        password=password,
     )
 
 
@@ -156,6 +163,7 @@ def _detect_table_for_symbol(client: Any, symbol: str) -> list[tuple[str, str, i
 # ---------------------------------------------------------------------------
 # L1 Export (research .npy format)
 # ---------------------------------------------------------------------------
+
 
 def _export_l1_day(
     client: Any,
@@ -257,12 +265,13 @@ def _export_l1_day(
 # L2 Export (hftbacktest .npz format)
 # ---------------------------------------------------------------------------
 
+
 def _build_hbt_event(ev: int, exch_ts: int, local_ts: int, px: float, qty: float) -> tuple:
     """Build an hftbacktest event tuple."""
     return (ev, int(exch_ts), int(local_ts), float(px), float(qty), 0, 0, 0.0)
 
 
-def _export_l2_day(
+def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting adds no clarity
     client: Any,
     symbol: str,
     date: str,
@@ -405,10 +414,11 @@ def _export_l2_day(
 # Batch orchestration
 # ---------------------------------------------------------------------------
 
+
 def run_batch_export(
     *,
     symbols: list[str],
-    host: str = "100.91.176.126",
+    host: str = "localhost",
     port: int = 8123,
     user: str = "default",
     password: str = "",
@@ -561,20 +571,23 @@ def concat_l1_files(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Batch export ClickHouse market data for alpha research + MM backtesting."
     )
     parser.add_argument(
-        "--symbols", required=True,
+        "--symbols",
+        required=True,
         help="Comma-separated symbols (e.g., TXFC6,TXFB6,2330)",
     )
-    parser.add_argument("--host", default="100.91.176.126", help="ClickHouse host")
+    parser.add_argument("--host", default="localhost", help="ClickHouse host")
     parser.add_argument("--port", type=int, default=8123, help="ClickHouse HTTP port")
     parser.add_argument("--user", default="default", help="ClickHouse user")
     parser.add_argument("--password", default="", help="ClickHouse password")
     parser.add_argument(
-        "--formats", default="l1",
+        "--formats",
+        default="l1",
         help="Comma-separated: l1 (research .npy), l2 (hftbacktest .npz)",
     )
     parser.add_argument("--out", default="research/data/raw", help="Output base directory")
@@ -582,7 +595,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--date-to", default=None, help="End date YYYY-MM-DD")
     parser.add_argument("--dry-run", action="store_true", help="List dates without exporting")
     parser.add_argument(
-        "--concat", action="store_true",
+        "--concat",
+        action="store_true",
         help="After export, concatenate per-day L1 files into single .npy per symbol",
     )
     return parser.parse_args()

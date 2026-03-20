@@ -39,11 +39,11 @@ docker exec clickhouse clickhouse-client \
 
 # Apply to remote machine
 rsync -avz src/hft_platform/migrations/ \
-  charl@100.91.176.126:/home/charl/subhft/src/hft_platform/migrations/
+  ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PROJECT_PATH}/src/hft_platform/migrations/
 
-ssh charl@100.91.176.126 \
-  'cd /home/charl/subhft && docker exec clickhouse clickhouse-client \
-   < src/hft_platform/migrations/clickhouse/20260302_001_add_ttl_policies.sql'
+ssh ${REMOTE_USER}@${REMOTE_HOST} \
+  "cd ${REMOTE_PROJECT_PATH} && docker exec clickhouse clickhouse-client \
+   < src/hft_platform/migrations/clickhouse/20260302_001_add_ttl_policies.sql"
 ```
 
 ### Verify TTLs Are Active

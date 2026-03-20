@@ -117,7 +117,7 @@ python3 scripts/reliability_review_pack.py \
 
 ```bash
 python3 scripts/soak_acceptance.py daily \
-  --ssh-target charl@100.91.176.126 \
+  --ssh-target ${REMOTE_USER}@${REMOTE_HOST} \
   --project-root /home/charl/subhft \
   --prom-url http://localhost:9091 \
   --output-dir outputs/soak_reports \

@@ -49,7 +49,7 @@ src/hft_platform/monitor/
 ### 2.2 資料流
 
 ```
-ClickHouse (remote 100.91.176.126)
+ClickHouse (remote <REMOTE_HOST>)
   hft.market_data
        │
        │  HTTP 8123 (poll every 3s)
@@ -75,14 +75,14 @@ ClickHouse (remote 100.91.176.126)
 
 ```yaml
 # 方式 1: SSH tunnel (推薦，安全)
-# 先開 tunnel: ssh -L 8123:localhost:8123 charl@100.91.176.126
+# 先開 tunnel: ssh -L 8123:localhost:8123 ${REMOTE_USER}@${REMOTE_HOST}
 source:
   host: localhost
   port: 8123
 
 # 方式 2: Tailscale direct (已有 VPN)
 source:
-  host: 100.91.176.126
+  host: <REMOTE_HOST>   # Set via .env.remote.local
   port: 8123
 ```
 
@@ -159,7 +159,7 @@ alphas:
   # 加新的 alpha 只要這裡加一行，會自動從 research/alphas/ 載入
 
 source:
-  host: localhost           # SSH tunnel: ssh -L 8123:localhost:8123 charl@100.91.176.126
+  host: localhost           # SSH tunnel: ssh -L 8123:localhost:8123 ${REMOTE_USER}@${REMOTE_HOST}
   port: 8123
   database: hft
   poll_sec: 3
