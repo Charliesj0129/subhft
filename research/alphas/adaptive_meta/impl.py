@@ -13,6 +13,8 @@ _MANIFEST = AlphaManifest(
     status=AlphaStatus.DRAFT,
     tier=AlphaTier.TIER_2,
     rust_module=None,
+    roles_used=("planner", "code-reviewer"),
+    skills_used=("iterative-retrieval", "validation-gate"),
 )
 
 

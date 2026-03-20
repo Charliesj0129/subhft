@@ -67,6 +67,60 @@ jobs:
       - name: Check linting
         run: make lint
 
+      - name: HFT discipline enforcement
+        run: make discipline
+
+      - name: Detect float in financial paths
+        run: |
+          FOUND=$(grep -rnE ':\s*float\b|float\(' \
+            src/hft_platform/order/ \
+            src/hft_platform/risk/ \
+            src/hft_platform/execution/ \
+            --include='*.py' \
+            | grep -v '# noqa' \
+            | grep -v 'timestamp' \
+            | grep -v 'latency' \
+            | grep -v '_seconds' \
+            | grep -v '_ratio' \
+            | grep -v 'precision-' \
+            | grep -v '_interval' \
+            | grep -v 'interval_s' \
+            | grep -v 'concentration' \
+            | grep -v 'last_sync_ts' \
+            | grep -v 'checkpoint' || true)
+          if [ -n "$FOUND" ]; then
+            echo "::error::float usage detected in financial code paths:"
+            echo "$FOUND"
+            echo "Use Decimal or scaled int for prices/balances (see CLAUDE.md Precision Law)."
+            exit 1
+          fi
+
+      - name: Detect print() in production code
+        run: |
+          FOUND=$(grep -rnE '^\s*print\(' src/hft_platform/ --include='*.py' \
+            | grep -v '__main__' \
+            | grep -v 'cli/' \
+            | grep -v 'cli.py' \
+            | grep -v '# noqa' \
+            | grep -v 'testing/' \
+            | grep -v 'config/wizard' \
+            | grep -v 'alpha/latency_audit' \
+            | grep -v 'alpha/paper_trade' \
+            | grep -v '/scripts/' \
+            | grep -v 'ipc/' || true)
+          if [ -n "$FOUND" ]; then
+            echo "::error::print() detected in production code (use structlog):"
+            echo "$FOUND"
+            exit 1
+          fi
+
+      - name: Detect worktree artifacts
+        run: |
+          if find .claude/worktrees/ -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1 | grep -q .; then
+            echo "::error::Worktree directories found in .claude/worktrees/ — clean up before merge"
+            exit 1
+          fi
+
       - name: Architecture conformance gate
         run: make arch-gate
 

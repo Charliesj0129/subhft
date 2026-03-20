@@ -132,7 +132,7 @@ class ReconciliationService:
         self._metrics().reconciliation_consecutive_failures.set(self._consecutive_failures)
 
     def _update_last_success_ts(self) -> None:
-        self._metrics().reconciliation_last_success_ts.set(time.time())
+        self._metrics().reconciliation_last_success_ts.set(timebase.now_ns() / 1e9)
 
     # ------------------------------------------------------------------
     # Main loop

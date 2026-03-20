@@ -39,6 +39,7 @@ class PaperTradeRunnerConfig:
     regime_hint: str | None = None
     project_root: str = "."
     experiments_dir: str = "research/experiments"
+    notes: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +52,7 @@ class PaperTradeSummary:
     """Aggregated statistics computed from all sessions in a campaign."""
 
     alpha_id: str
+    campaign_id: str
     sessions: tuple[PaperTradeSession, ...]
     session_count: int
     calendar_span_days: int
@@ -68,14 +70,18 @@ class PaperTradeSummary:
         return {
             "alpha_id": self.alpha_id,
             "campaign_id": self.campaign_id,
+            "sessions": [s.to_dict() for s in self.sessions],
             "session_count": self.session_count,
             "calendar_span_days": self.calendar_span_days,
             "distinct_trading_days": self.distinct_trading_days,
             "min_session_duration_seconds": self.min_session_duration_seconds,
+            "invalid_session_duration_count": self.invalid_session_duration_count,
             "drift_alerts_total": self.drift_alerts_total,
             "execution_reject_rate_mean": self.execution_reject_rate_mean,
-            "pnl_bps_mean": self.pnl_bps_mean,
-            "sessions": [s.to_dict() for s in self.sessions],
+            "execution_reject_rate_p95": self.execution_reject_rate_p95,
+            "total_fills": self.total_fills,
+            "mean_pnl_bps": self.mean_pnl_bps,
+            "notes": self.notes,
         }
 
 
@@ -230,7 +236,7 @@ class PaperTradeRunner:
         log.info(
             "paper_trade_runner.run_campaign.complete",
             session_count=summary.session_count,
-            pnl_bps_mean=summary.pnl_bps_mean,
+            pnl_bps_mean=summary.mean_pnl_bps,
             drift_alerts_total=summary.drift_alerts_total,
         )
         return summary
@@ -280,6 +286,7 @@ def _build_summary(
     if not sessions:
         return PaperTradeSummary(
             alpha_id=alpha_id,
+            campaign_id=campaign_id,
             sessions=(),
             session_count=0,
             calendar_span_days=0,
@@ -326,6 +333,7 @@ def _build_summary(
     return PaperTradeSummary(
         alpha_id=alpha_id,
         campaign_id=campaign_id,
+        sessions=tuple(sessions),
         session_count=len(sessions),
         calendar_span_days=span_days,
         distinct_trading_days=distinct_days,
@@ -336,7 +344,7 @@ def _build_summary(
         execution_reject_rate_p95=reject_p95,
         total_fills=total_fills,
         mean_pnl_bps=mean_pnl,
-        notes=config.notes,
+        notes=config.notes if config else "",
     )
 
 

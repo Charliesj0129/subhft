@@ -141,6 +141,17 @@ def _is_allowlisted(source_lines: list[str], node: ast.FunctionDef) -> bool:
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--max-advisory",
+        type=int,
+        default=0,
+        help="Fail if advisory zero-assertion count exceeds this threshold (0=no limit)",
+    )
+    args = parser.parse_args()
+
     tests_dir = Path("tests")
     if not tests_dir.is_dir():
         print("tests/ directory not found")
@@ -150,6 +161,9 @@ def main() -> int:
     no_assert: list[str] = []
 
     for py_file in sorted(tests_dir.rglob("*.py")):
+        # Skip worktree artifacts
+        if ".claude/worktrees/" in str(py_file):
+            continue
         try:
             source = py_file.read_text(encoding="utf-8")
             tree = ast.parse(source)
@@ -180,7 +194,13 @@ def main() -> int:
     print(f"\nFound {total} tests, {len(no_assert)} without assertions "
           f"({len(critical)} critical, {len(advisory)} advisory)")
 
-    return 1 if critical else 0
+    if critical:
+        return 1
+    if args.max_advisory > 0 and len(advisory) > args.max_advisory:
+        print(f"\n::error::Advisory zero-assertion count ({len(advisory)}) exceeds "
+              f"threshold ({args.max_advisory}). Fix or allowlist with '# noqa: no-assert'.")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
