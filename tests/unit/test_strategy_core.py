@@ -104,7 +104,8 @@ def test_base_strategy_other_events():
         ingest_ts_ns=0,
         match_ts_ns=0,
     )
-    strat.handle_event(ctx, fill)
+    result_fill = strat.handle_event(ctx, fill)
+    assert isinstance(result_fill, list)
 
     # Order
     order = OrderEvent(
@@ -120,7 +121,8 @@ def test_base_strategy_other_events():
         ingest_ts_ns=0,
         broker_ts_ns=0,
     )
-    strat.handle_event(ctx, order)
+    result_order = strat.handle_event(ctx, order)
+    assert isinstance(result_order, list)
 
     # LOBStats - backward-compatible interface auto-computes mid_price/spread
     stats = LOBStatsEvent(
@@ -132,11 +134,13 @@ def test_base_strategy_other_events():
         bid_depth=10,
         ask_depth=10,
     )
-    strat.handle_event(ctx, stats)
+    result_stats = strat.handle_event(ctx, stats)
+    assert isinstance(result_stats, list)
 
     # BidAsk
     ba = BidAskEvent(meta=meta, symbol="AAPL", bids=[], asks=[], is_snapshot=False)
-    strat.handle_event(ctx, ba)
+    result_ba = strat.handle_event(ctx, ba)
+    assert isinstance(result_ba, list)
 
 
 def test_base_strategy_feature_event_dispatch():
@@ -278,8 +282,10 @@ def test_runner_error_handling():
         with patch.dict(os.environ, {"HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST": "0"}):
             runner = StrategyRunner(bus, risk_queue, config_path="dummy")
 
-        # Should not raise
+        # Should not raise — error is caught internally
         asyncio.run(runner.process_event(MagicMock()))
+        # Risk queue should remain empty since strategy raised or was skipped
+        assert risk_queue.empty()
 
 
 def test_helpers_without_context():

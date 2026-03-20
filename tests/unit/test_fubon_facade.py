@@ -253,10 +253,12 @@ class TestStubMode:
     def test_stub_close_no_error(self, facade: FubonClientFacade) -> None:
         """close() should not raise even in stub mode."""
         facade.close(logout=False)
+        assert facade.logged_in is False
 
     def test_stub_shutdown_no_error(self, facade: FubonClientFacade) -> None:
         """shutdown() should not raise even in stub mode."""
         facade.shutdown(logout=False)
+        assert facade.logged_in is False
 
     def test_stub_fetch_snapshots_empty(self, facade: FubonClientFacade) -> None:
         assert facade.fetch_snapshots() == []

@@ -46,7 +46,8 @@ class TestAuditDisabledByDefault:
 
             mod._ENABLED = None
             # Should not raise, should not call clickhouse
-            log_gate_result("alpha1", "run1", _make_gate_report(), "hash123")
+            result = log_gate_result("alpha1", "run1", _make_gate_report(), "hash123")
+            assert result is None
 
     def test_log_promotion_result_noop_when_disabled(self):
         from hft_platform.alpha.audit import log_promotion_result
@@ -55,7 +56,8 @@ class TestAuditDisabledByDefault:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            log_promotion_result(_make_promotion_result(), "hash123", {"sharpe_oos": 1.5})
+            result = log_promotion_result(_make_promotion_result(), "hash123", {"sharpe_oos": 1.5})
+            assert result is None
 
     def test_log_canary_action_noop_when_disabled(self):
         from hft_platform.alpha.audit import log_canary_action
@@ -64,7 +66,8 @@ class TestAuditDisabledByDefault:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            log_canary_action("alpha1", "rollback", 0.05, 0.0, "test", {})
+            result = log_canary_action("alpha1", "rollback", 0.05, 0.0, "test", {})
+            assert result is None
 
 
 class TestAuditEnabled:
@@ -150,8 +153,9 @@ class TestAuditEnabled:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            # Should not raise
-            log_gate_result("alpha1", "run1", _make_gate_report(), "hash")
+            # Should not raise — fails silently on connection error
+            result = log_gate_result("alpha1", "run1", _make_gate_report(), "hash")
+            assert result is None
 
     @patch("hft_platform.alpha.audit._get_client")
     def test_log_promotion_result_fails_silently(self, mock_get_client):
@@ -163,5 +167,6 @@ class TestAuditEnabled:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            # Should not raise
-            log_promotion_result(_make_promotion_result(), "hash")
+            # Should not raise — fails silently on connection error
+            result = log_promotion_result(_make_promotion_result(), "hash")
+            assert result is None

@@ -67,7 +67,9 @@ class TestSanitizeMetricLabel:
 class TestRecordApiLatency:
     def test_no_metrics_noop(self) -> None:
         # Should not raise
-        record_api_latency(None, {}, "login", time.perf_counter_ns())
+        last_map: dict[str, float] = {}
+        record_api_latency(None, last_map, "login", time.perf_counter_ns())
+        assert len(last_map) == 0  # no metrics object means no state change
 
     def test_records_latency_ok(self) -> None:
         hist = MagicMock()
@@ -132,7 +134,8 @@ class TestRecordApiLatency:
 
 class TestRecordCrashSignature:
     def test_no_metrics_noop(self) -> None:
-        record_crash_signature(None, "some error", context="test")
+        result = record_crash_signature(None, "some error", context="test")
+        assert result is None
 
     def test_no_match_noop(self) -> None:
         counter = MagicMock()
@@ -199,7 +202,8 @@ class TestSafeCallWithTimeout:
 
 class TestSetThreadAliveMetric:
     def test_no_metrics_noop(self) -> None:
-        set_thread_alive_metric(None, "test", True)
+        result = set_thread_alive_metric(None, "test", True)
+        assert result is None
 
     def test_sets_gauge(self) -> None:
         gauge = MagicMock()
@@ -270,7 +274,8 @@ class TestSessionLock:
         release_session_lock(fd, None)
 
     def test_release_none_noop(self) -> None:
-        release_session_lock(None, None)  # Should not raise
+        result = release_session_lock(None, None)  # Should not raise
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
