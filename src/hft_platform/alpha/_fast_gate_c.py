@@ -67,9 +67,7 @@ def run_fast_gate_c(
     tracker = ExperimentTracker(base_dir=experiments_base)
     latest_pool_signals = tracker.latest_signals_by_alpha()
     pool_signals: dict[str, Sequence[float]] = {
-        k: tuple(float(x) for x in v.tolist())
-        for k, v in latest_pool_signals.items()
-        if k != alpha.manifest.alpha_id
+        k: tuple(float(x) for x in v.tolist()) for k, v in latest_pool_signals.items() if k != alpha.manifest.alpha_id
     }
 
     scorecard = compute_scorecard(
