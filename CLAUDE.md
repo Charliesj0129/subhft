@@ -188,6 +188,15 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_MONITOR_REDIS_PORT`   | `6379`      | Redis port for monitor live cache         |
 | `HFT_MONITOR_REDIS_PASSWORD`| —          | Redis password for monitor live cache     |
 | `HFT_MONITOR_DATA_SOURCE`  | `auto`      | Data source layer: `ch`/`shm`/`auto`     |
+| `HFT_RECONNECT_HOURS`     | `""`        | Scheduled reconnect window 1 (e.g. `08:30-09:00`) |
+| `HFT_RECONNECT_HOURS_2`   | `""`        | Scheduled reconnect window 2 (e.g. `12:30-13:00`) |
+| `HFT_RECONNECT_COOLDOWN`  | `30`        | Min seconds between reconnect attempts    |
+| `HFT_RECONNECT_BACKOFF_S` | `30.0`      | Initial reconnect backoff (doubles on failure) |
+| `HFT_RECONNECT_BACKOFF_MAX_S` | `600.0` | Max reconnect backoff cap (seconds)       |
+| `HFT_QUOTE_FLAP_THRESHOLD`| `5`         | Reconnect count within window to trigger flap protection |
+| `HFT_QUOTE_FLAP_WINDOW_S` | `60.0`      | Time window for counting reconnect attempts (seconds) |
+| `HFT_QUOTE_FLAP_COOLDOWN_S`| `300.0`    | Cooldown after flap detection triggers force relogin |
+| `HFT_STORMGUARD_FEED_GAP_HALT_S` | `1.0` | Feed gap threshold for StormGuard STORM escalation |
 
 ## 🎨 Coding Style (Strict)
 
