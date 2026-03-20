@@ -79,9 +79,7 @@ class MarketDataObservabilityMixin:
             if callable(process_lob_update):
                 feature_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
             else:
-                feature_update = feature_engine.process_lob_stats(
-                    cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns
-                )
+                feature_update = feature_engine.process_lob_stats(cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns)
             self._maybe_run_feature_shadow_parity(event, stats, local_ts_ns, feature_update)
             self._record_feature_metrics(event, feature_update, start_ns)
             return feature_update
@@ -191,18 +189,14 @@ class MarketDataObservabilityMixin:
         if not enabled:
             return
         try:
-            primary_backend = (
-                feature_engine.kernel_backend() if hasattr(feature_engine, "kernel_backend") else "python"
-            )
+            primary_backend = feature_engine.kernel_backend() if hasattr(feature_engine, "kernel_backend") else "python"
         except Exception:
             primary_backend = "python"
         requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
         shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
         try:
             shadow = FeatureEngine(
-                feature_set_id=(
-                    feature_engine.feature_set_id() if hasattr(feature_engine, "feature_set_id") else None
-                ),
+                feature_set_id=(feature_engine.feature_set_id() if hasattr(feature_engine, "feature_set_id") else None),
                 emit_events=True,
                 kernel_backend=shadow_backend,
             )
@@ -252,9 +246,7 @@ class MarketDataObservabilityMixin:
         else:
             feature_engine: FeatureEngine | None = getattr(self, "feature_engine", None)
             try:
-                view = (
-                    feature_engine.get_feature_view(getattr(event, "symbol", "")) if feature_engine else None
-                )
+                view = feature_engine.get_feature_view(getattr(event, "symbol", "")) if feature_engine else None
             except Exception:
                 view = None
             if isinstance(view, dict):

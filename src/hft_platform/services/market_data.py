@@ -88,9 +88,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self.reconnect_timeout_s = float(os.getenv("HFT_MD_RECONNECT_TIMEOUT_S", "30"))
         self._heartbeat_gap_metric_cooldown_s = float(os.getenv("HFT_MD_GAP_METRIC_COOLDOWN_S", "30"))
         self._last_heartbeat_gap_metric_ts = 0.0
-        self.reconnect_days = {
-            d.strip().lower() for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",") if d.strip()
-        }
+        self.reconnect_days = {d.strip().lower() for d in os.getenv("HFT_RECONNECT_DAYS", "").split(",") if d.strip()}
         self.reconnect_hours = os.getenv("HFT_RECONNECT_HOURS", "")
         self.reconnect_hours_2 = os.getenv("HFT_RECONNECT_HOURS_2", "")
         self.reconnect_tz = os.getenv("HFT_RECONNECT_TZ") or timebase.TZ_NAME or "Asia/Taipei"
@@ -159,9 +157,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
         self._symbol_gap_min_stale_count = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_STALE_COUNT", "5")))
         self._symbol_gap_min_active_symbols = max(1, int(os.getenv("HFT_SYMBOL_GAP_MIN_ACTIVE_SYMBOLS", "24")))
-        self._symbol_gap_active_lookback_s = max(
-            0.0, float(os.getenv("HFT_SYMBOL_GAP_ACTIVE_LOOKBACK_S", "90.0"))
-        )
+        self._symbol_gap_active_lookback_s = max(0.0, float(os.getenv("HFT_SYMBOL_GAP_ACTIVE_LOOKBACK_S", "90.0")))
         self._symbol_gap_stale_ratio_threshold = min(
             1.0,
             max(0.0, float(os.getenv("HFT_SYMBOL_GAP_STALE_RATIO_THRESHOLD", "0.85"))),
@@ -169,9 +165,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._symbol_gap_severe_gap_s = max(0.0, float(os.getenv("HFT_SYMBOL_GAP_SEVERE_GAP_S", "30.0")))
         self._symbol_gap_consecutive_cycles = max(1, int(os.getenv("HFT_SYMBOL_GAP_CONSECUTIVE_CYCLES", "5")))
         self._symbol_gap_consecutive_hits = 0
-        self._symbol_gap_resubscribe_cooldown_s = float(
-            os.getenv("HFT_SYMBOL_GAP_RESUBSCRIBE_COOLDOWN_S", "120")
-        )
+        self._symbol_gap_resubscribe_cooldown_s = float(os.getenv("HFT_SYMBOL_GAP_RESUBSCRIBE_COOLDOWN_S", "120"))
         self._last_symbol_gap_resubscribe_ts = 0.0
         self._symbol_gap_metric_cooldown_s = float(os.getenv("HFT_SYMBOL_GAP_METRIC_COOLDOWN_S", "30"))
         self._last_symbol_gap_metric_ts = 0.0
@@ -181,9 +175,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             "no",
             "off",
         }
-        self._symbol_gap_off_hours_log_interval_s = float(
-            os.getenv("HFT_SYMBOL_GAP_OFF_HOURS_LOG_INTERVAL_S", "300")
-        )
+        self._symbol_gap_off_hours_log_interval_s = float(os.getenv("HFT_SYMBOL_GAP_OFF_HOURS_LOG_INTERVAL_S", "300"))
         self._last_symbol_gap_off_hours_log_ts = 0.0
         self._symbol_tick_inline = os.getenv("HFT_SYMBOL_TICK_INLINE", "1").lower() not in {
             "0",
@@ -214,18 +206,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         feature_latency_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         self._md_metrics_sample_every = env_int("HFT_MD_METRICS_SAMPLE_EVERY", md_metrics_default)
         self._md_latency_sample_every = env_int("HFT_MD_LATENCY_SAMPLE_EVERY", md_latency_default)
-        self._md_callback_parse_metrics_every = env_int(
-            "HFT_MD_CALLBACK_PARSE_METRICS_EVERY", cb_parse_metrics_default
-        )
-        self._feature_metrics_sample_every = env_int(
-            "HFT_FEATURE_METRICS_SAMPLE_EVERY", feature_metrics_default
-        )
-        self._feature_latency_sample_every = env_int(
-            "HFT_FEATURE_LATENCY_SAMPLE_EVERY", feature_latency_default
-        )
-        self._feature_shadow_sample_every = env_int(
-            "HFT_FEATURE_SHADOW_SAMPLE_EVERY", 64 if policy != "debug" else 1
-        )
+        self._md_callback_parse_metrics_every = env_int("HFT_MD_CALLBACK_PARSE_METRICS_EVERY", cb_parse_metrics_default)
+        self._feature_metrics_sample_every = env_int("HFT_FEATURE_METRICS_SAMPLE_EVERY", feature_metrics_default)
+        self._feature_latency_sample_every = env_int("HFT_FEATURE_LATENCY_SAMPLE_EVERY", feature_latency_default)
+        self._feature_shadow_sample_every = env_int("HFT_FEATURE_SHADOW_SAMPLE_EVERY", 64 if policy != "debug" else 1)
         self._feature_shadow_warn_every = env_int("HFT_FEATURE_SHADOW_WARN_EVERY", 100)
         self._feature_shadow_abs_tolerance = float(os.getenv("HFT_FEATURE_SHADOW_ABS_TOL", "0"))
         self._md_metrics_counter = 0
@@ -292,9 +276,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                         raw_type = type(raw).__name__
                         if isinstance(raw, dict):
                             sample: Any = {
-                                k: raw.get(k)
-                                for k in ("code", "close", "bid_price", "ask_price", "ts")
-                                if k in raw
+                                k: raw.get(k) for k in ("code", "close", "bid_price", "ask_price", "ts") if k in raw
                             }
                         else:
                             sample = getattr(raw, "code", None) or raw_type
@@ -381,9 +363,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 trace_id,
                 {
                     "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
-                    "feature_set_id": getattr(
-                        feature_update, "feature_set_id", self._feature_set_id_cached
-                    ),
+                    "feature_set_id": getattr(feature_update, "feature_set_id", self._feature_set_id_cached),
                     "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
                     "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
                 },
