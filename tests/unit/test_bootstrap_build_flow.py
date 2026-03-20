@@ -206,9 +206,7 @@ class TestBrokerInjection:
     """Verify broker client selection based on HFT_BROKER env var."""
 
     @pytest.mark.usefixtures("_mock_services")
-    def test_shioaji_broker_creates_shioaji_facade(
-        self, monkeypatch: pytest.MonkeyPatch, _mock_services: dict
-    ) -> None:
+    def test_shioaji_broker_creates_shioaji_facade(self, monkeypatch: pytest.MonkeyPatch, _mock_services: dict) -> None:
         monkeypatch.setenv("HFT_MODE", "sim")
         monkeypatch.setenv("HFT_BROKER", "shioaji")
         monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "0")
@@ -219,9 +217,7 @@ class TestBrokerInjection:
         assert registry.broker_id == "shioaji"
 
     @pytest.mark.usefixtures("_mock_services")
-    def test_fubon_broker_creates_fubon_facade(
-        self, monkeypatch: pytest.MonkeyPatch, _mock_services: dict
-    ) -> None:
+    def test_fubon_broker_creates_fubon_facade(self, monkeypatch: pytest.MonkeyPatch, _mock_services: dict) -> None:
         monkeypatch.setenv("HFT_MODE", "sim")
         monkeypatch.setenv("HFT_BROKER", "fubon")
         monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "0")

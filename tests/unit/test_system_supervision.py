@@ -124,7 +124,9 @@ class TestSupervisionCrashDetection:
             async def _crash():
                 raise RuntimeError("service exploded")
 
-            task = loop.run_until_complete(asyncio.ensure_future(_crash(), loop=loop) if False else _run_failing_task(loop))
+            task = loop.run_until_complete(
+                asyncio.ensure_future(_crash(), loop=loop) if False else _run_failing_task(loop)
+            )
         finally:
             loop.close()
 
