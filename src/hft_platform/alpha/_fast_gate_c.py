@@ -9,7 +9,7 @@ before investing in full promotion-tier Gate C.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import structlog
 
@@ -65,8 +65,12 @@ def run_fast_gate_c(
     result = runner.run()
 
     tracker = ExperimentTracker(base_dir=experiments_base)
-    pool_signals = tracker.latest_signals_by_alpha()
-    pool_signals = {k: v for k, v in pool_signals.items() if k != alpha.manifest.alpha_id}
+    latest_pool_signals = tracker.latest_signals_by_alpha()
+    pool_signals: dict[str, Sequence[float]] = {
+        k: tuple(float(x) for x in v.tolist())
+        for k, v in latest_pool_signals.items()
+        if k != alpha.manifest.alpha_id
+    }
 
     scorecard = compute_scorecard(
         {
@@ -84,8 +88,33 @@ def run_fast_gate_c(
         pool_signals=pool_signals,
     )
 
-    run_id = tracker.record_run(alpha.manifest.alpha_id, scorecard)
-    scorecard_path = str(tracker.scorecard_path(run_id))
+    run_id = str(result.run_id)
+    scorecard_path = experiments_base / "runs" / run_id / "scorecard.json"
+    meta_path = tracker.log_run(
+        run_id=run_id,
+        alpha_id=str(alpha.manifest.alpha_id),
+        config_hash=str(result.config_hash),
+        data_paths=[str(p) for p in resolved_data_paths],
+        metrics={
+            "sharpe_is": float(result.sharpe_is),
+            "sharpe_oos": float(result.sharpe_oos),
+            "ic_mean": float(result.ic_mean),
+            "ic_std": float(result.ic_std),
+            "turnover": float(result.turnover),
+            "max_drawdown": float(result.max_drawdown),
+            "capacity_estimate": float(result.capacity_estimate),
+        },
+        gate_status={"gate_c_discovery": bool(float(result.sharpe_oos) >= float(config.min_sharpe_oos))},
+        scorecard_payload=scorecard.to_dict(),
+        backtest_report_payload={
+            "run_id": run_id,
+            "config_hash": str(result.config_hash),
+            "alpha_id": str(alpha.manifest.alpha_id),
+            "tier": "discovery",
+        },
+        signals=result.signals,
+        equity=result.equity_curve,
+    )
 
     passed = float(result.sharpe_oos) >= float(config.min_sharpe_oos)
     details: dict[str, Any] = {
@@ -104,4 +133,4 @@ def run_fast_gate_c(
     )
 
     report = GateReport(gate="C_discovery", passed=passed, details=details)
-    return report, scorecard_path, run_id, "", ""
+    return report, str(scorecard_path), run_id, str(result.config_hash), str(meta_path)

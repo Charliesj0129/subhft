@@ -186,6 +186,7 @@ def _audit_scorecard(
     if not has_profile:
         issues.append("latency_profile is missing — must record P95 broker RTT assumptions before promotion")
     else:
+        assert isinstance(latency_profile, dict)
         profile_valid, profile_issues = _validate_profile(latency_profile, reference_profiles)
         issues.extend(profile_issues)
 

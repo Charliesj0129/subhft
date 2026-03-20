@@ -55,7 +55,7 @@ arch-gate: ## Run architecture conformance gate
 	$(PY) scripts/arch_conformance_gate.py
 
 test-assertion-check: ## Check test functions have assertions
-	$(PY) scripts/check_test_assertions.py
+	$(PY) scripts/check_test_assertions.py --max-advisory 40
 
 test-collection-check: ## Verify zero test collection errors
 	$(PY) scripts/check_test_collection.py
