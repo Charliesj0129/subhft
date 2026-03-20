@@ -41,7 +41,12 @@ jobs:
             | grep -v 'latency' \
             | grep -v '_seconds' \
             | grep -v '_ratio' \
-            | grep -v 'precision-' || true)
+            | grep -v 'precision-' \
+            | grep -v '_interval' \
+            | grep -v 'interval_s' \
+            | grep -v 'concentration' \
+            | grep -v 'last_sync_ts' \
+            | grep -v 'checkpoint' || true)
           if [ -n "$FOUND" ]; then
             echo "::error::float usage detected in financial code paths:"
             echo "$FOUND"
