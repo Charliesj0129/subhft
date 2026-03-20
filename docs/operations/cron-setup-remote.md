@@ -2,7 +2,7 @@
 
 ## Context
 
-The remote receiver machine (`charl@subhft`, 100.91.176.126) runs 24/7 without automated disk
+The remote receiver machine (`<REMOTE_USER>@<REMOTE_HOST>`) runs 24/7 without automated disk
 maintenance. The 2026-03-02 disk crisis demonstrated that without periodic cleanup, a single
 runaway log table can fill a 216 GB drive in days.
 
