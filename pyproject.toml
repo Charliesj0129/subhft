@@ -85,6 +85,7 @@ markers = [
     "system: docker-compose backed system tests",
     "acceptance: end-to-end acceptance tests",
     "integration: integration tests",
+    "chaos: chaos and fault injection tests",
     "load: load and throughput tests (WU-12)",
     "bench: latency regression benchmarks (WU-19)",
 ]
@@ -98,9 +99,7 @@ omit = [
     "src/hft_platform/config/symbols.py",
     "src/hft_platform/feed_adapter/shioaji_client.py",
     "src/hft_platform/feed_adapter/shioaji/*",
-    "src/hft_platform/feed_adapter/normalizer.py",
     "src/hft_platform/recorder/loader.py",
-    "src/hft_platform/recorder/writer.py",
 ]
 
 [tool.coverage.report]
@@ -222,6 +221,11 @@ files = [
 namespace_packages = true
 explicit_package_bases = true
 mypy_path = ["src"]
+
+# Strict type checking for financial-critical paths
+[[tool.mypy.overrides]]
+module = ["hft_platform.risk.*", "hft_platform.order.*", "hft_platform.execution.*", "hft_platform.contracts.*"]
+disallow_untyped_defs = true
 
 [tool.uv]
 # Broker SDKs are mutually exclusive extras.
