@@ -114,6 +114,15 @@ jobs:
             exit 1
           fi
 
+      - name: Detect conflict markers (AWG-03)
+        run: |
+          CONFLICTS=$(grep -rn '<<<<<<< \|=======$\|>>>>>>> ' src/ tests/ docs/ --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' --include='*.toml' || true)
+          if [ -n "$CONFLICTS" ]; then
+            echo "::error::Conflict markers found in tracked files — resolve before merge:"
+            echo "$CONFLICTS"
+            exit 1
+          fi
+
       - name: Detect worktree artifacts
         run: |
           if find .claude/worktrees/ -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1 | grep -q .; then

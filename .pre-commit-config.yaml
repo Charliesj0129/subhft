@@ -19,3 +19,9 @@ repos:
         language: system
         types: [python]
         pass_filenames: true
+      - id: conflict-markers
+        name: Detect conflict markers (AWG-03)
+        entry: bash -c 'grep -rn "<<<<<<< \|=======\|>>>>>>> " "$@" && echo "BLOCKED: conflict markers found" && exit 1 || exit 0'
+        language: system
+        types_or: [python, markdown, yaml]
+        pass_filenames: true
