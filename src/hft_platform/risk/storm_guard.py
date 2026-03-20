@@ -162,7 +162,7 @@ class StormGuard:
 
         return self.state
 
-    def transition(self, new_state: StormGuardState, reason: str):
+    def transition(self, new_state: StormGuardState, reason: str) -> None:
         old_state = self.state
         self.state = new_state
         self.last_state_change = timebase.now_s()
@@ -204,7 +204,7 @@ class StormGuard:
                     error_type=type(exc).__name__,
                 )
 
-    def trigger_halt(self, reason: str):
+    def trigger_halt(self, reason: str) -> None:
         """Manual or Supervisor override to force HALT."""
         self.transition(StormGuardState.HALT, reason)
 

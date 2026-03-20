@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import os
 import threading
 import time
@@ -28,21 +29,18 @@ logger = get_logger("risk_engine")
 _RustRiskValidator = None
 
 
-def _load_rust_risk_validator():
+def _load_rust_risk_validator() -> Any:
     global _RustRiskValidator
     if _RustRiskValidator is not None:
         return _RustRiskValidator
     try:
-        from hft_platform.rust_core import RustRiskValidator
-
-        _RustRiskValidator = RustRiskValidator
+        rust_module = importlib.import_module("hft_platform.rust_core")
     except ImportError:
         try:
-            from rust_core import RustRiskValidator
-
-            _RustRiskValidator = RustRiskValidator
+            rust_module = importlib.import_module("rust_core")
         except ImportError:
-            _RustRiskValidator = None
+            rust_module = None
+    _RustRiskValidator = getattr(rust_module, "RustRiskValidator", None) if rust_module is not None else None
     return _RustRiskValidator
 
 
@@ -53,7 +51,7 @@ def _obs_policy() -> str:
     return ""
 
 
-def _get_trace_sampler():
+def _get_trace_sampler() -> Any | None:
     try:
         from hft_platform.diagnostics.trace import get_trace_sampler
 
@@ -136,7 +134,7 @@ class RiskEngine:
         except ValueError:
             return max(1, int(default))
 
-    def _init_fast_gate(self):
+    def _init_fast_gate(self) -> Any | None:
         if not self._bool_env(os.getenv("HFT_RISK_FAST_GATE", "0"), default=False):
             return None
         try:
@@ -173,7 +171,7 @@ class RiskEngine:
             logger.warning("FastGate init failed; disabling", error=str(exc))
             return None
 
-    def _init_rust_validator(self, price_scale_provider: PriceScaleProvider | None = None):
+    def _init_rust_validator(self, price_scale_provider: PriceScaleProvider | None = None) -> Any | None:
         if not self._bool_env(os.getenv("HFT_RISK_RUST_VALIDATOR", "0"), default=False):
             return None
         cls = _load_rust_risk_validator()
@@ -212,7 +210,7 @@ class RiskEngine:
             logger.warning("RustRiskValidator init failed; disabling", error=str(exc))
             return None
 
-    def load_config(self):
+    def load_config(self) -> None:
         with open(self.config_path, "r") as f:
             self.config = yaml.safe_load(f)
 
@@ -265,7 +263,7 @@ class RiskEngine:
             v.strat_configs = new_config.get("strategies", {})
         logger.info("RiskEngine config reloaded", strategies=list(new_config.get("strategies", {}).keys()))
 
-    async def run(self):
+    async def run(self) -> None:
         self.running = True
         logger.info("RiskEngine started")
 

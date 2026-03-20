@@ -44,7 +44,7 @@ class RiskValidator:
 
 
 class PriceBandValidator(RiskValidator):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))  # precision-config
         self._tick_size_raw = float(self.defaults.get("tick_size", 0.01))  # precision-config
@@ -122,7 +122,7 @@ class PriceBandValidator(RiskValidator):
 
 
 class MaxNotionalValidator(RiskValidator):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._default_max_notional_raw = self.defaults.get("max_notional", 10_000_000)
         self._max_notional_scaled_cache: Dict[tuple[str, str], int] = {}
@@ -347,11 +347,11 @@ class StormGuardFSM:
         self._de_escalate_count: int = 0
         self._storm_entry_ts: float = 0.0  # precision-time
 
-    def update_pnl(self, pnl: int):
+    def update_pnl(self, pnl: int) -> None:
         self.pnl_drawdown = pnl
         self._transition()
 
-    def _transition(self):
+    def _transition(self) -> None:
         old_state = self.state
         # Determine target state from PnL thresholds
         if self.pnl_drawdown <= self.halt:

@@ -1,6 +1,7 @@
 import asyncio
 import inspect
-from typing import Callable, Dict, Optional, Union
+from collections.abc import Coroutine
+from typing import Any, Callable, Dict, Optional, Union
 
 from structlog import get_logger
 
@@ -13,7 +14,7 @@ from hft_platform.observability.metrics import MetricsRegistry
 logger = get_logger("execution.router")
 
 
-def _create_task_with_error_handling(coro, name: Optional[str] = None) -> asyncio.Task:
+def _create_task_with_error_handling(coro: Coroutine[Any, Any, Any], name: Optional[str] = None) -> asyncio.Task[Any]:
     """Create an asyncio task with proper exception handling to prevent silent failures.
 
     Args:
@@ -23,7 +24,7 @@ def _create_task_with_error_handling(coro, name: Optional[str] = None) -> asynci
     Returns:
         The created task with exception callback attached.
     """
-    task = asyncio.create_task(coro, name=name)
+    task: asyncio.Task[Any] = asyncio.create_task(coro, name=name)
 
     def _on_task_done(t: asyncio.Task) -> None:
         try:
@@ -68,7 +69,7 @@ class ExecutionRouter:
         self.running = False
         self.metrics = MetricsRegistry.get()
 
-    async def run(self):
+    async def run(self) -> None:
         self.running = True
         logger.info("ExecutionRouter started")
         self.metrics.execution_router_alive.set(1)
@@ -82,64 +83,69 @@ class ExecutionRouter:
                 self.metrics.execution_router_heartbeat_ts.set(timebase.now_s())
 
                 if raw.topic == "order":
-                    norm = self.normalizer.normalize_order(raw)
-                    if norm:
-                        self._publish_nowait(norm)
+                    order_event = self.normalizer.normalize_order(raw)
+                    if order_event:
+                        self._publish_nowait(order_event)
                         # OrderStatus 3=FILLED, 4=CANCELLED, 5=FAILED
-                        if int(norm.status) >= 3:
+                        if int(order_event.status) >= 3:
                             handler = self.terminal_handler
                             if callable(handler):
-                                result = handler(norm.strategy_id, norm.order_id)
+                                result = handler(order_event.strategy_id, order_event.order_id)
                                 if inspect.iscoroutine(result):
                                     _create_task_with_error_handling(
                                         result,
-                                        name=f"terminal_handler:{norm.strategy_id}:{norm.order_id}",
+                                        name=f"terminal_handler:{order_event.strategy_id}:{order_event.order_id}",
                                     )
                             elif hasattr(handler, "on_terminal_state"):
                                 method = handler.on_terminal_state
-                                result = method(norm.strategy_id, norm.order_id)
+                                result = method(order_event.strategy_id, order_event.order_id)
                                 if inspect.iscoroutine(result):
                                     _create_task_with_error_handling(
                                         result,
-                                        name=f"terminal_state:{norm.strategy_id}:{norm.order_id}",
+                                        name=f"terminal_state:{order_event.strategy_id}:{order_event.order_id}",
                                     )
 
                 elif raw.topic == "deal":
-                    norm = self.normalizer.normalize_fill(raw)
-                    if norm:
-                        if norm.strategy_id == "UNKNOWN":
+                    fill_event = self.normalizer.normalize_fill(raw)
+                    if fill_event:
+                        if fill_event.strategy_id == "UNKNOWN":
                             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
                             dlq = get_orphaned_fill_dlq()
-                            dlq.add(norm)
+                            dlq.add(fill_event)
                             self.metrics.orphaned_fill_total.inc()
-                            logger.warning("Orphaned fill routed to DLQ", symbol=norm.symbol, order_id=norm.order_id)
+                            logger.warning(
+                                "Orphaned fill routed to DLQ",
+                                symbol=fill_event.symbol,
+                                order_id=fill_event.order_id,
+                            )
                             continue
 
+                        _pre_realized = 0
                         if self._risk_engine is not None:
-                            _pos_key = f"{norm.account_id}:{norm.strategy_id}:{norm.symbol}"
+                            _pos_key = f"{fill_event.account_id}:{fill_event.strategy_id}:{fill_event.symbol}"
                             _pre_pos = self.position_store.positions.get(_pos_key)
                             if _pre_pos is not None:
                                 _pre_realized = _pre_pos.realized_pnl_scaled
 
                         if hasattr(self.position_store, "on_fill_async"):
-                            delta = await self.position_store.on_fill_async(norm)
+                            delta = await self.position_store.on_fill_async(fill_event)
                         else:
-                            delta = self.position_store.on_fill(norm)
+                            delta = self.position_store.on_fill(fill_event)
 
                         if self._risk_engine is not None:
                             pnl_delta = delta.realized_pnl - _pre_realized
                             if pnl_delta != 0:
                                 notify = getattr(self._risk_engine, "notify_fill_pnl", None)
                                 if callable(notify):
-                                    notify(norm.strategy_id, pnl_delta)
+                                    notify(fill_event.strategy_id, pnl_delta)
 
                         publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
                         if publish_many_nowait:
-                            publish_many_nowait([delta, norm])
+                            publish_many_nowait([delta, fill_event])
                         else:
                             self._publish_nowait(delta)
-                            self._publish_nowait(norm)
+                            self._publish_nowait(fill_event)
 
             except asyncio.CancelledError:
                 break
@@ -153,7 +159,7 @@ class ExecutionRouter:
                     pass  # task_done called too many times
         self.metrics.execution_router_alive.set(0)
 
-    def _publish_nowait(self, event) -> None:
+    def _publish_nowait(self, event: Any) -> None:
         publish_nowait = getattr(self.bus, "publish_nowait", None)
         if publish_nowait:
             publish_nowait(event)

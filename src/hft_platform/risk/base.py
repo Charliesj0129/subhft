@@ -9,13 +9,13 @@ class RiskManager(ABC):
         pass
 
     @abstractmethod
-    def on_fill(self, fill: Any):
+    def on_fill(self, fill: Any) -> None:
         """Update risk state on fill."""
         pass
 
 
 class StormGuard:
-    def __init__(self):
+    def __init__(self) -> None:
         self.triggered = False
 
     def check(self) -> bool:

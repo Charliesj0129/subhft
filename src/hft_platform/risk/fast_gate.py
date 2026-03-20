@@ -1,5 +1,6 @@
 from multiprocessing import shared_memory
-from typing import Optional
+from types import TracebackType
+from typing import Any, Literal, Optional
 
 import numpy as np
 from numba import njit
@@ -10,7 +11,13 @@ KILL_SWITCH_SHM_NAME = "hft_kill_switch"
 
 
 @njit
-def _check_order(price_scaled: int, qty: int, max_price_scaled: int, max_qty: int, kill_flag_ptr):
+def _check_order(
+    price_scaled: int,
+    qty: int,
+    max_price_scaled: int,
+    max_qty: int,
+    kill_flag_ptr: Any,
+) -> tuple[bool, int]:
     """
     Core Risk Check Logic (Numba Compiled).
     Uses scaled integers for price comparisons to comply with Precision Law.
@@ -141,34 +148,39 @@ class FastGate:
         ok, code = _check_order(int(price_scaled), int(qty), self.max_price_scaled, self.max_qty, self.ks_array)
         return ok, code
 
-    def set_kill_switch(self, active: bool):
+    def set_kill_switch(self, active: bool) -> None:
         if self.ks_array is None:
             raise RuntimeError("Kill switch shared memory not initialized")
         self.ks_array[0] = 1 if active else 0
 
-    def close(self):
+    def close(self) -> None:
         if self.ks_shm is not None:
             self.ks_shm.close()
             self.ks_shm = None
         self.ks_array = None
 
-    def unlink(self):
+    def unlink(self) -> None:
         if self.ks_shm is not None:
             try:
                 self.ks_shm.unlink()
             except FileNotFoundError:
                 pass
 
-    def __enter__(self):
+    def __enter__(self) -> "FastGate":
         """Context manager entry."""
         return self
 
-    def __exit__(self, _exc_type, _exc_val, _exc_tb):
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc_val: BaseException | None,
+        _exc_tb: TracebackType | None,
+    ) -> Literal[False]:
         """Context manager exit - close shared memory."""
         self.close()
         return False
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Destructor - attempt to close shared memory if not already closed."""
         try:
             self.close()
