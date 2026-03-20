@@ -73,6 +73,9 @@ jobs:
       - name: Test collection zero-error gate
         run: make test-collection-check
 
+      - name: Test assertion enforcement gate
+        run: make test-assertion-check
+
       - name: Enforce research factory contract
         run: make research-audit-strict
 

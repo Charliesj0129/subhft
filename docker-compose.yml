@@ -41,8 +41,8 @@ x-hft-common: &hft-common
     - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
     - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
-    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-1}
-    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-rust}
+    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
+    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
     - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
     - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
     - PYTHONDONTWRITEBYTECODE=1
@@ -258,7 +258,7 @@ services:
     ports:
       - "9093:9093"
     volumes:
-      - ./config/monitoring/alerts/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${HFT_ALERTMANAGER_CONFIG:-./config/monitoring/alerts/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
     deploy:
