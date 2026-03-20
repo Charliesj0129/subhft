@@ -234,6 +234,8 @@ class TestGlobalMemoryGuard:
     def test_unregister_nonexistent_table(self) -> None:
         guard = GlobalMemoryGuard(max_rows=100)
         guard.unregister("nonexistent")  # should not raise
+        assert guard.total_rows == 0
+        assert "nonexistent" not in guard._batchers
 
     def test_set_health_tracker(self) -> None:
         guard = GlobalMemoryGuard(max_rows=100)
@@ -433,6 +435,8 @@ class TestBatcher:
         b = Batcher("hft.orders", flush_limit=2, writer=writer)
         await b.add({"a": 1})
         await b.add({"a": 2})  # triggers flush; timeout should be caught
+        assert writer.write_columnar.call_count >= 1
+        assert b.total_count == 2
 
     @pytest.mark.asyncio
     async def test_write_connection_error_handled(self) -> None:
@@ -441,6 +445,8 @@ class TestBatcher:
         b = Batcher("hft.orders", flush_limit=2, writer=writer)
         await b.add({"a": 1})
         await b.add({"a": 2})  # should not raise
+        assert writer.write_columnar.call_count >= 1
+        assert b.total_count == 2
 
     @pytest.mark.asyncio
     async def test_write_generic_error_handled(self) -> None:
@@ -449,6 +455,8 @@ class TestBatcher:
         b = Batcher("hft.orders", flush_limit=2, writer=writer)
         await b.add({"a": 1})
         await b.add({"a": 2})  # should not raise
+        assert writer.write_columnar.call_count >= 1
+        assert b.total_count == 2
 
     @pytest.mark.asyncio
     async def test_columnar_disabled_uses_row_write(self) -> None:
