@@ -20,6 +20,7 @@ import pytest
 # 1. Bounded queue rejects overflow
 # ---------------------------------------------------------------------------
 
+
 class TestBoundedQueueRejectsOverflow:
     """asyncio.Queue(maxsize=N) raises QueueFull on N+1th put_nowait."""
 
@@ -44,6 +45,7 @@ class TestBoundedQueueRejectsOverflow:
 # ---------------------------------------------------------------------------
 # 2. Recorder queue drop policy
 # ---------------------------------------------------------------------------
+
 
 class TestRecorderQueueDropPolicy:
     """When recorder queue is full, the platform drops events (never blocks).
@@ -92,6 +94,7 @@ class TestRecorderQueueDropPolicy:
 # ---------------------------------------------------------------------------
 # 3. Queue depth never exceeds maxsize
 # ---------------------------------------------------------------------------
+
 
 class TestQueueDepthNeverExceedsMaxsize:
     """After N puts and M gets (M < N), depth = min(N-M, maxsize)."""
@@ -148,6 +151,7 @@ class TestQueueDepthNeverExceedsMaxsize:
 # 4. put_nowait is non-blocking
 # ---------------------------------------------------------------------------
 
+
 class TestPutNowaitIsNonblocking:
     """put_nowait returns immediately without awaiting."""
 
@@ -188,6 +192,7 @@ class TestPutNowaitIsNonblocking:
 # 5. Bounded queue FIFO order
 # ---------------------------------------------------------------------------
 
+
 class TestBoundedQueueFifoOrder:
     """Items come out in insertion order."""
 
@@ -219,6 +224,7 @@ class TestBoundedQueueFifoOrder:
 # ---------------------------------------------------------------------------
 # 6. Raw queue (market data ingestion) is always bounded
 # ---------------------------------------------------------------------------
+
 
 class TestRawQueueBounded:
     """The raw_queue used in market data ingestion must be bounded.
@@ -272,6 +278,7 @@ class TestRawQueueBounded:
 # 7. Risk queue is bounded
 # ---------------------------------------------------------------------------
 
+
 class TestRiskQueueBounded:
     """The risk/intent queue must be bounded.
 
@@ -304,8 +311,7 @@ class TestRiskQueueBounded:
         from hft_platform.services.bootstrap import BootstrapService
 
         queue_attrs = [
-            attr for attr in dir(BootstrapService)
-            if attr.startswith("DEFAULT_") and attr.endswith("_QUEUE_SIZE")
+            attr for attr in dir(BootstrapService) if attr.startswith("DEFAULT_") and attr.endswith("_QUEUE_SIZE")
         ]
         assert len(queue_attrs) >= 3, "Expected at least 3 queue size defaults"
         for attr in queue_attrs:
