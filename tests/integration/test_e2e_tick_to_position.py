@@ -12,7 +12,6 @@ from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import Side
 from hft_platform.execution.positions import Position, PositionStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
