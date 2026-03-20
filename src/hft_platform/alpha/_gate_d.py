@@ -10,6 +10,7 @@ from typing import Any
 import structlog
 import yaml
 
+from hft_platform.alpha._latency_registry import validate_latency_profile_id
 from hft_platform.alpha._promotion_helpers import _to_float
 from hft_platform.alpha._promotion_types import PromotionConfig
 
@@ -178,6 +179,16 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
     if isinstance(latency_profile, dict):
         profiles = _load_latency_profiles(config.project_root)
         checks["latency_values_realistic"] = _check_latency_values(latency_profile, profiles)
+        profile_id = latency_profile.get("latency_profile_id")
+        if profile_id is not None:
+            valid, detail = validate_latency_profile_id(str(profile_id), profiles if profiles else None)
+            checks["latency_profile_id_known"] = {
+                "value": str(profile_id),
+                "valid": valid,
+                "required": False,
+                "pass": True,
+                "detail": detail if valid else f"WARN — {detail}",
+            }
 
     # Stress test validation — warn-only, non-blocking.
     stress_test = scorecard.get("stress_test") or {}

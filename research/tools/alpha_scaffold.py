@@ -203,7 +203,7 @@ class {cls_name}:
             status=AlphaStatus.DRAFT,
             tier=AlphaTier.ENSEMBLE,
             rust_module=None,
-            latency_profile=None,
+            latency_profile="sim_p95_v2026-02-26",
             roles_used=("planner", "code-reviewer"),
             skills_used=("iterative-retrieval", "validation-gate"),
             feature_set_version="lob_shared_v1",
