@@ -31,6 +31,8 @@ VALID_SKILLS: frozenset[str] = frozenset(
     }
 )
 
+DEFAULT_LATENCY_PROFILE = "sim_p95_v2026-02-26"
+
 
 class AlphaStatus(str, Enum):
     DRAFT = "DRAFT"
@@ -66,7 +68,7 @@ class AlphaManifest:
     # Must reference a named latency profile (e.g. "shioaji_sim_p95") before Gate D.
     # Profiles are defined in docs/architecture/latency-baseline-shioaji-sim-vs-system.md.
     # None = NOT promotion-ready (blocks Gate D with a warning).
-    latency_profile: str | None = None
+    latency_profile: str | None = DEFAULT_LATENCY_PROFILE
     # Research process attribution (SOP governance).
     # roles_used: which SOP roles were applied (planner, architect, code-reviewer, refactor-cleaner).
     # skills_used: which SOP skills were applied (iterative-retrieval, validation-gate,
