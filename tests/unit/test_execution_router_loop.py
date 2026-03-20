@@ -1,0 +1,530 @@
+"""Async unit tests for ExecutionRouter."""
+
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from hft_platform.contracts.execution import OrderEvent, PositionDelta
+from hft_platform.execution.normalizer import RawExecEvent
+from hft_platform.execution.router import ExecutionRouter, _create_task_with_error_handling
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _stub_metrics() -> MagicMock:
+    m = MagicMock()
+    m.execution_router_alive = MagicMock()
+    m.execution_router_heartbeat_ts = MagicMock()
+    m.execution_router_lag_ns = MagicMock()
+    m.execution_router_errors_total = MagicMock()
+    m.execution_events_total = MagicMock()
+    m.orphaned_fill_total = MagicMock()
+    m.position_pnl_realized = MagicMock()
+    return m
+
+
+def _make_order_raw(
+    *,
+    status: str = "Filled",
+    strategy_id: str = "strat1",
+    order_id: str = "ORD001",
+    symbol: str = "2330",
+    ingest_ts_ns: int = 1_000_000_000,
+) -> RawExecEvent:
+    return RawExecEvent(
+        topic="order",
+        data={
+            "order": {"ordno": order_id, "action": "Buy", "price": 100, "quantity": 1, "custom_field": strategy_id},
+            "status": {"status": status},
+            "contract": {"code": symbol},
+        },
+        ingest_ts_ns=ingest_ts_ns,
+    )
+
+
+def _make_deal_raw(
+    *,
+    strategy_id: str = "strat1",
+    order_id: str = "ORD001",
+    symbol: str = "2330",
+    price: float = 100.0,
+    qty: int = 1,
+    ingest_ts_ns: int = 1_000_000_000,
+) -> RawExecEvent:
+    return RawExecEvent(
+        topic="deal",
+        data={
+            "ordno": order_id,
+            "code": symbol,
+            "action": "Buy",
+            "price": price,
+            "quantity": qty,
+            "seqno": "FILL001",
+            "account_id": "acct1",
+            "custom_field": strategy_id,
+            "ts": 1_000_000_000,
+        },
+        ingest_ts_ns=ingest_ts_ns,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _patch_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _stub_metrics()
+    monkeypatch.setattr(
+        "hft_platform.observability.metrics.MetricsRegistry.get",
+        staticmethod(lambda: stub),
+    )
+
+
+@pytest.fixture()
+def bus() -> MagicMock:
+    b = MagicMock()
+    b.publish_nowait = MagicMock()
+    b.publish_many_nowait = MagicMock()
+    return b
+
+
+@pytest.fixture()
+def position_store() -> MagicMock:
+    ps = MagicMock()
+    ps.positions = {}
+    ps.on_fill = MagicMock(
+        return_value=PositionDelta(
+            account_id="acct1",
+            strategy_id="strat1",
+            symbol="2330",
+            net_qty=1,
+            avg_price=1_000_000,
+            realized_pnl=0,
+            unrealized_pnl=0,
+            delta_source="FILL",
+        )
+    )
+    ps.on_fill_async = AsyncMock(
+        return_value=PositionDelta(
+            account_id="acct1",
+            strategy_id="strat1",
+            symbol="2330",
+            net_qty=1,
+            avg_price=1_000_000,
+            realized_pnl=0,
+            unrealized_pnl=0,
+            delta_source="FILL",
+        )
+    )
+    return ps
+
+
+@pytest.fixture()
+def router(bus: MagicMock, position_store: MagicMock) -> ExecutionRouter:
+    q: asyncio.Queue = asyncio.Queue()
+    order_id_map: dict[str, str] = {"ORD001": "strat1"}
+    handler = MagicMock()
+    r = ExecutionRouter(bus, q, order_id_map, position_store, handler)
+    return r
+
+
+# ---------------------------------------------------------------------------
+# Order event normalization + publish
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_order_event_normalized_and_published(router: ExecutionRouter, bus: MagicMock) -> None:
+    raw = _make_order_raw(status="Submitted")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    bus.publish_nowait.assert_called()
+    event = bus.publish_nowait.call_args[0][0]
+    assert isinstance(event, OrderEvent)
+
+
+# ---------------------------------------------------------------------------
+# Terminal state handlers
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_terminal_sync_handler_called(router: ExecutionRouter) -> None:
+    handler = MagicMock()
+    router.terminal_handler = handler
+
+    raw = _make_order_raw(status="Filled")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    handler.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_terminal_async_handler_called(router: ExecutionRouter) -> None:
+    handler = AsyncMock()
+    router.terminal_handler = handler
+
+    raw = _make_order_raw(status="Filled")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    # Allow spawned tasks to run
+    await asyncio.sleep(0.01)
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    handler.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_terminal_object_handler(router: ExecutionRouter) -> None:
+    class _Handler:
+        def __init__(self) -> None:
+            self.called = False
+            self.args: tuple = ()
+
+        def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
+            self.called = True
+            self.args = (strategy_id, order_id)
+
+    obj = _Handler()
+    router.terminal_handler = obj
+
+    raw = _make_order_raw(status="Cancelled")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert obj.called
+
+
+# ---------------------------------------------------------------------------
+# Fill -> position -> PnL flow
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fill_updates_position(router: ExecutionRouter, position_store: MagicMock, bus: MagicMock) -> None:
+    raw = _make_deal_raw()
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    position_store.on_fill_async.assert_awaited_once()
+    bus.publish_many_nowait.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Non-terminal order skips handler
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_non_terminal_order_skips_handler(router: ExecutionRouter) -> None:
+    handler = MagicMock()
+    router.terminal_handler = handler
+
+    raw = _make_order_raw(status="Submitted")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    handler.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Error recovery
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_error_does_not_stop_loop(router: ExecutionRouter, bus: MagicMock) -> None:
+    # First event causes normalizer to throw, second should still process
+    bad_raw = RawExecEvent(topic="order", data="NOT_A_DICT", ingest_ts_ns=1000)
+    good_raw = _make_order_raw(status="Submitted")
+
+    await router.raw_queue.put(bad_raw)
+    await router.raw_queue.put(good_raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # The good event should have been published
+    assert bus.publish_nowait.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: running flag, alive metric, heartbeat, lag metric
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_running_flag_lifecycle(router: ExecutionRouter) -> None:
+    assert router.running is False
+
+    raw = _make_order_raw(status="Submitted")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+
+    assert router.running is True
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_alive_metric_set_on_start(router: ExecutionRouter) -> None:
+    raw = _make_order_raw(status="Submitted")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    router.metrics.execution_router_alive.set.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_updated(router: ExecutionRouter) -> None:
+    raw = _make_order_raw(status="Submitted")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert router.metrics.execution_router_heartbeat_ts.set.call_count >= 2  # init + loop
+
+
+@pytest.mark.asyncio
+async def test_lag_metric_recorded(router: ExecutionRouter) -> None:
+    raw = _make_order_raw(ingest_ts_ns=1_000_000)
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    router.metrics.execution_router_lag_ns.observe.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Queue drain and cancellation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cancellation_stops_loop(router: ExecutionRouter) -> None:
+    task = asyncio.create_task(router.run())
+    await asyncio.sleep(0.01)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    # alive should be set to 0 after exit
+    router.metrics.execution_router_alive.set.assert_called_with(0)
+
+
+# ---------------------------------------------------------------------------
+# Normalizer returns None
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_normalizer_returns_none_no_publish(router: ExecutionRouter, bus: MagicMock) -> None:
+    router.normalizer.normalize_order = MagicMock(return_value=None)
+
+    raw = _make_order_raw()
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    bus.publish_nowait.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Fill with risk engine
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fill_with_risk_engine_notifies_pnl(router: ExecutionRouter, position_store: MagicMock) -> None:
+    risk_engine = MagicMock()
+    risk_engine.notify_fill_pnl = MagicMock()
+    router._risk_engine = risk_engine
+
+    # Set up pre-position with realized_pnl
+    pre_pos = SimpleNamespace(realized_pnl_scaled=100_000)
+    position_store.positions = {"acct1:strat1:2330": pre_pos}
+    position_store.on_fill_async = AsyncMock(
+        return_value=PositionDelta(
+            account_id="acct1",
+            strategy_id="strat1",
+            symbol="2330",
+            net_qty=0,
+            avg_price=0,
+            realized_pnl=150_000,
+            unrealized_pnl=0,
+            delta_source="FILL",
+        )
+    )
+
+    raw = _make_deal_raw()
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    risk_engine.notify_fill_pnl.assert_called_once_with("strat1", 50_000)
+
+
+# ---------------------------------------------------------------------------
+# Fill without risk engine
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fill_without_risk_engine(router: ExecutionRouter, bus: MagicMock) -> None:
+    router._risk_engine = None
+
+    raw = _make_deal_raw()
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    bus.publish_many_nowait.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Handler exception isolation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_handler_exception_does_not_crash(router: ExecutionRouter, bus: MagicMock) -> None:
+    handler = MagicMock(side_effect=RuntimeError("handler error"))
+    router.terminal_handler = handler
+
+    raw = _make_order_raw(status="Failed")
+    await router.raw_queue.put(raw)
+
+    task = asyncio.create_task(router.run())
+    await router.raw_queue.join()
+    router.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # The error metric should have been recorded
+    router.metrics.execution_router_errors_total.inc.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# _create_task_with_error_handling
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_task_with_error_handling_logs_exception() -> None:
+    async def fail():
+        raise ValueError("test failure")
+
+    task = _create_task_with_error_handling(fail(), name="test-fail")
+    # Let task run and fail
+    await asyncio.sleep(0.01)
+    assert task.done()
+    with pytest.raises(ValueError):
+        task.result()
+
+
+@pytest.mark.asyncio
+async def test_create_task_with_error_handling_success() -> None:
+    async def ok():
+        return 42
+
+    task = _create_task_with_error_handling(ok(), name="test-ok")
+    result = await task
+    assert result == 42
