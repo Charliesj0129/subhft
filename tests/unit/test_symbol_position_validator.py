@@ -6,9 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.execution.positions import Position, PositionStore
 from hft_platform.risk.symbol_position_validator import SymbolPositionLimitValidator
+from tests.factories.intents import make_order_intent
 
 
 def _make_intent(
@@ -18,15 +19,13 @@ def _make_intent(
     intent_type: IntentType = IntentType.NEW,
     strategy_id: str = "strat_a",
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
+    return make_order_intent(
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,
         side=side,
-        price=1000_0000,  # scaled int
+        price=1000_0000,
         qty=qty,
-        tif=TIF.LIMIT,
         timestamp_ns=0,
     )
 

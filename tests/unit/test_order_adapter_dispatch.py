@@ -10,10 +10,9 @@ from hft_platform.contracts.strategy import (
     OrderCommand,
     OrderIntent,
     Side,
-    StormGuardState,
 )
-from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
+from tests.factories.intents import make_order_command, make_order_intent
 
 
 @pytest.fixture
@@ -76,8 +75,8 @@ def _make_intent(
     qty: int = 1,
     target_order_id: str | None = None,
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=intent_id,
+    return make_order_intent(
+        intent_id,
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,
@@ -91,13 +90,7 @@ def _make_intent(
 def _make_cmd(intent: OrderIntent | None = None, **kw) -> OrderCommand:
     if intent is None:
         intent = _make_intent(**kw)
-    return OrderCommand(
-        cmd_id=1,
-        intent=intent,
-        deadline_ns=timebase.now_ns() + 10**10,
-        storm_guard_state=StormGuardState.NORMAL,
-        created_ns=0,
-    )
+    return make_order_command(intent=intent)
 
 
 def _make_adapter(tmp_config: str, client=None):

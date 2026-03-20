@@ -12,6 +12,7 @@ from hft_platform.risk.validators import (
     PriceBandValidator,
     StormGuardFSM,
 )
+from tests.factories.intents import make_order_intent
 
 _DEFAULT_CONFIG = {
     "global_defaults": {
@@ -41,8 +42,7 @@ def make_intent(
     intent_type: IntentType = IntentType.NEW,
     side: Side = Side.BUY,
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
+    return make_order_intent(
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,

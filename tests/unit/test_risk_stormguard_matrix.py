@@ -19,10 +19,10 @@ import pytest
 from hft_platform.contracts.strategy import (
     IntentType,
     OrderIntent,
-    Side,
     StormGuardState,
 )
 from hft_platform.risk.validators import StormGuardFSM
+from tests.factories.intents import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,14 +39,10 @@ _DEFAULT_CONFIG: dict = {
 
 def _make_intent(intent_type: IntentType) -> OrderIntent:
     """Create a minimal OrderIntent for testing."""
-    return OrderIntent(
-        intent_id=1,
+    return make_order_intent(
         strategy_id="test_strategy",
-        symbol="2330",
         intent_type=intent_type,
-        side=Side.BUY,
-        price=100_0000,  # scaled x10000
-        qty=1,
+        price=100_0000,
     )
 
 

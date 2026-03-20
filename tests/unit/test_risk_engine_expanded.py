@@ -13,13 +13,13 @@ import pytest
 import yaml
 
 from hft_platform.contracts.strategy import (
-    TIF,
     IntentType,
     OrderIntent,
     Side,
     StormGuardState,
 )
 from hft_platform.risk.engine import RiskEngine
+from tests.factories.intents import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -35,15 +35,13 @@ def _make_intent(
     symbol: str = "2330",
     side: Side = Side.BUY,
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
+    return make_order_intent(
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,
         side=side,
         price=price,
         qty=qty,
-        tif=TIF.LIMIT,
     )
 
 

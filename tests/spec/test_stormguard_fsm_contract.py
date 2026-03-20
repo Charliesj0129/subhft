@@ -6,6 +6,7 @@ and is_safe() semantics.
 
 from __future__ import annotations
 
+from enum import IntEnum
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -49,6 +50,38 @@ def _patch_audit() -> object:
         "hft_platform.risk.storm_guard.get_audit_writer",
         return_value=MagicMock(),
     )
+
+
+# ---------------------------------------------------------------------------
+# 0. TestInitialState
+# ---------------------------------------------------------------------------
+
+
+class TestInitialState:
+    """New StormGuard always starts in NORMAL state."""
+
+    def test_initial_state_is_normal(self) -> None:
+        guard = _make_guard()
+        assert guard.state == StormGuardState.NORMAL
+
+    def test_state_is_stormguard_state_enum(self) -> None:
+        guard = _make_guard()
+        assert isinstance(guard.state, StormGuardState)
+        assert isinstance(guard.state, IntEnum)
+
+    def test_all_states_are_valid_enum_values(self) -> None:
+        guard = _make_guard()
+        valid_states = set(StormGuardState)
+        assert guard.state in valid_states
+
+        # Verify after transitions the state remains a valid enum
+        with _patch_audit():
+            guard.update(drawdown_bps=-50)
+            assert guard.state in valid_states
+            guard.update(drawdown_bps=-100)
+            assert guard.state in valid_states
+            guard.update(drawdown_bps=-200)
+            assert guard.state in valid_states
 
 
 # ---------------------------------------------------------------------------

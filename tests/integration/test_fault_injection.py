@@ -462,8 +462,8 @@ class TestWALFaultInjection:
         try:
             data = [{"price": 100, "exch_ts": 1000}]
             result = await writer.write("test_table", data)
-            # Should handle gracefully (return False or True depending on implementation)
-            # The key assertion is no unhandled exception
+            # Should handle gracefully — result is bool (True/False)
+            assert isinstance(result, bool), f"WAL write should return bool, got {type(result)}"
         finally:
             wal_dir.chmod(0o755)
 

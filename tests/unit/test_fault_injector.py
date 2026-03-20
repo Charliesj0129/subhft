@@ -103,9 +103,16 @@ class TestBrokerError:
 class TestLatencyInjection:
     @pytest.mark.asyncio
     async def test_zero_latency_is_noop(self) -> None:
+        import time
+
         os.environ["HFT_MODE"] = "sim"
         os.environ["HFT_FAULT_LATENCY_MS"] = "0"
-        await FaultInjector().inject_latency()
+        fi = FaultInjector()
+        start = time.monotonic()
+        await fi.inject_latency()
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.05, "Zero latency injection should complete near-instantly"
+        assert fi.latency_ms == 0.0
 
     @pytest.mark.asyncio
     async def test_nonzero_latency_sleeps(self) -> None:
@@ -122,9 +129,16 @@ class TestLatencyInjection:
 class TestFeedGap:
     @pytest.mark.asyncio
     async def test_zero_gap_is_noop(self) -> None:
+        import time
+
         os.environ["HFT_MODE"] = "sim"
         os.environ["HFT_FAULT_FEED_GAP_S"] = "0"
-        await FaultInjector().inject_feed_gap()
+        fi = FaultInjector()
+        start = time.monotonic()
+        await fi.inject_feed_gap()
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.05, "Zero feed gap should complete near-instantly"
+        assert fi.feed_gap_s == 0.0
 
     @pytest.mark.asyncio
     async def test_nonzero_gap_sleeps(self) -> None:

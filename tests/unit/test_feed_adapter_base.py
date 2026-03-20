@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -227,9 +229,15 @@ class TestCooldownManager:
         from hft_platform.feed_adapter._base.subscription_manager import CooldownManager
 
         cd = CooldownManager(cooldown_s=0.05, name="test")
-        assert cd.try_acquire()
-        time.sleep(0.06)
-        assert cd.try_acquire()
+        fake_time = [100.0]
+        with patch(
+            "hft_platform.feed_adapter._base.subscription_manager.time.monotonic",
+            side_effect=lambda: fake_time[0],
+        ):
+            assert cd.try_acquire()
+            # Advance fake clock past the 50ms cooldown
+            fake_time[0] = 100.1
+            assert cd.try_acquire()
 
     def test_reset_allows_immediate_acquire(self) -> None:
         """reset should allow the next acquire to succeed immediately."""
@@ -246,11 +254,17 @@ class TestCooldownManager:
         from hft_platform.feed_adapter._base.subscription_manager import CooldownManager
 
         cd = CooldownManager(cooldown_s=0.05, name="test")
-        assert cd.is_ready  # never acquired
-        cd.try_acquire()
-        assert not cd.is_ready
-        time.sleep(0.06)
-        assert cd.is_ready
+        fake_time = [100.0]
+        with patch(
+            "hft_platform.feed_adapter._base.subscription_manager.time.monotonic",
+            side_effect=lambda: fake_time[0],
+        ):
+            assert cd.is_ready  # never acquired
+            cd.try_acquire()
+            assert not cd.is_ready
+            # Advance fake clock past the 50ms cooldown
+            fake_time[0] = 100.1
+            assert cd.is_ready
 
     def test_cooldown_s_property(self) -> None:
         """cooldown_s should return the configured duration."""
@@ -311,30 +325,32 @@ class TestBaseQuoteWatchdog:
         """on_stall should be called when no data arrives within timeout."""
         from hft_platform.feed_adapter._base.quote_runtime import BaseQuoteWatchdog
 
-        stall_detected = []
+        stall_detected = threading.Event()
+        stall_gaps: list[float] = []
 
         def on_stall(gap_s: float) -> None:
-            stall_detected.append(gap_s)
+            stall_gaps.append(gap_s)
+            stall_detected.set()
 
         wd = BaseQuoteWatchdog(
             timeout_s=0.05,
             on_stall=on_stall,
-            check_interval_s=0.03,
+            check_interval_s=0.01,
         )
         # Simulate data then stop feeding
         wd.notify_data()
         wd.start()
-        time.sleep(0.15)
+        assert stall_detected.wait(timeout=2.0), "Timed out waiting for stall detection"
         wd.stop()
 
-        assert len(stall_detected) > 0
-        assert stall_detected[0] >= 0.05
+        assert len(stall_gaps) > 0
+        assert stall_gaps[0] >= 0.05
 
     def test_no_stall_when_data_flows(self) -> None:
         """on_stall should NOT be called when data keeps arriving."""
         from hft_platform.feed_adapter._base.quote_runtime import BaseQuoteWatchdog
 
-        stall_detected = []
+        stall_detected: list[float] = []
 
         def on_stall(gap_s: float) -> None:
             stall_detected.append(gap_s)
@@ -346,9 +362,9 @@ class TestBaseQuoteWatchdog:
         )
         wd.notify_data()
         wd.start()
-        # Keep feeding data
+        # Keep feeding data — use short 1ms sleeps just to yield to watchdog thread
         for _ in range(5):
-            time.sleep(0.04)
+            time.sleep(0.004)  # 4ms between data notifications — well under 200ms timeout
             wd.notify_data()
         wd.stop()
 

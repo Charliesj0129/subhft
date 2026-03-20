@@ -1,20 +1,12 @@
 """Tests for CE2-06: GatewayPolicy FSM."""
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
 from hft_platform.gateway.policy import GatewayPolicy, GatewayPolicyMode
+from tests.factories.intents import make_order_intent
 
 
 def _make_intent(intent_type: IntentType = IntentType.NEW) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
-        strategy_id="s1",
-        symbol="TSE:2330",
-        intent_type=intent_type,
-        side=Side.BUY,
-        price=1_000_000,
-        qty=1,
-        tif=TIF.LIMIT,
-    )
+    return make_order_intent(symbol="TSE:2330", intent_type=intent_type, price=1_000_000)
 
 
 def test_policy_normal_allows_new():

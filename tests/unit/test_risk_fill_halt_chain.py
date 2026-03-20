@@ -12,10 +12,10 @@ import asyncio
 import pytest
 import yaml
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
-from hft_platform.core import timebase
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.validators import DailyLossLimitValidator
+from tests.factories.intents import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,19 +50,16 @@ def _make_intent(
     strategy_id: str = "s1",
     symbol: str = "2330",
     side: Side = Side.BUY,
-    price: int = 500_0000,  # 500 NTD in x10000
+    price: int = 500_0000,
     qty: int = 1,
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
+    return make_order_intent(
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,
         side=side,
         price=price,
         qty=qty,
-        tif=TIF.LIMIT,
-        timestamp_ns=timebase.now_ns(),
     )
 
 

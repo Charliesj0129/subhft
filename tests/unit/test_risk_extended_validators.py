@@ -11,26 +11,24 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.validators import DailyLossLimitValidator, PositionLimitValidator
+from tests.factories.intents import make_order_intent
 
 
 def _make_intent(
     qty: int = 10,
-    price: int = 1_000_000,  # 100.0000 scaled x10000
+    price: int = 1_000_000,
     strategy_id: str = "strat_a",
     symbol: str = "2330",
     intent_type: IntentType = IntentType.NEW,
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
+    return make_order_intent(
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,
-        side=Side.BUY,
         price=price,
         qty=qty,
-        tif=TIF.LIMIT,
     )
 
 

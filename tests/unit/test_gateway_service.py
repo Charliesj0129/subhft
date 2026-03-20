@@ -7,12 +7,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from hft_platform.contracts.strategy import (
-    TIF,
     IntentType,
     OrderCommand,
     OrderIntent,
     RiskDecision,
-    Side,
     StormGuardState,
 )
 from hft_platform.gateway.channel import LocalIntentChannel
@@ -20,20 +18,17 @@ from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
+from tests.factories.intents import make_order_intent
 
 
 def _make_intent(
     intent_id: int = 1, key: str = "k1", intent_type: IntentType = IntentType.NEW, symbol: str = "TSE:2330"
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=intent_id,
-        strategy_id="s1",
+    return make_order_intent(
+        intent_id,
         symbol=symbol,
         intent_type=intent_type,
-        side=Side.BUY,
         price=1_000_000,
-        qty=1,
-        tif=TIF.LIMIT,
         idempotency_key=key,
     )
 

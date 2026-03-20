@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import patch
 
 import pytest
@@ -59,12 +58,15 @@ class TestDegradedState:
     def test_recovery_after_window_expires(self) -> None:
         t = PipelineHealthTracker()
         t._window_s = 0.05  # 50ms window
-        t.record_event("drop")
-        assert t.state == PipelineState.DEGRADED
-        time.sleep(0.1)
-        # Record a benign event to trigger recompute
-        t.record_event("ch_connected")
-        assert t.state == PipelineState.HEALTHY
+        fake_time = [100.0]
+        with patch("hft_platform.recorder.health.time.monotonic", side_effect=lambda: fake_time[0]):
+            t.record_event("drop")
+            assert t.state == PipelineState.DEGRADED
+            # Advance fake clock past the 50ms window
+            fake_time[0] = 100.2
+            # Record a benign event to trigger recompute
+            t.record_event("ch_connected")
+            assert t.state == PipelineState.HEALTHY
 
 
 # ── State transitions: DATA_LOSS ─────────────────────────────────────
@@ -189,9 +191,12 @@ class TestPrune:
     def test_prune_removes_old_events(self) -> None:
         t = PipelineHealthTracker()
         t._window_s = 0.05  # 50ms
-        t.record_event("drop")
-        time.sleep(0.1)
-        t.prune()
+        fake_time = [100.0]
+        with patch("hft_platform.recorder.health.time.monotonic", side_effect=lambda: fake_time[0]):
+            t.record_event("drop")
+            # Advance fake clock past the 50ms window
+            fake_time[0] = 100.2
+            t.prune()
         assert len(t._events) == 0
 
     def test_prune_keeps_recent_events(self) -> None:
@@ -204,10 +209,13 @@ class TestPrune:
     def test_prune_partial(self) -> None:
         t = PipelineHealthTracker()
         t._window_s = 0.05
-        t.record_event("drop")
-        time.sleep(0.1)
-        t.record_event("wal_fallback")  # Recent
-        t.prune()
+        fake_time = [100.0]
+        with patch("hft_platform.recorder.health.time.monotonic", side_effect=lambda: fake_time[0]):
+            t.record_event("drop")
+            # Advance fake clock past the 50ms window
+            fake_time[0] = 100.2
+            t.record_event("wal_fallback")  # Recent
+            t.prune()
         assert len(t._events) == 1
 
 

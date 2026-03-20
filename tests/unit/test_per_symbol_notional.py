@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.validators import PerSymbolNotionalValidator
+from tests.factories.intents import make_order_intent
 
 
 def _make_intent(
@@ -13,19 +14,17 @@ def _make_intent(
     strategy_id: str = "strat_a",
     symbol: str = "2330",
     intent_type: IntentType = IntentType.NEW,
-    price: int = 5000000,  # 500.0 scaled x10000
+    price: int = 5000000,
     qty: int = 10,
     side: Side = Side.BUY,
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
+    return make_order_intent(
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,
-        side=side,
         price=price,
         qty=qty,
-        tif=TIF.LIMIT,
+        side=side,
     )
 
 

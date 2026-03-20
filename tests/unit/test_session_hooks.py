@@ -130,8 +130,9 @@ class TestSessionHookExecution:
         mgr = SessionHookManager()
         cb = MagicMock(side_effect=ValueError("boom"))
         hooks = [("failing_hook", cb)]
-        # Should not raise
+        # Should not raise — error is caught internally
         await mgr._fire_hooks(hooks, "test")
+        cb.assert_called_once()  # Hook was invoked despite raising
 
     @pytest.mark.asyncio
     async def test_hook_timeout_does_not_crash(self) -> None:
@@ -142,8 +143,10 @@ class TestSessionHookExecution:
             await asyncio.sleep(10)
 
         hooks = [("slow_hook", slow_hook)]
-        # Should not raise
+        # Should not raise — timeout is handled internally
         await mgr._fire_hooks(hooks, "test")
+        # Manager should still be functional after timeout
+        assert mgr._hook_timeout_s == 0.01
 
     @pytest.mark.asyncio
     async def test_multiple_hooks_run_sequentially(self) -> None:

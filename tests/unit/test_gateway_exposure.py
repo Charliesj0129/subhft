@@ -4,21 +4,13 @@ import threading
 
 import pytest
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+from hft_platform.contracts.strategy import IntentType, OrderIntent
 from hft_platform.gateway.exposure import ExposureKey, ExposureLimitError, ExposureLimits, ExposureStore
+from tests.factories.intents import make_order_intent
 
 
 def _make_intent(price: int = 1_000_000, qty: int = 1, intent_type: IntentType = IntentType.NEW) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
-        strategy_id="s1",
-        symbol="TSE:2330",
-        intent_type=intent_type,
-        side=Side.BUY,
-        price=price,
-        qty=qty,
-        tif=TIF.LIMIT,
-    )
+    return make_order_intent(symbol="TSE:2330", price=price, qty=qty, intent_type=intent_type)
 
 
 def _key() -> ExposureKey:
@@ -139,16 +131,7 @@ def test_exposure_deterministic_rejection_reason():
 
 
 def _make_intent_for_symbol(symbol: str) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
-        strategy_id="s1",
-        symbol=symbol,
-        intent_type=IntentType.NEW,
-        side=Side.BUY,
-        price=1_000_000,
-        qty=1,
-        tif=TIF.LIMIT,
-    )
+    return make_order_intent(symbol=symbol, price=1_000_000)
 
 
 def test_symbol_limit_evicts_zeroes_and_admits():

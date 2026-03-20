@@ -79,10 +79,12 @@ async def test_storm_guard():
     # Current implementation might just log critical error.
     # Inspecting code: recon_service usually sets storm_guard_state or calls panic.
 
-    # For now, we assert it detected mismatch
-    # In a full impl, we'd assert system.storm_guard.triggered
-
-    print("Storm Guard Test Passed (Simulated Mismatch detection).")
+    # Assert that sync_portfolio completed and the reconciler attempted to fetch positions
+    assert system.reconciler.client.get_positions.called, "Reconciler should have fetched remote positions"
+    # Assert the local position store still contains the symbol
+    assert "test:test:2330" in system.position_store.positions
+    # Assert the local position's net_qty is still 0 (local state unchanged by mismatch)
+    assert system.position_store.positions["test:test:2330"].net_qty == 0
 
 
 if __name__ == "__main__":
