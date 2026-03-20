@@ -45,6 +45,8 @@ from ._md_ingestion import (
     try_fast_extract_callback_payload,
     unwrap_md,
 )
+from ._md_observability import MarketDataObservabilityMixin
+from ._md_reconnect import MarketDataReconnectMixin
 
 logger = get_logger("service.market_data")
 
@@ -190,7 +192,7 @@ def _obs_policy() -> str:
 # FeedState imported from ._md_ingestion
 
 
-class MarketDataService:
+class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     def __init__(
         self,
         bus: RingBufferBus,
@@ -209,6 +211,7 @@ class MarketDataService:
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+        self.feature_engine: FeatureEngine | None = None
         if feature_engine is not None:
             self.feature_engine = feature_engine
         elif feature_enabled:
@@ -225,6 +228,9 @@ class MarketDataService:
             logger.debug("operation_fallback", error=str(exc))
             pass
         self._feature_shadow_engine: FeatureEngine | None = None
+        self._shm_publisher: ShmSnapshotWriter | None = None
+        self._shm_symbol_index: dict[str, int] = {}
+        self._shm_symbol_hashes: dict[str, int] = {}
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.normalizer = MarketDataNormalizer(metadata=self.symbol_metadata)
 
@@ -551,7 +557,7 @@ class MarketDataService:
 
     def _process_raw(self, raw: Any) -> None:
         """Normalize, update LOB/features, publish, and record a single raw message."""
-        event = None
+        event: TickEvent | BidAskEvent | None = None
         try:
             norm_start_ns = time.perf_counter_ns()
             if isinstance(raw, dict):
@@ -561,10 +567,13 @@ class MarketDataService:
                 is_bid = hasattr(raw, "bid_price") or hasattr(raw, "bid_volume") or hasattr(raw, "ask_price")
                 is_tick = hasattr(raw, "close") or hasattr(raw, "price")
 
+            normalized: TickEvent | BidAskEvent | tuple[Any, ...] | None = None
             if is_bid:
-                event = self.normalizer.normalize_bidask(raw)
+                normalized = self.normalizer.normalize_bidask(raw)
             elif is_tick:
-                event = self.normalizer.normalize_tick(raw)
+                normalized = self.normalizer.normalize_tick(raw)
+            if isinstance(normalized, (TickEvent, BidAskEvent)):
+                event = normalized
             norm_duration = time.perf_counter_ns() - norm_start_ns
         except Exception as ne:
             logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))
@@ -982,8 +991,8 @@ class MarketDataService:
                             )
                             self._feature_update_metric_children[key] = child
                         child.inc()
-                except Exception as exc:
-                    logger.debug("operation_fallback", error=str(exc))
+                except Exception as metric_exc:
+                    logger.debug("operation_fallback", error=str(metric_exc))
                     pass
             logger.warning("feature_engine_update_failed", reason=str(exc))
             return None
