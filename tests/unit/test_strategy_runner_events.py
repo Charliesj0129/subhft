@@ -432,13 +432,12 @@ def test_duplicate_strategy_registration():
 
 def test_extract_event_trace_from_meta():
     """_extract_event_trace with MetaData returns (local_ts, 'topic:seq')."""
+    from hft_platform.events import MetaData
+
     runner, _rq = _make_runner()
     event = make_tick_event(
         symbol="2330",
-        seq=42,
-        topic="tick",
-        source_ts=100,
-        local_ts=999,
+        meta=MetaData(seq=42, topic="tick", source_ts=100, local_ts=999),
     )
 
     source_ts_ns, trace_id = runner._extract_event_trace(event)
@@ -591,3 +590,234 @@ def test_extract_event_trace_ts_fallback():
 
     assert source_ts_ns == 5_000_000
     assert trace_id == ""
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: cross-event-type routing, isolation, and enrichment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exception_isolation_on_bidask():
+    """Exception in on_book_update does not prevent other strategies from executing."""
+    runner, _rq = _make_runner()
+    bad = ExplodingStrategy("bad", symbols=["2330"])
+    good = RecordingStrategy("good", symbols=["2330"])
+    runner.register(bad)
+    runner.register(good)
+
+    await runner.process_event(make_bidask_event(symbol="2330"))
+
+    assert len(good.events_received) == 1
+    assert good.events_received[0][0] == "bidask"
+
+
+@pytest.mark.asyncio
+async def test_exception_isolation_on_lobstats():
+    """Exception in on_stats does not prevent other strategies from executing."""
+    runner, _rq = _make_runner()
+    bad = ExplodingStrategy("bad", symbols=["2330"])
+    good = RecordingStrategy("good", symbols=["2330"])
+    runner.register(bad)
+    runner.register(good)
+
+    await runner.process_event(make_lob_stats_event(symbol="2330"))
+
+    assert len(good.events_received) == 1
+    assert good.events_received[0][0] == "lob_stats"
+
+
+@pytest.mark.asyncio
+async def test_exception_isolation_multiple_bad_strategies():
+    """Multiple bad strategies do not prevent a good strategy from executing."""
+    runner, _rq = _make_runner()
+    bad1 = ExplodingStrategy("bad1", symbols=["2330"])
+    bad2 = ExplodingStrategy("bad2", symbols=["2330"])
+    good = RecordingStrategy("good", symbols=["2330"])
+    runner.register(bad1)
+    runner.register(good)
+    runner.register(bad2)
+
+    await runner.process_event(make_tick_event(symbol="2330"))
+
+    assert len(good.events_received) == 1
+
+
+@pytest.mark.asyncio
+async def test_bidask_broadcast_to_all_subscribed():
+    """BidAskEvent is broadcast to all strategies subscribed to the symbol."""
+    runner, _rq = _make_runner()
+    a = RecordingStrategy("a", symbols=["2330"])
+    b = RecordingStrategy("b", symbols=["2330"])
+    runner.register(a)
+    runner.register(b)
+
+    await runner.process_event(make_bidask_event(symbol="2330"))
+
+    assert len(a.events_received) == 1
+    assert len(b.events_received) == 1
+    assert a.events_received[0][0] == "bidask"
+
+
+@pytest.mark.asyncio
+async def test_symbol_filtering_bidask():
+    """BidAskEvent for unsubscribed symbol is filtered out."""
+    runner, _rq = _make_runner()
+    strat = RecordingStrategy("s1", symbols=["2330"])
+    runner.register(strat)
+
+    await runner.process_event(make_bidask_event(symbol="2454"))
+
+    assert len(strat.events_received) == 0
+
+
+@pytest.mark.asyncio
+async def test_feature_update_symbol_filtering():
+    """FeatureUpdateEvent for unsubscribed symbol is filtered out."""
+    runner, _rq = _make_runner()
+    strat = RecordingStrategy("s1", symbols=["2454"])
+    runner.register(strat)
+
+    event = FeatureUpdateEvent(
+        symbol="2330",
+        ts=1_000_000,
+        local_ts=1_000_001,
+        seq=1,
+        feature_set_id="default",
+        schema_version=1,
+        changed_mask=0xFF,
+        warmup_ready_mask=0xFF,
+        quality_flags=0,
+        feature_ids=("ofi_l1",),
+        values=(42,),
+    )
+    await runner.process_event(event)
+
+    assert len(strat.events_received) == 0
+
+
+@pytest.mark.asyncio
+async def test_process_event_with_no_strategies():
+    """process_event with no strategies registered should not crash."""
+    runner, _rq = _make_runner()
+    assert len(runner.strategies) == 0
+
+    await runner.process_event(make_tick_event(symbol="2330"))
+    await runner.process_event(make_bidask_event(symbol="2330"))
+    await runner.process_event(make_lob_stats_event(symbol="2330"))
+
+
+@pytest.mark.asyncio
+async def test_multiple_event_types_interleaved():
+    """Process a sequence of different event types without issues."""
+    runner, _rq = _make_runner()
+    strat = RecordingStrategy("s1", symbols=["2330"])
+    runner.register(strat)
+
+    await runner.process_event(make_tick_event(symbol="2330"))
+    await runner.process_event(make_bidask_event(symbol="2330"))
+    await runner.process_event(make_lob_stats_event(symbol="2330"))
+    await runner.process_event(make_tick_event(symbol="2330"))
+
+    types = [e[0] for e in strat.events_received]
+    assert types == ["tick", "bidask", "lob_stats", "tick"]
+
+
+@pytest.mark.asyncio
+async def test_multi_symbol_strategy():
+    """Strategy subscribing to multiple symbols receives events for each."""
+    runner, _rq = _make_runner()
+    strat = RecordingStrategy("multi", symbols=["2330", "2454"])
+    runner.register(strat)
+
+    await runner.process_event(make_tick_event(symbol="2330"))
+    await runner.process_event(make_tick_event(symbol="2454"))
+    await runner.process_event(make_tick_event(symbol="XXXX"))
+
+    assert len(strat.events_received) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_lifecycle_processes_events():
+    """run() processes events from bus.consume and sets running flag."""
+    bus = MagicMock()
+    risk_queue = asyncio.Queue()
+    events_to_yield = [
+        make_tick_event(symbol="2330"),
+        make_tick_event(symbol="2330"),
+        make_tick_event(symbol="2330"),
+    ]
+
+    async def mock_consume():
+        for ev in events_to_yield:
+            yield ev
+
+    bus.consume = mock_consume
+
+    with (
+        patch("hft_platform.strategy.runner.StrategyRegistry") as MockReg,
+        patch("hft_platform.strategy.runner.MetricsRegistry") as MockMetrics,
+        patch("hft_platform.strategy.runner.LatencyRecorder") as MockLatency,
+    ):
+        MockReg.return_value.instantiate.return_value = []
+        MockMetrics.get.return_value = None
+        MockLatency.get.return_value = None
+        runner = StrategyRunner(bus, risk_queue, config_path="dummy")
+
+    strat = RecordingStrategy("s1", symbols=["2330"])
+    runner.register(strat)
+
+    task = asyncio.create_task(runner.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert len(strat.events_received) == 3
+    assert runner.running is True
+
+
+@pytest.mark.asyncio
+async def test_intent_enrichment_from_bidask_event():
+    """OrderIntent created from BidAskEvent carries correct source_ts_ns and trace_id."""
+    from hft_platform.events import MetaData
+
+    runner, rq = _make_runner()
+    strat = RecordingStrategy("s1", symbols=["2330"], generate_intent=True)
+    runner.register(strat)
+
+    event = make_bidask_event(
+        symbol="2330",
+        meta=MetaData(seq=42, topic="bidask", source_ts=1, local_ts=987654321),
+    )
+    await runner.process_event(event)
+
+    assert rq.qsize() == 1
+    intent = rq.get_nowait()
+    assert intent.source_ts_ns == 987654321
+    assert intent.trace_id == "bidask:42"
+
+
+@pytest.mark.asyncio
+async def test_intent_enrichment_from_lobstats_event():
+    """OrderIntent created from LOBStatsEvent uses event.ts as source timestamp."""
+    runner, rq = _make_runner()
+
+    class BuyOnStats(BaseStrategy):
+        def __init__(self):
+            super().__init__(strategy_id="stats_buyer", symbols=["2330"])
+
+        def on_stats(self, event: LOBStatsEvent) -> None:
+            self.buy(event.symbol, event.best_bid, 1)
+
+    strat = BuyOnStats()
+    runner.register(strat)
+
+    event = make_lob_stats_event(symbol="2330", ts=111222333)
+    await runner.process_event(event)
+
+    assert rq.qsize() == 1
+    intent = rq.get_nowait()
+    assert intent.source_ts_ns == 111222333
