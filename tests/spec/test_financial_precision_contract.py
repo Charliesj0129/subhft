@@ -24,6 +24,7 @@ from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_fill(
     *,
     side: Side = Side.BUY,
@@ -120,6 +121,7 @@ def _make_position_store():
 # 1. Float rejection at risk boundary
 # ---------------------------------------------------------------------------
 
+
 class TestFloatRejection:
     def test_float_price_rejected_by_risk_engine(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
@@ -139,6 +141,7 @@ class TestFloatRejection:
 # ---------------------------------------------------------------------------
 # 2. Scaled int round-trip
 # ---------------------------------------------------------------------------
+
 
 class TestScaledIntRoundTrip:
     def test_buy_sell_pnl_exact(self):
@@ -173,6 +176,7 @@ class TestScaledIntRoundTrip:
 # 3. Position PnL is exact integer (no float drift)
 # ---------------------------------------------------------------------------
 
+
 class TestPositionPnlNoDrift:
     def test_multiple_fills_exact_integer(self):
         """After many fills, PnL remains an exact integer with no float drift."""
@@ -192,6 +196,7 @@ class TestPositionPnlNoDrift:
 # ---------------------------------------------------------------------------
 # 4. Normalizer output type contract
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizerOutputType:
     def test_tick_price_is_int(self):
@@ -216,6 +221,7 @@ class TestNormalizerOutputType:
 # ---------------------------------------------------------------------------
 # 5. Edge cases: zero price, large price, fee accumulation
 # ---------------------------------------------------------------------------
+
 
 class TestEdgeCases:
     def test_zero_price_fill(self):
@@ -255,6 +261,7 @@ class TestEdgeCases:
 # 6. Avg price weighted average
 # ---------------------------------------------------------------------------
 
+
 class TestAvgPrice:
     def test_weighted_average_two_buys(self):
         """Avg price is weighted average of two buy fills."""
@@ -274,6 +281,7 @@ class TestAvgPrice:
 # ---------------------------------------------------------------------------
 # 7. Multiple partial closes
 # ---------------------------------------------------------------------------
+
 
 class TestPartialCloses:
     def test_partial_close_preserves_remainder(self):
@@ -307,6 +315,7 @@ class TestPartialCloses:
 # 8. Position flip PnL
 # ---------------------------------------------------------------------------
 
+
 class TestPositionFlip:
     def test_long_to_short_flip(self):
         """Flipping from long to short realizes full close PnL."""
@@ -338,21 +347,27 @@ except ImportError:
         def decorator(f):
             def wrapper(*a, **kw):
                 pytest.skip("hypothesis not installed")
+
             return wrapper
+
         return decorator
 
     def settings(**kwargs):  # type: ignore[misc]
         def decorator(f):
             return f
+
         return decorator
 
     class _St:
         def integers(self, **kw):
             return None
+
         def lists(self, *a, **kw):
             return None
+
         def tuples(self, *a, **kw):
             return None
+
     st = _St()  # type: ignore[assignment]
 
 
@@ -370,7 +385,7 @@ class TestHypothesisPrecision:
     @given(
         st.integers(min_value=100_000, max_value=50_000_000),  # buy price
         st.integers(min_value=100_000, max_value=50_000_000),  # sell price
-        st.integers(min_value=1, max_value=1000),              # qty
+        st.integers(min_value=1, max_value=1000),  # qty
     )
     def test_pnl_sign_invariant(self, buy_price, sell_price, qty):
         """Long PnL sign: positive iff sell > buy."""
@@ -391,8 +406,8 @@ class TestHypothesisPrecision:
 
     @settings(max_examples=50)
     @given(
-        st.integers(min_value=1, max_value=5000),   # fee per fill
-        st.integers(min_value=1, max_value=20),      # number of fills
+        st.integers(min_value=1, max_value=5000),  # fee per fill
+        st.integers(min_value=1, max_value=20),  # number of fills
     )
     def test_fee_monotonicity(self, fee_per_fill, n_fills):
         """Fees are monotonically non-decreasing."""

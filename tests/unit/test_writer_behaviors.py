@@ -5,6 +5,7 @@ HFT_CLICKHOUSE_ENABLED opt-in, port-based protocol selection,
 WAL fallback on CH failure, host/port env overrides, per-table lock striping,
 connection flags, backoff computation, and status reporting.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -13,6 +14,7 @@ from unittest.mock import patch
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_writer(monkeypatch, **env_overrides):
     """Build a DataWriter with mocked externals and optional env overrides."""
@@ -52,6 +54,7 @@ def _make_writer(monkeypatch, **env_overrides):
 # ===================================================================
 # Credential resolution chain
 # ===================================================================
+
 
 class TestCredentialResolution:
     """Credential resolution: HFT_CLICKHOUSE_USER > CLICKHOUSE_USER > default."""
@@ -95,6 +98,7 @@ class TestCredentialResolution:
 # Deprecated env var warnings
 # ===================================================================
 
+
 class TestDeprecatedEnvVars:
     """Deprecated env vars emit DeprecationWarning."""
 
@@ -130,6 +134,7 @@ class TestDeprecatedEnvVars:
 # HFT_CLICKHOUSE_ENABLED opt-in
 # ===================================================================
 
+
 class TestClickHouseEnabled:
     """ClickHouse is opt-in via HFT_CLICKHOUSE_ENABLED."""
 
@@ -158,6 +163,7 @@ class TestClickHouseEnabled:
 # Port-based protocol selection
 # ===================================================================
 
+
 class TestProtocolSelection:
     """Port determines native vs HTTP protocol."""
 
@@ -171,10 +177,14 @@ class TestProtocolSelection:
         """Port 8123 does not set native interface."""
         monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "0")
         for var in (
-            "HFT_CLICKHOUSE_USER", "HFT_CLICKHOUSE_USERNAME",
-            "CLICKHOUSE_USER", "CLICKHOUSE_USERNAME",
-            "HFT_CLICKHOUSE_PASSWORD", "CLICKHOUSE_PASSWORD",
-            "HFT_CLICKHOUSE_HOST", "HFT_CLICKHOUSE_PORT",
+            "HFT_CLICKHOUSE_USER",
+            "HFT_CLICKHOUSE_USERNAME",
+            "CLICKHOUSE_USER",
+            "CLICKHOUSE_USERNAME",
+            "HFT_CLICKHOUSE_PASSWORD",
+            "CLICKHOUSE_PASSWORD",
+            "HFT_CLICKHOUSE_HOST",
+            "HFT_CLICKHOUSE_PORT",
             "HFT_DISABLE_CLICKHOUSE",
         ):
             monkeypatch.delenv(var, raising=False)
@@ -207,6 +217,7 @@ class TestProtocolSelection:
 # Host/port env overrides
 # ===================================================================
 
+
 class TestHostPortOverrides:
     """HFT_CLICKHOUSE_HOST and HFT_CLICKHOUSE_PORT override constructor args."""
 
@@ -224,6 +235,7 @@ class TestHostPortOverrides:
 # ===================================================================
 # Per-table lock striping
 # ===================================================================
+
 
 class TestLockStriping:
     """Per-table lock striping avoids serializing inserts across tables."""
@@ -247,6 +259,7 @@ class TestLockStriping:
 # Connection flags
 # ===================================================================
 
+
 class TestConnectionFlags:
     """Connection state flags."""
 
@@ -265,6 +278,7 @@ class TestConnectionFlags:
 # ===================================================================
 # WAL fallback
 # ===================================================================
+
 
 class TestWALFallback:
     """WAL fallback behavior when CH is unavailable."""
@@ -286,6 +300,7 @@ class TestWALFallback:
 # ===================================================================
 # Backoff computation
 # ===================================================================
+
 
 class TestBackoffComputation:
     """Exponential backoff delay computation."""
@@ -311,6 +326,7 @@ class TestBackoffComputation:
 # get_status
 # ===================================================================
 
+
 class TestGetStatus:
     """Status reporting."""
 
@@ -319,9 +335,17 @@ class TestGetStatus:
         writer = _make_writer(monkeypatch)
         status = writer.get_status()
         expected_keys = {
-            "ch_enabled", "connected", "schema_initialized", "wal_only_mode",
-            "connect_attempts", "ch_host", "ch_port", "ch_interface",
-            "native_interface_fallback_used", "last_heartbeat_ts", "last_heartbeat_ok",
+            "ch_enabled",
+            "connected",
+            "schema_initialized",
+            "wal_only_mode",
+            "connect_attempts",
+            "ch_host",
+            "ch_port",
+            "ch_interface",
+            "native_interface_fallback_used",
+            "last_heartbeat_ts",
+            "last_heartbeat_ok",
         }
         assert expected_keys.issubset(set(status.keys()))
 
@@ -334,6 +358,7 @@ class TestGetStatus:
 # ===================================================================
 # Native interface fallback
 # ===================================================================
+
 
 class TestNativeInterfaceFallback:
     """Native interface fallback detection."""
@@ -366,6 +391,7 @@ class TestNativeInterfaceFallback:
 # ===================================================================
 # Chunking
 # ===================================================================
+
 
 class TestChunking:
     """Row and columnar chunking."""
@@ -403,6 +429,7 @@ class TestChunking:
 # ===================================================================
 # Transpose helpers
 # ===================================================================
+
 
 class TestTransposeHelpers:
     """Columnar transpose and conversion helpers."""

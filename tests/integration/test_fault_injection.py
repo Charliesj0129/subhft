@@ -161,9 +161,11 @@ class TestRiskEngineFaultInjection:
         intent_q = asyncio.Queue()
         order_q = asyncio.Queue()
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -192,9 +194,11 @@ class TestRiskEngineFaultInjection:
         intent_q = asyncio.Queue()
         order_q = asyncio.Queue()
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -234,10 +238,12 @@ class TestPositionStoreFaultInjection:
     def test_position_store_at_capacity_triggers_eviction(self):
         """When PositionStore reaches max size, it evicts flat positions."""
         with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0", "HFT_POSITIONS_MAX_SIZE": "5"}):
-            with patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr, \
-                 patch("hft_platform.execution.positions.SymbolMetadata"), \
-                 patch("hft_platform.execution.positions.PriceCodec"), \
-                 patch("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider"):
+            with (
+                patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr,
+                patch("hft_platform.execution.positions.SymbolMetadata"),
+                patch("hft_platform.execution.positions.PriceCodec"),
+                patch("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider"),
+            ):
                 mock_mr.get.return_value = _mock_metrics()
 
                 from hft_platform.execution.positions import PositionStore
@@ -282,10 +288,12 @@ class TestPositionStoreFaultInjection:
     def test_position_store_eviction_preserves_active(self):
         """Eviction only removes flat positions, not active ones."""
         with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0", "HFT_POSITIONS_MAX_SIZE": "3"}):
-            with patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr, \
-                 patch("hft_platform.execution.positions.SymbolMetadata"), \
-                 patch("hft_platform.execution.positions.PriceCodec"), \
-                 patch("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider"):
+            with (
+                patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr,
+                patch("hft_platform.execution.positions.SymbolMetadata"),
+                patch("hft_platform.execution.positions.PriceCodec"),
+                patch("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider"),
+            ):
                 mock_mr.get.return_value = _mock_metrics()
 
                 from hft_platform.execution.positions import PositionStore
@@ -296,7 +304,9 @@ class TestPositionStoreFaultInjection:
                 # Create 2 flat positions and 1 active
                 for i in range(2):
                     store.on_fill(_make_fill(fill_id=f"FB{i}", symbol=f"FLAT{i}", side=Side.BUY, qty=1, match_ts_ns=i))
-                    store.on_fill(_make_fill(fill_id=f"FS{i}", symbol=f"FLAT{i}", side=Side.SELL, qty=1, match_ts_ns=i + 1))
+                    store.on_fill(
+                        _make_fill(fill_id=f"FS{i}", symbol=f"FLAT{i}", side=Side.SELL, qty=1, match_ts_ns=i + 1)
+                    )
 
                 store.on_fill(_make_fill(fill_id="ACTIVE", symbol="ACTIVE0", side=Side.BUY, qty=10, match_ts_ns=100))
 
@@ -350,9 +360,11 @@ class TestStormGuardFaultInjection:
         intent_q = asyncio.Queue()
         order_q = asyncio.Queue()
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -372,9 +384,11 @@ class TestStormGuardFaultInjection:
         intent_q = asyncio.Queue()
         order_q = asyncio.Queue()
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -464,9 +478,11 @@ class TestRiskConfigFaultInjection:
         intent_q = asyncio.Queue()
         order_q = asyncio.Queue()
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -495,9 +511,11 @@ class TestOrderQueueFaultInjection:
         intent_q = asyncio.Queue()
         order_q = asyncio.Queue()
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -524,9 +542,11 @@ class TestConcurrentRiskEvaluations:
         intent_q = asyncio.Queue()
         order_q = asyncio.Queue()
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -565,10 +585,12 @@ class TestPositionUpdateDuringEviction:
     def test_position_update_during_eviction(self):
         """Concurrent fills during eviction must not lose data."""
         with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0", "HFT_POSITIONS_MAX_SIZE": "5"}):
-            with patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr, \
-                 patch("hft_platform.execution.positions.SymbolMetadata"), \
-                 patch("hft_platform.execution.positions.PriceCodec"), \
-                 patch("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider"):
+            with (
+                patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr,
+                patch("hft_platform.execution.positions.SymbolMetadata"),
+                patch("hft_platform.execution.positions.PriceCodec"),
+                patch("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider"),
+            ):
                 mock_mr.get.return_value = _mock_metrics()
 
                 from hft_platform.execution.positions import PositionStore
