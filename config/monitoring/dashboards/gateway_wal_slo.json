@@ -88,6 +88,19 @@
         {"expr": "sum(rate(quote_schema_mismatch_total[5m])) by (reason)", "refId": "A", "legendFormat": "{{reason}}"}
       ],
       "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "E2E Order Latency (p50/p95/p99 ns)",
+      "id": 7,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum(rate(e2e_order_latency_ns_bucket[1m])) by (le))", "refId": "A", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, sum(rate(e2e_order_latency_ns_bucket[1m])) by (le))", "refId": "B", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, sum(rate(e2e_order_latency_ns_bucket[1m])) by (le))", "refId": "C", "legendFormat": "p99"}
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
     }
   ],
   "schemaVersion": 30,
