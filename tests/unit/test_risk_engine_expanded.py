@@ -25,6 +25,7 @@ from hft_platform.risk.engine import RiskEngine
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_intent(
     *,
     price: int | float = 1000_0000,
@@ -97,6 +98,7 @@ def engine(tmp_path: Any, _mock_singletons: None) -> RiskEngine:
 # evaluate — float price rejection
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluateFloatPrice:
     def test_float_price_rejected(self, engine: RiskEngine) -> None:
         intent = _make_intent(price=100.5)
@@ -109,6 +111,7 @@ class TestEvaluateFloatPrice:
 # evaluate — int price approval
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluateIntPrice:
     def test_int_price_approved(self, engine: RiskEngine) -> None:
         intent = _make_intent(price=1000_0000)
@@ -120,6 +123,7 @@ class TestEvaluateIntPrice:
 # ---------------------------------------------------------------------------
 # evaluate — FastGate rejection / error / cancel-bypass
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluateFastGate:
     def test_fast_gate_rejects(self, engine: RiskEngine) -> None:
@@ -157,6 +161,7 @@ class TestEvaluateFastGate:
 # evaluate — StormGuard HALT
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluateStormGuard:
     def test_halt_rejects_new(self, engine: RiskEngine) -> None:
         engine.storm_guard.state = StormGuardState.HALT
@@ -175,6 +180,7 @@ class TestEvaluateStormGuard:
 # ---------------------------------------------------------------------------
 # evaluate — Rust validator path
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluateRustValidator:
     def test_rust_validator_rejects(self, engine: RiskEngine) -> None:
@@ -202,6 +208,7 @@ class TestEvaluateRustValidator:
 # evaluate — Python validators
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluatePythonValidators:
     def test_python_validator_rejects(self, engine: RiskEngine) -> None:
         engine._rust_validator = None
@@ -224,6 +231,7 @@ class TestEvaluatePythonValidators:
 # ---------------------------------------------------------------------------
 # create_command
 # ---------------------------------------------------------------------------
+
 
 class TestCreateCommand:
     def test_deadline_is_in_future(self, engine: RiskEngine) -> None:
@@ -251,6 +259,7 @@ class TestCreateCommand:
 # ---------------------------------------------------------------------------
 # reload_config / on_config_reload
 # ---------------------------------------------------------------------------
+
 
 class TestReloadConfig:
     def test_reload_clears_caches(self, engine: RiskEngine, tmp_path: Any) -> None:
@@ -290,7 +299,13 @@ class TestReloadConfig:
     def test_reload_config_reads_file(self, engine: RiskEngine, tmp_path: Any) -> None:
         # Rewrite the config file with changed value
         new_cfg = {
-            "global_defaults": {"max_price_cap": 7777.0, "tick_size": 0.01, "price_band_ticks": 20, "max_notional": 10_000_000, "max_daily_loss": 500_000_000},
+            "global_defaults": {
+                "max_price_cap": 7777.0,
+                "tick_size": 0.01,
+                "price_band_ticks": 20,
+                "max_notional": 10_000_000,
+                "max_daily_loss": 500_000_000,
+            },
             "strategies": {},
             "storm_guard": {},
         }
@@ -304,6 +319,7 @@ class TestReloadConfig:
 # ---------------------------------------------------------------------------
 # notify_fill_pnl
 # ---------------------------------------------------------------------------
+
 
 class TestNotifyFillPnl:
     def test_routes_to_daily_loss_validator(self, engine: RiskEngine) -> None:
@@ -321,6 +337,7 @@ class TestNotifyFillPnl:
 # ---------------------------------------------------------------------------
 # _bool_env
 # ---------------------------------------------------------------------------
+
 
 class TestBoolEnv:
     def test_none_returns_default(self) -> None:
@@ -345,6 +362,7 @@ class TestBoolEnv:
 # _parse_sample_every
 # ---------------------------------------------------------------------------
 
+
 class TestParseSampleEvery:
     def test_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEST_SAMPLE", "5")
@@ -362,6 +380,7 @@ class TestParseSampleEvery:
 # ---------------------------------------------------------------------------
 # _emit_reject_metric
 # ---------------------------------------------------------------------------
+
 
 class TestEmitRejectMetric:
     def test_sampling_skips(self, engine: RiskEngine) -> None:
@@ -391,8 +410,11 @@ class TestEmitRejectMetric:
 # Thread-safe cmd_id with lock
 # ---------------------------------------------------------------------------
 
+
 class TestThreadSafeCmdId:
-    def test_concurrent_cmd_ids_unique(self, tmp_path: Any, _mock_singletons: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_concurrent_cmd_ids_unique(
+        self, tmp_path: Any, _mock_singletons: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HFT_RISK_CMD_ID_LOCK", "1")
         cfg_path = _write_config(str(tmp_path))
         iq: asyncio.Queue = asyncio.Queue()
@@ -422,6 +444,7 @@ class TestThreadSafeCmdId:
 # monotonic_cmd_id property
 # ---------------------------------------------------------------------------
 
+
 class TestMonotonicCmdIdProperty:
     def test_property_reads_current(self, engine: RiskEngine) -> None:
         assert engine.monotonic_cmd_id == 0
@@ -433,11 +456,14 @@ class TestMonotonicCmdIdProperty:
 # evaluate_typed_frame
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluateTypedFrame:
     def test_delegates_to_evaluate(self, engine: RiskEngine) -> None:
         intent = _make_intent()
         engine.evaluate = MagicMock(return_value=SimpleNamespace(approved=True, reason_code="OK"))
-        frame = SimpleNamespace(price=1000_0000, qty=1, intent_type=IntentType.NEW, strategy_id="s", symbol="2330", side=Side.BUY)
+        frame = SimpleNamespace(
+            price=1000_0000, qty=1, intent_type=IntentType.NEW, strategy_id="s", symbol="2330", side=Side.BUY
+        )
 
         with patch.object(engine, "typed_frame_view", return_value=frame):
             result = engine.evaluate_typed_frame(frame)

@@ -67,7 +67,9 @@ class TestStrategyDispatchIndex:
             runner, StrategyRunner
         )
         runner._rebuild_executors = StrategyRunner._rebuild_executors.__get__(runner, StrategyRunner)
-        runner._build_positions_by_strategy = StrategyRunner._build_positions_by_strategy.__get__(runner, StrategyRunner)
+        runner._build_positions_by_strategy = StrategyRunner._build_positions_by_strategy.__get__(
+            runner, StrategyRunner
+        )
 
         if strategies:
             for strategy in strategies:

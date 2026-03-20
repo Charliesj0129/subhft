@@ -20,6 +20,7 @@ from hft_platform.contracts.execution import FillEvent, Side
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_fill(
     *,
     side: Side = Side.BUY,
@@ -64,6 +65,7 @@ def _make_position_store():
 # 1. Inventory conservation
 # ---------------------------------------------------------------------------
 
+
 class TestInventoryConservation:
     def test_net_qty_equals_buys_minus_sells(self):
         """net_qty = sum(buy_qty) - sum(sell_qty)."""
@@ -84,6 +86,7 @@ class TestInventoryConservation:
 # ---------------------------------------------------------------------------
 # 2. PnL conservation on full close
 # ---------------------------------------------------------------------------
+
 
 class TestPnlConservation:
     def test_full_close_pnl(self):
@@ -107,6 +110,7 @@ class TestPnlConservation:
 # 3. Fee accumulation
 # ---------------------------------------------------------------------------
 
+
 class TestFeeAccumulation:
     def test_fees_sum_over_fills(self):
         """Total fees = sum(fee + tax) across all fills."""
@@ -123,6 +127,7 @@ class TestFeeAccumulation:
 # 4. Partial close PnL
 # ---------------------------------------------------------------------------
 
+
 class TestPartialClosePnl:
     def test_partial_close_realizes_proportional_pnl(self):
         store = _make_position_store()
@@ -135,6 +140,7 @@ class TestPartialClosePnl:
 # ---------------------------------------------------------------------------
 # 5. Position flip: long -> short
 # ---------------------------------------------------------------------------
+
 
 class TestPositionFlipLongShort:
     def test_flip_long_to_short(self):
@@ -161,6 +167,7 @@ class TestPositionFlipLongShort:
 # 6. Position flip: short -> long
 # ---------------------------------------------------------------------------
 
+
 class TestPositionFlipShortLong:
     def test_flip_short_to_long(self):
         store = _make_position_store()
@@ -174,6 +181,7 @@ class TestPositionFlipShortLong:
 # ---------------------------------------------------------------------------
 # 7. Zero-crossing avg_price
 # ---------------------------------------------------------------------------
+
 
 class TestZeroCrossingAvgPrice:
     def test_flat_then_reopen(self):
@@ -196,6 +204,7 @@ class TestZeroCrossingAvgPrice:
 # 8. Multiple opens avg_price
 # ---------------------------------------------------------------------------
 
+
 class TestMultipleOpensAvgPrice:
     def test_three_buys_weighted_average(self):
         store = _make_position_store()
@@ -213,6 +222,7 @@ class TestMultipleOpensAvgPrice:
 # ---------------------------------------------------------------------------
 # 9. Flat position reopen
 # ---------------------------------------------------------------------------
+
 
 class TestFlatPositionReopen:
     def test_reopen_after_flat(self):
@@ -233,6 +243,7 @@ class TestFlatPositionReopen:
 # 10. PnL sign: long profit / loss
 # ---------------------------------------------------------------------------
 
+
 class TestPnlSignLong:
     def test_long_profit(self):
         store = _make_position_store()
@@ -251,6 +262,7 @@ class TestPnlSignLong:
 # 11. PnL sign: short profit / loss
 # ---------------------------------------------------------------------------
 
+
 class TestPnlSignShort:
     def test_short_profit(self):
         store = _make_position_store()
@@ -268,6 +280,7 @@ class TestPnlSignShort:
 # ---------------------------------------------------------------------------
 # 12. PositionStore eviction
 # ---------------------------------------------------------------------------
+
 
 class TestPositionStoreEviction:
     def test_eviction_at_max_size(self, monkeypatch):
@@ -299,6 +312,7 @@ class TestPositionStoreEviction:
 # 13. PositionStore key format
 # ---------------------------------------------------------------------------
 
+
 class TestPositionStoreKeyFormat:
     def test_key_format(self):
         store = _make_position_store()
@@ -322,21 +336,27 @@ except ImportError:
         def decorator(f):
             def wrapper(*a, **kw):
                 pytest.skip("hypothesis not installed")
+
             return wrapper
+
         return decorator
 
     def settings(**kwargs):  # type: ignore[misc]
         def decorator(f):
             return f
+
         return decorator
 
     class _St:
         def integers(self, **kw):
             return None
+
         def lists(self, *a, **kw):
             return None
+
         def tuples(self, *a, **kw):
             return None
+
     st = _St()  # type: ignore[assignment]
 
 
@@ -356,7 +376,7 @@ class TestHypothesisPositionConservation:
     @settings(max_examples=50)
     @given(
         st.integers(min_value=1, max_value=5000),  # fee
-        st.integers(min_value=1, max_value=20),     # n fills
+        st.integers(min_value=1, max_value=20),  # n fills
     )
     def test_fee_monotonicity(self, fee, n_fills):
         """Cumulative fees never decrease."""
@@ -372,7 +392,7 @@ class TestHypothesisPositionConservation:
     @settings(max_examples=50)
     @given(
         st.integers(min_value=100_000, max_value=50_000_000),  # price
-        st.integers(min_value=1, max_value=100),               # qty
+        st.integers(min_value=1, max_value=100),  # qty
     )
     def test_round_trip_pnl_zero(self, price, qty):
         """Buy and sell at same price => PnL is zero."""

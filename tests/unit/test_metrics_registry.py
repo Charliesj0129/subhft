@@ -57,7 +57,9 @@ def test_metrics_registry_update_system_metrics_handles_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "psutil", BadPsutil)
     MetricsRegistry._instance = None
     registry = MetricsRegistry.get()
+    # Should not raise even when psutil throws
     registry.update_system_metrics()
+    assert registry is not None
 
 
 def test_unregister_metric_prefixes_handles_keyerror(monkeypatch):
@@ -67,4 +69,6 @@ def test_unregister_metric_prefixes_handles_keyerror(monkeypatch):
         raise KeyError("missing")
 
     monkeypatch.setattr(REGISTRY, "unregister", raise_keyerror)
+    # Should not raise even when unregister throws KeyError
     _unregister_metric_prefixes(["test_prefix_keyerror"])
+    assert "test_prefix_keyerror_total" in REGISTRY._names_to_collectors  # type: ignore[attr-defined]
