@@ -8,17 +8,14 @@ import pytest
 
 from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.positions import Position, PositionStore
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from tests.factories import make_fill_event
 
 
 def _make_fill(
     *,
     side: Side = Side.BUY,
     qty: int = 10,
-    price: int = 1000_0000,  # scaled x10000
+    price: int = 1000_0000,
     fee: int = 100,
     tax: int = 50,
     account_id: str = "acct1",
@@ -26,10 +23,11 @@ def _make_fill(
     symbol: str = "2330",
     match_ts_ns: int = 1_000_000_000,
 ) -> FillEvent:
-    return FillEvent(
+    """Delegate to shared factory with local defaults."""
+    return make_fill_event(
         fill_id="F001",
         account_id=account_id,
-        order_id="ORD001",
+        order_id="order-001",
         strategy_id=strategy_id,
         symbol=symbol,
         side=side,

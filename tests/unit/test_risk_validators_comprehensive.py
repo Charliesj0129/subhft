@@ -12,7 +12,7 @@ from hft_platform.risk.validators import (
     PriceBandValidator,
     StormGuardFSM,
 )
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 _DEFAULT_CONFIG = {
     "global_defaults": {

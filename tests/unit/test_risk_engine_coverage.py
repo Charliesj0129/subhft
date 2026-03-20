@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side, StormGuardState
+from tests.factories import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -18,14 +19,15 @@ def _make_intent(
     symbol: str = "2330",
     intent_type: IntentType = IntentType.NEW,
     side: Side = Side.BUY,
-    price: int = 5000000,  # 500.0 scaled x10000
+    price: int = 5000000,
     qty: int = 10,
     tif: TIF = TIF.ROD,
     target_order_id: str | None = None,
     trace_id: str = "",
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=intent_id,
+    """Delegate to shared factory with local defaults."""
+    return make_order_intent(
+        intent_id,
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,

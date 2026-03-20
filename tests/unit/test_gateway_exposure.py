@@ -6,7 +6,7 @@ import pytest
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent
 from hft_platform.gateway.exposure import ExposureKey, ExposureLimitError, ExposureLimits, ExposureStore
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 
 def _make_intent(price: int = 1_000_000, qty: int = 1, intent_type: IntentType = IntentType.NEW) -> OrderIntent:

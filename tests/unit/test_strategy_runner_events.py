@@ -432,12 +432,14 @@ def test_duplicate_strategy_registration():
 
 def test_extract_event_trace_from_meta():
     """_extract_event_trace with MetaData returns (local_ts, 'topic:seq')."""
-    from hft_platform.events import MetaData
 
     runner, _rq = _make_runner()
     event = make_tick_event(
         symbol="2330",
-        meta=MetaData(seq=42, topic="tick", source_ts=100, local_ts=999),
+        seq=42,
+        topic="tick",
+        source_ts=100,
+        local_ts=999,
     )
 
     source_ts_ns, trace_id = runner._extract_event_trace(event)
@@ -782,7 +784,6 @@ async def test_run_lifecycle_processes_events():
 @pytest.mark.asyncio
 async def test_intent_enrichment_from_bidask_event():
     """OrderIntent created from BidAskEvent carries correct source_ts_ns and trace_id."""
-    from hft_platform.events import MetaData
 
     runner, rq = _make_runner()
     strat = RecordingStrategy("s1", symbols=["2330"], generate_intent=True)
@@ -790,7 +791,10 @@ async def test_intent_enrichment_from_bidask_event():
 
     event = make_bidask_event(
         symbol="2330",
-        meta=MetaData(seq=42, topic="bidask", source_ts=1, local_ts=987654321),
+        seq=42,
+        topic="bidask",
+        source_ts=1,
+        local_ts=987654321,
     )
     await runner.process_event(event)
 

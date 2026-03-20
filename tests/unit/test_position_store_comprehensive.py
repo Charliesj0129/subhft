@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from hft_platform.contracts.execution import FillEvent, Side
-from hft_platform.core import timebase
+from tests.factories import make_fill_event
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,10 +36,10 @@ def _make_fill(
     symbol: str = "2330",
     order_id: str = "ORD1",
 ) -> FillEvent:
+    """Delegate to shared factory with auto-incrementing fill ID."""
     global _FILL_SEQ
     _FILL_SEQ += 1
-    ts = timebase.now_ns()
-    return FillEvent(
+    return make_fill_event(
         fill_id=f"F{_FILL_SEQ}",
         account_id=account_id,
         order_id=order_id,
@@ -50,8 +50,6 @@ def _make_fill(
         price=price,
         fee=fee,
         tax=tax,
-        ingest_ts_ns=ts,
-        match_ts_ns=ts,
     )
 
 

@@ -5,23 +5,12 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import time
-from enum import Enum
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.services._md_ingestion import FeedState
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-class _FeedState(Enum):
-    INIT = "INIT"
-    CONNECTED = "CONNECTED"
-    DISCONNECTED = "DISCONNECTED"
-    RECOVERING = "RECOVERING"
 
 
 class FakeService(MarketDataReconnectMixin):
@@ -36,7 +25,7 @@ class FakeService(MarketDataReconnectMixin):
         self.last_event_mono: float = 0.0
         self._last_rollover_seen_date: dt.date | None = None
         self._last_rollover_reconnect_date: dt.date | None = None
-        self.state: _FeedState | None = None
+        self.state: FeedState | None = None
         self._market_open_grace_s: float = 0.0
         self.metrics_registry: object | None = None
         # Reconnect / resubscribe state
@@ -499,15 +488,16 @@ class TestMarkPendingReconnect:
             svc._mark_pending_reconnect(99.0, reason="heartbeat_gap")
         assert svc._pending_reconnect_gap == 99.0
 
-    def test_resets_since_on_new_reason(self) -> None:
+    def test_preserves_since_on_new_reason(self) -> None:
+        """_since is preserved even when reason changes (only set when None)."""
         svc = FakeService()
+        original_ts = _ts_for(hour=10)
         svc._pending_reconnect_reason = "heartbeat_gap"
-        svc._pending_reconnect_since = _ts_for(hour=10)
-        new_ts = _ts_for(hour=11)
-        with patch("hft_platform.core.timebase.now_s", return_value=new_ts):
+        svc._pending_reconnect_since = original_ts
+        with patch("hft_platform.core.timebase.now_s", return_value=_ts_for(hour=11)):
             svc._mark_pending_reconnect(5.0, reason="session_rollover")
         assert svc._pending_reconnect_reason == "session_rollover"
-        assert svc._pending_reconnect_since == new_ts
+        assert svc._pending_reconnect_since == original_ts
 
 
 # ---------------------------------------------------------------------------
@@ -634,7 +624,7 @@ class TestTriggerReconnect:
         with patch("hft_platform.core.timebase.now_s", return_value=now):
             result = await svc._trigger_reconnect(99.0)
         assert result is False
-        assert svc.state == _FeedState.DISCONNECTED
+        assert svc.state == FeedState.DISCONNECTED
 
     @pytest.mark.asyncio
     async def test_successful_reconnect(self) -> None:
@@ -647,7 +637,7 @@ class TestTriggerReconnect:
         with patch("hft_platform.core.timebase.now_s", return_value=now):
             result = await svc._trigger_reconnect(99.0, reason="heartbeat_gap")
         assert result is True
-        assert svc.state == _FeedState.CONNECTED
+        assert svc.state == FeedState.CONNECTED
         assert svc._resubscribe_attempts == 0
         assert svc._last_reconnect_ts == now
 
@@ -661,7 +651,7 @@ class TestTriggerReconnect:
         with patch("hft_platform.core.timebase.now_s", return_value=now):
             result = await svc._trigger_reconnect(99.0)
         assert result is False
-        assert svc.state == _FeedState.DISCONNECTED
+        assert svc.state == FeedState.DISCONNECTED
 
     @pytest.mark.asyncio
     async def test_timeout_sets_disconnected(self) -> None:
@@ -679,7 +669,7 @@ class TestTriggerReconnect:
         with patch("hft_platform.core.timebase.now_s", return_value=now):
             result = await svc._trigger_reconnect(99.0)
         assert result is False
-        assert svc.state == _FeedState.DISCONNECTED
+        assert svc.state == FeedState.DISCONNECTED
 
     @pytest.mark.asyncio
     async def test_exception_sets_disconnected(self) -> None:
@@ -691,7 +681,7 @@ class TestTriggerReconnect:
         with patch("hft_platform.core.timebase.now_s", return_value=now):
             result = await svc._trigger_reconnect(99.0)
         assert result is False
-        assert svc.state == _FeedState.DISCONNECTED
+        assert svc.state == FeedState.DISCONNECTED
 
     @pytest.mark.asyncio
     async def test_session_rollover_forces_login(self) -> None:
@@ -753,7 +743,7 @@ class TestRequestReconnect:
         now = _ts_for(hour=10)
         with patch("hft_platform.core.timebase.now_s", return_value=now):
             await svc._request_reconnect(50.0, reason="heartbeat_gap")
-        assert svc.state == _FeedState.CONNECTED
+        assert svc.state == FeedState.CONNECTED
 
     @pytest.mark.asyncio
     async def test_outside_window_marks_pending(self) -> None:
@@ -783,7 +773,7 @@ class TestRunMonitorReconnectChecks:
         mock_client = MagicMock()
         mock_client.reconnect.return_value = True
         svc.client = mock_client
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         now = _ts_for(hour=10)
         with patch("hft_platform.core.timebase.now_s", return_value=now):
             await svc._run_monitor_reconnect_checks(gap=2.0)
@@ -800,7 +790,7 @@ class TestRunMonitorReconnectChecks:
         mock_client = MagicMock()
         mock_client.reconnect.return_value = True
         svc.client = mock_client
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         now = _ts_for(hour=10)
         with patch("hft_platform.core.timebase.now_s", return_value=now):
             await svc._run_monitor_reconnect_checks(gap=2.0)
@@ -809,7 +799,7 @@ class TestRunMonitorReconnectChecks:
     @pytest.mark.asyncio
     async def test_connected_heartbeat_triggers_resubscribe(self) -> None:
         svc = FakeService()
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc.resubscribe_gap_s = 15.0
         mock_client = MagicMock()
         mock_client.resubscribe.return_value = True
@@ -822,7 +812,7 @@ class TestRunMonitorReconnectChecks:
     @pytest.mark.asyncio
     async def test_connected_force_reconnect(self) -> None:
         svc = FakeService()
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc.force_reconnect_gap_s = 300.0
         mock_client = MagicMock()
         mock_client.reconnect.return_value = True
@@ -836,7 +826,7 @@ class TestRunMonitorReconnectChecks:
     @pytest.mark.asyncio
     async def test_disconnected_requests_reconnect(self) -> None:
         svc = FakeService()
-        svc.state = _FeedState.DISCONNECTED
+        svc.state = FeedState.DISCONNECTED
         mock_client = MagicMock()
         mock_client.reconnect.return_value = True
         svc.client = mock_client
@@ -848,7 +838,7 @@ class TestRunMonitorReconnectChecks:
     @pytest.mark.asyncio
     async def test_recovering_requests_reconnect(self) -> None:
         svc = FakeService()
-        svc.state = _FeedState.RECOVERING
+        svc.state = FeedState.RECOVERING
         mock_client = MagicMock()
         mock_client.reconnect.return_value = True
         svc.client = mock_client
@@ -860,7 +850,7 @@ class TestRunMonitorReconnectChecks:
     @pytest.mark.asyncio
     async def test_rollover_detected_during_connected(self) -> None:
         svc = FakeService()
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc.last_event_ts = _ts_for(day=19, hour=23)
         mock_client = MagicMock()
         mock_client.reconnect.return_value = True
@@ -875,7 +865,7 @@ class TestRunMonitorReconnectChecks:
     @pytest.mark.asyncio
     async def test_small_gap_no_action(self) -> None:
         svc = FakeService()
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc.last_event_ts = _ts_for(hour=10)
         mock_client = MagicMock()
         svc.client = mock_client
@@ -906,15 +896,17 @@ class TestWatchdogLoop:
     async def test_skips_non_connected_state(self) -> None:
         svc = FakeService()
         svc.running = True
-        svc.state = _FeedState.DISCONNECTED
+        svc.state = FeedState.DISCONNECTED
+
+        _real_sleep = asyncio.sleep
         call_count = 0
 
-        async def _stop_after_one(orig_sleep: object = asyncio.sleep) -> None:
+        async def _stop_after_one(delay: float) -> None:
             nonlocal call_count
             call_count += 1
             if call_count >= 2:
                 svc.running = False
-            await asyncio.sleep(0)
+            await _real_sleep(0)
 
         with patch("asyncio.sleep", side_effect=_stop_after_one):
             await svc._watchdog_loop()
@@ -924,9 +916,11 @@ class TestWatchdogLoop:
     async def test_skips_off_hours(self) -> None:
         svc = FakeService()
         svc.running = True
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc._symbol_gap_skip_off_hours = True
         svc._symbol_gap_consecutive_hits = 5
+
+        _real_sleep = asyncio.sleep
         call_count = 0
 
         async def _stop_after_one(delay: float) -> None:
@@ -934,7 +928,7 @@ class TestWatchdogLoop:
             call_count += 1
             if call_count >= 2:
                 svc.running = False
-            await asyncio.sleep(0)
+            await _real_sleep(0)
 
         with (
             patch("asyncio.sleep", side_effect=_stop_after_one),
@@ -949,10 +943,12 @@ class TestWatchdogLoop:
     async def test_empty_symbol_last_tick_resets_hits(self) -> None:
         svc = FakeService()
         svc.running = True
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc._symbol_gap_skip_off_hours = False
         svc._symbol_last_tick = {}
         svc._symbol_gap_consecutive_hits = 3
+
+        _real_sleep = asyncio.sleep
         call_count = 0
 
         async def _stop_after_one(delay: float) -> None:
@@ -960,7 +956,7 @@ class TestWatchdogLoop:
             call_count += 1
             if call_count >= 2:
                 svc.running = False
-            await asyncio.sleep(0)
+            await _real_sleep(0)
 
         with patch("asyncio.sleep", side_effect=_stop_after_one):
             await svc._watchdog_loop()
@@ -970,13 +966,15 @@ class TestWatchdogLoop:
     async def test_below_min_active_resets_hits(self) -> None:
         svc = FakeService()
         svc.running = True
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc._symbol_gap_skip_off_hours = False
         svc._symbol_gap_min_active_symbols = 24
         # Only 3 active symbols, below min_active=24
         now_mono = time.monotonic()
         svc._symbol_last_tick = {f"SYM{i}": now_mono for i in range(3)}
         svc._symbol_gap_consecutive_hits = 2
+
+        _real_sleep = asyncio.sleep
         call_count = 0
 
         async def _stop_after_one(delay: float) -> None:
@@ -984,7 +982,7 @@ class TestWatchdogLoop:
             call_count += 1
             if call_count >= 2:
                 svc.running = False
-            await asyncio.sleep(0)
+            await _real_sleep(0)
 
         with patch("asyncio.sleep", side_effect=_stop_after_one):
             await svc._watchdog_loop()
@@ -994,7 +992,7 @@ class TestWatchdogLoop:
     async def test_stale_symbols_increment_hits(self) -> None:
         svc = FakeService()
         svc.running = True
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc._symbol_gap_skip_off_hours = False
         svc._symbol_gap_min_active_symbols = 1
         svc._symbol_gap_threshold_s = 6.0
@@ -1003,6 +1001,8 @@ class TestWatchdogLoop:
         now_mono = time.monotonic()
         svc._symbol_last_tick = {f"SYM{i}": now_mono - 100 for i in range(30)}
         svc._symbol_gap_consecutive_hits = 0
+
+        _real_sleep = asyncio.sleep
         call_count = 0
 
         async def _stop_after_one(delay: float) -> None:
@@ -1010,7 +1010,7 @@ class TestWatchdogLoop:
             call_count += 1
             if call_count >= 2:
                 svc.running = False
-            await asyncio.sleep(0)
+            await _real_sleep(0)
 
         with patch("asyncio.sleep", side_effect=_stop_after_one):
             await svc._watchdog_loop()
@@ -1020,7 +1020,7 @@ class TestWatchdogLoop:
     async def test_no_stale_symbols_resets_hits(self) -> None:
         svc = FakeService()
         svc.running = True
-        svc.state = _FeedState.CONNECTED
+        svc.state = FeedState.CONNECTED
         svc._symbol_gap_skip_off_hours = False
         svc._symbol_gap_min_active_symbols = 1
         svc._symbol_gap_threshold_s = 6.0
@@ -1029,6 +1029,8 @@ class TestWatchdogLoop:
         now_mono = time.monotonic()
         svc._symbol_last_tick = {f"SYM{i}": now_mono for i in range(30)}
         svc._symbol_gap_consecutive_hits = 5
+
+        _real_sleep = asyncio.sleep
         call_count = 0
 
         async def _stop_after_one(delay: float) -> None:
@@ -1036,7 +1038,7 @@ class TestWatchdogLoop:
             call_count += 1
             if call_count >= 2:
                 svc.running = False
-            await asyncio.sleep(0)
+            await _real_sleep(0)
 
         with patch("asyncio.sleep", side_effect=_stop_after_one):
             await svc._watchdog_loop()

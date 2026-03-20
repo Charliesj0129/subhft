@@ -2,7 +2,7 @@
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
 from hft_platform.gateway.policy import GatewayPolicy, GatewayPolicyMode
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 
 def _make_intent(intent_type: IntentType = IntentType.NEW) -> OrderIntent:

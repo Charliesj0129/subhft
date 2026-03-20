@@ -1,4 +1,4 @@
-"""Shared test factories for HFT platform events and order objects."""
+"""Shared test factories for HFT platform events, order objects, and runtime components."""
 
 from tests.factories.components import (
     make_normalizer,

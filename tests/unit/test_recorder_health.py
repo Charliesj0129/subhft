@@ -56,14 +56,21 @@ class TestDegradedState:
         assert t.state == PipelineState.DEGRADED
 
     def test_recovery_after_window_expires(self) -> None:
+        fake_time = [1000.0]
+
+        def _monotonic() -> float:
+            return fake_time[0]
+
         t = PipelineHealthTracker()
         t._window_s = 0.05  # 50ms window
-        fake_time = [100.0]
-        with patch("hft_platform.recorder.health.time.monotonic", side_effect=lambda: fake_time[0]):
+
+        with patch("hft_platform.recorder.health.time") as mock_time:
+            mock_time.monotonic = _monotonic
             t.record_event("drop")
             assert t.state == PipelineState.DEGRADED
-            # Advance fake clock past the 50ms window
-            fake_time[0] = 100.2
+
+            # Advance time past the window
+            fake_time[0] = 1000.2
             # Record a benign event to trigger recompute
             t.record_event("ch_connected")
             assert t.state == PipelineState.HEALTHY
@@ -189,15 +196,21 @@ class TestGetHealth:
 
 class TestPrune:
     def test_prune_removes_old_events(self) -> None:
+        fake_time = [1000.0]
+
+        def _monotonic() -> float:
+            return fake_time[0]
+
         t = PipelineHealthTracker()
         t._window_s = 0.05  # 50ms
-        fake_time = [100.0]
-        with patch("hft_platform.recorder.health.time.monotonic", side_effect=lambda: fake_time[0]):
+
+        with patch("hft_platform.recorder.health.time") as mock_time:
+            mock_time.monotonic = _monotonic
             t.record_event("drop")
-            # Advance fake clock past the 50ms window
-            fake_time[0] = 100.2
+            # Advance time past the window
+            fake_time[0] = 1000.2
             t.prune()
-        assert len(t._events) == 0
+            assert len(t._events) == 0
 
     def test_prune_keeps_recent_events(self) -> None:
         t = PipelineHealthTracker()
@@ -207,16 +220,22 @@ class TestPrune:
         assert len(t._events) == 1
 
     def test_prune_partial(self) -> None:
+        fake_time = [1000.0]
+
+        def _monotonic() -> float:
+            return fake_time[0]
+
         t = PipelineHealthTracker()
         t._window_s = 0.05
-        fake_time = [100.0]
-        with patch("hft_platform.recorder.health.time.monotonic", side_effect=lambda: fake_time[0]):
+
+        with patch("hft_platform.recorder.health.time") as mock_time:
+            mock_time.monotonic = _monotonic
             t.record_event("drop")
-            # Advance fake clock past the 50ms window
-            fake_time[0] = 100.2
+            # Advance time past the window
+            fake_time[0] = 1000.2
             t.record_event("wal_fallback")  # Recent
             t.prune()
-        assert len(t._events) == 1
+            assert len(t._events) == 1
 
 
 # ── Metrics integration ─────────────────────────────────────────────

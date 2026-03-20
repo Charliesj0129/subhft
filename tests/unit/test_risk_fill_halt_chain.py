@@ -15,7 +15,7 @@ import yaml
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.validators import DailyLossLimitValidator
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers

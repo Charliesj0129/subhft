@@ -18,7 +18,7 @@ from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 
 def _make_intent(

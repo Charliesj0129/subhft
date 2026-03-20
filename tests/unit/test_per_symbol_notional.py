@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.validators import PerSymbolNotionalValidator
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 
 def _make_intent(

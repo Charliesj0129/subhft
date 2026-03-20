@@ -13,45 +13,19 @@ import pytest
 import yaml
 
 from hft_platform.contracts.strategy import (
-    TIF,
     IntentType,
-    OrderIntent,
     RiskDecision,
     Side,
     StormGuardState,
 )
+from tests.factories.intents import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_intent(
-    *,
-    intent_id: int = 1,
-    price: int | float = 1_000_000,
-    qty: int = 1,
-    side: Side = Side.BUY,
-    intent_type: IntentType = IntentType.NEW,
-    strategy_id: str = "test_strat",
-    symbol: str = "2330",
-    idempotency_key: str = "",
-    ttl_ns: int = 0,
-) -> OrderIntent:
-    return OrderIntent(
-        intent_id=intent_id,
-        strategy_id=strategy_id,
-        symbol=symbol,
-        intent_type=intent_type,
-        side=side,
-        price=price,  # type: ignore[arg-type]
-        qty=qty,
-        tif=TIF.LIMIT,
-        idempotency_key=idempotency_key,
-        ttl_ns=ttl_ns,
-    )
-
-
+# TODO: migrate to tests.factories.components.make_risk_engine when available
 def _make_risk_engine(tmp_path, *, storm_state: StormGuardState = StormGuardState.NORMAL):
     """Create a RiskEngine with mocked dependencies."""
     cfg = {
@@ -98,13 +72,13 @@ class TestIntentToDecision:
     def test_decision_contains_same_intent_object(self, tmp_path):
         """RiskDecision.intent is the same object as the input intent."""
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent()
+        intent = make_order_intent()
         decision = engine.evaluate(intent)
         assert decision.intent is intent
 
     def test_decision_approved_carries_ok_reason(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent()
+        intent = make_order_intent()
         decision = engine.evaluate(intent)
         if decision.approved:
             assert decision.reason_code == "OK"
@@ -118,7 +92,7 @@ class TestIntentToDecision:
 class TestDecisionToCommand:
     def test_command_preserves_all_intent_fields(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(
+        intent = make_order_intent(
             strategy_id="s1",
             symbol="2330",
             side=Side.SELL,
@@ -149,7 +123,7 @@ class TestCancelBypass:
     def test_cancel_bypasses_storm_guard_halt(self, tmp_path):
         """CANCEL intent is allowed even in HALT state."""
         engine = _make_risk_engine(tmp_path, storm_state=StormGuardState.HALT)
-        intent = _make_intent(intent_type=IntentType.CANCEL)
+        intent = make_order_intent(intent_type=IntentType.CANCEL)
         decision = engine.evaluate(intent)
         # StormGuard HALT allows CANCEL
         assert decision.reason_code != "STORMGUARD_HALT"
@@ -163,14 +137,14 @@ class TestCancelBypass:
 class TestHaltBlocksNew:
     def test_halt_blocks_new_order(self, tmp_path):
         engine = _make_risk_engine(tmp_path, storm_state=StormGuardState.HALT)
-        intent = _make_intent(intent_type=IntentType.NEW)
+        intent = make_order_intent(intent_type=IntentType.NEW)
         decision = engine.evaluate(intent)
         assert not decision.approved
         assert decision.reason_code == "STORMGUARD_HALT"
 
     def test_halt_allows_cancel(self, tmp_path):
         engine = _make_risk_engine(tmp_path, storm_state=StormGuardState.HALT)
-        intent = _make_intent(intent_type=IntentType.CANCEL)
+        intent = make_order_intent(intent_type=IntentType.CANCEL)
         decision = engine.evaluate(intent)
         assert decision.reason_code != "STORMGUARD_HALT"
 
@@ -185,7 +159,7 @@ class TestCmdIdMonotonicity:
         engine = _make_risk_engine(tmp_path)
         ids = []
         for _ in range(10):
-            intent = _make_intent()
+            intent = make_order_intent()
             decision = engine.evaluate(intent)
             if decision.approved:
                 cmd = engine.create_command(decision.intent)
@@ -204,7 +178,7 @@ class TestCmdIdMonotonicity:
 class TestDeadlineFuture:
     def test_deadline_greater_than_created(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent()
+        intent = make_order_intent()
         decision = engine.evaluate(intent)
         assert decision.approved
         cmd = engine.create_command(decision.intent)
@@ -219,7 +193,7 @@ class TestDeadlineFuture:
 class TestStormGuardPropagation:
     def test_normal_state_propagated(self, tmp_path):
         engine = _make_risk_engine(tmp_path, storm_state=StormGuardState.NORMAL)
-        intent = _make_intent()
+        intent = make_order_intent()
         decision = engine.evaluate(intent)
         assert decision.approved
         cmd = engine.create_command(decision.intent)
@@ -227,7 +201,7 @@ class TestStormGuardPropagation:
 
     def test_warm_state_propagated(self, tmp_path):
         engine = _make_risk_engine(tmp_path, storm_state=StormGuardState.WARM)
-        intent = _make_intent()
+        intent = make_order_intent()
         decision = engine.evaluate(intent)
         if decision.approved:
             cmd = engine.create_command(decision.intent)
@@ -242,13 +216,13 @@ class TestStormGuardPropagation:
 class TestIdempotencyAndTtl:
     def test_idempotency_key_preserved(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(idempotency_key="dedup-abc-123")
+        intent = make_order_intent(idempotency_key="dedup-abc-123")
         decision = engine.evaluate(intent)
         assert decision.intent.idempotency_key == "dedup-abc-123"
 
     def test_ttl_ns_preserved(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(ttl_ns=500_000_000)
+        intent = make_order_intent(ttl_ns=500_000_000)
         decision = engine.evaluate(intent)
         assert decision.intent.ttl_ns == 500_000_000
 
@@ -261,7 +235,7 @@ class TestIdempotencyAndTtl:
 class TestCoreFieldsPreserved:
     def test_all_core_fields_survive_evaluate_and_create_command(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(
+        intent = make_order_intent(
             strategy_id="alpha_v2",
             symbol="TXFJ5",
             side=Side.SELL,
@@ -287,14 +261,14 @@ class TestCoreFieldsPreserved:
 class TestFloatPriceRejection:
     def test_float_price_rejected(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(price=123.45)
+        intent = make_order_intent(price=123.45)  # type: ignore[arg-type]
         decision = engine.evaluate(intent)
         assert not decision.approved
         assert decision.reason_code == "FLOAT_PRICE"
 
     def test_zero_float_rejected(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(price=0.0)
+        intent = make_order_intent(price=0.0)  # type: ignore[arg-type]
         decision = engine.evaluate(intent)
         assert not decision.approved
         assert decision.reason_code == "FLOAT_PRICE"
@@ -308,14 +282,14 @@ class TestFloatPriceRejection:
 class TestReasonCodeSemantics:
     def test_approved_reason_is_ok(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent()
+        intent = make_order_intent()
         decision = engine.evaluate(intent)
         if decision.approved:
             assert decision.reason_code == "OK"
 
     def test_rejected_reason_is_not_ok(self, tmp_path):
         engine = _make_risk_engine(tmp_path, storm_state=StormGuardState.HALT)
-        intent = _make_intent(intent_type=IntentType.NEW)
+        intent = make_order_intent(intent_type=IntentType.NEW)
         decision = engine.evaluate(intent)
         assert not decision.approved
         assert decision.reason_code != "OK"
@@ -369,7 +343,7 @@ def test_hypothesis_valid_intent_never_raises(price, qty):
 
     with tempfile.TemporaryDirectory() as td:
         engine = _make_risk_engine(pathlib.Path(td))
-        intent = _make_intent(price=price, qty=qty)
+        intent = make_order_intent(price=price, qty=qty)
         decision = engine.evaluate(intent)
         assert isinstance(decision, RiskDecision)
 
@@ -384,7 +358,7 @@ def test_hypothesis_cmd_id_always_positive(n):
 
     with tempfile.TemporaryDirectory() as td:
         engine = _make_risk_engine(pathlib.Path(td))
-        intent = _make_intent()
+        intent = make_order_intent()
         decision = engine.evaluate(intent)
         if decision.approved:
             cmd = engine.create_command(decision.intent)

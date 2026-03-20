@@ -16,8 +16,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
+from hft_platform.core import timebase
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
+from tests.factories import make_fill_event
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,9 +40,10 @@ def _make_fill(
     symbol: str = "2330",
     match_ts_ns: int = 1_000_000_000,
 ) -> FillEvent:
+    """Delegate to shared factory with auto-incrementing fill/order IDs."""
     global _FILL_SEQ
     _FILL_SEQ += 1
-    return FillEvent(
+    return make_fill_event(
         fill_id=f"F{_FILL_SEQ:04d}",
         account_id=account_id,
         order_id=f"O{_FILL_SEQ:04d}",
@@ -96,7 +99,7 @@ class TestFillNormalizePositionFlow:
                 "account_id": "acc1",
                 "ts": str(time.time()),
             },
-            ingest_ts_ns=time.time_ns(),
+            ingest_ts_ns=timebase.now_ns(),
         )
 
         fill = normalizer.normalize_fill(raw)
@@ -132,7 +135,7 @@ class TestFillNormalizePositionFlow:
                 "account_id": "acc1",
                 "ts": str(time.time()),
             },
-            ingest_ts_ns=time.time_ns(),
+            ingest_ts_ns=timebase.now_ns(),
         )
         fill_buy = normalizer.normalize_fill(raw_buy)
         assert fill_buy is not None
@@ -155,7 +158,7 @@ class TestFillNormalizePositionFlow:
                 "account_id": "acc1",
                 "ts": str(time.time()),
             },
-            ingest_ts_ns=time.time_ns(),
+            ingest_ts_ns=timebase.now_ns(),
         )
         fill_sell = normalizer.normalize_fill(raw_sell)
         assert fill_sell is not None
@@ -172,7 +175,7 @@ class TestFillNormalizePositionFlow:
         normalizer = ExecutionNormalizer()
 
         # Non-dict data
-        raw = RawExecEvent(topic="deal", data="not-a-dict", ingest_ts_ns=time.time_ns())
+        raw = RawExecEvent(topic="deal", data="not-a-dict", ingest_ts_ns=timebase.now_ns())
         result = normalizer.normalize_fill(raw)
         # Should not crash; returns None or a FillEvent with defaults
         # The normalizer uses getattr fallback, so it may return a fill with 0 qty
@@ -348,7 +351,7 @@ class TestExecutionRouterFillRouting:
                 "account_id": "acc1",
                 "ts": str(time.time()),
             },
-            ingest_ts_ns=time.time_ns(),
+            ingest_ts_ns=timebase.now_ns(),
         )
         await raw_queue.put(raw)
 
@@ -408,7 +411,7 @@ class TestExecutionRouterFillRouting:
                 "contract": {"code": "2330"},
                 "order": {"action": "Buy", "price": 100.0, "quantity": 5},
             },
-            ingest_ts_ns=time.time_ns(),
+            ingest_ts_ns=timebase.now_ns(),
         )
         await raw_queue.put(raw)
 
@@ -464,7 +467,7 @@ class TestExecutionRouterFillRouting:
                 "account_id": "acc1",
                 "ts": str(time.time()),
             },
-            ingest_ts_ns=time.time_ns(),
+            ingest_ts_ns=timebase.now_ns(),
         )
         await raw_queue.put(raw)
 
@@ -512,7 +515,7 @@ class TestExecutionRouterFillRouting:
         raw = RawExecEvent(
             topic="unknown_topic",
             data={"something": "irrelevant"},
-            ingest_ts_ns=time.time_ns(),
+            ingest_ts_ns=timebase.now_ns(),
         )
         await raw_queue.put(raw)
 
@@ -558,7 +561,7 @@ class TestExecutionRouterFillRouting:
         )
 
         # Malformed: data is None
-        raw = RawExecEvent(topic="deal", data=None, ingest_ts_ns=time.time_ns())
+        raw = RawExecEvent(topic="deal", data=None, ingest_ts_ns=timebase.now_ns())
         await raw_queue.put(raw)
 
         # Then a valid event to prove router survived
@@ -575,7 +578,7 @@ class TestExecutionRouterFillRouting:
                 "account_id": "acc1",
                 "ts": str(time.time()),
             },
-            ingest_ts_ns=time.time_ns(),
+            ingest_ts_ns=timebase.now_ns(),
         )
         await raw_queue.put(raw_valid)
 

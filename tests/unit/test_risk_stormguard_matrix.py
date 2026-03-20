@@ -22,7 +22,7 @@ from hft_platform.contracts.strategy import (
     StormGuardState,
 )
 from hft_platform.risk.validators import StormGuardFSM
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers

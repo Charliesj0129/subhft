@@ -42,6 +42,7 @@ dev = [
     "pre-commit>=3.7.0",
     "pytest-benchmark>=4.0.0",
     "pyarrow>=23.0.1",
+    "bandit>=1.8.0",
 ]
 
 research = [

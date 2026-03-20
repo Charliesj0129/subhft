@@ -8,9 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from hft_platform.contracts.execution import FillEvent, Side
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
-
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
@@ -61,7 +58,13 @@ def risk_yaml(tmp_path):
 
 @pytest.fixture()
 def make_fill():
-    """Factory that returns FillEvent instances with sensible defaults."""
+    """Factory that returns FillEvent instances with sensible defaults.
+
+    Delegates to ``tests.factories.events.make_fill_event`` while preserving
+    the auto-incrementing counter behaviour expected by existing unit tests.
+    """
+    from tests.factories.events import make_fill_event
+
     _counter = 0
 
     def _factory(**overrides):
@@ -72,9 +75,6 @@ def make_fill():
             account_id="acc_test",
             order_id=f"ord_{_counter}",
             strategy_id="test_strategy",
-            symbol="2330",
-            side=Side.BUY,
-            qty=1,
             price=1_000_000,  # 100.0 scaled x10000
             fee=0,
             tax=0,
@@ -82,14 +82,20 @@ def make_fill():
             match_ts_ns=_counter * 1_000_000,
         )
         defaults.update(overrides)
-        return FillEvent(**defaults)
+        return make_fill_event(**defaults)
 
     return _factory
 
 
 @pytest.fixture()
 def make_intent():
-    """Factory that returns OrderIntent instances with sensible defaults."""
+    """Factory that returns OrderIntent instances with sensible defaults.
+
+    Delegates to ``tests.factories.intents.make_order_intent`` while preserving
+    the auto-incrementing counter behaviour expected by existing unit tests.
+    """
+    from tests.factories.intents import make_order_intent
+
     _counter = 0
 
     def _factory(**overrides):
@@ -98,16 +104,11 @@ def make_intent():
         defaults = dict(
             intent_id=_counter,
             strategy_id="test_strategy",
-            symbol="2330",
-            intent_type=IntentType.NEW,
-            side=Side.BUY,
             price=1_000_000,  # 100.0 scaled x10000
-            qty=1,
-            tif=TIF.LIMIT,
             timestamp_ns=_counter * 1_000_000,
         )
         defaults.update(overrides)
-        return OrderIntent(**defaults)
+        return make_order_intent(**defaults)
 
     return _factory
 

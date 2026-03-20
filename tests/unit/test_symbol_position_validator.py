@@ -9,7 +9,7 @@ import pytest
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.execution.positions import Position, PositionStore
 from hft_platform.risk.symbol_position_validator import SymbolPositionLimitValidator
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 
 def _make_intent(

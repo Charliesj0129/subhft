@@ -4,18 +4,11 @@ All prices/PnL values use scaled integers (x10000) — no floats in financial ca
 Drawdown percentage is a display-only float, which is the expected and correct form.
 """
 
-import sys
-from pathlib import Path
-
 import pytest
-
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
 from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.execution.positions import PositionStore
+from tests.factories import make_fill_event
 
 
 def _make_fill(
@@ -29,11 +22,11 @@ def _make_fill(
     symbol: str = "SYM",
     ts: int = 0,
 ) -> FillEvent:
-    """Helper to construct a FillEvent with scaled-integer price."""
-    return FillEvent(
-        fill_id="F1",
+    """Delegate to shared factory with local defaults."""
+    return make_fill_event(
+        fill_id="fill-001",
         account_id=account_id,
-        order_id="O1",
+        order_id="order-001",
         strategy_id=strategy_id,
         symbol=symbol,
         side=side,

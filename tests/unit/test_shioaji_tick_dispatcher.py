@@ -11,12 +11,21 @@ import pytest
 
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
 
-def _wait_for_processed(dispatcher: TickDispatcher, expected: int, timeout: float = 2.0) -> None:
-    """Spin-wait until dispatcher.processed reaches expected count (1ms poll)."""
-    deadline = time.monotonic() + timeout
-    while dispatcher.processed < expected and time.monotonic() < deadline:
-        time.sleep(0.001)
+_POLL_TIMEOUT_S = 2.0
+_POLL_INTERVAL_S = 0.005
+
+
+def _wait_for(predicate, timeout_s: float = _POLL_TIMEOUT_S) -> None:
+    """Spin-poll *predicate* until it returns True or *timeout_s* elapses."""
+    deadline = time.monotonic() + timeout_s
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"predicate not satisfied within {timeout_s}s")
+        time.sleep(_POLL_INTERVAL_S)
 
 
 # ------------------------------------------------------------------
@@ -41,11 +50,9 @@ class TestProcessTickRouting:
     def test_async_dispatch_calls_process_tick_on_worker(self) -> None:
         """When async dispatch is enabled, process_tick_fn runs on worker thread."""
         received: list[tuple] = []
-        done = threading.Event()
 
         def _capture(*args: object, **kwargs: object) -> None:
             received.append((args, kwargs))
-            done.set()
 
         dispatcher = TickDispatcher(
             process_tick_fn=_capture,
@@ -54,7 +61,7 @@ class TestProcessTickRouting:
             queue_size=64,
         )
         dispatcher.enqueue_tick("topic", "quote")
-        assert done.wait(timeout=2.0), "Timed out waiting for worker to process tick"
+        _wait_for(lambda: dispatcher.processed >= 1)
         dispatcher.stop_worker()
 
         assert len(received) == 1
@@ -63,14 +70,14 @@ class TestProcessTickRouting:
     def test_process_tick_exception_does_not_crash_worker(self) -> None:
         """Errors inside process_tick_fn are caught; worker keeps running."""
         call_count = 0
-        second_done = threading.Event()
+        call_event = threading.Event()
 
         def _flaky(*args: object, **kwargs: object) -> None:
             nonlocal call_count
             call_count += 1
+            call_event.set()
             if call_count == 1:
                 raise RuntimeError("boom")
-            second_done.set()
 
         dispatcher = TickDispatcher(
             process_tick_fn=_flaky,
@@ -79,9 +86,10 @@ class TestProcessTickRouting:
             queue_size=64,
         )
         dispatcher.enqueue_tick("a")
-        _wait_for_processed(dispatcher, 1)
+        call_event.wait(timeout=_POLL_TIMEOUT_S)
+        call_event.clear()
         dispatcher.enqueue_tick("b")
-        assert second_done.wait(timeout=2.0), "Timed out waiting for second tick"
+        call_event.wait(timeout=_POLL_TIMEOUT_S)
         dispatcher.stop_worker()
         assert call_count == 2
 
@@ -121,7 +129,7 @@ class TestEnqueueDequeue:
         dispatcher.enqueue_tick("a")
         dispatcher.enqueue_tick("b")
         assert dispatcher.enqueued == 2
-        _wait_for_processed(dispatcher, 2)
+        _wait_for(lambda: dispatcher.processed >= 2)
         dispatcher.stop_worker()
 
     def test_fallback_to_inline_when_queue_none(self) -> None:
@@ -156,7 +164,7 @@ class TestEnqueueDequeue:
         )
         for i in range(6):
             dispatcher.enqueue_tick(f"t{i}")
-        _wait_for_processed(dispatcher, 6)
+        _wait_for(lambda: dispatcher.processed >= 6)
         dispatcher.stop_worker()
         assert received == [f"t{i}" for i in range(6)]
         assert dispatcher.processed == 6
@@ -293,11 +301,9 @@ class TestDequeTransportRouting:
 
     def test_async_dispatch_via_deque(self) -> None:
         received: list[tuple] = []
-        done = threading.Event()
 
         def _capture(*args: object, **kwargs: object) -> None:
             received.append((args, kwargs))
-            done.set()
 
         dispatcher = TickDispatcher(
             process_tick_fn=_capture,
@@ -307,7 +313,7 @@ class TestDequeTransportRouting:
             use_deque=True,
         )
         dispatcher.enqueue_tick("topic", "quote")
-        assert done.wait(timeout=2.0), "Timed out waiting for deque worker"
+        _wait_for(lambda: dispatcher.processed >= 1)
         dispatcher.stop_worker()
 
         assert len(received) == 1
@@ -315,14 +321,14 @@ class TestDequeTransportRouting:
 
     def test_exception_does_not_crash_deque_worker(self) -> None:
         call_count = 0
-        second_done = threading.Event()
+        call_event = threading.Event()
 
         def _flaky(*args: object, **kwargs: object) -> None:
             nonlocal call_count
             call_count += 1
+            call_event.set()
             if call_count == 1:
                 raise RuntimeError("boom")
-            second_done.set()
 
         dispatcher = TickDispatcher(
             process_tick_fn=_flaky,
@@ -332,9 +338,10 @@ class TestDequeTransportRouting:
             use_deque=True,
         )
         dispatcher.enqueue_tick("a")
-        _wait_for_processed(dispatcher, 1)
+        call_event.wait(timeout=_POLL_TIMEOUT_S)
+        call_event.clear()
         dispatcher.enqueue_tick("b")
-        assert second_done.wait(timeout=2.0), "Timed out waiting for second deque tick"
+        call_event.wait(timeout=_POLL_TIMEOUT_S)
         dispatcher.stop_worker()
         assert call_count == 2
 
@@ -374,7 +381,7 @@ class TestDequeEnqueueDequeue:
         dispatcher.enqueue_tick("a")
         dispatcher.enqueue_tick("b")
         assert dispatcher.enqueued == 2
-        _wait_for_processed(dispatcher, 2)
+        _wait_for(lambda: dispatcher.processed >= 2)
         dispatcher.stop_worker()
 
     def test_fallback_to_inline_when_deque_none(self) -> None:
@@ -411,7 +418,7 @@ class TestDequeEnqueueDequeue:
         )
         for i in range(6):
             dispatcher.enqueue_tick(f"t{i}")
-        _wait_for_processed(dispatcher, 6)
+        _wait_for(lambda: dispatcher.processed >= 6)
         dispatcher.stop_worker()
         assert received == [f"t{i}" for i in range(6)]
         assert dispatcher.processed == 6
@@ -547,7 +554,7 @@ class TestDequeBackwardCompat:
         items = [f"item_{i}" for i in range(10)]
         for item in items:
             dispatcher.enqueue_tick(item)
-        _wait_for_processed(dispatcher, 10)
+        _wait_for(lambda: dispatcher.processed >= 10)
         dispatcher.stop_worker()
         assert received == items
         assert dispatcher.processed == 10

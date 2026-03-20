@@ -18,7 +18,7 @@ import yaml
 os.environ["HFT_RUST_POSITIONS"] = "0"
 
 from hft_platform.contracts.execution import FillEvent, Side
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
+from tests.factories.intents import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,27 +53,7 @@ def _make_fill(
     )
 
 
-def _make_intent(
-    *,
-    price: int | float = 1_000_000,
-    qty: int = 1,
-    side: Side = Side.BUY,
-    intent_type: IntentType = IntentType.NEW,
-    strategy_id: str = "test_strat",
-    symbol: str = "2330",
-) -> OrderIntent:
-    return OrderIntent(
-        intent_id=1,
-        strategy_id=strategy_id,
-        symbol=symbol,
-        intent_type=intent_type,
-        side=side,
-        price=price,  # type: ignore[arg-type]
-        qty=qty,
-        tif=TIF.LIMIT,
-    )
-
-
+# TODO: migrate to tests.factories.components.make_risk_engine when available
 def _make_risk_engine(tmp_path):
     """Create a RiskEngine with mocked dependencies."""
     cfg = {
@@ -125,14 +105,14 @@ def _make_position_store():
 class TestFloatRejection:
     def test_float_price_rejected_by_risk_engine(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(price=100.5)  # float price
+        intent = make_order_intent(price=100.5)  # type: ignore[arg-type]  # float price
         decision = engine.evaluate(intent)
         assert not decision.approved
         assert decision.reason_code == "FLOAT_PRICE"
 
     def test_int_price_not_rejected_as_float(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(price=1_000_000)
+        intent = make_order_intent(price=1_000_000)
         decision = engine.evaluate(intent)
         # Should not be rejected for FLOAT_PRICE
         assert decision.reason_code != "FLOAT_PRICE"

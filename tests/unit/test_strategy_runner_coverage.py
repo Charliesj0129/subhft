@@ -10,28 +10,25 @@ import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
+from tests.factories import make_bidask_event, make_lob_stats_event, make_tick_event
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_meta(seq: int = 1, source_ts: int = 1000, local_ts: int = 2000, topic: str = "tick") -> MetaData:
-    return MetaData(seq=seq, source_ts=source_ts, local_ts=local_ts, topic=topic)
-
-
 def _make_tick(symbol: str = "2330", price: int = 5000000, volume: int = 100) -> TickEvent:
-    return TickEvent(meta=_make_meta(), symbol=symbol, price=price, volume=volume)
+    return make_tick_event(symbol=symbol, price=price, volume=volume, source_ts=1000, local_ts=2000)
 
 
 def _make_bidask(symbol: str = "2330") -> BidAskEvent:
     bids = np.array([[5000000, 100]], dtype=np.int64)
     asks = np.array([[5010000, 200]], dtype=np.int64)
-    return BidAskEvent(meta=_make_meta(topic="bidask"), symbol=symbol, bids=bids, asks=asks)
+    return make_bidask_event(symbol=symbol, bids=bids, asks=asks, source_ts=1000, local_ts=2000)
 
 
 def _make_lobstats(symbol: str = "2330") -> LOBStatsEvent:
-    return LOBStatsEvent(
+    return make_lob_stats_event(
         symbol=symbol,
         ts=1000,
         imbalance=0.1,

@@ -110,8 +110,7 @@ class TestQueueDepthNeverExceedsMaxsize:
                 pass
         for _ in range(m_gets):
             q.get_nowait()
-        expected_depth = min(n_puts - m_gets, maxsize)
-        # Since only maxsize items were accepted, depth = maxsize - m_gets
+        # Only maxsize items were accepted, so depth = maxsize - m_gets
         assert q.qsize() == maxsize - m_gets
         assert q.qsize() <= maxsize
 
@@ -234,16 +233,14 @@ class TestRawQueueBounded:
 
     def test_raw_queue_default_is_bounded(self) -> None:
         """Verify the documented default raw queue size is positive (bounded)."""
-        from hft_platform.services.bootstrap import BootstrapService
+        from hft_platform.services.bootstrap import SystemBootstrapper
 
-        default = BootstrapService.DEFAULT_RAW_QUEUE_SIZE
+        default = SystemBootstrapper.DEFAULT_RAW_QUEUE_SIZE
         assert default > 0, "Raw queue must have a positive maxsize (bounded)"
         assert default == 65536, "Expected default raw queue size of 65536"
 
     def test_bounded_queue_with_raw_queue_size(self) -> None:
-        """A queue created with the default raw queue size rejects overflow."""
-
-        # Use a small queue to avoid allocating 65k items in test
+        """A queue created with a bounded maxsize rejects overflow."""
         maxsize = 8
         q: asyncio.Queue[int] = asyncio.Queue(maxsize=maxsize)
         for i in range(maxsize):
@@ -285,34 +282,34 @@ class TestRiskQueueBounded:
     """
 
     def test_risk_queue_default_is_bounded(self) -> None:
-        from hft_platform.services.bootstrap import BootstrapService
+        from hft_platform.services.bootstrap import SystemBootstrapper
 
-        default = BootstrapService.DEFAULT_RISK_QUEUE_SIZE
+        default = SystemBootstrapper.DEFAULT_RISK_QUEUE_SIZE
         assert default > 0, "Risk queue must have a positive maxsize (bounded)"
         assert default == 4096, "Expected default risk queue size of 4096"
 
     def test_order_queue_default_is_bounded(self) -> None:
-        from hft_platform.services.bootstrap import BootstrapService
+        from hft_platform.services.bootstrap import SystemBootstrapper
 
-        default = BootstrapService.DEFAULT_ORDER_QUEUE_SIZE
+        default = SystemBootstrapper.DEFAULT_ORDER_QUEUE_SIZE
         assert default > 0, "Order queue must have a positive maxsize (bounded)"
 
     def test_recorder_queue_default_is_bounded(self) -> None:
-        from hft_platform.services.bootstrap import BootstrapService
+        from hft_platform.services.bootstrap import SystemBootstrapper
 
-        default = BootstrapService.DEFAULT_RECORDER_QUEUE_SIZE
+        default = SystemBootstrapper.DEFAULT_RECORDER_QUEUE_SIZE
         assert default > 0, "Recorder queue must have a positive maxsize (bounded)"
         assert default == 16384, "Expected default recorder queue size of 16384"
 
     def test_all_platform_queues_have_positive_maxsize(self) -> None:
-        """All queue defaults in BootstrapService must be positive (bounded)."""
-        from hft_platform.services.bootstrap import BootstrapService
+        """All queue defaults in SystemBootstrapper must be positive (bounded)."""
+        from hft_platform.services.bootstrap import SystemBootstrapper
 
         queue_attrs = [
-            attr for attr in dir(BootstrapService) if attr.startswith("DEFAULT_") and attr.endswith("_QUEUE_SIZE")
+            attr for attr in dir(SystemBootstrapper) if attr.startswith("DEFAULT_") and attr.endswith("_QUEUE_SIZE")
         ]
         assert len(queue_attrs) >= 3, "Expected at least 3 queue size defaults"
         for attr in queue_attrs:
-            value = getattr(BootstrapService, attr)
+            value = getattr(SystemBootstrapper, attr)
             assert isinstance(value, int), f"{attr} should be int, got {type(value)}"
             assert value > 0, f"{attr} must be positive (bounded), got {value}"

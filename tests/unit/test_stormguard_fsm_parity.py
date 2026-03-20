@@ -19,7 +19,6 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.risk.validators import StormGuardFSM
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

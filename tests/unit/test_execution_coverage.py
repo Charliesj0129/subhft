@@ -7,40 +7,24 @@ import pytest
 
 from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.positions import Position, PositionStore
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from tests.factories import make_fill_event
 
 
-def _make_fill(
-    fill_id: str = "F001",
-    account_id: str = "ACC1",
-    order_id: str = "ORD1",
-    strategy_id: str = "s1",
-    symbol: str = "2330",
-    side: Side = Side.BUY,
-    qty: int = 10,
-    price: int = 5000000,  # 500.0 x10000
-    fee: int = 200,  # scaled
-    tax: int = 0,
-    ingest_ts_ns: int = 1000,
-    match_ts_ns: int = 2000,
-) -> FillEvent:
-    return FillEvent(
-        fill_id=fill_id,
-        account_id=account_id,
-        order_id=order_id,
-        strategy_id=strategy_id,
-        symbol=symbol,
-        side=side,
-        qty=qty,
-        price=price,
-        fee=fee,
-        tax=tax,
-        ingest_ts_ns=ingest_ts_ns,
-        match_ts_ns=match_ts_ns,
+def _make_fill(**overrides) -> FillEvent:
+    """Delegate to shared factory with local defaults."""
+    defaults = dict(
+        fill_id="F001",
+        account_id="ACC1",
+        order_id="order-001",
+        strategy_id="s1",
+        qty=10,
+        price=5000000,
+        fee=200,
+        ingest_ts_ns=1000,
+        match_ts_ns=2000,
     )
+    defaults.update(overrides)
+    return make_fill_event(**defaults)
 
 
 # ---------------------------------------------------------------------------

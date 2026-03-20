@@ -12,7 +12,7 @@ import pytest
 from hft_platform.contracts.strategy import IntentType, Side
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.system import HFTSystem
-from tests.factories.intents import make_order_intent
+from tests.factories import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers (mirror test_system_lifecycle.py patterns)

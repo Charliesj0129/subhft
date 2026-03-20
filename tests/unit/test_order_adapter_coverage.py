@@ -7,6 +7,7 @@ import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side, StormGuardState
 from hft_platform.core import timebase
+from tests.factories import make_order_intent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,8 +27,9 @@ def _make_intent(
     trace_id: str = "",
     source_ts_ns: int = 0,
 ) -> OrderIntent:
-    return OrderIntent(
-        intent_id=intent_id,
+    """Delegate to shared factory with local defaults."""
+    return make_order_intent(
+        intent_id,
         strategy_id=strategy_id,
         symbol=symbol,
         intent_type=intent_type,

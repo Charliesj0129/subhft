@@ -4,17 +4,10 @@ Every test runs the same fill sequence through both backends and asserts
 identical net_qty, avg_price, realized_pnl, and fees.
 """
 
-import sys
-from pathlib import Path
-
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-from hft_platform.contracts.execution import FillEvent, Side
+from hft_platform.contracts.execution import Side
+from tests.factories import make_fill_event
 
 
 def _load_rust_tracker():
@@ -75,10 +68,9 @@ SELL = 1
 
 
 def _make_fill(side, qty, price, fee=0, tax=0, ts=0):
-    return FillEvent(
-        fill_id="F1",
+    """Delegate to shared factory -- positional ``side`` is 0=BUY, 1=SELL."""
+    return make_fill_event(
         account_id="ACC",
-        order_id="O1",
         strategy_id="STRAT",
         symbol="SYM",
         side=Side.BUY if side == BUY else Side.SELL,
