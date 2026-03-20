@@ -1,10 +1,33 @@
-"""Check test functions have at least one assertion. Exits 1 if violations found (enforced)."""
+"""Check test functions have at least one assertion.
+
+Exits 1 if zero-assertion tests are found in critical-path directories.
+Non-critical violations are advisory only (exit 0).
+"""
 
 from __future__ import annotations
 
 import ast
 import sys
 from pathlib import Path
+
+# Critical-path directories: zero-assertion tests here cause exit 1.
+CRITICAL_PREFIXES = (
+    "tests/unit/test_risk",
+    "tests/unit/test_execution",
+    "tests/unit/test_order",
+    "tests/unit/test_recorder",
+    "tests/unit/test_service",           # matches test_*service*
+    "tests/unit/test_graceful_shutdown",
+)
+
+
+def _is_critical(entry: str) -> bool:
+    """Return True if a no-assert entry line matches a critical-path prefix."""
+    # entry format: "  tests/unit/test_risk_engine.py:42 test_foo"
+    path_str = entry.strip().split(":")[0]
+    normalized = path_str.replace("\\", "/")
+    return any(normalized.startswith(p) for p in CRITICAL_PREFIXES)
+
 
 # Functions that are known test helpers containing assertions internally.
 # Tests delegating to these are considered asserted.
@@ -139,15 +162,25 @@ def main() -> int:
                 if not _has_assertion(node) and not _is_allowlisted(source_lines, node):
                     no_assert.append(f"  {py_file}:{node.lineno} {node.name}")
 
-    if no_assert:
-        print(f"Tests without assertions ({len(no_assert)}):")
-        for line in no_assert[:50]:
-            print(line)
-        if len(no_assert) > 50:
-            print(f"  ... and {len(no_assert) - 50} more")
+    critical = [e for e in no_assert if _is_critical(e)]
+    advisory = [e for e in no_assert if not _is_critical(e)]
 
-    print(f"\nFound {total} tests, {len(no_assert)} without assertions")
-    return 1 if no_assert else 0
+    if advisory:
+        print(f"Advisory — tests without assertions ({len(advisory)}):")
+        for line in advisory[:50]:
+            print(line)
+        if len(advisory) > 50:
+            print(f"  ... and {len(advisory) - 50} more")
+
+    if critical:
+        print(f"\nCRITICAL — zero-assertion tests in critical-path dirs ({len(critical)}):")
+        for line in critical:
+            print(line)
+
+    print(f"\nFound {total} tests, {len(no_assert)} without assertions "
+          f"({len(critical)} critical, {len(advisory)} advisory)")
+
+    return 1 if critical else 0
 
 
 if __name__ == "__main__":

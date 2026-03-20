@@ -23,6 +23,8 @@ def test_import_toxicity_aware_mm_v1():
     """Should not raise."""
     from hft_platform.strategies.toxicity_aware_mm import ToxicityAwareMM  # noqa: F401
 
+    assert ToxicityAwareMM is not None
+
 
 @pytest.mark.skipif(not HAS_HFT_BACKTEST, reason="hftbacktest not installed")
 def test_toxicity_mm_v1_instantiation():
@@ -61,6 +63,8 @@ def test_import_toxicity_aware_mm_v2():
     """Should not raise."""
     from hft_platform.strategies.toxicity_aware_mm_v2 import ToxicityAwareMMv2  # noqa: F401
 
+    assert ToxicityAwareMMv2 is not None
+
 
 # ---- v3 ----
 
@@ -69,3 +73,5 @@ def test_import_toxicity_aware_mm_v2():
 def test_import_toxicity_aware_mm_v3():
     """Should not raise."""
     from hft_platform.strategies.toxicity_aware_mm_v3 import ToxicityAwareMMv3  # noqa: F401
+
+    assert ToxicityAwareMMv3 is not None

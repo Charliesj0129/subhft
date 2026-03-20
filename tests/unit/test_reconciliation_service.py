@@ -24,3 +24,20 @@ async def test_reconciliation_sync_portfolio_logs_remote_positions(tmp_path):
 
     # Check that broker state was logged
     mock_logger.info.assert_any_call("Portfolio Sync: Broker State", positions={"AAA": 2, "BBB": -3})
+
+    # Verify discrepancies were computed (local store is empty, so both symbols differ)
+    discreps = service._last_discrepancies
+    assert isinstance(discreps, list)
+    assert len(discreps) == 2, f"Expected 2 discrepancies, got {len(discreps)}"
+
+    by_symbol = {d.symbol: d for d in discreps}
+    assert "AAA" in by_symbol
+    assert "BBB" in by_symbol
+    # local=0, broker=2 → diff = 0 - 2 = -2
+    assert by_symbol["AAA"].diff == -2
+    assert by_symbol["AAA"].local_qty == 0
+    assert by_symbol["AAA"].broker_qty == 2
+    # local=0, broker=-3 → diff = 0 - (-3) = 3
+    assert by_symbol["BBB"].diff == 3
+    assert by_symbol["BBB"].local_qty == 0
+    assert by_symbol["BBB"].broker_qty == -3

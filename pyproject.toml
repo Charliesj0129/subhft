@@ -223,6 +223,15 @@ namespace_packages = true
 explicit_package_bases = true
 mypy_path = ["src"]
 
+[[tool.mypy.overrides]]
+module = [
+    "hft_platform.risk.*",
+    "hft_platform.order.*",
+    "hft_platform.execution.*",
+    "hft_platform.contracts.*",
+]
+disallow_untyped_defs = true
+
 [tool.uv]
 # Broker SDKs are mutually exclusive extras.
 conflicts = [
