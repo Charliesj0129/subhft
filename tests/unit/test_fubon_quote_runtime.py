@@ -88,16 +88,19 @@ class TestTradeCallback:
     def test_trade_no_callback_noop(self) -> None:
         """No crash when on_tick is not registered."""
         rt = _make_runtime()
-        rt._on_fubon_trade({"symbol": "2330", "close": 100.0, "volume": 1, "datetime": 0})
+        result = rt._on_fubon_trade({"symbol": "2330", "close": 100.0, "volume": 1, "datetime": 0})
         # Should silently return without error
+        assert result is None
 
     def test_trade_callback_error_logged(self) -> None:
         """Malformed data should not crash; error is logged."""
         rt = _make_runtime()
-        rt.register_quote_callbacks(on_tick=MagicMock(), on_bidask=MagicMock())
+        cb = MagicMock()
+        rt.register_quote_callbacks(on_tick=cb, on_bidask=MagicMock())
         # 'close' is a non-numeric string — will fail float()
-        rt._on_fubon_trade({"symbol": "2330", "close": "bad", "volume": 1, "datetime": 0})
-        # No exception propagated
+        result = rt._on_fubon_trade({"symbol": "2330", "close": "bad", "volume": 1, "datetime": 0})
+        # No exception propagated; callback should not have been called with valid data
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -180,9 +183,10 @@ class TestBookCallback:
 
     def test_book_no_callback_noop(self) -> None:
         rt = _make_runtime()
-        rt._on_fubon_book(
+        result = rt._on_fubon_book(
             {"symbol": "2330", "bid_prices": [], "bid_sizes": [], "ask_prices": [], "ask_sizes": [], "datetime": 0}
         )
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +332,7 @@ class TestStop:
         rt = _make_runtime()
         rt.stop()
         rt.stop()  # second call must not crash
+        assert len(rt._subscribed) == 0
 
 
 # ---------------------------------------------------------------------------

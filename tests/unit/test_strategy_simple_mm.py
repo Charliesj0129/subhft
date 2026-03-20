@@ -46,12 +46,17 @@ class TestSimpleMarketMaker:
         # buy() and sell() call _emit_intent when no ctx is set, they return early
         # but on_stats itself should have completed without error
         assert isinstance(strat._generated_intents, list)
+        # buy() and sell() call _emit_intent when no ctx is set, they return early
+        # but on_stats itself should have completed without error
+        assert isinstance(strat._generated_intents, list)
 
     def test_on_stats_skips_invalid_prices(self):
         strat = SimpleMarketMaker("test_smm")
         strat._positions = {}
         stats = _make_stats(mid_price_x2=0, spread_scaled=0, best_bid=0, best_ask=0)
         strat.on_stats(stats)  # Should not raise — early return on invalid
+        # No intents generated on invalid prices (early return)
+        assert len(strat._generated_intents) == 0
         # No intents generated on invalid prices (early return)
         assert len(strat._generated_intents) == 0
 
@@ -63,12 +68,16 @@ class TestSimpleMarketMaker:
         strat.on_stats(stats)  # Should not raise — early return on None
         # No intents generated when mid_price_x2 is None (early return)
         assert len(strat._generated_intents) == 0
+        # No intents generated when mid_price_x2 is None (early return)
+        assert len(strat._generated_intents) == 0
 
     def test_on_stats_negative_spread(self):
         strat = SimpleMarketMaker("test_smm")
         strat._positions = {}
         stats = _make_stats(spread_scaled=-1)
         strat.on_stats(stats)  # Should not raise — early return
+        # No intents generated on negative spread (early return)
+        assert len(strat._generated_intents) == 0
         # No intents generated on negative spread (early return)
         assert len(strat._generated_intents) == 0
 
@@ -81,12 +90,19 @@ class TestSimpleMarketMaker:
         # Strategy should still attempt to generate intents (no ctx so buy/sell are no-ops)
         assert isinstance(strat._generated_intents, list)
         assert len(strat._generated_intents) == 0  # no ctx means buy/sell return early
+        # Strategy should still attempt to generate intents (no ctx so buy/sell are no-ops)
+        assert isinstance(strat._generated_intents, list)
+        assert len(strat._generated_intents) == 0  # no ctx means buy/sell return early
 
     def test_max_position_limit(self):
         strat = SimpleMarketMaker("test_smm")
         strat._positions = {"2330": 100}
         stats = _make_stats()
         strat.on_stats(stats)  # Should not raise — only sell side at max pos
+        # At max position (100), buy is skipped but sell still attempted
+        # No ctx means buy/sell return early, but verify no crash
+        assert isinstance(strat._generated_intents, list)
+        assert len(strat._generated_intents) == 0  # no ctx means buy/sell return early
         # At max position (100), buy is skipped but sell still attempted
         # No ctx means buy/sell return early, but verify no crash
         assert isinstance(strat._generated_intents, list)

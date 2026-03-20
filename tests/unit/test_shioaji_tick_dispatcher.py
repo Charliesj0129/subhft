@@ -197,6 +197,8 @@ class TestWorkerLifecycle:
         # Calling stop without start should not raise.
         dispatcher.stop_worker()
         dispatcher.stop_worker()
+        assert dispatcher.running is False
+        assert dispatcher._thread is None
 
     def test_no_worker_when_async_disabled(self) -> None:
         cb = MagicMock()
@@ -259,7 +261,8 @@ class TestWrappedTickCb:
 
     def test_noop_when_callback_none(self) -> None:
         # Should not raise.
-        TickDispatcher.wrapped_tick_cb(None, "a")
+        result = TickDispatcher.wrapped_tick_cb(None, "a")
+        assert result is None
 
     def test_exception_swallowed(self) -> None:
         cb = MagicMock(side_effect=RuntimeError("oops"))
@@ -445,6 +448,9 @@ class TestDequeWorkerLifecycle:
         )
         dispatcher.stop_worker()
         dispatcher.stop_worker()
+        assert dispatcher.running is False
+        assert dispatcher._thread is None
+        assert dispatcher._deque is None
 
 
 class TestDequeMetrics:

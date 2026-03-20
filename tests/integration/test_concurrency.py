@@ -101,12 +101,15 @@ def _mock_metrics():
 
 def _make_position_store():
     """Create a Python-backed PositionStore with mocked dependencies."""
-    with patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr, \
-         patch("hft_platform.execution.positions.SymbolMetadata"), \
-         patch("hft_platform.execution.positions.PriceCodec"), \
-         patch("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider"):
+    with (
+        patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr,
+        patch("hft_platform.execution.positions.SymbolMetadata"),
+        patch("hft_platform.execution.positions.PriceCodec"),
+        patch("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider"),
+    ):
         mock_mr.get.return_value = _mock_metrics()
         from hft_platform.execution.positions import PositionStore
+
         store = PositionStore()
     return store
 
@@ -193,9 +196,11 @@ class TestCmdIdMonotonicity:
         """20 threads x 100 IDs with lock -> all 2000 unique."""
         config_path = _risk_config(tmp_path)
         with patch.dict(os.environ, {"HFT_RISK_CMD_ID_LOCK": "1"}):
-            with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-                 patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-                 patch("hft_platform.risk.engine.get_audit_writer"):
+            with (
+                patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+                patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+                patch("hft_platform.risk.engine.get_audit_writer"),
+            ):
                 mock_mr.get.return_value = _mock_metrics()
                 mock_lr.get.return_value = MagicMock()
 
@@ -233,9 +238,11 @@ class TestCmdIdMonotonicity:
         """Sequential generation without lock is monotonically increasing."""
         config_path = _risk_config(tmp_path)
         with patch.dict(os.environ, {"HFT_RISK_CMD_ID_LOCK": "0"}):
-            with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-                 patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-                 patch("hft_platform.risk.engine.get_audit_writer"):
+            with (
+                patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+                patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+                patch("hft_platform.risk.engine.get_audit_writer"),
+            ):
                 mock_mr.get.return_value = _mock_metrics()
                 mock_lr.get.return_value = MagicMock()
 
@@ -301,8 +308,8 @@ class TestStormGuardConcurrency:
 
             threads = [
                 threading.Thread(target=updater, args=(-300,)),  # Try HALT
-                threading.Thread(target=updater, args=(-50,)),   # Try WARM
-                threading.Thread(target=updater, args=(0,)),     # Try NORMAL
+                threading.Thread(target=updater, args=(-50,)),  # Try WARM
+                threading.Thread(target=updater, args=(0,)),  # Try NORMAL
                 threading.Thread(target=updater, args=(-150,)),  # Try STORM
             ]
             for t in threads:
@@ -387,9 +394,11 @@ class TestRiskEvaluateConcurrent:
         """Multiple threads evaluating risk simultaneously."""
         config_path = _risk_config(tmp_path)
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -458,9 +467,11 @@ class TestConfigReloadDuringEvaluation:
         """Reloading config while evaluating intents must not crash."""
         config_path = _risk_config(tmp_path)
 
-        with patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr, \
-             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr, \
-             patch("hft_platform.risk.engine.get_audit_writer"):
+        with (
+            patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
+            patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
+            patch("hft_platform.risk.engine.get_audit_writer"),
+        ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
 
@@ -662,9 +673,7 @@ class TestAtomicPositionUpdate:
                         net_qty = pos.net_qty
                         avg_price = pos.avg_price_scaled
                         if net_qty > 0 and avg_price <= 0:
-                            inconsistencies.append(
-                                f"net_qty={net_qty}, avg_price={avg_price}"
-                            )
+                            inconsistencies.append(f"net_qty={net_qty}, avg_price={avg_price}")
 
             writer_thread = threading.Thread(target=writer)
             reader_threads = [threading.Thread(target=reader) for _ in range(3)]

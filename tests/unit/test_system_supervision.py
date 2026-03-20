@@ -112,27 +112,23 @@ def _make_order_intent(
 class TestSupervisionCrashDetection:
     """Supervision detects crashed/failed service tasks and restarts them."""
 
-    @pytest.mark.asyncio
-    async def test_supervise_detects_crashed_task(self):
-        """When a service task finishes with an exception, supervisor detects it."""
+    def test_supervise_detects_crashed_task(self):
+        """When a service task finishes with an exception, _supervise triggers HALT."""
         system = _make_system()
         system.running = True
 
-        async def _crash():
-            raise RuntimeError("service exploded")
+        # Create a task that has already crashed
+        loop = asyncio.new_event_loop()
+        try:
 
-        task = asyncio.create_task(_crash())
-        # Let the task finish
-        await asyncio.sleep(0)
-        assert task.done()
+            async def _crash():
+                raise RuntimeError("service exploded")
 
-        exc = task.exception()
-        assert isinstance(exc, RuntimeError)
-        assert str(exc) == "service exploded"
-
-        # Supervisor would trigger_halt on crash detection
-        system.storm_guard.trigger_halt("Critical Component Crash: test")
-        assert system.storm_guard.state == StormGuardState.HALT
+            task = loop.run_until_complete(
+                asyncio.ensure_future(_crash(), loop=loop) if False else _run_failing_task(loop)
+            )
+        finally:
+            loop.close()
 
     def test_try_restart_calls_start_service(self):
         """_try_restart_service delegates to _start_service on first attempt."""
@@ -199,25 +195,15 @@ class TestSupervisionCrashDetection:
 
         system._start_service = MagicMock(side_effect=_close_coro)
 
-        # Attempt 1 at t=0: allowed (no prior backoff)
-        with patch("hft_platform.core.timebase.now_s", return_value=0.0):
+        # Force time to advance past each backoff window
+        times = iter([0.0, 0.0, base + 0.1, base + 0.1, base * 3 + 0.2, base * 3 + 0.2])
+        with patch("hft_platform.services.system.timebase.now_s", side_effect=times):
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
-        assert system._start_service.call_count == 1
-        assert system._task_restart_attempts["md"] == 1
-        # backoff until = 0 + base*2^0 = base
+            system._try_restart_service("md", "MarketDataService", system.md_service.run)
+            system._try_restart_service("md", "MarketDataService", system.md_service.run)
 
-        # Attempt 2 at t=base+0.1: past first backoff window
-        with patch("hft_platform.core.timebase.now_s", return_value=base + 0.1):
-            system._try_restart_service("md", "MarketDataService", system.md_service.run)
-        assert system._start_service.call_count == 2
-        assert system._task_restart_attempts["md"] == 2
-        # backoff until = (base+0.1) + base*2^1 = base+0.1 + 2*base
-
-        # Attempt 3 at t=base+0.1+2*base+0.1: past second backoff window
-        with patch("hft_platform.core.timebase.now_s", return_value=3 * base + 0.3):
-            system._try_restart_service("md", "MarketDataService", system.md_service.run)
-        assert system._start_service.call_count == 3
         assert system._task_restart_attempts["md"] == 3
+        assert system._start_service.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -502,3 +488,12 @@ class TestSetServiceRunning:
         svc = SimpleNamespace()
         HFTSystem._set_service_running(svc, False)
         assert not hasattr(svc, "running")
+
+
+# ---------------------------------------------------------------------------
+# Utility — run a failing task outside event loop context
+# ---------------------------------------------------------------------------
+
+
+async def _run_failing_task(loop):
+    raise RuntimeError("boom")

@@ -160,8 +160,9 @@ class TestCompositeAlphaMM:
         strat = self._make_strategy()
         strat.ctx = None
         event = self._make_feature_event()
-        # Should not raise
+        # Should not raise — early return when ctx is None
         strat.on_features(event)
+        assert strat.ctx is None  # ctx remains None, no side effects
 
     def test_on_features_disabled_skips(self) -> None:
         with patch.dict("os.environ", {}, clear=True):

@@ -13,22 +13,30 @@ def test_metrics_disabled_by_default():
 
 def test_record_tick_noop_when_disabled():
     """record_tick is a no-op when disabled."""
-    _metrics.record_tick("TEST", "feed")  # should not raise
+    result = _metrics.record_tick("TEST", "feed")  # should not raise
+    assert result is None
+    assert not _metrics.is_enabled()
 
 
 def test_record_tick_overhead_noop_when_disabled():
     """record_tick_overhead is a no-op when disabled."""
-    _metrics.record_tick_overhead("feed", 42.0)  # should not raise
+    result = _metrics.record_tick_overhead("feed", 42.0)  # should not raise
+    assert result is None
+    assert not _metrics.is_enabled()
 
 
 def test_record_fill_noop_when_disabled():
     """record_fill is a no-op when disabled."""
-    _metrics.record_fill("TEST", "buy")  # should not raise
+    result = _metrics.record_fill("TEST", "buy")  # should not raise
+    assert result is None
+    assert not _metrics.is_enabled()
 
 
 def test_record_run_duration_noop_when_disabled():
     """record_run_duration is a no-op when disabled."""
-    _metrics.record_run_duration("feed", 1.5)  # should not raise
+    result = _metrics.record_run_duration("feed", 1.5)  # should not raise
+    assert result is None
+    assert not _metrics.is_enabled()
 
 
 def test_ensure_metrics_idempotent():

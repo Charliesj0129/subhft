@@ -7,36 +7,36 @@
 
 global_limits:
   # Maximum position across all symbols
-  max_position_lots: 2
+  max_position_lots: 1
   # Maximum single order size
   max_order_size: 1
   # Daily loss limit in NTD — triggers StormGuard HALT
-  daily_loss_limit: 50000
+  daily_loss_limit: 10000
   # Maximum notional exposure per symbol (NTD)
-  max_notional_per_symbol: 500000
+  max_notional_per_symbol: 100000
   # Maximum total notional exposure (NTD)
-  max_total_notional: 1000000
+  max_total_notional: 100000
 
 symbol_limits:
   TXFD6:
-    max_position_lots: 2
+    max_position_lots: 1
     max_order_size: 1
-    max_notional: 500000
+    max_notional: 100000
     # Tick size for Mini-TAIEX futures: 1 point
     tick_size_scaled: 10000  # 1 point x10000
 
 stormguard:
   # StormGuard FSM thresholds (NTD)
-  degrade_threshold: 30000
-  halt_threshold: 50000
+  degrade_threshold: 6000
+  halt_threshold: 10000
   # Recovery requires manual intervention in production
   auto_recover: false
 
 rate_limiter:
   # Orders per second limit
-  max_orders_per_second: 5
+  max_orders_per_second: 2
   # Orders per minute limit
-  max_orders_per_minute: 60
+  max_orders_per_minute: 30
   # Burst allowance
   burst_size: 3
 

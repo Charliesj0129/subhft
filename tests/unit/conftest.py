@@ -1,4 +1,5 @@
 """Shared fixtures for HFT Platform unit tests."""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +14,7 @@ from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def symbols_yaml(tmp_path):
@@ -55,6 +57,7 @@ def risk_yaml(tmp_path):
 # ---------------------------------------------------------------------------
 # Factory fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def make_fill():
@@ -112,6 +115,7 @@ def make_intent():
 # ---------------------------------------------------------------------------
 # Component fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def risk_engine(tmp_path, monkeypatch):

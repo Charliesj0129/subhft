@@ -25,6 +25,7 @@ from hft_platform.contracts.strategy import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_intent(
     *,
     intent_id: int = 1,
@@ -92,6 +93,7 @@ def _make_risk_engine(tmp_path, *, storm_state: StormGuardState = StormGuardStat
 # 1. Field propagation: intent -> decision
 # ---------------------------------------------------------------------------
 
+
 class TestIntentToDecision:
     def test_decision_contains_same_intent_object(self, tmp_path):
         """RiskDecision.intent is the same object as the input intent."""
@@ -111,6 +113,7 @@ class TestIntentToDecision:
 # ---------------------------------------------------------------------------
 # 2. Field propagation: decision -> command
 # ---------------------------------------------------------------------------
+
 
 class TestDecisionToCommand:
     def test_command_preserves_all_intent_fields(self, tmp_path):
@@ -141,6 +144,7 @@ class TestDecisionToCommand:
 # 3. CANCEL bypasses validators
 # ---------------------------------------------------------------------------
 
+
 class TestCancelBypass:
     def test_cancel_bypasses_storm_guard_halt(self, tmp_path):
         """CANCEL intent is allowed even in HALT state."""
@@ -154,6 +158,7 @@ class TestCancelBypass:
 # ---------------------------------------------------------------------------
 # 4. HALT blocks NEW
 # ---------------------------------------------------------------------------
+
 
 class TestHaltBlocksNew:
     def test_halt_blocks_new_order(self, tmp_path):
@@ -173,6 +178,7 @@ class TestHaltBlocksNew:
 # ---------------------------------------------------------------------------
 # 5. cmd_id monotonicity
 # ---------------------------------------------------------------------------
+
 
 class TestCmdIdMonotonicity:
     def test_cmd_id_increases(self, tmp_path):
@@ -194,6 +200,7 @@ class TestCmdIdMonotonicity:
 # 6. Deadline is in the future
 # ---------------------------------------------------------------------------
 
+
 class TestDeadlineFuture:
     def test_deadline_greater_than_created(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
@@ -207,6 +214,7 @@ class TestDeadlineFuture:
 # ---------------------------------------------------------------------------
 # 7. storm_guard_state propagated to command
 # ---------------------------------------------------------------------------
+
 
 class TestStormGuardPropagation:
     def test_normal_state_propagated(self, tmp_path):
@@ -230,6 +238,7 @@ class TestStormGuardPropagation:
 # 8. Idempotency key and TTL preserved
 # ---------------------------------------------------------------------------
 
+
 class TestIdempotencyAndTtl:
     def test_idempotency_key_preserved(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
@@ -247,6 +256,7 @@ class TestIdempotencyAndTtl:
 # ---------------------------------------------------------------------------
 # 9. Core fields preserved through lifecycle
 # ---------------------------------------------------------------------------
+
 
 class TestCoreFieldsPreserved:
     def test_all_core_fields_survive_evaluate_and_create_command(self, tmp_path):
@@ -273,6 +283,7 @@ class TestCoreFieldsPreserved:
 # 10. Float price rejection
 # ---------------------------------------------------------------------------
 
+
 class TestFloatPriceRejection:
     def test_float_price_rejected(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
@@ -292,6 +303,7 @@ class TestFloatPriceRejection:
 # ---------------------------------------------------------------------------
 # 11. Reason code semantics
 # ---------------------------------------------------------------------------
+
 
 class TestReasonCodeSemantics:
     def test_approved_reason_is_ok(self, tmp_path):
@@ -326,17 +338,21 @@ except ImportError:
         def decorator(f):
             def wrapper(*a, **kw):
                 pytest.skip("hypothesis not installed")
+
             return wrapper
+
         return decorator
 
     def settings(**kwargs):  # type: ignore[misc]
         def decorator(f):
             return f
+
         return decorator
 
     class _St:
         def integers(self, **kw):
             return None
+
     st = _St()  # type: ignore[assignment]
 
 
@@ -350,6 +366,7 @@ def test_hypothesis_valid_intent_never_raises(price, qty):
     """Evaluating a valid intent never raises an exception."""
     import pathlib
     import tempfile
+
     with tempfile.TemporaryDirectory() as td:
         engine = _make_risk_engine(pathlib.Path(td))
         intent = _make_intent(price=price, qty=qty)
@@ -364,6 +381,7 @@ def test_hypothesis_cmd_id_always_positive(n):
     """cmd_id is always a positive integer."""
     import pathlib
     import tempfile
+
     with tempfile.TemporaryDirectory() as td:
         engine = _make_risk_engine(pathlib.Path(td))
         intent = _make_intent()

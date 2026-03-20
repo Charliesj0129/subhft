@@ -29,7 +29,8 @@ class MarketDataReconnectMixin:
         tz = getattr(self, "_reconnect_tzinfo", dt.timezone.utc)
         now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=tz)
         last_event_dt = dt.datetime.fromtimestamp(
-            getattr(self, "last_event_ts", 0.0), tz=tz,
+            getattr(self, "last_event_ts", 0.0),
+            tz=tz,
         )
         if last_event_dt.date() == now_dt.date():
             return False
@@ -183,7 +184,8 @@ class MarketDataReconnectMixin:
             return calendar.is_trading_hours(now_dt, product_type=product_type)
         except Exception:
             now_dt = dt.datetime.fromtimestamp(
-                timebase.now_s(), tz=dt.timezone(dt.timedelta(hours=8)),
+                timebase.now_s(),
+                tz=dt.timezone(dt.timedelta(hours=8)),
             )
             if now_dt.weekday() >= 5:
                 return False
@@ -249,9 +251,7 @@ class MarketDataReconnectMixin:
             lookback = getattr(self, "_symbol_gap_active_lookback_s", 90.0)
             if lookback > 0:
                 active_snapshot = {
-                    symbol: last_ts
-                    for symbol, last_ts in tick_snapshot.items()
-                    if (now - last_ts) <= lookback
+                    symbol: last_ts for symbol, last_ts in tick_snapshot.items() if (now - last_ts) <= lookback
                 }
             else:
                 active_snapshot = tick_snapshot
@@ -318,7 +318,8 @@ class MarketDataReconnectMixin:
             if ok:
                 if getattr(self, "_pending_reconnect_reason", None) == "session_rollover":
                     self._last_rollover_reconnect_date = dt.datetime.fromtimestamp(  # type: ignore[attr-defined]
-                        timebase.now_s(), tz=tz,
+                        timebase.now_s(),
+                        tz=tz,
                     ).date()
                 self._pending_reconnect_reason = None  # type: ignore[attr-defined]
                 self._pending_reconnect_gap = 0.0  # type: ignore[attr-defined]
