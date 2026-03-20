@@ -28,10 +28,10 @@ class RawExecEvent:
 class ExecutionNormalizer:
     def __init__(
         self,
-        raw_queue=None,
+        raw_queue: Any = None,
         order_id_map: Optional[Dict[str, str]] = None,
         strategy_id_resolvers: Optional[list[Callable[[RawExecEvent], Optional[str]]]] = None,
-    ):
+    ) -> None:
         self.raw_queue = raw_queue
         self.metrics = MetricsRegistry.get()
         self.metadata = SymbolMetadata()
@@ -159,7 +159,7 @@ class ExecutionNormalizer:
         self.metrics.execution_events_total.labels(type="fill").inc()
         d, _ = self._unwrap_data(raw)
 
-        def get(key, default=None):
+        def get(key: str, default: Any = None) -> Any:
             if isinstance(d, dict):
                 return d.get(key, default)
             return getattr(d, key, default)

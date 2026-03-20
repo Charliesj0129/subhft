@@ -36,7 +36,7 @@ def _is_typed_order_cmd_frame(obj: Any) -> TypeGuard[TypedOrderCommandFrame]:
     return isinstance(obj, tuple) and len(obj) >= 6 and obj[0] == "typed_order_cmd_v1"
 
 
-def _get_trace_sampler():
+def _get_trace_sampler() -> Any | None:
     try:
         from hft_platform.diagnostics.trace import get_trace_sampler
 
@@ -50,11 +50,11 @@ class OrderAdapter:
     def __init__(
         self,
         config_path: str,
-        order_queue: asyncio.Queue,
-        shioaji_client,
+        order_queue: asyncio.Queue[OrderCommand],
+        shioaji_client: Any,
         order_id_map: Dict[str, str] | None = None,
         broker_codec: ShioajiOrderCodec | None = None,
-    ):
+    ) -> None:
         self.config_path = config_path
         self.order_queue = order_queue
         self.client = shioaji_client
@@ -107,11 +107,11 @@ class OrderAdapter:
         return self._metadata
 
     @metadata.setter
-    def metadata(self, value: SymbolMetadata):
+    def metadata(self, value: SymbolMetadata) -> None:
         self._metadata = value
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
 
-    def load_config(self):
+    def load_config(self) -> None:
         with open(self.config_path, "r") as f:
             cfg = yaml.safe_load(f) or {}
             rate_cfg = cfg.get("rate_limits", {})
@@ -126,7 +126,7 @@ class OrderAdapter:
             if "timeout_seconds" in cb_cfg:
                 self.circuit_breaker.timeout_s = cb_cfg.get("timeout_seconds", self.circuit_breaker.timeout_s)
 
-    async def run(self):
+    async def run(self) -> None:
         self.running = True
         logger.info("OrderAdapter started")
         self._api_worker_task = asyncio.create_task(self._api_worker())
@@ -192,7 +192,7 @@ class OrderAdapter:
         logger.info("Order drain complete", cancelled=cancelled, total=len(live_keys))
         return cancelled
 
-    async def on_terminal_state(self, strategy_id: str, order_id: str):
+    async def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
         """Called when an order reaches a terminal state (Filled, Cancelled, Rejected)."""
         async with self._live_orders_lock:
             order_key = self.order_id_resolver.resolve_order_key(strategy_id, order_id, self.live_orders)
@@ -203,7 +203,7 @@ class OrderAdapter:
 
         # Also clean up rate limit window if needed? No, rate limit is distinct.
 
-    async def _register_broker_ids(self, order_key: str, trade: Any):
+    async def _register_broker_ids(self, order_key: str, trade: Any) -> None:
         """Register broker IDs to order_key mapping with lock protection."""
         ids = set()
 
@@ -245,7 +245,7 @@ class OrderAdapter:
             for oid in ids:
                 self.order_id_map[str(oid)] = order_key
 
-    async def execute(self, cmd: OrderCommand):
+    async def execute(self, cmd: OrderCommand) -> None:
         intent = cmd.intent
 
         # Per-symbol rate limit check (WU-06)
@@ -321,7 +321,7 @@ class OrderAdapter:
             return hasattr(self.client, "update_order")
         return True
 
-    async def _dispatch_to_api(self, cmd: OrderCommand):
+    async def _dispatch_to_api(self, cmd: OrderCommand) -> None:
         intent = cmd.intent
         self._emit_trace(
             "order_dispatch_start", intent, {"cmd_id": int(cmd.cmd_id), "intent_type": int(intent.intent_type)}
@@ -631,7 +631,15 @@ class OrderAdapter:
         transient_patterns = ("econnrefused", "econnreset", "etimedout", "connection reset", "temporarily unavailable")
         return any(p in err_str for p in transient_patterns)
 
-    async def _call_api(self, op: str, fn, *args, intent: OrderIntent | None = None, max_retries: int = 2, **kwargs):
+    async def _call_api(
+        self,
+        op: str,
+        fn: Any,
+        *args: Any,
+        intent: OrderIntent | None = None,
+        max_retries: int = 2,
+        **kwargs: Any,
+    ) -> Any | None:
         try:
             await asyncio.wait_for(self._api_semaphore.acquire(), timeout=self._api_guard_timeout_s)
         except asyncio.TimeoutError:

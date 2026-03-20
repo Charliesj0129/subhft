@@ -147,7 +147,7 @@ class Position:
 
 
 class PositionStore:
-    def __init__(self):
+    def __init__(self) -> None:
         # map: f"{account}:{strategy}:{symbol}" -> Position
         self.positions: Dict[str, Position] = {}
         self._positions_max_size = int(os.getenv("HFT_POSITIONS_MAX_SIZE", "10000"))
@@ -221,7 +221,10 @@ class PositionStore:
         return await asyncio.to_thread(self.on_fill, fill)
 
     def _on_fill_rust(self, fill: FillEvent, key: str) -> PositionDelta:
-        net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled = self._rust_tracker.update(
+        tracker = self._rust_tracker
+        if tracker is None:
+            raise RuntimeError("Rust position tracker unavailable")
+        net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled = tracker.update(
             key,
             int(fill.side),
             fill.qty,
@@ -313,7 +316,7 @@ class PositionStore:
             delta_source="FILL",
         )
 
-    def _key(self, acc, strat, sym):
+    def _key(self, acc: str, strat: str, sym: str) -> str:
         return f"{acc}:{strat}:{sym}"
 
     def _evict_flat_positions(self) -> None:
