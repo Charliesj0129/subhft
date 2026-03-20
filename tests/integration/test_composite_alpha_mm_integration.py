@@ -134,7 +134,11 @@ class TestCompositeAlphaMMIntegration:
         strat.ctx = MagicMock()
         strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple()
 
-        with patch.object(strat, "position", return_value=0), patch.object(strat, "buy") as mock_buy, patch.object(strat, "sell") as mock_sell:
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             # Simulate 100 rapid events
             for _i in range(100):
                 book_event = self._make_book_event()
@@ -154,7 +158,11 @@ class TestCompositeAlphaMMIntegration:
         strat.ctx = MagicMock()
 
         iterations = 0
-        with patch.object(strat, "position", return_value=0), patch.object(strat, "buy") as mock_buy, patch.object(strat, "sell") as mock_sell:
+        with (
+            patch.object(strat, "position", return_value=0),
+            patch.object(strat, "buy") as mock_buy,
+            patch.object(strat, "sell") as mock_sell,
+        ):
             for ofi in [-100, -50, 0, 50, 100]:
                 for depth in [-5000, 0, 5000, 10000]:
                     strat.ctx.get_feature_tuple.return_value = self._make_feature_tuple(

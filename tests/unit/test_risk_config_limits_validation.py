@@ -65,25 +65,19 @@ def validate_risk_config(config: Dict[str, Any]) -> List[str]:
         if not isinstance(gl["daily_loss_limit"], (int, float)):
             errors.append("global_limits.daily_loss_limit must be numeric")
         elif gl["daily_loss_limit"] < 0:
-            errors.append(
-                f"global_limits.daily_loss_limit must be non-negative, got {gl['daily_loss_limit']}"
-            )
+            errors.append(f"global_limits.daily_loss_limit must be non-negative, got {gl['daily_loss_limit']}")
 
     if "max_position_lots" in gl:
         if not isinstance(gl["max_position_lots"], int):
             errors.append("global_limits.max_position_lots must be an integer")
         elif gl["max_position_lots"] <= 0:
-            errors.append(
-                f"global_limits.max_position_lots must be positive, got {gl['max_position_lots']}"
-            )
+            errors.append(f"global_limits.max_position_lots must be positive, got {gl['max_position_lots']}")
 
     if "max_order_size" in gl:
         if not isinstance(gl["max_order_size"], int):
             errors.append("global_limits.max_order_size must be an integer")
         elif gl["max_order_size"] <= 0:
-            errors.append(
-                f"global_limits.max_order_size must be positive, got {gl['max_order_size']}"
-            )
+            errors.append(f"global_limits.max_order_size must be positive, got {gl['max_order_size']}")
 
     # --- stormguard required fields ---
     for field in _REQUIRED_STORMGUARD_FIELDS:
@@ -107,9 +101,7 @@ def validate_risk_config(config: Dict[str, Any]) -> List[str]:
         if not isinstance(rl["max_orders_per_second"], (int, float)):
             errors.append("rate_limiter.max_orders_per_second must be numeric")
         elif rl["max_orders_per_second"] <= 0:
-            errors.append(
-                f"rate_limiter.max_orders_per_second must be positive, got {rl['max_orders_per_second']}"
-            )
+            errors.append(f"rate_limiter.max_orders_per_second must be positive, got {rl['max_orders_per_second']}")
 
     return errors
 
@@ -118,9 +110,7 @@ def validate_risk_config_strict(config: Dict[str, Any]) -> None:
     """Validate and raise on first batch of errors."""
     errors = validate_risk_config(config)
     if errors:
-        raise RiskConfigValidationError(
-            "Risk config validation failed:\n  - " + "\n  - ".join(errors)
-        )
+        raise RiskConfigValidationError("Risk config validation failed:\n  - " + "\n  - ".join(errors))
 
 
 # ---------------------------------------------------------------------------

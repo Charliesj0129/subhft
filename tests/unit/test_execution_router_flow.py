@@ -58,9 +58,7 @@ def _make_fill(
 
 def _symbols_cfg(tmp_path):
     cfg = tmp_path / "symbols.yaml"
-    cfg.write_text(
-        "symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n"
-    )
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
     return cfg
 
 
