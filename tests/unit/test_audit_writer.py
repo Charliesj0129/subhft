@@ -110,11 +110,13 @@ class TestAuditWriter:
         """With no writer configured, rows are flushed via structlog fallback."""
         audit = AuditWriter(queue_size=100, flush_interval_ms=50, writer=None)
         audit.log_guardrail_transition({"old_state": "NORMAL", "new_state": "HALT"})
+        assert audit._queues["audit.guardrail_log"].qsize() == 1
 
         await audit.start()
         await asyncio.sleep(0.15)
         await audit.stop()
-        # No exception = success (structlog fallback worked)
+        # structlog fallback should have drained the queue
+        assert audit._queues["audit.guardrail_log"].qsize() == 0
 
     @pytest.mark.asyncio
     async def test_stop_drains_remaining(self) -> None:

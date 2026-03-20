@@ -127,8 +127,9 @@ class TestDarwinGateOrders:
         count, avg_latency, max_latency = result.result_rows[0]
         assert count > 0, "Expected order records with latency data"
 
-    def test_order_throughput(self, ch_client):  # noqa: no-assert
+    def test_order_throughput(self, ch_client):
         """Measure order throughput over last hour."""
+        # no-assert: benchmark-only
         query = """
         SELECT
             toStartOfMinute(toDateTime(ingest_ts / 1000000000)) as minute,
@@ -149,7 +150,6 @@ class TestDarwinGateOrders:
 
         # Log metrics (no assertion, just reporting)
         print(f"Order throughput - Peak: {peak}/min, Avg: {avg_per_min:.1f}/min")
-        # no-assert: benchmark-only
 
 
 @pytest.mark.benchmark
@@ -174,8 +174,9 @@ class TestDarwinGateMarketData:
         # (relaxed threshold for testing)
         assert age_s < 3600, f"Market data is {age_s:.0f}s old (> 1 hour)"
 
-    def test_ohlcv_aggregation(self, ch_client):  # noqa: no-assert
+    def test_ohlcv_aggregation(self, ch_client):
         """Verify OHLCV materialized view is producing data."""
+        # no-assert: benchmark-only
         query = """
         SELECT count(), max(bucket)
         FROM hft.ohlcv_1m

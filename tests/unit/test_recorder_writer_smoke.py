@@ -32,7 +32,8 @@ def test_connect_wal(w):
 
 @pytest.mark.asyncio
 async def test_write_empty(w):
-    await w.write("t", [])
+    result = await w.write("t", [])
+    assert result is None
 
 
 def test_chunks(w):
