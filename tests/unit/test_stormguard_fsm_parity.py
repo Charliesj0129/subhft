@@ -1,209 +1,191 @@
-"""StormGuardFSM validator parity tests.
+"""Parametrized boundary and parity tests for StormGuardFSM in validators.py.
 
-Tests the StormGuardFSM class in risk/validators.py, covering:
-- Drawdown-based state transitions (NORMAL -> WARM/STORM/HALT)
-- HALT blocking NEW intents while allowing CANCEL
-- Cooldown hysteresis preventing immediate de-escalation
-- De-escalation counter requiring N consecutive periods below threshold
-- Parametrized drawdown transition matrix
+Mirrors the patterns from test_stormguard_state_machine.py but targets the
+StormGuardFSM class (config-dict-driven, PnL-based thresholds, validate() API).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, Side, StormGuardState
+from hft_platform.contracts.strategy import (
+    IntentType,
+    OrderIntent,
+    Side,
+    StormGuardState,
+)
 from hft_platform.risk.validators import StormGuardFSM
-from tests.conftest import make_order_intent
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+_DEFAULT_CONFIG: Dict[str, Any] = {
+    "storm_guard": {
+        "warm_threshold": -200_000,
+        "storm_threshold": -500_000,
+        "halt_threshold": -1_000_000,
+    },
+}
+
 
 def _fsm(
-    *,
-    warm: int = -200_000,
-    storm: int = -500_000,
-    halt: int = -1_000_000,
+    config: Dict[str, Any] | None = None,
     cooldown_s: float = 0.0,
     de_escalate_n: int = 1,
 ) -> StormGuardFSM:
-    """Create a StormGuardFSM with controllable thresholds and hysteresis."""
-    config: dict[str, Any] = {
-        "storm_guard": {
-            "warm_threshold": warm,
-            "storm_threshold": storm,
-            "halt_threshold": halt,
-        },
-    }
-    with patch("hft_platform.risk.validators.MetricsRegistry") as mock_mr:
-        mock_metrics = MagicMock()
-        mock_mr.get.return_value = mock_metrics
-        fsm = StormGuardFSM(config)
+    """Create a StormGuardFSM with hysteresis overrides for deterministic tests."""
+    fsm = StormGuardFSM(config or _DEFAULT_CONFIG)
     fsm._storm_cooldown_s = cooldown_s
     fsm._de_escalate_threshold = de_escalate_n
     return fsm
 
 
+def _intent(intent_type: IntentType = IntentType.NEW) -> OrderIntent:
+    """Create a minimal OrderIntent for validation tests."""
+    return OrderIntent(
+        intent_id=1,
+        strategy_id="test_strat",
+        symbol="2330",
+        intent_type=intent_type,
+        side=Side.BUY,
+        price=100_0000,  # 100.0 scaled x10000
+        qty=1,
+    )
+
+
 # ---------------------------------------------------------------------------
-# 1. Normal to Caution (WARM) boundary
+# Parametrized drawdown threshold transitions
 # ---------------------------------------------------------------------------
 
 
-class TestNormalToCautionBoundary:
-    def test_just_above_warm_stays_normal(self) -> None:
+class TestDrawdownEscalation:
+    """Boundary tests for PnL-driven state transitions."""
+
+    @pytest.mark.parametrize(
+        "pnl, expected",
+        [
+            (0, StormGuardState.NORMAL),
+            (-100_000, StormGuardState.NORMAL),
+            (-199_999, StormGuardState.NORMAL),
+            (-200_000, StormGuardState.WARM),
+            (-200_001, StormGuardState.WARM),
+            (-350_000, StormGuardState.WARM),
+            (-499_999, StormGuardState.WARM),
+            (-500_000, StormGuardState.STORM),
+            (-500_001, StormGuardState.STORM),
+            (-750_000, StormGuardState.STORM),
+            (-999_999, StormGuardState.STORM),
+            (-1_000_000, StormGuardState.HALT),
+            (-1_000_001, StormGuardState.HALT),
+            (-5_000_000, StormGuardState.HALT),
+        ],
+        ids=[
+            "zero",
+            "mid_normal",
+            "just_above_warm",
+            "warm_boundary",
+            "just_below_warm",
+            "mid_warm",
+            "just_above_storm",
+            "storm_boundary",
+            "just_below_storm",
+            "mid_storm",
+            "just_above_halt",
+            "halt_boundary",
+            "just_below_halt",
+            "deep_halt",
+        ],
+    )
+    def test_drawdown_escalation(self, pnl: int, expected: StormGuardState) -> None:
         fsm = _fsm()
-        fsm.update_pnl(-199_999)
+        fsm.update_pnl(pnl)
+        assert fsm.state == expected
+
+    def test_positive_pnl_stays_normal(self) -> None:
+        fsm = _fsm()
+        fsm.update_pnl(500_000)
         assert fsm.state == StormGuardState.NORMAL
 
-    def test_at_warm_transitions(self) -> None:
+    def test_escalation_chain(self) -> None:
         fsm = _fsm()
         fsm.update_pnl(-200_000)
         assert fsm.state == StormGuardState.WARM
+        fsm.update_pnl(-500_000)
+        assert fsm.state == StormGuardState.STORM
+        fsm.update_pnl(-1_000_000)
+        assert fsm.state == StormGuardState.HALT
 
-    def test_below_warm_transitions(self) -> None:
+    def test_escalation_is_instant_ignores_hysteresis(self) -> None:
+        """Escalation must not be gated by cooldown or consecutive checks."""
+        fsm = _fsm(cooldown_s=9999, de_escalate_n=9999)
+        fsm.update_pnl(-1_000_000)
+        assert fsm.state == StormGuardState.HALT
+
+    def test_skip_normal_to_halt(self) -> None:
         fsm = _fsm()
-        fsm.update_pnl(-200_001)
+        fsm.update_pnl(-1_000_000)
+        assert fsm.state == StormGuardState.HALT
+
+    def test_skip_normal_to_storm(self) -> None:
+        fsm = _fsm()
+        fsm.update_pnl(-500_000)
+        assert fsm.state == StormGuardState.STORM
+
+
+# ---------------------------------------------------------------------------
+# De-escalation with hysteresis
+# ---------------------------------------------------------------------------
+
+
+class TestDeEscalation:
+    def test_halt_allows_immediate_step_down(self) -> None:
+        """HALT has special handling: immediate de-escalation (no cooldown/N)."""
+        fsm = _fsm(cooldown_s=9999, de_escalate_n=9999)
+        fsm.update_pnl(-1_000_000)
+        assert fsm.state == StormGuardState.HALT
+        fsm.update_pnl(0)
+        assert fsm.state == StormGuardState.NORMAL
+
+    def test_halt_to_warm(self) -> None:
+        fsm = _fsm(cooldown_s=9999, de_escalate_n=9999)
+        fsm.update_pnl(-1_000_000)
+        assert fsm.state == StormGuardState.HALT
+        fsm.update_pnl(-200_000)
         assert fsm.state == StormGuardState.WARM
 
-
-# ---------------------------------------------------------------------------
-# 2. Caution (WARM) to HALT boundary (via STORM)
-# ---------------------------------------------------------------------------
-
-
-class TestCautionToHaltBoundary:
-    def test_at_storm_threshold(self) -> None:
-        fsm = _fsm()
+    def test_halt_to_storm(self) -> None:
+        fsm = _fsm(cooldown_s=9999, de_escalate_n=9999)
+        fsm.update_pnl(-1_000_000)
+        assert fsm.state == StormGuardState.HALT
         fsm.update_pnl(-500_000)
         assert fsm.state == StormGuardState.STORM
 
-    def test_just_above_halt_stays_storm(self) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(-999_999)
-        assert fsm.state == StormGuardState.STORM
-
-    def test_at_halt_threshold(self) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(-1_000_000)
-        assert fsm.state == StormGuardState.HALT
-
-    def test_below_halt_threshold(self) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(-1_500_000)
-        assert fsm.state == StormGuardState.HALT
-
-
-# ---------------------------------------------------------------------------
-# 3. HALT blocks NEW orders
-# ---------------------------------------------------------------------------
-
-
-class TestHaltBlocksNewOrders:
-    def test_halt_rejects_new_buy(self) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(-1_000_000)
-        assert fsm.state == StormGuardState.HALT
-
-        intent = make_order_intent(intent_type=IntentType.NEW, side=Side.BUY)
-        ok, reason = fsm.validate(intent)
-        assert ok is False
-        assert "HALT" in reason
-
-    def test_halt_rejects_new_sell(self) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(-1_000_000)
-
-        intent = make_order_intent(intent_type=IntentType.NEW, side=Side.SELL)
-        ok, reason = fsm.validate(intent)
-        assert ok is False
-        assert "HALT" in reason
-
-
-# ---------------------------------------------------------------------------
-# 4. HALT allows CANCEL
-# ---------------------------------------------------------------------------
-
-
-class TestHaltAllowsCancel:
-    def test_halt_allows_cancel(self) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(-1_000_000)
-        assert fsm.state == StormGuardState.HALT
-
-        intent = make_order_intent(intent_type=IntentType.CANCEL)
-        ok, reason = fsm.validate(intent)
-        assert ok is True
-        assert reason == "OK"
-
-
-# ---------------------------------------------------------------------------
-# 5. Cooldown prevents immediate de-escalation
-# ---------------------------------------------------------------------------
-
-
-class TestCooldownPreventsImmediateDeescalation:
-    def test_storm_with_long_cooldown_stays_storm(self) -> None:
-        """When cooldown hasn't elapsed, STORM cannot de-escalate."""
-        fsm = _fsm(cooldown_s=9999, de_escalate_n=1)
-        fsm.update_pnl(-500_000)
-        assert fsm.state == StormGuardState.STORM
-
-        # PnL recovers, but cooldown hasn't elapsed
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.STORM
-
-    @patch("hft_platform.risk.validators.time")
-    def test_storm_deescalates_after_cooldown(self, mock_time: MagicMock) -> None:
-        """After cooldown elapses, de-escalation proceeds."""
-        t = 1000.0
-        mock_time.monotonic.return_value = t
-
-        fsm = _fsm(cooldown_s=30.0, de_escalate_n=1)
-        fsm.update_pnl(-500_000)
-        assert fsm.state == StormGuardState.STORM
-
-        # Advance past cooldown
-        mock_time.monotonic.return_value = t + 31.0
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.NORMAL
-
-
-# ---------------------------------------------------------------------------
-# 6. De-escalation count required
-# ---------------------------------------------------------------------------
-
-
-class TestDeescalationCountRequired:
-    def test_needs_n_consecutive_clears(self) -> None:
-        """STORM requires N consecutive clear evaluations to de-escalate."""
+    def test_storm_requires_n_consecutive_clears(self) -> None:
         fsm = _fsm(cooldown_s=0, de_escalate_n=3)
         fsm.update_pnl(-500_000)
         assert fsm.state == StormGuardState.STORM
 
-        # 1st clear - not enough
+        # 1st clear
         fsm.update_pnl(0)
         assert fsm.state == StormGuardState.STORM
-
-        # 2nd clear - still not enough
+        # 2nd clear
         fsm.update_pnl(0)
         assert fsm.state == StormGuardState.STORM
-
-        # 3rd clear - de-escalates
+        # 3rd clear => de-escalate
         fsm.update_pnl(0)
         assert fsm.state == StormGuardState.NORMAL
 
-    def test_counter_resets_on_reescalation(self) -> None:
-        """Re-triggering storm resets the de-escalation counter."""
+    def test_storm_counter_reset_on_re_escalation(self) -> None:
         fsm = _fsm(cooldown_s=0, de_escalate_n=3)
         fsm.update_pnl(-500_000)
         assert fsm.state == StormGuardState.STORM
 
-        # 2 clears, then re-trigger
+        # 2 clears, then re-trigger (same-state re-entry resets counter)
         fsm.update_pnl(0)
         fsm.update_pnl(0)
         fsm.update_pnl(-500_000)
@@ -217,156 +199,238 @@ class TestDeescalationCountRequired:
         fsm.update_pnl(0)
         assert fsm.state == StormGuardState.NORMAL
 
-    def test_halt_allows_immediate_stepdown(self) -> None:
-        """HALT bypasses cooldown and N-count requirements."""
-        fsm = _fsm(cooldown_s=9999, de_escalate_n=9999)
-        fsm.update_pnl(-1_000_000)
-        assert fsm.state == StormGuardState.HALT
+    def test_warm_de_escalation_no_storm_cooldown(self) -> None:
+        """WARM->NORMAL does not require storm cooldown (no storm entry)."""
+        fsm = _fsm(cooldown_s=0, de_escalate_n=1)
+        fsm.update_pnl(-200_000)
+        assert fsm.state == StormGuardState.WARM
+        fsm.update_pnl(0)
+        assert fsm.state == StormGuardState.NORMAL
 
+    def test_storm_cooldown_blocks_de_escalation(self) -> None:
+        """When cooldown has not elapsed, de-escalation counter resets."""
+        fsm = _fsm(cooldown_s=9999, de_escalate_n=1)
+        fsm.update_pnl(-500_000)
+        assert fsm.state == StormGuardState.STORM
+
+        fsm.update_pnl(0)
+        assert fsm.state == StormGuardState.STORM
+
+    @patch("hft_platform.risk.validators.time.monotonic")
+    def test_storm_cooldown_elapsed_allows_de_escalation(
+        self, mock_monotonic: MagicMock
+    ) -> None:
+        t = 1000.0
+        mock_monotonic.return_value = t
+        fsm = _fsm(cooldown_s=30.0, de_escalate_n=1)
+
+        fsm.update_pnl(-500_000)
+        assert fsm.state == StormGuardState.STORM
+
+        # Advance past cooldown
+        mock_monotonic.return_value = t + 31.0
         fsm.update_pnl(0)
         assert fsm.state == StormGuardState.NORMAL
 
 
 # ---------------------------------------------------------------------------
-# 7. Parametrized drawdown transitions
+# validate() per state: NEW / AMEND / CANCEL
 # ---------------------------------------------------------------------------
 
 
-class TestParametrizedDrawdownTransitions:
-    @pytest.mark.parametrize(
-        "pnl, expected_state",
-        [
-            (0, StormGuardState.NORMAL),
-            (100_000, StormGuardState.NORMAL),
-            (-100_000, StormGuardState.NORMAL),
-            (-199_999, StormGuardState.NORMAL),
-            (-200_000, StormGuardState.WARM),
-            (-300_000, StormGuardState.WARM),
-            (-499_999, StormGuardState.WARM),
-            (-500_000, StormGuardState.STORM),
-            (-750_000, StormGuardState.STORM),
-            (-999_999, StormGuardState.STORM),
-            (-1_000_000, StormGuardState.HALT),
-            (-2_000_000, StormGuardState.HALT),
-        ],
-        ids=[
-            "zero",
-            "positive_pnl",
-            "small_loss",
-            "just_above_warm",
-            "warm_boundary",
-            "mid_warm",
-            "just_above_storm",
-            "storm_boundary",
-            "mid_storm",
-            "just_above_halt",
-            "halt_boundary",
-            "deep_halt",
-        ],
-    )
-    def test_pnl_to_state(self, pnl: int, expected_state: StormGuardState) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(pnl)
-        assert fsm.state == expected_state
+class TestValidatePerState:
+    """Check that validate() blocks/allows intents correctly per FSM state."""
 
     @pytest.mark.parametrize(
-        "initial_pnl, initial_state, update_pnl, expected_state",
+        "state, intent_type, expected_safe",
         [
-            # Escalation from NORMAL
-            (-100_000, StormGuardState.NORMAL, -500_000, StormGuardState.STORM),
-            (-100_000, StormGuardState.NORMAL, -1_000_000, StormGuardState.HALT),
-            # Escalation from WARM
-            (-200_000, StormGuardState.WARM, -500_000, StormGuardState.STORM),
-            (-200_000, StormGuardState.WARM, -1_000_000, StormGuardState.HALT),
-            # Escalation from STORM
-            (-500_000, StormGuardState.STORM, -1_000_000, StormGuardState.HALT),
+            # NORMAL: everything allowed
+            (StormGuardState.NORMAL, IntentType.NEW, True),
+            (StormGuardState.NORMAL, IntentType.AMEND, True),
+            (StormGuardState.NORMAL, IntentType.CANCEL, True),
+            # WARM: everything allowed
+            (StormGuardState.WARM, IntentType.NEW, True),
+            (StormGuardState.WARM, IntentType.AMEND, True),
+            (StormGuardState.WARM, IntentType.CANCEL, True),
+            # STORM: NEW blocked, AMEND/CANCEL allowed
+            (StormGuardState.STORM, IntentType.NEW, False),
+            (StormGuardState.STORM, IntentType.AMEND, True),
+            (StormGuardState.STORM, IntentType.CANCEL, True),
+            # HALT: only CANCEL allowed
+            (StormGuardState.HALT, IntentType.NEW, False),
+            (StormGuardState.HALT, IntentType.AMEND, False),
+            (StormGuardState.HALT, IntentType.CANCEL, True),
         ],
         ids=[
-            "normal_to_storm",
-            "normal_to_halt",
-            "warm_to_storm",
-            "warm_to_halt",
-            "storm_to_halt",
+            "normal_new",
+            "normal_amend",
+            "normal_cancel",
+            "warm_new",
+            "warm_amend",
+            "warm_cancel",
+            "storm_new",
+            "storm_amend",
+            "storm_cancel",
+            "halt_new",
+            "halt_amend",
+            "halt_cancel",
         ],
     )
-    def test_escalation_matrix(
+    def test_validate_intent(
         self,
-        initial_pnl: int,
-        initial_state: StormGuardState,
-        update_pnl: int,
-        expected_state: StormGuardState,
+        state: StormGuardState,
+        intent_type: IntentType,
+        expected_safe: bool,
     ) -> None:
         fsm = _fsm()
-        fsm.update_pnl(initial_pnl)
-        assert fsm.state == initial_state
+        fsm.state = state
+        approved, reason = fsm.validate(_intent(intent_type))
+        assert approved is expected_safe, f"state={state.name}, type={intent_type.name}, reason={reason}"
 
-        fsm.update_pnl(update_pnl)
-        assert fsm.state == expected_state
+    def test_cancel_always_allowed_across_all_states(self) -> None:
+        """CANCEL orders must pass validate() in every state."""
+        cancel = _intent(IntentType.CANCEL)
+        for state in StormGuardState:
+            fsm = _fsm()
+            fsm.state = state
+            approved, _ = fsm.validate(cancel)
+            assert approved is True, f"CANCEL rejected in state {state.name}"
 
 
 # ---------------------------------------------------------------------------
-# 8. NORMAL state approves all intent types
+# validate() reason codes
 # ---------------------------------------------------------------------------
 
 
-class TestNormalStateApprovesAll:
-    @pytest.mark.parametrize(
-        "intent_type",
-        [IntentType.NEW, IntentType.CANCEL],
-        ids=["new", "cancel"],
-    )
-    def test_normal_approves(self, intent_type: IntentType) -> None:
+class TestValidateReasonCodes:
+    def test_halt_reason_code(self) -> None:
         fsm = _fsm()
+        fsm.state = StormGuardState.HALT
+        _, reason = fsm.validate(_intent(IntentType.NEW))
+        assert reason == "STORMGUARD_HALT"
+
+    def test_storm_new_reason_code(self) -> None:
+        fsm = _fsm()
+        fsm.state = StormGuardState.STORM
+        _, reason = fsm.validate(_intent(IntentType.NEW))
+        assert reason == "STORMGUARD_STORM_NEW_BLOCKED"
+
+    def test_ok_reason_code(self) -> None:
+        fsm = _fsm()
+        fsm.state = StormGuardState.NORMAL
+        _, reason = fsm.validate(_intent(IntentType.NEW))
+        assert reason == "OK"
+
+
+# ---------------------------------------------------------------------------
+# Multi-step scenarios
+# ---------------------------------------------------------------------------
+
+
+class TestMultiStep:
+    def test_full_cycle_escalate_and_recover(self) -> None:
+        fsm = _fsm(cooldown_s=0, de_escalate_n=1)
         assert fsm.state == StormGuardState.NORMAL
 
-        intent = make_order_intent(intent_type=intent_type)
-        ok, reason = fsm.validate(intent)
-        assert ok is True
-        assert reason == "OK"
-
-    @pytest.mark.parametrize(
-        "side",
-        [Side.BUY, Side.SELL],
-        ids=["buy", "sell"],
-    )
-    def test_normal_approves_all_sides(self, side: Side) -> None:
-        fsm = _fsm()
-        intent = make_order_intent(intent_type=IntentType.NEW, side=side)
-        ok, reason = fsm.validate(intent)
-        assert ok is True
-        assert reason == "OK"
-
-
-# ---------------------------------------------------------------------------
-# Additional: STORM blocks NEW but allows CANCEL
-# ---------------------------------------------------------------------------
-
-
-class TestStormValidation:
-    def test_storm_blocks_new(self) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(-500_000)
-        assert fsm.state == StormGuardState.STORM
-
-        intent = make_order_intent(intent_type=IntentType.NEW)
-        ok, reason = fsm.validate(intent)
-        assert ok is False
-        assert "STORM" in reason
-
-    def test_storm_allows_cancel(self) -> None:
-        fsm = _fsm()
-        fsm.update_pnl(-500_000)
-        assert fsm.state == StormGuardState.STORM
-
-        intent = make_order_intent(intent_type=IntentType.CANCEL)
-        ok, reason = fsm.validate(intent)
-        assert ok is True
-
-    def test_warm_allows_new(self) -> None:
-        fsm = _fsm()
         fsm.update_pnl(-200_000)
         assert fsm.state == StormGuardState.WARM
 
-        intent = make_order_intent(intent_type=IntentType.NEW)
-        ok, reason = fsm.validate(intent)
-        assert ok is True
+        fsm.update_pnl(-500_000)
+        assert fsm.state == StormGuardState.STORM
+
+        fsm.update_pnl(-1_000_000)
+        assert fsm.state == StormGuardState.HALT
+
+        # HALT immediate step-down
+        fsm.update_pnl(-500_000)
+        assert fsm.state == StormGuardState.STORM
+
+        # De-escalate from STORM (cooldown=0, n=1)
+        fsm.update_pnl(0)
+        assert fsm.state == StormGuardState.NORMAL
+
+    def test_repeated_normal_stays_normal(self) -> None:
+        fsm = _fsm()
+        for _ in range(20):
+            fsm.update_pnl(0)
+        assert fsm.state == StormGuardState.NORMAL
+
+    def test_oscillating_pnl_respects_hysteresis(self) -> None:
+        """Rapidly alternating PnL should respect N-consecutive-clear hysteresis."""
+        fsm = _fsm(cooldown_s=0, de_escalate_n=3)
+        fsm.update_pnl(-500_000)
+        assert fsm.state == StormGuardState.STORM
+
+        # Oscillate: 2 clears then re-trigger
+        for _ in range(5):
+            fsm.update_pnl(0)
+            fsm.update_pnl(0)
+            fsm.update_pnl(-500_000)
+        assert fsm.state == StormGuardState.STORM
+
+    def test_validate_tracks_state_after_pnl_changes(self) -> None:
+        """Validate results must reflect the latest state after PnL updates."""
+        fsm = _fsm(cooldown_s=0, de_escalate_n=1)
+        new_intent = _intent(IntentType.NEW)
+
+        # NORMAL: NEW allowed
+        approved, _ = fsm.validate(new_intent)
+        assert approved is True
+
+        # Escalate to STORM: NEW blocked
+        fsm.update_pnl(-500_000)
+        approved, _ = fsm.validate(new_intent)
+        assert approved is False
+
+        # Recover to NORMAL: NEW allowed again
+        fsm.update_pnl(0)
+        approved, _ = fsm.validate(new_intent)
+        assert approved is True
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestEdgeCases:
+    def test_initial_state_is_normal(self) -> None:
+        fsm = _fsm()
+        assert fsm.state == StormGuardState.NORMAL
+
+    def test_custom_thresholds(self) -> None:
+        config: Dict[str, Any] = {
+            "storm_guard": {
+                "warm_threshold": -100,
+                "storm_threshold": -200,
+                "halt_threshold": -300,
+            },
+        }
+        fsm = _fsm(config=config)
+        fsm.update_pnl(-100)
+        assert fsm.state == StormGuardState.WARM
+        fsm.update_pnl(-200)
+        assert fsm.state == StormGuardState.STORM
+        fsm.update_pnl(-300)
+        assert fsm.state == StormGuardState.HALT
+
+    def test_extreme_negative_pnl(self) -> None:
+        fsm = _fsm()
+        fsm.update_pnl(-999_999_999)
+        assert fsm.state == StormGuardState.HALT
+
+    def test_env_override_cooldown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "120")
+        fsm = StormGuardFSM(_DEFAULT_CONFIG)
+        assert fsm._storm_cooldown_s == 120.0
+
+    def test_env_override_de_escalate_n(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_STORMGUARD_DE_ESCALATE_N", "10")
+        fsm = StormGuardFSM(_DEFAULT_CONFIG)
+        assert fsm._de_escalate_threshold == 10
+
+    def test_missing_storm_guard_config_uses_defaults(self) -> None:
+        fsm = StormGuardFSM({})
+        assert fsm.warm == -200_000
+        assert fsm.storm == -500_000
+        assert fsm.halt == -1_000_000
