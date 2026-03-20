@@ -141,7 +141,8 @@ class HftBacktestAdapter:
             self._feature_engine = FeatureEngine()
             try:
                 setattr(self._lob_engine, "feature_engine", self._feature_engine)
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
 
         resolved_tick_size = float(tick_size) if tick_size is not None else infer_tick_size_from_data(data_path)
@@ -391,9 +392,11 @@ class HftBacktestAdapter:
             except TypeError:
                 try:
                     raw = fn()
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     continue
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 continue
             if isinstance(raw, (int, float, np.integer, np.floating)):
                 self._last_known_balance = float(raw)

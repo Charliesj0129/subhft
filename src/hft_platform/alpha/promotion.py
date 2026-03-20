@@ -246,7 +246,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
         for gate_report in (gate_d_report, gate_e_report, gate_f_report):
             log_gate_result(config.alpha_id, None, gate_report, cfg_hash)
         log_promotion_result(result, cfg_hash, scorecard)
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass  # audit must never break the research pipeline
 
     return result
@@ -306,7 +306,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
     _LIVE_FSV: str | None = None
     try:
         from hft_platform.feature.registry import FEATURE_SET_VERSION as _LIVE_FSV
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass
     if manifest_fsv is not None and _LIVE_FSV is not None:
         fsv_match = manifest_fsv == _LIVE_FSV
@@ -353,7 +353,7 @@ def _latest_scorecard_from_runs(root: Path, alpha_id: str) -> Path | None:
             scorecard = Path(row.scorecard_path)
             if scorecard.exists():
                 return scorecard
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
     return None
 
@@ -664,7 +664,7 @@ def _load_rust_module_name(root: Path, alpha_id: str) -> str:
             return ""
         rust_module = getattr(alpha.manifest, "rust_module", None)
         return str(rust_module or "").strip()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return ""
 
 
@@ -877,7 +877,7 @@ def _git_commit(root: Path) -> str:
         )
         if proc.returncode == 0:
             return proc.stdout.strip()
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         pass
     return "unknown"
 

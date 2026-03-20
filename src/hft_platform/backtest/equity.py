@@ -65,7 +65,7 @@ def _extract_from_stats(hbt: Any, asset_id: int) -> EquitySeries | None:
             stats_obj = stats_fn(*args)
         except TypeError:
             continue
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return None
         from_stats = _extract_from_named_fields(stats_obj)
         if from_stats is not None:
@@ -127,11 +127,11 @@ def _coerce_1d_array(value: Any, dtype: Any) -> np.ndarray | None:
         return None
     try:
         arr = np.asarray(value)
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None
     if arr.ndim != 1 or arr.size == 0:
         return None
     try:
         return arr.astype(dtype, copy=False)
-    except Exception:
+    except Exception as _exc:  # noqa: BLE001
         return None

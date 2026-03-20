@@ -1,38 +1,57 @@
-"""Paper-trade runner — orchestrates paper trading sessions for alpha governance.
+"""Paper-trade session runner — orchestrates single and campaign paper-trade sessions.
 
-Provides a structured campaign runner that collects PaperTradeSessions from
-a SessionRunner implementation and aggregates them into a PaperTradeSummary
-suitable for Gate E evaluation.
+Provides:
+- ``PaperTradeRunnerConfig``: configuration for a paper-trade campaign.
+- ``PaperTradeSummary``: aggregated statistics across all sessions in a campaign.
+- ``SessionRunner``: protocol for objects that can execute a single paper-trade session.
+- ``PaperTradeRunner``: orchestrator that drives session execution and optional persistence.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
-from hft_platform.alpha.experiments import PaperTradeSession
+from hft_platform.alpha.experiments import ExperimentTracker, PaperTradeSession
+
+if TYPE_CHECKING:
+    pass
 
 logger = structlog.get_logger("alpha.paper_trade_runner")
 
 
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True, slots=True)
 class PaperTradeRunnerConfig:
+    """Configuration for a paper-trade campaign or a single session run."""
+
     alpha_id: str
-    target_sessions: int = 10
-    min_session_minutes: int = 60
-    max_retries: int = 3
-    dry_run: bool = False
-    campaign_id: str = ""
-    notes: str = ""
+    session_duration_minutes: int = 240
+    max_sessions: int = 10
+    regime_hint: str | None = None
+    project_root: str = "."
+    experiments_dir: str = "research/experiments"
+
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class PaperTradeSummary:
+    """Aggregated statistics computed from all sessions in a campaign."""
+
     alpha_id: str
-    campaign_id: str
+    sessions: tuple[PaperTradeSession, ...]
     session_count: int
     calendar_span_days: int
     distinct_trading_days: int
@@ -53,36 +72,215 @@ class PaperTradeSummary:
             "calendar_span_days": self.calendar_span_days,
             "distinct_trading_days": self.distinct_trading_days,
             "min_session_duration_seconds": self.min_session_duration_seconds,
-            "invalid_session_duration_count": self.invalid_session_duration_count,
             "drift_alerts_total": self.drift_alerts_total,
             "execution_reject_rate_mean": self.execution_reject_rate_mean,
-            "execution_reject_rate_p95": self.execution_reject_rate_p95,
-            "total_fills": self.total_fills,
-            "mean_pnl_bps": self.mean_pnl_bps,
-            "notes": self.notes,
+            "pnl_bps_mean": self.pnl_bps_mean,
+            "sessions": [s.to_dict() for s in self.sessions],
         }
 
 
-@runtime_checkable
-class SessionRunner(Protocol):
-    """Protocol for running a single paper-trade session."""
+# ---------------------------------------------------------------------------
+# Protocol
+# ---------------------------------------------------------------------------
 
-    def run_one_session(self, config: PaperTradeRunnerConfig) -> PaperTradeSession:
+
+class SessionRunner(Protocol):
+    """Protocol for objects that can execute a single paper-trade session."""
+
+    def run(
+        self,
+        alpha_id: str,
+        duration_minutes: int,
+        regime_hint: str | None = None,
+    ) -> PaperTradeSession:
         """Run a single paper-trade session and return the result."""
         ...
 
 
-def _compute_summary(
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+
+class PaperTradeRunner:
+    """Orchestrates paper-trade sessions using a ``SessionRunner`` implementation.
+
+    Parameters
+    ----------
+    runner:
+        The ``SessionRunner`` that executes individual sessions.
+    tracker:
+        Optional ``ExperimentTracker`` for persisting session records and
+        writing the campaign summary JSON.  When ``None``, sessions are still
+        executed but nothing is persisted.
+    """
+
+    def __init__(
+        self,
+        runner: SessionRunner,
+        tracker: ExperimentTracker | None = None,
+    ) -> None:
+        self._runner = runner
+        self._tracker = tracker
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def run_session(self, config: PaperTradeRunnerConfig) -> PaperTradeSession:
+        """Execute a single paper-trade session.
+
+        Parameters
+        ----------
+        config:
+            Runner configuration.  Only ``alpha_id``, ``session_duration_minutes``,
+            and ``regime_hint`` are used for a single-session run.
+
+        Returns
+        -------
+        PaperTradeSession
+            The completed session record.
+        """
+        log = logger.bind(alpha_id=config.alpha_id, duration_minutes=config.session_duration_minutes)
+        log.info("paper_trade_runner.run_session.start")
+
+        session = self._runner.run(
+            alpha_id=config.alpha_id,
+            duration_minutes=config.session_duration_minutes,
+            regime_hint=config.regime_hint,
+        )
+
+        log.info(
+            "paper_trade_runner.run_session.complete",
+            session_id=session.session_id,
+            pnl_bps=session.pnl_bps,
+            fills=session.fills,
+        )
+        return session
+
+    def run_campaign(self, config: PaperTradeRunnerConfig) -> PaperTradeSummary:
+        """Orchestrate a full paper-trade campaign of ``max_sessions`` sessions.
+
+        Each session is executed sequentially via the ``SessionRunner``.
+        If a ``tracker`` was provided at construction time, each session is
+        persisted via ``tracker.log_paper_trade_session()``, and the final
+        campaign summary is written to
+        ``<paper_trade_dir>/<alpha_id>/paper_trade_summary.json``.
+
+        Parameters
+        ----------
+        config:
+            Campaign configuration.
+
+        Returns
+        -------
+        PaperTradeSummary
+            Aggregated statistics across all completed sessions.
+        """
+        log = logger.bind(alpha_id=config.alpha_id, max_sessions=config.max_sessions)
+        log.info("paper_trade_runner.run_campaign.start")
+
+        sessions: list[PaperTradeSession] = []
+        for i in range(config.max_sessions):
+            log.debug("paper_trade_runner.run_campaign.session", index=i + 1, total=config.max_sessions)
+            try:
+                session = self._runner.run(
+                    alpha_id=config.alpha_id,
+                    duration_minutes=config.session_duration_minutes,
+                    regime_hint=config.regime_hint,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "paper_trade_runner.run_campaign.session_error",
+                    index=i + 1,
+                    error=str(exc),
+                )
+                continue
+
+            sessions.append(session)
+
+            if self._tracker is not None:
+                try:
+                    self._tracker.log_paper_trade_session(
+                        alpha_id=session.alpha_id,
+                        started_at=session.started_at,
+                        ended_at=session.ended_at,
+                        trading_day=session.trading_day,
+                        fills=session.fills,
+                        pnl_bps=session.pnl_bps,
+                        drift_alerts=session.drift_alerts,
+                        execution_reject_rate=session.execution_reject_rate,
+                        notes=session.notes,
+                        session_id=session.session_id,
+                        reject_rate_p95=session.reject_rate_p95,
+                        regime=session.regime,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "paper_trade_runner.run_campaign.persist_error",
+                        session_id=session.session_id,
+                        error=str(exc),
+                    )
+
+        summary = _build_summary(alpha_id=config.alpha_id, sessions=sessions)
+
+        if self._tracker is not None:
+            self._persist_summary(summary)
+
+        log.info(
+            "paper_trade_runner.run_campaign.complete",
+            session_count=summary.session_count,
+            pnl_bps_mean=summary.pnl_bps_mean,
+            drift_alerts_total=summary.drift_alerts_total,
+        )
+        return summary
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _persist_summary(self, summary: PaperTradeSummary) -> None:
+        """Write ``paper_trade_summary.json`` under the tracker's paper_trade_dir."""
+        assert self._tracker is not None  # guarded by caller
+        out_dir = self._tracker.paper_trade_dir / summary.alpha_id
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / "paper_trade_summary.json"
+            payload = summary.to_dict()
+            # Remove the full session list to keep the summary file lean;
+            # individual sessions are already stored per-session by the tracker.
+            payload.pop("sessions", None)
+            out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+            logger.info(
+                "paper_trade_runner.summary_persisted",
+                alpha_id=summary.alpha_id,
+                path=str(out_path),
+            )
+        except OSError as exc:
+            logger.error(
+                "paper_trade_runner.summary_persist_error",
+                alpha_id=summary.alpha_id,
+                error=str(exc),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_summary(
+    *,
     alpha_id: str,
-    campaign_id: str,
     sessions: list[PaperTradeSession],
-    config: PaperTradeRunnerConfig,
+    campaign_id: str = "",
+    config: PaperTradeRunnerConfig | None = None,
 ) -> PaperTradeSummary:
-    """Aggregate a list of PaperTradeSession into a PaperTradeSummary."""
+    """Compute aggregate statistics from a list of sessions."""
     if not sessions:
         return PaperTradeSummary(
             alpha_id=alpha_id,
-            campaign_id=campaign_id,
+            sessions=(),
             session_count=0,
             calendar_span_days=0,
             distinct_trading_days=0,
@@ -93,7 +291,7 @@ def _compute_summary(
             execution_reject_rate_p95=None,
             total_fills=0,
             mean_pnl_bps=0.0,
-            notes=config.notes,
+            notes=config.notes if config else "",
         )
 
     # Calendar span
@@ -110,7 +308,7 @@ def _compute_summary(
         span_days = 0
 
     min_dur = min(s.duration_seconds for s in sessions) if sessions else 0
-    min_threshold_s = config.min_session_minutes * 60
+    min_threshold_s = (config.session_duration_minutes * 60) if config else 0
     invalid_count = sum(1 for s in sessions if s.duration_seconds < min_threshold_s)
 
     drift_total = sum(s.drift_alerts for s in sessions)
@@ -142,87 +340,6 @@ def _compute_summary(
     )
 
 
-class PaperTradeRunner:
-    """Orchestrate paper trading sessions for an alpha strategy."""
 
-    def __init__(self, session_runner: SessionRunner) -> None:
-        self._runner = session_runner
-
-    def run_session(self, config: PaperTradeRunnerConfig) -> PaperTradeSession:
-        """Run a single paper-trade session with retry on error.
-
-        Returns the session result. In dry_run mode returns a stub session.
-        """
-        if config.dry_run:
-            logger.info(
-                "paper_trade_runner.dry_run",
-                alpha_id=config.alpha_id,
-                campaign_id=config.campaign_id,
-            )
-            return PaperTradeSession(
-                alpha_id=config.alpha_id,
-                session_id=f"dry_run_{config.campaign_id}_0",
-                started_at=dt.datetime.now(dt.UTC).isoformat(),
-                ended_at=dt.datetime.now(dt.UTC).isoformat(),
-                duration_seconds=config.min_session_minutes * 60,
-                trading_day=dt.date.today().isoformat(),
-                fills=0,
-                pnl_bps=0.0,
-                drift_alerts=0,
-                execution_reject_rate=0.0,
-                notes="dry_run",
-            )
-
-        last_exc: Exception | None = None
-        for attempt in range(1, config.max_retries + 1):
-            try:
-                session = self._runner.run_one_session(config)
-                logger.info(
-                    "paper_trade_runner.session_complete",
-                    alpha_id=config.alpha_id,
-                    session_id=session.session_id,
-                    fills=session.fills,
-                    pnl_bps=session.pnl_bps,
-                    attempt=attempt,
-                )
-                return session
-            except Exception as exc:
-                last_exc = exc
-                logger.warning(
-                    "paper_trade_runner.session_error",
-                    alpha_id=config.alpha_id,
-                    attempt=attempt,
-                    max_retries=config.max_retries,
-                    error=str(exc),
-                )
-        raise RuntimeError(
-            f"run_session failed after {config.max_retries} attempts for alpha '{config.alpha_id}'"
-        ) from last_exc
-
-    def run_campaign(self, config: PaperTradeRunnerConfig) -> PaperTradeSummary:
-        """Run a full campaign of sessions and return aggregated summary."""
-        sessions: list[PaperTradeSession] = []
-        for idx in range(config.target_sessions):
-            logger.info(
-                "paper_trade_runner.campaign_progress",
-                alpha_id=config.alpha_id,
-                session_index=idx + 1,
-                target=config.target_sessions,
-            )
-            session = self.run_session(config)
-            sessions.append(session)
-
-        summary = _compute_summary(
-            alpha_id=config.alpha_id,
-            campaign_id=config.campaign_id,
-            sessions=sessions,
-            config=config,
-        )
-        logger.info(
-            "paper_trade_runner.campaign_complete",
-            alpha_id=config.alpha_id,
-            sessions=summary.session_count,
-            distinct_days=summary.distinct_trading_days,
-            drift_alerts=summary.drift_alerts_total,
-        )
-        return summary
+# Alias for backward compatibility with code expecting _compute_summary
+_compute_summary = _build_summary

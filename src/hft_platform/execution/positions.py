@@ -25,10 +25,12 @@ if _RUST_POSITIONS:
     _rust_mod: Any = None
     try:
         _rust_mod = importlib.import_module("hft_platform.rust_core")
-    except Exception:
+    except ImportError as exc:
+        logger.debug("operation_fallback", error=str(exc))
         try:
             _rust_mod = importlib.import_module("rust_core")
-        except Exception:
+        except ImportError as exc:
+            logger.debug("operation_fallback", error=str(exc))
             _rust_mod = None
     if _rust_mod is not None:
         _RustPositionTracker = getattr(_rust_mod, "RustPositionTracker", None)

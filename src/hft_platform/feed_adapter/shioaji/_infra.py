@@ -94,7 +94,8 @@ def record_crash_signature(metrics: Any, text: str | None, *, context: str) -> N
         return
     try:
         metrics.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return
 
 
@@ -149,7 +150,8 @@ def set_thread_alive_metric(metrics: Any, thread_name: str, alive: bool) -> None
         return
     try:
         metrics.shioaji_thread_alive.labels(thread=thread_name).set(1 if alive else 0)
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return
 
 
@@ -193,7 +195,8 @@ def update_quote_pending_metrics(
                 reason=pending_reason,
                 age_s=round(age_s, 2),
             )
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         pass
     return stall_reported
 
@@ -231,7 +234,8 @@ def ensure_session_lock(
         if new_fd is not None:
             try:
                 new_fd.close()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
         logger.warning(
             "Potential duplicate broker runtime detected: session lock unavailable",
@@ -241,7 +245,8 @@ def ensure_session_lock(
         if metrics and hasattr(metrics, "shioaji_session_lock_conflicts_total"):
             try:
                 metrics.shioaji_session_lock_conflicts_total.inc()
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 pass
         return False, None
 
@@ -256,11 +261,13 @@ def release_session_lock(
     try:
         if fcntl_mod is not None:
             fcntl_mod.flock(lock_fd.fileno(), fcntl_mod.LOCK_UN)
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         pass
     try:
         lock_fd.close()
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         pass
 
 

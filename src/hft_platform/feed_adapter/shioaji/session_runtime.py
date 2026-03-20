@@ -83,7 +83,8 @@ class SessionRuntime:
         """
         try:
             return bool(self._client.reconnect(reason=reason, force=force))
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return False
 
     def is_logged_in(self) -> bool:

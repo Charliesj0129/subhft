@@ -185,7 +185,8 @@ class SystemBootstrapper:
     def _read_int_resp(value: str | int | None, default: int = -2) -> int:
         try:
             return int(value)  # type: ignore[arg-type]
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return int(default)
 
     @staticmethod
@@ -204,7 +205,8 @@ class SystemBootstrapper:
             m = MetricsRegistry.get()
             if hasattr(m, "feed_session_lease_ops_total"):
                 m.feed_session_lease_ops_total.labels(op=op, result=result).inc()
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             return
 
     def _check_session_ownership(self, role: str) -> bool:
@@ -278,7 +280,7 @@ class SystemBootstrapper:
                     m = MetricsRegistry.get()
                     if hasattr(m, "feed_session_conflict_total"):
                         m.feed_session_conflict_total.labels(role=role).inc()
-                except Exception:
+                except ImportError:
                     pass
                 self._record_lease_metric("preflight", "conflict")
                 return False
@@ -620,16 +622,86 @@ class SystemBootstrapper:
         md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg, broker_id)
 
         # 4. Services
-        (
-            feature_engine,
-            feature_profile_registry,
-            feature_profile,
-            feature_rollout_controller,
-            feature_rollout_assignment,
-        ) = self._build_feature_engine()
+        feature_engine = None
+        feature_profile_registry = None
+        feature_profile = None
+        feature_rollout_controller = None
+        feature_rollout_assignment = None
+        if os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}:
+            try:
+                feature_profile_registry = load_feature_profile_registry()
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
+                feature_profile_registry = None
+            try:
+                feature_rollout_controller = load_feature_rollout_controller()
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
+                feature_rollout_controller = None
+            feature_engine = FeatureEngine()
+            if feature_profile_registry is not None:
+                try:
+                    if feature_rollout_controller is not None:
+                        feature_rollout_assignment = feature_rollout_controller.get(feature_engine.feature_set_id())
+                    override_profile_id = (
+                        feature_rollout_controller.resolve_profile_id(feature_engine.feature_set_id())
+                        if feature_rollout_controller is not None
+                        else None
+                    )
+                    if feature_rollout_assignment is not None and str(feature_rollout_assignment.state) == "disabled":
+                        feature_profile = None
+                    elif override_profile_id:
+                        try:
+                            feature_profile = feature_profile_registry.get(override_profile_id)
+                        except Exception as exc:
+                            logger.debug("operation_fallback", error=str(exc))
+                            feature_profile = None
+                    else:
+                        feature_profile = feature_profile_registry.get_active_for_set(feature_engine.feature_set_id())
+                    if feature_profile is not None:
+                        feature_engine.apply_profile(feature_profile)
+                        try:
+                            from hft_platform.observability.metrics import MetricsRegistry
 
-        if feature_engine is not None and feature_profile is None and feature_profile_registry is not None:
-            logger.warning("feature_engine_degraded", reason="profile_load_failed")
+                            m = MetricsRegistry.get()
+                            if hasattr(m, "feature_profile_activations_total"):
+                                action = "shadow" if feature_profile.state == "shadow" else "activate"
+                                m.feature_profile_activations_total.labels(
+                                    feature_set=feature_profile.feature_set_id,
+                                    profile_id=feature_profile.profile_id,
+                                    action=action,
+                                ).inc()
+                            if hasattr(m, "feature_profile_rollout_state"):
+                                state_map = {"disabled": 0, "shadow": 1, "active": 2}
+                                rollout_state = (
+                                    feature_rollout_assignment.state
+                                    if feature_rollout_assignment is not None
+                                    else feature_profile.state
+                                )
+                                m.feature_profile_rollout_state.labels(
+                                    feature_set=feature_profile.feature_set_id,
+                                    profile_id=feature_profile.profile_id,
+                                ).set(float(state_map.get(str(rollout_state), 0)))
+                        except Exception as exc:
+                            logger.debug("operation_fallback", error=str(exc))
+                            pass
+                    elif feature_rollout_assignment is not None:
+                        try:
+                            from hft_platform.observability.metrics import MetricsRegistry
+
+                            m = MetricsRegistry.get()
+                            if hasattr(m, "feature_profile_rollout_state"):
+                                state_map = {"disabled": 0, "shadow": 1, "active": 2}
+                                m.feature_profile_rollout_state.labels(
+                                    feature_set=feature_rollout_assignment.feature_set_id,
+                                    profile_id=str(feature_rollout_assignment.active_profile_id or ""),
+                                ).set(float(state_map.get(str(feature_rollout_assignment.state), 0)))
+                        except Exception as exc:
+                            logger.debug("operation_fallback", error=str(exc))
+                            pass
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
+                    feature_profile = None
 
         md_service = MarketDataService(
             bus,

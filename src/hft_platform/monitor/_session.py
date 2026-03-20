@@ -15,7 +15,8 @@ try:
     from zoneinfo import ZoneInfo
 
     _TZ_TAIPEI: dt.tzinfo = ZoneInfo("Asia/Taipei")
-except Exception:
+except Exception as exc:
+    logger.debug("operation_fallback", error=str(exc))
     _TZ_TAIPEI = dt.timezone(dt.timedelta(hours=8))
 
 

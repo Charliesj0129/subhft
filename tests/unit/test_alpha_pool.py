@@ -9,6 +9,7 @@ from hft_platform.alpha.pool import (
     flag_redundant_pairs,
     marginal_contribution_test,
     optimize_pool_weights,
+    recompute_pool_correlations,
 )
 
 
@@ -157,3 +158,75 @@ def test_marginal_contribution_without_returns_uses_diversification():
     )
     assert payload["metric_name"] == "diversification_score"
     assert payload["returns_used"] is False
+
+
+class TestRecomputePoolCorrelations:
+    def test_recompute_dry_run(self, tmp_path: Path):
+        base = tmp_path / "experiments"
+        tracker = ExperimentTracker(base_dir=base)
+        tracker.log_run(
+            run_id="run-a",
+            alpha_id="alpha_a",
+            config_hash="a",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.0},
+            gate_status={"gate_c": True},
+            scorecard_payload={"sharpe_oos": 1.0},
+            backtest_report_payload={},
+            signals=np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
+        )
+        tracker.log_run(
+            run_id="run-b",
+            alpha_id="alpha_b",
+            config_hash="b",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.1},
+            gate_status={"gate_c": True},
+            scorecard_payload={"sharpe_oos": 1.1},
+            backtest_report_payload={},
+            signals=np.array([1.1, 2.1, 3.1, 4.1], dtype=np.float64),
+        )
+        result = recompute_pool_correlations(base_dir=str(base), apply=False)
+        assert set(result["alpha_ids"]) == {"alpha_a", "alpha_b"}
+        assert "alpha_a" in result["correlation_pool_max"]
+        assert result["updated_scorecards"] == []
+        assert result["applied"] is False
+
+    def test_recompute_with_apply(self, tmp_path: Path):
+        import json
+
+        base = tmp_path / "experiments"
+        tracker = ExperimentTracker(base_dir=base)
+        tracker.log_run(
+            run_id="run-a",
+            alpha_id="alpha_a",
+            config_hash="a",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.0},
+            gate_status={"gate_c": True},
+            scorecard_payload={"sharpe_oos": 1.0},
+            backtest_report_payload={},
+            signals=np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
+        )
+        tracker.log_run(
+            run_id="run-b",
+            alpha_id="alpha_b",
+            config_hash="b",
+            data_paths=["d.npy"],
+            metrics={"sharpe_oos": 1.1},
+            gate_status={"gate_c": True},
+            scorecard_payload={"sharpe_oos": 1.1},
+            backtest_report_payload={},
+            signals=np.array([1.1, 2.1, 3.1, 4.1], dtype=np.float64),
+        )
+        result = recompute_pool_correlations(base_dir=str(base), apply=True)
+        assert result["applied"] is True
+        assert len(result["updated_scorecards"]) > 0
+        scorecard = json.loads((base / "runs" / "run-a" / "scorecard.json").read_text())
+        assert "correlation_pool_max" in scorecard
+
+    def test_recompute_empty(self, tmp_path: Path):
+        base = tmp_path / "experiments"
+        base.mkdir(parents=True)
+        result = recompute_pool_correlations(base_dir=str(base), apply=False)
+        assert result["alpha_ids"] == []

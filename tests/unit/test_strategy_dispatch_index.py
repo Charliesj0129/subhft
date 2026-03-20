@@ -1,4 +1,4 @@
-"""Unit tests for strategy dispatch index fast-path."""
+"""Unit tests for strategy dispatch HashMap index (Unit 10)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from hft_platform.strategy.runner import StrategyRunner
 
 class TestStrategyDispatchIndex:
     def _make_runner(self, strategies=None):
+        """Create a StrategyRunner with minimal mocking."""
         runner = StrategyRunner.__new__(StrategyRunner)
         runner.bus = MagicMock()
         runner.risk_queue = MagicMock()
@@ -62,36 +63,30 @@ class TestStrategyDispatchIndex:
         runner.running = False
         runner.registry = MagicMock()
         runner.registry.instantiate.return_value = []
-        runner._emit_trace = MagicMock()
-        runner._executors_match_strategy_list = StrategyRunner._executors_match_strategy_list.__get__(
-            runner, StrategyRunner
-        )
-        runner._rebuild_executors = StrategyRunner._rebuild_executors.__get__(runner, StrategyRunner)
-        runner._build_positions_by_strategy = StrategyRunner._build_positions_by_strategy.__get__(
-            runner, StrategyRunner
-        )
 
         if strategies:
-            for strategy in strategies:
-                runner.strategies.append(strategy)
-                runner._strat_executors.append((strategy, MagicMock(), None, None, None, None, None))
-            for idx, strategy in enumerate(runner.strategies):
-                runner._strat_index.setdefault(strategy.strategy_id, []).append(idx)
+            for s in strategies:
+                runner.strategies.append(s)
+                runner._strat_executors.append((s, MagicMock(), None, None, None, None, None))
+
+            runner._strat_index = {}
+            for idx, s in enumerate(runner.strategies):
+                runner._strat_index.setdefault(s.strategy_id, []).append(idx)
 
         return runner
 
     def _make_strategy(self, strategy_id: str, enabled: bool = True):
-        strategy = MagicMock()
-        strategy.strategy_id = strategy_id
-        strategy.enabled = enabled
-        strategy.symbols = set()
-        strategy.handle_event.return_value = []
-        return strategy
+        s = MagicMock()
+        s.strategy_id = strategy_id
+        s.enabled = enabled
+        s.symbols = set()
+        s.handle_event.return_value = []
+        return s
 
     def test_index_built_correctly(self):
         s1 = self._make_strategy("strat_a")
         s2 = self._make_strategy("strat_b")
-        s3 = self._make_strategy("strat_a")
+        s3 = self._make_strategy("strat_a")  # duplicate ID
         runner = self._make_runner([s1, s2, s3])
 
         assert runner._strat_index["strat_a"] == [0, 2]
@@ -102,6 +97,7 @@ class TestStrategyDispatchIndex:
         s2 = self._make_strategy("strat_b")
         runner = self._make_runner([s1, s2])
 
+        # Manually clear and rebuild
         runner._strat_index = {}
         runner._rebuild_executors()
 
@@ -120,8 +116,9 @@ class TestStrategyDispatchIndex:
         event.meta = None
         event.ts = 1000
 
-        await StrategyRunner.process_event(runner, event)
+        await runner.process_event(event)
 
+        # strat_b should be called, strat_a should NOT
         s2.handle_event.assert_called_once()
         s1.handle_event.assert_not_called()
 
@@ -132,12 +129,12 @@ class TestStrategyDispatchIndex:
         runner = self._make_runner([s1, s2])
 
         event = MagicMock()
-        event.strategy_id = None
+        event.strategy_id = None  # broadcast
         event.symbol = "SYM1"
         event.meta = None
         event.ts = 1000
 
-        await StrategyRunner.process_event(runner, event)
+        await runner.process_event(event)
 
         s1.handle_event.assert_called_once()
         s2.handle_event.assert_called_once()
@@ -153,6 +150,8 @@ class TestStrategyDispatchIndex:
         event.meta = None
         event.ts = 1000
 
-        await StrategyRunner.process_event(runner, event)
+        await runner.process_event(event)
 
+        # Falls through to full list iteration, but strategy_id check filters it out
+        # strat_a won't be called because target_strat_id doesn't match
         s1.handle_event.assert_not_called()

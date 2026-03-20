@@ -27,7 +27,8 @@ class ExecutionGateway:
         self.metrics.execution_gateway_heartbeat_ts.set(timebase.now_s())
         try:
             await self.adapter.run()
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             self.metrics.execution_gateway_errors_total.inc()
             raise
         finally:

@@ -196,7 +196,8 @@ def on_shioaji_event(svc: Any, *args: Any, **kwargs: Any) -> None:
                             child = svc.metrics_registry.market_data_callback_parse_total.labels(result=parse_result)
                             svc._md_callback_parse_metric_children[parse_result] = child
                         child.inc()
-                except Exception:
+                except Exception as exc:
+                    logger.debug("operation_fallback", error=str(exc))
                     pass
 
         if not svc.log_raw and msg is not None and not svc._raw_first_parsed:
@@ -236,5 +237,6 @@ def _record_shioaji_crash_signature(svc: Any, text: str | None, *, context: str)
         return
     try:
         svc.metrics_registry.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
-    except Exception:
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
         return

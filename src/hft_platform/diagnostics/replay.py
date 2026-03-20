@@ -16,7 +16,7 @@ def load_traces(path: str | Path) -> list[dict[str, Any]]:
             continue
         try:
             obj = json.loads(line)
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             continue
         if isinstance(obj, dict):
             out.append(obj)

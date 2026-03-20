@@ -42,7 +42,7 @@ def _get_trace_sampler():
         from hft_platform.diagnostics.trace import get_trace_sampler
 
         return get_trace_sampler()
-    except Exception:
+    except ImportError:
         return None
 
 
@@ -144,11 +144,11 @@ class StrategyRunner:
                     self._circuit_recovery_threshold,
                     self._circuit_cooldown_ns,
                 )
-            except Exception as exc:
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.warning("rust_circuit_breaker_init_failed", error=str(exc))
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
-        # Targeted dispatch index: strategy_id -> executor indices.
+        # Unit 10: Strategy-by-id index for O(1) targeted dispatch
         self._strat_index: dict[str, list[int]] = {}
         self._feature_compat_fail_fast = os.getenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "1").lower() not in {
             "0",
@@ -201,7 +201,7 @@ class StrategyRunner:
                         strategy=str(issue.strategy_id),
                         code=str(issue.code),
                     ).inc()
-            except Exception as exc:
+            except (TypeError, ValueError) as exc:
                 logger.debug("compat_metric_emit_failed", error=str(exc))
         if self._feature_compat_fail_fast and any(i.level == "error" for i in compat_issues):
             raise RuntimeError(
@@ -302,7 +302,7 @@ class StrategyRunner:
                     alpha_flat_m = alpha_events_total.labels(strategy=strategy.strategy_id, outcome="flat")
                 if alpha_last_signal_ts is not None:
                     alpha_last_ts_g = alpha_last_signal_ts.labels(strategy=strategy.strategy_id)
-            except Exception as exc:
+            except (TypeError, ValueError) as exc:
                 logger.debug("alpha_metrics_init_failed", strategy=strategy.strategy_id, error=str(exc))
                 alpha_intent_m = None
                 alpha_flat_m = None
@@ -389,12 +389,13 @@ class StrategyRunner:
     def _build_positions_by_strategy(self):
         if not self.position_store:
             return {}
+        # Unit 9: Use Rust fast-path if available
         rust_tracker = getattr(self.position_store, "_rust_tracker", None)
         if rust_tracker is not None and hasattr(rust_tracker, "get_positions_by_strategy"):
             try:
                 return rust_tracker.get_positions_by_strategy()
             except Exception:
-                pass
+                pass  # Fallback to Python path
         raw = getattr(self.position_store, "positions", None)
         if not isinstance(raw, dict):
             return {}
@@ -455,11 +456,13 @@ class StrategyRunner:
         if not self._executors_match_strategy_list():
             self._rebuild_executors()
 
+        # Unit 10: Use index for O(1) targeted dispatch when target_strat_id is set
         if target_strat_id and target_strat_id in self._strat_index:
             executors_iter = [self._strat_executors[i] for i in self._strat_index[target_strat_id]]
         else:
             executors_iter = self._strat_executors
 
+        # Use cached executors
         for strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g in executors_iter:
             if not strategy.enabled:
                 # S4: Check if halted strategy is eligible for cooldown recovery
@@ -504,7 +507,7 @@ class StrategyRunner:
             )
             try:
                 intents = strategy.handle_event(ctx, event)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — wraps user strategy code
                 logger.error("Strategy Exception", id=strategy.strategy_id, error=str(e))
                 self._emit_trace(
                     "strategy_exception",
@@ -669,7 +672,7 @@ class StrategyRunner:
             return
         try:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
-        except Exception as exc:
+        except (TypeError, ValueError) as exc:
             logger.debug("trace_emit_failed", error=str(exc))
             return
 

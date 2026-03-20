@@ -74,7 +74,8 @@ class ExecutionNormalizer:
         for resolver in self.strategy_id_resolvers:
             try:
                 candidate = resolver(raw)
-            except Exception:
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 candidate = None
             if candidate:
                 return candidate
@@ -150,7 +151,7 @@ class ExecutionNormalizer:
                 ingest_ts_ns=raw.ingest_ts_ns,
                 broker_ts_ns=self._normalize_ts_ns(exchange_ts),
             )
-        except Exception as e:
+        except (KeyError, TypeError, ValueError) as e:
             logger.error("Order normalization failed", error=str(e), data=d)
             return None
 
@@ -208,7 +209,7 @@ class ExecutionNormalizer:
                 ingest_ts_ns=raw.ingest_ts_ns,
                 match_ts_ns=self._normalize_ts_ns(get("ts")),
             )
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             logger.error("Fill normalization failed")
             return None
 

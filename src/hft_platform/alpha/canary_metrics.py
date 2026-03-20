@@ -7,9 +7,12 @@ data sources for evaluating promoted canary alpha performance.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import structlog
+
+if TYPE_CHECKING:
+    from hft_platform.alpha.canary import CanaryMonitor, CanaryStatus
 
 logger = structlog.get_logger("alpha.canary_metrics")
 
@@ -40,151 +43,151 @@ class CanaryMetricsSource(Protocol):
 
 
 class ClickHouseCanarySource:
-    """Fetch canary metrics from ClickHouse."""
+    """Canary metrics source backed by ClickHouse.
 
-    def __init__(self, host: str = "localhost", port: int = 8123, database: str = "hft") -> None:
-        self._host = host
-        self._port = port
-        self._database = database
+    Executes an aggregation query over ``hft.alpha_canary_metrics`` and
+    returns a metrics dict compatible with ``CanaryMonitor.evaluate()``.
+    """
 
-    def source_name(self) -> str:
-        return f"clickhouse://{self._host}:{self._port}/{self._database}"
+    def __init__(self, client: Any = None) -> None:
+        self._client = client
 
-    def fetch(self, alpha_id: str) -> CanaryMetricsSnapshot:
-        """Fetch metrics from ClickHouse.
+    def get_live_metrics(self, alpha_id: str) -> dict[str, Any]:
+        """Query ClickHouse for aggregated live metrics for *alpha_id*.
 
-        In production this would run SQL queries. This implementation
-        provides a structured interface; subclasses override _query().
+        Returns an empty dict when no client is configured or when the
+        query returns no rows.
         """
-        raw = self._query(alpha_id)
-        return CanaryMetricsSnapshot(
-            alpha_id=alpha_id,
-            session_count=int(raw.get("session_count", 0)),
-            drift_alerts=int(raw.get("drift_alerts", 0)),
-            execution_reject_rate=float(raw.get("execution_reject_rate", 0.0)),
-            live_slippage_bps=float(raw.get("live_slippage_bps", 0.0)),
-            live_drawdown_contribution=float(raw.get("live_drawdown_contribution", 0.0)),
-            source=self.source_name(),
-            raw=raw,
-        )
+        if self._client is None:
+            logger.debug("canary_metrics.clickhouse: no client configured", alpha_id=alpha_id)
+            return {}
 
-    def _query(self, alpha_id: str) -> dict[str, Any]:
-        """Execute ClickHouse query. Override in tests or subclasses."""
-        return {}
+        query = (
+            "SELECT "
+            "avg(slippage_bps), "
+            "max(drawdown_contribution), "
+            "avg(execution_error_rate), "
+            "count(*) "
+            "FROM hft.alpha_canary_metrics "
+            "WHERE alpha_id = %(alpha_id)s"
+        )
+        try:
+            rows = self._client.execute(query, {"alpha_id": alpha_id})
+        except Exception:
+            logger.warning("canary_metrics.clickhouse: query failed", alpha_id=alpha_id, exc_info=True)
+            return {}
+
+        if not rows:
+            logger.debug("canary_metrics.clickhouse: no rows returned", alpha_id=alpha_id)
+            return {}
+
+        row = rows[0]
+        if len(row) < 4:
+            logger.warning("canary_metrics.clickhouse: unexpected row shape", alpha_id=alpha_id, row=row)
+            return {}
+
+        avg_slippage, max_dd, avg_error_rate, session_count = row
+        metrics: dict[str, Any] = {
+            "slippage_bps": float(avg_slippage) if avg_slippage is not None else 0.0,
+            "drawdown_contribution": float(max_dd) if max_dd is not None else 0.0,
+            "execution_error_rate": float(avg_error_rate) if avg_error_rate is not None else 0.0,
+            "sessions_live": int(session_count) if session_count is not None else 0,
+        }
+        logger.debug("canary_metrics.clickhouse: metrics fetched", alpha_id=alpha_id, metrics=metrics)
+        return metrics
 
 
 class RedisCanarySource:
-    """Fetch canary metrics from Redis live cache."""
+    """Canary metrics source backed by Redis.
 
-    def __init__(
-        self,
-        host: str = "localhost",
-        port: int = 6379,
-        key_prefix: str = "canary",
-        password: str = "",
-    ) -> None:
-        self._host = host
-        self._port = port
-        self._key_prefix = key_prefix
-        self._password = password
+    Reads per-key values using the naming convention
+    ``canary:{alpha_id}:{field}`` and assembles them into a metrics dict.
+    """
 
-    def source_name(self) -> str:
-        return f"redis://{self._host}:{self._port}/{self._key_prefix}"
+    _FIELDS = (
+        "slippage_bps",
+        "drawdown_contribution",
+        "execution_error_rate",
+        "sessions_live",
+        "sharpe_live",
+    )
 
-    def fetch(self, alpha_id: str) -> CanaryMetricsSnapshot:
-        """Fetch metrics from Redis."""
-        raw = self._get(alpha_id)
-        return CanaryMetricsSnapshot(
-            alpha_id=alpha_id,
-            session_count=int(raw.get("session_count", 0)),
-            drift_alerts=int(raw.get("drift_alerts", 0)),
-            execution_reject_rate=float(raw.get("execution_reject_rate", 0.0)),
-            live_slippage_bps=float(raw.get("live_slippage_bps", 0.0)),
-            live_drawdown_contribution=float(raw.get("live_drawdown_contribution", 0.0)),
-            source=self.source_name(),
-            raw=raw,
-        )
+    def __init__(self, client: Any = None) -> None:
+        self._client = client
 
-    def _get(self, alpha_id: str) -> dict[str, Any]:
-        """Get from Redis. Override in tests or subclasses."""
-        return {}
+    def get_live_metrics(self, alpha_id: str) -> dict[str, Any]:
+        """Read live metrics for *alpha_id* from Redis.
+
+        Missing keys are silently skipped.  Returns an empty dict when no
+        client is configured or when all keys are absent.
+        """
+        if self._client is None:
+            logger.debug("canary_metrics.redis: no client configured", alpha_id=alpha_id)
+            return {}
+
+        metrics: dict[str, Any] = {}
+        for field in self._FIELDS:
+            key = f"canary:{alpha_id}:{field}"
+            try:
+                raw = self._client.get(key)
+            except Exception:
+                logger.warning("canary_metrics.redis: get failed", key=key, exc_info=True)
+                continue
+
+            if raw is None:
+                continue
+
+            try:
+                value: int | float
+                if field == "sessions_live":
+                    value = int(raw)
+                else:
+                    value = float(raw)
+                metrics[field] = value
+            except (ValueError, TypeError):
+                logger.warning("canary_metrics.redis: cannot convert value", key=key, raw=raw)
+
+        logger.debug("canary_metrics.redis: metrics fetched", alpha_id=alpha_id, metrics=metrics)
+        return metrics
 
 
 class HybridCanarySource:
-    """Hybrid source: prefer Redis for recency, fall back to ClickHouse."""
+    """Canary metrics source that prefers Redis over ClickHouse.
+
+    Uses *redis_source* first; falls back to *clickhouse_source* when the
+    Redis result is empty or reports ``sessions_live == 0``.
+    """
 
     def __init__(
         self,
-        primary: CanaryMetricsSource,
-        fallback: CanaryMetricsSource,
+        redis_source: CanaryMetricsSource,
+        clickhouse_source: CanaryMetricsSource,
     ) -> None:
-        self._primary = primary
-        self._fallback = fallback
+        self._redis = redis_source
+        self._clickhouse = clickhouse_source
 
-    def source_name(self) -> str:
-        return f"hybrid(primary={self._primary.source_name()}, fallback={self._fallback.source_name()})"
+    def get_live_metrics(self, alpha_id: str) -> dict[str, Any]:
+        """Return live metrics, preferring Redis if it has fresh data."""
+        redis_metrics = self._redis.get_live_metrics(alpha_id)
 
-    def fetch(self, alpha_id: str) -> CanaryMetricsSnapshot:
-        """Try primary source first; fall back on any error."""
-        try:
-            snapshot = self._primary.fetch(alpha_id)
-            logger.debug(
-                "canary_metrics.hybrid.primary_ok",
-                alpha_id=alpha_id,
-                source=self._primary.source_name(),
-            )
-            return snapshot
-        except Exception as exc:
-            logger.warning(
-                "canary_metrics.hybrid.primary_error",
-                alpha_id=alpha_id,
-                source=self._primary.source_name(),
-                error=str(exc),
-            )
-        return self._fallback.fetch(alpha_id)
+        if redis_metrics and int(redis_metrics.get("sessions_live", 0)) > 0:
+            logger.debug("canary_metrics.hybrid: using redis", alpha_id=alpha_id)
+            return redis_metrics
+
+        logger.debug("canary_metrics.hybrid: falling back to clickhouse", alpha_id=alpha_id)
+        return self._clickhouse.get_live_metrics(alpha_id)
 
 
 def evaluate_with_source(
+    monitor: CanaryMonitor,
     alpha_id: str,
     source: CanaryMetricsSource,
-    max_live_slippage_bps: float = 3.0,
-    max_live_drawdown_contribution: float = 0.02,
-    max_execution_reject_rate: float = 0.01,
-) -> dict[str, Any]:
-    """Evaluate canary metrics against guardrails using the given source.
+) -> CanaryStatus:
+    """Fetch live metrics via *source* and evaluate them with *monitor*.
 
-    Returns a dict with 'passed', 'checks', and 'snapshot' keys.
+    Convenience helper that combines ``CanaryMetricsSource.get_live_metrics``
+    with ``CanaryMonitor.evaluate`` in a single call.
     """
-    snapshot = source.fetch(alpha_id)
-
-    checks: dict[str, dict[str, Any]] = {
-        "live_slippage_bps": {
-            "value": snapshot.live_slippage_bps,
-            "max": max_live_slippage_bps,
-            "pass": snapshot.live_slippage_bps <= max_live_slippage_bps,
-        },
-        "live_drawdown_contribution": {
-            "value": snapshot.live_drawdown_contribution,
-            "max": max_live_drawdown_contribution,
-            "pass": snapshot.live_drawdown_contribution <= max_live_drawdown_contribution,
-        },
-        "execution_reject_rate": {
-            "value": snapshot.execution_reject_rate,
-            "max": max_execution_reject_rate,
-            "pass": snapshot.execution_reject_rate <= max_execution_reject_rate,
-        },
-        "drift_alerts": {
-            "value": snapshot.drift_alerts,
-            "max": 0,
-            "pass": snapshot.drift_alerts == 0,
-        },
-    }
-
-    passed = all(c["pass"] for c in checks.values())
-    return {
-        "alpha_id": alpha_id,
-        "passed": passed,
-        "source": snapshot.source,
-        "checks": checks,
-        "snapshot": snapshot,
-    }
+    metrics = source.get_live_metrics(alpha_id)
+    logger.debug("evaluate_with_source: calling monitor.evaluate", alpha_id=alpha_id, metrics=metrics)
+    return monitor.evaluate(alpha_id, metrics)

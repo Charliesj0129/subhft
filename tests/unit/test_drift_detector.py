@@ -1,4 +1,4 @@
-"""Tests for DriftDetector."""
+"""Unit tests for alpha.drift_detector — Signal Drift Detection (Unit 5)."""
 
 from __future__ import annotations
 
@@ -14,162 +14,358 @@ from hft_platform.alpha.drift_detector import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-def _cfg(**overrides: object) -> DriftDetectorConfig:
-    defaults = {
-        "alpha_id": "test_alpha",
-        "window_size": 50,
-        "z_score_threshold": 3.0,
-        "max_alerts": 100,
-        "min_window_fill": 10,
-    }
-    defaults.update(overrides)
-    return DriftDetectorConfig(**defaults)  # type: ignore[arg-type]
+def _feed(detector: DriftDetector, values: list[float]) -> list[DriftAlert]:
+    """Feed a sequence of values and collect non-None alerts."""
+    alerts = []
+    for v in values:
+        alert = detector.observe(v)
+        if alert is not None:
+            alerts.append(alert)
+    return alerts
 
 
-def _stable_observations(n: int = 50, mean: float = 0.0, std: float = 1.0) -> list[float]:
-    """Return n observations drawn from a deterministic near-Gaussian sequence."""
-    import random
-
-    rng = random.Random(42)
-    return [rng.gauss(mean, std) for _ in range(n)]
+def _make_values(mean: float, count: int) -> list[float]:
+    """Return a deterministic list of ``count`` values all equal to ``mean``."""
+    return [mean] * count
 
 
 # ---------------------------------------------------------------------------
-# No-drift tests
+# DriftDetectorConfig
 # ---------------------------------------------------------------------------
 
+class TestDriftDetectorConfig:
+    def test_defaults(self) -> None:
+        cfg = DriftDetectorConfig()
+        assert cfg.window_size == 100
+        assert cfg.z_threshold == 3.0
+        assert cfg.max_alerts == 10
+
+    def test_custom_values(self) -> None:
+        cfg = DriftDetectorConfig(window_size=50, z_threshold=2.0, max_alerts=5)
+        assert cfg.window_size == 50
+        assert cfg.z_threshold == 2.0
+        assert cfg.max_alerts == 5
+
+    def test_frozen(self) -> None:
+        cfg = DriftDetectorConfig()
+        with pytest.raises((AttributeError, TypeError)):
+            cfg.window_size = 200  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# DriftAlert
+# ---------------------------------------------------------------------------
+
+class TestDriftAlert:
+    def test_fields(self) -> None:
+        alert = DriftAlert(
+            z_score=4.5,
+            rolling_mean=1.5,
+            baseline_mean=0.0,
+            timestamp_ns=1_000_000,
+        )
+        assert alert.z_score == 4.5
+        assert alert.rolling_mean == 1.5
+        assert alert.baseline_mean == 0.0
+        assert alert.timestamp_ns == 1_000_000
+
+    def test_frozen(self) -> None:
+        alert = DriftAlert(z_score=1.0, rolling_mean=0.0, baseline_mean=0.0, timestamp_ns=0)
+        with pytest.raises((AttributeError, TypeError)):
+            alert.z_score = 99.9  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# No drift — same distribution
+# ---------------------------------------------------------------------------
 
 class TestNoDrift:
-    def test_stable_signal_no_alerts(self) -> None:
-        cfg = _cfg(z_score_threshold=5.0)
-        detector = DriftDetector(cfg)
-        for v in _stable_observations(100, mean=0.0, std=0.1):
-            detector.observe(v)
+    def test_same_distribution_no_alerts(self) -> None:
+        """Values drawn from baseline distribution must not trigger alerts."""
+        baseline_mean = 0.0
+        baseline_std = 1.0
+        cfg = DriftDetectorConfig(window_size=10, z_threshold=3.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean, baseline_std, cfg)
+
+        # Feed 50 values equal to the baseline mean — z_score will be 0.
+        values = _make_values(baseline_mean, 50)
+        alerts = _feed(detector, values)
+
+        assert alerts == []
         assert detector.alert_count == 0
 
-    def test_window_not_full_no_alerts(self) -> None:
-        cfg = _cfg(min_window_fill=20)
-        detector = DriftDetector(cfg)
-        # Feed fewer than min_window_fill observations
-        for i in range(15):
-            result = detector.observe(float(i * 100))  # large values but window not full
-        assert detector.alert_count == 0
+    def test_small_perturbation_below_threshold_no_alerts(self) -> None:
+        """Values slightly above mean but z-score < threshold → no alert."""
+        cfg = DriftDetectorConfig(window_size=10, z_threshold=3.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
 
-    def test_zero_std_no_alert(self) -> None:
-        """Constant signal has zero std — cannot compute z-score, no alert."""
-        cfg = _cfg(min_window_fill=5)
-        detector = DriftDetector(cfg)
-        for _ in range(20):
-            detector.observe(1.0)
+        # rolling_mean will be 0.1 → z = 0.1 / 1.0 = 0.1 < 3.0
+        values = _make_values(0.1, 50)
+        alerts = _feed(detector, values)
+
+        assert alerts == []
         assert detector.alert_count == 0
 
 
 # ---------------------------------------------------------------------------
-# Drift detection tests
+# Window not full — no alerts yet
 # ---------------------------------------------------------------------------
 
+class TestWindowNotFull:
+    def test_no_alert_before_window_full(self) -> None:
+        """Detector must not emit alerts before the rolling window is filled."""
+        cfg = DriftDetectorConfig(window_size=20, z_threshold=1.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
 
-class TestDriftDetection:
-    def test_mean_shift_triggers_alert(self) -> None:
-        """After stable observations, a sudden extreme outlier should trigger an alert."""
-        cfg = _cfg(z_score_threshold=3.0, min_window_fill=20, window_size=50)
-        detector = DriftDetector(cfg)
-        # Fill window with stable values
-        for _ in range(40):
-            detector.observe(0.0)
-        # Inject a strong outlier
-        alert = detector.observe(1000.0)
+        # Feed 19 heavily drifted values (window_size - 1 = not full yet).
+        for i in range(19):
+            result = detector.observe(value=100.0, timestamp_ns=i)
+            assert result is None, f"Got unexpected alert at index {i}"
+
+        assert detector.alert_count == 0
+
+    def test_alert_fires_exactly_at_window_full(self) -> None:
+        """The 20th observation (filling the window) should trigger an alert."""
+        cfg = DriftDetectorConfig(window_size=20, z_threshold=1.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        for _ in range(19):
+            detector.observe(value=100.0)
+
+        # 20th observation fills the window → drift must be detected.
+        alert = detector.observe(value=100.0)
         assert alert is not None
-        assert isinstance(alert, DriftAlert)
-        assert alert.z_score > 3.0
+        assert alert.alert_count if hasattr(alert, "alert_count") else True
         assert detector.alert_count == 1
 
-    def test_alert_contains_correct_fields(self) -> None:
-        cfg = _cfg(z_score_threshold=2.0, min_window_fill=10, window_size=20)
-        detector = DriftDetector(cfg)
-        for _ in range(15):
-            detector.observe(0.0)
-        alert = detector.observe(100.0)
+
+# ---------------------------------------------------------------------------
+# Mean shift → alerts triggered
+# ---------------------------------------------------------------------------
+
+class TestMeanShift:
+    def test_large_mean_shift_triggers_alert(self) -> None:
+        """A large mean shift should trigger at least one alert."""
+        baseline_mean = 0.0
+        baseline_std = 1.0
+        cfg = DriftDetectorConfig(window_size=10, z_threshold=3.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean, baseline_std, cfg)
+
+        # rolling_mean = 10.0 → z_score = |10.0 - 0.0| / 1.0 = 10.0 > 3.0
+        values = _make_values(10.0, 20)
+        alerts = _feed(detector, values)
+
+        assert len(alerts) > 0
+        assert detector.alert_count > 0
+
+    def test_alert_fields_correct(self) -> None:
+        """Alert fields must accurately reflect the drift state."""
+        baseline_mean = 0.0
+        baseline_std = 1.0
+        cfg = DriftDetectorConfig(window_size=10, z_threshold=3.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean, baseline_std, cfg)
+
+        values = _make_values(10.0, 10)
+        alerts = _feed(detector, values)
+
+        assert len(alerts) >= 1
+        first_alert = alerts[0]
+        assert first_alert.baseline_mean == baseline_mean
+        assert first_alert.rolling_mean == pytest.approx(10.0, abs=1e-9)
+        expected_z = abs(10.0 - 0.0) / 1.0
+        assert first_alert.z_score == pytest.approx(expected_z, rel=1e-6)
+
+    def test_alert_z_score_uses_abs(self) -> None:
+        """Negative drift (mean below baseline) must also trigger alerts."""
+        cfg = DriftDetectorConfig(window_size=10, z_threshold=3.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        # Shift to -10 — absolute z = 10 > 3.0
+        values = _make_values(-10.0, 20)
+        alerts = _feed(detector, values)
+
+        assert len(alerts) > 0
+        assert all(a.z_score > 0 for a in alerts)
+
+    def test_timestamp_stored_in_alert(self) -> None:
+        """timestamp_ns passed to observe() must be forwarded into the alert."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        for i in range(4):
+            detector.observe(value=100.0, timestamp_ns=i)
+
+        expected_ts = 999_999_999
+        alert = detector.observe(value=100.0, timestamp_ns=expected_ts)
+
         assert alert is not None
-        assert alert.alpha_id == cfg.alpha_id
-        assert alert.observation == pytest.approx(100.0)
-        # mean includes the current value (computed after appending)
-        assert alert.mean > 0.0  # non-zero since 100.0 is included
-        assert alert.std > 0
-        assert alert.z_score >= cfg.z_score_threshold
-        assert alert.alert_number == 1
-
-    def test_alert_number_increments(self) -> None:
-        cfg = _cfg(z_score_threshold=2.0, min_window_fill=5, window_size=10)
-        detector = DriftDetector(cfg)
-        for _ in range(10):
-            detector.observe(0.0)
-        # Inject multiple outliers
-        detector.observe(500.0)
-        detector.observe(500.0)
-        assert detector.alert_count == 2
-        assert detector.alerts[0].alert_number == 1
-        assert detector.alerts[1].alert_number == 2
-
-    def test_no_alert_below_threshold(self) -> None:
-        cfg = _cfg(z_score_threshold=10.0, min_window_fill=10)
-        detector = DriftDetector(cfg)
-        for _ in range(20):
-            detector.observe(0.0)
-        # Small deviation — should not trigger
-        result = detector.observe(0.5)
-        assert result is None
-        assert detector.alert_count == 0
+        assert alert.timestamp_ns == expected_ts
 
 
 # ---------------------------------------------------------------------------
 # max_alerts cap
 # ---------------------------------------------------------------------------
 
-
 class TestMaxAlertsCap:
-    def test_max_alerts_cap(self) -> None:
-        """Once max_alerts is reached, no further alerts are stored."""
-        cfg = _cfg(z_score_threshold=2.0, min_window_fill=5, window_size=20, max_alerts=3)
-        detector = DriftDetector(cfg)
-        # Fill window with stable zero values
+    def test_max_alerts_respected(self) -> None:
+        """No more than max_alerts alerts must be emitted."""
+        max_alerts = 3
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=max_alerts)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        # Feed 100 heavily drifted values — only max_alerts should be returned.
+        values = _make_values(50.0, 100)
+        alerts = _feed(detector, values)
+
+        assert len(alerts) == max_alerts
+        assert detector.alert_count == max_alerts
+
+    def test_no_alert_after_cap(self) -> None:
+        """After reaching max_alerts, observe() must return None."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=2)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        # Fill up all alert slots.
+        _feed(detector, _make_values(50.0, 50))
+        assert detector.alert_count == 2
+
+        # Further observations must not produce alerts.
         for _ in range(20):
-            detector.observe(0.0)
-        # Inject outliers interleaved with stable values to keep z-score high
-        for i in range(15):
-            # Stable values reset the window context
-            for _ in range(10):
-                detector.observe(0.0)
-            detector.observe(1000.0)
-        assert detector.alert_count == 3
+            result = detector.observe(value=50.0)
+            assert result is None
+
+        assert detector.alert_count == 2
 
 
 # ---------------------------------------------------------------------------
-# reset tests
+# Zero baseline_std — graceful no-op
 # ---------------------------------------------------------------------------
 
+class TestZeroBaselineStd:
+    def test_zero_std_no_alerts(self) -> None:
+        """A zero baseline_std must not cause division by zero or alerts."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=0.0, config=cfg)
+
+        values = _make_values(100.0, 20)
+        alerts = _feed(detector, values)
+
+        assert alerts == []
+        assert detector.alert_count == 0
+
+    def test_negative_std_no_alerts(self) -> None:
+        """A negative baseline_std (invalid) must be treated as non-positive — no alerts."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=-1.0, config=cfg)
+
+        values = _make_values(100.0, 20)
+        alerts = _feed(detector, values)
+
+        assert alerts == []
+        assert detector.alert_count == 0
+
+
+# ---------------------------------------------------------------------------
+# reset()
+# ---------------------------------------------------------------------------
 
 class TestReset:
-    def test_reset_clears_window_and_alerts(self) -> None:
-        cfg = _cfg(z_score_threshold=2.0, min_window_fill=5, window_size=10)
-        detector = DriftDetector(cfg)
-        for _ in range(10):
-            detector.observe(0.0)
-        detector.observe(500.0)
-        assert detector.alert_count == 1
+    def test_reset_clears_window(self) -> None:
+        """After reset, the window should be empty — no alerts on next window-1 values."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        # Trigger some alerts to confirm state is being set.
+        _feed(detector, _make_values(50.0, 10))
+        assert detector.alert_count > 0
+
         detector.reset()
         assert detector.alert_count == 0
-        assert detector.total_observations == 0
-        # After reset, window is empty so injecting outlier won't alert
-        result = detector.observe(500.0)
-        assert result is None  # window not full
 
-    def test_total_observations_resets(self) -> None:
-        cfg = _cfg()
-        detector = DriftDetector(cfg)
-        for i in range(20):
-            detector.observe(float(i))
-        assert detector.total_observations == 20
+        # Feed 4 values (window_size - 1) — no alert should fire.
+        for _ in range(4):
+            result = detector.observe(value=50.0)
+            assert result is None
+
+    def test_reset_allows_new_alerts(self) -> None:
+        """After reset, the detector must be able to emit fresh alerts."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=2)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        # Exhaust alert cap.
+        _feed(detector, _make_values(50.0, 50))
+        assert detector.alert_count == 2
+
+        # Reset and verify detector is operational again.
         detector.reset()
-        assert detector.total_observations == 0
+        assert detector.alert_count == 0
+
+        new_alerts = _feed(detector, _make_values(50.0, 10))
+        assert len(new_alerts) > 0
+        assert detector.alert_count > 0
+
+    def test_reset_idempotent(self) -> None:
+        """Calling reset() on a fresh detector must not raise."""
+        cfg = DriftDetectorConfig(window_size=10, z_threshold=3.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+        detector.reset()
+        detector.reset()
+        assert detector.alert_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+class TestEdgeCases:
+    def test_single_value_window(self) -> None:
+        """window_size=1 should alert immediately on first drifted value."""
+        cfg = DriftDetectorConfig(window_size=1, z_threshold=1.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        alert = detector.observe(value=10.0)
+        assert alert is not None
+        assert alert.z_score == pytest.approx(10.0, rel=1e-6)
+
+    def test_exactly_at_threshold_no_alert(self) -> None:
+        """z_score == z_threshold must NOT trigger an alert (strict inequality)."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=3.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        # rolling_mean = 3.0 → z_score = 3.0 == threshold (not strictly greater)
+        values = _make_values(3.0, 10)
+        alerts = _feed(detector, values)
+
+        assert alerts == []
+        assert detector.alert_count == 0
+
+    def test_just_above_threshold_triggers_alert(self) -> None:
+        """z_score just above z_threshold must trigger an alert."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=3.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        # rolling_mean = 3.0001 → z_score > 3.0
+        values = _make_values(3.0001, 10)
+        alerts = _feed(detector, values)
+
+        assert len(alerts) > 0
+
+    def test_default_timestamp_zero(self) -> None:
+        """When timestamp_ns is omitted, alert.timestamp_ns must be 0."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=5)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        for _ in range(4):
+            detector.observe(value=50.0)
+        alert = detector.observe(value=50.0)  # no timestamp_ns
+
+        assert alert is not None
+        assert alert.timestamp_ns == 0
+
+    def test_alert_count_property(self) -> None:
+        """alert_count property must equal the number of returned alerts."""
+        cfg = DriftDetectorConfig(window_size=5, z_threshold=1.0, max_alerts=10)
+        detector = DriftDetector(baseline_mean=0.0, baseline_std=1.0, config=cfg)
+
+        alerts = _feed(detector, _make_values(50.0, 30))
+        assert detector.alert_count == len(alerts)

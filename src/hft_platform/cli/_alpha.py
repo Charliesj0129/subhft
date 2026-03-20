@@ -591,6 +591,7 @@ def cmd_alpha_batch_correlation(args: argparse.Namespace) -> None:
     except Exception as exc:
         print(f"Failed to import batch correlation module: {exc}")
         sys.exit(1)
+
     results = batch_compute_correlations(
         experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
         project_root=".",
@@ -613,8 +614,10 @@ def cmd_alpha_paper_trade_batch(args: argparse.Namespace) -> None:
     except Exception as exc:
         print(f"Failed to import paper trade batch module: {exc}")
         sys.exit(1)
+
     action = getattr(args, "paper_trade_action", None)
     experiments_dir = str(getattr(args, "experiments_dir", "research/experiments"))
+
     if action == "discover":
         candidates = discover_gate_d_candidates(
             experiments_dir=experiments_dir,
@@ -630,7 +633,7 @@ def cmd_alpha_paper_trade_batch(args: argparse.Namespace) -> None:
     elif action == "record":
         alpha_ids = list(args.alpha_ids) if args.alpha_ids else []
         if not alpha_ids:
-            print("No alpha IDs specified. Use --alpha-ids or run discover first.")
+            print("No alpha IDs specified. Use --alpha-ids or run 'discover' first.")
             sys.exit(2)
         results = batch_record_sessions(
             alpha_ids=alpha_ids,
@@ -656,6 +659,7 @@ def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
     except Exception as exc:
         print(f"Failed to import batch promote module: {exc}")
         sys.exit(1)
+
     promoter = BatchPromoter(
         experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
         project_root=".",
@@ -664,12 +668,14 @@ def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
         max_abs_drawdown=float(getattr(args, "max_abs_drawdown", 0.2)),
         max_correlation=float(getattr(args, "max_correlation", 0.7)),
     )
+
     alpha_ids = list(getattr(args, "alpha_ids", None) or []) or None
     results = promoter.run_fleet(
         dry_run=bool(getattr(args, "dry_run", True)),
         top_n=int(getattr(args, "top_n", 50)),
         alpha_ids=alpha_ids,
     )
+
     approved = sum(1 for r in results if r.get("approved"))
     payload = {
         "results": results,

@@ -26,7 +26,7 @@ def _to_ch_price_scaled(
     if isinstance(value, int):
         try:
             scale = int(metadata.price_scale(symbol))
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             scale = 0
         if scale > 0:
             # Internal normalized events often carry scaled ints; convert directly.
@@ -39,7 +39,7 @@ def _descale(symbol: str, value: int | float, metadata: SymbolMetadata, price_co
     if price_codec:
         try:
             return price_codec.descale(symbol, int(value))
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             return float(value)
     scale = metadata.price_scale(symbol)
     if not scale:

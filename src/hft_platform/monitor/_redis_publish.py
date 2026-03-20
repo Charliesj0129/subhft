@@ -146,7 +146,7 @@ class MonitorLivePublisher:
             )
             self._client.request("SET", hb_key, hb_body, "EX", str(_HEARTBEAT_TTL_S))
             self._last_heartbeat = now
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             logger.debug("monitor_heartbeat_failed")
 
     def _publish_now(self, payload: dict[str, Any]) -> None:

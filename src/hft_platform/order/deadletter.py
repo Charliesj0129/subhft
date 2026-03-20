@@ -213,7 +213,8 @@ class DeadLetterQueue:
                             entries.append(DeadLetterEntry.from_dict(data))
                         except (json.JSONDecodeError, TypeError):
                             continue
-            except Exception:
+            except Exception as exc:
+                logger.debug("operation_fallback", error=str(exc))
                 continue
 
         return entries

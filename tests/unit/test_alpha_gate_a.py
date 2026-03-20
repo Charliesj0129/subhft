@@ -607,3 +607,33 @@ class TestRunGateA:
         report = run_gate_a(manifest, [str(path1), str(path2)])
         assert "field_a" in report.details["available_fields"]
         assert "field_b" in report.details["available_fields"]
+
+
+class TestGateALatencyProfile:
+    def test_advisory_warns_when_missing(self, tmp_path: Path):
+        path = _make_structured_npy(tmp_path / "d.npy", [("bid_px", "f8")])
+        manifest = _simple_manifest(data_fields=(), complexity="O(1)")
+        config = ValidationConfig(alpha_id="test", data_paths=[str(path)], enforce_latency_profile=False)
+        report = run_gate_a(manifest, [str(path)], config=config)
+        lp = report.details.get("latency_profile", {})
+        assert lp["enforce"] is False
+        assert lp["passed"] is True
+        assert len(lp["warnings"]) > 0
+
+    def test_enforce_blocks_when_missing(self, tmp_path: Path):
+        path = _make_structured_npy(tmp_path / "d.npy", [("bid_px", "f8")])
+        manifest = _simple_manifest(data_fields=(), complexity="O(1)")
+        config = ValidationConfig(alpha_id="test", data_paths=[str(path)], enforce_latency_profile=True)
+        report = run_gate_a(manifest, [str(path)], config=config)
+        lp = report.details.get("latency_profile", {})
+        assert lp["enforce"] is True
+        assert lp["passed"] is False
+
+    def test_present_profile_passes(self, tmp_path: Path):
+        path = _make_structured_npy(tmp_path / "d.npy", [("bid_px", "f8")])
+        manifest = _simple_manifest(data_fields=(), complexity="O(1)", latency_profile="sim_p95_v2026-02-26")
+        config = ValidationConfig(alpha_id="test", data_paths=[str(path)], enforce_latency_profile=True)
+        report = run_gate_a(manifest, [str(path)], config=config)
+        lp = report.details.get("latency_profile", {})
+        assert lp["present"] is True
+        assert lp["passed"] is True

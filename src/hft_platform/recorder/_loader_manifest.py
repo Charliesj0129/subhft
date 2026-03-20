@@ -78,7 +78,8 @@ def _save_manifest(self: WALLoaderService) -> None:
                 f.flush()
                 os.fsync(f.fileno())
             os.rename(tmp_path, self._manifest_path)
-        except Exception:
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
             raise

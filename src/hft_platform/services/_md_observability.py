@@ -93,7 +93,7 @@ class MarketDataObservabilityMixin:
             logger.warning("feature_engine_update_failed", reason=str(exc))
             return None
 
-    def _record_feature_metrics(
+    def _record_feature_metrics(  # noqa: C901
         self,
         event: TickEvent | BidAskEvent,
         feature_update: FeatureUpdateEvent | None,
@@ -211,7 +211,7 @@ class MarketDataObservabilityMixin:
             logger.warning("feature_shadow_engine_init_failed", reason=str(exc))
             self._feature_shadow_engine = None  # type: ignore[attr-defined]
 
-    def _maybe_run_feature_shadow_parity(
+    def _maybe_run_feature_shadow_parity(  # noqa: C901
         self,
         event: TickEvent | BidAskEvent,
         stats: object,
@@ -276,7 +276,7 @@ class MarketDataObservabilityMixin:
             return
         mismatched: list[str] = []
         tol = float(self._feature_shadow_abs_tolerance)  # type: ignore[attr-defined]
-        for fid, pv, sv in zip(primary_ids, primary_values, shadow_values):
+        for fid, pv, sv in zip(primary_ids, primary_values, shadow_values, strict=False):
             if isinstance(pv, float) or isinstance(sv, float):
                 if abs(float(pv) - float(sv)) > tol:
                     mismatched.append(str(fid))
