@@ -368,4 +368,5 @@ class TestLifecycle:
             gate = FastGate(max_price=10_000_000_000, max_qty=100, create_shm=True)
             gate.unlink()
             gate.unlink()  # Should not raise
+            assert True  # reached without exception
             gate.close()

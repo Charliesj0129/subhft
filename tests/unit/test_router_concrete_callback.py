@@ -105,8 +105,9 @@ class TestConcreteCallback:
         class Quote:
             code = "2330"
 
-        # Should not raise.
+        # Should not raise — exception is caught and logged internally.
         mod.dispatch_tick_cb("Q/TSE/2330", Quote())
+        assert c1._enqueue_tick.call_count == 1
 
 
 # --- Compat callback tests ---
