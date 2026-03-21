@@ -71,7 +71,7 @@ build-backend = "hatchling.build"
 packages = ["src/hft_platform"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing --timeout=30"
+addopts = "--cov=src/hft_platform --cov-report=term-missing --timeout=30"
 norecursedirs = [
     "research",
     ".venv",
