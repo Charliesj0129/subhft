@@ -242,17 +242,13 @@ class TestGateEBatchRunnerNoCandidates:
 class TestGateEBatchReport:
     def test_report_is_frozen_dataclass(self) -> None:
         """GateEBatchReport is immutable (frozen=True)."""
-        report = GateEBatchReport(
-            total_candidates=0, passed=0, failed=0, skipped=0, results=()
-        )
+        report = GateEBatchReport(total_candidates=0, passed=0, failed=0, skipped=0, results=())
         with pytest.raises(AttributeError):
             report.passed = 1  # type: ignore[misc]
 
     def test_report_to_dict(self) -> None:
         """to_dict produces expected structure."""
-        report = GateEBatchReport(
-            total_candidates=2, passed=1, failed=0, skipped=1, results=({"alpha_id": "a"},)
-        )
+        report = GateEBatchReport(total_candidates=2, passed=1, failed=0, skipped=1, results=({"alpha_id": "a"},))
         d = report.to_dict()
         assert d["total_candidates"] == 2
         assert d["passed"] == 1
@@ -278,7 +274,10 @@ class TestGateEBatchReport:
     def test_report_to_dict_json_serializable(self) -> None:
         """to_dict output should be JSON-serializable."""
         report = GateEBatchReport(
-            total_candidates=1, passed=0, failed=0, skipped=1,
+            total_candidates=1,
+            passed=0,
+            failed=0,
+            skipped=1,
             results=({"alpha_id": "x", "skipped": True},),
         )
         payload = json.dumps(report.to_dict())
