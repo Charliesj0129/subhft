@@ -71,7 +71,7 @@ build-backend = "hatchling.build"
 packages = ["src/hft_platform"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing"
+addopts = "--cov=src/hft_platform --cov-branch --cov-report=term-missing --timeout=30"
 norecursedirs = [
     "research",
     ".venv",
@@ -93,6 +93,10 @@ markers = [
 filterwarnings = [
     "ignore:Support for class-based `config` is deprecated.*:pydantic.PydanticDeprecatedSince20:shioaji\\.contracts",
 ]
+timeout = 30
+
+[tool.hypothesis]
+max_examples = 50
 
 [tool.coverage.run]
 omit = [
