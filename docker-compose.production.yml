@@ -1,0 +1,106 @@
+# docker-compose.production.yml — Production hardening overlay
+# Usage: docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+#
+# Applies: no-new-privileges, read_only where safe, 127.0.0.1 port binding,
+# internal bridge network, tmpfs for ephemeral dirs.
+
+networks:
+  hft-internal:
+    driver: bridge
+    internal: false  # Allow outbound (broker API, DNS); block unsolicited inbound via port binding
+
+x-security-common: &security-common
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  hft-base:
+    <<: *security-common
+    networks:
+      - hft-internal
+
+  hft-engine:
+    <<: *security-common
+    ports:
+      - "127.0.0.1:${HFT_PROM_PORT:-9090}:9090"
+      - "127.0.0.1:${HFT_HEALTH_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256M
+      - /app/__pycache__:size=64M
+    networks:
+      - hft-internal
+
+  clickhouse:
+    <<: *security-common
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    networks:
+      - hft-internal
+
+  redis:
+    <<: *security-common
+    ports:
+      - "127.0.0.1:6379:6379"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+      - /data:size=256M
+    networks:
+      - hft-internal
+
+  wal-loader:
+    <<: *security-common
+    read_only: true
+    tmpfs:
+      - /tmp:size=128M
+    networks:
+      - hft-internal
+
+  hft-monitor:
+    <<: *security-common
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    networks:
+      - hft-internal
+
+  node-exporter:
+    <<: *security-common
+    read_only: true
+
+  prometheus:
+    <<: *security-common
+    ports:
+      - "127.0.0.1:9091:9090"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    volumes:
+      - prometheus_data:/prometheus
+    networks:
+      - hft-internal
+
+  alertmanager:
+    <<: *security-common
+    ports:
+      - "127.0.0.1:9093:9093"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32M
+    networks:
+      - hft-internal
+
+  grafana:
+    <<: *security-common
+    ports:
+      - "127.0.0.1:3000:3000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    networks:
+      - hft-internal
+
+volumes:
+  prometheus_data:
