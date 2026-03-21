@@ -192,8 +192,12 @@ class TestSupervisionCrashDetection:
 
         system._start_service = MagicMock(side_effect=_close_coro)
 
-        # Force time to advance past each backoff window
-        times = iter([0.0, 0.0, base + 0.1, base + 0.1, base * 3 + 0.2, base * 3 + 0.2])
+        # Force time to advance past each backoff window.
+        # _try_restart_service calls timebase.now_s() once per invocation.
+        # Call 1 at t=0.0: attempt=1, delay=base*1, until=base
+        # Call 2 at t=base+0.1: attempt=2, delay=base*2, until=base+0.1+base*2
+        # Call 3 at t=base*3+0.2: attempt=3 (past until from call 2)
+        times = iter([0.0, base + 0.1, base * 3 + 0.2])
         with patch("hft_platform.services.system.timebase.now_s", side_effect=times):
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
             system._try_restart_service("md", "MarketDataService", system.md_service.run)

@@ -63,7 +63,7 @@ def _build_with_mocks(
     monkeypatch: pytest.MonkeyPatch | None = None,
 ) -> "ServiceRegistry":  # noqa: F821
     """Build a ServiceRegistry with all external deps mocked."""
-    bootstrapper = SystemBootstrapper(settings or {})
+    bootstrapper = SystemBootstrapper(settings if settings is not None else {})
     # Bypass Redis session ownership check
     with patch.object(bootstrapper, "_check_session_ownership", return_value=False):
         return bootstrapper.build()
@@ -354,7 +354,7 @@ class TestConfigLoadingChain:
         from hft_platform.config import loader
 
         monkeypatch.setattr(loader, "DEFAULT_YAML_PATH", str(tmp_path / "nonexistent.yaml"))
-        settings, _ = load_settings(cli_overrides={"skip_config_validation": True})
+        settings, _ = loader.load_settings(cli_overrides={"skip_config_validation": True})
         assert "mode" in settings
         assert "symbols" in settings
 

@@ -154,7 +154,7 @@ class _RoleGuardedNoopClient:
 
 class SystemBootstrapper:
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
-        self.settings = settings or {}
+        self.settings = settings if settings is not None else {}
         self._lease_refresh_running: bool = False
         self._lease_refresh_thread: Any | None = None
         self._last_role: str = "engine"
