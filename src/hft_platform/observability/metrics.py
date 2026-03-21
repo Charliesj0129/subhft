@@ -16,6 +16,7 @@ def _unregister_metric_prefixes(prefixes: list[str]) -> None:
 def _unregister_all_custom_metrics() -> None:
     """Unregister all non-default collectors to allow safe re-instantiation."""
     from prometheus_client import gc_collector, platform_collector, process_collector
+
     default_types = (
         type(platform_collector.PLATFORM_COLLECTOR),
         type(gc_collector.GC_COLLECTOR),
