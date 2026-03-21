@@ -124,9 +124,12 @@ class TestSupervisionCrashDetection:
             async def _crash():
                 raise RuntimeError("service exploded")
 
-            task = loop.run_until_complete(
-                asyncio.ensure_future(_crash(), loop=loop) if False else _run_failing_task(loop)
-            )
+            task = loop.create_task(_crash())
+            with pytest.raises(RuntimeError, match="service exploded"):
+                loop.run_until_complete(task)
+            # The task is now done with an exception, verifying crash detection setup
+            assert task.done()
+            assert task.exception() is not None
         finally:
             loop.close()
 
@@ -196,7 +199,8 @@ class TestSupervisionCrashDetection:
         system._start_service = MagicMock(side_effect=_close_coro)
 
         # Force time to advance past each backoff window
-        times = iter([0.0, 0.0, base + 0.1, base + 0.1, base * 3 + 0.2, base * 3 + 0.2])
+        # _try_restart_service calls timebase.now_s() once per invocation
+        times = iter([0.0, base + 0.1, base * 3 + 0.2])
         with patch("hft_platform.services.system.timebase.now_s", side_effect=times):
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
             system._try_restart_service("md", "MarketDataService", system.md_service.run)

@@ -149,6 +149,8 @@ class MetricsRegistry:
                 "reconciliation_discrepancy_total",
                 "reconciliation_consecutive_failures",
                 "reconciliation_last_success_ts",
+                # Execution router DLQ metrics
+                "orphaned_fill_total",
             ]
         )
         # Market Data

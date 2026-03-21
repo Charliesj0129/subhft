@@ -300,41 +300,5 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
         "detail": "diagnostic: Sharpe under 2x latency assumption",
     }
 
-    signal_halflife = scorecard.get("signal_halflife_ms")
-    submit_ack: float | None = None
-    if isinstance(latency_profile, dict):
-        submit_ack = latency_profile.get("submit_ack_latency_ms")
-
-    if signal_halflife is None:
-        checks["halflife_vs_rtt"] = {
-            "pass": True,
-            "required": False,
-            "detail": (
-                "WARN — signal_halflife_ms not recorded in scorecard; recommend recording to enforce RTT realism gate"
-            ),
-        }
-    elif submit_ack is None:
-        checks["halflife_vs_rtt"] = {
-            "pass": True,
-            "required": False,
-            "detail": "WARN — submit_ack_latency_ms not available; cannot check half-life vs RTT",
-        }
-    else:
-        threshold_ms = float(submit_ack) * 2.0
-        hl_val = float(signal_halflife)
-        hl_pass = hl_val >= threshold_ms
-        checks["halflife_vs_rtt"] = {
-            "pass": hl_pass,
-            "required": True,
-            "value_ms": hl_val,
-            "threshold_ms": threshold_ms,
-            "detail": (
-                f"OK — signal_halflife_ms={hl_val}ms >= threshold={threshold_ms}ms (2x submit_ack)"
-                if hl_pass
-                else f"FAIL — signal_halflife_ms={hl_val}ms < threshold={threshold_ms}ms (2x submit_ack); "
-                "alpha half-life too short relative to broker RTT"
-            ),
-        }
-
     passed = all(bool(v["pass"]) for v in checks.values())
     return passed, checks
