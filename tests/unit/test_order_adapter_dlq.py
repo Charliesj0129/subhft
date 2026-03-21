@@ -347,6 +347,9 @@ class TestStrategyCircuitBreakerManager:
         )
         mgr.get_breaker("s1")
         mgr.get_breaker("s2")
+        # Record failures so eviction cannot remove them
+        mgr.record_failure("s1")
+        mgr.record_failure("s2")
         # Third strategy exceeds limit; returns temporary breaker
         b3 = mgr.get_breaker("s3")
         assert b3.threshold == 1  # temporary open breaker
