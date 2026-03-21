@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.feed_adapter.fubon.account import FubonAccountGateway as StubAccountGateway
+from hft_platform.feed_adapter.fubon.account_gateway import FubonAccountGateway as StubAccountGateway
 from hft_platform.feed_adapter.fubon.client import FubonClient
 from hft_platform.feed_adapter.fubon.order_gateway import FubonOrderGateway
-from hft_platform.feed_adapter.fubon.quote import FubonQuoteRuntime as StubQuoteRuntime
-from hft_platform.feed_adapter.fubon.session import FubonSessionRuntime
+from hft_platform.feed_adapter.fubon.quote_runtime import FubonQuoteRuntime as StubQuoteRuntime
+from hft_platform.feed_adapter.fubon.session_runtime import FubonSessionRuntime
 
 # ------------------------------------------------------------------ #
 # Init / properties
@@ -228,23 +228,16 @@ class TestFubonClientPlaceholders:
 
 class TestFubonSessionRuntime:
     def test_fubon_session_runtime_init(self) -> None:
-        runtime = FubonSessionRuntime(client=None)
-        assert runtime._client is None
+        runtime = FubonSessionRuntime(sdk=None)
+        assert runtime._sdk is None
 
     def test_fubon_session_runtime_has_slots(self) -> None:
         assert hasattr(FubonSessionRuntime, "__slots__")
 
-    def test_fubon_session_methods_raise_without_impl(self) -> None:
-        """When session_runtime.py is not importable, stubs raise."""
-        runtime = FubonSessionRuntime(client=None)
-        # _impl is None when session_runtime module is absent
-        runtime._impl = None
-        with pytest.raises(NotImplementedError):
-            runtime.login()
-        with pytest.raises(NotImplementedError):
-            runtime.refresh_token()
-        with pytest.raises(NotImplementedError):
-            runtime.logout()
+    def test_fubon_session_runtime_not_logged_in_by_default(self) -> None:
+        """Newly created runtime is not logged in."""
+        runtime = FubonSessionRuntime(sdk=None)
+        assert runtime._logged_in is False
 
 
 # ------------------------------------------------------------------ #
