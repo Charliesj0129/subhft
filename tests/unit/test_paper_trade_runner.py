@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
+
+import pytest
 
 from hft_platform.alpha.experiments import ExperimentTracker, PaperTradeSession
 from hft_platform.alpha.paper_trade_runner import (
@@ -13,6 +16,7 @@ from hft_platform.alpha.paper_trade_runner import (
     PaperTradeSummary,
     _build_summary,
     _calendar_span,
+    _compute_summary,
 )
 
 # ---------------------------------------------------------------------------
@@ -30,7 +34,7 @@ def _make_session(
     execution_reject_rate: float = 0.01,
     duration_seconds: int = 14400,
     regime: str | None = "trending",
-    reject_rate_p95: float | None = 0.015,
+    reject_rate_p95: float | None = None,
 ) -> PaperTradeSession:
     started_at = f"{trading_day}T09:00:00+00:00"
     ended_at = f"{trading_day}T13:00:00+00:00"
@@ -51,13 +55,34 @@ def _make_session(
 
 
 def _cfg(**overrides: Any) -> PaperTradeRunnerConfig:
+    # Translate legacy test kwarg names
+    if "min_session_minutes" in overrides:
+        overrides["session_duration_minutes"] = overrides.pop("min_session_minutes")
     defaults: dict[str, Any] = {
         "alpha_id": "test_alpha",
-        "target_sessions": 3,
-        "min_session_minutes": 60,
     }
     defaults.update(overrides)
     return PaperTradeRunnerConfig(**defaults)
+
+
+class FixedSessionRunner:
+    """Test double that yields pre-built sessions in order."""
+
+    def __init__(self, sessions: list[PaperTradeSession]) -> None:
+        self._sessions = list(sessions)
+        self._index = 0
+
+    def run(
+        self,
+        alpha_id: str,
+        duration_minutes: int,
+        regime_hint: str | None = None,
+    ) -> PaperTradeSession:
+        if self._index >= len(self._sessions):
+            raise RuntimeError("No more sessions available")
+        session = self._sessions[self._index]
+        self._index += 1
+        return session
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +135,8 @@ class TestComputeSummary:
 
     def test_reject_rate_mean(self) -> None:
         sessions = [
-            _make_session(session_id="s1", reject_rate=0.01),
-            _make_session(session_id="s2", reject_rate=0.03),
+            _make_session(session_id="s1", execution_reject_rate=0.01),
+            _make_session(session_id="s2", execution_reject_rate=0.03),
         ]
         summary = _compute_summary("a", "c1", sessions, _cfg())
         assert summary.execution_reject_rate_mean == pytest.approx(0.02)
