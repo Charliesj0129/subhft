@@ -25,11 +25,12 @@ def test_strategy_context_place_order():
         positions={"AAPL": 10}, strategy_id="test_strat", intent_factory=intent_factory, price_scaler=scaler
     )
 
-    res = ctx.place_order(symbol="AAPL", side=Side.BUY, price=1.0, qty=1)
+    res = ctx.place_order(symbol="AAPL", side=Side.BUY, price=10000, qty=1)
     assert res == "intent"
-    scaler.assert_called_with("AAPL", 1.0)
+    # int prices are already scaled — scaler is not called
+    scaler.assert_not_called()
     intent_factory.assert_called_once()
-    assert intent_factory.call_args[1]["price"] == 100
+    assert intent_factory.call_args[1]["price"] == 10000
 
 
 def test_strategy_context_feature_accessors():

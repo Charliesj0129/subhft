@@ -12,7 +12,7 @@ from hft_platform.alpha.gate_e_batch import (
     GateEBatchConfig,
     GateEBatchReport,
     GateEBatchRunner,
-    discover_gate_e_candidates,
+    discover_gate_e_promotion_candidates,
 )
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ def _make_decision(
 
 
 # ---------------------------------------------------------------------------
-# discover_gate_e_candidates
+# discover_gate_e_promotion_candidates
 # ---------------------------------------------------------------------------
 
 
@@ -60,7 +60,7 @@ class TestDiscoverGateECandidates:
         _make_decision(tmp_path, "alpha_d_failed", gate_d_passed=False, gate_e_passed=False)
         _make_decision(tmp_path, "alpha_d_failed_e_passed", gate_d_passed=False, gate_e_passed=True)
 
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         assert len(candidates) == 1
         assert candidates[0]["alpha_id"] == "alpha_ok"
@@ -71,7 +71,7 @@ class TestDiscoverGateECandidates:
         """Each candidate dict includes a 'decision_path' key pointing to the JSON file."""
         decision_path = _make_decision(tmp_path, "my_alpha", gate_d_passed=True, gate_e_passed=False)
 
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         assert len(candidates) == 1
         assert candidates[0]["decision_path"] == str(decision_path)
@@ -82,7 +82,7 @@ class TestDiscoverGateECandidates:
         _make_decision(tmp_path, "alpha_b", gate_d_passed=True, gate_e_passed=False)
         _make_decision(tmp_path, "alpha_c", gate_d_passed=True, gate_e_passed=True)
 
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         alpha_ids = {c["alpha_id"] for c in candidates}
         assert alpha_ids == {"alpha_a", "alpha_b"}
@@ -97,7 +97,7 @@ class TestDiscoverGateECandidates:
             extra={"reasons": ["sharpe_below_threshold"], "canary_weight": 0.1},
         )
 
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         assert len(candidates) == 1
         assert candidates[0]["reasons"] == ["sharpe_below_threshold"]
@@ -108,13 +108,13 @@ class TestDiscoverGateECandidates:
         promotions_dir = tmp_path.joinpath(*_PROMOTIONS_SUBPATH)
         promotions_dir.mkdir(parents=True)
 
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         assert candidates == []
 
     def test_missing_promotions_dir_returns_empty_list(self, tmp_path: Path) -> None:
         """When the promotions directory does not exist, an empty list is returned."""
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         assert candidates == []
 
@@ -127,7 +127,7 @@ class TestDiscoverGateECandidates:
         # A valid candidate should still be returned alongside the bad file.
         _make_decision(tmp_path, "good_alpha", gate_d_passed=True, gate_e_passed=False)
 
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         assert len(candidates) == 1
         assert candidates[0]["alpha_id"] == "good_alpha"
@@ -138,7 +138,7 @@ class TestDiscoverGateECandidates:
         weird_dir.mkdir(parents=True)
         (weird_dir / "promotion_decision.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
 
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         assert candidates == []
 
@@ -151,7 +151,7 @@ class TestDiscoverGateECandidates:
             tmp_path, "repeat_alpha", gate_d_passed=True, gate_e_passed=False, timestamp="20260102T000000Z_bbb"
         )
 
-        candidates = discover_gate_e_candidates(tmp_path)
+        candidates = discover_gate_e_promotion_candidates(tmp_path)
 
         assert len(candidates) == 2
         assert all(c["alpha_id"] == "repeat_alpha" for c in candidates)
@@ -162,136 +162,76 @@ class TestDiscoverGateECandidates:
 # ---------------------------------------------------------------------------
 
 
+def _make_runs_meta(
+    tmp_path: Path,
+    alpha_id: str,
+    gate_d: bool = True,
+) -> Path:
+    """Create a runs/<alpha_id>/meta.json for discover_gate_e_candidates."""
+    run_dir = tmp_path / "research" / "experiments" / "runs" / alpha_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    meta = {"alpha_id": alpha_id, "gate_status": {"gate_d": gate_d}}
+    (run_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    return run_dir
+
+
 class TestGateEBatchRunnerDryRun:
-    def test_dry_run_lists_candidates_no_execution(self, tmp_path: Path) -> None:
-        """Dry-run returns all candidates; completed/failed/skipped are empty."""
-        _make_decision(tmp_path, "alpha_x", gate_d_passed=True, gate_e_passed=False)
-        _make_decision(tmp_path, "alpha_y", gate_d_passed=True, gate_e_passed=False)
-        _make_decision(tmp_path, "alpha_done", gate_d_passed=True, gate_e_passed=True)
+    def test_dry_run_skips_all_candidates(self, tmp_path: Path) -> None:
+        """Dry-run returns all candidates as skipped."""
+        _make_runs_meta(tmp_path, "alpha_x", gate_d=True)
+        _make_runs_meta(tmp_path, "alpha_y", gate_d=True)
+        _make_runs_meta(tmp_path, "alpha_done", gate_d=False)
 
         config = GateEBatchConfig(project_root=tmp_path, dry_run=True)
-        runner = GateEBatchRunner()
-        report = runner.run(config)
+        runner = GateEBatchRunner(config)
+        report = runner.run()
 
-        candidate_ids = {c["alpha_id"] for c in report.candidates}
-        assert candidate_ids == {"alpha_x", "alpha_y"}
-        assert report.completed == ()
-        assert report.failed == ()
-        assert report.skipped == ()
+        assert report.total_candidates == 2
+        assert report.skipped == 2
+        assert report.passed == 0
+        assert report.failed == 0
 
-    def test_dry_run_does_not_invoke_campaign_runner(self, tmp_path: Path) -> None:
-        """campaign_runner must NOT be called in dry-run mode."""
-        _make_decision(tmp_path, "alpha_z", gate_d_passed=True, gate_e_passed=False)
-
-        called: list[str] = []
-
-        def campaign_runner(alpha_id: str) -> None:
-            called.append(alpha_id)
+    def test_dry_run_results_contain_alpha_ids(self, tmp_path: Path) -> None:
+        """Dry-run results contain the correct alpha_ids."""
+        _make_runs_meta(tmp_path, "alpha_z", gate_d=True)
 
         config = GateEBatchConfig(project_root=tmp_path, dry_run=True)
-        runner = GateEBatchRunner(campaign_runner=campaign_runner)
-        runner.run(config)
+        runner = GateEBatchRunner(config)
+        report = runner.run()
 
-        assert called == []
-
-    def test_dry_run_writes_report_file(self, tmp_path: Path) -> None:
-        """Dry-run still writes gate_e_batch_report.json."""
-        _make_decision(tmp_path, "alpha_w", gate_d_passed=True, gate_e_passed=False)
-
-        config = GateEBatchConfig(project_root=tmp_path, dry_run=True)
-        GateEBatchRunner().run(config)
-
-        report_path = tmp_path / "research" / "experiments" / "gate_e_batch_report.json"
-        assert report_path.exists()
-        payload = json.loads(report_path.read_text())
-        assert isinstance(payload["candidates"], list)
-        assert payload["completed"] == []
-        assert payload["failed"] == []
-        assert payload["skipped"] == []
+        assert len(report.results) == 1
+        assert report.results[0]["alpha_id"] == "alpha_z"
+        assert report.results[0]["dry_run"] is True
 
 
 # ---------------------------------------------------------------------------
-# GateEBatchRunner — live run (no campaign_runner)
+# GateEBatchRunner — no candidates
 # ---------------------------------------------------------------------------
 
 
-class TestGateEBatchRunnerNoCampaignRunner:
-    def test_no_runner_skips_all_candidates(self, tmp_path: Path) -> None:
-        """When no campaign_runner is provided, all candidates are skipped."""
-        _make_decision(tmp_path, "alpha_1", gate_d_passed=True, gate_e_passed=False)
-        _make_decision(tmp_path, "alpha_2", gate_d_passed=True, gate_e_passed=False)
+class TestGateEBatchRunnerNoCandidates:
+    def test_no_candidates_produces_empty_report(self, tmp_path: Path) -> None:
+        """No candidates → report with all-zero counts."""
+        runs_dir = tmp_path / "research" / "experiments" / "runs"
+        runs_dir.mkdir(parents=True)
 
         config = GateEBatchConfig(project_root=tmp_path, dry_run=False)
-        runner = GateEBatchRunner(campaign_runner=None)
-        report = runner.run(config)
+        runner = GateEBatchRunner(config)
+        report = runner.run()
 
-        assert set(report.skipped) == {"alpha_1", "alpha_2"}
-        assert report.completed == ()
-        assert report.failed == ()
+        assert report.total_candidates == 0
+        assert report.passed == 0
+        assert report.failed == 0
+        assert report.skipped == 0
 
-
-# ---------------------------------------------------------------------------
-# GateEBatchRunner — live run (with campaign_runner)
-# ---------------------------------------------------------------------------
-
-
-class TestGateEBatchRunnerWithCampaignRunner:
-    def test_successful_run_marks_completed(self, tmp_path: Path) -> None:
-        """Alphas whose campaign_runner call succeeds appear in 'completed'."""
-        _make_decision(tmp_path, "alpha_pass", gate_d_passed=True, gate_e_passed=False)
-
-        def campaign_runner(alpha_id: str) -> None:
-            pass  # success
-
+    def test_missing_runs_dir_produces_empty_report(self, tmp_path: Path) -> None:
+        """Missing runs directory → empty report."""
         config = GateEBatchConfig(project_root=tmp_path, dry_run=False)
-        report = GateEBatchRunner(campaign_runner=campaign_runner).run(config)
+        runner = GateEBatchRunner(config)
+        report = runner.run()
 
-        assert "alpha_pass" in report.completed
-        assert report.failed == ()
-        assert report.skipped == ()
-
-    def test_failing_runner_marks_failed(self, tmp_path: Path) -> None:
-        """Alphas whose campaign_runner raises appear in 'failed'."""
-        _make_decision(tmp_path, "alpha_fail", gate_d_passed=True, gate_e_passed=False)
-
-        def campaign_runner(alpha_id: str) -> None:
-            raise RuntimeError("paper trade exploded")
-
-        config = GateEBatchConfig(project_root=tmp_path, dry_run=False)
-        report = GateEBatchRunner(campaign_runner=campaign_runner).run(config)
-
-        assert "alpha_fail" in report.failed
-        assert report.completed == ()
-
-    def test_mixed_results(self, tmp_path: Path) -> None:
-        """Some candidates complete, some fail, none skipped when runner is provided."""
-        _make_decision(tmp_path, "alpha_ok", gate_d_passed=True, gate_e_passed=False, timestamp="20260101T000000Z_aaa")
-        _make_decision(tmp_path, "alpha_err", gate_d_passed=True, gate_e_passed=False, timestamp="20260101T000000Z_bbb")
-
-        def campaign_runner(alpha_id: str) -> None:
-            if alpha_id == "alpha_err":
-                raise ValueError("boom")
-
-        config = GateEBatchConfig(project_root=tmp_path, dry_run=False)
-        report = GateEBatchRunner(campaign_runner=campaign_runner).run(config)
-
-        assert "alpha_ok" in report.completed
-        assert "alpha_err" in report.failed
-        assert report.skipped == ()
-
-    def test_runner_receives_correct_alpha_id(self, tmp_path: Path) -> None:
-        """campaign_runner is called with the exact alpha_id from the JSON."""
-        _make_decision(tmp_path, "my_special_alpha", gate_d_passed=True, gate_e_passed=False)
-
-        received: list[str] = []
-
-        def campaign_runner(alpha_id: str) -> None:
-            received.append(alpha_id)
-
-        config = GateEBatchConfig(project_root=tmp_path, dry_run=False)
-        GateEBatchRunner(campaign_runner=campaign_runner).run(config)
-
-        assert received == ["my_special_alpha"]
+        assert report.total_candidates == 0
+        assert report.results == ()
 
 
 # ---------------------------------------------------------------------------
@@ -302,47 +242,46 @@ class TestGateEBatchRunnerWithCampaignRunner:
 class TestGateEBatchReport:
     def test_report_is_frozen_dataclass(self) -> None:
         """GateEBatchReport is immutable (frozen=True)."""
-        report = GateEBatchReport(candidates=(), completed=(), failed=(), skipped=())
+        report = GateEBatchReport(
+            total_candidates=0, passed=0, failed=0, skipped=0, results=()
+        )
         with pytest.raises(AttributeError):
-            report.completed = ("oops",)  # type: ignore[misc]
+            report.passed = 1  # type: ignore[misc]
 
-    def test_report_fields_are_tuples(self, tmp_path: Path) -> None:
-        """All collection fields on the returned report are tuples."""
-        _make_decision(tmp_path, "alpha_t", gate_d_passed=True, gate_e_passed=False)
+    def test_report_to_dict(self) -> None:
+        """to_dict produces expected structure."""
+        report = GateEBatchReport(
+            total_candidates=2, passed=1, failed=0, skipped=1, results=({"alpha_id": "a"},)
+        )
+        d = report.to_dict()
+        assert d["total_candidates"] == 2
+        assert d["passed"] == 1
+        assert d["failed"] == 0
+        assert d["skipped"] == 1
+        assert isinstance(d["results"], list)
+        assert len(d["results"]) == 1
+
+    def test_report_fields_are_correct_types(self, tmp_path: Path) -> None:
+        """All fields on the returned report have expected types."""
+        _make_runs_meta(tmp_path, "alpha_t", gate_d=True)
 
         config = GateEBatchConfig(project_root=tmp_path, dry_run=True)
-        report = GateEBatchRunner().run(config)
+        runner = GateEBatchRunner(config)
+        report = runner.run()
 
-        assert isinstance(report.candidates, tuple)
-        assert isinstance(report.completed, tuple)
-        assert isinstance(report.failed, tuple)
-        assert isinstance(report.skipped, tuple)
+        assert isinstance(report.total_candidates, int)
+        assert isinstance(report.passed, int)
+        assert isinstance(report.failed, int)
+        assert isinstance(report.skipped, int)
+        assert isinstance(report.results, tuple)
 
-    def test_report_file_json_structure(self, tmp_path: Path) -> None:
-        """The written JSON report has the expected top-level keys."""
-        _make_decision(tmp_path, "alpha_j", gate_d_passed=True, gate_e_passed=False)
-
-        config = GateEBatchConfig(project_root=tmp_path, dry_run=False)
-        GateEBatchRunner().run(config)
-
-        report_path = tmp_path / "research" / "experiments" / "gate_e_batch_report.json"
-        payload = json.loads(report_path.read_text())
-
-        assert set(payload.keys()) >= {"candidates", "completed", "failed", "skipped"}
-        assert isinstance(payload["candidates"], list)
-        assert isinstance(payload["completed"], list)
-        assert isinstance(payload["failed"], list)
-        assert isinstance(payload["skipped"], list)
-
-    def test_empty_promotions_produces_empty_report(self, tmp_path: Path) -> None:
-        """No candidates → report with all-empty collections."""
-        promotions_dir = tmp_path.joinpath(*_PROMOTIONS_SUBPATH)
-        promotions_dir.mkdir(parents=True)
-
-        config = GateEBatchConfig(project_root=tmp_path, dry_run=False)
-        report = GateEBatchRunner().run(config)
-
-        assert report.candidates == ()
-        assert report.completed == ()
-        assert report.failed == ()
-        assert report.skipped == ()
+    def test_report_to_dict_json_serializable(self) -> None:
+        """to_dict output should be JSON-serializable."""
+        report = GateEBatchReport(
+            total_candidates=1, passed=0, failed=0, skipped=1,
+            results=({"alpha_id": "x", "skipped": True},),
+        )
+        payload = json.dumps(report.to_dict())
+        assert isinstance(payload, str)
+        parsed = json.loads(payload)
+        assert set(parsed.keys()) >= {"total_candidates", "passed", "failed", "skipped", "results"}

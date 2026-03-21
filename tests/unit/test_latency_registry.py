@@ -19,12 +19,12 @@ class TestValidateLatencyProfileId:
         profiles = {"sim_p95_v2026-02-26": {"submit_ms": 36.0}}
         valid, detail = validate_latency_profile_id("nonexistent_profile", profiles)
         assert valid is False
-        assert "not found" in detail
+        assert "not in registry" in detail
 
     def test_empty_profiles_returns_true_with_skip(self):
         valid, detail = validate_latency_profile_id("any_id", {})
         assert valid is True
-        assert "skipped" in detail
+        assert "SKIPPED" in detail
 
     def test_typo_in_profile_id_detected(self):
         profiles = {"sim_p95_v2026-02-26": {"submit_ms": 36.0}}

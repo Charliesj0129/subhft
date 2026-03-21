@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from hft_platform.alpha._gate_d import (
     _check_latency_values,
     _evaluate_gate_d,
