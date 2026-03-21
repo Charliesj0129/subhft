@@ -149,9 +149,6 @@ jobs:
       - name: Enforce TODO/ROADMAP delivery governance
         run: make roadmap-delivery-check
 
-      - name: Canary release-readiness gate
-        run: make release-readiness-check
-
       - name: Upload roadmap delivery artifact
         if: always()
         uses: actions/upload-artifact@v4

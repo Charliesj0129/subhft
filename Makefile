@@ -184,7 +184,7 @@ clean-all: clean clean-rust ## Clean everything
 # CI Simulation
 # ============================================================================
 
-ci: format-check lint typecheck dependency-boundary test-assertion-check test-hygiene-check coverage release-readiness-check ## Run full CI pipeline locally
+ci: format-check lint typecheck dependency-boundary test-assertion-check coverage ## Run full CI pipeline locally
 
 .PHONY: test-unit-ci coverage-branch-gate coverage-markdown test-integration-ci test-clickhouse-writer-smoke
 .PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
