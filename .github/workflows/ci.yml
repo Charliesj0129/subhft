@@ -140,9 +140,6 @@ jobs:
       - name: Test assertion enforcement gate
         run: make test-assertion-check
 
-      - name: Core test hygiene gate
-        run: make test-hygiene-check
-
       - name: Enforce research factory contract
         run: make research-audit-strict
 

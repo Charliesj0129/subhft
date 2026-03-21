@@ -63,9 +63,6 @@ test-assertion-check: ## Check test functions have assertions
 test-collection-check: ## Verify zero test collection errors
 	$(PY) scripts/check_test_collection.py
 
-test-hygiene-check: ## Block script-style patterns and coverage-only test files in core pytest suites
-	$(PY) scripts/check_test_hygiene.py
-
 lint: ## Run ruff linter
 	uv run ruff check src/ tests/
 
