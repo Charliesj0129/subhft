@@ -73,6 +73,7 @@ class MetricsRegistry:
                 "circuit_breaker_state",
                 "dlq_size_total",
                 "orphaned_fill",
+                "portfolio_total_pnl",
                 "reconciliation_discrepancy_count",
                 "recorder_insert_retry_total",
                 "feed_gap_by_symbol_seconds",
