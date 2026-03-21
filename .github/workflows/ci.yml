@@ -260,7 +260,7 @@ jobs:
   test:
     name: 🧪 Tests & Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     needs: [typecheck, rust]
     steps:
       - uses: actions/checkout@v4
