@@ -23,7 +23,7 @@ def _check_clickhouse(timeout: float) -> dict[str, Any]:
         import urllib.request
 
         req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 — internal health endpoint, host from config
             ok = resp.status == 200
         return {"name": "clickhouse", "ok": ok, "detail": f"{host}:{port} status={resp.status}"}
     except Exception as exc:
@@ -56,7 +56,7 @@ def _check_prometheus(timeout: float) -> dict[str, Any]:
         import urllib.request
 
         req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 — internal health endpoint, host from config
             ok = resp.status == 200
         return {"name": "prometheus", "ok": ok, "detail": f"{host}:{port} status={resp.status}"}
     except Exception as exc:

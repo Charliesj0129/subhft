@@ -124,7 +124,7 @@ def _fetch_from_prometheus(
     port = port or int(os.getenv("HFT_HEALTH_PORT", "9090"))
     state = HealthState(feed_total_count=feed_total)
     try:
-        with urlopen(f"http://{host}:{port}/metrics", timeout=2.0) as resp:  # noqa: S310
+        with urlopen(f"http://{host}:{port}/metrics", timeout=2.0) as resp:  # noqa: S310  # nosec B310 — internal health endpoint
             raw = resp.read().decode("utf-8", errors="replace")
     except (URLError, OSError, TimeoutError):
         return state

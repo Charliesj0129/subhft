@@ -19,7 +19,7 @@ def cmd_feed_status(args: argparse.Namespace) -> None:
     import urllib.request
 
     try:
-        resp = urllib.request.urlopen(f"http://localhost:{args.port}/metrics", timeout=1.5)
+        resp = urllib.request.urlopen(f"http://localhost:{args.port}/metrics", timeout=1.5)  # nosec B310 — internal metrics endpoint on localhost
         body = resp.read().decode("utf-8")
         has_feed = "feed_events_total" in body
         print(f"Metrics reachable on :{args.port}; feed metric present={has_feed}")
@@ -323,7 +323,7 @@ def cmd_recorder_status(args: argparse.Namespace) -> None:
     # ClickHouse reachability
     ck_status = "unreachable"
     try:
-        resp = urllib.request.urlopen(f"http://{ck_host}:{ck_port}/ping", timeout=2.0)
+        resp = urllib.request.urlopen(f"http://{ck_host}:{ck_port}/ping", timeout=2.0)  # nosec B310 — internal ClickHouse ping, host from config
         if resp.status == 200:
             ck_status = "ok"
     except Exception as _exc:  # noqa: BLE001
