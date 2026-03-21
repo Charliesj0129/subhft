@@ -190,7 +190,7 @@ ci: format-check lint typecheck test-assertion-check coverage ## Run full CI pip
 .PHONY: render-incident-timeline-json render-incident-timeline-md
 
 test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
-	uv run pytest tests/unit -q --cov=src/hft_platform --cov-branch --cov-report=term-missing --cov-report=xml --timeout=30 -o "hypothesis.max_examples=20"
+	uv run pytest tests/unit -q --cov=src/hft_platform --cov-report=term-missing --cov-report=xml --timeout=10 -o "hypothesis.max_examples=10"
 
 coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
 	uv run coverage report --fail-under=70

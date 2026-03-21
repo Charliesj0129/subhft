@@ -305,9 +305,6 @@ jobs:
 
       - name: Run unit tests with coverage
         run: make test-unit-ci
-        env:
-          PYTEST_TIMEOUT: "10"
-          HYPOTHESIS_MAX_EXAMPLES: "10"
 
       - name: Check branch coverage
         run: make coverage-branch-gate
