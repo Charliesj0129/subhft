@@ -384,6 +384,8 @@ def test_strategy_runner_positions_view():
     with patch("hft_platform.execution.positions.MetricsRegistry") as _mr:
         _mr.get.return_value = None
         store = PositionStore()
+    store._rust_tracker = None
+    store.metrics = None
     store.positions = {
         "acc:alpha:2330": Position("acc", "alpha", "2330", net_qty=5),
         "acc:beta:2317": Position("acc", "beta", "2317", net_qty=3),
