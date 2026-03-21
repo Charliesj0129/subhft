@@ -193,7 +193,7 @@ ci: format-check lint typecheck dependency-boundary test-assertion-check coverag
 .PHONY: render-incident-timeline-json render-incident-timeline-md
 
 test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
-	uv run pytest tests/unit -q --cov=src/hft_platform --cov-report=term-missing --cov-report=xml --timeout=10 --timeout_method=thread -o "hypothesis.max_examples=10" -o "faulthandler_timeout=120"
+	uv run pytest tests/unit -q --cov=src/hft_platform --cov-report=term-missing --cov-report=xml --timeout=10 -p no:hypothesis -p no:faulthandler
 
 coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
 	uv run coverage report --fail-under=70
