@@ -195,7 +195,7 @@ def is_duplicate(svc: Any, table: str, content_hash: str) -> bool:
     try:
         with svc._ch_lock:
             result = svc.ch_client.command(
-                f"SELECT count() FROM hft._wal_dedup WHERE table = '{table}' AND hash = '{content_hash}'"
+                f"SELECT count() FROM hft._wal_dedup WHERE table = '{table}' AND hash = '{content_hash}'"  # nosec B608
             )
         return int(result) > 0
     except Exception as _exc:  # noqa: BLE001

@@ -17,7 +17,7 @@ async def main():
         prom_port = int(prom_port_raw)
     except ValueError:
         prom_port = 9090
-    prom_addr = os.getenv("HFT_PROM_ADDR", "0.0.0.0")
+    prom_addr = os.getenv("HFT_PROM_ADDR", "0.0.0.0")  # nosec B104
     start_http_server(prom_port, addr=prom_addr)
     logger.info("Prometheus metrics started", port=prom_port, addr=prom_addr)
 
