@@ -105,6 +105,14 @@ omit = [
 [tool.coverage.report]
 # Roadmap: 70 (Phase 2, current) → 80 (Phase 3). See .agent/rules/50-testing.md
 fail_under = 70
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+    "@overload",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
