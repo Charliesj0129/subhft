@@ -64,6 +64,7 @@ class PaperTradeSummary:
     execution_reject_rate_p95: float | None
     total_fills: int
     mean_pnl_bps: float
+    pnl_bps_mean: float = 0.0
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -81,6 +82,7 @@ class PaperTradeSummary:
             "execution_reject_rate_p95": self.execution_reject_rate_p95,
             "total_fills": self.total_fills,
             "mean_pnl_bps": self.mean_pnl_bps,
+            "pnl_bps_mean": self.pnl_bps_mean,
             "notes": self.notes,
         }
 
@@ -298,6 +300,7 @@ def _build_summary(
             execution_reject_rate_p95=None,
             total_fills=0,
             mean_pnl_bps=0.0,
+            pnl_bps_mean=0.0,
             notes=config.notes if config else "",
         )
 
@@ -344,9 +347,35 @@ def _build_summary(
         execution_reject_rate_p95=reject_p95,
         total_fills=total_fills,
         mean_pnl_bps=mean_pnl,
+        pnl_bps_mean=mean_pnl,
         notes=config.notes if config else "",
     )
 
 
-# Alias for backward compatibility with code expecting _compute_summary
-_compute_summary = _build_summary
+def _compute_summary(
+    alpha_id: str,
+    campaign_id: str = "",
+    sessions: list[PaperTradeSession] | None = None,
+    config: PaperTradeRunnerConfig | None = None,
+) -> PaperTradeSummary:
+    """Backward-compatible positional-arg wrapper around ``_build_summary``."""
+    return _build_summary(
+        alpha_id=alpha_id,
+        campaign_id=campaign_id,
+        sessions=sessions if sessions is not None else [],
+        config=config,
+    )
+
+
+def _calendar_span(dates: list[str]) -> int:
+    """Compute inclusive calendar-day span from ISO date strings.
+
+    Returns 0 for empty input or unparseable dates.
+    """
+    if not dates:
+        return 0
+    try:
+        parsed = sorted(dt.date.fromisoformat(d) for d in dates)
+        return (parsed[-1] - parsed[0]).days + 1
+    except (ValueError, TypeError):
+        return 0
