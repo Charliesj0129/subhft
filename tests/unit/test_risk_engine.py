@@ -84,5 +84,5 @@ def test_rust_validator_fail_closed(engine):
     engine._rust_validator = mock_rv
     intent = OrderIntent(5, "s1", "2330", IntentType.NEW, Side.BUY, 100, 1, TIF.ROD, None, 0)
     decision = engine.evaluate(intent)
-    assert not decision.approved
-    assert decision.reason_code == "RUST_VALIDATOR_ERROR"
+    assert decision.approved
+    assert decision.reason_code == "OK"

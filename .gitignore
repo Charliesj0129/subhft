@@ -31,6 +31,7 @@ logs/
 .benchmarks/
 benchmark.json
 .coverage
+coverage.json
 coverage.xml
 htmlcov/
 

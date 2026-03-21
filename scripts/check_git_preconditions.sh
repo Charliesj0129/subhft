@@ -135,10 +135,15 @@ check_branches() {
 # AWG-03: Clean working tree
 # ---------------------------------------------------------------------------
 check_clean_tree() {
+    local severity="${1:-warn}"
     local dirty
     dirty=$(git status --porcelain | wc -l)
     if [ "$dirty" -gt 0 ]; then
-        warn "Working tree has $dirty uncommitted changes"
+        if [ "$severity" = "error" ]; then
+            err "Working tree has $dirty uncommitted changes"
+        else
+            warn "Working tree has $dirty uncommitted changes"
+        fi
     else
         ok "Working tree is clean"
     fi
@@ -155,7 +160,7 @@ echo ""
 case "$MODE" in
     --pre-merge)
         check_no_active_ops
-        check_clean_tree
+        check_clean_tree error
         check_no_conflict_markers
         ;;
     --post-merge)
@@ -166,18 +171,19 @@ case "$MODE" in
         check_no_active_ops
         check_worktrees
         check_branches
+        check_clean_tree warn
         check_no_conflict_markers
         ;;
     --session-end)
         check_no_active_ops
         check_worktrees
         check_branches
-        check_clean_tree
+        check_clean_tree error
         check_no_conflict_markers
         ;;
     --full)
         check_no_active_ops
-        check_clean_tree
+        check_clean_tree error
         check_worktrees
         check_branches
         check_no_conflict_markers
