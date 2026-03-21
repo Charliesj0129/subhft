@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -525,20 +527,17 @@ def recompute_pool_correlations(
 
     updated: list[str] = []
     if apply:
-        import json as _json
-        from pathlib import Path as _Path
-
         runs = tracker.list_runs()
         for run in runs:
             if run.alpha_id not in corr_max:
                 continue
-            scorecard_path = _Path(run.scorecard_path)
+            scorecard_path = Path(run.scorecard_path)
             if not scorecard_path.exists():
                 continue
             try:
-                scorecard = _json.loads(scorecard_path.read_text())
+                scorecard = json.loads(scorecard_path.read_text())
                 scorecard["correlation_pool_max"] = corr_max[run.alpha_id]
-                scorecard_path.write_text(_json.dumps(scorecard, indent=2, sort_keys=True))
+                scorecard_path.write_text(json.dumps(scorecard, indent=2, sort_keys=True))
                 updated.append(run.run_id)
             except (OSError, ValueError):
                 continue
@@ -549,3 +548,44 @@ def recompute_pool_correlations(
         "updated_scorecards": updated,
         "applied": apply,
     }
+
+
+def load_pool_signals_from_experiments(
+    experiments_dir: str | Path = "research/experiments",
+    *,
+    exclude_alpha_id: str | None = None,
+) -> dict[str, list[float]]:
+    """Load alpha signals from experiment run scorecards.
+
+    Scans ``<experiments_dir>/runs/`` for directories containing
+    ``meta.json`` (with ``alpha_id``) and ``scorecard.json`` (with ``signals``).
+    """
+    runs_dir = Path(experiments_dir) / "runs"
+    if not runs_dir.is_dir():
+        return {}
+
+    result: dict[str, list[float]] = {}
+    for run_dir in sorted(runs_dir.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        meta_path = run_dir / "meta.json"
+        scorecard_path = run_dir / "scorecard.json"
+        if not meta_path.exists() or not scorecard_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text())
+            alpha_id = meta.get("alpha_id")
+            if not alpha_id:
+                continue
+            scorecard = json.loads(scorecard_path.read_text())
+            signals = scorecard.get("signals")
+            if signals is None:
+                continue
+            result[alpha_id] = [float(v) for v in signals]
+        except (OSError, ValueError, KeyError):
+            continue
+
+    if exclude_alpha_id and exclude_alpha_id in result:
+        del result[exclude_alpha_id]
+
+    return result

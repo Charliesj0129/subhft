@@ -203,7 +203,7 @@ class HealthServer:
     async def run(self) -> None:
         """Start the health HTTP server and serve until cancelled."""
         try:
-            self._server = await asyncio.start_server(self._handle_connection, "0.0.0.0", self._port)
+            self._server = await asyncio.start_server(self._handle_connection, "0.0.0.0", self._port)  # nosec B104
         except OSError as exc:
             logger.error("health_server_bind_failed", port=self._port, error=str(exc))
             return
