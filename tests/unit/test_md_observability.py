@@ -743,7 +743,7 @@ class TestInitFeatureShadowEngine:
         engine = MagicMock()
         engine.kernel_backend.return_value = "python"
         engine.feature_set_id.return_value = "fs1"
-        with patch("hft_platform.services._md_observability.FeatureEngine") as FECls:
+        with patch("hft_platform.feature.engine.FeatureEngine") as FECls:
             shadow_inst = MagicMock()
             shadow_inst.kernel_backend.return_value = "rust"
             FECls.return_value = shadow_inst
@@ -761,7 +761,7 @@ class TestInitFeatureShadowEngine:
         engine = MagicMock()
         engine.kernel_backend.return_value = "rust"
         engine.feature_set_id.return_value = "fs1"
-        with patch("hft_platform.services._md_observability.FeatureEngine") as FECls:
+        with patch("hft_platform.feature.engine.FeatureEngine") as FECls:
             shadow_inst = MagicMock()
             shadow_inst.kernel_backend.return_value = "python"
             FECls.return_value = shadow_inst
@@ -779,7 +779,7 @@ class TestInitFeatureShadowEngine:
         engine = MagicMock()
         engine.kernel_backend.return_value = "python"
         engine.feature_set_id.return_value = "fs1"
-        with patch("hft_platform.services._md_observability.FeatureEngine") as FECls:
+        with patch("hft_platform.feature.engine.FeatureEngine") as FECls:
             shadow_inst = MagicMock()
             shadow_inst.kernel_backend.return_value = "python"
             FECls.return_value = shadow_inst
@@ -793,7 +793,7 @@ class TestInitFeatureShadowEngine:
         engine = MagicMock()
         engine.kernel_backend.return_value = "python"
         engine.feature_set_id.return_value = "fs1"
-        with patch("hft_platform.services._md_observability.FeatureEngine") as FECls:
+        with patch("hft_platform.feature.engine.FeatureEngine") as FECls:
             FECls.side_effect = RuntimeError("init failed")
             m = _make_mixin(feature_engine=engine)
             m._init_feature_shadow_engine()
@@ -804,7 +804,7 @@ class TestInitFeatureShadowEngine:
         engine = MagicMock()
         engine.kernel_backend.side_effect = RuntimeError("no backend")
         engine.feature_set_id.return_value = None
-        with patch("hft_platform.services._md_observability.FeatureEngine") as FECls:
+        with patch("hft_platform.feature.engine.FeatureEngine") as FECls:
             shadow_inst = MagicMock()
             shadow_inst.kernel_backend.return_value = "rust"
             FECls.return_value = shadow_inst
