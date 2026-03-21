@@ -1,7 +1,7 @@
 # HFT Platform Makefile
 # Unified CLI for development, testing, and CI
 
-.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html arch-gate test-assertion-check test-collection-check lint lint-fix format format-check typecheck check benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta monitor-remote experiment-gc experiment-gc-dry-run help pre-market-check post-market-check alert-test drill-recon-mismatch git-precheck git-postcheck git-session-check
+.PHONY: dev build-rust test test-all test-integration verify-ce3 coverage coverage-html arch-gate test-assertion-check test-collection-check test-hygiene-check lint lint-fix format format-check typecheck check benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta monitor-remote experiment-gc experiment-gc-dry-run help pre-market-check post-market-check alert-test drill-recon-mismatch git-precheck git-postcheck git-session-check
 
 PY ?= uv run python
 
@@ -60,6 +60,9 @@ test-assertion-check: ## Check test functions have assertions
 test-collection-check: ## Verify zero test collection errors
 	$(PY) scripts/check_test_collection.py
 
+test-hygiene-check: ## Block script-style patterns and coverage-only test files in core pytest suites
+	$(PY) scripts/check_test_hygiene.py
+
 lint: ## Run ruff linter
 	uv run ruff check src/ tests/
 
@@ -90,7 +93,7 @@ git-postcheck: ## Verify git state after merge/rebase (no conflict markers)
 git-session-check: ## Full git hygiene check (worktrees, branches, stash, conflicts)
 	bash scripts/check_git_preconditions.sh --full
 
-check: lint typecheck discipline ## Run all code quality checks
+check: lint typecheck discipline test-hygiene-check ## Run all code quality checks
 
 # ============================================================================
 # Benchmarks
@@ -181,7 +184,7 @@ clean-all: clean clean-rust ## Clean everything
 # CI Simulation
 # ============================================================================
 
-ci: format-check lint typecheck test-assertion-check coverage ## Run full CI pipeline locally
+ci: format-check lint typecheck test-assertion-check test-hygiene-check coverage release-readiness-check ## Run full CI pipeline locally
 
 .PHONY: test-unit-ci coverage-branch-gate coverage-markdown test-integration-ci test-clickhouse-writer-smoke
 .PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
@@ -190,7 +193,7 @@ ci: format-check lint typecheck test-assertion-check coverage ## Run full CI pip
 .PHONY: render-incident-timeline-json render-incident-timeline-md
 
 test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
-	uv run pytest tests/unit -q --cov=src/hft_platform --cov-report=term-missing --cov-report=xml --timeout=10 -o "hypothesis.max_examples=10"
+	timeout 900 uv run pytest tests/unit -q --cov=src/hft_platform --cov-report=term-missing --cov-report=xml --timeout=10 --timeout_method=thread -o "hypothesis.max_examples=10" -o "faulthandler_timeout=300" || { rc=$$?; [ $$rc -eq 124 ] && echo "ERROR: pytest hung after completion (leaked threads); exit 1" && exit 1; exit $$rc; }
 
 coverage-branch-gate: ## Enforce minimum coverage threshold from latest unit-test run
 	uv run coverage report --fail-under=70
@@ -383,6 +386,9 @@ release-first-ops-promote: release-first-ops-gate ## Promote stable only after f
 		exit 2; \
 	fi
 	$(PY) scripts/release_channel_guard.py promote --project-root . --output-dir outputs/deploy_guard --soak-dir outputs/soak_reports --change-id "$(CHANGE_ID)" --min-trading-days 5 --max-report-age-hours 72 --actor "$${ACTOR:-ops}" --apply
+
+release-readiness-check: ## Evaluate March 30 canary readiness from repo and runtime gate evidence
+	$(PY) scripts/release_readiness.py --project-root . --output-dir outputs/release_readiness --milestone-date 2026-03-30 --prod-date 2026-04-03
 
 reliability-monthly-pack: ## Generate monthly reliability review pack (soak/backlog/drift/disk/drill/query-guard/feature-canary/callback-latency)
 	$(PY) scripts/reliability_review_pack.py --project-root . --soak-dir outputs/soak_reports --deploy-dir outputs/deploy_guard --query-guard-dir outputs/query_guard --feature-canary-dir outputs/feature_canary --callback-latency-dir outputs/callback_latency --output-dir outputs/reliability/monthly --month "$${MONTH:-$(shell date +%Y-%m)}" --disk-path . --disk-path .wal --min-query-guard-runs "$${QUERY_GUARD_MIN_RUNS:-1}" --min-query-guard-suite-runs "$${QUERY_GUARD_MIN_SUITE_RUNS:-1}" --min-feature-canary-runs "$${FEATURE_CANARY_MIN_RUNS:-1}" --min-callback-latency-runs "$${CALLBACK_LATENCY_MIN_RUNS:-1}" $(if $(filter 1,$(RUN_DRILL)),--run-drill-suite,) --allow-warn-exit-zero

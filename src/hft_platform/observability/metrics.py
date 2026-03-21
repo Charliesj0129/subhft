@@ -72,6 +72,7 @@ class MetricsRegistry:
                 # Phase 5 metrics
                 "circuit_breaker_state",
                 "dlq_size_total",
+                "orphaned_fill",
                 "reconciliation_discrepancy_count",
                 "recorder_insert_retry_total",
                 "feed_gap_by_symbol_seconds",
