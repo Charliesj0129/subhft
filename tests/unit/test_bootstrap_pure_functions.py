@@ -8,11 +8,14 @@ import io
 
 import pytest
 
+import hft_platform.observability.health as health_mod
+import hft_platform.services.bootstrap as bootstrap_mod
 from hft_platform.services.bootstrap import (
     SystemBootstrapper,
     _encode_resp,
     _read_resp,
     _RoleGuardedNoopClient,
+    wait_for_readiness,
 )
 
 # ---------------------------------------------------------------------------
@@ -275,3 +278,21 @@ class TestLeaseIsStale:
     def test_takeover_zero_not_stale(self) -> None:
         # takeover_ttl_s=0 means stale takeover is disabled
         assert SystemBootstrapper._lease_is_stale(ttl_s=50, takeover_ttl_s=0) is False
+
+
+@pytest.mark.asyncio
+async def test_wait_for_readiness_returns_when_health_server_reports_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeHealthServer:
+        def __init__(self, system):
+            self.system = system
+
+        def _check_readiness(self) -> tuple[bool, dict[str, object]]:
+            return True, {"system_running": True, "feed_connected": True}
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(health_mod, "HealthServer", _FakeHealthServer)
+    monkeypatch.setattr(bootstrap_mod.asyncio, "sleep", _no_sleep)
+
+    await wait_for_readiness(object(), timeout_s=0.01)
