@@ -146,7 +146,8 @@ def test_get_trace_sampler_import_error_returns_none():
     from hft_platform.order import adapter as adapter_mod
 
     result = adapter_mod._get_trace_sampler()
-    assert result is None or result is not None  # Must not raise
+    # diagnostics.trace module is present in this env; sampler is returned (not None)
+    assert result is not None
 
 
 # ── metadata property setter ───────────────────────────────────────────────
