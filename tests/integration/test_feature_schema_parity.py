@@ -240,8 +240,7 @@ class TestBackendParity:
         report = check_backend_parity(py_features, rust_features)
 
         assert report.passed, f"Backend parity failed with {len(report.mismatches)} mismatch(es):\n" + "\n".join(
-            f"  {m.feature_id!r}: py={m.python_value} rust={m.rust_value}"
-            for m in report.mismatches[:20]
+            f"  {m.feature_id!r}: py={m.python_value} rust={m.rust_value}" for m in report.mismatches[:20]
         )
         assert report.mismatches == ()
 

@@ -1,4 +1,5 @@
 """Coverage tests for feed_adapter/normalizer.py — targeting 80%+ line coverage."""
+
 from __future__ import annotations
 
 import os

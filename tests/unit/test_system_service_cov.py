@@ -1,4 +1,5 @@
 """Coverage tests for services/system.py — targeting 80%+ line coverage."""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,4 +1,5 @@
 """Coverage tests for feature/kernel.py — targeting 80%+ line coverage."""
+
 from __future__ import annotations
 
 import math
@@ -227,8 +228,9 @@ def fresh_state():
 
 def test_lob_kernel_first_tick(lob_kernel, fresh_state):
     """First tick initializes EMA state."""
-    result = lob_kernel.compute(fresh_state, bb=100000, ba=100100, mid=100050, spread=100,
-                                 bd=50, ad=30, l1bq=10, l1aq=8)
+    result = lob_kernel.compute(
+        fresh_state, bb=100000, ba=100100, mid=100050, spread=100, bd=50, ad=30, l1bq=10, l1aq=8
+    )
     assert len(result) == 16
     assert fresh_state.initialized is True
 

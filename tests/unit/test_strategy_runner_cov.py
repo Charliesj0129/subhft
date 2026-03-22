@@ -1,4 +1,5 @@
 """Coverage tests for strategy/runner.py — targeting 80%+ line coverage."""
+
 from __future__ import annotations
 
 import asyncio
@@ -379,6 +380,7 @@ async def test_process_event_halted_strategy_skipped(runner_factory):
     runner.register(strat)
     runner._circuit_states["strat_a"] = "halted"
     from hft_platform.core import timebase
+
     runner._circuit_halted_at_ns["strat_a"] = timebase.now_ns()
     runner._circuit_cooldown_ns = int(3600 * 1e9)  # 1 hour
     event = _make_event()

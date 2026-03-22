@@ -1,4 +1,5 @@
 """Coverage tests for feed_adapter/lob_engine.py."""
+
 from __future__ import annotations
 
 import os
@@ -37,6 +38,7 @@ class TestBookStateInit:
 
     def test_rust_state_disabled(self):
         import hft_platform.feed_adapter.lob_engine as mod
+
         old = mod._RUST_BOOK_STATE_ENABLED
         mod._RUST_BOOK_STATE_ENABLED = False
         try:
@@ -47,6 +49,7 @@ class TestBookStateInit:
 
     def test_rust_state_exception(self):
         import hft_platform.feed_adapter.lob_engine as mod
+
         old_cls = mod._RustBookState
         old_en = mod._RUST_BOOK_STATE_ENABLED
         mod._RUST_BOOK_STATE_ENABLED = True
@@ -91,6 +94,7 @@ class TestApplyUpdate:
 
     def test_list_input(self):
         import hft_platform.feed_adapter.lob_engine as mod
+
         old_fn = mod._FORCE_NUMPY
         mod._FORCE_NUMPY = False
         try:
@@ -137,6 +141,7 @@ class TestApplyUpdate:
 
     def test_stats_none_mode(self):
         import hft_platform.feed_adapter.lob_engine as mod
+
         old = mod._STATS_NONE
         mod._STATS_NONE = True
         try:
@@ -152,6 +157,7 @@ class TestApplyUpdate:
 
     def test_local_ts_enabled(self):
         import hft_platform.feed_adapter.lob_engine as mod
+
         old = mod._LOCAL_TS_ENABLED
         mod._LOCAL_TS_ENABLED = True
         try:
@@ -250,6 +256,7 @@ class TestRecompute:
 
     def test_rust_compute_stats_exception_fallback(self):
         import hft_platform.feed_adapter.lob_engine as mod
+
         old = mod._RUST_COMPUTE_STATS
         mod._RUST_COMPUTE_STATS = MagicMock(side_effect=RuntimeError("rust err"))
         try:

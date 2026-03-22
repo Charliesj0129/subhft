@@ -2,6 +2,7 @@
 
 The module was at 0% coverage.
 """
+
 from __future__ import annotations
 
 import math

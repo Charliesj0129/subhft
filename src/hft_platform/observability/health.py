@@ -230,9 +230,7 @@ class HealthServer:
             status = "unavailable"
         elif degraded_reasons:
             status = "degraded"
-            self._degradation_tracker.record(
-                reason="; ".join(degraded_reasons), checks=checks
-            )
+            self._degradation_tracker.record(reason="; ".join(degraded_reasons), checks=checks)
         else:
             status = "ready"
 

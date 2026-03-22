@@ -1,4 +1,5 @@
 """Coverage tests for recorder/wal.py."""
+
 from __future__ import annotations
 
 import os

@@ -1,4 +1,5 @@
 """Coverage tests for services/bootstrap.py — targeting 80%+ line coverage."""
+
 from __future__ import annotations
 
 import os
@@ -312,6 +313,7 @@ def test_build_broker_clients_order_simulation_env(monkeypatch):
         broker_id="shioaji",
     )
     from hft_platform.services.bootstrap import _RoleGuardedNoopClient
+
     assert isinstance(md, _RoleGuardedNoopClient)
 
 
