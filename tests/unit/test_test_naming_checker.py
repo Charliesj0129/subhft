@@ -29,8 +29,7 @@ def test_check_test_naming_rejects_cov_filename(tmp_path, monkeypatch):
 def test_check_test_naming_rejects_forbidden_test_function_name(tmp_path, monkeypatch):
     _write_test_file(
         tmp_path,
-        "def test_covers_bootstrap_path():\n"
-        "    assert True\n",
+        "def test_covers_bootstrap_path():\n    assert True\n",
     )
     monkeypatch.chdir(tmp_path)
 
@@ -40,8 +39,7 @@ def test_check_test_naming_rejects_forbidden_test_function_name(tmp_path, monkey
 def test_check_test_naming_rejects_forbidden_async_test_function_name(tmp_path, monkeypatch):
     _write_test_file(
         tmp_path,
-        "async def test_cov_async_bootstrap_path():\n"
-        "    assert True\n",
+        "async def test_cov_async_bootstrap_path():\n    assert True\n",
     )
     monkeypatch.chdir(tmp_path)
 
@@ -66,9 +64,7 @@ def test_check_test_naming_ignores_nested_helper_names(tmp_path, monkeypatch):
 def test_check_test_naming_ignores_non_collectable_class_methods(tmp_path, monkeypatch):
     _write_test_file(
         tmp_path,
-        "class HelperCases:\n"
-        "    def test_line_helper_method(self):\n"
-        "        assert True\n",
+        "class HelperCases:\n    def test_line_helper_method(self):\n        assert True\n",
     )
     monkeypatch.chdir(tmp_path)
 
