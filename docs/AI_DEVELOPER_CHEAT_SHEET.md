@@ -48,6 +48,8 @@ The platform strictly separates Alpha research from live deployment via Gates (A
 Here are the terminal commands you'll use 95% of the time:
 
 - **Unit/Integration Testing**: `uv run pytest` or `make test`
+- **Targeted File Test (no global coverage gate)**: `make test-file FILE=tests/unit/test_x.py`
+- **Targeted Node Test (no global coverage gate)**: `make test-node NODE=tests/unit/test_x.py::test_y`
 - **Lint & Format**: `uv run ruff check src/ tests/ --fix` (Always run this before committing)
 - **Run the Engine (Sim Mode)**: `uv run hft run sim`
 - **Check DB Status**: `uv run hft recorder status`

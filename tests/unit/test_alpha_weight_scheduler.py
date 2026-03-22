@@ -78,13 +78,6 @@ class TestAlphaWeightSchedulerLifecycle:
         pool = _FakePool()
         sched = AlphaWeightScheduler(pool=pool, interval_s=0)
         # start() should be a no-op
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(asyncio.wait_for(asyncio.coroutine(lambda: None)(), timeout=0.1))
-        except Exception:
-            pass
-        finally:
-            loop.close()
         sched.start()  # should not raise
         assert sched._task is None
 
