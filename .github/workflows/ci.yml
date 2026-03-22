@@ -144,6 +144,12 @@ jobs:
       - name: Test assertion enforcement gate
         run: make test-assertion-check
 
+      - name: Test naming enforcement gate
+        run: make test-name-check
+
+      - name: Weak test-pattern enforcement gate
+        run: make test-quality-pattern-check
+
       - name: Enforce research factory contract
         run: make research-audit-strict
 

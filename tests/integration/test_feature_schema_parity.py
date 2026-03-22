@@ -37,17 +37,17 @@ _TICK = 10_000  # 1 point in x10000 units
 def _run_engine_on_events(
     events: list[LOBStatsEvent],
     backend: str = "python",
+    symbol: str = _SYMBOL,
 ) -> dict[str, float]:
-    """Run a FeatureEngine on events and return the last feature dict for _SYMBOL."""
+    """Run a FeatureEngine on events and return the last feature dict for *symbol*."""
     registry = default_feature_registry()
     engine = FeatureEngine(registry=registry, kernel_backend=backend, emit_events=False)
     for ev in events:
         engine.process_lob_stats(ev)
-    tup = engine.get_feature_tuple(_SYMBOL)
+    tup = engine.get_feature_tuple(symbol)
     if tup is None:
         return {}
-    fs = registry.get_default()
-    return dict(zip(fs.feature_ids, tup))
+    return dict(zip(engine.feature_ids(), tup))
 
 
 def _rust_available() -> bool:
@@ -127,38 +127,46 @@ def _make_synthetic_events(n: int = 100, seed: int = 42) -> list[LOBStatsEvent]:
 
 
 class TestSchemaParity:
-    """Validate that the Python FeatureRegistry schema matches the Rust registry."""
+    """Validate registry schema metadata and the real runtime backend contract."""
 
-    def test_check_schema_parity_returns_parity_report(self) -> None:
-        """check_schema_parity() must always return a ParityReport."""
+    def test_runtime_status_reports_default_registry_schema_metadata(self) -> None:
+        """FeatureEngine runtime status must expose the default registry schema metadata."""
         registry = default_feature_registry()
-        py_schema = {spec.feature_id: spec for spec in registry.get_default().features}
-        report = check_schema_parity(py_schema, py_schema)
-        assert isinstance(report, ParityReport)
-        assert isinstance(report.total_events, int)
-        assert isinstance(report.mismatches, tuple)
-        assert isinstance(report.passed, bool)
+        feature_set = registry.get_default()
+        engine = FeatureEngine(registry=registry, kernel_backend="python", emit_events=False)
+        status = engine.runtime_status()
 
-    def test_check_schema_parity_passes_without_rust(self) -> None:
-        """When Rust is unavailable, schema parity trivially passes (skip semantics)."""
+        assert status["feature_set_id"] == feature_set.feature_set_id
+        assert status["schema_version"] == feature_set.schema_version
+        assert status["kernel_backend"] == "python"
+        assert status["rust_backend_available"] is _rust_available()
+        assert status["tracked_symbols"] == 0
+
+    def test_check_schema_parity_reports_empty_skip_without_rust(self) -> None:
+        """When Rust is unavailable, schema parity reports an honest empty skip result."""
         if _rust_available():
             pytest.skip("Rust backend is available; this test targets unavailable-Rust path")
-        report = check_schema_parity({}, {})
-        assert report.passed is True
-        assert report.total_events == 0
-        assert report.mismatches == ()
-
-    @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
-    def test_check_schema_parity_passes_with_rust(self) -> None:
-        """When Rust is available, the default feature set schema must agree."""
-        registry = default_feature_registry()
-        py_schema = {spec.feature_id: spec for spec in registry.get_default().features}
-        report = check_schema_parity(py_schema, py_schema)
-        assert isinstance(report, ParityReport)
-        # Schema should pass — mismatches indicate a versioning drift.
-        assert report.passed, f"Schema parity failed with {len(report.mismatches)} mismatch(es):\n" + "\n".join(
-            f"  [{m.event_idx}] {m.feature_id!r}: py={m.python_value} rust={m.rust_value}" for m in report.mismatches
+        rust_requested_engine = FeatureEngine(
+            registry=default_feature_registry(),
+            kernel_backend="rust",
+            emit_events=False,
         )
+        report = check_schema_parity({}, {})
+        assert rust_requested_engine.kernel_backend() == "python"
+        assert rust_requested_engine.runtime_status()["rust_backend_available"] is False
+        assert report == ParityReport(total_events=0, mismatches=(), passed=True)
+
+    def test_rust_requested_runtime_status_uses_actual_backend(self) -> None:
+        """A rust-requested engine must report the real runtime backend and schema metadata."""
+        registry = default_feature_registry()
+        feature_set = registry.get_default()
+        engine = FeatureEngine(registry=registry, kernel_backend="rust", emit_events=False)
+        status = engine.runtime_status()
+
+        assert status["feature_set_id"] == feature_set.feature_set_id
+        assert status["schema_version"] == feature_set.schema_version
+        assert status["rust_backend_available"] is _rust_available()
+        assert status["kernel_backend"] == ("rust" if _rust_available() else "python")
 
     def test_python_registry_has_expected_feature_ids(self) -> None:
         """Smoke-test: Python default registry has the expected 16 canonical feature IDs."""
@@ -219,17 +227,26 @@ class TestBackendParity:
         """check_backend_parity() must always return a ParityReport."""
         events = _make_synthetic_events(5)
         py_features = _run_engine_on_events(events, backend="python")
-        report = check_backend_parity(py_features, py_features)
+        mismatched_features = dict(py_features)
+        mismatched_features["best_bid"] = float(mismatched_features["best_bid"]) + 1_000.0
+        report = check_backend_parity(py_features, mismatched_features)
         assert isinstance(report, ParityReport)
+        assert report.passed is False
+        assert any(m.feature_id == "best_bid" for m in report.mismatches)
 
-    def test_check_backend_parity_passes_without_rust(self) -> None:
-        """When Rust is unavailable, parity check is skipped (trivially passes)."""
+    def test_check_backend_parity_reports_empty_skip_without_rust(self) -> None:
+        """When Rust is unavailable, backend parity reports an honest empty skip result."""
         if _rust_available():
             pytest.skip("Rust backend is available; this test targets unavailable-Rust path")
-        events = _make_synthetic_events(10)
-        py_features = _run_engine_on_events(events, backend="python")
-        report = check_backend_parity(py_features, py_features)
-        assert report.passed is True
+        rust_requested_engine = FeatureEngine(
+            registry=default_feature_registry(),
+            kernel_backend="rust",
+            emit_events=False,
+        )
+        report = check_backend_parity({}, {})
+        assert rust_requested_engine.kernel_backend() == "python"
+        assert rust_requested_engine.runtime_status()["rust_backend_available"] is False
+        assert report == ParityReport(total_events=0, mismatches=(), passed=True)
 
     @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
     def test_check_backend_parity_zero_mismatches_on_synthetic_data(self) -> None:
@@ -267,10 +284,15 @@ class TestBackendParity:
                 )
             )
 
-        py_features = _run_engine_on_events(events, backend="python")
-        rust_features = _run_engine_on_events(events, backend="rust")
-        report = check_backend_parity(py_features, rust_features)
-        assert report.passed, f"Multi-symbol backend parity failed: {len(report.mismatches)} mismatch(es)"
+        for symbol in symbols:
+            py_features = _run_engine_on_events(events, backend="python", symbol=symbol)
+            rust_features = _run_engine_on_events(events, backend="rust", symbol=symbol)
+            assert py_features, f"Expected Python features for {symbol}"
+            assert rust_features, f"Expected Rust features for {symbol}"
+            report = check_backend_parity(py_features, rust_features)
+            assert report.passed, (
+                f"Multi-symbol backend parity failed for {symbol}: {len(report.mismatches)} mismatch(es)"
+            )
 
     @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
     def test_check_backend_parity_edge_cases(self) -> None:
@@ -370,6 +392,31 @@ class TestMismatchDetection:
         report = ParityReport(total_events=50, mismatches=(), passed=True)
         assert report.passed is True
         assert len(report.mismatches) == 0
+
+    @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
+    def test_requested_runtime_backend_matches_python_reference(self) -> None:
+        """A rust-requested engine must use the real runtime backend and stay in parity."""
+        events = _make_synthetic_events(30)
+        registry = default_feature_registry()
+
+        python_engine = FeatureEngine(registry=registry, kernel_backend="python", emit_events=False)
+        runtime_engine = FeatureEngine(registry=registry, kernel_backend="rust", emit_events=False)
+
+        for event in events:
+            python_engine.process_lob_stats(event)
+            runtime_engine.process_lob_stats(event)
+
+        python_features = python_engine.get_feature_tuple(_SYMBOL)
+        runtime_features = runtime_engine.get_feature_tuple(_SYMBOL)
+
+        assert python_features is not None
+        assert runtime_features is not None
+        assert runtime_engine.kernel_backend() == "rust"
+        report = check_backend_parity(
+            dict(zip(python_engine.feature_ids(), python_features)),
+            dict(zip(runtime_engine.feature_ids(), runtime_features)),
+        )
+        assert report.passed, f"Runtime backend drifted from Python reference: {report.mismatches}"
 
     def test_synthetic_parity_check_consistent_with_python_only(self) -> None:
         """Python FeatureEngine fed the same events twice must produce identical values."""
