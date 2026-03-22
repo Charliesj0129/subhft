@@ -712,7 +712,14 @@ class SystemBootstrapper:
             recorder_queue=recorder_queue,
             feature_engine=feature_engine,
         )
-        order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map)
+        if broker_id == "fubon":
+            from hft_platform.feed_adapter.fubon.order_codec import FubonOrderCodec
+            _broker_codec = FubonOrderCodec()
+        else:
+            from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
+            _broker_codec = ShioajiOrderCodec()
+
+        order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec)
         execution_gateway = ExecutionGateway(order_adapter)
         exec_service = ExecutionRouter(
             bus,

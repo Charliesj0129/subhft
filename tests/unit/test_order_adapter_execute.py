@@ -91,7 +91,7 @@ def adapter(tmp_config):
     oa = OrderAdapter(
         config_path=tmp_config,
         order_queue=q,
-        shioaji_client=client,
+        broker_client=client,
     )
     # Replace slots-based helpers with mocks so tests can configure them.
     # Defaults: all checks pass, shadow disabled, adapter not running.

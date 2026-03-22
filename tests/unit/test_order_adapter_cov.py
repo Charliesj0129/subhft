@@ -79,7 +79,7 @@ def _make_adapter(tmp_config: str, *, client: Any | None = None) -> OrderAdapter
         client.get_exchange = MagicMock(return_value="TSE")
         client.mode = "simulation"
         client.activate_ca = False
-    return OrderAdapter(config_path=tmp_config, order_queue=order_q, shioaji_client=client)
+    return OrderAdapter(config_path=tmp_config, order_queue=order_q, broker_client=client)
 
 
 def _make_cmd(

@@ -11,7 +11,7 @@ from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
-from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
+from hft_platform.feed_adapter.protocol import BrokerOrderCodec
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
@@ -51,14 +51,14 @@ class OrderAdapter:
         self,
         config_path: str,
         order_queue: asyncio.Queue[OrderCommand],
-        shioaji_client: Any,
+        broker_client: Any,
         order_id_map: Dict[str, str] | None = None,
-        broker_codec: ShioajiOrderCodec | None = None,
+        broker_codec: BrokerOrderCodec | None = None,
     ) -> None:
         self.config_path = config_path
         self.order_queue = order_queue
-        self.client = shioaji_client
-        self._broker_codec = broker_codec if broker_codec is not None else ShioajiOrderCodec()
+        self.client = broker_client
+        self._broker_codec = broker_codec
         # Map broker order IDs -> order_key ("strategy_id:intent_id")
         # Protected by _order_id_map_lock for concurrent access
         self.order_id_map = order_id_map if order_id_map is not None else {}
