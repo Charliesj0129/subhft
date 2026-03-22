@@ -497,4 +497,3 @@ class TestBrokerRTTInjection:
 
         assert "effective_broker_rtt_ms" in result.latency_profile
         assert result.latency_profile["effective_broker_rtt_ms"] == 47.0
-

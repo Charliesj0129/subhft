@@ -1,4 +1,5 @@
 """Edge cases for WALLoaderService: corrupt files, partial writes, error paths, cleanup."""
+
 import json
 import os
 import time
@@ -8,6 +9,7 @@ from hft_platform.recorder.loader import WALLoaderService
 
 # Shared helpers (local copies — not in conftest)
 
+
 def _make_wal_file(wal_dir, filename, row, age_s=10):
     """Helper: write a single-row WAL file with mtime in the past."""
     fpath = wal_dir / filename
@@ -15,6 +17,7 @@ def _make_wal_file(wal_dir, filename, row, age_s=10):
     past = time.time() - age_s
     os.utime(fpath, (past, past))
     return fpath
+
 
 def _run_and_capture_warnings(loader):
     """Run process_files() and return structlog warning events via patching."""
@@ -34,7 +37,9 @@ def _run_and_capture_warnings(loader):
         loader_mod.logger.warning = original
     return captured
 
+
 # Error path: corrupt / invalid JSON
+
 
 def test_wal_loader_invalid_json_archives(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -57,7 +62,9 @@ def test_wal_loader_invalid_json_archives(tmp_path):
     assert corrupt_dir.exists()
     assert (corrupt_dir / fpath.name).exists()
 
+
 # Error path: insert failure → DLQ
+
 
 def test_wal_loader_insert_failure_still_archives(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -99,6 +106,7 @@ def test_wal_loader_insert_failure_still_archives(tmp_path):
     assert len(dlq_files) == 1
     loader.ch_client.insert.assert_called()
 
+
 def test_insert_with_retry_records_failed_after_retry_outcome(tmp_path):
     wal_dir = tmp_path / "wal"
     archive_dir = tmp_path / "archive"
@@ -126,7 +134,9 @@ def test_insert_with_retry_records_failed_after_retry_outcome(tmp_path):
     )
     loader.metrics.recorder_insert_retry_total.labels.assert_any_call(table="market_data", result="failed")
 
+
 # DLQ write and cleanup
+
 
 def test_write_to_dlq_writes_metadata(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -148,6 +158,7 @@ def test_write_to_dlq_writes_metadata(tmp_path):
     assert header["table"] == "orders"
     assert header["error"] == "boom"
     assert header["row_count"] == 2
+
 
 def test_cleanup_old_dlq_files_archives(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -174,7 +185,9 @@ def test_cleanup_old_dlq_files_archives(tmp_path):
     assert not dlq_file.exists()
     assert (dlq_archive / dlq_file.name).exists()
 
+
 # Corrupt file cleanup
+
 
 def test_cleanup_old_corrupt_files(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -197,7 +210,9 @@ def test_cleanup_old_corrupt_files(tmp_path):
 
     assert not corrupt_file.exists()
 
+
 # Archive cleanup (retention policy)
+
 
 def test_cleanup_old_archive_files(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -223,7 +238,9 @@ def test_cleanup_old_archive_files(tmp_path):
     assert not old_archive.exists()
     assert new_archive.exists()
 
+
 # Dedup paths
+
 
 def test_dedup_skips_duplicate_and_archives(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -262,6 +279,7 @@ def test_dedup_skips_duplicate_and_archives(tmp_path):
 
     assert loader.insert_batch.call_count == 0
     assert (archive_dir / fpath.name).exists()
+
 
 def test_dedup_records_hash_after_insert(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -302,7 +320,9 @@ def test_dedup_records_hash_after_insert(tmp_path):
     loader._record_dedup.assert_called_once()
     assert (archive_dir / fpath.name).exists()
 
+
 # Strict-order and unknown-table skips
+
 
 def test_process_single_file_strict_order_skips(tmp_path):
     wal_dir = tmp_path / "wal"
@@ -321,6 +341,7 @@ def test_process_single_file_strict_order_skips(tmp_path):
     assert processed is False
     assert fpath.exists()
 
+
 def test_process_single_file_unknown_table_skips(tmp_path):
     wal_dir = tmp_path / "wal"
     wal_dir.mkdir()
@@ -336,7 +357,9 @@ def test_process_single_file_unknown_table_skips(tmp_path):
     assert processed is False
     assert fpath.exists()
 
+
 # Orderbook warning edge cases
+
 
 def test_tick_type_no_orderbook_warning(tmp_path):
     """Tick-type rows must not trigger 'Missing orderbook side' warning."""
@@ -367,6 +390,7 @@ def test_tick_type_no_orderbook_warning(tmp_path):
     warnings = _run_and_capture_warnings(loader)
     assert not any("Missing orderbook side" in w.get("event", "") for w in warnings)
 
+
 def test_tick_type_lowercase_no_orderbook_warning(tmp_path):
     """Lowercase tick-type rows must not trigger orderbook-side warning."""
     wal_dir = tmp_path / "wal"
@@ -395,6 +419,7 @@ def test_tick_type_lowercase_no_orderbook_warning(tmp_path):
 
     warnings = _run_and_capture_warnings(loader)
     assert not any("Missing orderbook side" in w.get("event", "") for w in warnings)
+
 
 def test_bidask_both_empty_no_orderbook_warning(tmp_path):
     """BidAsk rows with BOTH sides empty (book-cleared at close) must not warn."""
@@ -425,6 +450,7 @@ def test_bidask_both_empty_no_orderbook_warning(tmp_path):
     warnings = _run_and_capture_warnings(loader)
     assert not any("Missing orderbook side" in w.get("event", "") for w in warnings)
 
+
 def test_bidask_one_side_empty_warns(tmp_path):
     """BidAsk rows with exactly ONE side empty must still warn (genuine gap)."""
     wal_dir = tmp_path / "wal"
@@ -454,7 +480,9 @@ def test_bidask_one_side_empty_warns(tmp_path):
     warnings = _run_and_capture_warnings(loader)
     assert any("Missing orderbook side" in w.get("event", "") for w in warnings)
 
+
 # Backoff computation bounds
+
 
 def test_compute_backoff_bounds(tmp_path):
     wal_dir = tmp_path / "wal"

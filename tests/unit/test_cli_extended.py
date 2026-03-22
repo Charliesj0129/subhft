@@ -3,7 +3,6 @@ import sys
 import types
 from argparse import Namespace
 
-import numpy as np
 import pytest
 
 import hft_platform.cli as cli
@@ -404,5 +403,3 @@ def test_cmd_symbols_build_errors_exit(monkeypatch):
     )
     with pytest.raises(SystemExit):
         cli.cmd_symbols_build(args)
-
-

@@ -7,6 +7,7 @@ This module covers:
 - _optimize_parameters boundary detection
 - Scorecard BDS p-value propagation
 """
+
 import types
 from pathlib import Path
 
@@ -23,7 +24,6 @@ from hft_platform.alpha.validation import (
 )
 from research.backtest.types import BacktestConfig
 from research.registry.schemas import Scorecard
-
 
 # ---------------------------------------------------------------------------
 # Statistical helper tests
