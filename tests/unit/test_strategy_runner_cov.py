@@ -367,6 +367,7 @@ async def test_process_event_strategy_exception_triggers_circuit(runner_factory)
 
     strat = _ErrStrat("strat_a")
     runner.register(strat)
+    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_threshold = 1
     event = _make_event()
     await runner.process_event(event)
@@ -378,6 +379,7 @@ async def test_process_event_halted_strategy_skipped(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy(enabled=False)
     runner.register(strat)
+    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_states["strat_a"] = "halted"
     from hft_platform.core import timebase
 
@@ -393,6 +395,7 @@ async def test_process_event_circuit_recovery_cooldown(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy(enabled=False)
     runner.register(strat)
+    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_states["strat_a"] = "halted"
     runner._circuit_halted_at_ns["strat_a"] = 1  # epoch + 1ns
     runner._circuit_cooldown_ns = int(1e9)  # 1 second; definitely elapsed
@@ -406,6 +409,7 @@ async def test_process_event_degraded_recovery(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy()
     runner.register(strat)
+    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_states["strat_a"] = "degraded"
     runner._circuit_recovery_threshold = 1
     event = _make_event()
@@ -423,6 +427,7 @@ async def test_process_event_circuit_degraded_transition(runner_factory):
 
     strat = _ErrStrat("strat_a")
     runner.register(strat)
+    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_threshold = 4
     for _ in range(2):
         await runner.process_event(_make_event())
