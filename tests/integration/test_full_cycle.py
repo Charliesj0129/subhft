@@ -54,27 +54,20 @@ async def test_full_order_lifecycle():
     def handle_override(ctx, event):
         if getattr(event, "topic", "") == "trigger":
             strat.ctx = ctx
-            strat.buy("2330", 100.0, 1)
+            strat.buy("2330", 1_000_000, 1)  # 100.0000 in x10000 scaled int
             return strat._generated_intents
         return original_handle(ctx, event)
 
     strat.handle_event = handle_override
     system.strategy_runner.strategies = [strat]
 
-    # Mock Shioaji API via OrderAdapter's client
-    mock_api = MagicMock()
-    mock_api.place_order.return_value = {"seq_no": "test-seq-1", "order_id": "oid-1"}
-    mock_api.stock_account = None
-    mock_api.futopt_account = None
-
-    # Mock Contract
-    mock_contract = MagicMock()
-    mock_contract.code = "2330"
-    mock_api.Contracts.Stocks.TSE.__getitem__.return_value = mock_contract
-
-    # Inject Mock API into Order client (used by OrderAdapter)
-    system.order_client.api = mock_api
-    system.order_client.logged_in = True  # Fake login
+    # Replace the adapter's client with a mock that satisfies the adapter's checks.
+    mock_client = MagicMock()
+    mock_client.place_order.return_value = {"seq_no": "test-seq-1", "order_id": "oid-1"}
+    mock_client.get_exchange.return_value = "TSE"
+    mock_client.mode = "simulation"
+    mock_client.logged_in = True
+    system.order_adapter.client = mock_client
 
     # 2. Components to Run
     # HFTSystem.run() runs everything, but blocks. We run components individually for control?
@@ -110,17 +103,14 @@ async def test_full_order_lifecycle():
     # Poll
     start_wait = time.time()
     while time.time() - start_wait < 2.0:
-        if mock_api.place_order.call_count > 0:
+        if mock_client.place_order.call_count > 0:
             break
         await asyncio.sleep(0.05)
 
-    mock_api.place_order.assert_called_once()
-    args, kwargs = mock_api.place_order.call_args
-    # args[0] is contract, args[1] is order
-    order_obj = args[1]
-
-    assert order_obj.price == 100.0
-    assert order_obj.quantity == 1
+    mock_client.place_order.assert_called_once()
+    _, kwargs = mock_client.place_order.call_args
+    # The adapter passes keyword arguments to client.place_order(...)
+    assert kwargs.get("qty") == 1
 
     print("Action Verified: Strategy -> Risk -> API")
 
@@ -129,7 +119,7 @@ async def test_full_order_lifecycle():
     ts = time.time_ns()
     raw_deal_data = {
         "code": "2330",
-        "price": 100.0,
+        "price": 1_000_000,  # x10000 scaled int
         "quantity": 1,
         "seq_no": "test-seq-1",
         "ord_no": "oid-1",

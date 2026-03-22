@@ -1,0 +1,16 @@
+# Default owner for repository-wide review.
+* @Charliesj0129
+
+# High-risk runtime paths require explicit ownership.
+/src/hft_platform/feed_adapter/ @Charliesj0129
+/src/hft_platform/risk/ @Charliesj0129
+/src/hft_platform/order/ @Charliesj0129
+/src/hft_platform/execution/ @Charliesj0129
+/src/hft_platform/gateway/ @Charliesj0129
+/src/hft_platform/recorder/ @Charliesj0129
+/src/hft_platform/services/ @Charliesj0129
+/rust_core/ @Charliesj0129
+/tests/integration/ @Charliesj0129
+/tests/system/ @Charliesj0129
+/.github/workflows/ @Charliesj0129
+/docs/architecture/ @Charliesj0129

@@ -1,0 +1,32 @@
+[importlinter]
+root_package = hft_platform
+
+[importlinter:contract:contracts-runtime-free]
+name = contracts stay runtime free
+type = forbidden
+source_modules =
+    hft_platform.contracts
+forbidden_modules =
+    hft_platform.services
+    hft_platform.risk
+    hft_platform.order
+    hft_platform.execution
+    hft_platform.recorder
+
+[importlinter:contract:events-runtime-free]
+name = events stay runtime free
+type = forbidden
+source_modules =
+    hft_platform.events
+forbidden_modules =
+    hft_platform.strategy
+    hft_platform.execution
+    hft_platform.services
+
+[importlinter:contract:testing-helpers-stay-test-only]
+name = testing helpers stay out of production
+type = protected
+protected_modules =
+    hft_platform.testing
+allowed_importers =
+    hft_platform.testing

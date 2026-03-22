@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.gateway import ExecutionGateway
@@ -154,7 +155,7 @@ class _RoleGuardedNoopClient:
 
 class SystemBootstrapper:
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
-        self.settings = settings or {}
+        self.settings = settings if settings is not None else {}
         self._lease_refresh_running: bool = False
         self._lease_refresh_thread: Any | None = None
         self._last_role: str = "engine"
@@ -794,3 +795,43 @@ class SystemBootstrapper:
             gateway_service=gateway_service,
             intent_channel=intent_channel,
         )
+
+
+async def wait_for_readiness(system: Any, *, timeout_s: float = 30.0) -> None:
+    """Block until the system reports ready, or raise on timeout.
+
+    This prevents the system from processing market data before all
+    subsystems (risk, order, recorder) are operational.
+
+    Parameters
+    ----------
+    system : HFTSystem
+        The running system instance whose health is probed.
+    timeout_s : float
+        Maximum seconds to wait before raising ``RuntimeError``.
+    """
+    from hft_platform.observability.health import HealthServer
+
+    health = HealthServer(system=system)
+    deadline = time.monotonic() + timeout_s
+    checks: dict[str, Any] = {}
+
+    while time.monotonic() < deadline:
+        is_ready, checks = health._check_readiness()
+        if is_ready:
+            logger.info(
+                "startup_readiness_ok",
+                checks=checks,
+                elapsed_ms=round((timeout_s - (deadline - time.monotonic())) * 1000, 1),
+                timestamp_ns=timebase.now_ns(),
+            )
+            return
+        await asyncio.sleep(0.1)
+
+    logger.error(
+        "startup_readiness_timeout",
+        timeout_s=timeout_s,
+        checks=checks,
+        timestamp_ns=timebase.now_ns(),
+    )
+    raise RuntimeError(f"System not ready within {timeout_s}s: {checks}")

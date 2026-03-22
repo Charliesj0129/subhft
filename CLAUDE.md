@@ -188,6 +188,15 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_MONITOR_REDIS_PORT`   | `6379`      | Redis port for monitor live cache         |
 | `HFT_MONITOR_REDIS_PASSWORD`| —          | Redis password for monitor live cache     |
 | `HFT_MONITOR_DATA_SOURCE`  | `auto`      | Data source layer: `ch`/`shm`/`auto`     |
+| `HFT_RECONNECT_HOURS`     | `08:30-13:35`| Trading hours window for auto-reconnect  |
+| `HFT_RECONNECT_HOURS_2`   | —           | Secondary trading hours window            |
+| `HFT_RECONNECT_COOLDOWN`  | `60`        | Reconnect cooldown seconds                |
+| `HFT_RECONNECT_BACKOFF_S` | `5`         | Initial reconnect backoff delay seconds   |
+| `HFT_RECONNECT_BACKOFF_MAX_S`| `120`    | Maximum reconnect backoff delay seconds   |
+| `HFT_QUOTE_FLAP_THRESHOLD`| `5`         | Quote flap detection: max flaps in window |
+| `HFT_QUOTE_FLAP_WINDOW_S` | `60`        | Quote flap detection window seconds       |
+| `HFT_QUOTE_FLAP_COOLDOWN_S`| `300`      | Quote flap cooldown before re-subscribe   |
+| `HFT_STORMGUARD_FEED_GAP_HALT_S`| `30`  | Feed gap threshold to trigger HALT        |
 
 ## 🎨 Coding Style (Strict)
 

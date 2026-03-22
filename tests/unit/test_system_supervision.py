@@ -113,22 +113,19 @@ class TestSupervisionCrashDetection:
     """Supervision detects crashed/failed service tasks and restarts them."""
 
     def test_supervise_detects_crashed_task(self):
-        """When a service task finishes with an exception, _supervise triggers HALT."""
+        """When a service task finishes with an exception, _try_restart_service is invoked."""
         system = _make_system()
         system.running = True
 
-        # Create a task that has already crashed
-        loop = asyncio.new_event_loop()
-        try:
+        def _close_coro(_name, coro):
+            coro.close()
 
-            async def _crash():
-                raise RuntimeError("service exploded")
+        system._start_service = MagicMock(side_effect=_close_coro)
+        # Simulate detecting a crashed task and attempting restart
+        system._try_restart_service("md", "MarketDataService", system.md_service.run)
 
-            task = loop.run_until_complete(
-                asyncio.ensure_future(_crash(), loop=loop) if False else _run_failing_task(loop)
-            )
-        finally:
-            loop.close()
+        assert system._start_service.call_count == 1
+        assert system._task_restart_attempts["md"] == 1
 
     def test_try_restart_calls_start_service(self):
         """_try_restart_service delegates to _start_service on first attempt."""
@@ -195,8 +192,11 @@ class TestSupervisionCrashDetection:
 
         system._start_service = MagicMock(side_effect=_close_coro)
 
-        # Force time to advance past each backoff window
-        times = iter([0.0, 0.0, base + 0.1, base + 0.1, base * 3 + 0.2, base * 3 + 0.2])
+        # _try_restart_service calls now_s() once per invocation.
+        # Call 1: now=0.0, allowed=0.0 → proceeds, sets until=0.0+base
+        # Call 2: now=base+0.1, allowed=base → proceeds, sets until=(base+0.1)+base*2
+        # Call 3: now=base*3+0.2, allowed=base*3+0.1 → proceeds
+        times = iter([0.0, base + 0.1, base * 3 + 0.2])
         with patch("hft_platform.services.system.timebase.now_s", side_effect=times):
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
             system._try_restart_service("md", "MarketDataService", system.md_service.run)

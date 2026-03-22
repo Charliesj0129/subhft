@@ -435,25 +435,41 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.service._within_reconnect_window())
 
     def test_within_reconnect_window_hours(self):
+        tz_cst = dt.timezone(dt.timedelta(hours=8))
         self.service.reconnect_days = set()
         self.service.reconnect_hours = "09:00-15:00"
         self.service.reconnect_hours_2 = ""
-        now = dt.datetime(2026, 2, 3, 10, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
-        with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
-            mock_tb.now_s.return_value = now.timestamp()
+        self.service._reconnect_tzinfo = tz_cst
+        now = dt.datetime(2026, 2, 3, 10, 0, tzinfo=tz_cst)
+        with (
+            patch("hft_platform.services.market_data.dt.datetime") as mock_dt,
+            patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}),
+        ):
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *a, **kw: dt.datetime(*a, **kw)
             self.assertTrue(self.service._within_reconnect_window())
 
     def test_within_reconnect_window_overnight(self):
+        tz_cst = dt.timezone(dt.timedelta(hours=8))
         self.service.reconnect_days = set()
         self.service.reconnect_hours = "22:00-02:00"
         self.service.reconnect_hours_2 = ""
-        late = dt.datetime(2026, 2, 3, 23, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
-        early = dt.datetime(2026, 2, 4, 1, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
-        with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
-            mock_tb.now_s.return_value = late.timestamp()
+        self.service._reconnect_tzinfo = tz_cst
+        late = dt.datetime(2026, 2, 3, 23, 0, tzinfo=tz_cst)
+        early = dt.datetime(2026, 2, 4, 1, 0, tzinfo=tz_cst)
+        with (
+            patch("hft_platform.services.market_data.dt.datetime") as mock_dt,
+            patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}),
+        ):
+            mock_dt.now.return_value = late
+            mock_dt.side_effect = lambda *a, **kw: dt.datetime(*a, **kw)
             self.assertTrue(self.service._within_reconnect_window())
-        with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
-            mock_tb.now_s.return_value = early.timestamp()
+        with (
+            patch("hft_platform.services.market_data.dt.datetime") as mock_dt,
+            patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}),
+        ):
+            mock_dt.now.return_value = early
+            mock_dt.side_effect = lambda *a, **kw: dt.datetime(*a, **kw)
             self.assertTrue(self.service._within_reconnect_window())
 
     def test_within_reconnect_window_invalid_window(self):

@@ -25,11 +25,12 @@ def test_strategy_context_place_order():
         positions={"AAPL": 10}, strategy_id="test_strat", intent_factory=intent_factory, price_scaler=scaler
     )
 
-    res = ctx.place_order(symbol="AAPL", side=Side.BUY, price=1.0, qty=1)
+    res = ctx.place_order(symbol="AAPL", side=Side.BUY, price=10000, qty=1)
     assert res == "intent"
-    scaler.assert_called_with("AAPL", 1.0)
+    # int prices are already scaled — scaler is not called
+    scaler.assert_not_called()
     intent_factory.assert_called_once()
-    assert intent_factory.call_args[1]["price"] == 100
+    assert intent_factory.call_args[1]["price"] == 10000
 
 
 def test_strategy_context_feature_accessors():
@@ -380,7 +381,11 @@ def test_strategy_runner_positions_view():
         MockReg.return_value.instantiate.return_value = []
         runner = StrategyRunner(bus, risk_queue, config_path="dummy")
 
-    store = PositionStore()
+    with patch("hft_platform.execution.positions.MetricsRegistry") as _mr:
+        _mr.get.return_value = None
+        store = PositionStore()
+    store._rust_tracker = None
+    store.metrics = None
     store.positions = {
         "acc:alpha:2330": Position("acc", "alpha", "2330", net_qty=5),
         "acc:beta:2317": Position("acc", "beta", "2317", net_qty=3),

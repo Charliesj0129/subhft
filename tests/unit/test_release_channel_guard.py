@@ -73,6 +73,27 @@ def _prepare_artifacts(
         },
     )
 
+    # Rollback drill artifact (looked up via output_dir.parent / "reliability" / "drills")
+    reliability_dir = root / "outputs" / "reliability" / "drills"
+    _write_json(
+        reliability_dir / "rollback_20260304T010000Z.json",
+        {
+            "timestamp": "2026-03-04T01:00:00+00:00",
+            "result": "pass",
+        },
+    )
+
+    # Code canary evaluation artifact (looked up via output_dir / "canary")
+    _write_json(
+        output_dir / "canary" / "canary_eval_20260305T020000Z.json",
+        {
+            "generated_at": "2026-03-05T02:00:00+00:00",
+            "result": {
+                "overall": "pass",
+            },
+        },
+    )
+
     return {
         "output_dir": output_dir,
         "soak_dir": soak_dir,

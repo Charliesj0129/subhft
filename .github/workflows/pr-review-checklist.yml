@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - '.github/**'
+  merge_group:
+
+permissions:
+  pull-requests: read
+  contents: read
 
 jobs:
   code-quality:
@@ -13,7 +19,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Merge queue compatibility
+        if: github.event_name == 'merge_group'
+        run: echo "merge_group validation uses PR-time governance checks; returning success for queue compatibility."
+
+      - name: Check PR template governance sections
+        if: github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_BODY="$(gh pr view "$PR_NUMBER" --json body --jq '.body')"
+          for section in "## Summary" "## Test Plan" "## AI Participation"; do
+            if ! printf '%s\n' "$PR_BODY" | grep -Fq "$section"; then
+              echo "::error::Missing required PR section: $section"
+              exit 1
+            fi
+          done
+
       - name: Detect print() in production code
+        if: github.event_name == 'pull_request'
         run: |
           echo "Checking for print() statements in src/..."
           FOUND=$(grep -rn 'print(' src/ --include='*.py' \
@@ -29,6 +54,7 @@ jobs:
           fi
 
       - name: Detect float in financial paths
+        if: github.event_name == 'pull_request'
         run: |
           echo "Checking for float usage in financial code paths..."
           FOUND=$(grep -rnE ':\s*float\b|float\(' \
@@ -56,6 +82,7 @@ jobs:
           fi
 
       - name: Detect hardcoded secrets
+        if: github.event_name == 'pull_request'
         run: |
           echo "Checking for hardcoded secrets..."
           FOUND=$(grep -rnEi '(api_key|password|secret|token)\s*=\s*["\x27][^"\x27]{8,}' \
@@ -75,6 +102,7 @@ jobs:
           fi
 
       - name: Check TODO/FIXME without ticket reference
+        if: github.event_name == 'pull_request'
         run: |
           echo "Checking for TODO/FIXME without ticket references..."
           FOUND=$(grep -rnE '(TODO|FIXME|HACK|XXX)' src/ --include='*.py' \

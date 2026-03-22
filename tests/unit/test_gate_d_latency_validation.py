@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from hft_platform.alpha._gate_d import (
     _check_latency_values,
     _evaluate_gate_d,
@@ -105,7 +107,10 @@ def _standard_profiles(tmp_path: Path) -> Path:
 class TestLoadLatencyProfiles:
     def test_loads_from_real_file(self) -> None:
         """Should load real profiles.yaml if project root is correct."""
-        profiles = _load_latency_profiles("/home/charlie/hft_platform")
+        import pathlib
+
+        project_root = str(pathlib.Path(__file__).resolve().parents[2])
+        profiles = _load_latency_profiles(project_root)
         assert isinstance(profiles, dict)
         # At least one shioaji profile should be present
         assert any("shioaji" in k for k in profiles)

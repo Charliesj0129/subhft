@@ -5,6 +5,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  merge_group:
   workflow_dispatch:
     inputs:
       run_recorder_drills:
@@ -24,6 +25,10 @@ on:
         type: boolean
   schedule:
     - cron: "30 18 * * *" # Daily UTC nightly perf drill
+
+permissions:
+  contents: read
+  pull-requests: read
 
 env:
   PYTHONPATH: src
@@ -255,13 +260,32 @@ jobs:
         run: make typecheck
 
   # ============================================================================
+  # Stage 2c: Dependency Boundaries
+  # ============================================================================
+  dependency-boundary:
+    name: Dependency Boundary
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Enforce import contracts
+        run: make dependency-boundary
+
+  # ============================================================================
+  # ============================================================================
   # Stage 3: Unit Tests + Coverage Gates
   # ============================================================================
   test:
     name: 🧪 Tests & Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    needs: [typecheck, rust]
+    timeout-minutes: 30
+    needs: [typecheck, rust, dependency-boundary]
     steps:
       - uses: actions/checkout@v4
 
@@ -314,6 +338,24 @@ jobs:
         run: |
           echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
           make coverage-markdown >> $GITHUB_STEP_SUMMARY || true
+
+      - name: Repo Gate — no generated artifacts left behind
+        if: always()
+        run: |
+          ARTIFACTS=""
+          for f in coverage.json coverage_*.json; do
+            [ -f "$f" ] && ARTIFACTS="$ARTIFACTS $f"
+          done
+          if [ -d "tests/benchmark/baselines" ] && [ "$(ls -A tests/benchmark/baselines 2>/dev/null)" ]; then
+            ARTIFACTS="$ARTIFACTS tests/benchmark/baselines/"
+          fi
+          BASELINES=$(find tests/ -name "*.baseline.json" 2>/dev/null | head -5 || true)
+          [ -n "$BASELINES" ] && ARTIFACTS="$ARTIFACTS $BASELINES"
+          if [ -n "$ARTIFACTS" ]; then
+            echo "::error::Repo Gate: generated artifacts left in working tree:$ARTIFACTS"
+            echo "Add these patterns to .gitignore or clean up after test runs."
+            exit 1
+          fi
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4

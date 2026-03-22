@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -582,10 +582,35 @@ def bench_research_backtest(rows: int = 40_000) -> float:
 
     import research.backtest.hft_native_runner as _hnr_mod
 
-    with NamedTemporaryFile(suffix=".npy") as fp:
-        np.save(fp.name, arr)
-        runner = HftNativeRunner(_DummyAlpha(), BacktestConfig(data_paths=[fp.name]))
-        with patch.object(_hnr_mod, "_run_adapter_slice", side_effect=_fake_adapter_slice):
+    with TemporaryDirectory(prefix="perfgate_bt_") as tmp_dir:
+        npy_path = os.path.join(tmp_dir, "research.npy")
+        np.save(npy_path, arr)
+        # Pre-convert to hftbt.npz so ensure_hftbt_npz hits the fast path
+        # and the timed section measures scorecard/run logic, not I/O conversion.
+        from research.backtest.hft_native_runner import ensure_hftbt_npz
+
+        hbt_path = ensure_hftbt_npz(npy_path)
+        # Pre-split using uncompressed savez so the timed section is not dominated
+        # by zlib compression I/O (which varies wildly across CI runners).
+        data = np.load(hbt_path, allow_pickle=False)
+        split_arr = np.asarray(data["data"]) if hasattr(data, "keys") else np.asarray(data)
+        if hasattr(data, "close"):
+            data.close()
+        n = len(split_arr)
+        split_idx = max(1, min(n - 1, int(n * 0.7)))
+        is_path = os.path.join(tmp_dir, "is.npz")
+        oos_path = os.path.join(tmp_dir, "oos.npz")
+        np.savez(is_path, data=split_arr[:split_idx])
+        np.savez(oos_path, data=split_arr[split_idx:])
+
+        def _fast_split(path, split=0.7):
+            return is_path, oos_path
+
+        runner = HftNativeRunner(_DummyAlpha(), BacktestConfig(data_paths=[npy_path]))
+        with (
+            patch.object(_hnr_mod, "_run_adapter_slice", side_effect=_fake_adapter_slice),
+            patch.object(_hnr_mod, "_split_npz", side_effect=_fast_split),
+        ):
             t0 = time.perf_counter()
             runner.run()
             t1 = time.perf_counter()
@@ -1049,7 +1074,7 @@ def main() -> int:
     n_runs = max(1, int(args.runs))
 
     noop_mean, noop_std = _multi_sample(bench_strategy_noop, n_runs)
-    bt_mean, bt_std = _multi_sample(bench_research_backtest, n_runs)
+    bt_mean, bt_std = _multi_sample(bench_research_backtest, max(2, n_runs))
     search_mean, search_std = _multi_sample(bench_research_search, n_runs)
     cb_dispatch_mean, cb_dispatch_std = _multi_sample(bench_shioaji_callback_dispatch, n_runs)
     cb_parse_mean, cb_parse_std = _multi_sample(bench_market_data_callback_parse, n_runs)

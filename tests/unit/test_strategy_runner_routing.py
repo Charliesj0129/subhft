@@ -18,11 +18,11 @@ class OrderStrategy(BaseStrategy):
 
     def on_order(self, event: OrderEvent) -> None:
         self.called += 1
-        self.buy(event.symbol, 1.0, 1, tif=TIF.LIMIT)
+        self.buy(event.symbol, 10000, 1, tif=TIF.LIMIT)
 
     def on_tick(self, event: TickEvent) -> None:
         self.called += 1
-        self.buy(event.symbol, 1.0, 1, tif=TIF.LIMIT)
+        self.buy(event.symbol, 10000, 1, tif=TIF.LIMIT)
 
 
 @pytest.mark.asyncio

@@ -139,6 +139,23 @@ def _write_gate_markdown(payload: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _find_latest_rollback_drill(output_dir: Path) -> Path | None:
+    """Find the latest rollback drill JSON under outputs/reliability/drills/."""
+    drills_dir = output_dir.parent / "reliability" / "drills"
+    if not drills_dir.is_dir():
+        # Also try relative to project root (outputs/reliability/drills)
+        drills_dir = Path("outputs/reliability/drills")
+    pattern = str(drills_dir / "rollback_*.json")
+    return _find_latest(pattern)
+
+
+def _find_latest_code_canary(output_dir: Path) -> Path | None:
+    """Find the latest code canary evaluation JSON."""
+    canary_dir = output_dir / "canary"
+    pattern = str(canary_dir / "*.json")
+    return _find_latest(pattern)
+
+
 def _evaluate_gate(
     *,
     change_id: str,
@@ -393,6 +410,60 @@ def _evaluate_gate(
             current=None if drift_age is None else round(drift_age, 3),
             message="drift check should be recent for promotion",
         )
+
+    # --- Rollback drill freshness (last 30 days) ---
+    rollback_drill_path = _find_latest_rollback_drill(output_dir)
+    rollback_drill_ok = False
+    rollback_drill_age_days: float | None = None
+    if rollback_drill_path and rollback_drill_path.exists():
+        try:
+            drill_obj = _read_json(rollback_drill_path)
+            drill_result = str(drill_obj.get("result") or "")
+            drill_ts = _parse_iso_datetime(drill_obj.get("timestamp"))
+            if drill_ts is not None:
+                rollback_drill_age_days = round((now_utc - drill_ts).total_seconds() / 86400.0, 1)
+                rollback_drill_ok = drill_result == "pass" and rollback_drill_age_days <= 30.0
+        except Exception:
+            pass
+
+    add(
+        "rollback_drill_freshness",
+        rollback_drill_ok,
+        severity="warning",
+        expected="passing drill within 30 days",
+        current=f"{rollback_drill_age_days}d ago" if rollback_drill_age_days is not None else "no drill found",
+        message="rollback drill should have a passing result within the last 30 days",
+        allow=True,
+    )
+
+    # --- Code canary evaluation ---
+    code_canary_path = _find_latest_code_canary(output_dir)
+    code_canary_ok = False
+    code_canary_age_hours: float | None = None
+    if code_canary_path and code_canary_path.exists():
+        try:
+            canary_eval_obj = _read_json(code_canary_path)
+            canary_eval_result = canary_eval_obj.get("result", {}) if isinstance(canary_eval_obj.get("result"), dict) else {}
+            canary_eval_overall = str(canary_eval_result.get("overall") or canary_eval_obj.get("result") or "")
+            canary_eval_age = _age_hours(
+                canary_eval_obj.get("generated_at") or canary_eval_obj.get("timestamp"),
+                now_utc,
+            )
+            if canary_eval_age is not None:
+                code_canary_age_hours = round(canary_eval_age, 1)
+                code_canary_ok = canary_eval_overall in {STATUS_PASS, "pass"} and canary_eval_age <= max_report_age_hours
+        except Exception:
+            pass
+
+    add(
+        "code_canary_freshness",
+        code_canary_ok,
+        severity="warning",
+        expected=f"passing canary within {max_report_age_hours}h",
+        current=f"{code_canary_age_hours}h ago" if code_canary_age_hours is not None else "no canary found",
+        message="code canary evaluation should have a recent passing result",
+        allow=True,
+    )
 
     overall = STATUS_PASS
     for check in checks:

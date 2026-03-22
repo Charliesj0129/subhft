@@ -207,6 +207,15 @@ Base YAML (config/base/main.yaml)
 | `HFT_RECORDER_MODE` | `direct` | `wal_first` = WAL-only 寫入路徑（CE-M3） | 生產環境建議 `wal_first` |
 | `HFT_TS_TZ` | `Asia/Taipei` | 時區假設（無時區時間戳解析） | 跨區部署務必顯式設定 |
 | `HFT_RECONNECT_TZ` | `Asia/Taipei` | reconnect 時段判斷時區 | 與 `HFT_TS_TZ` 保持一致 |
+| `HFT_RECONNECT_HOURS` | `08:30-13:35` | 交易時段自動重連窗口 | 開盤前/收盤後不觸發 |
+| `HFT_RECONNECT_HOURS_2` | — | 第二交易時段窗口（期貨夜盤等） | 無需時可留空 |
+| `HFT_RECONNECT_COOLDOWN` | `60` | 重連冷卻秒數 | 避免頻繁重連 |
+| `HFT_RECONNECT_BACKOFF_S` | `5` | 初始重連退避延遲（秒） | 指數退避起始值 |
+| `HFT_RECONNECT_BACKOFF_MAX_S` | `120` | 最大重連退避延遲（秒） | 封頂避免過長等待 |
+| `HFT_QUOTE_FLAP_THRESHOLD` | `5` | 報價閃爍偵測：窗口內最大閃爍次數 | 超過則暫停訂閱 |
+| `HFT_QUOTE_FLAP_WINDOW_S` | `60` | 報價閃爍偵測窗口（秒） | 配合 threshold |
+| `HFT_QUOTE_FLAP_COOLDOWN_S` | `300` | 報價閃爍冷卻（秒） | 冷卻後自動重新訂閱 |
+| `HFT_STORMGUARD_FEED_GAP_HALT_S` | `30` | 行情斷流觸發 HALT 門檻（秒） | 超過此值進入 HALT |
 | `HFT_DIAG_TRACE_ENABLED` | `0` | `1` = 啟用事件決策 trace 採樣 | 僅事故期間啟用 |
 | `HFT_DIAG_TRACE_SAMPLE_EVERY` | `100` | 每 N 事件採樣一筆決策 trace | 流量大時可提高 |
 | `HFT_ALPHA_AUDIT_ENABLED` | `0` | `1` = 啟用 Alpha 審計模式（release gate 必須設置） | `release-first-ops-gate` 前必須設為 `1` |

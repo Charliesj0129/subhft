@@ -18,6 +18,7 @@ RST='\033[0m'
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)" || { echo "Not a git repo"; exit 1; }
 ERRORS=0
 WARNINGS=0
+STRICT_CLEAN="${STRICT_CLEAN:-0}"
 
 err()  { echo -e "${RED}FAIL${RST}: $1"; ((ERRORS++)); }
 warn() { echo -e "${YEL}WARN${RST}: $1"; ((WARNINGS++)); }
@@ -138,9 +139,50 @@ check_clean_tree() {
     local dirty
     dirty=$(git status --porcelain | wc -l)
     if [ "$dirty" -gt 0 ]; then
-        warn "Working tree has $dirty uncommitted changes"
+        if [ "$STRICT_CLEAN" = "1" ]; then
+            err "Working tree has $dirty uncommitted changes (strict mode)"
+        else
+            warn "Working tree has $dirty uncommitted changes"
+        fi
     else
         ok "Working tree is clean"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Repo Gate: No generated artifacts left behind
+# ---------------------------------------------------------------------------
+check_no_generated_artifacts() {
+    local found=0
+    local artifacts=""
+
+    # Coverage reports
+    for f in coverage.json coverage_*.json; do
+        if [ -f "$f" ]; then
+            artifacts="$artifacts  $f\n"
+            ((found++))
+        fi
+    done
+
+    # Benchmark baselines
+    if [ -d "tests/benchmark/baselines" ] && [ "$(ls -A tests/benchmark/baselines 2>/dev/null)" ]; then
+        artifacts="$artifacts  tests/benchmark/baselines/\n"
+        ((found++))
+    fi
+
+    # Stray .baseline.json files
+    local baseline_files
+    baseline_files=$(find tests/ -name "*.baseline.json" 2>/dev/null | head -5)
+    if [ -n "$baseline_files" ]; then
+        artifacts="$artifacts  $(echo "$baseline_files" | head -3 | tr '\n' ' ')\n"
+        ((found++))
+    fi
+
+    if [ "$found" -gt 0 ]; then
+        err "Generated artifacts found in working tree ($found):"
+        echo -e "$artifacts"
+    else
+        ok "No generated artifacts in working tree"
     fi
 }
 
@@ -154,8 +196,10 @@ echo ""
 
 case "$MODE" in
     --pre-merge)
+        STRICT_CLEAN=1
         check_no_active_ops
         check_clean_tree
+        check_no_generated_artifacts
         check_no_conflict_markers
         ;;
     --post-merge)
@@ -169,10 +213,12 @@ case "$MODE" in
         check_no_conflict_markers
         ;;
     --session-end)
+        STRICT_CLEAN=1
         check_no_active_ops
         check_worktrees
         check_branches
         check_clean_tree
+        check_no_generated_artifacts
         check_no_conflict_markers
         ;;
     --full)

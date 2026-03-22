@@ -13,10 +13,31 @@ def _unregister_metric_prefixes(prefixes: list[str]) -> None:
             pass
 
 
+def _unregister_all_custom_metrics() -> None:
+    """Unregister all non-default collectors to allow safe re-instantiation."""
+    from prometheus_client import gc_collector, platform_collector, process_collector
+
+    default_types = (
+        type(platform_collector.PLATFORM_COLLECTOR),
+        type(gc_collector.GC_COLLECTOR),
+        type(process_collector.PROCESS_COLLECTOR),
+    )
+    to_remove = set()
+    for _name, collector in list(REGISTRY._names_to_collectors.items()):
+        if not isinstance(collector, default_types):
+            to_remove.add(collector)
+    for collector in to_remove:
+        try:
+            REGISTRY.unregister(collector)
+        except (KeyError, ValueError):
+            pass
+
+
 class MetricsRegistry:
     _instance = None
 
     def __init__(self):
+        _unregister_all_custom_metrics()
         _unregister_metric_prefixes(
             [
                 "feed_events_total",
@@ -72,6 +93,8 @@ class MetricsRegistry:
                 # Phase 5 metrics
                 "circuit_breaker_state",
                 "dlq_size_total",
+                "orphaned_fill",
+                "portfolio_total_pnl",
                 "reconciliation_discrepancy_count",
                 "recorder_insert_retry_total",
                 "feed_gap_by_symbol_seconds",

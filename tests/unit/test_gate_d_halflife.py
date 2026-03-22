@@ -49,8 +49,7 @@ class TestHalflifeVsRTTFails:
         hl_check = checks["halflife_vs_rtt"]
         assert hl_check["pass"] is False
         assert hl_check["required"] is True
-        assert hl_check["value"] == 10.0
-        assert hl_check["submit_ack_latency_ms"] == 36.0
+        assert hl_check["value_ms"] == 10.0
         assert hl_check["threshold_ms"] == 72.0
         assert "FAIL" in hl_check["detail"]
         # Gate D overall must also fail
@@ -61,8 +60,8 @@ class TestHalflifeVsRTTFails:
         sc = _passing_scorecard(signal_halflife_ms=10.0)
         _, checks = _evaluate_gate_d(sc, _cfg())
         detail = checks["halflife_vs_rtt"]["detail"]
-        assert "10.00" in detail
-        assert "72.00" in detail
+        assert "10.0" in detail
+        assert "72.0" in detail
 
     def test_just_below_threshold_fails(self) -> None:
         """71.9ms halflife with 36ms RTT (threshold=72) → just below boundary → fail."""
@@ -82,9 +81,9 @@ class TestHalflifeVsRTTPasses:
         hl_check = checks["halflife_vs_rtt"]
         assert hl_check["pass"] is True
         assert hl_check["required"] is True
-        assert hl_check["value"] == 100.0
+        assert hl_check["value_ms"] == 100.0
         assert hl_check["threshold_ms"] == 72.0
-        assert hl_check["detail"] == "OK"
+        assert "OK" in hl_check["detail"]
         assert passed is True
 
     def test_exact_threshold_passes(self) -> None:
@@ -111,7 +110,6 @@ class TestHalflifeVsRTTWarnOnly:
         hl_check = checks["halflife_vs_rtt"]
         assert hl_check["pass"] is True
         assert hl_check["required"] is False
-        assert hl_check["value"] is None
         assert "WARN" in hl_check["detail"]
         assert "signal_halflife_ms" in hl_check["detail"]
         # Gate D should still pass (no other failures in this scorecard)
@@ -167,7 +165,6 @@ class TestHalflifeVsRTTWarnOnly:
         _, checks = _evaluate_gate_d(sc, _cfg())
         detail = checks["halflife_vs_rtt"]["detail"]
         assert "signal_halflife_ms" in detail
-        assert "submit_ack_latency_ms" in detail
 
     def test_string_latency_profile_not_a_dict_warn_only(self) -> None:
         """A string latency_profile (legacy format) → cannot extract RTT → warn-only."""
@@ -197,8 +194,8 @@ class TestHalflifeVsRTTIsolation:
         assert checks["halflife_vs_rtt"]["pass"] is False
 
     def test_string_numeric_halflife_handled_via_to_float(self) -> None:
-        """signal_halflife_ms as a string → _to_float converts it correctly."""
+        """signal_halflife_ms as a string → float() converts it correctly."""
         sc = _passing_scorecard(signal_halflife_ms="100.0")
         _, checks = _evaluate_gate_d(sc, _cfg())
         assert checks["halflife_vs_rtt"]["pass"] is True
-        assert checks["halflife_vs_rtt"]["value"] == 100.0
+        assert checks["halflife_vs_rtt"]["value_ms"] == 100.0
