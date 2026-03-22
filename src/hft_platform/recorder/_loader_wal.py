@@ -174,7 +174,10 @@ def parse_batch_table_name(table_name: str) -> str:
         "backtest_runs": "backtest_runs",
         "latency_spans": "latency_spans",
     }
-    return mapping.get(table_name, table_name)
+    result = mapping.get(table_name)
+    if result is None:
+        raise ValueError(f"Unknown table name in WAL batch: {table_name!r}")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +292,11 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
             table_batches.append((current_table, current_rows))
 
         for target_table, rows in table_batches:
-            parsed_table = parse_batch_table_name(target_table)
+            try:
+                parsed_table = parse_batch_table_name(target_table)
+            except ValueError:
+                logger.warning("Unknown batch table name, skipping batch entry", table=target_table, file=fname)
+                return False
             success = svc._insert_with_dedup(parsed_table, rows, fname)
             if not success:
                 svc._write_to_dlq(parsed_table, rows, "insert_failed_after_retries")
