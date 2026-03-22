@@ -359,9 +359,7 @@ def test_normalizer_normalize_snapshot_basic(normalizer):
     except Exception:
         result = None
     # normalize_snapshot returns BidAskEvent | tuple | None; if not None verify it has bids/asks
-    assert result is None or isinstance(result, tuple) or (
-        hasattr(result, "bids") and hasattr(result, "asks")
-    )
+    assert result is None or isinstance(result, tuple) or (hasattr(result, "bids") and hasattr(result, "asks"))
 
 
 def test_normalizer_next_seq(normalizer):
