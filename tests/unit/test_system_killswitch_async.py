@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import inspect
 
-import pytest
-
 
 def test_supervise_uses_run_in_executor_for_kill_switch():
     """Kill-switch file IO must use run_in_executor, not direct sync calls."""
