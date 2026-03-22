@@ -525,11 +525,17 @@ def test_emit_trace_sampler_exception_swallowed():
 
     svc._emit_trace("stage", "tid", {})  # Must not raise
 
+    # sampler.emit was called (exception was swallowed, not skipped)
+    sampler.emit.assert_called_once()
+
 
 def test_emit_trace_no_sampler():
     svc, _ = _build_service()
     svc._trace_sampler = None
     svc._emit_trace("stage", "tid", {"k": "v"})  # Must not raise
+
+    # With no sampler, the function returns early — sampler is still None
+    assert svc._trace_sampler is None
 
 
 # ── Metric helpers ─────────────────────────────────────────────────────────
@@ -538,7 +544,12 @@ def test_emit_trace_no_sampler():
 def test_emit_reject_metrics_disabled():
     svc, _ = _build_service()
     svc._metrics_enabled = False
+    counter_before = svc._gateway_reject_counter
     svc._emit_reject("TEST_REASON")  # Must not raise
+
+    # When metrics are disabled the function returns immediately without
+    # touching the sampling counter
+    assert svc._gateway_reject_counter == counter_before
 
 
 def test_emit_reject_metrics_enabled_no_registry():
@@ -548,6 +559,10 @@ def test_emit_reject_metrics_enabled_no_registry():
     svc._gateway_reject_counter = 0
     svc._gateway_reject_sample_every = 1
     svc._emit_reject("TEST_REASON")  # Must not raise
+
+    # Counter wraps (0+1)%1 == 0; no metric was incremented because
+    # _metrics_or_refresh() still returns None (no registry in test env)
+    assert svc._gateway_reject_counter == 0
 
 
 def test_emit_reject_with_metrics():
@@ -589,7 +604,12 @@ def test_emit_reject_caches_label():
 def test_record_latency_metrics_disabled():
     svc, _ = _build_service()
     svc._metrics_enabled = False
+    counter_before = svc._gateway_latency_counter
     svc._record_latency(0)  # Must not raise
+
+    # When metrics are disabled the function returns immediately without
+    # touching the sampling counter
+    assert svc._gateway_latency_counter == counter_before
 
 
 def test_record_latency_with_metrics():
@@ -612,13 +632,23 @@ def test_record_latency_with_metrics():
 def test_update_channel_depth_metric_disabled():
     svc, _ = _build_service()
     svc._metrics_enabled = False
+    counter_before = svc._gateway_depth_counter
     svc._update_channel_depth_metric()  # Must not raise
+
+    # When metrics are disabled the function returns immediately without
+    # touching the sampling counter
+    assert svc._gateway_depth_counter == counter_before
 
 
 def test_inc_dedup_hit_metric_disabled():
     svc, _ = _build_service()
     svc._metrics_enabled = False
+    counter_before = svc._gateway_dedup_counter
     svc._inc_dedup_hit_metric()  # Must not raise
+
+    # When metrics are disabled the function returns immediately without
+    # touching the sampling counter
+    assert svc._gateway_dedup_counter == counter_before
 
 
 def test_inc_dedup_hit_metric_enabled():
@@ -645,8 +675,11 @@ def test_metrics_or_refresh_no_metrics_triggers_refresh():
     svc, _ = _build_service()
     svc._metrics = None
     result = svc._metrics_or_refresh()
-    # After refresh, no exception raised
-    assert result is None or result is not None
+    # When _metrics is None, _metrics_or_refresh calls _refresh_metrics_registry()
+    # which populates self._metrics from MetricsRegistry.get() and returns it.
+    # The registry is available in the test environment, so the result is non-None
+    # and equals the freshly-loaded self._metrics.
+    assert result is svc._metrics
 
 
 def test_metrics_or_refresh_owner_id_mismatch_triggers_refresh():
