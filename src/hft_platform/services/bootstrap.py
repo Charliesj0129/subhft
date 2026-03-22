@@ -5,7 +5,10 @@ import os
 import socket
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from hft_platform.feed_adapter.protocol import BrokerOrderCodec
 
 from structlog import get_logger
 
@@ -712,6 +715,7 @@ class SystemBootstrapper:
             recorder_queue=recorder_queue,
             feature_engine=feature_engine,
         )
+        _broker_codec: BrokerOrderCodec
         if broker_id == "fubon":
             from hft_platform.feed_adapter.fubon.order_codec import FubonOrderCodec
 

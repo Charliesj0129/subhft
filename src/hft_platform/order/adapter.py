@@ -330,6 +330,10 @@ class OrderAdapter:
             order_key = f"{intent.strategy_id}:{intent.intent_id}"
 
             if intent.intent_type == IntentType.NEW:
+                if self._broker_codec is None:
+                    logger.error("No broker codec configured — cannot dispatch order", symbol=intent.symbol)
+                    self.metrics.order_reject_total.inc()
+                    return
                 logger.info("Placing Order", symbol=intent.symbol, price=intent.price, qty=intent.qty, side=intent.side)
 
                 # Dynamic Exchange Lookup (prefer config metadata)
