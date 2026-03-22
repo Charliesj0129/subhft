@@ -158,8 +158,10 @@ def test_read_int_resp_bad():
 def test_record_lease_metric_no_registry():
     from hft_platform.services.bootstrap import SystemBootstrapper
 
-    with patch("hft_platform.observability.metrics.MetricsRegistry.get", side_effect=Exception("no metrics")):
+    with patch("hft_platform.observability.metrics.MetricsRegistry.get", side_effect=Exception("no metrics")) as get_metrics:
         SystemBootstrapper._record_lease_metric("preflight", "acquired")
+    # Registry lookup was attempted but failed — no metric recorded, no exception raised
+    assert get_metrics.call_count == 1, "MetricsRegistry.get should have been called once"
 
 
 def test_record_lease_metric_with_registry():
@@ -239,6 +241,9 @@ def test_teardown_engine_role_connection_failure():
     b._stop_lease_refresh_thread = MagicMock()
     with patch("socket.create_connection", side_effect=ConnectionRefusedError("refused")):
         b.teardown()
+    # Teardown must complete gracefully: stop thread called and role unchanged
+    assert b._stop_lease_refresh_thread.call_count == 1, "_stop_lease_refresh_thread must be called once"
+    assert b._last_role == "engine", "_last_role must remain unchanged after teardown"
 
 
 # ---------------------------------------------------------------------------
