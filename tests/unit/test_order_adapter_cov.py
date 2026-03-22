@@ -280,7 +280,7 @@ async def test_drain_and_cancel_cancel_timeout(tmp_config):
 
     # Use a short sleep that exceeds the drain timeout but doesn't block teardown
     def slow_cancel(trade):
-        _time.sleep(0.5)  # longer than timeout_s but short enough for cleanup
+        _time.sleep(0.05)  # longer than timeout_s=0.01 but short enough for cleanup
 
     adapter.client.cancel_order = slow_cancel
 

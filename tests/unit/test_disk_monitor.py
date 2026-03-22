@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import threading
 import time
 
 from hft_platform.recorder.disk_monitor import DiskPressureLevel, DiskPressureMonitor
@@ -49,17 +50,23 @@ def test_compute_level_halt():
 
 def test_hook_called_on_transition():
     with tempfile.TemporaryDirectory() as tmpdir:
-        mon = _make_monitor(warn_mb=0.001, critical_mb=100, halt_mb=200, interval_s=0.05, tmpdir=tmpdir)
+        mon = _make_monitor(warn_mb=0.001, critical_mb=100, halt_mb=200, interval_s=0.01, tmpdir=tmpdir)
 
         transitions = []
-        mon.register_hook(lambda old, new: transitions.append((old, new)))
+        transition_event = threading.Event()
+
+        def hook(old, new):
+            transitions.append((old, new))
+            transition_event.set()
+
+        mon.register_hook(hook)
 
         # Write a file to push WAL above 0.001 MB
         with open(os.path.join(tmpdir, "test.jsonl"), "wb") as f:
             f.write(b"x" * 2000)  # ~2 KB
 
         mon.start()
-        time.sleep(0.2)
+        transition_event.wait(timeout=0.5)  # event-based: wait until hook fires
         mon.stop()
 
         # Should have transitioned to at least WARN
