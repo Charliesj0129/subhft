@@ -41,13 +41,16 @@ from hft_platform.alpha._validation_types import (
 
 class TestValidateAlphaId:
     def test_valid_simple(self) -> None:
-        _validate_alpha_id("ofi")
+        result = _validate_alpha_id("ofi")
+        assert result is None
 
     def test_valid_with_underscores_and_digits(self) -> None:
-        _validate_alpha_id("alpha_v2_rev3")
+        result = _validate_alpha_id("alpha_v2_rev3")
+        assert result is None
 
     def test_valid_single_char(self) -> None:
-        _validate_alpha_id("a")
+        result = _validate_alpha_id("a")
+        assert result is None
 
     def test_invalid_starts_with_digit(self) -> None:
         with pytest.raises(ValueError, match="Invalid alpha_id"):
