@@ -714,9 +714,11 @@ class SystemBootstrapper:
         )
         if broker_id == "fubon":
             from hft_platform.feed_adapter.fubon.order_codec import FubonOrderCodec
+
             _broker_codec = FubonOrderCodec()
         else:
             from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
+
             _broker_codec = ShioajiOrderCodec()
 
         order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec)

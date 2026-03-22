@@ -13,9 +13,7 @@ def test_supervise_uses_run_in_executor_for_kill_switch():
 
     source = inspect.getsource(HFTSystem._supervise)
 
-    assert "run_in_executor" in source, (
-        "_supervise() should use run_in_executor for kill-switch file IO"
-    )
+    assert "run_in_executor" in source, "_supervise() should use run_in_executor for kill-switch file IO"
 
 
 def test_read_kill_switch_reason_helper_exists():

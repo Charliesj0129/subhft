@@ -48,9 +48,8 @@ def test_order_adapter_no_shioaji_import():
         if isinstance(node, ast.ImportFrom):
             if node.module and "shioaji" in node.module:
                 imported_names = [alias.name for alias in node.names]
-                pytest.fail(
-                    f"MB-02 violation: order/adapter.py imports {imported_names} from {node.module}"
-                )
+                pytest.fail(f"MB-02 violation: order/adapter.py imports {imported_names} from {node.module}")
+    assert isinstance(tree, ast.Module)
 
 
 def test_order_adapter_accepts_protocol_codec():

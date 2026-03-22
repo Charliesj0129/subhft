@@ -377,9 +377,7 @@ class HFTSystem:
             if ks_exists:
                 if self.storm_guard.state != StormGuardState.HALT:
                     try:
-                        _ks_reason = await loop.run_in_executor(
-                            None, _read_kill_switch_reason, kill_switch_path
-                        )
+                        _ks_reason = await loop.run_in_executor(None, _read_kill_switch_reason, kill_switch_path)
                     except Exception:
                         _ks_reason = "kill_switch_file_present"
                     self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
