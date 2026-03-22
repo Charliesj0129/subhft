@@ -502,6 +502,7 @@ class TestShioajiClientFull(unittest.TestCase):
         """B3: _relogin_after() must not propagate exception from reconnect()."""
         self.client._pending_quote_resubscribe = True
         self.client._pending_quote_relogining = True
+        caught: RuntimeError | None = None
 
         with patch.object(self.client, "reconnect", side_effect=RuntimeError("sim login fail")):
             # Invoke _schedule_force_relogin with delay=0 and run inner function directly
@@ -509,6 +510,7 @@ class TestShioajiClientFull(unittest.TestCase):
             self.client._quote_force_relogin_s = delay
 
             def _relogin_after() -> None:
+                nonlocal caught
                 try:
                     import time as _t
 
@@ -517,33 +519,41 @@ class TestShioajiClientFull(unittest.TestCase):
                         try:
                             self.client.reconnect(reason="quote_pending", force=True)
                         except Exception as exc:
-                            pass  # must be swallowed
+                            caught = exc
                 finally:
                     self.client._pending_quote_relogining = False
 
             # Should not raise
             _relogin_after()
 
+        self.assertIsNotNone(caught)
+        self.assertIsInstance(caught, RuntimeError)
+        self.assertEqual(str(caught), "sim login fail")
         self.assertFalse(self.client._pending_quote_relogining)
 
     def test_do_relogin_reconnect_exception_does_not_crash_thread(self):
         """B4: _do_relogin() must not propagate exception from reconnect()."""
         self.client._pending_quote_relogining = True
         reason = "test_reason"
+        caught: RuntimeError | None = None
 
         with patch.object(self.client, "reconnect", side_effect=RuntimeError("login error")):
 
             def _do_relogin() -> None:
+                nonlocal caught
                 try:
                     try:
                         self.client.reconnect(reason=reason, force=True)
                     except Exception as exc:
-                        pass  # must be swallowed
+                        caught = exc
                 finally:
                     self.client._pending_quote_relogining = False
 
             _do_relogin()
 
+        self.assertIsNotNone(caught)
+        self.assertIsInstance(caught, RuntimeError)
+        self.assertEqual(str(caught), "login error")
         self.assertFalse(self.client._pending_quote_relogining)
 
     def test_reconnect_login_exception_returns_false(self):
