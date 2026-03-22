@@ -28,6 +28,7 @@ COPY pyproject.toml ./
 RUN mkdir -p rust_core
 COPY rust_core/Cargo.toml ./rust_core/Cargo.toml
 COPY rust_core/src/lib.rs ./rust_core/src/lib.rs
+COPY rust_core/benches/ ./rust_core/benches/
 
 # Generate a simple runtime requirements.txt from pyproject dependencies.
 # This avoids an extra `uv` bootstrap download in constrained build environments.
