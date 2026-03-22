@@ -8,6 +8,10 @@ on:
       - '.github/**'
   merge_group:
 
+permissions:
+  pull-requests: read
+  contents: read
+
 jobs:
   code-quality:
     name: Code Quality Checks

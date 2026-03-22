@@ -26,6 +26,10 @@ on:
   schedule:
     - cron: "30 18 * * *" # Daily UTC nightly perf drill
 
+permissions:
+  contents: read
+  pull-requests: read
+
 env:
   PYTHONPATH: src
   PYTHON_VERSION: "3.12"

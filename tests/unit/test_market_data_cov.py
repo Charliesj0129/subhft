@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helper: module-level functions
@@ -350,7 +348,7 @@ def test_set_state_same_state(mds_factory):
 
 
 def test_build_trace_id(mds_factory):
-    from hft_platform.events import TickEvent, MetaData
+    from hft_platform.events import MetaData, TickEvent
 
     svc = mds_factory()
     meta = MetaData(seq=42, source_ts=1000, local_ts=1000, topic="tick")

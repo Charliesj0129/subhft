@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from hft_platform.feed_adapter.lob_engine import BookState, _NoopLock
-
 
 # ── _NoopLock ─────────────────────────────────────────────────────────────
 

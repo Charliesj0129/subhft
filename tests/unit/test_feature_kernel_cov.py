@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import math
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # _top_qty

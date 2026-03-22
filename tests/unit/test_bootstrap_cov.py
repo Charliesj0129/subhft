@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -400,6 +399,7 @@ def test_encode_resp():
 
 def test_read_resp_simple_string():
     import io
+
     from hft_platform.services.bootstrap import _read_resp
 
     stream = io.BytesIO(b"+OK\r\n")
@@ -409,6 +409,7 @@ def test_read_resp_simple_string():
 
 def test_read_resp_integer():
     import io
+
     from hft_platform.services.bootstrap import _read_resp
 
     stream = io.BytesIO(b":42\r\n")
@@ -418,6 +419,7 @@ def test_read_resp_integer():
 
 def test_read_resp_bulk_string():
     import io
+
     from hft_platform.services.bootstrap import _read_resp
 
     stream = io.BytesIO(b"$5\r\nhello\r\n")
@@ -427,6 +429,7 @@ def test_read_resp_bulk_string():
 
 def test_read_resp_null_bulk():
     import io
+
     from hft_platform.services.bootstrap import _read_resp
 
     stream = io.BytesIO(b"$-1\r\n")
@@ -436,6 +439,7 @@ def test_read_resp_null_bulk():
 
 def test_read_resp_error():
     import io
+
     from hft_platform.services.bootstrap import _read_resp
 
     stream = io.BytesIO(b"-ERR something went wrong\r\n")
@@ -445,6 +449,7 @@ def test_read_resp_error():
 
 def test_read_resp_empty():
     import io
+
     from hft_platform.services.bootstrap import _read_resp
 
     stream = io.BytesIO(b"")
@@ -454,6 +459,7 @@ def test_read_resp_empty():
 
 def test_read_resp_unknown_prefix():
     import io
+
     from hft_platform.services.bootstrap import _read_resp
 
     stream = io.BytesIO(b"!badprefix\r\n")

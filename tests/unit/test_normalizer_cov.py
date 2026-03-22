@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # SymbolMetadata tests

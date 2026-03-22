@@ -34,7 +34,6 @@ from hft_platform.gateway.service import (
     _obs_policy,
 )
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
