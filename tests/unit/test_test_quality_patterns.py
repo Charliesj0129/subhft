@@ -12,9 +12,7 @@ def _write_test_file(tmp_path, contents: str) -> None:
 def test_checker_allows_concrete_postcondition(tmp_path, monkeypatch):
     _write_test_file(
         tmp_path,
-        "def test_updates_state():\n"
-        "    value = 2 + 2\n"
-        "    assert value == 4\n",
+        "def test_updates_state():\n    value = 2 + 2\n    assert value == 4\n",
     )
     monkeypatch.chdir(tmp_path)
 
@@ -24,9 +22,7 @@ def test_checker_allows_concrete_postcondition(tmp_path, monkeypatch):
 def test_checker_rejects_tautological_none_or_not_none(tmp_path, monkeypatch):
     _write_test_file(
         tmp_path,
-        "def test_bad():\n"
-        "    value = object()\n"
-        "    assert value is None or value is not None\n",
+        "def test_bad():\n    value = object()\n    assert value is None or value is not None\n",
     )
     monkeypatch.chdir(tmp_path)
 
@@ -36,10 +32,7 @@ def test_checker_rejects_tautological_none_or_not_none(tmp_path, monkeypatch):
 def test_checker_rejects_tautological_eq_or_neq(tmp_path, monkeypatch):
     _write_test_file(
         tmp_path,
-        "def test_bad():\n"
-        "    left = 1\n"
-        "    right = 2\n"
-        "    assert left == right or left != right\n",
+        "def test_bad():\n    left = 1\n    right = 2\n    assert left == right or left != right\n",
     )
     monkeypatch.chdir(tmp_path)
 

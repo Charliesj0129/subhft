@@ -290,7 +290,9 @@ class TestBackendParity:
             assert py_features, f"Expected Python features for {symbol}"
             assert rust_features, f"Expected Rust features for {symbol}"
             report = check_backend_parity(py_features, rust_features)
-            assert report.passed, f"Multi-symbol backend parity failed for {symbol}: {len(report.mismatches)} mismatch(es)"
+            assert report.passed, (
+                f"Multi-symbol backend parity failed for {symbol}: {len(report.mismatches)} mismatch(es)"
+            )
 
     @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
     def test_check_backend_parity_edge_cases(self) -> None:
