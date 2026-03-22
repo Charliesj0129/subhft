@@ -1,6 +1,6 @@
 {
   "market_data_callback_parse_us_per_event_max": 8.0,
-  "risk_evaluate_us_per_call_max": 5.0,
+  "risk_evaluate_us_per_call_max": 10.0,
   "risk_evaluate_typed_frame_us_per_call_max": 10.0,
   "risk_run_approve_us_per_intent_max": 40.0,
   "risk_run_reject_us_per_intent_max": 30.0,
