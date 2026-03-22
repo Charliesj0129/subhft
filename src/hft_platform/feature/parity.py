@@ -89,32 +89,29 @@ def check_backend_parity(
         Report containing mismatches and statistics.
     """
     all_ids = set(python_features) | set(rust_features)
-    report = ParityReport(total_features=len(all_ids))
+    mismatches: list[ParityMismatch] = []
+    event_counter = 0
 
     for fid in sorted(all_ids):
         py_val = python_features.get(fid)
         rs_val = rust_features.get(fid)
 
         if py_val is None and rs_val is None:
-            report.skipped.append(fid)
             continue
 
         if py_val is None or rs_val is None:
-            missing_in = "rust" if py_val is not None else "python"
-            report.mismatches.append(
+            mismatches.append(
                 ParityMismatch(
+                    event_idx=event_counter,
                     feature_id=fid,
-                    python_value=py_val,
-                    rust_value=rs_val,
-                    abs_diff=None,
-                    rel_diff=None,
-                    detail=f"MISSING in {missing_in} backend",
+                    python_value=float(py_val) if py_val is not None else 0.0,
+                    rust_value=float(rs_val) if rs_val is not None else 0.0,
                 )
             )
-            report.checked += 1
+            event_counter += 1
             continue
 
-        report.checked += 1
+        event_counter += 1
 
         # Numeric comparison
         try:
@@ -124,34 +121,28 @@ def check_backend_parity(
             denom = max(abs(py_float), abs(rs_float), 1e-12)
             rel_diff = abs_diff / denom
             if abs_diff > abs_tolerance and rel_diff > rel_tolerance:
-                report.mismatches.append(
+                mismatches.append(
                     ParityMismatch(
+                        event_idx=event_counter - 1,
                         feature_id=fid,
-                        python_value=py_val,
-                        rust_value=rs_val,
-                        abs_diff=abs_diff,
-                        rel_diff=rel_diff,
-                        detail=(
-                            f"MISMATCH: abs_diff={abs_diff:.2e} > {abs_tolerance:.2e}, "
-                            f"rel_diff={rel_diff:.2e} > {rel_tolerance:.2e}"
-                        ),
+                        python_value=py_float,
+                        rust_value=rs_float,
                     )
                 )
         except (TypeError, ValueError):
             # Non-numeric: exact equality check
             if py_val != rs_val:
-                report.mismatches.append(
+                mismatches.append(
                     ParityMismatch(
+                        event_idx=event_counter - 1,
                         feature_id=fid,
-                        python_value=py_val,
-                        rust_value=rs_val,
-                        abs_diff=None,
-                        rel_diff=None,
-                        detail=f"MISMATCH (non-numeric): python={py_val!r} != rust={rs_val!r}",
+                        python_value=float("nan"),
+                        rust_value=float("nan"),
                     )
                 )
 
-    return report
+    passed = len(mismatches) == 0
+    return ParityReport(total_events=event_counter, mismatches=tuple(mismatches), passed=passed)
 
 
 def check_schema_parity(  # noqa: C901

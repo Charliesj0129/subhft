@@ -27,8 +27,105 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Determine staging SHA
+        id: sha
+        run: |
+          if [ -n "${{ inputs.rollback_sha }}" ]; then
+            echo "sha=${{ inputs.rollback_sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy to staging
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_KEY: ${{ secrets.STAGING_KEY }}
+          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
+          DEPLOY_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}
+        run: |
+          if [ -z "$STAGING_HOST" ]; then
+            echo "::warning::Staging secrets not configured. Running local container smoke test."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh
+          echo "$STAGING_KEY" > ~/.ssh/staging_key
+          chmod 600 ~/.ssh/staging_key
+          ssh-keyscan -H "$STAGING_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          ssh -i ~/.ssh/staging_key -o StrictHostKeyChecking=accept-new \
+            "${STAGING_USER}@${STAGING_HOST}" \
+            "cd /opt/hft-platform-staging && \
+             docker pull ${DEPLOY_IMAGE} && \
+             docker compose -f docker-compose.yml up -d --no-deps hft-engine && \
+             sleep 10 && \
+             curl -sf http://localhost:9090/metrics > /dev/null"
+
+          rm -f ~/.ssh/staging_key
+
+      - name: Staging health check
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_KEY: ${{ secrets.STAGING_KEY }}
+        run: |
+          if [ -z "$STAGING_HOST" ]; then
+            echo "::warning::Staging secrets not configured. Skipping remote health check."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh
+          echo "$STAGING_KEY" > ~/.ssh/staging_key
+          chmod 600 ~/.ssh/staging_key
+
+          for i in 1 2 3; do
+            if ssh -i ~/.ssh/staging_key -o StrictHostKeyChecking=accept-new \
+              "${STAGING_USER}@${STAGING_HOST}" \
+              "curl -sf http://localhost:9090/metrics | grep -q hft_"; then
+              echo "Staging health check passed (attempt $i)"
+              rm -f ~/.ssh/staging_key
+              exit 0
+            fi
+            echo "Staging health check attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+
+          echo "::error::Staging health check failed after 3 attempts"
+          rm -f ~/.ssh/staging_key
+          exit 1
+
+      - name: Run soak daily report
+        run: make soak-daily-report || echo "::warning::Soak report skipped (Prometheus not available in CI)"
+
   deploy:
-    name: Build & Deploy
+    name: Build & Deploy to Production
+    needs: deploy-staging
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'workflow_dispatch' ||

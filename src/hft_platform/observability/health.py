@@ -5,7 +5,7 @@ full status introspection.
 
 Endpoints:
     ``/healthz``  -- Liveness: always 200 if process is running.
-    ``/readyz``   -- Readiness: 200 if services healthy, 503 otherwise.
+    ``/readyz``   -- Readiness: 200/503 with three-level status.
     ``/status``   -- Full JSON status dump.
 
 Port configured via ``HFT_HEALTH_PORT`` (default 8080).
@@ -27,6 +27,12 @@ logger = get_logger("observability.health")
 _DEFAULT_PORT = 8080
 _STARTUP_TS = time.time()
 
+# Queue pressure threshold (fraction of maxsize)
+_QUEUE_PRESSURE_THRESHOLD = 0.8
+
+# ClickHouse write staleness threshold (nanoseconds)
+_CH_WRITE_STALE_NS = 60_000_000_000  # 60 seconds
+
 
 def _json_dumps(obj: Any) -> bytes:
     """Serialize *obj* to JSON bytes using orjson if available, else stdlib."""
@@ -40,6 +46,32 @@ def _json_dumps(obj: Any) -> bytes:
         return json.dumps(obj, default=str).encode("utf-8")
 
 
+class DegradationTracker:
+    """Tracks degradation events for /status introspection."""
+
+    __slots__ = ("_events", "_max_events")
+
+    def __init__(self, max_events: int = 10) -> None:
+        self._events: list[dict[str, Any]] = []
+        self._max_events = max_events
+
+    def record(self, reason: str, checks: dict[str, Any]) -> None:
+        """Record a degradation event."""
+        event: dict[str, Any] = {
+            "timestamp_ns": timebase.now_ns(),
+            "reason": reason,
+            "checks": dict(checks),
+        }
+        self._events.append(event)
+        if len(self._events) > self._max_events:
+            self._events = self._events[-self._max_events :]
+
+    @property
+    def recent(self) -> list[dict[str, Any]]:
+        """Return a copy of recent degradation events."""
+        return list(self._events)
+
+
 class HealthServer:
     """Async HTTP health check server using raw asyncio (no third-party deps).
 
@@ -50,79 +82,173 @@ class HealthServer:
         May be ``None`` during testing (liveness always returns 200).
     """
 
-    __slots__ = ("_port", "_system", "_server", "_version")
+    __slots__ = ("_port", "_system", "_server", "_version", "_degradation_tracker")
 
     def __init__(self, system: Any = None) -> None:
         self._port = int(os.getenv("HFT_HEALTH_PORT", str(_DEFAULT_PORT)))
         self._system = system
         self._server: asyncio.Server | None = None
         self._version = os.getenv("HFT_VERSION", "unknown")
+        self._degradation_tracker = DegradationTracker()
 
     # -- Checks -------------------------------------------------------------
 
-    def _check_readiness(self) -> tuple[bool, dict[str, Any]]:
+    def _check_readiness(self) -> tuple[str, dict[str, Any]]:  # noqa: C901
         """Evaluate readiness based on system state.
 
-        Returns (is_ready, checks_dict).
+        Returns (status, checks_dict) where status is one of:
+        ``"ready"``, ``"degraded"``, ``"unavailable"``.
         """
         checks: dict[str, Any] = {}
+        unavailable_reasons: list[str] = []
+        degraded_reasons: list[str] = []
 
         if self._system is None:
-            return False, {"system": "not_attached"}
+            return "unavailable", {"system": "not_attached"}
 
         # 1. System running flag
-        system_running = getattr(self._system, "running", False)
+        system_running: bool = getattr(self._system, "running", False)
         checks["system_running"] = system_running
+        if not system_running:
+            unavailable_reasons.append("system_not_running")
 
-        # 2. StormGuard not in HALT
+        # 2. Broker login
+        md_client = getattr(self._system, "md_client", None)
+        order_client = getattr(self._system, "order_client", None)
+        md_logged_in = getattr(md_client, "logged_in", False) if md_client else False
+        order_logged_in = getattr(order_client, "logged_in", False) if order_client else False
+        checks["broker_login"] = {
+            "md_client": md_logged_in,
+            "order_client": order_logged_in,
+        }
+        if not (md_logged_in and order_logged_in):
+            unavailable_reasons.append("broker_not_logged_in")
+
+        # 3. StormGuard
         storm_guard = getattr(self._system, "storm_guard", None)
         if storm_guard is not None:
             from hft_platform.risk.storm_guard import StormGuardState
 
             sg_state = storm_guard.state
             checks["storm_guard"] = sg_state.name
-            storm_ok = sg_state != StormGuardState.HALT
+            if sg_state == StormGuardState.HALT:
+                unavailable_reasons.append("storm_guard_halt")
+            elif sg_state in (StormGuardState.WARM, StormGuardState.STORM):
+                degraded_reasons.append("storm_guard_elevated")
         else:
-            storm_ok = True
             checks["storm_guard"] = "unknown"
 
-        # 3. Critical tasks alive
-        tasks = getattr(self._system, "tasks", {})
-        critical_tasks = ["md", "strat", "order", "recorder"]
+        # 4. Critical tasks alive
+        tasks: dict[str, Any] = getattr(self._system, "tasks", {})
+        critical_tasks = ["md", "strat", "order", "recorder", "risk"]
+        # Conditionally add gateway if enabled
+        if os.getenv("HFT_GATEWAY_ENABLED", "0") == "1":
+            critical_tasks.append("gateway")
         tasks_alive: dict[str, bool] = {}
         for name in critical_tasks:
             task = tasks.get(name)
             alive = task is not None and not task.done()
             tasks_alive[name] = alive
         checks["tasks"] = tasks_alive
-        all_tasks_ok = all(tasks_alive.values())
+        dead_tasks = [n for n, alive in tasks_alive.items() if not alive]
+        if dead_tasks:
+            unavailable_reasons.append(f"critical_tasks_dead:{','.join(dead_tasks)}")
 
-        # 4. Feed connected (md_service.running)
+        # 5. Optional tasks (execution)
+        optional_tasks: dict[str, bool] = {}
+        for name in ("exec_router", "exec_gateway"):
+            task = tasks.get(name)
+            if task is not None:
+                optional_tasks[name] = not task.done()
+        if optional_tasks:
+            checks["optional_tasks"] = optional_tasks
+
+        # 6. Feed connected
         md_service = getattr(self._system, "md_service", None)
-        feed_ok = getattr(md_service, "running", False) if md_service else False
+        feed_ok: bool = getattr(md_service, "running", False) if md_service else False
         checks["feed_connected"] = feed_ok
+        if not feed_ok and system_running:
+            degraded_reasons.append("feed_disconnected")
 
-        is_ready = system_running and storm_ok and all_tasks_ok
-        return is_ready, checks
+        # 7. ClickHouse write health
+        recorder_service = getattr(self._system, "recorder_service", None)
+        if recorder_service is not None:
+            ch_healthy = getattr(recorder_service, "healthy", None)
+            last_write_ok = getattr(recorder_service, "last_write_ok", None)
+            if ch_healthy is not None:
+                checks["clickhouse_write"] = ch_healthy
+                if not ch_healthy:
+                    degraded_reasons.append("clickhouse_unhealthy")
+            elif last_write_ok is not None:
+                # last_write_ok is expected to be a nanosecond timestamp
+                now_ns = timebase.now_ns()
+                stale = (now_ns - last_write_ok) > _CH_WRITE_STALE_NS if last_write_ok > 0 else True
+                checks["clickhouse_write"] = not stale
+                if stale:
+                    degraded_reasons.append("clickhouse_write_stale")
+            else:
+                checks["clickhouse_write"] = "unknown"
+
+        # 8. Queue pressure
+        queue_names = ("raw_queue", "raw_exec_queue", "risk_queue", "order_queue", "recorder_queue")
+        queue_pressure: dict[str, Any] = {}
+        any_pressure = False
+        for qname in queue_names:
+            q = getattr(self._system, qname, None)
+            if q is not None:
+                qsize = q.qsize()
+                maxsize = getattr(q, "maxsize", 0)
+                if maxsize > 0:
+                    ratio = qsize / maxsize
+                    queue_pressure[qname] = {"size": qsize, "max": maxsize}
+                    if ratio > _QUEUE_PRESSURE_THRESHOLD:
+                        any_pressure = True
+                else:
+                    queue_pressure[qname] = {"size": qsize, "max": 0}
+        if queue_pressure:
+            checks["queue_pressure"] = queue_pressure
+        if any_pressure:
+            degraded_reasons.append("queue_pressure_high")
+
+        # 9. Order path: task alive AND broker connected
+        order_task = tasks.get("order")
+        order_alive = order_task is not None and not order_task.done()
+        if not order_alive or not order_logged_in:
+            if "critical_tasks_dead:order" not in str(unavailable_reasons):
+                # Only add if not already captured by critical task check
+                if not order_alive and "order" not in dead_tasks:
+                    unavailable_reasons.append("order_path_down")
+                elif order_alive and not order_logged_in:
+                    # broker_not_logged_in already covers this
+                    pass
+
+        # Determine final status
+        checks["unavailable_reasons"] = unavailable_reasons
+        checks["degraded_reasons"] = degraded_reasons
+
+        if unavailable_reasons:
+            status = "unavailable"
+        elif degraded_reasons:
+            status = "degraded"
+            self._degradation_tracker.record(reason="; ".join(degraded_reasons), checks=checks)
+        else:
+            status = "ready"
+
+        return status, checks
 
     def _build_status(self) -> dict[str, Any]:
         """Build the full ``/status`` response payload."""
-        is_ready, checks = self._check_readiness()
-
-        status_label = "ok" if is_ready else "unhealthy"
-        # Detect degraded: system running but some tasks down or storm != NORMAL
-        if not is_ready and self._system and getattr(self._system, "running", False):
-            status_label = "degraded"
+        status, checks = self._check_readiness()
 
         result: dict[str, Any] = {
-            "status": status_label,
+            "status": status,
             "checks": checks,
             "uptime_s": round(time.time() - _STARTUP_TS, 1),
             "version": self._version,
             "timestamp_ns": timebase.now_ns(),
         }
 
-        # Queue depths
+        # Queue depths (legacy compat + detail)
         if self._system is not None:
             queues: dict[str, int] = {}
             for qname in ("raw_queue", "raw_exec_queue", "risk_queue", "order_queue", "recorder_queue"):
@@ -135,6 +261,11 @@ class HealthServer:
             sg = getattr(self._system, "storm_guard", None)
             if sg is not None:
                 result["storm_guard_state"] = int(sg.state)
+
+        # Recent degradation events
+        recent_degradations = self._degradation_tracker.recent
+        if recent_degradations:
+            result["degradation_events"] = recent_degradations
 
         return result
 
@@ -164,10 +295,16 @@ class HealthServer:
             if path == "/healthz":
                 self._send_response(writer, 200, _json_dumps({"status": "ok"}))
             elif path == "/readyz":
-                is_ready, checks = self._check_readiness()
-                code = 200 if is_ready else 503
-                status_label = "ok" if is_ready else "unavailable"
-                self._send_response(writer, code, _json_dumps({"status": status_label, "checks": checks}))
+                status, checks = self._check_readiness()
+                if status == "unavailable":
+                    code = 503
+                else:
+                    code = 200
+                body = _json_dumps({"status": status, "checks": checks})
+                extra_headers: dict[str, str] = {}
+                if status == "degraded":
+                    extra_headers["X-Health-Status"] = "degraded"
+                self._send_response(writer, code, body, extra_headers=extra_headers)
             elif path == "/status":
                 body = _json_dumps(self._build_status())
                 self._send_response(writer, 200, body)
@@ -186,16 +323,27 @@ class HealthServer:
                 pass
 
     @staticmethod
-    def _send_response(writer: asyncio.StreamWriter, status: int, body: bytes) -> None:
+    def _send_response(
+        writer: asyncio.StreamWriter,
+        status: int,
+        body: bytes,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         """Write a minimal HTTP/1.1 response."""
         reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 503: "Service Unavailable"}.get(status, "Unknown")
-        header = (
-            f"HTTP/1.1 {status} {reason}\r\n"
-            f"Content-Type: application/json\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            f"Connection: close\r\n"
-            f"\r\n"
-        )
+        header_lines = [
+            f"HTTP/1.1 {status} {reason}",
+            "Content-Type: application/json",
+            f"Content-Length: {len(body)}",
+            "Connection: close",
+        ]
+        if extra_headers:
+            for key, value in extra_headers.items():
+                header_lines.append(f"{key}: {value}")
+        header_lines.append("")
+        header_lines.append("")
+        header = "\r\n".join(header_lines)
         writer.write(header.encode("utf-8") + body)
 
     # -- Lifecycle ----------------------------------------------------------

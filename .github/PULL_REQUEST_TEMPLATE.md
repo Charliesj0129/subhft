@@ -2,6 +2,11 @@
 
 <!-- Brief description of the change -->
 
+## AI Participation
+
+- [ ] No AI assistance used
+- [ ] AI assistance used and all generated code/docs were reviewed, tested, and edited by the author where needed
+
 ## Test Plan
 
 - [ ] Unit tests added/updated

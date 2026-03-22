@@ -294,6 +294,7 @@ class TestShmDataSourceStubbed:
         ds._connected = True
         ds._retry_count = 0
         ds._last_error = ""
+        ds._next_retry_at = 0.0
 
         # Build symbol→slot mapping like __init__ does
         sym_hashes = {_symbol_hash(s): s for s in symbols}
@@ -428,6 +429,7 @@ class TestShmDataSourceStubbed:
         ds._connected = False
         ds._retry_count = 0
         ds._last_error = ""
+        ds._next_retry_at = 0.0
 
         assert ds.poll({"2330": 0}) == {}
 
