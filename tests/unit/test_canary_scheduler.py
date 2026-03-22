@@ -82,6 +82,7 @@ class TestCanaryAutoSchedulerLifecycle:
             loop.run_until_complete(self._start_stop(scheduler))
         finally:
             loop.close()
+        assert scheduler._task is None
 
     @staticmethod
     async def _start_stop(scheduler: CanaryAutoScheduler) -> None:
@@ -106,6 +107,7 @@ class TestCanaryAutoSchedulerLifecycle:
             loop.run_until_complete(self._double_start(scheduler))
         finally:
             loop.close()
+        assert scheduler._task is None
 
     @staticmethod
     async def _double_start(scheduler: CanaryAutoScheduler) -> None:
@@ -121,6 +123,7 @@ class TestCanaryAutoSchedulerLifecycle:
         # stop without start — should not raise
         scheduler.stop()
         scheduler.stop()
+        assert scheduler._task is None
 
 
 class TestCanaryAutoSchedulerEvaluateAll:

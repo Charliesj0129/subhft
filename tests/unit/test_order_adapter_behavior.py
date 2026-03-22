@@ -1,11 +1,23 @@
 import asyncio
 import time
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
 from hft_platform.order.adapter import OrderAdapter
+
+
+class _StubCodec:
+    def encode_side(self, side: Any) -> str:
+        return "Buy"
+
+    def encode_tif(self, tif: Any) -> str:
+        return "ROD"
+
+    def encode_price_type(self, price_type: Any) -> str:
+        return "LMT"
 
 
 class _Meta:
@@ -96,7 +108,7 @@ def test_circuit_breaker_blocks(mock_load):
     client.get_exchange.return_value = "TSE"
     client.place_order.side_effect = RuntimeError("boom")
 
-    adapter = OrderAdapter("config/dummy.yaml", queue, client)
+    adapter = OrderAdapter("config/dummy.yaml", queue, client, broker_codec=_StubCodec())
     adapter.circuit_breaker.threshold = 2
     adapter.circuit_breaker.timeout_s = 60
     adapter.metadata = _Meta(scale=100)
@@ -142,7 +154,7 @@ async def test_api_worker_coalesces_new(mock_load):
     client.get_exchange.return_value = "TSE"
     client.place_order.return_value = {"id": "T1"}
 
-    adapter = OrderAdapter("config/dummy.yaml", queue, client)
+    adapter = OrderAdapter("config/dummy.yaml", queue, client, broker_codec=_StubCodec())
     adapter.metadata = _Meta(scale=100)
     adapter.running = True
 

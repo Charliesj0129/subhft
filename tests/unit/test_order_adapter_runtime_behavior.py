@@ -79,7 +79,7 @@ def _make_adapter(tmp_config: str, *, client: Any | None = None) -> OrderAdapter
         client.get_exchange = MagicMock(return_value="TSE")
         client.mode = "simulation"
         client.activate_ca = False
-    return OrderAdapter(config_path=tmp_config, order_queue=order_q, shioaji_client=client)
+    return OrderAdapter(config_path=tmp_config, order_queue=order_q, broker_client=client)
 
 
 def _make_cmd(
@@ -146,7 +146,8 @@ def test_get_trace_sampler_import_error_returns_none():
     from hft_platform.order import adapter as adapter_mod
 
     result = adapter_mod._get_trace_sampler()
-    assert result is None or result is not None  # Must not raise
+    # diagnostics.trace module is present in this env; sampler is returned (not None)
+    assert result is not None
 
 
 # ── metadata property setter ───────────────────────────────────────────────
@@ -279,7 +280,7 @@ async def test_drain_and_cancel_cancel_timeout(tmp_config):
 
     # Use a short sleep that exceeds the drain timeout but doesn't block teardown
     def slow_cancel(trade):
-        _time.sleep(0.5)  # longer than timeout_s but short enough for cleanup
+        _time.sleep(0.05)  # longer than timeout_s=0.01 but short enough for cleanup
 
     adapter.client.cancel_order = slow_cancel
 

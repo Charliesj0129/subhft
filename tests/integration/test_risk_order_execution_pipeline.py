@@ -81,7 +81,9 @@ async def test_risk_to_execution_pipeline(tmp_path, monkeypatch):
     client.get_exchange.return_value = "TSE"
     client.place_order.return_value = {"seq_no": "S1", "ord_no": "O1"}
 
-    order_adapter = OrderAdapter(str(adapter_cfg), order_q, client, order_id_map)
+    from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
+
+    order_adapter = OrderAdapter(str(adapter_cfg), order_q, client, order_id_map, broker_codec=ShioajiOrderCodec())
     risk_engine = RiskEngine(str(risk_cfg), intent_q, order_q)
     pos_store = PositionStore()
     exec_service = ExecutionService(bus, raw_exec_q, order_id_map, pos_store, order_adapter)

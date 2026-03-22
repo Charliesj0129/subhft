@@ -111,8 +111,13 @@ def _write_scorecard(base: Path, alpha_id: str, scorecard: dict, sub: str = "val
 
 
 def test_module_imports() -> None:
-    """Module imports without error."""
-    from hft_platform.alpha import latency_audit  # noqa: F401
+    """Module imports without error and exposes expected public API."""
+    from hft_platform.alpha import latency_audit
+
+    assert latency_audit is not None
+    assert hasattr(latency_audit, "LatencyAuditResult")
+    assert hasattr(latency_audit, "audit_alphas")
+    assert hasattr(latency_audit, "format_audit_report")
 
 
 # ---------------------------------------------------------------------------

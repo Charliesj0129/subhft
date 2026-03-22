@@ -287,6 +287,7 @@ class TestCanaryApplyDecision:
         )
         # Should not raise
         monitor.apply_decision(status)
+        assert list(tmp_path.rglob("*.yaml")) == []
 
 
 class TestCanaryStatusToDict:

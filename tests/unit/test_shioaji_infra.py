@@ -184,7 +184,7 @@ class TestSafeCallWithTimeout:
     def test_with_timeout_times_out(self) -> None:
         import time as _time
 
-        ok, result, err, timed_out = safe_call_with_timeout("op", lambda: _time.sleep(10), 0.1)
+        ok, result, err, timed_out = safe_call_with_timeout("op", lambda: _time.sleep(0.5), 0.1)
         assert ok is False
         assert isinstance(err, TimeoutError)
         assert timed_out is True

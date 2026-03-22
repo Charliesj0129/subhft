@@ -15,6 +15,15 @@ from hft_platform.utils.logging import configure_logging
 logger = get_logger("system")
 
 
+def _read_kill_switch_reason(path: str) -> str:
+    """Read kill-switch reason from JSON file. Runs in executor thread."""
+    import json as _json
+
+    with open(path, "r") as f:
+        data = _json.load(f)
+    return data.get("reason", "unknown")
+
+
 class HFTSystem:
     # -- Typed helpers to replace hasattr probes ----------------------------------
 
@@ -361,16 +370,14 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard update failed", error=str(e))
 
-            # Kill-switch file check
+            # Kill-switch file check (async to avoid blocking event loop)
             kill_switch_path = os.getenv("HFT_KILL_SWITCH_PATH", ".runtime/kill_switch")
-            if os.path.exists(kill_switch_path):
+            loop = asyncio.get_running_loop()
+            ks_exists = await loop.run_in_executor(None, os.path.exists, kill_switch_path)
+            if ks_exists:
                 if self.storm_guard.state != StormGuardState.HALT:
                     try:
-                        import json as _json
-
-                        with open(kill_switch_path, "r") as _ksf:
-                            _ks_data = _json.load(_ksf)
-                        _ks_reason = _ks_data.get("reason", "unknown")
+                        _ks_reason = await loop.run_in_executor(None, _read_kill_switch_reason, kill_switch_path)
                     except Exception:
                         _ks_reason = "kill_switch_file_present"
                     self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")

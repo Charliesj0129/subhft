@@ -1,4 +1,4 @@
-"""Coverage-boosting tests for RiskEngine (risk/engine.py).
+"""Behavior tests for RiskEngine (risk/engine.py).
 
 Targets: _load_rust_risk_validator caching/fallback/fail, _obs_policy,
 _get_trace_sampler ImportError, _init_fast_gate disabled/ValueError/risk sources,
@@ -124,8 +124,8 @@ def test_obs_policy_unknown_returns_empty(monkeypatch):
 
 def test_get_trace_sampler_import_error_returns_none():
     result = engine_mod._get_trace_sampler()
-    # Must not raise; may return sampler or None
-    assert result is None or result is not None
+    # diagnostics.trace module is present in this env; sampler is returned (not None)
+    assert result is not None
 
 
 # ── _init_fast_gate ────────────────────────────────────────────────────────
@@ -406,7 +406,8 @@ def test_evaluate_rust_validator_oserror_falls_through(engine):
     engine._rust_validator = mock_rv
 
     decision = engine.evaluate(_intent())
-    assert decision.approved or not decision.approved  # Must not raise
+    # OSError falls through to Python validators; intent is within limits so approved
+    assert decision.approved is True
 
 
 def test_evaluate_rust_validator_with_lob_mid_price(engine):

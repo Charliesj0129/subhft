@@ -11,7 +11,12 @@ import yaml
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side, StormGuardState
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
 from hft_platform.risk.engine import RiskEngine
+
+
+def _test_codec() -> ShioajiOrderCodec:
+    return ShioajiOrderCodec()
 
 
 def _make_risk_config(
@@ -187,7 +192,7 @@ async def test_expired_deadline_skipped(adapter_config_path, queues, mock_broker
     from hft_platform.order.adapter import OrderAdapter
 
     _, order_q = queues
-    adapter = OrderAdapter(adapter_config_path, order_q, mock_broker)
+    adapter = OrderAdapter(adapter_config_path, order_q, mock_broker, broker_codec=_test_codec())
     cmd = OrderCommand(
         cmd_id=1, intent=_make_intent(), deadline_ns=1, storm_guard_state=StormGuardState.NORMAL, created_ns=1
     )
@@ -210,7 +215,7 @@ async def test_circuit_breaker_rejection(adapter_config_path, queues, mock_broke
     from hft_platform.order.adapter import OrderAdapter
 
     _, order_q = queues
-    adapter = OrderAdapter(adapter_config_path, order_q, mock_broker)
+    adapter = OrderAdapter(adapter_config_path, order_q, mock_broker, broker_codec=_test_codec())
     for _ in range(adapter.circuit_breaker.threshold + 1):
         adapter.circuit_breaker.record_failure()
     assert adapter.circuit_breaker.is_open()
@@ -232,7 +237,7 @@ async def test_rate_limit_rejection(adapter_config_path, queues, mock_broker):
     _, order_q = queues
     tight_path = _write_yaml(_make_adapter_config(soft_cap=1, hard_cap=2, window_seconds=60))
     try:
-        adapter = OrderAdapter(tight_path, order_q, mock_broker)
+        adapter = OrderAdapter(tight_path, order_q, mock_broker, broker_codec=_test_codec())
         for _ in range(adapter.rate_limiter.hard_cap + 1):
             adapter.rate_limiter.record()
         cmd = OrderCommand(
@@ -253,7 +258,7 @@ async def test_dlq_population(adapter_config_path, queues, mock_broker):
     from hft_platform.order.adapter import OrderAdapter
 
     _, order_q = queues
-    adapter = OrderAdapter(adapter_config_path, order_q, mock_broker)
+    adapter = OrderAdapter(adapter_config_path, order_q, mock_broker, broker_codec=_test_codec())
     for _ in range(adapter.circuit_breaker.threshold + 1):
         adapter.circuit_breaker.record_failure()
     initial_size = len(adapter._dlq._buffer)

@@ -310,6 +310,7 @@ def test_rust_kernel_adapter_reset_symbol_missing():
 
     adapter = RustFeatureKernelAdapter(ema_alpha=0.2, warmup_thresholds=[8, 8])
     adapter.reset_symbol("UNKNOWN")  # Should not raise
+    assert adapter._kernels == {}
 
 
 def test_rust_kernel_adapter_reset_all():

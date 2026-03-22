@@ -90,7 +90,7 @@ def test_bench_check_order_numba_direct(benchmark, numba_arrays):
 # ---------------------------------------------------------------------------
 # Batch Validation Benchmarks
 # ---------------------------------------------------------------------------
-def test_bench_fast_gate_batch_100(benchmark, gate):
+def test_bench_fast_gate_batch_100(benchmark, gate):  # noqa: no-assert
     """Benchmark 100 consecutive checks."""
 
     def batch_check():
@@ -100,7 +100,7 @@ def test_bench_fast_gate_batch_100(benchmark, gate):
     benchmark(batch_check)
 
 
-def test_bench_fast_gate_batch_1000(benchmark, gate):
+def test_bench_fast_gate_batch_1000(benchmark, gate):  # noqa: no-assert
     """Benchmark 1000 consecutive checks."""
 
     def batch_check():

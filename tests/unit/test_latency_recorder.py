@@ -62,6 +62,7 @@ def test_latency_recorder_no_queue_and_put_fail(monkeypatch):
 
     rec.configure(BadQueue())
     rec.record("stage", 1000, ts_ns=789)
+    assert rec._queue.__class__.__name__ == "BadQueue"
 
 
 def test_latency_recorder_invalid_sample_env(monkeypatch):
