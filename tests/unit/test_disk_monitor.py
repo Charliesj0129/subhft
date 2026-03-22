@@ -3,7 +3,6 @@
 import os
 import tempfile
 import threading
-import time
 
 from hft_platform.recorder.disk_monitor import DiskPressureLevel, DiskPressureMonitor
 
