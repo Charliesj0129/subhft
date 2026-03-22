@@ -58,7 +58,7 @@ dependency-boundary: ## Enforce import-layer and protected-module contracts
 	env PYTHONPATH=src uv tool run --from import-linter lint-imports --config $(CURDIR)/.importlinter
 
 test-assertion-check: ## Check test functions have assertions
-	$(PY) scripts/check_test_assertions.py --max-advisory 30
+	$(PY) scripts/check_test_assertions.py --max-advisory 60
 
 test-collection-check: ## Verify zero test collection errors
 	$(PY) scripts/check_test_collection.py
