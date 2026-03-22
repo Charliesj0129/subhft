@@ -1,6 +1,7 @@
 """Tests for OrderAdapter: _dispatch_to_api, _register_broker_ids, drain_and_cancel, load_config."""
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +15,17 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
+
+
+class _StubCodec:
+    def encode_side(self, side: Any) -> str:
+        return "Buy"
+
+    def encode_tif(self, tif: Any) -> str:
+        return "ROD"
+
+    def encode_price_type(self, price_type: Any) -> str:
+        return "LMT"
 
 
 @pytest.fixture
@@ -104,7 +116,7 @@ def _make_adapter(tmp_config: str, client=None):
     if client is None:
         client = _make_client()
     q: asyncio.Queue = asyncio.Queue()
-    adapter = OrderAdapter(config_path=tmp_config, order_queue=q, shioaji_client=client)
+    adapter = OrderAdapter(config_path=tmp_config, order_queue=q, broker_client=client, broker_codec=_StubCodec())
     return adapter
 
 

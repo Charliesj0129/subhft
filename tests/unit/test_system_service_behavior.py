@@ -1,4 +1,4 @@
-"""Coverage tests for services/system.py — targeting 80%+ line coverage."""
+"""Behavior tests for services/system.py."""
 
 from __future__ import annotations
 
@@ -209,6 +209,7 @@ def test_set_service_running_no_attr():
 
     svc = SimpleNamespace()
     HFTSystem._set_service_running(svc, False)  # Should not raise
+    assert not hasattr(svc, "running")
 
 
 # ---------------------------------------------------------------------------
@@ -230,17 +231,20 @@ def test_close_broker_client_close_raises():
     mock_client.close.side_effect = RuntimeError("logout failed")
     sys_obj.my_client = mock_client
     sys_obj._close_broker_client("my_client")  # Should not raise
+    mock_client.close.assert_called_once_with(logout=True)
 
 
 def test_close_broker_client_no_close():
     sys_obj = _make_system()
     sys_obj.no_close_client = SimpleNamespace()
     sys_obj._close_broker_client("no_close_client")  # Should not raise
+    assert hasattr(sys_obj, "no_close_client")
 
 
 def test_close_broker_client_missing():
     sys_obj = _make_system()
     sys_obj._close_broker_client("nonexistent_client")  # Should not raise
+    assert not hasattr(sys_obj, "nonexistent_client")
 
 
 def test_on_sighup_success():
@@ -255,6 +259,7 @@ def test_on_sighup_raises():
     sys_obj.risk_engine = MagicMock()
     sys_obj.risk_engine.reload_config.side_effect = RuntimeError("oops")
     sys_obj._on_sighup()  # Should not raise
+    sys_obj.risk_engine.reload_config.assert_called_once()
 
 
 def test_teardown_bootstrap_first_call():
@@ -284,6 +289,7 @@ def test_teardown_bootstrap_teardown_raises():
     sys_obj.bootstrapper = MagicMock()
     sys_obj.bootstrapper.teardown.side_effect = RuntimeError("fail")
     sys_obj._teardown_bootstrap()  # Should not raise
+    assert sys_obj._bootstrap_torn_down is True
 
 
 def test_iter_supervised_services_no_gateway():
@@ -326,6 +332,7 @@ def test_reset_restart_backoff_if_healthy_task_done():
 def test_reset_restart_backoff_none_task():
     sys_obj = _make_system()
     sys_obj._reset_restart_backoff_if_healthy("md", None)  # Should not raise
+    assert sys_obj._task_restart_attempts == {}
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +387,7 @@ async def test_cleanup_tasks():
     sys_obj._teardown_bootstrap = MagicMock()
 
     async def _long():
-        await asyncio.sleep(100)
+        await asyncio.sleep(1.0)
 
     loop = asyncio.get_event_loop()
     t = loop.create_task(_long())

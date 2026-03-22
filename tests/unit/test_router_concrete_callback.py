@@ -133,6 +133,7 @@ class TestCompatCallback:
     def test_compat_empty_args_returns_early(self) -> None:
         """No args/kwargs should be a no-op."""
         mod.dispatch_tick_cb_compat()
+        assert mod.CLIENT_REGISTRY_SNAPSHOT == ()
 
 
 # --- Cache warmup tests ---

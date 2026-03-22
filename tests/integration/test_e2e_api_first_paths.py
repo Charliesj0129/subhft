@@ -182,7 +182,9 @@ async def test_hotpath_intent_to_execution_api_first(tmp_path, monkeypatch):
 
     order_id_map: dict[str, str] = {}
     broker_api = InMemoryBrokerAPI()
-    order_adapter = OrderAdapter(str(adapter_cfg), order_q, broker_api, order_id_map)
+    from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
+
+    order_adapter = OrderAdapter(str(adapter_cfg), order_q, broker_api, order_id_map, broker_codec=ShioajiOrderCodec())
     risk_engine = RiskEngine(str(risk_cfg), intent_q, order_q)
     position_store = PositionStore()
     exec_service = ExecutionService(bus, raw_exec_q, order_id_map, position_store, order_adapter)

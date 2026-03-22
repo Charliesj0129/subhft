@@ -226,9 +226,9 @@ class TestCooldownManager:
         """try_acquire should succeed after cooldown has elapsed."""
         from hft_platform.feed_adapter._base.subscription_manager import CooldownManager
 
-        cd = CooldownManager(cooldown_s=0.05, name="test")
+        cd = CooldownManager(cooldown_s=0.01, name="test")  # cooldown delay - cannot use event-based
         assert cd.try_acquire()
-        time.sleep(0.06)
+        time.sleep(0.02)  # cooldown delay - cannot use event-based
         assert cd.try_acquire()
 
     def test_reset_allows_immediate_acquire(self) -> None:
@@ -245,11 +245,11 @@ class TestCooldownManager:
         """is_ready should reflect whether the cooldown has elapsed."""
         from hft_platform.feed_adapter._base.subscription_manager import CooldownManager
 
-        cd = CooldownManager(cooldown_s=0.05, name="test")
+        cd = CooldownManager(cooldown_s=0.01, name="test")  # cooldown delay - cannot use event-based
         assert cd.is_ready  # never acquired
         cd.try_acquire()
         assert not cd.is_ready
-        time.sleep(0.06)
+        time.sleep(0.02)  # cooldown delay - cannot use event-based
         assert cd.is_ready
 
     def test_cooldown_s_property(self) -> None:
@@ -309,12 +309,16 @@ class TestBaseQuoteWatchdog:
 
     def test_stall_callback_invoked(self) -> None:
         """on_stall should be called when no data arrives within timeout."""
+        import threading
+
         from hft_platform.feed_adapter._base.quote_runtime import BaseQuoteWatchdog
 
         stall_detected = []
+        stall_event = threading.Event()
 
         def on_stall(gap_s: float) -> None:
             stall_detected.append(gap_s)
+            stall_event.set()
 
         wd = BaseQuoteWatchdog(
             timeout_s=0.05,
@@ -324,7 +328,7 @@ class TestBaseQuoteWatchdog:
         # Simulate data then stop feeding
         wd.notify_data()
         wd.start()
-        time.sleep(0.15)
+        stall_event.wait(timeout=0.5)  # event-based: wait until stall fires
         wd.stop()
 
         assert len(stall_detected) > 0

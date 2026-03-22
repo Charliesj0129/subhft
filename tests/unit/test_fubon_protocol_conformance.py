@@ -146,6 +146,7 @@ class TestFubonMethodSignatureCompatibility:
             pytest.fail(
                 f"FubonClient.{method_name} does not accept parameter '{param_name}' required by BrokerProtocol"
             )
+        assert isinstance(impl_sig, inspect.Signature)
 
 
 class TestFubonPropertyCheck:

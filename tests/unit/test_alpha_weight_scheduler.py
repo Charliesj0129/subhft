@@ -93,6 +93,7 @@ class TestAlphaWeightSchedulerLifecycle:
         sched = AlphaWeightScheduler(pool=pool, interval_s=3600)
         sched.stop()  # stop before start — must not raise
         sched.stop()  # double stop — must not raise
+        assert sched._task is None
 
     @pytest.mark.asyncio
     async def test_start_creates_task(self):

@@ -1,11 +1,23 @@
 import asyncio
 import time
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side
 from hft_platform.order.adapter import OrderAdapter
+
+
+class _StubCodec:
+    def encode_side(self, side: Any) -> str:
+        return "Buy"
+
+    def encode_tif(self, tif: Any) -> str:
+        return "ROD"
+
+    def encode_price_type(self, price_type: Any) -> str:
+        return "LMT"
 
 
 @pytest.mark.asyncio
@@ -16,7 +28,7 @@ async def test_order_adapter_maps_broker_ids_and_clears(mock_load):
     client.get_exchange.return_value = "TSE"
     client.place_order.return_value = {"seq_no": "S1", "ord_no": "O1"}
 
-    adapter = OrderAdapter("config/dummy.yaml", queue, client)
+    adapter = OrderAdapter("config/dummy.yaml", queue, client, broker_codec=_StubCodec())
 
     intent = OrderIntent(
         intent_id=1,

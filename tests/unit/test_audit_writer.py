@@ -76,13 +76,13 @@ class TestAuditWriter:
     @pytest.mark.asyncio
     async def test_flush_writes_to_ch(self) -> None:
         mock_writer = AsyncMock()
-        audit = AuditWriter(queue_size=100, flush_interval_ms=50, writer=mock_writer)
+        audit = AuditWriter(queue_size=100, flush_interval_ms=10, writer=mock_writer)
         audit.log_order({"cmd_id": 1})
         audit.log_order({"cmd_id": 2})
 
         await audit.start()
-        # Give flush loop time to run
-        await asyncio.sleep(0.15)
+        # Give flush loop time to run (flush_interval=10ms, wait 5 cycles)
+        await asyncio.sleep(0.05)
         await audit.stop()
 
         mock_writer.write.assert_called()
@@ -95,11 +95,11 @@ class TestAuditWriter:
         """When ClickHouse writer fails, rows are logged via structlog (no data loss)."""
         mock_writer = AsyncMock()
         mock_writer.write.side_effect = ConnectionError("CH down")
-        audit = AuditWriter(queue_size=100, flush_interval_ms=50, writer=mock_writer)
+        audit = AuditWriter(queue_size=100, flush_interval_ms=10, writer=mock_writer)
         audit.log_risk_decision({"approved": True})
 
         await audit.start()
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.05)  # flush_interval=10ms, wait 5 cycles
         await audit.stop()
 
         # Writer was called and failed, but no exception propagated
@@ -108,11 +108,11 @@ class TestAuditWriter:
     @pytest.mark.asyncio
     async def test_flush_no_writer_uses_structlog(self) -> None:
         """With no writer configured, rows are flushed via structlog fallback."""
-        audit = AuditWriter(queue_size=100, flush_interval_ms=50, writer=None)
+        audit = AuditWriter(queue_size=100, flush_interval_ms=10, writer=None)
         audit.log_guardrail_transition({"old_state": "NORMAL", "new_state": "HALT"})
 
         await audit.start()
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.05)  # flush_interval=10ms, wait 5 cycles
         await audit.stop()
         # No exception = success (structlog fallback worked)
 

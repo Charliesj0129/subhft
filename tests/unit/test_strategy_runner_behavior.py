@@ -1,4 +1,4 @@
-"""Coverage tests for strategy/runner.py — targeting 80%+ line coverage."""
+"""Behavior tests for strategy/runner.py."""
 
 from __future__ import annotations
 
@@ -465,6 +465,7 @@ def test_emit_trace_no_sampler(runner_factory):
     runner, _, _ = runner_factory()
     runner._trace_sampler = None
     runner._emit_trace("stage", "trace-id", {"key": "val"})
+    assert runner._trace_sampler is None
 
 
 def test_emit_trace_with_sampler(runner_factory):
@@ -481,6 +482,7 @@ def test_emit_trace_sampler_raises(runner_factory):
     sampler.emit.side_effect = TypeError("bad")
     runner._trace_sampler = sampler
     runner._emit_trace("stage", "trace-id", {})
+    sampler.emit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

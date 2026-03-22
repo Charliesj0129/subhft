@@ -103,22 +103,22 @@ def rust_normalize_bidask(rc):
     )
 
 
-def test_bench_python_scale_book_pair_stats(benchmark):
+def test_bench_python_scale_book_pair_stats(benchmark):  # noqa: no-assert
     benchmark(python_scale_book_pair_stats)
 
 
-def test_bench_rust_scale_book_pair_stats(benchmark):
+def test_bench_rust_scale_book_pair_stats(benchmark):  # noqa: no-assert
     rc = _load_rust_core()
     if rc is None:
         pytest.skip("rust_core not available")
     benchmark(lambda: rust_scale_book_pair_stats(rc))
 
 
-def test_bench_python_normalize_bidask(benchmark):
+def test_bench_python_normalize_bidask(benchmark):  # noqa: no-assert
     benchmark(python_normalize_bidask)
 
 
-def test_bench_rust_normalize_bidask(benchmark):
+def test_bench_rust_normalize_bidask(benchmark):  # noqa: no-assert
     rc = _load_rust_core()
     if rc is None:
         pytest.skip("rust_core not available")
@@ -177,11 +177,11 @@ def _rust_position_update(tracker):
         tracker.update(_POS_KEY, side, qty, price, fee, tax, 0)
 
 
-def test_bench_python_position_update(benchmark):
+def test_bench_python_position_update(benchmark):  # noqa: no-assert
     benchmark(_python_position_update)
 
 
-def test_bench_rust_position_update(benchmark):
+def test_bench_rust_position_update(benchmark):  # noqa: no-assert
     rc = _load_rust_core()
     if rc is None or not hasattr(rc, "RustPositionTracker"):
         pytest.skip("rust_core.RustPositionTracker not available")

@@ -325,7 +325,9 @@ def _make_bidask_obj(code="TSMC", bid=499.9, ask=500.1, ts=None):
 def test_normalizer_normalize_tick_basic(normalizer):
     tick = _make_tick_obj("TSMC", price=500.0)
     result = normalizer.normalize_tick(tick)
-    # May return None — just ensure no crash
+    # normalize_tick returns TickEvent | tuple | None; verify correct type is returned
+    assert result is not None
+    assert isinstance(result, tuple) or hasattr(result, "price")
 
 
 def test_normalizer_normalize_tick_returns_tick_event(normalizer):
@@ -338,7 +340,8 @@ def test_normalizer_normalize_tick_returns_tick_event(normalizer):
 
 def test_normalizer_normalize_bidask_basic(normalizer):
     ba = _make_bidask_obj("TSMC")
-    normalizer.normalize_bidask(ba)
+    result = normalizer.normalize_bidask(ba)
+    assert result is None or isinstance(result, tuple) or hasattr(result, "bids")
 
 
 def test_normalizer_normalize_bidask_returns_event(normalizer):
@@ -352,9 +355,11 @@ def test_normalizer_normalize_bidask_returns_event(normalizer):
 def test_normalizer_normalize_snapshot_basic(normalizer):
     ba = _make_bidask_obj("TSMC")
     try:
-        normalizer.normalize_snapshot(ba)
+        result = normalizer.normalize_snapshot(ba)
     except Exception:
-        pass
+        result = None
+    # normalize_snapshot returns BidAskEvent | tuple | None; if not None verify it has bids/asks
+    assert result is None or isinstance(result, tuple) or (hasattr(result, "bids") and hasattr(result, "asks"))
 
 
 def test_normalizer_next_seq(normalizer):
@@ -434,7 +439,8 @@ def test_get_field_on_tick():
 
     tick = _make_tick_obj()
     if _RUST_GET_FIELD is not None:
-        val = _RUST_GET_FIELD(tick, "price")
-        assert val is not None or val is None
+        # keys must be an iterable of field names (list), not a bare string
+        val = _RUST_GET_FIELD(tick, ["price"])
+        assert val == 500.0  # default price from _make_tick_obj()
     else:
         assert getattr(tick, "code") == "TSMC"

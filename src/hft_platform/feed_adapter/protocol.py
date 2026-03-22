@@ -81,12 +81,12 @@ class BrokerOrderCodec(Protocol):
     ``"ROD"``, ``"LMT"``) into broker SDK constants.
     """
 
-    def encode_side(self, side: str) -> Any:
-        """Map ``"Buy"``/``"Sell"`` to broker SDK action enum."""
+    def encode_side(self, side: Any) -> Any:
+        """Map side (``Side`` enum or ``"Buy"``/``"Sell"``) to broker SDK action."""
         ...
 
-    def encode_tif(self, tif: str) -> Any:
-        """Map time-in-force string (e.g. ``"ROD"``, ``"IOC"``) to SDK enum."""
+    def encode_tif(self, tif: Any) -> Any:
+        """Map time-in-force (``TIF`` enum or ``"ROD"``/``"IOC"``) to SDK value."""
         ...
 
     def encode_price_type(self, price_type: str) -> Any:

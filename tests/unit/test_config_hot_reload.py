@@ -157,19 +157,19 @@ class TestConfigHotReload:
 
         watcher = ConfigWatcher(str(cfg_file), poll_interval_s=1.0)
         # Override poll interval to something fast for testing
-        watcher._poll_interval_s = 0.1
+        watcher._poll_interval_s = 0.02
         received: List[Dict[str, Any]] = []
         watcher.register(lambda c: received.append(c))
         watcher.start()
 
         # Wait for initial poll
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.02)
 
         # Modify file
         _write_yaml(str(cfg_file), {"v": 2})
 
         # Wait for poll to pick it up (multiple poll cycles)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.05)  # reduced: poll_interval=0.02s so 2-3 cycles fit
 
         await watcher.stop()
 
