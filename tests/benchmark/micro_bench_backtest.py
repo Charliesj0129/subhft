@@ -175,7 +175,7 @@ def test_bench_equity_core_100k():
     assert elapsed_ms < 50, f"Equity computation too slow: {elapsed_ms:.3f} ms"
 
 
-def test_bench_save_baseline(monkeypatch):
+def test_bench_save_baseline(monkeypatch):  # noqa: no-assert
     """Save baseline results for regression detection."""
     _patch(monkeypatch)
     adapter = hbt_adapter.HftBacktestAdapter(

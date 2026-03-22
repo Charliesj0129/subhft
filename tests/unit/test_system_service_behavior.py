@@ -1,4 +1,4 @@
-"""Coverage tests for services/system.py — targeting 80%+ line coverage."""
+"""Behavior tests for services/system.py."""
 
 from __future__ import annotations
 

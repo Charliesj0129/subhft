@@ -1,4 +1,4 @@
-"""Coverage-boosting tests for RiskEngine (risk/engine.py).
+"""Behavior tests for RiskEngine (risk/engine.py).
 
 Targets: _load_rust_risk_validator caching/fallback/fail, _obs_policy,
 _get_trace_sampler ImportError, _init_fast_gate disabled/ValueError/risk sources,

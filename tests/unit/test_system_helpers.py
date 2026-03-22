@@ -102,3 +102,4 @@ class TestSetServiceRunning:
     def test_no_running_attribute_no_error(self) -> None:
         service = MagicMock(spec=[])
         HFTSystem._set_service_running(service, True)  # should not raise
+        assert not hasattr(service, "running")

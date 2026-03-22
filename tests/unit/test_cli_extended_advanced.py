@@ -1,12 +1,12 @@
 import json
 import sys
 import types
+from argparse import Namespace
 
 import numpy as np
 import pytest
 
 import hft_platform.cli as cli
-from argparse import Namespace
 
 
 def test_cmd_alpha_list(monkeypatch, capsys):

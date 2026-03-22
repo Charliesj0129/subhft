@@ -20,6 +20,7 @@ def test_is_duplicate_no_fstring_sql():
                 if isinstance(value, ast.Constant) and isinstance(value.value, str):
                     if "SELECT" in value.value.upper() or "FROM" in value.value.upper():
                         pytest.fail("is_duplicate() still uses f-string SQL interpolation")
+    assert "SELECT" in source.upper()
 
 
 def test_parse_batch_table_name_rejects_unknown():

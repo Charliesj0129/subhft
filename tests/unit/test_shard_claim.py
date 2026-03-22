@@ -90,3 +90,4 @@ def test_release_nonexistent_key_is_safe():
         reg = _make_registry(tmpdir)
         # Releasing a key never claimed should not raise
         reg.release_claim("ghost.jsonl")
+        assert reg._held_fds == {}

@@ -432,6 +432,7 @@ class TestHealthServerLifecycle:
     def test_stop_without_server_is_safe(self) -> None:
         server = HealthServer()
         server.stop()  # Should not raise
+        assert server._server is None
 
     def test_port_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_HEALTH_PORT", "9999")

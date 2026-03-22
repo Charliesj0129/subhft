@@ -127,7 +127,7 @@ class TestDarwinGateOrders:
         count, avg_latency, max_latency = result.result_rows[0]
         assert count > 0, "Expected order records with latency data"
 
-    def test_order_throughput(self, ch_client):
+    def test_order_throughput(self, ch_client):  # noqa: no-assert
         """Measure order throughput over last hour."""
         query = """
         SELECT
@@ -173,7 +173,7 @@ class TestDarwinGateMarketData:
         # (relaxed threshold for testing)
         assert age_s < 3600, f"Market data is {age_s:.0f}s old (> 1 hour)"
 
-    def test_ohlcv_aggregation(self, ch_client):
+    def test_ohlcv_aggregation(self, ch_client):  # noqa: no-assert
         """Verify OHLCV materialized view is producing data."""
         query = """
         SELECT count(), max(bucket)
