@@ -10,6 +10,14 @@ import pytest
 
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 
+
+def _wait_processed(dispatcher: TickDispatcher, expected: int, timeout: float = 2.0) -> None:
+    """Poll dispatcher.processed until it reaches *expected*, or timeout."""
+    deadline = time.monotonic() + timeout
+    while dispatcher.processed < expected and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
 # ------------------------------------------------------------------
 # _process_tick callback routing
 # ------------------------------------------------------------------
@@ -43,8 +51,7 @@ class TestProcessTickRouting:
             queue_size=64,
         )
         dispatcher.enqueue_tick("topic", "quote")
-        # Allow worker to drain.
-        time.sleep(0.2)
+        _wait_processed(dispatcher, 1)
         dispatcher.stop_worker()
 
         assert len(received) == 1
@@ -67,9 +74,9 @@ class TestProcessTickRouting:
             queue_size=64,
         )
         dispatcher.enqueue_tick("a")
-        time.sleep(0.15)
+        _wait_processed(dispatcher, 1)
         dispatcher.enqueue_tick("b")
-        time.sleep(0.15)
+        _wait_processed(dispatcher, 2)
         dispatcher.stop_worker()
         assert call_count == 2
 
@@ -109,7 +116,7 @@ class TestEnqueueDequeue:
         dispatcher.enqueue_tick("a")
         dispatcher.enqueue_tick("b")
         assert dispatcher.enqueued == 2
-        time.sleep(0.15)
+        _wait_processed(dispatcher, 2)
         dispatcher.stop_worker()
 
     def test_fallback_to_inline_when_queue_none(self) -> None:
@@ -144,7 +151,7 @@ class TestEnqueueDequeue:
         )
         for i in range(6):
             dispatcher.enqueue_tick(f"t{i}")
-        time.sleep(0.3)
+        _wait_processed(dispatcher, 6)
         dispatcher.stop_worker()
         assert received == [f"t{i}" for i in range(6)]
         assert dispatcher.processed == 6
@@ -293,7 +300,7 @@ class TestDequeTransportRouting:
             use_deque=True,
         )
         dispatcher.enqueue_tick("topic", "quote")
-        time.sleep(0.2)
+        _wait_processed(dispatcher, 1)
         dispatcher.stop_worker()
 
         assert len(received) == 1
@@ -316,9 +323,9 @@ class TestDequeTransportRouting:
             use_deque=True,
         )
         dispatcher.enqueue_tick("a")
-        time.sleep(0.15)
+        _wait_processed(dispatcher, 1)
         dispatcher.enqueue_tick("b")
-        time.sleep(0.15)
+        _wait_processed(dispatcher, 2)
         dispatcher.stop_worker()
         assert call_count == 2
 
@@ -358,7 +365,7 @@ class TestDequeEnqueueDequeue:
         dispatcher.enqueue_tick("a")
         dispatcher.enqueue_tick("b")
         assert dispatcher.enqueued == 2
-        time.sleep(0.15)
+        _wait_processed(dispatcher, 2)
         dispatcher.stop_worker()
 
     def test_fallback_to_inline_when_deque_none(self) -> None:
@@ -395,7 +402,7 @@ class TestDequeEnqueueDequeue:
         )
         for i in range(6):
             dispatcher.enqueue_tick(f"t{i}")
-        time.sleep(0.3)
+        _wait_processed(dispatcher, 6)
         dispatcher.stop_worker()
         assert received == [f"t{i}" for i in range(6)]
         assert dispatcher.processed == 6
@@ -531,7 +538,7 @@ class TestDequeBackwardCompat:
         items = [f"item_{i}" for i in range(10)]
         for item in items:
             dispatcher.enqueue_tick(item)
-        time.sleep(0.3)
+        _wait_processed(dispatcher, 10)
         dispatcher.stop_worker()
         assert received == items
         assert dispatcher.processed == 10

@@ -1,0 +1,76 @@
+rules:
+  - id: hft-no-silent-exception-swallow
+    message: Silent exception swallowing is forbidden. Log and re-raise or handle explicitly.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try:
+                ...
+              except Exception:
+                pass
+          - pattern: |
+              try:
+                ...
+              except $EXC:
+                pass
+          - pattern: |
+              try:
+                ...
+              except:
+                pass
+
+  - id: hft-no-prod-import-testing-helpers
+    message: Production modules must not import hft_platform.testing helpers.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - src/hft_platform/**/*.py
+      exclude:
+        - src/hft_platform/testing/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import hft_platform.testing
+          - pattern: from hft_platform.testing import ...
+          - pattern: from hft_platform.testing.$MOD import ...
+
+  - id: hft-no-broker-sdk-outside-adapter
+    message: Broker SDK imports must stay inside feed_adapter/, config/, or cli/.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - src/hft_platform/**/*.py
+      exclude:
+        - src/hft_platform/feed_adapter/**/*.py
+        - src/hft_platform/config/**/*.py
+        - src/hft_platform/cli.py
+        - src/hft_platform/cli/**/*.py
+        - src/hft_platform/scripts/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import shioaji
+          - pattern: from shioaji import ...
+          - pattern: import fubon_neo
+          - pattern: from fubon_neo import ...
+
+  - id: hft-no-direct-db-client-in-decision-paths
+    message: Decision and execution paths must not open DB clients directly; go through recorder/monitor/service boundaries.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - src/hft_platform/strategy/**/*.py
+        - src/hft_platform/risk/**/*.py
+        - src/hft_platform/order/**/*.py
+        - src/hft_platform/execution/**/*.py
+        - src/hft_platform/gateway/**/*.py
+        - src/hft_platform/services/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import clickhouse_connect
+          - pattern: from clickhouse_connect import ...
+          - pattern: import sqlite3
+          - pattern: from sqlite3 import ...

@@ -1,0 +1,8 @@
+.agent/
+.claude/
+.venv/
+docs/
+external_repos/
+htmlcov/
+research/
+tests/

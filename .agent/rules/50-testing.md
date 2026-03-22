@@ -22,3 +22,14 @@
 - **Always**: Business logic, financial calculations, risk checks.
 - **Prefer**: Edge cases (empty books, one-sided quotes, zero prices).
 - **Skip**: Pure logging, third-party wrappers, CLI glue code.
+
+### Test Naming Convention
+- Format: `test_<behavior>_<scenario>` (e.g., `test_rejects_order_when_halt`)
+- Forbidden patterns: `test_covers_*`, `test_line_*`, `test_cov_*` — tests must describe behavior, not coverage targets
+- Every test MUST contain at least one `assert` statement. "Must not raise" tests should assert a postcondition (e.g., state unchanged, no side effects).
+- Advisory zero-assert threshold: 30 (enforced by `make test-assertion-check`)
+
+### Test Sleep Discipline
+- Prefer `threading.Event`, `asyncio.Event`, or polling helpers over fixed `time.sleep()` / `asyncio.sleep()` in tests.
+- If sleep is unavoidable, keep duration ≤ 50ms. Document why event-based waiting is not possible.
+- Use `_wait_processed()` or similar poll-with-timeout helpers for thread-based workers.

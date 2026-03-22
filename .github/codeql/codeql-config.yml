@@ -1,0 +1,12 @@
+name: hft-platform-codeql
+
+paths:
+  - src/hft_platform
+  - scripts
+
+paths-ignore:
+  - tests
+  - research
+  - docs
+  - external_repos
+  - .agent
