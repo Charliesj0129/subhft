@@ -56,10 +56,12 @@ impl RustPositionTracker {
     ///   fee          – fee in fixed-point
     ///   tax          – tax in fixed-point
     ///   match_ts     – exchange match timestamp (nanoseconds)
+    ///   multiplier   – contract point-value multiplier (stocks=1, futures=point_value)
     ///
     /// Returns:
     ///   (net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled)
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (key, side, qty, price_scaled, fee, tax, match_ts, multiplier=1))]
     pub fn update(
         &mut self,
         key: String,
@@ -69,6 +71,7 @@ impl RustPositionTracker {
         fee: i64,
         tax: i64,
         match_ts: i64,
+        multiplier: i64,
     ) -> (i64, i64, i64, i64) {
         let pos = self.positions.entry(key).or_insert_with(PositionState::new);
 
@@ -96,14 +99,15 @@ impl RustPositionTracker {
             let close_qty = abs_net.min(abs_fill);
 
             // PnL in fixed-point:
-            //   Long closing (sell):  (fill_price - avg_price) * close_qty
-            //   Short closing (buy):  (avg_price - fill_price) * close_qty
+            //   Long closing (sell):  (fill_price - avg_price) * close_qty * multiplier
+            //   Short closing (buy):  (avg_price - fill_price) * close_qty * multiplier
+            // multiplier: stocks=1, futures=point_value (TMF=10, MXF=50, TXF=200)
             let pnl = if is_buy {
                 // Covering a short
-                (pos.avg_price_scaled - price_scaled) * close_qty
+                (pos.avg_price_scaled - price_scaled) * close_qty * multiplier
             } else {
                 // Selling a long
-                (price_scaled - pos.avg_price_scaled) * close_qty
+                (price_scaled - pos.avg_price_scaled) * close_qty * multiplier
             };
             pos.realized_pnl_scaled += pnl;
 
@@ -203,15 +207,15 @@ mod tests {
         let mut tracker = RustPositionTracker::new();
         let key = "acc:strat:SYM".to_string();
 
-        // Buy 10 @ 1000 (scaled)
-        let (net, avg, pnl, fees) = tracker.update(key.clone(), BUY, 10, 1000, 5, 0, 100);
+        // Buy 10 @ 1000 (scaled), multiplier=1 (stock)
+        let (net, avg, pnl, fees) = tracker.update(key.clone(), BUY, 10, 1000, 5, 0, 100, 1);
         assert_eq!(net, 10);
         assert_eq!(avg, 1000);
         assert_eq!(pnl, 0);
         assert_eq!(fees, 5);
 
-        // Sell 10 @ 1050 → PnL = (1050-1000)*10 = 500
-        let (net, _avg, pnl, fees) = tracker.update(key.clone(), SELL, 10, 1050, 5, 0, 200);
+        // Sell 10 @ 1050 → PnL = (1050-1000)*10*1 = 500
+        let (net, _avg, pnl, fees) = tracker.update(key.clone(), SELL, 10, 1050, 5, 0, 200, 1);
         assert_eq!(net, 0);
         assert_eq!(pnl, 500);
         assert_eq!(fees, 10);
@@ -223,13 +227,13 @@ mod tests {
         let key = "acc:strat:SYM".to_string();
 
         // Sell 5 @ 2000 (open short)
-        let (net, avg, pnl, _) = tracker.update(key.clone(), SELL, 5, 2000, 0, 0, 100);
+        let (net, avg, pnl, _) = tracker.update(key.clone(), SELL, 5, 2000, 0, 0, 100, 1);
         assert_eq!(net, -5);
         assert_eq!(avg, 2000);
         assert_eq!(pnl, 0);
 
-        // Buy 5 @ 1900 (cover) → PnL = (2000-1900)*5 = 500
-        let (net, _avg, pnl, _) = tracker.update(key.clone(), BUY, 5, 1900, 0, 0, 200);
+        // Buy 5 @ 1900 (cover) → PnL = (2000-1900)*5*1 = 500
+        let (net, _avg, pnl, _) = tracker.update(key.clone(), BUY, 5, 1900, 0, 0, 200, 1);
         assert_eq!(net, 0);
         assert_eq!(pnl, 500);
     }
@@ -240,9 +244,9 @@ mod tests {
         let key = "acc:strat:SYM".to_string();
 
         // Buy 10 @ 1000
-        tracker.update(key.clone(), BUY, 10, 1000, 0, 0, 100);
+        tracker.update(key.clone(), BUY, 10, 1000, 0, 0, 100, 1);
         // Buy 10 @ 1200 → avg = (10*1000 + 10*1200) / 20 = 1100
-        let (net, avg, pnl, _) = tracker.update(key.clone(), BUY, 10, 1200, 0, 0, 200);
+        let (net, avg, pnl, _) = tracker.update(key.clone(), BUY, 10, 1200, 0, 0, 200, 1);
         assert_eq!(net, 20);
         assert_eq!(avg, 1100);
         assert_eq!(pnl, 0);
@@ -254,11 +258,37 @@ mod tests {
         let key = "acc:strat:SYM".to_string();
 
         // Buy 10 @ 1000
-        tracker.update(key.clone(), BUY, 10, 1000, 0, 0, 100);
-        // Sell 15 @ 1100 → close 10 (pnl=1000), open short 5 @ 1100
-        let (net, avg, pnl, _) = tracker.update(key.clone(), SELL, 15, 1100, 0, 0, 200);
+        tracker.update(key.clone(), BUY, 10, 1000, 0, 0, 100, 1);
+        // Sell 15 @ 1100 → close 10 (pnl=1000*1), open short 5 @ 1100
+        let (net, avg, pnl, _) = tracker.update(key.clone(), SELL, 15, 1100, 0, 0, 200, 1);
         assert_eq!(net, -5);
         assert_eq!(avg, 1100);
-        assert_eq!(pnl, 1000); // (1100-1000)*10
+        assert_eq!(pnl, 1000); // (1100-1000)*10*1
+    }
+
+    #[test]
+    fn test_futures_multiplier_10() {
+        let mut tracker = RustPositionTracker::new();
+        let key = "acc:strat:TMFD6".to_string();
+
+        // Buy 1 @ 333450000, multiplier=10 (微台指)
+        tracker.update(key.clone(), BUY, 1, 333_450_000, 0, 0, 100, 10);
+        // Sell 1 @ 333440000 → PnL = (333440000-333450000)*1*10 = -100000
+        let (net, _avg, pnl, _) = tracker.update(key.clone(), SELL, 1, 333_440_000, 0, 0, 200, 10);
+        assert_eq!(net, 0);
+        assert_eq!(pnl, -100_000); // -10 NTD (descaled)
+    }
+
+    #[test]
+    fn test_futures_multiplier_50() {
+        let mut tracker = RustPositionTracker::new();
+        let key = "acc:strat:MXFD6".to_string();
+
+        // Buy 1 @ 333450000, multiplier=50 (小台指)
+        tracker.update(key.clone(), BUY, 1, 333_450_000, 0, 0, 100, 50);
+        // Sell 1 @ 333440000 → PnL = (333440000-333450000)*1*50 = -500000
+        let (net, _avg, pnl, _) = tracker.update(key.clone(), SELL, 1, 333_440_000, 0, 0, 200, 50);
+        assert_eq!(net, 0);
+        assert_eq!(pnl, -500_000); // -50 NTD (descaled)
     }
 }

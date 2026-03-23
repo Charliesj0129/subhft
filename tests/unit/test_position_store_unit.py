@@ -56,6 +56,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
     # Mock SymbolMetadata and PriceCodec to avoid file IO
     mock_metadata = MagicMock()
     mock_metadata.price_scale.return_value = 10_000
+    mock_metadata.contract_multiplier.return_value = 1
     monkeypatch.setattr(
         "hft_platform.execution.positions.SymbolMetadata",
         lambda *a, **kw: mock_metadata,
