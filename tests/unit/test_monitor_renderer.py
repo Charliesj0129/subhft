@@ -30,7 +30,7 @@ def _symbol_state() -> SymbolState:
             code="TMFC6",
             name="微台",
             product_type="future",
-            alpha_ids=("queue_imbalance", "flow_mode_decomp", "microprice_momentum"),
+            alpha_ids=("alpha_1", "alpha_2", "alpha_3"),
         ),
         tick_count=64,
         composite=2.2,
@@ -47,16 +47,16 @@ def test_render_sparkline_scales_values() -> None:
 def test_compute_suggestion_returns_strong_buy_and_mixed() -> None:
     state = _symbol_state()
     state.alpha_states = {
-        "queue_imbalance": AlphaState(alpha_id="queue_imbalance", signal=0.8),
-        "flow_mode_decomp": AlphaState(alpha_id="flow_mode_decomp", signal=0.4),
-        "microprice_momentum": AlphaState(alpha_id="microprice_momentum", signal=0.3),
+        "alpha_1": AlphaState(alpha_id="alpha_1", signal=0.8),
+        "alpha_2": AlphaState(alpha_id="alpha_2", signal=0.4),
+        "alpha_3": AlphaState(alpha_id="alpha_3", signal=0.3),
     }
     label, _ = _compute_suggestion(state, list(state.alpha_states), 64)
     assert label == "BUY↑↑"
 
     state.composite = 1.8
-    state.alpha_states["flow_mode_decomp"].signal = 0.0
-    state.alpha_states["microprice_momentum"].signal = -0.3
+    state.alpha_states["alpha_2"].signal = 0.0
+    state.alpha_states["alpha_3"].signal = -0.3
     label, _ = _compute_suggestion(state, list(state.alpha_states), 64)
     assert label == "mixed"
 
@@ -91,14 +91,14 @@ def test_format_action_includes_alpha_names() -> None:
     """Phase 1: action labels include driving alpha names."""
     ss = _symbol_state()
     ss.alpha_states = {
-        "queue_imbalance": AlphaState(alpha_id="queue_imbalance", signal=0.8, z_score=2.1),
-        "flow_mode_decomp": AlphaState(alpha_id="flow_mode_decomp", signal=0.4, z_score=1.5),
-        "microprice_momentum": AlphaState(alpha_id="microprice_momentum", signal=0.3, z_score=1.0),
+        "alpha_1": AlphaState(alpha_id="alpha_1", signal=0.8, z_score=2.1),
+        "alpha_2": AlphaState(alpha_id="alpha_2", signal=0.4, z_score=1.5),
+        "alpha_3": AlphaState(alpha_id="alpha_3", signal=0.3, z_score=1.0),
     }
     label, _ = _format_action(ss, pos=3, neg=0, total=3, warmup_ticks=64)
     assert "BUY" in label
-    # Should contain alpha short name
-    assert "QI" in label or "all" in label
+    # Should contain alpha short name or "all" when all aligned
+    assert "all" in label or "ALP" in label
 
 
 def test_row_flash_for_recent_events() -> None:
@@ -179,7 +179,7 @@ def test_delta_column_shows_price_change() -> None:
 
 def test_collapsed_closed_section() -> None:
     """S3: closed symbols are collapsed into summary row when closed_collapsed=True."""
-    ws = WatchlistSymbol(code="2330", name="台積", product_type="stock", alpha_ids=("queue_imbalance",))
+    ws = WatchlistSymbol(code="2330", name="台積", product_type="stock", alpha_ids=("alpha_1",))
     active = SymbolState(symbol=ws, tick_count=64, composite=1.0, session_active=True)
     closed = SymbolState(symbol=ws, tick_count=0, is_closed=True)
 
@@ -187,7 +187,7 @@ def test_collapsed_closed_section() -> None:
 
     # Collapsed: should show summary row
     table_collapsed = build_table(
-        [active, closed], config, MonitorState.LIVE, alpha_cols=["queue_imbalance"], closed_collapsed=True
+        [active, closed], config, MonitorState.LIVE, alpha_cols=["alpha_1"], closed_collapsed=True
     )
     row_count_collapsed = table_collapsed.row_count
     # 1 active row + 1 collapsed summary row = 2
@@ -195,7 +195,7 @@ def test_collapsed_closed_section() -> None:
 
     # Expanded: should show all rows
     table_expanded = build_table(
-        [active, closed], config, MonitorState.LIVE, alpha_cols=["queue_imbalance"], closed_collapsed=False
+        [active, closed], config, MonitorState.LIVE, alpha_cols=["alpha_1"], closed_collapsed=False
     )
     row_count_expanded = table_expanded.row_count
     assert row_count_expanded == 2  # 1 active + 1 closed shown

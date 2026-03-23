@@ -11,13 +11,8 @@ from hft_platform.monitor._types import EventFlag, SymbolState
 
 # Short display labels for alpha IDs
 _ALPHA_SHORT: dict[str, str] = {
-    "queue_imbalance": "QI",
-    "flow_mode_decomp": "FMD",
-    "microprice_momentum": "MM",
-    "ofi_regime": "OFI_R",
     "sqrt_ofi": "sOFI",
     "depth_depletion_asym": "DA",
-    "depth_concentration_index": "DCI",
 }
 
 
