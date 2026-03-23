@@ -185,3 +185,4 @@ notebooks/.ipynb_checkpoints
 arxiv_papers/
 
 gha-creds-*.json
+certs/

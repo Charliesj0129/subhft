@@ -1,4 +1,14 @@
-from typing import Any
+import contextlib
+from typing import Any, Generator
+
+
+@contextlib.contextmanager
+def suppress_metrics_errors() -> Generator[None, None, None]:
+    """Suppress exceptions from metrics operations."""
+    try:
+        yield
+    except Exception:
+        pass
 
 
 class Metrics:

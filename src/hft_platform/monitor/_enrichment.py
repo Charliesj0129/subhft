@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from hft_platform.monitor._types import CH_PRICE_SCALE, CH_TO_PLATFORM_DIVISOR, PLATFORM_SCALE, RowView, SymbolState
+from hft_platform.monitor._types import (
+    CH_PRICE_SCALE,
+    CH_TO_PLATFORM_DIVISOR,
+    PLATFORM_SCALE,
+    RowView,
+    Severity,
+    SymbolState,
+)
 
 
 def validate_l1_row(row: RowView) -> str | None:
@@ -32,6 +39,20 @@ def validate_l1_row(row: RowView) -> str | None:
         return "l1_none"
 
     return None
+
+
+def classify_problem(
+    reason: str,
+    *,
+    is_active: bool = True,
+    session_label: str = "",
+) -> Severity:
+    """Classify a validation failure reason into a severity level."""
+    if not is_active or session_label in ("[CLOSED]", "[PRE]"):
+        return Severity.INFO
+    if "mismatch" in reason or "not_array" in reason:
+        return Severity.CRIT
+    return Severity.WARN
 
 
 def enrich_tick(
@@ -97,6 +118,10 @@ def enrich_tick(
     sym_state.cursor_ts_ns = max(sym_state.cursor_ts_ns, row.ingest_ts)
     # S7: append mid_price to price sparkline
     sym_state.price_sparkline_append(mid)
+    # History sparklines for detail dashboard
+    sym_state.vol_sparkline_append(float(row.volume))
+    sym_state.spread_sparkline_append(spread_bps)
+    sym_state.imbal_sparkline_append(imbalance)
 
     # Mutate pre-allocated payload buffer in-place
     buf = sym_state._payload_buf
@@ -166,6 +191,10 @@ def enrich_from_snapshot(
     sym_state.cursor_ts_ns = max(sym_state.cursor_ts_ns, slot.ts_ns)
     # S7: append mid_price to price sparkline
     sym_state.price_sparkline_append(mid)
+    # History sparklines for detail dashboard
+    sym_state.spread_sparkline_append(spread_bps)
+    sym_state.imbal_sparkline_append(imbalance)
+    sym_state.vol_sparkline_append(0.0)  # SHM doesn't provide per-tick volume
 
     buf = sym_state._payload_buf
     buf["bid_px"] = bid_px

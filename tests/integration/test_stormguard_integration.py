@@ -80,8 +80,7 @@ class TestStormGuardStateMachine(unittest.TestCase):
         guard = StormGuard()
         thresholds = guard.thresholds
 
-        # Use 1.1s which exceeds the default 1.0s threshold
-        state = guard.update(feed_gap_s=1.1)
+        state = guard.update(feed_gap_s=thresholds.feed_gap_storm_s + 0.1)
         self.assertEqual(state, StormGuardState.STORM)
 
     def test_halt_priority_over_storm(self):

@@ -54,9 +54,9 @@ def _make_fsm(cooldown_s: float = 30.0, de_n: int = 5) -> StormGuardFSM:
         },
     ):
         fsm = StormGuardFSM(config)
-    fsm.metrics = MagicMock()
-    fsm.metrics.stormguard_mode = MagicMock()
-    fsm.metrics.stormguard_mode.labels.return_value = MagicMock()
+    fsm._guard.metrics = MagicMock()
+    fsm._guard.metrics.stormguard_mode = MagicMock()
+    fsm._guard.metrics.stormguard_mode.labels.return_value = MagicMock()
     return fsm
 
 
@@ -71,7 +71,7 @@ def test_escalation_is_instant():
     thresholds = sg.thresholds
     assert sg.state == StormGuardState.NORMAL
 
-    state = sg.update(feed_gap_s=thresholds.feed_gap_halt_s + 0.1)
+    state = sg.update(feed_gap_s=thresholds.feed_gap_storm_s + 0.1)
     assert state == StormGuardState.STORM
 
 
@@ -80,7 +80,7 @@ def test_deescalation_requires_n_clears():
     sg = _make_storm_guard(cooldown_s=0.0, de_n=5)  # cooldown=0 so only N matters
 
     # Escalate
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.1)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
     # N-1 clear evals: should still be STORM
@@ -97,7 +97,7 @@ def test_cooldown_blocks_recovery():
     """Even after N clear evals, cooldown not elapsed → stays STORM."""
     sg = _make_storm_guard(cooldown_s=9999.0, de_n=1)  # huge cooldown
 
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.1)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
     # Attempt many clears — cooldown not elapsed so counter always resets
@@ -110,7 +110,7 @@ def test_cooldown_elapsed_allows_recovery():
     """After cooldown elapses, N consecutive clears → NORMAL."""
     sg = _make_storm_guard(cooldown_s=0.001, de_n=3)  # very short cooldown
 
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.1)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
     # Wait for cooldown
@@ -132,7 +132,7 @@ def test_escalation_resets_counter():
     sg = _make_storm_guard(cooldown_s=0.0, de_n=5)
 
     # Escalate
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.1)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
     # Make 3 clear evals (counter = 3)
@@ -141,7 +141,7 @@ def test_escalation_resets_counter():
     assert sg._de_escalate_count == 3
 
     # Escalate again (new feed gap spike) → counter must reset
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.5)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.5)
     assert sg._de_escalate_count == 0
     assert sg.state == StormGuardState.STORM
 
@@ -179,7 +179,7 @@ def test_stormguard_fsm_hysteresis():
 def test_stormguard_fsm_halt_requires_cooldown_and_clears():
     """FSM: HALT de-escalation requires halt_cooldown elapsed + N consecutive clears."""
     fsm = _make_fsm(cooldown_s=9999.0, de_n=2)
-    fsm._halt_cooldown_s = 10.0
+    fsm._guard._halt_cooldown_s = 10.0
 
     # Escalate to HALT via PnL
     fsm.update_pnl(-1_100_000)
@@ -192,7 +192,7 @@ def test_stormguard_fsm_halt_requires_cooldown_and_clears():
     # Simulate time past halt cooldown
     import time
 
-    fsm._halt_entry_ts = time.monotonic() - 11.0
+    fsm._guard._halt_entry_ts = time.monotonic() - 11.0
     fsm.update_pnl(0)  # 1st clear after cooldown
     assert fsm.state == StormGuardState.HALT
     fsm.update_pnl(0)  # 2nd clear — meets de_n=2

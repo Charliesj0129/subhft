@@ -7,6 +7,9 @@ x-hft-common: &hft-common
     - SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
     - SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
     - SHIOAJI_PERSON_ID=${SHIOAJI_PERSON_ID}
+    - CA_CERT_PATH=${CA_CERT_PATH:-}
+    - CA_PASSWORD=${CA_PASSWORD:-}
+    - SHIOAJI_ACTIVATE_CA=${SHIOAJI_ACTIVATE_CA:-0}
     - SHIOAJI_ACCOUNT=${SHIOAJI_ACCOUNT:-}
     - HFT_MODE=${HFT_MODE:-sim}
     - HFT_ORDER_MODE=${HFT_ORDER_MODE:-sim}
@@ -91,6 +94,8 @@ services:
       - ./src:/app/src
       # Hugepages mount (only works if mapped on host)
       - /dev/hugepages:/dev/hugepages
+      # CA certificate mount (read-only)
+      - ${CA_CERT_DIR:-./certs}:/app/certs:ro
     deploy:
       resources:
         limits:

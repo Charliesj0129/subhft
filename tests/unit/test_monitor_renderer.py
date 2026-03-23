@@ -81,10 +81,13 @@ def test_render_symbol_status_handles_live_and_no_l1() -> None:
     status, _ = _render_symbol_status(live, config, MonitorState.LIVE, now_ns=1_000_000_000)
     assert status == "✓"
 
+    from hft_platform.monitor._types import Severity
+
     no_l1 = SymbolState(symbol=live.symbol, session_active=True, invalid_row_count=3)
+    no_l1.max_severity = Severity.WARN
     no_l1.session_started_ns = 1
     status, _ = _render_symbol_status(no_l1, config, MonitorState.WARMING_UP, now_ns=1_000_000_000)
-    assert status == "!L1"
+    assert status == "\u26a0L1"
 
 
 def test_format_action_includes_alpha_names() -> None:

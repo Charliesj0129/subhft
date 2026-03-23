@@ -401,8 +401,8 @@ class TestStormGuardFSM:
         monkeypatch.setenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "0")
         monkeypatch.setenv("HFT_STORMGUARD_DE_ESCALATE_N", "3")
         fsm = self._fsm()
-        fsm._storm_cooldown_s = 0.0
-        fsm._de_escalate_threshold = 3
+        fsm._guard._storm_cooldown_s = 0.0
+        fsm._guard._de_escalate_threshold = 3
         fsm.update_pnl(-500_000)
         assert fsm.state == StormGuardState.STORM
 
