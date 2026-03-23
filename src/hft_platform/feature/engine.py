@@ -494,9 +494,8 @@ class FeatureEngine:
             int(l1_bid_qty),
             int(l1_ask_qty),
         )
-        if not isinstance(out, tuple):
-            out = tuple(out)
-        return tuple(int(v) for v in out)
+        # Rust returns ints already; avoid per-element generator allocation
+        return tuple(out) if not isinstance(out, tuple) else out
 
     def _get_rust_pipeline(self, symbol: str) -> Any:
         """Get or create a RustFeaturePipelineV1 for the given symbol."""
@@ -541,7 +540,9 @@ class FeatureEngine:
                 l1_ask_qty,
                 warm_count,
             )
-            return (tuple(int(v) for v in values_list), int(changed_mask), int(warmup_mask))
+            # Rust returns ints already; avoid per-element generator allocation
+            values = tuple(values_list) if not isinstance(values_list, tuple) else values_list
+            return (values, int(changed_mask), int(warmup_mask))
         except Exception as _exc:  # noqa: BLE001
             return None
 
