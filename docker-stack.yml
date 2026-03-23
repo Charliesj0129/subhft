@@ -22,7 +22,8 @@ x-hft-env: &hft-env
   HFT_CLICKHOUSE_HOST: clickhouse
   HFT_CLICKHOUSE_PORT: ${HFT_CLICKHOUSE_PORT:-8123}
   HFT_CLICKHOUSE_ENABLED: "1"
-  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-changeme}
+  HFT_CLICKHOUSE_USER: ${HFT_CH_APP_USER:-hft_app}
+  HFT_CLICKHOUSE_PASSWORD: ${HFT_CH_APP_PASSWORD:-${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}}
   HFT_RECONNECT_DAYS: ${HFT_RECONNECT_DAYS:-}
   HFT_RECONNECT_HOURS: ${HFT_RECONNECT_HOURS:-}
   HFT_RECONNECT_HOURS_2: ${HFT_RECONNECT_HOURS_2:-}
@@ -66,7 +67,7 @@ services:
     command: ["python", "-m", "hft_platform.main"]
     ports:
       - target: 9090
-        published: ${HFT_PROM_PORT:-9090}
+        published: "127.0.0.1:${HFT_PROM_PORT:-9090}"
         protocol: tcp
         mode: ingress
     volumes:
@@ -92,21 +93,25 @@ services:
     image: clickhouse/clickhouse-server:25.12.3
     environment:
       CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-changeme}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      # App-level user for hft-engine (least-privilege)
+      HFT_CH_APP_USER: ${HFT_CH_APP_USER:-hft_app}
+      HFT_CH_APP_PASSWORD: ${HFT_CH_APP_PASSWORD:-${CLICKHOUSE_PASSWORD:?}}
     ports:
       - target: 8123
-        published: 8123
+        published: "127.0.0.1:8123"
         protocol: tcp
         mode: ingress
       - target: 9000
-        published: 9000
+        published: "127.0.0.1:9000"
         protocol: tcp
         mode: ingress
     ulimits:
       nofile: 262144
     volumes:
       - ./config/clickhouse_storage.xml:/etc/clickhouse-server/config.d/storage.xml
+      - ./config/clickhouse_init_users.sh:/docker-entrypoint-initdb.d/01_init_users.sh:ro
       - ${CH_DATA_HOT:-ch_data_hot}:/var/lib/clickhouse/data/hot
       - ${CH_DATA_COLD:-ch_data_cold}:/var/lib/clickhouse/data/cold
       - ch_metadata:/var/lib/clickhouse
@@ -135,11 +140,11 @@ services:
           memory: 4G
 
   redis:
-    image: redis:7
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
+    image: redis:7.2.7
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
     ports:
       - target: 6379
-        published: 6379
+        published: "127.0.0.1:6379"
         protocol: tcp
         mode: ingress
     logging:
@@ -173,8 +178,8 @@ services:
       HFT_MONITOR_METRICS_URL: http://hft-engine:9090/metrics
       HFT_CLICKHOUSE_HOST: clickhouse
       HFT_CLICKHOUSE_PORT: ${HFT_CLICKHOUSE_PORT:-8123}
-      HFT_CLICKHOUSE_USER: ${HFT_CLICKHOUSE_USER:-default}
-      HFT_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-changeme}
+      HFT_CLICKHOUSE_USER: ${HFT_CH_APP_USER:-hft_app}
+      HFT_CLICKHOUSE_PASSWORD: ${HFT_CH_APP_PASSWORD:-${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}}
       HFT_MONITOR_INTERVAL_S: ${HFT_MONITOR_INTERVAL_S:-10}
       HFT_MONITOR_MAX_INGEST_LAG_S: ${HFT_MONITOR_MAX_INGEST_LAG_S:-5}
       HFT_MONITOR_FUTURE_TOLERANCE_S: ${HFT_MONITOR_FUTURE_TOLERANCE_S:-60}
@@ -186,7 +191,7 @@ services:
     image: prom/prometheus:v2.51.0
     ports:
       - target: 9090
-        published: 9091
+        published: "127.0.0.1:9091"
         protocol: tcp
         mode: ingress
     volumes:
@@ -221,7 +226,7 @@ services:
     image: prom/alertmanager:v0.27.0
     ports:
       - target: 9093
-        published: 9093
+        published: "127.0.0.1:9093"
         protocol: tcp
         mode: ingress
     volumes:
@@ -253,12 +258,12 @@ services:
     image: grafana/grafana:10.4.1
     ports:
       - target: 3000
-        published: 3000
+        published: "127.0.0.1:3000"
         protocol: tcp
         mode: ingress
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
     volumes:
       - ./config/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
       - ./config/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
