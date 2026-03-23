@@ -8,8 +8,6 @@ Without contract_multiplier, futures PnL is underestimated by point_value factor
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from hft_platform.contracts.execution import FillEvent, Side
@@ -120,6 +118,7 @@ class TestRustPositionMultiplier:
     def _get_tracker(self):
         try:
             from hft_platform.rust_core import RustPositionTracker
+
             return RustPositionTracker()
         except ImportError:
             pytest.skip("Rust extension not available")
