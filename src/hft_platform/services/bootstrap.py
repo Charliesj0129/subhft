@@ -156,6 +156,29 @@ class _RoleGuardedNoopClient:
         self.close(logout=logout)
 
 
+def validate_order_mode_safety() -> None:
+    """Reject dangerous mode combinations and log warnings for live trading."""
+    hft_mode = os.getenv("HFT_MODE", "sim").strip().lower()
+    order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
+
+    if order_mode in {"live", "real"}:
+        if hft_mode not in {"real", "live"}:
+            logger.critical(
+                "FATAL: HFT_ORDER_MODE=live requires HFT_MODE=real or live",
+                hft_mode=hft_mode,
+                order_mode=order_mode,
+            )
+            raise SystemExit(
+                "HFT_ORDER_MODE=live with HFT_MODE=sim is invalid. "
+                "Set HFT_MODE=real to enable live orders."
+            )
+        logger.critical(
+            "LIVE ORDER MODE ACTIVE — real money orders will be placed",
+            hft_mode=hft_mode,
+            order_mode=order_mode,
+        )
+
+
 class SystemBootstrapper:
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         self.settings = settings if settings is not None else {}
