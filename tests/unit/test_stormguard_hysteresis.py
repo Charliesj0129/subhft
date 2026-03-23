@@ -191,6 +191,7 @@ def test_stormguard_fsm_halt_requires_cooldown_and_clears():
 
     # Simulate time past halt cooldown
     import time
+
     fsm._halt_entry_ts = time.monotonic() - 11.0
     fsm.update_pnl(0)  # 1st clear after cooldown
     assert fsm.state == StormGuardState.HALT

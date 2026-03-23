@@ -1181,7 +1181,20 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                         threshold=self._record_degrade_threshold,
                     )
         else:
-            asyncio.create_task(self.recorder_queue.put({"topic": topic, "data": payload}))
+            # Bounded async put: drop if too many pending tasks to prevent memory leak
+            pending = getattr(self, "_record_pending_puts", 0)
+            if pending < 1000:
+                self._record_pending_puts = pending + 1
+
+                async def _bounded_put(q: asyncio.Queue, item: dict) -> None:
+                    try:
+                        await q.put(item)
+                    finally:
+                        self._record_pending_puts -= 1
+
+                asyncio.create_task(_bounded_put(self.recorder_queue, {"topic": topic, "data": payload}))
+            else:
+                self._dropped_count += 1
 
     def _enqueue_raw(self, exchange: Any, msg: Any) -> None:
         """Enqueue raw quote messages with backpressure handling."""

@@ -17,6 +17,7 @@ pytestmark = pytest.mark.usefixtures("_disable_wal_dedup")
 def _disable_wal_dedup(monkeypatch):
     monkeypatch.setenv("HFT_WAL_DEDUP_ENABLED", "0")
 
+
 # Shared helpers (local copies — not in conftest)
 
 

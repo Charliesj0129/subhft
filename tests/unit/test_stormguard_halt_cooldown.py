@@ -3,7 +3,7 @@
 import os
 from unittest.mock import patch
 
-from hft_platform.risk.storm_guard import StormGuard, StormGuardState, RiskThresholds
+from hft_platform.risk.storm_guard import RiskThresholds, StormGuard, StormGuardState
 
 
 class TestStormGuardHaltCooldown:

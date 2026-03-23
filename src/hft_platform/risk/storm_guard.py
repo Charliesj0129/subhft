@@ -39,10 +39,17 @@ class StormGuard:
     """
 
     __slots__ = (
-        "state", "thresholds", "metrics", "last_state_change",
-        "_de_escalate_count", "_storm_entry_ts", "_storm_cooldown_s",
-        "_halt_cooldown_s", "_halt_entry_ts",
-        "_de_escalate_threshold", "_on_halt_callback",
+        "state",
+        "thresholds",
+        "metrics",
+        "last_state_change",
+        "_de_escalate_count",
+        "_storm_entry_ts",
+        "_storm_cooldown_s",
+        "_halt_cooldown_s",
+        "_halt_entry_ts",
+        "_de_escalate_threshold",
+        "_on_halt_callback",
     )
 
     def __init__(
@@ -160,7 +167,9 @@ class StormGuard:
                         "StormGuard de-escalated after hysteresis",
                         from_state=old_for_log.name,
                         to_state=new_state.name,
-                        cooldown_s=self._halt_cooldown_s if old_for_log == StormGuardState.HALT else self._storm_cooldown_s,
+                        cooldown_s=self._halt_cooldown_s
+                        if old_for_log == StormGuardState.HALT
+                        else self._storm_cooldown_s,
                         threshold=self._de_escalate_threshold,
                     )
             else:
