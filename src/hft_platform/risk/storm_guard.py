@@ -95,11 +95,11 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
-    def _evaluate_target_state(
+    def _evaluate_target_state(  # noqa: PLR0911
         self,
         drawdown_bps: int,
         latency_us: int,
-        feed_gap_s: float,
+        feed_gap_s: float,  # precision-time (not a price; seconds, float acceptable)
     ) -> tuple[StormGuardState, str]:
         """Determine target state from inputs. Priority: HALT > STORM > WARM > NORMAL."""
         t = self.thresholds
