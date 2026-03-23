@@ -52,7 +52,7 @@ def _make_intent(intent_type: IntentType) -> OrderIntent:
 
 def _make_fsm(state: StormGuardState) -> StormGuardFSM:
     """Create a StormGuardFSM and force it into *state*."""
-    with patch("hft_platform.risk.validators.MetricsRegistry") as mock_registry_cls:
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry") as mock_registry_cls:
         mock_metrics = MagicMock()
         mock_registry_cls.get.return_value = mock_metrics
         fsm = StormGuardFSM(_DEFAULT_CONFIG)

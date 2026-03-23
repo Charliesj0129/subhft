@@ -80,7 +80,7 @@ class TestStormGuardStateMachine(unittest.TestCase):
         guard = StormGuard()
         thresholds = guard.thresholds
 
-        state = guard.update(feed_gap_s=thresholds.feed_gap_halt_s + 0.1)
+        state = guard.update(feed_gap_s=thresholds.feed_gap_storm_s + 0.1)
         self.assertEqual(state, StormGuardState.STORM)
 
     def test_halt_priority_over_storm(self):
@@ -97,6 +97,8 @@ class TestStormGuardStateMachine(unittest.TestCase):
     def test_recovery_from_halt(self):
         """System can recover from HALT when conditions improve."""
         guard = StormGuard()
+        guard._halt_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
 
         # Trigger HALT
         guard.update(drawdown_bps=-300)
@@ -165,7 +167,7 @@ class TestStormGuardWithCustomThresholds(unittest.TestCase):
 
     def test_custom_feed_gap_threshold(self):
         """Custom feed gap threshold is respected."""
-        custom = RiskThresholds(feed_gap_halt_s=0.5)  # 500ms
+        custom = RiskThresholds(feed_gap_storm_s=0.5)  # 500ms
         guard = StormGuard(thresholds=custom)
 
         # 600ms gap should trigger STORM with custom threshold
@@ -229,6 +231,8 @@ class TestStormGuardConcurrency(unittest.TestCase):
     def test_rapid_state_changes(self):
         """Test rapid state changes are handled correctly."""
         guard = StormGuard()
+        guard._halt_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
 
         # Rapidly cycle through states
         for _ in range(100):

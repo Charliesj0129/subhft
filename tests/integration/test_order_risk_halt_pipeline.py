@@ -172,7 +172,7 @@ async def test_cancel_flow(risk_engine, queues):
 
 @pytest.mark.asyncio
 async def test_halt_blocks_new(risk_engine, queues):
-    risk_engine.storm_guard.update_pnl(-2_000_000)
+    risk_engine.storm_guard.trigger_halt("test")
     assert risk_engine.storm_guard.state == StormGuardState.HALT
     decision = risk_engine.evaluate(_make_intent())
     assert not decision.approved
@@ -181,7 +181,7 @@ async def test_halt_blocks_new(risk_engine, queues):
 
 @pytest.mark.asyncio
 async def test_halt_allows_cancel(risk_engine, queues):
-    risk_engine.storm_guard.update_pnl(-2_000_000)
+    risk_engine.storm_guard.trigger_halt("test")
     assert risk_engine.storm_guard.state == StormGuardState.HALT
     decision = risk_engine.evaluate(_make_intent(intent_type=IntentType.CANCEL, target_order_id="x", price=0))
     assert decision.approved

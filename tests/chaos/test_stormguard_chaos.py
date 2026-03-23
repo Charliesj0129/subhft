@@ -133,6 +133,8 @@ class TestStormGuardChaos:
     def test_recovery_under_concurrent_load(self):
         """HALT->NORMAL while concurrent readers check is_safe()."""
         guard = StormGuard()
+        guard._halt_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
         guard.trigger_halt("pre-recovery")
         go_event = threading.Event()
         saw_safe: list[bool] = []
@@ -291,7 +293,7 @@ class TestStormGuardChaos:
     # 11. Feed gap triggers STORM (not HALT) ---------------------------------
     def test_feed_gap_storm_trigger(self):
         """Feed gap >= threshold triggers STORM (architecture: feed gap does not HALT)."""
-        guard = StormGuard(thresholds=RiskThresholds(feed_gap_halt_s=1.0))
+        guard = StormGuard(thresholds=RiskThresholds(feed_gap_storm_s=1.0))
         state = guard.update(feed_gap_s=1.5)
         assert state == StormGuardState.STORM
 
@@ -357,6 +359,8 @@ class TestStormGuardChaos:
     def test_halt_normal_recovery_cycle(self):
         """Full HALT -> NORMAL -> HALT -> NORMAL cycle; verify state correctness."""
         guard = StormGuard()
+        guard._halt_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
         observed_halt = False
         observed_normal_after_halt = False
 

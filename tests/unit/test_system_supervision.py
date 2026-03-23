@@ -342,7 +342,7 @@ class TestFeedGapStormGuard:
             mock_metrics = MagicMock()
             mock_metrics.stormguard_mode.labels.return_value = MagicMock()
             mock_metrics_cls.get.return_value = mock_metrics
-            sg = StormGuard(thresholds=RiskThresholds(feed_gap_halt_s=1.0))
+            sg = StormGuard(thresholds=RiskThresholds(feed_gap_storm_s=1.0))
 
         with patch("hft_platform.risk.storm_guard.MetricsRegistry") as mock_metrics_cls:
             mock_metrics_cls.get.return_value = mock_metrics
