@@ -254,6 +254,14 @@ class TestConfigReloadUpdatesThreshold:
         validator = _get_daily_loss_validator(eng)
         assert validator.strat_configs["s1"]["max_daily_loss"] == 200_000_000
 
+        # After a daily loss HALT, StormGuard is now in HALT state.
+        # An operator raising the threshold must also manually clear the halt to resume trading.
+        # Reset halt_triggered on the validator and StormGuard to simulate operator intervention.
+        from hft_platform.contracts.strategy import StormGuardState
+
+        validator.halt_triggered = False
+        eng.storm_guard.state = StormGuardState.NORMAL
+
         # Same intent should now be approved (60M loss < 200M per-strategy threshold)
         decision = eng.evaluate(intent)
         assert decision.approved is True

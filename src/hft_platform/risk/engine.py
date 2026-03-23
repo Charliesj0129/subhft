@@ -84,6 +84,7 @@ class RiskEngine:
         "_fast_gate",
         "_fast_gate_reason_map",
         "_trace_sampler",
+        "_notification_dispatcher",
         "__dict__",
     )
 
@@ -94,6 +95,7 @@ class RiskEngine:
         order_queue: asyncio.Queue,
         price_scale_provider: PriceScaleProvider | None = None,
         storm_guard: StormGuard | None = None,
+        notification_dispatcher: Any | None = None,
     ):
         self.config_path = config_path
         self.intent_queue = intent_queue  # Input
@@ -125,6 +127,7 @@ class RiskEngine:
             if hasattr(validator, "_shared_scale_cache"):
                 validator._shared_scale_cache = shared_scale_cache
         self.storm_guard = storm_guard if storm_guard is not None else StormGuard()
+        self._notification_dispatcher = notification_dispatcher
         self._rust_validator = self._init_rust_validator(price_scale_provider)
         self._rust_validator_reason_map = {
             1: "PRICE_ZERO_OR_NEG",
@@ -382,6 +385,7 @@ class RiskEngine:
                             intent,
                             {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                         )
+                        self._check_daily_loss_halt()
                         return RiskDecision(False, intent, reason)
         else:
             for v in self.validators:
@@ -392,7 +396,11 @@ class RiskEngine:
                         intent,
                         {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                     )
+                    self._check_daily_loss_halt()
                     return RiskDecision(False, intent, reason)
+
+        # Check if DailyLossLimitValidator triggered HALT after the validator loop
+        self._check_daily_loss_halt()
 
         self._emit_trace("risk_approve", intent, {"stage": "evaluate"})
         decision = RiskDecision(True, intent)
@@ -538,4 +546,44 @@ class RiskEngine:
         for v in self.validators:
             if isinstance(v, DailyLossLimitValidator):
                 v.record_pnl(strategy_id, pnl_delta)
+                return
+
+    def update_unrealized_pnl(self, unrealized_scaled: int) -> None:
+        """Forward unrealized PnL to the DailyLossLimitValidator."""
+        for v in self.validators:
+            if isinstance(v, DailyLossLimitValidator):
+                v.update_unrealized(unrealized_scaled)
+                return
+
+    def _check_daily_loss_halt(self) -> None:
+        """Check if DailyLossLimitValidator has triggered a HALT; if so, escalate StormGuard.
+
+        Non-blocking: Telegram notification is scheduled via asyncio.create_task so it
+        never delays the evaluate() hot path.
+        """
+        from hft_platform.contracts.strategy import StormGuardState
+
+        if self.storm_guard.state == StormGuardState.HALT:
+            return  # Already in HALT — nothing to do
+
+        for v in self.validators:
+            if isinstance(v, DailyLossLimitValidator) and v.halt_triggered:
+                logger.critical(
+                    "DailyLossLimit HALT triggered — escalating StormGuard to HALT",
+                    accumulated_loss=v._accumulated_loss,
+                    unrealized_pnl=v._unrealized_pnl,
+                )
+                self.storm_guard.trigger_halt("DAILY_LOSS_LIMIT_EXCEEDED")
+
+                dispatcher = self._notification_dispatcher
+                if dispatcher is not None:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            total_pnl = sum(v._accumulated_loss.values()) + v._unrealized_pnl
+                            limit = v._default_max_daily_loss
+                            asyncio.create_task(dispatcher.notify_daily_loss(total_pnl, limit))
+                            asyncio.create_task(dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"))
+                    except RuntimeError:
+                        pass  # No event loop — skip notification (e.g. sync test context)
                 return
