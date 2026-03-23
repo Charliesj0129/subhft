@@ -139,7 +139,7 @@ class TestSessionHookExecution:
         mgr._hook_timeout_s = 0.01
 
         async def slow_hook():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         hooks = [("slow_hook", slow_hook)]
         # Should not raise

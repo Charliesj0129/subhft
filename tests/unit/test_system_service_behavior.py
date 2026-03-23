@@ -387,7 +387,7 @@ async def test_cleanup_tasks():
     sys_obj._teardown_bootstrap = MagicMock()
 
     async def _long():
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.05)
 
     loop = asyncio.get_event_loop()
     t = loop.create_task(_long())

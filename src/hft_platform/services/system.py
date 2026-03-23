@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import os
 from typing import Any, Dict, Optional
 
@@ -179,12 +180,22 @@ class HFTSystem:
             # WU-17: Structured health endpoint
             self._start_service("health_server", self.health_server.run())
 
+            # Disable GC during active trading (HFT Core Law 1: Allocator Law)
+            _gc_disabled = False
+            if os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {"1", "true", "yes", "on"}:
+                gc.disable()
+                _gc_disabled = True
+                logger.info("GC disabled for trading session")
+
             # Start Monitor/Supervisor Loop
             await self._supervise()
 
         except asyncio.CancelledError:
             logger.info("System Stopping...")
         finally:
+            if _gc_disabled:
+                gc.enable()
+                logger.info("GC re-enabled after trading session")
             self.stop()
 
     def _start_service(self, name, coro):
