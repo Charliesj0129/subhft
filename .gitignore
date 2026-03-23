@@ -19,6 +19,7 @@ env/
 .env.remote.local
 .remote-credentials.json
 user_rules.md
+config/settings.py
 
 # Data & Consistency
 .wal/
