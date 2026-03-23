@@ -64,6 +64,8 @@ async def run_monitor(
             is_health_visible,
             poll_health,
         )
+        from hft_platform.monitor._renderer import build_footer, build_help_overlay
+        from hft_platform.monitor._types import Severity as _Severity
 
         layout = Layout()
         header_size = 4 if engine.get_header_context().event_ticker else 3
@@ -87,6 +89,22 @@ async def run_monitor(
             if _health is not None:
                 parts.append(Layout(build_health_panel(_health), size=8, name="health"))
 
+        # Footer help bar (computed before help overlay check)
+        footer_text = build_footer(
+            detail_visible=engine._detail_visible,
+            paused=engine._paused_by_user,
+            has_warnings=any(ss.max_severity >= _Severity.WARN for ss in engine._sym_states),
+            show_help=engine._show_help,
+        )
+
+        # Help overlay replaces main content when active
+        if engine._show_help:
+            layout.split_column(
+                Layout(build_help_overlay(), name="help"),
+                Layout(footer_text, size=1, name="footer"),
+            )
+            return layout
+
         parts.append(Layout(engine.get_table(), name="table"))
 
         # Phase 3: detail panel
@@ -94,6 +112,8 @@ async def run_monitor(
             ss = engine.get_selected_symbol_state()
             detail = build_detail_panel(ss, config, engine._dispatcher.weights)
             parts.append(Layout(detail, size=8, name="detail"))
+
+        parts.append(Layout(footer_text, size=1, name="footer"))
 
         layout.split_column(*parts)
         return layout
@@ -122,14 +142,17 @@ async def run_monitor(
                 live.update(_make_display())
                 break
 
-            # Wait for next poll or stop
-            try:
-                await asyncio.wait_for(
-                    stop_event.wait(),
-                    timeout=config.poll_interval_s,
-                )
-            except asyncio.TimeoutError:
-                pass
+            # Wait for next poll or stop (skip wait if force poll requested)
+            if engine._force_poll:
+                engine._force_poll = False
+            else:
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(),
+                        timeout=config.poll_interval_s,
+                    )
+                except asyncio.TimeoutError:
+                    pass
 
         key_task.cancel()
         try:
@@ -172,8 +195,22 @@ async def _key_listener(engine: MonitorEngine, stop_event: asyncio.Event) -> Non
                 break
             elif char in ("p", "P"):
                 engine.toggle_pause()
-            elif char in ("r", "R"):
+            elif char == "R":
+                engine.request_reconnect()
+            elif char in ("r", "\x12"):  # r or Ctrl+R = full reset
                 engine.reset_session()
+            elif char == " ":
+                engine.request_force_poll()
+            elif char == "x":
+                engine.clear_warnings()
+            elif char == "w":
+                engine.toggle_warning_filter()
+            elif char == "?":
+                engine.toggle_help()
+            elif char == "e":
+                engine.toggle_event_log()
+            elif char == "l":
+                engine.toggle_problem_log()
             elif char in ("s", "S"):
                 engine.cycle_sort_mode()
             elif char in ("c", "C"):

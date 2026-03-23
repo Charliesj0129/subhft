@@ -167,7 +167,8 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 
 | Variable                   | Default     | Purpose                                   |
 | -------------------------- | ----------- | ----------------------------------------- |
-| `HFT_MODE`                 | `sim`       | Runtime mode: `sim` / `live` / `replay`   |
+| `HFT_MODE`                 | `sim`       | Runtime mode: `sim` / `real` / `replay`   |
+| `HFT_ORDER_MODE`           | `sim`       | Order execution: `sim` / `live` (LIVE = real money) |
 | `HFT_SYMBOLS`              | —           | Comma-separated symbol list override      |
 | `HFT_QUOTE_VERSION`        | `auto`      | Shioaji quote protocol version            |
 | `HFT_STRICT_PRICE_MODE`    | `0`         | `1` = reject float prices with TypeError  |

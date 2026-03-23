@@ -3,14 +3,14 @@
 global_limits:
   max_position_notional: 500000000   # 50K NTD x10000
   max_order_size: 1                  # Max 1 lot per order
-  max_daily_loss: 10000000           # 1,000 NTD x10000 = 2% of 50K
+  max_daily_loss: 50000000           # 5,000 NTD x10000
 
 # global_defaults is the key read by risk validators at runtime
 global_defaults:
   max_notional: 500000000            # 50K NTD x10000
   per_symbol_max_notional: 5000000000 # Single symbol = full capital for futures
   max_position_lots: 1               # Max 1 lot open
-  max_daily_loss: 10000000           # 1,000 NTD x10000 (triggers HALT)
+  max_daily_loss: 50000000           # 5,000 NTD x10000 (triggers rejection)
 
 strategies:
   MM_ALPHA_V1:

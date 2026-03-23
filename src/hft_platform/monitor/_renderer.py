@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import math
+import unicodedata
 from typing import Sequence
 
+from rich.panel import Panel
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
 from hft_platform.core import timebase
 from hft_platform.monitor._events import _ALPHA_SHORT, dominant_alpha_label
-from hft_platform.monitor._types import AlphaState, HeaderContext, MonitorConfig, MonitorState, SymbolState
+from hft_platform.monitor._types import (
+    AlphaState,
+    ColumnProfile,
+    HeaderContext,
+    MonitorConfig,
+    MonitorState,
+    Severity,
+    SymbolState,
+    Toast,
+)
 
 # Sparkline Unicode blocks (8 levels)
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
@@ -89,6 +100,11 @@ def build_header(ctx: HeaderContext) -> Text:
     if ctx.source_label:
         src_style = _SRC_STYLES.get(ctx.source_label, _DIM)
         parts.append(f"  |  src: {ctx.source_label}", src_style)
+
+    # Bad-data summary
+    if ctx.bad_summary:
+        _bad_style = Style.parse(ctx.bad_style) if ctx.bad_style else _DIM
+        parts.append(f" | {ctx.bad_summary}", _bad_style)
 
     # Line 2: Event ticker (Phase 1)
     if ctx.event_ticker:
@@ -207,12 +223,18 @@ def _build_symbol_row(
     sym_text = Text(ss.symbol.code)
     if ss.session_label:
         sym_text.append(f" {ss.session_label}", _DIM)
-    if ss.invalid_row_count > 5:
-        sym_text.append(" [!L1]", _YELLOW)
+    if ss.max_severity >= Severity.CRIT:
+        sym_text.append(" \u2716", _BRIGHT_RED)
+    elif ss.max_severity >= Severity.WARN:
+        sym_text.append(" \u26a0", _YELLOW)
     row.append(sym_text)
 
-    # Name (truncated to 6 chars)
-    row.append(Text(ss.symbol.name[:6]))
+    # Name -- CJK-aware truncation + futures contract labels
+    if ss.symbol.product_type == "future":
+        name_display = format_contract_name(ss.symbol.code, ss.symbol.name)
+    else:
+        name_display = truncate_display(ss.symbol.name, 10)
+    row.append(Text(name_display))
 
     # State — compact badges (Phase 2)
     status_text, status_style = _render_symbol_status(ss, config, state, now_ns)
@@ -611,11 +633,205 @@ def _render_symbol_status(
         return "✓", _GREEN
     if ss.tick_count > 0:
         return f"W{ss.tick_count}/{config.warmup_ticks}", _CYAN
-    if ss.session_active and ss.invalid_row_count > 0:
-        return "!L1", _YELLOW
+    if ss.session_active and ss.max_severity >= Severity.CRIT:
+        return "\u2716L1", _BRIGHT_RED
+    if ss.session_active and ss.max_severity >= Severity.WARN:
+        return "\u26a0L1", _YELLOW
     if ss.session_active and ss.session_started_ns > 0:
         ts = now_ns or timebase.now_ns()
         age_s = (ts - ss.session_started_ns) / 1e9
         if age_s >= config.no_data_warn_s:
             return "NO DATA", _YELLOW
     return "WAIT", _DIM
+
+
+# ------------------------------------------------------------------ #
+# Task 8: Footer help bar                                             #
+# ------------------------------------------------------------------ #
+
+
+def build_footer(
+    *,
+    detail_visible: bool,
+    paused: bool,
+    has_warnings: bool,
+    show_help: bool,
+) -> Text:
+    """Build context-aware footer help bar."""
+    if show_help:
+        return Text("Press any key to close", style=_DIM)
+    t = Text()
+    if paused:
+        t.append("[p]", _WHITE)
+        t.append(" resume  ", _DIM)
+        t.append("[Space]", _WHITE)
+        t.append(" single poll  ", _DIM)
+    elif detail_visible:
+        t.append("[l]", _WHITE)
+        t.append(" problem log  ", _DIM)
+        t.append("[e]", _WHITE)
+        t.append(" events  ", _DIM)
+        t.append("[x]", _WHITE)
+        t.append(" clear warns  ", _DIM)
+        t.append("[ESC]", _WHITE)
+        t.append(" close  ", _DIM)
+    elif has_warnings:
+        t.append("[w]", _WHITE)
+        t.append(" warnings only  ", _DIM)
+        t.append("[x]", _WHITE)
+        t.append(" clear  ", _DIM)
+        t.append("[R]", _WHITE)
+        t.append(" reconnect  ", _DIM)
+    else:
+        t.append("[Space]", _WHITE)
+        t.append(" refresh  ", _DIM)
+        t.append("[j/k]", _WHITE)
+        t.append(" nav  ", _DIM)
+        t.append("[d]", _WHITE)
+        t.append(" detail  ", _DIM)
+        t.append("[s]", _WHITE)
+        t.append(" sort  ", _DIM)
+        t.append("[h]", _WHITE)
+        t.append(" health  ", _DIM)
+    t.append("[?]", _WHITE)
+    t.append(" all keys", _DIM)
+    return t
+
+
+# ------------------------------------------------------------------ #
+# Task 9: Help overlay (? key)                                        #
+# ------------------------------------------------------------------ #
+
+
+def build_help_overlay() -> Panel:
+    """Build full-screen help overlay with all keybindings."""
+    content = Text()
+    sections = [
+        (
+            "Navigation",
+            [
+                ("j/k \u2191/\u2193", "Navigate symbols"),
+                ("d/Enter", "Toggle detail panel"),
+                ("ESC", "Close panel / clear"),
+            ],
+        ),
+        (
+            "Data",
+            [
+                ("Space", "Force poll now"),
+                ("s", "Cycle sort mode"),
+                ("w", "Filter warnings only"),
+                ("c", "Toggle closed symbols"),
+                ("e", "Event log overlay"),
+            ],
+        ),
+        (
+            "System",
+            [
+                ("x", "Clear warnings"),
+                ("R", "Reconnect data source"),
+                ("r/Ctrl+R", "Full reset (replay warmup)"),
+                ("h", "Toggle health panel"),
+                ("p", "Pause / resume"),
+                ("q", "Quit"),
+            ],
+        ),
+        (
+            "Detail Panel",
+            [
+                ("l", "Toggle problem log"),
+            ],
+        ),
+    ]
+    for title, keys in sections:
+        content.append(f"\u2500\u2500\u2500 {title} ", _DIM)
+        content.append("\u2500" * (30 - len(title)) + "\n", _DIM)
+        for key, desc in keys:
+            content.append(f"  {key:<12}", _WHITE)
+            content.append(f"{desc}\n", _DIM)
+        content.append("\n")
+    content.append("Press any key to close", _DIM)
+    return Panel(content, title="Keyboard Shortcuts", border_style="dim")
+
+
+# ------------------------------------------------------------------ #
+# Task 10: Toast rendering in header                                  #
+# ------------------------------------------------------------------ #
+
+
+def build_header_with_toast(ctx: HeaderContext, toast: Toast | None = None) -> Text:
+    """Build header text, appending toast notification if active."""
+    parts = build_header(ctx)
+    if toast is not None:
+        now_ns = timebase.now_ns()
+        if toast.expire_ns > now_ns:
+            parts.append("  ", _DIM)
+            parts.append(f" {toast.message} ", Style.parse(toast.style))
+    return parts
+
+
+# ------------------------------------------------------------------ #
+# Task 15: CJK-aware truncation                                      #
+# ------------------------------------------------------------------ #
+
+
+def truncate_display(text: str, max_width: int) -> str:
+    """Truncate string to max_width display columns, CJK-aware."""
+    if not text:
+        return text
+    width = 0
+    for i, ch in enumerate(text):
+        w = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if width + w > max_width:
+            # Need to truncate: go back and add ellipsis
+            # Find the cut point where we can fit ellipsis (1 col)
+            cut_width = 0
+            for j, c in enumerate(text):
+                cw = 2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
+                if cut_width + cw > max_width - 1:
+                    return text[:j] + "\u2026"
+                cut_width += cw
+            return text[:i] + "\u2026"
+        width += w
+    return text
+
+
+# ------------------------------------------------------------------ #
+# Task 16: Contract month readable labels                             #
+# ------------------------------------------------------------------ #
+
+_PRODUCT_NAMES: dict[str, str] = {
+    "TXF": "\u53f0\u6307\u671f",
+    "MXF": "\u5c0f\u53f0\u6307",
+    "TMF": "\u5fae\u53f0\u6307",
+    "EXF": "\u96fb\u5b50\u671f",
+    "FXF": "\u91d1\u878d\u671f",
+    "TGF": "\u53f0\u91d1\u671f",
+}
+_MONTH_MAP: dict[str, str] = {chr(ord("A") + i): f"{i + 1:02d}" for i in range(12)}
+
+
+def format_contract_name(code: str, raw_name: str) -> str:
+    """Convert futures contract code to human-readable name."""
+    if len(code) >= 4:
+        prefix = code[:3]
+        month_char = code[3] if len(code) > 3 else ""
+        product = _PRODUCT_NAMES.get(prefix)
+        month = _MONTH_MAP.get(month_char)
+        if product and month:
+            return f"{product} {month}\u6708"
+    return truncate_display(raw_name, 10)
+
+
+# ------------------------------------------------------------------ #
+# Task 17: Adaptive column widths                                     #
+# ------------------------------------------------------------------ #
+
+
+def compute_column_profile(terminal_width: int) -> ColumnProfile:
+    """Compute column visibility based on terminal width."""
+    if terminal_width < 120:
+        return ColumnProfile(name_width=8, show_drivers=False, show_spark=False, spark_width=0)
+    if terminal_width > 180:
+        return ColumnProfile(name_width=20, show_drivers=True, show_spark=True, spark_width=30)
+    return ColumnProfile(name_width=10, show_drivers=True, show_spark=True, spark_width=20)
