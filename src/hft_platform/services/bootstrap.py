@@ -169,8 +169,7 @@ def validate_order_mode_safety() -> None:
                 order_mode=order_mode,
             )
             raise SystemExit(
-                "HFT_ORDER_MODE=live with HFT_MODE=sim is invalid. "
-                "Set HFT_MODE=real to enable live orders."
+                "HFT_ORDER_MODE=live with HFT_MODE=sim is invalid. Set HFT_MODE=real to enable live orders."
             )
         logger.critical(
             "LIVE ORDER MODE ACTIVE — real money orders will be placed",
