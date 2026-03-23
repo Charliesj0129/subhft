@@ -97,6 +97,8 @@ class TestStormGuardStateMachine(unittest.TestCase):
     def test_recovery_from_halt(self):
         """System can recover from HALT when conditions improve."""
         guard = StormGuard()
+        guard._halt_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
 
         # Trigger HALT
         guard.update(drawdown_bps=-300)
@@ -229,6 +231,8 @@ class TestStormGuardConcurrency(unittest.TestCase):
     def test_rapid_state_changes(self):
         """Test rapid state changes are handled correctly."""
         guard = StormGuard()
+        guard._halt_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
 
         # Rapidly cycle through states
         for _ in range(100):
