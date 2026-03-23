@@ -1,4 +1,7 @@
-"""Tests for LOBStatsEvent edge cases — zero-price truthiness bug (C-1)."""
+"""Tests for LOBStatsEvent edge cases — zero-price truthiness bug (C-1).
+
+Verifies that best_bid=0 or best_ask=0 correctly computes mid_price_x2 and spread_scaled.
+"""
 
 from hft_platform.events import LOBStatsEvent
 
