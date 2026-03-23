@@ -38,6 +38,20 @@ class StormGuard:
     Monitors System Health and Enforces Defcon Levels.
     """
 
+    __slots__ = (
+        "state",
+        "thresholds",
+        "metrics",
+        "last_state_change",
+        "_de_escalate_count",
+        "_storm_entry_ts",
+        "_storm_cooldown_s",
+        "_halt_cooldown_s",
+        "_halt_entry_ts",
+        "_de_escalate_threshold",
+        "_on_halt_callback",
+    )
+
     def __init__(
         self,
         thresholds: RiskThresholds | None = None,
@@ -51,6 +65,8 @@ class StormGuard:
         self._de_escalate_count: int = 0
         self._storm_entry_ts: float = 0.0  # precision-time
         self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
+        self._halt_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "60"))  # precision-time
+        self._halt_entry_ts: float = 0.0  # precision-time
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._on_halt_callback = on_halt_callback
 
@@ -79,6 +95,28 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
+    def _evaluate_target_state(
+        self,
+        drawdown_bps: int,
+        latency_us: int,
+        feed_gap_s: float,  # precision-time (not a price; seconds, float acceptable)
+    ) -> tuple[StormGuardState, str]:
+        """Determine target state from inputs. Priority: HALT > STORM > WARM > NORMAL."""
+        t = self.thresholds
+        if drawdown_bps <= t.halt_drawdown_bps:
+            return StormGuardState.HALT, f"Drawdown {drawdown_bps}bps"
+        if drawdown_bps <= t.storm_drawdown_bps:
+            return StormGuardState.STORM, f"Drawdown {drawdown_bps}bps"
+        if latency_us >= t.latency_storm_us:
+            return StormGuardState.STORM, f"Latency {latency_us}us"
+        if feed_gap_s >= t.feed_gap_halt_s:
+            return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
+        if drawdown_bps <= t.warm_drawdown_bps:
+            return StormGuardState.WARM, "Drawdown Warning"
+        if latency_us >= t.latency_warm_us:
+            return StormGuardState.WARM, "Latency Warning"
+        return StormGuardState.NORMAL, ""
+
     def update(
         self,
         drawdown_bps: int = 0,
@@ -87,40 +125,13 @@ class StormGuard:
     ) -> StormGuardState:
         """
         Evaluate inputs and transition state.
-        Priority: HALT > STORM > WARM > NORMAL
 
         Args:
             drawdown_bps: Drawdown in basis points (1 bps = 0.01% = 0.0001).
-                          E.g. -50 means -0.5%.
             latency_us: Latency in microseconds.
             feed_gap_s: Feed gap in seconds.
         """
-        new_state = StormGuardState.NORMAL
-
-        # 1. HALT Check
-        if drawdown_bps <= self.thresholds.halt_drawdown_bps:
-            new_state = StormGuardState.HALT
-            reason = f"Drawdown {drawdown_bps}bps"
-
-        # 2. STORM Check
-        elif drawdown_bps <= self.thresholds.storm_drawdown_bps:
-            new_state = StormGuardState.STORM
-            reason = f"Drawdown {drawdown_bps}bps"
-        elif latency_us >= self.thresholds.latency_storm_us:
-            new_state = StormGuardState.STORM
-            reason = f"Latency {latency_us}us"
-        elif feed_gap_s >= self.thresholds.feed_gap_halt_s:
-            # Keep feed gap as warning/storm signal but do not HALT on it.
-            new_state = StormGuardState.STORM
-            reason = f"Feed Gap {feed_gap_s:.3f}s"
-
-        # 3. WARM Check
-        elif drawdown_bps <= self.thresholds.warm_drawdown_bps:
-            new_state = StormGuardState.WARM
-            reason = "Drawdown Warning"
-        elif latency_us >= self.thresholds.latency_warm_us:
-            new_state = StormGuardState.WARM
-            reason = "Latency Warning"
+        new_state, reason = self._evaluate_target_state(drawdown_bps, latency_us, feed_gap_s)
 
         # Transition Logic (with hysteresis protection for de-escalation)
         now = timebase.now_s()
@@ -129,18 +140,18 @@ class StormGuard:
             self._de_escalate_count = 0
             if new_state >= StormGuardState.STORM and self.state < StormGuardState.STORM:
                 self._storm_entry_ts = now
+            if new_state == StormGuardState.HALT:
+                self._halt_entry_ts = now
             self.transition(new_state, reason)
         elif new_state < self.state:
-            # Keep manual HALT recovery compatible with legacy tests/flows:
-            # when all signals are clear, allow immediate step-down from HALT.
+            # De-escalation from any elevated state requires cooldown + N consecutive clears
             if self.state == StormGuardState.HALT:
-                self._de_escalate_count = 0
-                self.transition(new_state, "Recovery")
-                return self.state
-            # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
-            cooldown_ok = (
-                (now - self._storm_entry_ts) >= self._storm_cooldown_s if self.state >= StormGuardState.STORM else True
-            )
+                cooldown_ok = (now - self._halt_entry_ts) >= self._halt_cooldown_s
+            elif self.state >= StormGuardState.STORM:
+                cooldown_ok = (now - self._storm_entry_ts) >= self._storm_cooldown_s
+            else:
+                cooldown_ok = True
+
             if cooldown_ok:
                 self._de_escalate_count += 1
                 if self._de_escalate_count >= self._de_escalate_threshold:
@@ -151,7 +162,9 @@ class StormGuard:
                         "StormGuard de-escalated after hysteresis",
                         from_state=old_for_log.name,
                         to_state=new_state.name,
-                        cooldown_s=self._storm_cooldown_s,
+                        cooldown_s=self._halt_cooldown_s
+                        if old_for_log == StormGuardState.HALT
+                        else self._storm_cooldown_s,
                         threshold=self._de_escalate_threshold,
                     )
             else:

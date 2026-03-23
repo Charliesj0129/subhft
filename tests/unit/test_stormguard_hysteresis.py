@@ -176,14 +176,24 @@ def test_stormguard_fsm_hysteresis():
     assert fsm.state == StormGuardState.NORMAL
 
 
-def test_stormguard_fsm_halt_immediate_recovery():
-    """FSM: HALT → NORMAL must be immediate (no cooldown or N-count), to allow cancel draining."""
-    fsm = _make_fsm(cooldown_s=9999.0, de_n=99)  # huge hysteresis to prove bypass
+def test_stormguard_fsm_halt_requires_cooldown_and_clears():
+    """FSM: HALT de-escalation requires halt_cooldown elapsed + N consecutive clears."""
+    fsm = _make_fsm(cooldown_s=9999.0, de_n=2)
+    fsm._halt_cooldown_s = 10.0
 
     # Escalate to HALT via PnL
     fsm.update_pnl(-1_100_000)
     assert fsm.state == StormGuardState.HALT
 
-    # Single recovery update: even with huge cooldown/N, should step down immediately
+    # Single recovery update: should NOT step down (cooldown not elapsed)
     fsm.update_pnl(0)
-    assert fsm.state == StormGuardState.NORMAL, "HALT recovery must bypass hysteresis"
+    assert fsm.state == StormGuardState.HALT, "HALT must not de-escalate before cooldown"
+
+    # Simulate time past halt cooldown
+    import time
+
+    fsm._halt_entry_ts = time.monotonic() - 11.0
+    fsm.update_pnl(0)  # 1st clear after cooldown
+    assert fsm.state == StormGuardState.HALT
+    fsm.update_pnl(0)  # 2nd clear — meets de_n=2
+    assert fsm.state == StormGuardState.NORMAL

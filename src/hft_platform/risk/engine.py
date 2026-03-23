@@ -62,6 +62,31 @@ def _get_trace_sampler() -> Any | None:
 
 
 class RiskEngine:
+    __slots__ = (
+        "config_path",
+        "intent_queue",
+        "order_queue",
+        "running",
+        "config",
+        "metrics",
+        "latency",
+        "_reject_metric_cache",
+        "_reject_metric_cache_owner_id",
+        "_reject_metric_counter",
+        "_reject_metric_sample_every",
+        "validators",
+        "storm_guard",
+        "_rust_validator",
+        "_rust_validator_reason_map",
+        "_cmd_id_lock_enabled",
+        "_cmd_id_lock",
+        "_monotonic_cmd_id",
+        "_fast_gate",
+        "_fast_gate_reason_map",
+        "_trace_sampler",
+        "__dict__",
+    )
+
     def __init__(
         self,
         config_path: str,

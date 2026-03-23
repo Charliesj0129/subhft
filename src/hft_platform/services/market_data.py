@@ -381,7 +381,6 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
         self._init_feature_shadow_engine()
         self._init_shm_publisher()
-        self._init_redis_live_publisher()
 
     def _init_shm_publisher(self) -> None:
         """Initialise optional SHM publisher for monitor snapshots."""
@@ -403,52 +402,6 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         except Exception as exc:
             logger.warning("shm_publisher_init_failed", error=str(exc))
             self._shm_publisher = None
-
-    def _init_redis_live_publisher(self) -> None:
-        """Initialise optional Redis live publisher for signal monitor TUI."""
-        from hft_platform.monitor._redis_publish import MonitorLivePublisher
-
-        self._redis_live_publisher: MonitorLivePublisher | None = None
-        if os.getenv("HFT_MONITOR_LIVE_ENABLED", "0").lower() not in {"1", "true", "yes", "on"}:
-            return
-        host = os.getenv("HFT_MONITOR_REDIS_HOST", "redis")
-        port = int(os.getenv("HFT_MONITOR_REDIS_PORT", "6379"))
-        password = os.getenv("HFT_MONITOR_REDIS_PASSWORD", os.getenv("REDIS_PASSWORD", ""))
-        try:
-            self._redis_live_publisher = MonitorLivePublisher(host=host, port=port, password=password)
-            self._redis_live_publisher.start()
-            logger.info("redis_live_publisher_enabled", host=host, port=port)
-        except Exception as exc:
-            logger.warning("redis_live_publisher_init_failed", error=str(exc))
-            self._redis_live_publisher = None
-
-    def _publish_to_redis_live(self, event: object) -> None:
-        """Best-effort publish BidAsk events to Redis for live monitor."""
-        publisher = self._redis_live_publisher
-        if publisher is None:
-            return
-        if not isinstance(event, BidAskEvent):
-            return
-        bids = event.bids
-        asks = event.asks
-        if bids is None or asks is None:
-            return
-        import numpy as np
-
-        bids_arr: np.ndarray = bids  # type: ignore[assignment]
-        asks_arr: np.ndarray = asks  # type: ignore[assignment]
-        publisher.publish_market_data(
-            {
-                "symbol": event.symbol,
-                "ingest_ts": getattr(getattr(event, "meta", None), "ingest_ts", 0) or timebase.now_ns(),
-                "bids_price": bids_arr[:, 0].tolist(),
-                "asks_price": asks_arr[:, 0].tolist(),
-                "bids_vol": bids_arr[:, 1].tolist(),
-                "asks_vol": asks_arr[:, 1].tolist(),
-                "price_scaled": int(getattr(event, "price", 0) or 0),
-                "volume": int(getattr(event, "volume", 0) or 0),
-            }
-        )
 
     # -- main loop -----------------------------------------------------------
 
@@ -686,7 +639,6 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             self._record_direct_event(event)
 
         self._publish_events(event, stats, feature_update)
-        self._publish_to_redis_live(event)
 
     # -- helpers for _process_raw -------------------------------------------
 

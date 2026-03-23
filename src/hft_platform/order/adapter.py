@@ -47,6 +47,42 @@ def _get_trace_sampler() -> Any | None:
 
 
 class OrderAdapter:
+    __slots__ = (
+        "config_path",
+        "order_queue",
+        "client",
+        "_broker_codec",
+        "order_id_map",
+        "_order_id_map_lock",
+        "_order_id_map_max_size",
+        "running",
+        "metrics",
+        "latency",
+        "_metadata",
+        "price_codec",
+        "live_orders",
+        "_live_orders_lock",
+        "rate_limiter",
+        "circuit_breaker",
+        "order_id_resolver",
+        "_api_timeout_s",
+        "_api_guard_timeout_s",
+        "_api_max_inflight",
+        "_api_semaphore",
+        "_api_queue_max",
+        "_api_queue",
+        "_api_coalesce_window_s",
+        "_api_pending",
+        "_api_worker_task",
+        "_supports_typed_command_ingress",
+        "_trace_sampler",
+        "_dlq",
+        "per_symbol_rate_limiter",
+        "strategy_cb_mgr",
+        "shadow_sink",
+        "__dict__",  # needed for test monkey-patching
+    )
+
     def __init__(
         self,
         config_path: str,
