@@ -84,12 +84,14 @@ class Position:
         """Descale fees for display purposes only."""
         return self.fees_scaled / scale if scale else 0.0
 
-    def update(self, fill: FillEvent, scale: int = 1) -> None:
+    def update(self, fill: FillEvent, scale: int = 1, contract_multiplier: int = 1) -> None:
         """Update position with fill using integer-only arithmetic.
 
         Args:
             fill: The fill event with price already in scaled integer form.
             scale: Price scale factor (kept for API compat, but fill.price is already scaled).
+            contract_multiplier: Contract point value multiplier. Stocks=1, futures=point_value.
+                For TMF (微台指) = 10, MXF (小台指) = 50, TXF (台指期) = 200.
         """
         # fill.price is already in fixed-point scaled integer
         fill_qty = fill.qty
@@ -112,12 +114,13 @@ class Position:
             close_qty = min(abs(self.net_qty), fill_qty)
 
             # PnL calculation using integer arithmetic
-            # PnL = (Exit Price - Entry Price) * Qty for LONG
-            # PnL = (Entry Price - Exit Price) * Qty for SHORT
+            # PnL = (Exit Price - Entry Price) * Qty * ContractMultiplier for LONG
+            # PnL = (Entry Price - Exit Price) * Qty * ContractMultiplier for SHORT
+            # Stocks: multiplier=1, Futures: multiplier=point_value (e.g. TMF=10, MXF=50, TXF=200)
             if is_buy:  # Covering a SHORT
-                pnl = (self.avg_price_scaled - fill_price_scaled) * close_qty
+                pnl = (self.avg_price_scaled - fill_price_scaled) * close_qty * contract_multiplier
             else:  # Selling a LONG
-                pnl = (fill_price_scaled - self.avg_price_scaled) * close_qty
+                pnl = (fill_price_scaled - self.avg_price_scaled) * close_qty * contract_multiplier
 
             self.realized_pnl_scaled += pnl
 
@@ -238,6 +241,7 @@ class PositionStore:
         tracker = self._rust_tracker
         if tracker is None:
             raise RuntimeError("Rust position tracker unavailable")
+        multiplier = self.metadata.contract_multiplier(fill.symbol)
         net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled = tracker.update(
             key,
             int(fill.side),
@@ -246,6 +250,7 @@ class PositionStore:
             fill.fee,
             fill.tax,
             fill.match_ts_ns,
+            multiplier,
         )
 
         # Keep Python-visible cache in sync for tests/debugging/metrics parity.
@@ -300,8 +305,9 @@ class PositionStore:
             self.positions[key] = Position(fill.account_id, fill.strategy_id, fill.symbol)
 
         pos = self.positions[key]
-        # Pass scale for API compat, but Position.update() uses fill.price directly (already scaled)
-        pos.update(fill)
+        # Pass contract_multiplier for futures PnL: stocks=1, futures=point_value
+        multiplier = self.metadata.contract_multiplier(fill.symbol)
+        pos.update(fill, contract_multiplier=multiplier)
         if self._log_fills:
             logger.info("Fill processed", key=key, net_qty=pos.net_qty, pnl=pos.realized_pnl_scaled)
 
