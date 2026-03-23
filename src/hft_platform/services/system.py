@@ -11,6 +11,7 @@ from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
+from hft_platform.services.heartbeat import write_heartbeat
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
@@ -337,6 +338,9 @@ class HFTSystem:
         loop = asyncio.get_running_loop()
         interval_s = 1.0
         last_tick = loop.time()
+        _heartbeat_path = os.getenv("HFT_HEARTBEAT_PATH", "/tmp/hft-heartbeat")
+        _heartbeat_interval_ticks = int(os.getenv("HFT_HEARTBEAT_INTERVAL_S", "30"))
+        _heartbeat_tick = 0
 
         while self.running:
             await asyncio.sleep(interval_s)  # 1Hz Tick
@@ -451,6 +455,12 @@ class HFTSystem:
                 metrics.execution_router_heartbeat_ts.set(now)
             if t_gateway and not t_gateway.done():
                 metrics.execution_gateway_heartbeat_ts.set(now)
+
+            # File-based heartbeat for watchdog monitoring (every ~30s)
+            _heartbeat_tick += 1
+            if _heartbeat_tick >= _heartbeat_interval_ticks:
+                _heartbeat_tick = 0
+                write_heartbeat(_heartbeat_path)
 
             # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
