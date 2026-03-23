@@ -404,20 +404,21 @@ class TestStormGuardFaultInjection:
     def test_stormguard_halt_to_normal_recovery(self, tmp_path):
         """StormGuard can recover from HALT to NORMAL."""
         from hft_platform.contracts.strategy import StormGuardState
-        from hft_platform.risk.validators import StormGuardFSM
+        from hft_platform.risk.storm_guard import StormGuard
 
-        config = yaml.safe_load(open(_risk_config(tmp_path)))
-        with patch("hft_platform.risk.validators.MetricsRegistry") as mock_mr:
+        with patch("hft_platform.risk.storm_guard.MetricsRegistry") as mock_mr:
             mock_mr.get.return_value = _mock_metrics()
 
-            fsm = StormGuardFSM(config)
+            guard = StormGuard()
+            guard._halt_cooldown_s = 0.0
+            guard._de_escalate_threshold = 1
             # Drive to HALT
-            fsm.update_pnl(-2_000_000)
-            assert fsm.state == StormGuardState.HALT
+            guard.trigger_halt("test")
+            assert guard.state == StormGuardState.HALT
 
-            # Recover: PnL back to zero triggers immediate step-down from HALT
-            fsm.update_pnl(0)
-            assert fsm.state == StormGuardState.NORMAL
+            # Recover
+            guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+            assert guard.state == StormGuardState.NORMAL
 
 
 @pytest.mark.integration
