@@ -267,7 +267,9 @@
     "title": "amm fee mechanisms formal approach"
   },
   "026": {
-    "alphas": ["queue_acceleration"],
+    "alphas": [
+      "queue_acceleration"
+    ],
     "arxiv_id": "2601.23172",
     "note_file": "research/knowledge/notes/026_unified_theory_order_flow_impact.md",
     "ref": "026",
@@ -333,7 +335,9 @@
     "title": "design empirical study llm reits"
   },
   "032": {
-    "alphas": ["depth_ratio_log"],
+    "alphas": [
+      "depth_ratio_log"
+    ],
     "arxiv_id": "2601.19369",
     "note_file": "research/knowledge/notes/032_directional_liquidity_geometric_shear.md",
     "ref": "032",
@@ -405,7 +409,9 @@
     "title": "rl finance review"
   },
   "039": {
-    "alphas": ["depth_velocity_diff"],
+    "alphas": [
+      "depth_velocity_diff"
+    ],
     "note_file": "research/knowledge/notes/039_intraday_lob_markov.md",
     "ref": "039",
     "status": "reviewed",
@@ -817,7 +823,9 @@
     "title": "llm multi agent reits"
   },
   "080": {
-    "alphas": ["depth_shock"],
+    "alphas": [
+      "depth_shock"
+    ],
     "note_file": "research/knowledge/notes/080_directional_liquidity_shear.md",
     "ref": "080",
     "status": "reviewed",
@@ -909,7 +917,9 @@
     "title": "prediction market bench"
   },
   "089": {
-    "alphas": ["flow_persistence"],
+    "alphas": [
+      "flow_persistence"
+    ],
     "note_file": "research/knowledge/notes/089_realised_quantile_variance.md",
     "ref": "089",
     "status": "reviewed",
@@ -1354,7 +1364,7 @@
       "microstructure"
     ],
     "title": "Detecting Toxic Flow",
-    "authors": "Álvaro Cartea, Gerardo Durán-Martín, Leandro Sánchez-Betancourt",
+    "authors": "\u00c1lvaro Cartea, Gerardo Dur\u00e1n-Mart\u00edn, Leandro S\u00e1nchez-Betancourt",
     "year": 2023
   },
   "130": {
@@ -1392,7 +1402,7 @@
       "microstructure"
     ],
     "title": "A Simple Strategy to Deal with Toxic Flow",
-    "authors": "Álvaro Cartea, Leandro Sánchez-Betancourt",
+    "authors": "\u00c1lvaro Cartea, Leandro S\u00e1nchez-Betancourt",
     "year": 2025
   },
   "132": {
@@ -1411,7 +1421,7 @@
       "microstructure"
     ],
     "title": "Brokers and Informed Traders: Dealing with Toxic Flow and Extracting Trading Signals",
-    "authors": "Álvaro Cartea, Leandro Sánchez-Betancourt",
+    "authors": "\u00c1lvaro Cartea, Leandro S\u00e1nchez-Betancourt",
     "year": 2024,
     "journal": "SIAM Journal on Financial Mathematics 16(2), 243-270"
   },

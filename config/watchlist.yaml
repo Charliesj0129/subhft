@@ -11,37 +11,37 @@ monitor:
 symbols:
   # === Futures (night + day) — D6 = April 2026 front month ===
   - code: MXFD6
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: TMFD6
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: TXFD6
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   # === Top Stocks (day session) ===
   - code: "2330"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2317"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2454"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2881"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2882"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2886"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2891"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "1301"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "1303"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2303"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2412"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "3008"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "3034"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: "2603"
-    alpha_ids: [queue_imbalance, microprice_momentum, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []

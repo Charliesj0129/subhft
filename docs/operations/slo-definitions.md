@@ -1,6 +1,6 @@
 # SLO Definitions — TXFD6 Production
 
-Service Level Objectives for the TXFD6 + queue_imbalance production deployment.
+Service Level Objectives for the TXFD6 production deployment.
 
 ## SLO Summary
 

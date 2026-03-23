@@ -3,7 +3,18 @@ import os
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hft_platform.recorder.loader import WALLoaderService
+
+# These tests exercise WAL loading/archiving, not dedup logic.
+# Explicitly disable dedup to isolate concerns.
+pytestmark = pytest.mark.usefixtures("_disable_wal_dedup")
+
+
+@pytest.fixture(autouse=False)
+def _disable_wal_dedup(monkeypatch):
+    monkeypatch.setenv("HFT_WAL_DEDUP_ENABLED", "0")
 
 
 def test_wal_loader_processes_and_archives(tmp_path):

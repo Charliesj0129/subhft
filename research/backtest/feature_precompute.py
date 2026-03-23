@@ -29,16 +29,8 @@ REQUIRED_FIELDS: frozenset[str] = frozenset(
 
 KNOWN_ALPHA_IDS: frozenset[str] = frozenset(
     [
-        "queue_imbalance",
-        "microprice_momentum",
-        "ofi_regime",
-        # New top-performing alphas from large-scale exploration
         "toxicity_timescale_div",
         "microprice_spread_ratio",
-        "cross_ema_qi",
-        "depth_velocity_diff",
-        "cum_ofi_revert",
-        "adverse_momentum",
         "ofi_asymmetry",
     ]
 )
@@ -197,14 +189,6 @@ def precompute_alpha_features_vectorized(
     bid_qty = np.asarray(data["bid_qty"], dtype=np.float64)
     ask_qty = np.asarray(data["ask_qty"], dtype=np.float64)
 
-    if alpha_id == "queue_imbalance":
-        return _vectorized_queue_imbalance(bid_qty, ask_qty)
-    if alpha_id == "microprice_momentum":
-        bid_px = np.asarray(data["bid_px"], dtype=np.float64)
-        ask_px = np.asarray(data["ask_px"], dtype=np.float64)
-        return _vectorized_microprice_momentum(bid_px, ask_px, bid_qty, ask_qty)
-    if alpha_id == "ofi_regime":
-        return _vectorized_ofi_regime(bid_qty, ask_qty)
     if alpha_id == "toxicity_timescale_div":
         spread = np.asarray(data["spread_bps"], dtype=np.float64)
         return _vectorized_toxicity_timescale_div(bid_qty, ask_qty, spread)
@@ -212,69 +196,10 @@ def precompute_alpha_features_vectorized(
         bid_px = np.asarray(data["bid_px"], dtype=np.float64)
         ask_px = np.asarray(data["ask_px"], dtype=np.float64)
         return _vectorized_microprice_spread_ratio(bid_px, ask_px, bid_qty, ask_qty)
-    if alpha_id == "cross_ema_qi":
-        return _vectorized_cross_ema_qi(bid_qty, ask_qty)
-    if alpha_id == "depth_velocity_diff":
-        return _vectorized_depth_velocity_diff(bid_qty, ask_qty)
-    if alpha_id == "cum_ofi_revert":
-        return _vectorized_cum_ofi_revert(bid_qty, ask_qty)
-    if alpha_id == "adverse_momentum":
-        mid = np.asarray(data["mid_price"], dtype=np.float64)
-        return _vectorized_adverse_momentum(bid_qty, ask_qty, mid)
     if alpha_id == "ofi_asymmetry":
         return _vectorized_ofi_asymmetry(bid_qty, ask_qty)
     msg = f"Vectorized path not implemented for {alpha_id!r}"
     raise NotImplementedError(msg)
-
-
-def _vectorized_queue_imbalance(
-    bid_qty: NDArray[np.float64],
-    ask_qty: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """QI = EMA_8((bid_qty - ask_qty) / (bid_qty + ask_qty + 1e-8))."""
-    raw = (bid_qty - ask_qty) / (bid_qty + ask_qty + 1e-8)
-    return _ema_vectorized(raw, _EMA_ALPHA_8)
-
-
-def _vectorized_microprice_momentum(
-    bid_px: NDArray[np.float64],
-    ask_px: NDArray[np.float64],
-    bid_qty: NDArray[np.float64],
-    ask_qty: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """MM = EMA_8(diff(microprice_x2) / max(spread_scaled, 1))."""
-    total_qty = bid_qty + ask_qty
-    # Avoid division by zero
-    safe_total = np.where(total_qty > 0, total_qty, 1.0)
-    microprice_x2 = (bid_px * ask_qty + ask_px * bid_qty) / safe_total
-
-    delta = np.empty_like(microprice_x2)
-    delta[0] = 0.0
-    delta[1:] = np.diff(microprice_x2)
-
-    spread_scaled = np.abs(ask_px - bid_px)
-    denom = np.maximum(spread_scaled, 1.0)
-    raw = delta / denom
-
-    return _ema_vectorized(raw, _EMA_ALPHA_8)
-
-
-def _vectorized_ofi_regime(
-    bid_qty: NDArray[np.float64],
-    ask_qty: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """OFI regime: ofi_ema8 * clip(vol16 / base64, 0.5, 2.0)."""
-    total = np.maximum(bid_qty + ask_qty, 1.0)
-    ofi = (bid_qty - ask_qty) / total
-
-    ofi_ema8 = _ema_vectorized(ofi, _EMA_ALPHA_8)
-    vol16 = _ema_vectorized(np.abs(ofi), _EMA_ALPHA_16)
-    base64 = _ema_vectorized(np.abs(ofi), _EMA_ALPHA_64)
-
-    safe_base = np.where(base64 > 1e-12, base64, 1e-12)
-    rf = np.clip(vol16 / safe_base, 0.5, 2.0)
-
-    return ofi_ema8 * rf
 
 
 # ---------------------------------------------------------------------------
@@ -315,73 +240,6 @@ def _vectorized_microprice_spread_ratio(
 
 
 # ---------------------------------------------------------------------------
-# Vectorized: cross_ema_qi
-# ---------------------------------------------------------------------------
-def _vectorized_cross_ema_qi(
-    bid_qty: NDArray[np.float64],
-    ask_qty: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """Fast-slow QI crossover. IC=+0.077, IR=2.00, 26/26."""
-    qi = (bid_qty - ask_qty) / (bid_qty + ask_qty + 1e-8)
-    return np.clip(
-        _ema_vectorized(qi, _EMA_ALPHA_4) - _ema_vectorized(qi, _EMA_ALPHA_16),
-        -1.0,
-        1.0,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Vectorized: depth_velocity_diff
-# ---------------------------------------------------------------------------
-def _vectorized_depth_velocity_diff(
-    bid_qty: NDArray[np.float64],
-    ask_qty: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """Bid-ask depth change velocity difference. IC=+0.071, IR=2.19, 26/26."""
-    d_bid = np.diff(bid_qty, prepend=bid_qty[0])
-    d_ask = np.diff(ask_qty, prepend=ask_qty[0])
-    raw = d_bid - d_ask
-    ema_raw = _ema_vectorized(raw, _EMA_ALPHA_8)
-    ema_abs = _ema_vectorized(np.abs(raw), _EMA_ALPHA_32)
-    return np.clip(ema_raw / np.maximum(ema_abs, 1e-8), -2.0, 2.0)
-
-
-# ---------------------------------------------------------------------------
-# Vectorized: cum_ofi_revert
-# ---------------------------------------------------------------------------
-def _vectorized_cum_ofi_revert(
-    bid_qty: NDArray[np.float64],
-    ask_qty: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """Cumulative OFI mean-reversion. IC=-0.135, IR=5.17."""
-    ofi = np.diff(bid_qty, prepend=bid_qty[0]) - np.diff(ask_qty, prepend=ask_qty[0])
-    cum_ofi = np.cumsum(ofi)
-    ema_cum = _ema_vectorized(cum_ofi, _EMA_ALPHA_64)
-    ema_abs_cum = _ema_vectorized(np.abs(cum_ofi), _EMA_ALPHA_64)
-    return np.clip(-(cum_ofi - ema_cum) / np.maximum(ema_abs_cum, 1e-8), -2.0, 2.0)
-
-
-# ---------------------------------------------------------------------------
-# Vectorized: adverse_momentum
-# ---------------------------------------------------------------------------
-def _vectorized_adverse_momentum(
-    bid_qty: NDArray[np.float64],
-    ask_qty: NDArray[np.float64],
-    mid: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """OFI→return residual: hidden alpha process detection. IC=+0.058, IR=2.00."""
-    ofi = np.diff(bid_qty, prepend=bid_qty[0]) - np.diff(ask_qty, prepend=ask_qty[0])
-    ofi_ema8 = _ema_vectorized(ofi, _EMA_ALPHA_8)
-    d_mid = np.diff(mid, prepend=mid[0])
-    cov = _ema_vectorized(ofi_ema8 * d_mid, _EMA_ALPHA_32)
-    var = _ema_vectorized(ofi_ema8 ** 2, _EMA_ALPHA_32) + 1e-8
-    beta = cov / var
-    residual = d_mid - beta * ofi_ema8
-    raw = np.sign(ofi_ema8) * np.abs(residual)
-    return np.clip(_ema_vectorized(raw, _EMA_ALPHA_8), -2.0, 2.0)
-
-
-# ---------------------------------------------------------------------------
 # Vectorized: ofi_asymmetry
 # ---------------------------------------------------------------------------
 def _vectorized_ofi_asymmetry(
@@ -414,13 +272,8 @@ def precompute_all_mm_features(
 
     if alpha_ids is None:
         alpha_ids = [
-            "queue_imbalance",
             "toxicity_timescale_div",
             "microprice_spread_ratio",
-            "cross_ema_qi",
-            "depth_velocity_diff",
-            "adverse_momentum",
-            "cum_ofi_revert",
             "ofi_asymmetry",
         ]
 
