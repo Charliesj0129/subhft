@@ -118,6 +118,10 @@ def enrich_tick(
     sym_state.cursor_ts_ns = max(sym_state.cursor_ts_ns, row.ingest_ts)
     # S7: append mid_price to price sparkline
     sym_state.price_sparkline_append(mid)
+    # History sparklines for detail dashboard
+    sym_state.vol_sparkline_append(float(row.volume))
+    sym_state.spread_sparkline_append(spread_bps)
+    sym_state.imbal_sparkline_append(imbalance)
 
     # Mutate pre-allocated payload buffer in-place
     buf = sym_state._payload_buf
@@ -187,6 +191,10 @@ def enrich_from_snapshot(
     sym_state.cursor_ts_ns = max(sym_state.cursor_ts_ns, slot.ts_ns)
     # S7: append mid_price to price sparkline
     sym_state.price_sparkline_append(mid)
+    # History sparklines for detail dashboard
+    sym_state.spread_sparkline_append(spread_bps)
+    sym_state.imbal_sparkline_append(imbalance)
+    sym_state.vol_sparkline_append(0.0)  # SHM doesn't provide per-tick volume
 
     buf = sym_state._payload_buf
     buf["bid_px"] = bid_px

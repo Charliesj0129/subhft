@@ -2,7 +2,6 @@
 
 from hft_platform.monitor._renderer import format_contract_name, truncate_display
 
-
 # ---- truncate_display ---- #
 
 
