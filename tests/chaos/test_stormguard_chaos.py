@@ -293,7 +293,7 @@ class TestStormGuardChaos:
     # 11. Feed gap triggers STORM (not HALT) ---------------------------------
     def test_feed_gap_storm_trigger(self):
         """Feed gap >= threshold triggers STORM (architecture: feed gap does not HALT)."""
-        guard = StormGuard(thresholds=RiskThresholds(feed_gap_halt_s=1.0))
+        guard = StormGuard(thresholds=RiskThresholds(feed_gap_storm_s=1.0))
         state = guard.update(feed_gap_s=1.5)
         assert state == StormGuardState.STORM
 

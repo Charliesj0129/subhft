@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import os
 from typing import Any, Dict, Optional
 
@@ -179,12 +180,22 @@ class HFTSystem:
             # WU-17: Structured health endpoint
             self._start_service("health_server", self.health_server.run())
 
+            # GC disable for trading session (reduces tail latency)
+            if os.getenv("HFT_GC_DISABLE_TRADING", "1").lower() not in {"0", "false", "no", "off"}:
+                gc.disable()
+                gc.collect()
+                logger.info("GC disabled for trading session")
+
             # Start Monitor/Supervisor Loop
             await self._supervise()
 
         except asyncio.CancelledError:
             logger.info("System Stopping...")
         finally:
+            if not gc.isenabled():
+                gc.enable()
+                gc.collect()
+                logger.info("GC re-enabled after trading session")
             self.stop()
 
     def _start_service(self, name, coro):

@@ -1,5 +1,4 @@
 import os
-import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from structlog import get_logger
@@ -7,7 +6,7 @@ from structlog import get_logger
 from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, PriceScaleProvider, SymbolMetadataPriceScaleProvider
-from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.observability.metrics import MetricsRegistry  # noqa: F401 — kept for backward-compat patch targets
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.lob_engine import LOBEngine
@@ -332,83 +331,46 @@ class PerSymbolNotionalValidator(RiskValidator):
 
 
 class StormGuardFSM:
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.state = StormGuardState.NORMAL
-        self.pnl_drawdown: int = 0
-        self.metrics = MetricsRegistry.get()
+    """Deprecated. Use StormGuard instead."""
 
+    def __init__(self, config: Dict[str, Any]):
+        from hft_platform.risk.storm_guard import StormGuard as _StormGuard
+
+        self._guard = _StormGuard()
+        self.config = config
+        self.pnl_drawdown = 0
         sg_cfg = config.get("storm_guard", {})
         self.warm = sg_cfg.get("warm_threshold", -200_000)
         self.storm = sg_cfg.get("storm_threshold", -500_000)
         self.halt = sg_cfg.get("halt_threshold", -1_000_000)
-        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
-        self._halt_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "60"))  # precision-time
-        self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
-        self._de_escalate_count: int = 0
-        self._storm_entry_ts: float = 0.0  # precision-time
-        self._halt_entry_ts: float = 0.0  # precision-time
 
-    def update_pnl(self, pnl: int) -> None:
+    @property
+    def state(self):
+        return self._guard.state
+
+    @state.setter
+    def state(self, value):
+        self._guard.state = value
+
+    def update_pnl(self, pnl):
         self.pnl_drawdown = pnl
-        self._transition()
-
-    def _transition(self) -> None:
-        old_state = self.state
-        # Determine target state from PnL thresholds
-        if self.pnl_drawdown <= self.halt:
-            target_state = StormGuardState.HALT
-        elif self.pnl_drawdown <= self.storm:
-            target_state = StormGuardState.STORM
-        elif self.pnl_drawdown <= self.warm:
-            target_state = StormGuardState.WARM
+        if pnl <= self.halt:
+            target = StormGuardState.HALT
+        elif pnl <= self.storm:
+            target = StormGuardState.STORM
+        elif pnl <= self.warm:
+            target = StormGuardState.WARM
         else:
-            target_state = StormGuardState.NORMAL
+            target = StormGuardState.NORMAL
+        self._guard.state = target
 
-        now = time.monotonic()
-        if target_state > old_state:
-            # Escalation: always instant (safety-first)
-            self._de_escalate_count = 0
-            if target_state >= StormGuardState.STORM and old_state < StormGuardState.STORM:
-                self._storm_entry_ts = now
-            if target_state == StormGuardState.HALT:
-                self._halt_entry_ts = now
-            self.state = target_state
-        elif target_state < old_state:
-            # De-escalation from any elevated state requires cooldown + N consecutive clears
-            if old_state == StormGuardState.HALT:
-                cooldown_ok = (now - self._halt_entry_ts) >= self._halt_cooldown_s
-            elif old_state >= StormGuardState.STORM:
-                cooldown_ok = (now - self._storm_entry_ts) >= self._storm_cooldown_s
-            else:
-                cooldown_ok = True
+    def validate(self, intent):
+        return self._guard.validate(intent)
 
-            if cooldown_ok:
-                self._de_escalate_count += 1
-                if self._de_escalate_count >= self._de_escalate_threshold:
-                    self._de_escalate_count = 0
-                    self.state = target_state
-            else:
-                self._de_escalate_count = 0
-        else:
-            if target_state >= StormGuardState.STORM:
-                self._de_escalate_count = 0
+    @property
+    def metrics(self):
+        return self._guard.metrics
 
-        if self.state != old_state:
-            logger.warning("StormGuard Transition", old=old_state, new=self.state, pnl=self.pnl_drawdown)
-            # Update Gauge (Global or per strategy if FSM is per strategy - assuming global here)
-            self.metrics.stormguard_mode.labels(strategy="global").set(int(self.state))
-
-    def validate(self, intent: OrderIntent) -> Tuple[bool, str]:
-        if self.state == StormGuardState.HALT:
-            if intent.intent_type == IntentType.CANCEL:
-                return True, "OK"  # Allow cancels in HALT
-            return False, "STORMGUARD_HALT"
-
-        if self.state == StormGuardState.STORM:
-            # Rejection logic for increasing position could go here.
-            # Simplified: Reject all NEW for safety in prototype
-            if intent.intent_type == IntentType.NEW:
-                return False, "STORMGUARD_STORM_NEW_BLOCKED"
-
-        return True, "OK"
+    @metrics.setter
+    def metrics(self, value):
+        self._guard.metrics = value

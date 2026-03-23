@@ -51,7 +51,7 @@ class TestRiskThresholds:
         assert t.halt_drawdown_bps == -200
         assert t.latency_warm_us == 5_000
         assert t.latency_storm_us == 20_000
-        assert t.feed_gap_halt_s == 1.0
+        assert t.feed_gap_storm_s == 1.0
 
     def test_custom(self) -> None:
         t = RiskThresholds(warm_drawdown_bps=-10, storm_drawdown_bps=-20, halt_drawdown_bps=-40)
@@ -348,21 +348,21 @@ class TestEdgeCases:
         assert sg.state == StormGuardState.STORM
 
     def test_feed_gap_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "5.0")
+        monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_STORM_S", "5.0")
         sg = StormGuard(thresholds=RiskThresholds())
         sg._storm_cooldown_s = 0.0
         sg._de_escalate_threshold = 1
-        assert sg.thresholds.feed_gap_halt_s == 5.0
+        assert sg.thresholds.feed_gap_storm_s == 5.0
         sg.update(feed_gap_s=4.9)
         assert sg.state == StormGuardState.NORMAL
         sg.update(feed_gap_s=5.0)
         assert sg.state == StormGuardState.STORM
 
     def test_invalid_feed_gap_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "not_a_number")
+        monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_STORM_S", "not_a_number")
         sg = StormGuard(thresholds=RiskThresholds())
         # Should fall back to default
-        assert sg.thresholds.feed_gap_halt_s == 1.0
+        assert sg.thresholds.feed_gap_storm_s == 1.0
 
     def test_last_state_change_updated(self) -> None:
         sg = _guard()

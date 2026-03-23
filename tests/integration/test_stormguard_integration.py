@@ -80,7 +80,7 @@ class TestStormGuardStateMachine(unittest.TestCase):
         guard = StormGuard()
         thresholds = guard.thresholds
 
-        state = guard.update(feed_gap_s=thresholds.feed_gap_halt_s + 0.1)
+        state = guard.update(feed_gap_s=thresholds.feed_gap_storm_s + 0.1)
         self.assertEqual(state, StormGuardState.STORM)
 
     def test_halt_priority_over_storm(self):
@@ -167,7 +167,7 @@ class TestStormGuardWithCustomThresholds(unittest.TestCase):
 
     def test_custom_feed_gap_threshold(self):
         """Custom feed gap threshold is respected."""
-        custom = RiskThresholds(feed_gap_halt_s=0.5)  # 500ms
+        custom = RiskThresholds(feed_gap_storm_s=0.5)  # 500ms
         guard = StormGuard(thresholds=custom)
 
         # 600ms gap should trigger STORM with custom threshold

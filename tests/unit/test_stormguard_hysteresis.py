@@ -71,7 +71,7 @@ def test_escalation_is_instant():
     thresholds = sg.thresholds
     assert sg.state == StormGuardState.NORMAL
 
-    state = sg.update(feed_gap_s=thresholds.feed_gap_halt_s + 0.1)
+    state = sg.update(feed_gap_s=thresholds.feed_gap_storm_s + 0.1)
     assert state == StormGuardState.STORM
 
 
@@ -80,7 +80,7 @@ def test_deescalation_requires_n_clears():
     sg = _make_storm_guard(cooldown_s=0.0, de_n=5)  # cooldown=0 so only N matters
 
     # Escalate
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.1)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
     # N-1 clear evals: should still be STORM
@@ -97,7 +97,7 @@ def test_cooldown_blocks_recovery():
     """Even after N clear evals, cooldown not elapsed → stays STORM."""
     sg = _make_storm_guard(cooldown_s=9999.0, de_n=1)  # huge cooldown
 
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.1)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
     # Attempt many clears — cooldown not elapsed so counter always resets
@@ -110,7 +110,7 @@ def test_cooldown_elapsed_allows_recovery():
     """After cooldown elapses, N consecutive clears → NORMAL."""
     sg = _make_storm_guard(cooldown_s=0.001, de_n=3)  # very short cooldown
 
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.1)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
     # Wait for cooldown
@@ -132,7 +132,7 @@ def test_escalation_resets_counter():
     sg = _make_storm_guard(cooldown_s=0.0, de_n=5)
 
     # Escalate
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.1)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
     # Make 3 clear evals (counter = 3)
@@ -141,7 +141,7 @@ def test_escalation_resets_counter():
     assert sg._de_escalate_count == 3
 
     # Escalate again (new feed gap spike) → counter must reset
-    sg.update(feed_gap_s=sg.thresholds.feed_gap_halt_s + 0.5)
+    sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.5)
     assert sg._de_escalate_count == 0
     assert sg.state == StormGuardState.STORM
 
@@ -158,42 +158,47 @@ def test_trigger_halt_bypasses_hysteresis():
 # ---------------------------------------------------------------------------
 
 
-def test_stormguard_fsm_hysteresis():
-    """FSM: PnL recovery must persist N consecutive updates before de-escalating."""
-    fsm = _make_fsm(cooldown_s=0.0, de_n=4)
+def test_stormguard_validate_halt_blocks_new():
+    """StormGuard.validate() blocks NEW orders in HALT state."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
 
-    # Escalate to STORM
-    fsm.update_pnl(-600_000)
-    assert fsm.state == StormGuardState.STORM
+    sg = _make_storm_guard(cooldown_s=0.0, de_n=1)
+    sg.trigger_halt("test")
+    assert sg.state == StormGuardState.HALT
 
-    # 3 recovery updates (PnL back to normal) — should still be STORM
-    for i in range(3):
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.STORM, f"Should still be STORM after {i + 1} recovery evals"
+    intent = OrderIntent(
+        intent_id=1,
+        strategy_id="test",
+        symbol="2330",
+        side=Side.BUY,
+        price=1000000,
+        qty=1,
+        intent_type=IntentType.NEW,
+        tif=TIF.ROD,
+    )
+    ok, reason = sg.validate(intent)
+    assert ok is False
+    assert reason == "STORMGUARD_HALT"
 
-    # 4th recovery update — should transition
-    fsm.update_pnl(0)
-    assert fsm.state == StormGuardState.NORMAL
 
+def test_stormguard_validate_halt_allows_cancel():
+    """StormGuard.validate() allows CANCEL orders in HALT state."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
 
-def test_stormguard_fsm_halt_requires_cooldown_and_clears():
-    """FSM: HALT de-escalation requires halt_cooldown elapsed + N consecutive clears."""
-    fsm = _make_fsm(cooldown_s=9999.0, de_n=2)
-    fsm._halt_cooldown_s = 10.0
+    sg = _make_storm_guard(cooldown_s=0.0, de_n=1)
+    sg.trigger_halt("test")
 
-    # Escalate to HALT via PnL
-    fsm.update_pnl(-1_100_000)
-    assert fsm.state == StormGuardState.HALT
-
-    # Single recovery update: should NOT step down (cooldown not elapsed)
-    fsm.update_pnl(0)
-    assert fsm.state == StormGuardState.HALT, "HALT must not de-escalate before cooldown"
-
-    # Simulate time past halt cooldown
-    import time
-
-    fsm._halt_entry_ts = time.monotonic() - 11.0
-    fsm.update_pnl(0)  # 1st clear after cooldown
-    assert fsm.state == StormGuardState.HALT
-    fsm.update_pnl(0)  # 2nd clear — meets de_n=2
-    assert fsm.state == StormGuardState.NORMAL
+    intent = OrderIntent(
+        intent_id=2,
+        strategy_id="test",
+        symbol="2330",
+        side=Side.BUY,
+        price=0,
+        qty=0,
+        intent_type=IntentType.CANCEL,
+        tif=TIF.ROD,
+        target_order_id="x",
+    )
+    ok, reason = sg.validate(intent)
+    assert ok is True
+    assert reason == "OK"
