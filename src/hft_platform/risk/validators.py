@@ -343,9 +343,11 @@ class StormGuardFSM:
         self.storm = sg_cfg.get("storm_threshold", -500_000)
         self.halt = sg_cfg.get("halt_threshold", -1_000_000)
         self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
+        self._halt_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "60"))  # precision-time
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._de_escalate_count: int = 0
         self._storm_entry_ts: float = 0.0  # precision-time
+        self._halt_entry_ts: float = 0.0  # precision-time
 
     def update_pnl(self, pnl: int) -> None:
         self.pnl_drawdown = pnl
@@ -369,26 +371,25 @@ class StormGuardFSM:
             self._de_escalate_count = 0
             if target_state >= StormGuardState.STORM and old_state < StormGuardState.STORM:
                 self._storm_entry_ts = now
+            if target_state == StormGuardState.HALT:
+                self._halt_entry_ts = now
             self.state = target_state
         elif target_state < old_state:
-            # HALT: allow immediate step-down to unblock order cancellation draining
+            # De-escalation from any elevated state requires cooldown + N consecutive clears
             if old_state == StormGuardState.HALT:
-                self._de_escalate_count = 0
-                self.state = target_state
+                cooldown_ok = (now - self._halt_entry_ts) >= self._halt_cooldown_s
+            elif old_state >= StormGuardState.STORM:
+                cooldown_ok = (now - self._storm_entry_ts) >= self._storm_cooldown_s
             else:
-                # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
-                cooldown_ok = (
-                    (now - self._storm_entry_ts) >= self._storm_cooldown_s
-                    if old_state >= StormGuardState.STORM
-                    else True
-                )
-                if cooldown_ok:
-                    self._de_escalate_count += 1
-                    if self._de_escalate_count >= self._de_escalate_threshold:
-                        self._de_escalate_count = 0
-                        self.state = target_state
-                else:
+                cooldown_ok = True
+
+            if cooldown_ok:
+                self._de_escalate_count += 1
+                if self._de_escalate_count >= self._de_escalate_threshold:
                     self._de_escalate_count = 0
+                    self.state = target_state
+            else:
+                self._de_escalate_count = 0
         else:
             if target_state >= StormGuardState.STORM:
                 self._de_escalate_count = 0

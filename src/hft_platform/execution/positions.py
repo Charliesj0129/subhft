@@ -147,6 +147,19 @@ class Position:
 
 
 class PositionStore:
+    __slots__ = (
+        "positions",
+        "_positions_max_size",
+        "metrics",
+        "metadata",
+        "price_codec",
+        "_rust_tracker",
+        "_log_fills",
+        "_fill_lock",
+        "_peak_equity_scaled",
+        "_total_realized_pnl_scaled",
+    )
+
     def __init__(self) -> None:
         # map: f"{account}:{strategy}:{symbol}" -> Position
         self.positions: Dict[str, Position] = {}

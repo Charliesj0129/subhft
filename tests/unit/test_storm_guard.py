@@ -44,6 +44,9 @@ class TestStormGuard(unittest.TestCase):
 
     def test_recovery(self):
         self.guard.trigger_halt("Manual")
+        # With default halt_cooldown, bypass by setting cooldown=0 and n=1
+        self.guard._halt_cooldown_s = 0.0
+        self.guard._de_escalate_threshold = 1
         # Update with safe values
         state = self.guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
         self.assertEqual(state, StormGuardState.NORMAL)

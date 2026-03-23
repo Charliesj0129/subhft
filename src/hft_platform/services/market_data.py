@@ -611,29 +611,30 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 trace_id=trace_id,
                 symbol=getattr(event, "symbol", ""),
             )
-        self._emit_trace(
-            "md_event",
-            trace_id,
-            {
-                "symbol": getattr(event, "symbol", ""),
-                "event_type": type(event).__name__,
-                "norm_ns": int(norm_duration or 0),
-                "lob_ns": int(lob_duration or 0),
-                "has_stats": bool(stats is not None),
-                "has_feature_update": bool(feature_update is not None),
-            },
-        )
-        if feature_update is not None:
+        if getattr(self, "_trace_sampler", None) is not None:
             self._emit_trace(
-                "feature_update",
+                "md_event",
                 trace_id,
                 {
-                    "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
-                    "feature_set_id": getattr(feature_update, "feature_set_id", self._feature_set_id_cached),
-                    "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
-                    "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
+                    "symbol": getattr(event, "symbol", ""),
+                    "event_type": type(event).__name__,
+                    "norm_ns": int(norm_duration or 0),
+                    "lob_ns": int(lob_duration or 0),
+                    "has_stats": bool(stats is not None),
+                    "has_feature_update": bool(feature_update is not None),
                 },
             )
+            if feature_update is not None:
+                self._emit_trace(
+                    "feature_update",
+                    trace_id,
+                    {
+                        "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
+                        "feature_set_id": getattr(feature_update, "feature_set_id", self._feature_set_id_cached),
+                        "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
+                        "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
+                    },
+                )
         if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
             self._record_direct_event(event)
 
@@ -683,22 +684,20 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         feature_update: FeatureUpdateEvent | None,
     ) -> None:
         if self.publish_full_events:
-            if stats or feature_update:
-                payload: list[Any] = [event]
-                if stats:
-                    payload.append(stats)
-                if feature_update:
-                    payload.append(feature_update)
-                self._publish_many_nowait(payload)
+            if stats and feature_update:
+                self._publish_many_nowait((event, stats, feature_update))
+            elif stats:
+                self._publish_many_nowait((event, stats))
+            elif feature_update:
+                self._publish_many_nowait((event, feature_update))
             else:
                 self._publish_nowait(event)
-        elif stats or feature_update:
-            payload = []
-            if stats:
-                payload.append(stats)
-            if feature_update:
-                payload.append(feature_update)
-            self._publish_many_nowait(payload)
+        elif stats and feature_update:
+            self._publish_many_nowait((stats, feature_update))
+        elif stats:
+            self._publish_many_nowait((stats,))
+        elif feature_update:
+            self._publish_many_nowait((feature_update,))
 
     # -- connect sequence ----------------------------------------------------
 
@@ -865,7 +864,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             return
         asyncio.create_task(self._publish(event))
 
-    def _publish_many_nowait(self, events: list[Any]) -> None:
+    def _publish_many_nowait(self, events: list[Any] | tuple[Any, ...]) -> None:
         publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
         if publish_many_nowait:
             publish_many_nowait(events)

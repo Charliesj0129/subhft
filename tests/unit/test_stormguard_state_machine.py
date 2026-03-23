@@ -27,11 +27,13 @@ def _guard(
     thresholds: RiskThresholds | None = None,
     on_halt_callback: Any = None,
     cooldown_s: float = 0.0,
+    halt_cooldown_s: float = 0.0,
     de_escalate_n: int = 1,
 ) -> StormGuard:
     """Create a StormGuard with env-driven hysteresis overridden for testing."""
     sg = StormGuard(thresholds=thresholds, on_halt_callback=on_halt_callback)
     sg._storm_cooldown_s = cooldown_s
+    sg._halt_cooldown_s = halt_cooldown_s
     sg._de_escalate_threshold = de_escalate_n
     return sg
 
@@ -153,9 +155,9 @@ class TestEscalation:
 
 
 class TestDeEscalation:
-    def test_halt_immediate_recovery(self) -> None:
-        """HALT allows immediate step-down when signals clear."""
-        sg = _guard(cooldown_s=9999, de_escalate_n=9999)
+    def test_halt_recovery_with_zero_cooldown(self) -> None:
+        """HALT with zero halt_cooldown allows de-escalation after N clears."""
+        sg = _guard(cooldown_s=9999, halt_cooldown_s=0, de_escalate_n=1)
         sg.update(drawdown_bps=-200)
         assert sg.state == StormGuardState.HALT
         sg.update(drawdown_bps=0)
@@ -227,16 +229,16 @@ class TestDeEscalation:
         sg.update(drawdown_bps=0)
         assert sg.state == StormGuardState.NORMAL
 
-    def test_halt_to_warm_direct(self) -> None:
-        """HALT allows direct step-down to any lower state."""
-        sg = _guard(cooldown_s=9999, de_escalate_n=9999)
+    def test_halt_to_warm_with_zero_cooldown(self) -> None:
+        """HALT with zero halt_cooldown can step down to WARM after N clears."""
+        sg = _guard(cooldown_s=9999, halt_cooldown_s=0, de_escalate_n=1)
         sg.update(drawdown_bps=-200)
         assert sg.state == StormGuardState.HALT
         sg.update(drawdown_bps=-50)
         assert sg.state == StormGuardState.WARM
 
-    def test_halt_to_storm_direct(self) -> None:
-        sg = _guard(cooldown_s=9999, de_escalate_n=9999)
+    def test_halt_to_storm_with_zero_cooldown(self) -> None:
+        sg = _guard(cooldown_s=9999, halt_cooldown_s=0, de_escalate_n=1)
         sg.update(drawdown_bps=-200)
         assert sg.state == StormGuardState.HALT
         sg.update(drawdown_bps=-100)
@@ -399,7 +401,7 @@ class TestEnvOverrides:
 
 class TestMultiStep:
     def test_full_cycle_escalate_and_recover(self) -> None:
-        sg = _guard(cooldown_s=0, de_escalate_n=1)
+        sg = _guard(cooldown_s=0, halt_cooldown_s=0, de_escalate_n=1)
         assert sg.state == StormGuardState.NORMAL
 
         sg.update(drawdown_bps=-50)
