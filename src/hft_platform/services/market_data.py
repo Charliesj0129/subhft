@@ -433,14 +433,18 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         asks = event.asks
         if bids is None or asks is None:
             return
+        import numpy as np
+
+        bids_arr: np.ndarray = bids  # type: ignore[assignment]
+        asks_arr: np.ndarray = asks  # type: ignore[assignment]
         publisher.publish_market_data(
             {
                 "symbol": event.symbol,
                 "ingest_ts": getattr(getattr(event, "meta", None), "ingest_ts", 0) or timebase.now_ns(),
-                "bids_price": bids[:, 0].tolist() if hasattr(bids, "tolist") else [],
-                "asks_price": asks[:, 0].tolist() if hasattr(asks, "tolist") else [],
-                "bids_vol": bids[:, 1].tolist() if hasattr(bids, "tolist") else [],
-                "asks_vol": asks[:, 1].tolist() if hasattr(asks, "tolist") else [],
+                "bids_price": bids_arr[:, 0].tolist(),
+                "asks_price": asks_arr[:, 0].tolist(),
+                "bids_vol": bids_arr[:, 1].tolist(),
+                "asks_vol": asks_arr[:, 1].tolist(),
                 "price_scaled": int(getattr(event, "price", 0) or 0),
                 "volume": int(getattr(event, "volume", 0) or 0),
             }
