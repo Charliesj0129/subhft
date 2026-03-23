@@ -24,7 +24,7 @@ class TestPriceBandValidatorBasic(unittest.TestCase):
             "strategies": {},
         }
         # Mock the metrics registry
-        self.metrics_patcher = patch("hft_platform.risk.validators.MetricsRegistry.get")
+        self.metrics_patcher = patch("hft_platform.risk.storm_guard.MetricsRegistry.get")
         self.mock_metrics = self.metrics_patcher.start()
         self.mock_metrics.return_value = MagicMock()
 
@@ -129,7 +129,7 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
             },
         }
         # Mock metrics
-        self.metrics_patcher = patch("hft_platform.risk.validators.MetricsRegistry.get")
+        self.metrics_patcher = patch("hft_platform.risk.storm_guard.MetricsRegistry.get")
         self.mock_metrics = self.metrics_patcher.start()
         self.mock_metrics.return_value = MagicMock()
 
@@ -280,7 +280,7 @@ class TestPriceBandValidatorMidPriceRetrieval(unittest.TestCase):
 
     def setUp(self):
         self.config = {"global_defaults": {}, "strategies": {}}
-        self.metrics_patcher = patch("hft_platform.risk.validators.MetricsRegistry.get")
+        self.metrics_patcher = patch("hft_platform.risk.storm_guard.MetricsRegistry.get")
         self.mock_metrics = self.metrics_patcher.start()
         self.mock_metrics.return_value = MagicMock()
 

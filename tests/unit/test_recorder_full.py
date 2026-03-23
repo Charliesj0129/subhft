@@ -84,14 +84,10 @@ class TestWALLoader(unittest.TestCase):
     def setUp(self):
         self.wal_dir = tempfile.mkdtemp()
         self.archive_dir = tempfile.mkdtemp()
-        # Disable dedup for loading tests (tested separately in test_loader_dedup_parameterized)
-        self._dedup_patcher = patch.dict(os.environ, {"HFT_WAL_DEDUP_ENABLED": "0"})
-        self._dedup_patcher.start()
         self.loader = WALLoaderService(wal_dir=self.wal_dir, archive_dir=self.archive_dir)
         self.loader.ch_client = MagicMock()  # Mock connected client
 
     def tearDown(self):
-        self._dedup_patcher.stop()
         shutil.rmtree(self.wal_dir)
         shutil.rmtree(self.archive_dir)
 

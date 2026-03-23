@@ -14,13 +14,13 @@ from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.audit import get_audit_writer
+from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
     MaxNotionalValidator,
     PerSymbolNotionalValidator,
     PositionLimitValidator,
     PriceBandValidator,
-    StormGuardFSM,
 )
 
 logger = get_logger("risk_engine")
@@ -62,37 +62,13 @@ def _get_trace_sampler() -> Any | None:
 
 
 class RiskEngine:
-    __slots__ = (
-        "config_path",
-        "intent_queue",
-        "order_queue",
-        "running",
-        "config",
-        "metrics",
-        "latency",
-        "_reject_metric_cache",
-        "_reject_metric_cache_owner_id",
-        "_reject_metric_counter",
-        "_reject_metric_sample_every",
-        "validators",
-        "storm_guard",
-        "_rust_validator",
-        "_rust_validator_reason_map",
-        "_cmd_id_lock_enabled",
-        "_cmd_id_lock",
-        "_monotonic_cmd_id",
-        "_fast_gate",
-        "_fast_gate_reason_map",
-        "_trace_sampler",
-        "__dict__",
-    )
-
     def __init__(
         self,
         config_path: str,
         intent_queue: asyncio.Queue,
         order_queue: asyncio.Queue,
         price_scale_provider: PriceScaleProvider | None = None,
+        storm_guard: StormGuard | None = None,
     ):
         self.config_path = config_path
         self.intent_queue = intent_queue  # Input
@@ -123,7 +99,7 @@ class RiskEngine:
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
                 validator._shared_scale_cache = shared_scale_cache
-        self.storm_guard = StormGuardFSM(self.config)
+        self.storm_guard = storm_guard if storm_guard is not None else StormGuard()
         self._rust_validator = self._init_rust_validator(price_scale_provider)
         self._rust_validator_reason_map = {
             1: "PRICE_ZERO_OR_NEG",

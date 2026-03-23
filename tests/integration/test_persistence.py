@@ -3,7 +3,7 @@ import json
 import os
 import shutil
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -99,10 +99,9 @@ async def test_loader_integration():
     t_past = time.time() - 5.0
     os.utime(fpath, (t_past, t_past))
 
-    # 2. Setup Loader with Mock CH (dedup disabled — tested separately)
+    # 2. Setup Loader with Mock CH
     mock_ch = MagicMock()
-    with patch.dict(os.environ, {"HFT_WAL_DEDUP_ENABLED": "0"}):
-        loader = WALLoaderService(wal_dir=test_wal_dir, archive_dir=test_archive_dir)
+    loader = WALLoaderService(wal_dir=test_wal_dir, archive_dir=test_archive_dir)
     loader.ch_client = mock_ch  # Inject mock directly
 
     # 3. Process

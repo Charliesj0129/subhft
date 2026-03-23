@@ -82,7 +82,7 @@ class LOBStatsEvent:
 
     def __post_init__(self) -> None:
         if self.mid_price_x2 is None:
-            if self.best_bid is not None and self.best_ask is not None:
+            if self.best_bid and self.best_ask:
                 self.mid_price_x2 = int(self.best_bid) + int(self.best_ask)
             elif self.mid_price is not None:
                 self.mid_price_x2 = int(round(self.mid_price * 2))
@@ -94,7 +94,7 @@ class LOBStatsEvent:
             self.mid_price = float(self.mid_price)
 
         if self.spread_scaled is None:
-            if self.best_bid is not None and self.best_ask is not None:
+            if self.best_bid and self.best_ask:
                 self.spread_scaled = int(self.best_ask) - int(self.best_bid)
             elif self.spread is not None:
                 self.spread_scaled = int(round(self.spread))

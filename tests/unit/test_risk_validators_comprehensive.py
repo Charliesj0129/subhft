@@ -54,7 +54,7 @@ def make_intent(
 
 @pytest.fixture(autouse=True)
 def mock_metrics():
-    with patch("hft_platform.risk.validators.MetricsRegistry") as m:
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry") as m:
         registry = MagicMock()
         m.get.return_value = registry
         yield registry
@@ -259,7 +259,7 @@ class TestStormGuardFSM:
 
     def test_de_escalation_requires_consecutive_clears(self):
         fsm = self._make_fsm()
-        fsm._de_escalate_threshold = 3
+        fsm._guard._de_escalate_threshold = 3
         fsm.update_pnl(-200_000)
         assert fsm.state == StormGuardState.WARM
         fsm.update_pnl(0)

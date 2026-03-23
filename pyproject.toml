@@ -193,6 +193,7 @@ known-first-party = ["hft_platform", "research"]
 "src/hft_platform/services/_md_normalize.py" = ["C901"]
 "src/hft_platform/services/bootstrap.py" = ["C901", "B"]
 "src/hft_platform/services/market_data.py" = ["C901", "B"]
+"src/hft_platform/risk/storm_guard.py" = ["C901"]
 "src/hft_platform/services/system.py" = ["C901"]
 "src/hft_platform/strategy/runner.py" = ["C901", "B"]
 # B (bugbear) existing violations

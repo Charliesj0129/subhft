@@ -54,57 +54,6 @@ def _obs_policy() -> str:
 
 
 class StrategyRunner:
-    __slots__ = (
-        "bus",
-        "risk_queue",
-        "lob_engine",
-        "feature_engine",
-        "position_store",
-        "registry",
-        "strategies",
-        "_strat_executors",
-        "_risk_submit",
-        "_risk_submit_typed",
-        "_typed_intent_fastpath",
-        "_lob_snapshot_source",
-        "_lob_l1_source",
-        "_feature_value_source",
-        "_feature_view_source",
-        "_feature_set_source",
-        "_feature_profile_source",
-        "_feature_tuple_source",
-        "metrics",
-        "latency",
-        "_trace_sampler",
-        "_obs_policy",
-        "_diagnostic_metrics_enabled",
-        "symbol_metadata",
-        "price_codec",
-        "_intent_seq",
-        "_positions_cache",
-        "_positions_dirty",
-        "_current_source_ts_ns",
-        "_current_trace_id",
-        "_strategy_metrics_sample_every",
-        "_strategy_metrics_batch",
-        "_strategy_metrics_seq",
-        "_strategy_pending_intents",
-        "_strategy_pending_alpha_intent",
-        "_strategy_pending_alpha_flat",
-        "_circuit_threshold",
-        "_circuit_recovery_threshold",
-        "_circuit_cooldown_ns",
-        "_failure_counts",
-        "_circuit_states",
-        "_circuit_success_counts",
-        "_circuit_halted_at_ns",
-        "_rust_circuit",
-        "_position_key_cache",
-        "_strat_index",
-        "_feature_compat_fail_fast",
-        "__dict__",  # needed for test monkey-patching
-    )
-
     def __init__(
         self,
         bus,
@@ -547,16 +496,15 @@ class StrategyRunner:
             ctx.positions = positions
 
             start = time.perf_counter_ns()
-            if getattr(self, "_trace_sampler", None) is not None:
-                self._emit_trace(
-                    "strategy_dispatch_start",
-                    trace_id,
-                    {
-                        "strategy_id": strategy.strategy_id,
-                        "event_type": type(event).__name__,
-                        "symbol": getattr(event, "symbol", ""),
-                    },
-                )
+            self._emit_trace(
+                "strategy_dispatch_start",
+                trace_id,
+                {
+                    "strategy_id": strategy.strategy_id,
+                    "event_type": type(event).__name__,
+                    "symbol": getattr(event, "symbol", ""),
+                },
+            )
             try:
                 intents = strategy.handle_event(ctx, event)
             except Exception as e:  # noqa: BLE001 — wraps user strategy code
@@ -632,18 +580,17 @@ class StrategyRunner:
                             logger.info("Strategy circuit recovered to normal", id=sid)
 
             duration = time.perf_counter_ns() - start
-            if getattr(self, "_trace_sampler", None) is not None:
-                self._emit_trace(
-                    "strategy_dispatch_done",
-                    trace_id,
-                    {
-                        "strategy_id": strategy.strategy_id,
-                        "event_type": type(event).__name__,
-                        "duration_ns": int(duration),
-                        "intent_count": len(intents or []),
-                        "symbol": getattr(event, "symbol", ""),
-                    },
-                )
+            self._emit_trace(
+                "strategy_dispatch_done",
+                trace_id,
+                {
+                    "strategy_id": strategy.strategy_id,
+                    "event_type": type(event).__name__,
+                    "duration_ns": int(duration),
+                    "intent_count": len(intents or []),
+                    "symbol": getattr(event, "symbol", ""),
+                },
+            )
 
             # Direct metric use
             sid = strategy.strategy_id

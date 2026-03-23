@@ -129,7 +129,7 @@ class WALLoaderService:
         self._loader_concurrency = int(os.getenv("HFT_WAL_LOADER_CONCURRENCY", "4"))
 
         # EC-1: WAL replay dedup guard
-        self._dedup_enabled = os.getenv("HFT_WAL_DEDUP_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+        self._dedup_enabled = os.getenv("HFT_WAL_DEDUP_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 
         # EC-2: WAL file timestamp ordering
         self._strict_order = os.getenv("HFT_WAL_STRICT_ORDER", "0").lower() in {"1", "true", "yes", "on"}

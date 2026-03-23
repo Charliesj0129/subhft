@@ -5,18 +5,7 @@ import os
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from hft_platform.recorder.loader import WALLoaderService
-
-# These tests exercise WAL edge cases, not dedup logic.
-pytestmark = pytest.mark.usefixtures("_disable_wal_dedup")
-
-
-@pytest.fixture(autouse=False)
-def _disable_wal_dedup(monkeypatch):
-    monkeypatch.setenv("HFT_WAL_DEDUP_ENABLED", "0")
-
 
 # Shared helpers (local copies — not in conftest)
 

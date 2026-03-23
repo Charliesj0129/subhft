@@ -1,23 +1,18 @@
 import asyncio
 import os
 from dataclasses import dataclass
-from enum import IntEnum
 from typing import Any, Callable
 
 from structlog import get_logger
 
+from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.audit import get_audit_writer
 
 logger = get_logger("risk.storm_guard")
 
-
-class StormGuardState(IntEnum):
-    NORMAL = 0
-    WARM = 1
-    STORM = 2
-    HALT = 3
+__all__ = ["StormGuard", "StormGuardState", "RiskThresholds"]
 
 
 @dataclass(slots=True)
@@ -29,7 +24,7 @@ class RiskThresholds:
     latency_warm_us: int = 5_000
     latency_storm_us: int = 20_000
 
-    feed_gap_halt_s: float = 1.0  # precision-time
+    feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
 
 class StormGuard:
@@ -82,8 +77,8 @@ class StormGuard:
         ):
             if key in risk_cfg:
                 setattr(self.thresholds, key, int(risk_cfg[key]))
-        if "feed_gap_halt_s" in risk_cfg:
-            self.thresholds.feed_gap_halt_s = float(risk_cfg["feed_gap_halt_s"])  # precision-ok
+        if "feed_gap_storm_s" in risk_cfg:
+            self.thresholds.feed_gap_storm_s = float(risk_cfg["feed_gap_storm_s"])  # precision-ok
         self._apply_env_overrides()
         logger.info("StormGuard thresholds reloaded")
 
@@ -91,7 +86,7 @@ class StormGuard:
         feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
         if feed_gap_override:
             try:
-                self.thresholds.feed_gap_halt_s = float(feed_gap_override)  # precision-time
+                self.thresholds.feed_gap_storm_s = float(feed_gap_override)  # precision-time
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
@@ -109,7 +104,7 @@ class StormGuard:
             return StormGuardState.STORM, f"Drawdown {drawdown_bps}bps"
         if latency_us >= t.latency_storm_us:
             return StormGuardState.STORM, f"Latency {latency_us}us"
-        if feed_gap_s >= t.feed_gap_halt_s:
+        if feed_gap_s >= t.feed_gap_storm_s:
             return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
         if drawdown_bps <= t.warm_drawdown_bps:
             return StormGuardState.WARM, "Drawdown Warning"
@@ -220,6 +215,16 @@ class StormGuard:
     def trigger_halt(self, reason: str) -> None:
         """Manual or Supervisor override to force HALT."""
         self.transition(StormGuardState.HALT, reason)
+
+    def validate(self, intent: OrderIntent) -> tuple[bool, str]:
+        if self.state == StormGuardState.HALT:
+            if intent.intent_type == IntentType.CANCEL:
+                return True, "OK"
+            return False, "STORMGUARD_HALT"
+        if self.state == StormGuardState.STORM:
+            if intent.intent_type == IntentType.NEW:
+                return False, "STORMGUARD_STORM_NEW_BLOCKED"
+        return True, "OK"
 
     def is_safe(self) -> bool:
         return self.state < StormGuardState.HALT
