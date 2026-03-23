@@ -216,6 +216,19 @@ class SymbolMetadata:
         self._price_scale_cache[symbol] = self.DEFAULT_SCALE
         return self.DEFAULT_SCALE
 
+    def contract_multiplier(self, symbol: str) -> int:
+        """Return contract point-value multiplier for PnL calculation.
+
+        Stocks return 1 (1 share × price diff = PnL in NTD).
+        Futures return point_value from config (e.g. TMF=10, MXF=50, TXF=200).
+        """
+        entry = self.meta.get(symbol)
+        if entry:
+            pv = entry.get("point_value")
+            if pv is not None:
+                return int(pv)
+        return 1
+
     def exchange(self, symbol: str) -> str:
         cached = self._exchange_cache.get(symbol)
         if cached is not None:
