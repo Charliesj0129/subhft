@@ -17,14 +17,14 @@ from hft_platform.monitor._data_source import (
     RedisHybridSource,
     ShmDataSource,
 )
-from hft_platform.monitor._enrichment import enrich_tick, validate_l1_row
+from hft_platform.monitor._enrichment import classify_problem, enrich_tick, validate_l1_row
 from hft_platform.monitor._events import (
     compute_opportunity_score,
     detect_events,
     format_event_label,
     snapshot_prev,
 )
-from hft_platform.monitor._renderer import build_header, build_table
+from hft_platform.monitor._renderer import build_header_with_toast, build_table
 from hft_platform.monitor._session import _TZ_TAIPEI, format_next_open, get_session_info, get_session_start
 from hft_platform.monitor._types import (
     _EVENT_RING_SIZE,
@@ -33,8 +33,11 @@ from hft_platform.monitor._types import (
     MonitorConfig,
     MonitorEvent,
     MonitorState,
+    ProblemEntry,
     RowView,
+    Severity,
     SymbolState,
+    Toast,
 )
 
 logger = get_logger("monitor.engine")
@@ -81,6 +84,13 @@ class MonitorEngine:
         "_last_poll_ns",
         # S3: collapsed closed symbols
         "_closed_collapsed",
+        # Production readiness: toast, help, event log, warning filter, force poll, problem log
+        "_toast",
+        "_show_help",
+        "_show_event_log",
+        "_warning_filter",
+        "_force_poll",
+        "_show_problem_log",
     )
 
     def __init__(self, config: MonitorConfig) -> None:
@@ -117,6 +127,13 @@ class MonitorEngine:
         self._last_poll_ns: int = 0
         # S3: collapsed closed symbols
         self._closed_collapsed: bool = True
+        # Production readiness
+        self._toast: Toast | None = None
+        self._show_help: bool = False
+        self._show_event_log: bool = False
+        self._warning_filter: bool = False
+        self._force_poll: bool = False
+        self._show_problem_log: bool = False
 
     @property
     def state(self) -> MonitorState:
@@ -387,6 +404,7 @@ class MonitorEngine:
         """Cycle through sort modes: opportunity → composite → config."""
         self._sort_mode = (self._sort_mode + 1) % 3
         self._sort_symbols()
+        self._set_toast(f"Sort: {_SORT_LABELS[self._sort_mode]} \u21bb", "cyan")
 
     def _update_state(self) -> None:
         """Evaluate state transitions after polling (single-pass, no list alloc)."""
@@ -448,6 +466,7 @@ class MonitorEngine:
         else:
             self._state = self._state_before_pause or MonitorState.WARMING_UP
             self._state_before_pause = None
+        self._set_toast("\u23f8 Paused" if self._paused_by_user else "\u25b6 Resumed", "cyan")
 
     def reset_session(self) -> None:
         """Reset alpha state and cursors for session transition.
@@ -484,6 +503,57 @@ class MonitorEngine:
     def toggle_closed_collapse(self) -> None:
         """Toggle whether closed symbols are collapsed into a summary row."""
         self._closed_collapsed = not self._closed_collapsed
+        self._set_toast("Closed: hidden" if self._closed_collapsed else "Closed: shown", "cyan")
+
+    # ------------------------------------------------------------------ #
+    # Production readiness: warnings, polling, reconnect, toggles          #
+    # ------------------------------------------------------------------ #
+
+    def clear_warnings(self) -> None:
+        now = timebase.now_ns()
+        for ss in self._sym_states:
+            ss.invalid_row_count = 0
+            ss.max_severity = Severity.INFO
+            ss.problem_log.append(
+                ProblemEntry(
+                    ts_ns=now,
+                    severity=Severity.INFO,
+                    message="Warnings cleared by user",
+                )
+            )
+        self._set_toast("\u2713 Warnings cleared", "green")
+
+    def request_force_poll(self) -> None:
+        self._force_poll = True
+        self._set_toast("\u27f3 Polling...", "cyan")
+
+    def request_reconnect(self) -> None:
+        self._set_toast("\u27f3 Reconnecting...", "cyan")
+        if self._data_source is not None:
+            ok = self._data_source.try_reconnect()
+            if ok:
+                self.clear_warnings()
+                self._force_poll = True
+                self._set_toast("\u2713 Connected", "green")
+            else:
+                self._set_toast("\u2716 Reconnect failed", "red")
+
+    def _set_toast(self, message: str, style: str) -> None:
+        self._toast = Toast(message=message, style=style, expire_ns=timebase.now_ns() + 2_000_000_000)
+
+    def toggle_help(self) -> None:
+        self._show_help = not self._show_help
+
+    def toggle_warning_filter(self) -> None:
+        self._warning_filter = not self._warning_filter
+        label = "warnings only" if self._warning_filter else "all symbols"
+        self._set_toast(f"Filter: {label}", "cyan")
+
+    def toggle_event_log(self) -> None:
+        self._show_event_log = not self._show_event_log
+
+    def toggle_problem_log(self) -> None:
+        self._show_problem_log = not self._show_problem_log
 
     # ------------------------------------------------------------------ #
     # Rendering helpers                                                    #
@@ -556,6 +626,28 @@ class MonitorEngine:
         # S3: count closed symbols
         n_closed = sum(1 for ss in self._sym_states if ss.is_closed)
 
+        # Bad-data summary for header
+        total_bad = sum(ss.invalid_row_count for ss in self._sym_states)
+        total_rows = sum(ss.tick_count + ss.invalid_row_count for ss in self._sym_states)
+        any_active_now = any(ss.session_active for ss in self._sym_states)
+
+        if total_bad == 0:
+            _bad_summary, _bad_style = "", ""
+        elif not any_active_now:
+            _bad_summary = f"{total_bad:,} pre-market rows skipped (normal)"
+            _bad_style = "dim"
+        else:
+            ratio = total_bad / max(total_rows, 1) * 100
+            if ratio < 5:
+                _bad_summary = f"{total_bad:,} L1 gaps ({ratio:.1f}%) \u2014 within tolerance"
+                _bad_style = "dim yellow"
+            elif ratio < 20:
+                _bad_summary = f"\u26a0 {total_bad:,} L1 gaps ({ratio:.0f}%) \u2014 feed degraded"
+                _bad_style = "yellow"
+            else:
+                _bad_summary = f"\u2716 feed critically degraded ({ratio:.0f}% invalid)"
+                _bad_style = "bright_red"
+
         return HeaderContext(
             state=self._state,
             session_display=session_display,
@@ -570,6 +662,8 @@ class MonitorEngine:
             poll_age_s=poll_age_s,
             closed_collapsed=self._closed_collapsed,
             n_closed=n_closed,
+            bad_summary=_bad_summary,
+            bad_style=_bad_style,
         )
 
     def _build_event_ticker(self) -> str:
@@ -591,8 +685,8 @@ class MonitorEngine:
         return "  |  ".join(entries)
 
     def get_header(self) -> Any:
-        """Build header Text for current state."""
-        return build_header(self.get_header_context())
+        """Build header Text for current state (with toast if active)."""
+        return build_header_with_toast(self.get_header_context(), self._toast)
 
     def get_table(self) -> Any:
         """Build the signal table."""
@@ -692,6 +786,20 @@ class MonitorEngine:
         if invalid_reason is not None:
             ss.invalid_row_count += 1
             ss.last_invalid_reason = invalid_reason
+            severity = classify_problem(
+                invalid_reason,
+                is_active=ss.session_active,
+                session_label=ss.session_label,
+            )
+            if severity > ss.max_severity:
+                ss.max_severity = severity
+            ss.problem_log.append(
+                ProblemEntry(
+                    ts_ns=timebase.now_ns(),
+                    severity=severity,
+                    message=invalid_reason,
+                )
+            )
             return
 
         try:
@@ -718,6 +826,7 @@ class MonitorEngine:
         ss.ask_qty = 0.0
         ss.invalid_row_count = 0
         ss.last_invalid_reason = ""
+        ss.max_severity = Severity.INFO
         ss.is_stale = False
         # Phase 1: reset event tracking fields
         ss.prev_composite = 0.0

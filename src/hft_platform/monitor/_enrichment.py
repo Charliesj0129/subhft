@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from hft_platform.monitor._types import CH_PRICE_SCALE, CH_TO_PLATFORM_DIVISOR, PLATFORM_SCALE, RowView, SymbolState
+from hft_platform.monitor._types import (
+    CH_PRICE_SCALE,
+    CH_TO_PLATFORM_DIVISOR,
+    PLATFORM_SCALE,
+    RowView,
+    Severity,
+    SymbolState,
+)
 
 
 def validate_l1_row(row: RowView) -> str | None:
@@ -32,6 +39,20 @@ def validate_l1_row(row: RowView) -> str | None:
         return "l1_none"
 
     return None
+
+
+def classify_problem(
+    reason: str,
+    *,
+    is_active: bool = True,
+    session_label: str = "",
+) -> Severity:
+    """Classify a validation failure reason into a severity level."""
+    if not is_active or session_label in ("[CLOSED]", "[PRE]"):
+        return Severity.INFO
+    if "mismatch" in reason or "not_array" in reason:
+        return Severity.CRIT
+    return Severity.WARN
 
 
 def enrich_tick(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum, IntFlag, auto
 from typing import Any
@@ -34,7 +35,43 @@ class EventFlag(IntFlag):
     STALE_RESOLVE = auto()
 
 
-_EVENT_RING_SIZE = 32
+class Severity(IntEnum):
+    """Problem severity levels for per-symbol health tracking."""
+
+    INFO = 0
+    WARN = 1
+    CRIT = 2
+
+
+@dataclass(slots=True)
+class ProblemEntry:
+    """A single problem log entry for a symbol."""
+
+    ts_ns: int
+    severity: Severity
+    message: str
+
+
+@dataclass(slots=True)
+class Toast:
+    """A transient notification displayed in the TUI footer."""
+
+    message: str
+    style: str
+    expire_ns: int
+
+
+@dataclass(slots=True, frozen=True)
+class ColumnProfile:
+    """Column layout profile for adaptive terminal widths."""
+
+    name_width: int
+    show_drivers: bool
+    show_spark: bool
+    spark_width: int
+
+
+_EVENT_RING_SIZE = 128
 
 
 @dataclass(slots=True)
@@ -242,6 +279,10 @@ class SymbolState:
     invalid_row_count: int = 0
     last_invalid_reason: str = ""
 
+    # Problem log and severity (Production Readiness)
+    problem_log: deque[ProblemEntry] = field(default_factory=lambda: deque(maxlen=32))
+    max_severity: Severity = field(default=Severity.INFO)
+
     def sparkline_append(self, value: float) -> None:
         """Append a value to the sparkline ring buffer."""
         self._spark_buf[self._spark_idx] = value
@@ -314,6 +355,9 @@ class HeaderContext:
     # S3: collapsed closed symbols
     closed_collapsed: bool = True
     n_closed: int = 0
+    # Production readiness: bad-data summary
+    bad_summary: str = ""
+    bad_style: str = ""
 
 
 # CH → platform price scale constants
