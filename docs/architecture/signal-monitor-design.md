@@ -152,10 +152,7 @@ symbols:
     point_value: 1000
     category: stock
 
-alphas:
-  - queue_imbalance        # Gate E approved, canary 0.1
-  - flow_mode_decomp       # Gate D approved, canary 0.1
-  - microprice_momentum    # Gate E approved, canary 0.1
+alphas: []
   # 加新的 alpha 只要這裡加一行，會自動從 research/alphas/ 載入
 
 source:
@@ -238,7 +235,7 @@ class AlphaEngine:
         """一筆新 tick → 返回所有 alpha 的最新信號。
 
         Returns:
-            {"queue_imbalance": 0.23, "flow_mode_decomp": -0.01, ...}
+            {"alpha_id_1": 0.23, "alpha_id_2": -0.01, ...}
         """
 
     def get_composite(self, symbol: str) -> float:
@@ -291,7 +288,7 @@ def _build_payload(tick: dict) -> dict:
 ```
 ┌─ Signal Monitor ──────────────────── 2026-03-17 21:03:15 TST ─── Poll: 3s ─┐
 │                                                                              │
-│  Symbol   Price    Chg%   │  QI      FMD     MM     │ Combo  │ Suggestion   │
+│  Symbol   Price    Chg%   │  A1     A2      A3     │ Combo  │ Suggestion   │
 │  ──────── ──────── ────── │ ──────  ──────  ──────  │ ─────  │ ──────────   │
 │▸ MXFC6    33,976   +0.3%  │ -0.29   -0.01   +0.09  │ -0.12  │ ● WAIT       │
 │  TXFC6    33,961   +0.8%  │ -0.25   -0.01   +0.07  │ -0.10  │ ● WAIT       │
@@ -303,9 +300,9 @@ def _build_payload(tick: dict) -> dict:
 ├─ Detail: MXFC6 ──────────────────────────────────────────────────────────────┤
 │  Bid: 33,975 (6)  │  Ask: 33,977 (2)  │  Spread: 2  │  Imb: +0.50         │
 │                                                                              │
-│  QI  ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▃▂▁  (last 30 polls sparkline)                  │
-│  FMD ▄▄▄▃▃▃▂▂▂▂▂▂▂▂▃▃▃▃▃▂▂▂▂  (stable, near zero)                        │
-│  MM  ▅▅▅▆▆▆▆▅▅▅▄▄▃▃▃▃▃▃▄▄▅▅▅  (trending up)                              │
+│  A1  ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▃▂▁  (last 30 polls sparkline)                  │
+│  A2  ▄▄▄▃▃▃▂▂▂▂▂▂▂▂▃▃▃▃▃▂▂▂▂  (stable, near zero)                        │
+│  A3  ▅▅▅▆▆▆▆▅▅▅▄▄▃▃▃▃▃▃▄▄▅▅▅  (trending up)                              │
 │                                                                              │
 │  Point value: 10 NTD │ Session: NIGHT │ Ticks: 45,231 │ Last: 0.3s ago     │
 └── [q]uit  [r]efresh  [↑↓]select  [a]dd  [d]etail  [p]ause  [s]napshot ─────┘
@@ -377,9 +374,6 @@ symbols:
 
 ```yaml
 alphas:
-  - queue_imbalance
-  - flow_mode_decomp
-  - microprice_momentum
   - new_alpha              # 新增
 ```
 

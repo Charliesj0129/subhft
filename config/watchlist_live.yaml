@@ -8,6 +8,6 @@ monitor:
 
 symbols:
   - code: MXFD6
-    alpha_ids: [queue_imbalance, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
   - code: TXFD6
-    alpha_ids: [queue_imbalance, flow_mode_decomp, depth_concentration_index]
+    alpha_ids: []
