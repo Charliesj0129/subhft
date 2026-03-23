@@ -429,9 +429,15 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.service.reconnect_days = {"mon"}
         self.service.reconnect_hours = ""
         self.service.reconnect_hours_2 = ""
-        now = dt.datetime(2026, 2, 3, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
-        with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
-            mock_tb.now_s.return_value = now.timestamp()
+        tz_cst = dt.timezone(dt.timedelta(hours=8))
+        # 2026-02-03 is a Tuesday — should NOT match {"mon"}
+        now = dt.datetime(2026, 2, 3, 12, 0, tzinfo=tz_cst)
+        with (
+            patch("hft_platform.services.market_data.dt.datetime") as mock_dt,
+            patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}),
+        ):
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *a, **kw: dt.datetime(*a, **kw)
             self.assertFalse(self.service._within_reconnect_window())
 
     def test_within_reconnect_window_hours(self):

@@ -108,7 +108,37 @@ export SHIOAJI_CA_PASSWORD=...
 export SHIOAJI_ACTIVATE_CA=1
 ```
 
-## 5. Swarm（可選）
+## 5. Fubon 券商部署
+
+平台支援 Shioaji 與 Fubon 兩個券商。選擇 Fubon 需設定 `HFT_BROKER=fubon` 並提供 Fubon 憑證：
+
+```bash
+export HFT_BROKER=fubon
+export HFT_FUBON_CERT_PATH=/path/to/cert.pfx
+export HFT_FUBON_ACCOUNT=your_account
+export HFT_FUBON_PASSWORD=your_password
+export HFT_MODE=live
+uv run hft run live
+```
+
+**Single Runtime 限制**同樣適用於 Fubon：每個容器只能運行一個 broker session（見 3.1.1 節）。
+
+### 5.1 Docker Compose with Fubon
+
+```bash
+# 設定 .env
+export HFT_BROKER=fubon
+export HFT_FUBON_CERT_PATH=/path/to/cert.pfx
+export HFT_FUBON_ACCOUNT=your_account
+export HFT_FUBON_PASSWORD=your_password
+export HFT_MODE=live
+
+# 啟動堆疊
+docker compose up -d clickhouse redis
+docker compose up -d --build hft-engine
+```
+
+## 6. Swarm（可選）
 ```bash
 docker swarm init 2>/dev/null || true
 docker build -t ${HFT_IMAGE:-hft-platform:latest} .
@@ -116,20 +146,20 @@ docker stack deploy -c docker-stack.yml hft
 docker service logs -f hft_hft-engine
 ```
 
-## 6. Ops / Host Tuning（低延遲）
+## 7. Ops / Host Tuning（低延遲）
 ```bash
 sudo ./ops.sh tune
 sudo ./ops.sh hugepages
 sudo ./ops.sh setup
 ```
 
-## 7. 版本更新流程
+## 8. 版本更新流程
 ```bash
 git pull
 docker compose up -d --build hft-engine
 ```
 
-### 7.1 受控變更（建議用於 production）
+### 8.1 受控變更（建議用於 production）
 
 ```bash
 # 1) pre-sync 產物（備份 + rollback + manifest）
@@ -166,12 +196,12 @@ make wal-dlq-replay-dry-run MAX_FILES=50
 make wal-dlq-replay MAX_FILES=50
 ```
 
-## 8. 相關文件
+## 9. 相關文件
 - `docs/runbooks.md`
 - `docs/troubleshooting.md`
 - `docs/hft_low_latency_runbook.md`
 
-## 9. Azure Deployment ☁️
+## 10. Azure Deployment ☁️
 If you plan to run the stack on Azure, you can follow these standardized steps:
 
 ### Provisioning (Azure CLI)

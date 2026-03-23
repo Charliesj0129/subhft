@@ -48,10 +48,10 @@ These modules run the primary event loop. Any changes here must adhere strictly 
 | **strategies**     | `simple_mm.py`, `rust_alpha.py`         | Built-in implementations of strategies. You can use these as templates.                    |
 | **backtest**       | `adapter.py`, `convert.py`, `runner.py` | Integration with `hftbacktest`. Converts JSONL → NPZ and generates HTML scorecard reports. |
 | **alpha**          | `validation.py`, `promotion.py`, `canary.py`, `audit.py`, `experiments.py`, `pool.py` | Alpha governance pipeline: Gate A-E validation, promotion decisions, canary lifecycle, experiment tracking, pool management. 102+ alpha implementations in `research/alphas/`. |
-| **adaptive**       | Adaptive parameter tuning                               | Runtime adaptive parameter adjustment for strategies.                                      |
-| **cross_symbol**   | Cross-symbol analytics                                  | Multi-symbol correlation and cross-asset signal computation.                               |
+| **data_quality**   | Data quality checks and validation pipelines             | Data quality checks and validation pipelines                                               |
 | **diagnostics**    | `trace.py`, `replay.py`                                 | Decision trace sampling, event replay for post-mortem analysis.                            |
-| **portfolio**      | Portfolio-level management                              | Portfolio-level position aggregation and risk attribution.                                 |
+| **incident**       | Incident management and response tooling                | Incident management and response tooling                                                   |
 | **scripts**        | Operational scripts                                     | Latency benchmarks, ops utilities, and diagnostic helpers.                                 |
+| **testing**        | Testing utilities, fixtures, and shadow runner          | Testing utilities, fixtures, and shadow runner                                             |
 | **utils**          | Shared utilities                                        | Common helpers used across modules (not hot-path).                                         |
 | **broker**         | Broker abstractions                                     | Shared broker protocol definitions and translation utilities.                              |
