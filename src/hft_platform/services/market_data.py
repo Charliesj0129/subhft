@@ -433,16 +433,18 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         asks = event.asks
         if bids is None or asks is None:
             return
-        publisher.publish_market_data({
-            "symbol": event.symbol,
-            "ingest_ts": getattr(getattr(event, "meta", None), "ingest_ts", 0) or timebase.now_ns(),
-            "bids_price": bids[:, 0].tolist() if hasattr(bids, "tolist") else [],
-            "asks_price": asks[:, 0].tolist() if hasattr(asks, "tolist") else [],
-            "bids_vol": bids[:, 1].tolist() if hasattr(bids, "tolist") else [],
-            "asks_vol": asks[:, 1].tolist() if hasattr(asks, "tolist") else [],
-            "price_scaled": int(getattr(event, "price", 0) or 0),
-            "volume": int(getattr(event, "volume", 0) or 0),
-        })
+        publisher.publish_market_data(
+            {
+                "symbol": event.symbol,
+                "ingest_ts": getattr(getattr(event, "meta", None), "ingest_ts", 0) or timebase.now_ns(),
+                "bids_price": bids[:, 0].tolist() if hasattr(bids, "tolist") else [],
+                "asks_price": asks[:, 0].tolist() if hasattr(asks, "tolist") else [],
+                "bids_vol": bids[:, 1].tolist() if hasattr(bids, "tolist") else [],
+                "asks_vol": asks[:, 1].tolist() if hasattr(asks, "tolist") else [],
+                "price_scaled": int(getattr(event, "price", 0) or 0),
+                "volume": int(getattr(event, "volume", 0) or 0),
+            }
+        )
 
     # -- main loop -----------------------------------------------------------
 
