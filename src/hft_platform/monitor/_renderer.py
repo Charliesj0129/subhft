@@ -707,29 +707,41 @@ def build_help_overlay() -> Panel:
     """Build full-screen help overlay with all keybindings."""
     content = Text()
     sections = [
-        ("Navigation", [
-            ("j/k \u2191/\u2193", "Navigate symbols"),
-            ("d/Enter", "Toggle detail panel"),
-            ("ESC", "Close panel / clear"),
-        ]),
-        ("Data", [
-            ("Space", "Force poll now"),
-            ("s", "Cycle sort mode"),
-            ("w", "Filter warnings only"),
-            ("c", "Toggle closed symbols"),
-            ("e", "Event log overlay"),
-        ]),
-        ("System", [
-            ("x", "Clear warnings"),
-            ("R", "Reconnect data source"),
-            ("r/Ctrl+R", "Full reset (replay warmup)"),
-            ("h", "Toggle health panel"),
-            ("p", "Pause / resume"),
-            ("q", "Quit"),
-        ]),
-        ("Detail Panel", [
-            ("l", "Toggle problem log"),
-        ]),
+        (
+            "Navigation",
+            [
+                ("j/k \u2191/\u2193", "Navigate symbols"),
+                ("d/Enter", "Toggle detail panel"),
+                ("ESC", "Close panel / clear"),
+            ],
+        ),
+        (
+            "Data",
+            [
+                ("Space", "Force poll now"),
+                ("s", "Cycle sort mode"),
+                ("w", "Filter warnings only"),
+                ("c", "Toggle closed symbols"),
+                ("e", "Event log overlay"),
+            ],
+        ),
+        (
+            "System",
+            [
+                ("x", "Clear warnings"),
+                ("R", "Reconnect data source"),
+                ("r/Ctrl+R", "Full reset (replay warmup)"),
+                ("h", "Toggle health panel"),
+                ("p", "Pause / resume"),
+                ("q", "Quit"),
+            ],
+        ),
+        (
+            "Detail Panel",
+            [
+                ("l", "Toggle problem log"),
+            ],
+        ),
     ]
     for title, keys in sections:
         content.append(f"\u2500\u2500\u2500 {title} ", _DIM)
