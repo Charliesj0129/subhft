@@ -43,7 +43,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping.
 - `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events (Python/Rust paths).
 - `src/hft_platform/feed_adapter/lob_engine.py`: per-symbol LOB + stats.
-- ✅ Implemented: `FeatureEngine` (Phase 18) with 16 features (8 stateless + 8 rolling), feature-flagged via `HFT_FEATURE_ENGINE_ENABLED=1` (default off). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+- ✅ Implemented: `FeatureEngine` (Phase 18) with 16 features (8 stateless + 8 rolling), feature-flagged via `HFT_FEATURE_ENGINE_ENABLED=1` (default on). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 
 3. Decision plane
 
