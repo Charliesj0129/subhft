@@ -257,14 +257,10 @@ class TestStormGuardFSM:
         assert ok is False
         assert reason == "STORMGUARD_HALT"
 
-    def test_de_escalation_requires_consecutive_clears(self):
+    def test_shim_de_escalation_is_immediate(self):
+        """StormGuardFSM shim maps PnL to state directly (no hysteresis)."""
         fsm = self._make_fsm()
-        fsm._de_escalate_threshold = 3
         fsm.update_pnl(-200_000)
-        assert fsm.state == StormGuardState.WARM
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.WARM
-        fsm.update_pnl(0)
         assert fsm.state == StormGuardState.WARM
         fsm.update_pnl(0)
         assert fsm.state == StormGuardState.NORMAL

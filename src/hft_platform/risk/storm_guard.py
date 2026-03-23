@@ -1,23 +1,19 @@
 import asyncio
 import os
 from dataclasses import dataclass
-from enum import IntEnum
-from typing import Any, Callable
+from typing import Any, Callable, Tuple
 
 from structlog import get_logger
 
+from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.audit import get_audit_writer
 
 logger = get_logger("risk.storm_guard")
 
-
-class StormGuardState(IntEnum):
-    NORMAL = 0
-    WARM = 1
-    STORM = 2
-    HALT = 3
+# Re-export for backward compatibility (many modules import from here)
+__all__ = ["StormGuard", "StormGuardState", "RiskThresholds"]
 
 
 @dataclass(slots=True)
@@ -29,7 +25,7 @@ class RiskThresholds:
     latency_warm_us: int = 5_000
     latency_storm_us: int = 20_000
 
-    feed_gap_halt_s: float = 1.0  # precision-time
+    feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
 
 class StormGuard:
@@ -37,6 +33,20 @@ class StormGuard:
     Central Risk Governance State Machine.
     Monitors System Health and Enforces Defcon Levels.
     """
+
+    __slots__ = (
+        "state",
+        "thresholds",
+        "metrics",
+        "last_state_change",
+        "_de_escalate_count",
+        "_storm_entry_ts",
+        "_storm_cooldown_s",
+        "_halt_cooldown_s",
+        "_halt_entry_ts",
+        "_de_escalate_threshold",
+        "_on_halt_callback",
+    )
 
     def __init__(
         self,
@@ -50,7 +60,9 @@ class StormGuard:
         self.last_state_change = timebase.now_s()
         self._de_escalate_count: int = 0
         self._storm_entry_ts: float = 0.0  # precision-time
+        self._halt_entry_ts: float = 0.0  # precision-time
         self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
+        self._halt_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "60"))  # precision-time
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._on_halt_callback = on_halt_callback
 
@@ -66,18 +78,19 @@ class StormGuard:
         ):
             if key in risk_cfg:
                 setattr(self.thresholds, key, int(risk_cfg[key]))
-        if "feed_gap_halt_s" in risk_cfg:
-            self.thresholds.feed_gap_halt_s = float(risk_cfg["feed_gap_halt_s"])  # precision-ok
+        if "feed_gap_storm_s" in risk_cfg:
+            self.thresholds.feed_gap_storm_s = float(risk_cfg["feed_gap_storm_s"])  # precision-ok
         self._apply_env_overrides()
         logger.info("StormGuard thresholds reloaded")
 
     def _apply_env_overrides(self) -> None:
-        feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
+        # Backward-compatible: accept both old and new env var names
+        feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_STORM_S") or os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
         if feed_gap_override:
             try:
-                self.thresholds.feed_gap_halt_s = float(feed_gap_override)  # precision-time
+                self.thresholds.feed_gap_storm_s = float(feed_gap_override)  # precision-time
             except ValueError:
-                logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
+                logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_STORM_S", value=feed_gap_override)
 
     def update(
         self,
@@ -109,7 +122,7 @@ class StormGuard:
         elif latency_us >= self.thresholds.latency_storm_us:
             new_state = StormGuardState.STORM
             reason = f"Latency {latency_us}us"
-        elif feed_gap_s >= self.thresholds.feed_gap_halt_s:
+        elif feed_gap_s >= self.thresholds.feed_gap_storm_s:
             # Keep feed gap as warning/storm signal but do not HALT on it.
             new_state = StormGuardState.STORM
             reason = f"Feed Gap {feed_gap_s:.3f}s"
@@ -129,18 +142,18 @@ class StormGuard:
             self._de_escalate_count = 0
             if new_state >= StormGuardState.STORM and self.state < StormGuardState.STORM:
                 self._storm_entry_ts = now
+            if new_state == StormGuardState.HALT:
+                self._halt_entry_ts = now
             self.transition(new_state, reason)
         elif new_state < self.state:
-            # Keep manual HALT recovery compatible with legacy tests/flows:
-            # when all signals are clear, allow immediate step-down from HALT.
-            if self.state == StormGuardState.HALT:
-                self._de_escalate_count = 0
-                self.transition(new_state, "Recovery")
-                return self.state
             # De-escalation: requires (a) cooldown elapsed AND (b) N consecutive clear evals
-            cooldown_ok = (
-                (now - self._storm_entry_ts) >= self._storm_cooldown_s if self.state >= StormGuardState.STORM else True
-            )
+            if self.state == StormGuardState.HALT:
+                cooldown_ok = (now - self._halt_entry_ts) >= self._halt_cooldown_s
+            elif self.state >= StormGuardState.STORM:
+                cooldown_ok = (now - self._storm_entry_ts) >= self._storm_cooldown_s
+            else:
+                cooldown_ok = True
+
             if cooldown_ok:
                 self._de_escalate_count += 1
                 if self._de_escalate_count >= self._de_escalate_threshold:
@@ -151,7 +164,9 @@ class StormGuard:
                         "StormGuard de-escalated after hysteresis",
                         from_state=old_for_log.name,
                         to_state=new_state.name,
-                        cooldown_s=self._storm_cooldown_s,
+                        cooldown_s=(
+                            self._halt_cooldown_s if old_for_log == StormGuardState.HALT else self._storm_cooldown_s
+                        ),
                         threshold=self._de_escalate_threshold,
                     )
             else:
@@ -207,6 +222,24 @@ class StormGuard:
     def trigger_halt(self, reason: str) -> None:
         """Manual or Supervisor override to force HALT."""
         self.transition(StormGuardState.HALT, reason)
+
+    def validate(self, intent: OrderIntent) -> Tuple[bool, str]:
+        """Check whether an order intent is allowed under the current state.
+
+        HALT: blocks all except CANCEL.
+        STORM: blocks NEW orders (position-increasing).
+        WARM/NORMAL: allow all.
+        """
+        if self.state == StormGuardState.HALT:
+            if intent.intent_type == IntentType.CANCEL:
+                return True, "OK"
+            return False, "STORMGUARD_HALT"
+
+        if self.state == StormGuardState.STORM:
+            if intent.intent_type == IntentType.NEW:
+                return False, "STORMGUARD_STORM_NEW_BLOCKED"
+
+        return True, "OK"
 
     def is_safe(self) -> bool:
         return self.state < StormGuardState.HALT

@@ -396,22 +396,16 @@ class TestStormGuardFSM:
         ok, _ = fsm.validate(_intent())
         assert ok is True
 
-    def test_hysteresis_prevents_immediate_de_escalation(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """De-escalation from STORM requires cooldown + N consecutive clears."""
-        monkeypatch.setenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "0")
-        monkeypatch.setenv("HFT_STORMGUARD_DE_ESCALATE_N", "3")
+    def test_shim_update_pnl_escalation_and_recovery(self) -> None:
+        """StormGuardFSM shim: update_pnl maps PnL to state (no hysteresis in shim).
+
+        Hysteresis is now in StormGuard.update() — tested in test_stormguard_*.py.
+        """
         fsm = self._fsm()
-        fsm._storm_cooldown_s = 0.0
-        fsm._de_escalate_threshold = 3
         fsm.update_pnl(-500_000)
         assert fsm.state == StormGuardState.STORM
 
-        # First two clears: still STORM (need 3 consecutive)
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.STORM
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.STORM
-        # Third clear: de-escalate
+        # Shim sets state directly (no hysteresis)
         fsm.update_pnl(0)
         assert fsm.state == StormGuardState.NORMAL
 

@@ -49,7 +49,7 @@ class TestRiskThresholds:
         assert t.halt_drawdown_bps == -200
         assert t.latency_warm_us == 5_000
         assert t.latency_storm_us == 20_000
-        assert t.feed_gap_halt_s == 1.0
+        assert t.feed_gap_storm_s == 1.0
 
     def test_custom(self) -> None:
         t = RiskThresholds(warm_drawdown_bps=-10, storm_drawdown_bps=-20, halt_drawdown_bps=-40)
@@ -153,13 +153,13 @@ class TestEscalation:
 
 
 class TestDeEscalation:
-    def test_halt_immediate_recovery(self) -> None:
-        """HALT allows immediate step-down when signals clear."""
+    def test_halt_requires_cooldown_before_recovery(self) -> None:
+        """HALT must not step down before cooldown expires (safety-first)."""
         sg = _guard(cooldown_s=9999, de_escalate_n=9999)
         sg.update(drawdown_bps=-200)
         assert sg.state == StormGuardState.HALT
         sg.update(drawdown_bps=0)
-        assert sg.state == StormGuardState.NORMAL
+        assert sg.state == StormGuardState.HALT, "HALT must respect cooldown"
 
     def test_storm_requires_n_consecutive_clears(self) -> None:
         sg = _guard(cooldown_s=0, de_escalate_n=3)
@@ -227,20 +227,21 @@ class TestDeEscalation:
         sg.update(drawdown_bps=0)
         assert sg.state == StormGuardState.NORMAL
 
-    def test_halt_to_warm_direct(self) -> None:
-        """HALT allows direct step-down to any lower state."""
+    def test_halt_to_warm_requires_cooldown(self) -> None:
+        """HALT must not step down to WARM during cooldown."""
         sg = _guard(cooldown_s=9999, de_escalate_n=9999)
         sg.update(drawdown_bps=-200)
         assert sg.state == StormGuardState.HALT
         sg.update(drawdown_bps=-50)
-        assert sg.state == StormGuardState.WARM
+        assert sg.state == StormGuardState.HALT, "HALT must respect cooldown"
 
-    def test_halt_to_storm_direct(self) -> None:
+    def test_halt_stays_during_cooldown(self) -> None:
+        """HALT must not de-escalate to STORM while cooldown is active."""
         sg = _guard(cooldown_s=9999, de_escalate_n=9999)
         sg.update(drawdown_bps=-200)
         assert sg.state == StormGuardState.HALT
         sg.update(drawdown_bps=-100)
-        assert sg.state == StormGuardState.STORM
+        assert sg.state == StormGuardState.HALT, "HALT must stay during cooldown"
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +351,7 @@ class TestEdgeCases:
         sg = StormGuard(thresholds=RiskThresholds())
         sg._storm_cooldown_s = 0.0
         sg._de_escalate_threshold = 1
-        assert sg.thresholds.feed_gap_halt_s == 5.0
+        assert sg.thresholds.feed_gap_storm_s == 5.0
         sg.update(feed_gap_s=4.9)
         assert sg.state == StormGuardState.NORMAL
         sg.update(feed_gap_s=5.0)
@@ -360,7 +361,7 @@ class TestEdgeCases:
         monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "not_a_number")
         sg = StormGuard(thresholds=RiskThresholds())
         # Should fall back to default
-        assert sg.thresholds.feed_gap_halt_s == 1.0
+        assert sg.thresholds.feed_gap_storm_s == 1.0
 
     def test_last_state_change_updated(self) -> None:
         sg = _guard()
@@ -400,6 +401,8 @@ class TestEnvOverrides:
 class TestMultiStep:
     def test_full_cycle_escalate_and_recover(self) -> None:
         sg = _guard(cooldown_s=0, de_escalate_n=1)
+        # Also set HALT cooldown to 0 for test
+        sg._halt_cooldown_s = 0.0
         assert sg.state == StormGuardState.NORMAL
 
         sg.update(drawdown_bps=-50)
@@ -411,7 +414,7 @@ class TestMultiStep:
         sg.update(drawdown_bps=-200)
         assert sg.state == StormGuardState.HALT
 
-        # Recovery from HALT is immediate
+        # Recovery from HALT requires cooldown (0s here) + 1 clear eval
         sg.update(drawdown_bps=-100)
         assert sg.state == StormGuardState.STORM
 
