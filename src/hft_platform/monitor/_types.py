@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum, IntFlag, auto
 from typing import Any
@@ -34,7 +35,43 @@ class EventFlag(IntFlag):
     STALE_RESOLVE = auto()
 
 
-_EVENT_RING_SIZE = 32
+class Severity(IntEnum):
+    """Problem severity levels for per-symbol health tracking."""
+
+    INFO = 0
+    WARN = 1
+    CRIT = 2
+
+
+@dataclass(slots=True)
+class ProblemEntry:
+    """A single problem log entry for a symbol."""
+
+    ts_ns: int
+    severity: Severity
+    message: str
+
+
+@dataclass(slots=True)
+class Toast:
+    """A transient notification displayed in the TUI footer."""
+
+    message: str
+    style: str
+    expire_ns: int
+
+
+@dataclass(slots=True, frozen=True)
+class ColumnProfile:
+    """Column layout profile for adaptive terminal widths."""
+
+    name_width: int
+    show_drivers: bool
+    show_spark: bool
+    spark_width: int
+
+
+_EVENT_RING_SIZE = 128
 
 
 @dataclass(slots=True)
@@ -123,6 +160,10 @@ class AlphaState:
     _signal_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
     _signal_spark_idx: int = 0
     _signal_spark_len: int = 0
+    # Z-score sparkline for detail dashboard
+    _zscore_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
+    _zscore_spark_idx: int = 0
+    _zscore_spark_len: int = 0
 
     def update_z(self, signal: float, alpha: float = 2.0 / 65.0) -> None:
         """Update EMA-based z-score normalization."""
@@ -152,6 +193,22 @@ class AlphaState:
     def signal_sparkline_clear(self) -> None:
         self._signal_spark_idx = 0
         self._signal_spark_len = 0
+
+    # Z-score sparkline for detail dashboard
+    def zscore_sparkline_append(self, value: float) -> None:
+        self._zscore_spark_buf[self._zscore_spark_idx] = value
+        self._zscore_spark_idx = (self._zscore_spark_idx + 1) % _SPARKLINE_SIZE
+        if self._zscore_spark_len < _SPARKLINE_SIZE:
+            self._zscore_spark_len += 1
+
+    def zscore_sparkline_values(self) -> list[float]:
+        n = self._zscore_spark_len
+        if n == 0:
+            return []
+        if n < _SPARKLINE_SIZE:
+            return self._zscore_spark_buf[:n]
+        start = self._zscore_spark_idx
+        return self._zscore_spark_buf[start:] + self._zscore_spark_buf[:start]
 
 
 _SPARKLINE_SIZE = 20
@@ -242,6 +299,24 @@ class SymbolState:
     invalid_row_count: int = 0
     last_invalid_reason: str = ""
 
+    # Problem log and severity (Production Readiness)
+    problem_log: deque[ProblemEntry] = field(default_factory=lambda: deque(maxlen=32))
+    max_severity: Severity = field(default=Severity.INFO)
+
+    # History sparklines — volume, spread, imbalance (same pattern as _spark_buf)
+    _vol_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
+    _vol_spark_idx: int = 0
+    _vol_spark_len: int = 0
+    _spread_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
+    _spread_spark_idx: int = 0
+    _spread_spark_len: int = 0
+    _imbal_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
+    _imbal_spark_idx: int = 0
+    _imbal_spark_len: int = 0
+
+    # Multi-timeframe deltas
+    delta_snapshots: dict[str, deque] = field(default_factory=dict)
+
     def sparkline_append(self, value: float) -> None:
         """Append a value to the sparkline ring buffer."""
         self._spark_buf[self._spark_idx] = value
@@ -294,6 +369,54 @@ class SymbolState:
         self._price_spark_idx = 0
         self._price_spark_len = 0
 
+    # Volume sparkline
+    def vol_sparkline_append(self, value: float) -> None:
+        self._vol_spark_buf[self._vol_spark_idx] = value
+        self._vol_spark_idx = (self._vol_spark_idx + 1) % _SPARKLINE_SIZE
+        if self._vol_spark_len < _SPARKLINE_SIZE:
+            self._vol_spark_len += 1
+
+    def vol_sparkline_values(self) -> list[float]:
+        n = self._vol_spark_len
+        if n == 0:
+            return []
+        if n < _SPARKLINE_SIZE:
+            return self._vol_spark_buf[:n]
+        start = self._vol_spark_idx
+        return self._vol_spark_buf[start:] + self._vol_spark_buf[:start]
+
+    # Spread sparkline
+    def spread_sparkline_append(self, value: float) -> None:
+        self._spread_spark_buf[self._spread_spark_idx] = value
+        self._spread_spark_idx = (self._spread_spark_idx + 1) % _SPARKLINE_SIZE
+        if self._spread_spark_len < _SPARKLINE_SIZE:
+            self._spread_spark_len += 1
+
+    def spread_sparkline_values(self) -> list[float]:
+        n = self._spread_spark_len
+        if n == 0:
+            return []
+        if n < _SPARKLINE_SIZE:
+            return self._spread_spark_buf[:n]
+        start = self._spread_spark_idx
+        return self._spread_spark_buf[start:] + self._spread_spark_buf[:start]
+
+    # Imbalance sparkline
+    def imbal_sparkline_append(self, value: float) -> None:
+        self._imbal_spark_buf[self._imbal_spark_idx] = value
+        self._imbal_spark_idx = (self._imbal_spark_idx + 1) % _SPARKLINE_SIZE
+        if self._imbal_spark_len < _SPARKLINE_SIZE:
+            self._imbal_spark_len += 1
+
+    def imbal_sparkline_values(self) -> list[float]:
+        n = self._imbal_spark_len
+        if n == 0:
+            return []
+        if n < _SPARKLINE_SIZE:
+            return self._imbal_spark_buf[:n]
+        start = self._imbal_spark_idx
+        return self._imbal_spark_buf[start:] + self._imbal_spark_buf[:start]
+
 
 @dataclass(slots=True, frozen=True)
 class HeaderContext:
@@ -314,6 +437,9 @@ class HeaderContext:
     # S3: collapsed closed symbols
     closed_collapsed: bool = True
     n_closed: int = 0
+    # Production readiness: bad-data summary
+    bad_summary: str = ""
+    bad_style: str = ""
 
 
 # CH → platform price scale constants
