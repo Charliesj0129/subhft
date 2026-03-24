@@ -58,6 +58,8 @@ class MetricsRegistry:
                 "strategy_micro_price",
                 "order_actions_total",
                 "order_reject_total",
+                "shadow_orders_total",
+                "shadow_mode_active",
                 "execution_events_total",
                 "execution_router_errors_total",
                 "execution_gateway_errors_total",
@@ -166,6 +168,11 @@ class MetricsRegistry:
                 "feature_profile_compat_failures_total",
                 "contract_refresh_total",
                 "contract_refresh_symbols_changed_total",
+                "autonomy_mode",
+                "autonomy_transitions_total",
+                "strategy_quarantine_active",
+                "platform_reduce_only_active",
+                "manual_rearm_required",
                 # WU-04/WU-18 Reconciliation resilience metrics
                 "reconciliation_sync_total",
                 "reconciliation_sync_duration_seconds",
@@ -251,6 +258,30 @@ class MetricsRegistry:
         self.stormguard_mode = Gauge(
             "stormguard_mode", "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
         )
+        self.autonomy_mode = Gauge(
+            "autonomy_mode",
+            "Autonomy control-plane mode (0=NORMAL, 1=STRATEGY_QUARANTINED, 2=PLATFORM_REDUCE_ONLY, 3=HALT)",
+            ["scope"],
+        )
+        self.autonomy_transitions_total = Counter(
+            "autonomy_transitions_total",
+            "Autonomy control-plane transitions",
+            ["scope", "from_mode", "to_mode", "reason"],
+        )
+        self.strategy_quarantine_active = Gauge(
+            "strategy_quarantine_active",
+            "Whether a strategy is currently quarantined (1=active, 0=inactive)",
+            ["strategy"],
+        )
+        self.platform_reduce_only_active = Gauge(
+            "platform_reduce_only_active",
+            "Whether the platform is currently in reduce-only mode (1=active, 0=inactive)",
+        )
+        self.manual_rearm_required = Gauge(
+            "manual_rearm_required",
+            "Whether manual re-arm is required before autonomy rights return (1=required, 0=not required)",
+            ["scope"],
+        )
 
         # Strategy Alpha (Whitebox)
         self.strategy_position = Gauge("strategy_position", "Current Net Position", ["strategy", "symbol"])
@@ -260,6 +291,16 @@ class MetricsRegistry:
         # Order
         self.order_actions_total = Counter("order_actions_total", "Order actions sent", ["type"])
         self.order_reject_total = Counter("order_reject_total", "Broker rejects")
+        # Shadow mode metrics
+        self.shadow_orders_total = Counter(
+            "shadow_orders_total",
+            "Shadow orders intercepted (not sent to broker)",
+            ["strategy", "symbol", "side"],
+        )
+        self.shadow_mode_active = Gauge(
+            "shadow_mode_active",
+            "Shadow order mode status (1=enabled, 0=disabled)",
+        )
 
         # Execution
         self.execution_events_total = Counter("execution_events_total", "Execution callbacks", ["type"])

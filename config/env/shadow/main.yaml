@@ -1,0 +1,10 @@
+# Phase 2 Shadow Trading: real feed, strategy-driven signals, no real orders
+# Usage: HFT_MODE=sim HFT_ORDER_SHADOW_MODE=1
+
+mode: sim
+
+shadow:
+  enabled: true
+
+shioaji:
+  activate_ca: false
