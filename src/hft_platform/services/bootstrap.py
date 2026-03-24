@@ -25,6 +25,7 @@ from hft_platform.feature.rollout import load_feature_rollout_controller
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 from hft_platform.observability.latency import LatencyRecorder
+from hft_platform.ops.platform_inputs import PlatformDegradeInputs
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
 from hft_platform.risk.engine import RiskEngine
@@ -830,6 +831,15 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
         )
         recorder = RecorderService(recorder_queue)
+        platform_degrade_inputs = PlatformDegradeInputs(
+            md_service=md_service,
+            recorder=recorder,
+            raw_queue=raw_queue,
+            raw_exec_queue=raw_exec_queue,
+            recorder_queue=recorder_queue,
+            risk_queue=risk_queue,
+            order_queue=order_queue,
+        )
 
         return ServiceRegistry(
             settings=self.settings,
@@ -861,6 +871,7 @@ class SystemBootstrapper:
             recon_service=recon_service,
             strategy_runner=strategy_runner,
             recorder=recorder,
+            platform_degrade_inputs=platform_degrade_inputs,
             gateway_service=gateway_service,
             intent_channel=intent_channel,
         )
