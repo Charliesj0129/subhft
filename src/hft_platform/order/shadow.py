@@ -10,6 +10,16 @@ from hft_platform.core import timebase
 logger = get_logger("order.shadow")
 
 
+def _get_metrics():
+    """Lazy import MetricsRegistry to avoid circular imports."""
+    try:
+        from hft_platform.observability.metrics import MetricsRegistry
+
+        return MetricsRegistry.get()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class ShadowOrderSink:
     """Intercepts orders for shadow logging without broker execution."""
 
@@ -49,4 +59,13 @@ class ShadowOrderSink:
             "shadow": True,
         }
         logger.info("Shadow order captured", **record)
+        # Emit Prometheus metrics
+        metrics = _get_metrics()
+        if metrics and hasattr(metrics, "shadow_orders_total"):
+            side_str = str(intent.side.name if hasattr(intent.side, "name") else intent.side)
+            metrics.shadow_orders_total.labels(
+                strategy=intent.strategy_id,
+                symbol=intent.symbol,
+                side=side_str,
+            ).inc()
         return record
