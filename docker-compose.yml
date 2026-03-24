@@ -179,6 +179,11 @@ services:
     <<: *hft-common
     container_name: wal-loader
     command: ["sh", "-lc", "HFT_RUNTIME_ROLE=wal_loader python -m hft_platform.recorder.loader"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import os; os.kill(1, 0)' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -187,6 +192,11 @@ services:
     <<: *hft-common
     container_name: hft-monitor
     command: ["sh", "-lc", "HFT_RUNTIME_ROLE=monitor python scripts/monitor_runtime_health.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import os; os.kill(1, 0)' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       hft-engine:
         condition: service_healthy
