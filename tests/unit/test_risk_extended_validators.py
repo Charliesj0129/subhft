@@ -244,10 +244,10 @@ class TestDailyLossLimitValidator(unittest.TestCase):
         self.assertFalse(ok)
 
         # Simulate date rollover by patching _today_midnight_ns to return tomorrow
-        tomorrow_midnight_ns = validator._current_date_ns + DailyLossLimitValidator._NS_PER_DAY
+        tomorrow_midnight_ns = validator._current_reset_boundary_ns + DailyLossLimitValidator._NS_PER_DAY
         with patch.object(
             DailyLossLimitValidator,
-            "_today_midnight_ns",
+            "_current_boundary_ns",
             return_value=tomorrow_midnight_ns,
         ):
             ok, reason = validator.check(intent)

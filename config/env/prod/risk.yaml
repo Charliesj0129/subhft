@@ -17,6 +17,16 @@ global_limits:
   # Maximum total notional exposure (NTD)
   max_total_notional: 100000
 
+risk:
+  # Daily loss limit: -10,000 NTD = -100,000,000 in scaled int (x10000)
+  max_daily_loss: 100000000
+  max_open_positions: 1          # Phase 3 Canary
+  max_position_lots: 1           # MaxPositionLotsValidator
+  max_order_per_min: 10
+  order_size_limit: 1
+  daily_pnl_reset_hour: 5       # 05:00 local time (Taiwan)
+  halt_requires_manual_recovery: true
+
 symbol_limits:
   TXFD6:
     max_position_lots: 1

@@ -173,10 +173,14 @@ class PositionLimitValidator(RiskValidator):
 
 
 class DailyLossLimitValidator(RiskValidator):
-    """Stateful validator: rejects orders when accumulated daily realized loss exceeds limit.
+    """Stateful validator: rejects orders when accumulated daily loss exceeds limit.
 
-    Tracks cumulative PnL updates per strategy. Caller must invoke record_pnl() to
-    register realized PnL changes. Date-based reset occurs automatically on check().
+    Tracks cumulative PnL updates per strategy (realized) plus a single platform-wide
+    unrealized PnL value supplied by the caller via update_unrealized().  Both are
+    combined when evaluating the limit.
+
+    Reset boundary: 05:00 Taiwan Standard Time (UTC+8) = 21:00 UTC of the
+    *previous* calendar day.  This aligns with Taiwan futures settlement.
 
     Prices are scaled int x10000 per platform conventions.
     Uses timebase.now_ns() for time — never datetime.now().
@@ -185,42 +189,68 @@ class DailyLossLimitValidator(RiskValidator):
     __slots__ = (
         "_default_max_daily_loss",
         "_accumulated_loss",
-        "_current_date_ns",
-        "_ns_per_day",
+        "_current_reset_boundary_ns",
+        "_unrealized_pnl",
+        "halt_triggered",
     )
 
     # Nanoseconds per calendar day
     _NS_PER_DAY: int = 86_400 * 1_000_000_000
+    # 05:00 Taiwan (UTC+8) = 21:00 UTC = 21 * 3600 seconds into the UTC day
+    _RESET_OFFSET_NS: int = 21 * 3600 * 1_000_000_000
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # Stored as a positive threshold; loss is compared as abs value
         self._default_max_daily_loss: int = int(self.defaults.get("max_daily_loss", 500_000_000))
-        # Accumulated PnL per strategy (negative = loss, positive = gain); scaled int
+        # Accumulated realized PnL per strategy (negative = loss, positive = gain); scaled int
         self._accumulated_loss: Dict[str, int] = {}
-        # Epoch-ns of midnight UTC for the current trading day (cached)
-        self._current_date_ns: int = self._today_midnight_ns()
+        # Epoch-ns of the last 21:00 UTC reset boundary (cached)
+        self._current_reset_boundary_ns: int = self._current_boundary_ns()
+        # Platform-wide unrealized PnL (scaled int, updated externally)
+        self._unrealized_pnl: int = 0
+        # Set to True when limit is breached; cleared only by _force_reset()
+        self.halt_triggered: bool = False
 
     @staticmethod
-    def _today_midnight_ns() -> int:
-        """Return epoch nanoseconds for UTC midnight of the current day."""
+    def _current_boundary_ns() -> int:
+        """Return epoch-ns of the most recent 21:00 UTC reset boundary."""
         now_ns = timebase.now_ns()
-        # Floor to day boundary
         ns_per_day = 86_400 * 1_000_000_000
-        return (now_ns // ns_per_day) * ns_per_day
+        offset = 21 * 3600 * 1_000_000_000
+        # Shift time back by offset so that floor-to-day gives us the last 21:00 UTC
+        return ((now_ns - offset) // ns_per_day) * ns_per_day + offset
 
     def _maybe_reset(self) -> None:
-        """Reset accumulated losses if the calendar date has rolled over."""
-        today_ns = self._today_midnight_ns()
-        if today_ns != self._current_date_ns:
+        """Reset accumulated losses if the 05:00 Taiwan (21:00 UTC) boundary has passed."""
+        boundary_ns = self._current_boundary_ns()
+        if boundary_ns != self._current_reset_boundary_ns:
             logger.info(
-                "DailyLossLimitValidator: daily reset",
-                prev_date_ns=self._current_date_ns,
-                new_date_ns=today_ns,
+                "DailyLossLimitValidator: daily reset (05:00 TST)",
+                prev_boundary_ns=self._current_reset_boundary_ns,
+                new_boundary_ns=boundary_ns,
                 strategies_reset=list(self._accumulated_loss.keys()),
             )
             self._accumulated_loss.clear()
-            self._current_date_ns = today_ns
+            self._unrealized_pnl = 0
+            self.halt_triggered = False
+            self._current_reset_boundary_ns = boundary_ns
+
+    def _force_reset(self) -> None:
+        """Unconditionally clear all accumulated state (e.g. for testing or manual override)."""
+        self._accumulated_loss.clear()
+        self._unrealized_pnl = 0
+        self.halt_triggered = False
+        self._current_reset_boundary_ns = self._current_boundary_ns()
+
+    def update_unrealized(self, unrealized_scaled: int) -> None:
+        """Update the platform-wide unrealized PnL used in loss calculations.
+
+        Args:
+            unrealized_scaled: Total unrealized PnL in scaled int (x10000).
+                               Negative = unrealized loss; positive = unrealized gain.
+        """
+        self._unrealized_pnl = unrealized_scaled
 
     def record_pnl(self, strategy_id: str, pnl_delta: int) -> None:
         """Record a realized PnL delta (negative = loss) for a strategy.
@@ -240,20 +270,26 @@ class DailyLossLimitValidator(RiskValidator):
         self._maybe_reset()
 
         accumulated = self._accumulated_loss.get(intent.strategy_id, 0)
-        if accumulated >= 0:
+        # Combine realized + unrealized PnL for the total loss picture
+        total_pnl = accumulated + self._unrealized_pnl
+
+        if total_pnl >= 0:
             # Net gain or breakeven — no loss to check
             return True, "OK"
 
-        loss_magnitude = -accumulated  # positive value representing loss
+        loss_magnitude = -total_pnl  # positive value representing combined loss
 
         strat_cfg = self.strat_configs.get(intent.strategy_id, {})
         max_daily_loss = int(strat_cfg.get("max_daily_loss", self._default_max_daily_loss))
 
         if loss_magnitude >= max_daily_loss:
+            self.halt_triggered = True
             logger.warning(
                 "DailyLossLimitValidator: daily loss limit exceeded",
                 strategy_id=intent.strategy_id,
                 accumulated_loss=accumulated,
+                unrealized_pnl=self._unrealized_pnl,
+                total_pnl=total_pnl,
                 max_daily_loss=max_daily_loss,
             )
             return False, f"DAILY_LOSS_LIMIT_EXCEEDED: loss={loss_magnitude} >= limit={max_daily_loss}"
