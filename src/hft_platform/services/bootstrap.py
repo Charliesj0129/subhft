@@ -178,6 +178,23 @@ def validate_order_mode_safety() -> None:
         )
 
 
+def validate_shadow_lock() -> None:
+    """Dual-lock: refuse startup if shadow mode + live order mode are both active.
+
+    HFT_ORDER_SHADOW_MODE=1 is an observation-only mode — orders are logged but
+    never sent to the broker. Combining it with HFT_ORDER_MODE=live/real is a
+    contradictory and dangerous configuration that must be rejected at boot.
+    """
+    shadow = os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1"
+    order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
+    if shadow and order_mode in {"live", "real"}:
+        logger.critical(
+            "FATAL: HFT_ORDER_SHADOW_MODE=1 cannot be combined with HFT_ORDER_MODE=live/real",
+            order_mode=order_mode,
+        )
+        raise SystemExit(1)
+
+
 class SystemBootstrapper:
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         self.settings = settings if settings is not None else {}
@@ -628,7 +645,24 @@ class SystemBootstrapper:
         # 2. Shared State
         position_store = PositionStore()
         order_id_map: Dict[str, str] = {}
-        storm_guard = StormGuard()
+        # DriftBurst detector for StormGuard (opt-in via env var)
+        drift_burst_detector = None
+        if os.getenv("HFT_STORMGUARD_DRIFT_BURST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
+            from hft_platform.risk.drift_burst_detector import DriftBurstDetector
+
+            db_threshold = float(os.getenv("HFT_STORMGUARD_DRIFT_BURST_THRESHOLD", "3.0"))
+            db_window = int(os.getenv("HFT_STORMGUARD_DRIFT_BURST_WINDOW", "100"))
+            drift_burst_detector = DriftBurstDetector(
+                window_size=db_window,
+                burst_threshold=db_threshold,
+            )
+            logger.info(
+                "DriftBurstDetector enabled for StormGuard",
+                window_size=db_window,
+                burst_threshold=db_threshold,
+            )
+
+        storm_guard = StormGuard(drift_burst_detector=drift_burst_detector)
 
         # Wire StormGuard to EventBus for overflow HALT triggering
         bus.set_storm_guard(storm_guard)
