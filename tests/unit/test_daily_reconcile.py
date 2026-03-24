@@ -3,6 +3,7 @@
 Tests exercise the pure ``compare_positions`` function in isolation — no
 broker API calls or ClickHouse connections are made.
 """
+
 from __future__ import annotations
 
 import os
@@ -108,8 +109,8 @@ def test_all_mismatches_reported() -> None:
         "TXFD6": _pos(2, 200_000_000),
     }
     platform = {
-        "2330": _pos(90, 5_000_000),      # qty differs
-        "TXFD6": _pos(2, 198_500_000),    # pnl differs by 1,500,000 (150 NTD)
+        "2330": _pos(90, 5_000_000),  # qty differs
+        "TXFD6": _pos(2, 198_500_000),  # pnl differs by 1,500,000 (150 NTD)
     }
     ch = {
         "2330": _pos(100, 5_000_000),

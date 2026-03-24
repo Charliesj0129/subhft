@@ -1,4 +1,5 @@
 """Tests for notification event dispatcher."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock

@@ -14,6 +14,7 @@ import pytest
 # module can be imported without the real aiohttp dependency.
 # ---------------------------------------------------------------------------
 
+
 def _build_aiohttp_stub() -> types.ModuleType:
     """Return a minimal aiohttp stub module with ClientSession."""
     stub = types.ModuleType("aiohttp")

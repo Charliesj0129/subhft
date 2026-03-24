@@ -2,6 +2,7 @@
 
 Each test function mocks external dependencies so no live services are needed.
 """
+
 from __future__ import annotations
 
 import sys
