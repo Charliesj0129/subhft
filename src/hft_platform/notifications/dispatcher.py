@@ -242,3 +242,24 @@ class NotificationDispatcher:
             total_pnl_ntd=total_pnl_ntd,
         )
         await self._sender.send(msg, critical=False)
+
+    async def notify_shadow_daily_report(self, **kwargs) -> None:
+        """Send the shadow strategy daily report.
+
+        Args:
+            date_str: Date label, e.g. "2026-04-22 (二)".
+            intent_count: Total number of OrderIntents generated.
+            buys: Number of buy-side OrderIntents.
+            sells: Number of sell-side OrderIntents.
+            simulated_pnl_ntd: Simulated PnL in NTD (with 1-tick slippage).
+            latency_p50_ms: P50 tick-to-signal latency in milliseconds.
+            latency_p95_ms: P95 tick-to-signal latency in milliseconds.
+            latency_p99_ms: P99 tick-to-signal latency in milliseconds.
+            reconnect_count: Number of broker reconnects during the session.
+            queue_peak_pct: Peak queue depth as percentage of capacity.
+            rss_gb: Current RSS memory usage in GB.
+            storm_guard_state: Final StormGuard FSM state name.
+        """
+        msg = templates.render_shadow_daily_report(**kwargs)
+        logger.info("dispatcher.notify_shadow_daily_report", **kwargs)
+        await self._sender.send(msg, critical=False)

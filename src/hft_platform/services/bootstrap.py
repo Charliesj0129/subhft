@@ -25,6 +25,7 @@ from hft_platform.feature.rollout import load_feature_rollout_controller
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 from hft_platform.observability.latency import LatencyRecorder
+from hft_platform.ops.platform_inputs import PlatformDegradeInputs
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.worker import RecorderService
 from hft_platform.risk.engine import RiskEngine
@@ -176,6 +177,23 @@ def validate_order_mode_safety() -> None:
             hft_mode=hft_mode,
             order_mode=order_mode,
         )
+
+
+def validate_shadow_lock() -> None:
+    """Dual-lock: refuse startup if shadow mode + live order mode are both active.
+
+    HFT_ORDER_SHADOW_MODE=1 is an observation-only mode — orders are logged but
+    never sent to the broker. Combining it with HFT_ORDER_MODE=live/real is a
+    contradictory and dangerous configuration that must be rejected at boot.
+    """
+    shadow = os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1"
+    order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
+    if shadow and order_mode in {"live", "real"}:
+        logger.critical(
+            "FATAL: HFT_ORDER_SHADOW_MODE=1 cannot be combined with HFT_ORDER_MODE=live/real",
+            order_mode=order_mode,
+        )
+        raise SystemExit(1)
 
 
 class SystemBootstrapper:
@@ -628,7 +646,24 @@ class SystemBootstrapper:
         # 2. Shared State
         position_store = PositionStore()
         order_id_map: Dict[str, str] = {}
-        storm_guard = StormGuard()
+        # DriftBurst detector for StormGuard (opt-in via env var)
+        drift_burst_detector = None
+        if os.getenv("HFT_STORMGUARD_DRIFT_BURST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
+            from hft_platform.risk.drift_burst_detector import DriftBurstDetector
+
+            db_threshold = float(os.getenv("HFT_STORMGUARD_DRIFT_BURST_THRESHOLD", "3.0"))
+            db_window = int(os.getenv("HFT_STORMGUARD_DRIFT_BURST_WINDOW", "100"))
+            drift_burst_detector = DriftBurstDetector(
+                window_size=db_window,
+                burst_threshold=db_threshold,
+            )
+            logger.info(
+                "DriftBurstDetector enabled for StormGuard",
+                window_size=db_window,
+                burst_threshold=db_threshold,
+            )
+
+        storm_guard = StormGuard(drift_burst_detector=drift_burst_detector)
 
         # Wire StormGuard to EventBus for overflow HALT triggering
         bus.set_storm_guard(storm_guard)
@@ -796,6 +831,15 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
         )
         recorder = RecorderService(recorder_queue)
+        platform_degrade_inputs = PlatformDegradeInputs(
+            md_service=md_service,
+            recorder=recorder,
+            raw_queue=raw_queue,
+            raw_exec_queue=raw_exec_queue,
+            recorder_queue=recorder_queue,
+            risk_queue=risk_queue,
+            order_queue=order_queue,
+        )
 
         return ServiceRegistry(
             settings=self.settings,
@@ -827,6 +871,7 @@ class SystemBootstrapper:
             recon_service=recon_service,
             strategy_runner=strategy_runner,
             recorder=recorder,
+            platform_degrade_inputs=platform_degrade_inputs,
             gateway_service=gateway_service,
             intent_channel=intent_channel,
         )

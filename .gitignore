@@ -63,6 +63,9 @@ claude.json
 reports/
 artifacts/
 outputs/
+!outputs/production_rollout/
+!outputs/production_rollout/phase2/
+!outputs/production_rollout/phase2/README.md
 research/
 !research/
 research/*
