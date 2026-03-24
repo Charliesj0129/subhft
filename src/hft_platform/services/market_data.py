@@ -414,7 +414,12 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
             host = os.getenv("HFT_MONITOR_REDIS_HOST", "redis")
             port = int(os.getenv("HFT_MONITOR_REDIS_PORT", "6379"))
-            password = os.getenv("HFT_MONITOR_REDIS_PASSWORD", os.getenv("REDIS_PASSWORD", ""))
+            password = (
+                os.getenv("HFT_MONITOR_REDIS_PASSWORD")
+                or os.getenv("HFT_REDIS_PASSWORD")
+                or os.getenv("REDIS_PASSWORD")
+                or ""
+            )
             self._redis_publisher = MonitorLivePublisher(host=host, port=port, password=password)
             self._redis_publisher.start()
             logger.info("redis_publisher_enabled", host=host, port=port)
