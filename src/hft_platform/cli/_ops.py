@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from hft_platform.config.loader import load_settings
+from hft_platform.ops.manual_rearm import ManualRearmGate
 
 
 def cmd_feed_status(args: argparse.Namespace) -> None:
@@ -341,3 +342,28 @@ def cmd_recorder_status(args: argparse.Namespace) -> None:
     print()
     print("Config:")
     print(f"  Batcher:     {batcher_max} rows/table | WAL batch: {wal_batch_max} rows | CK pool: {ck_pool} threads")
+
+
+def _manual_rearm_gate(args: argparse.Namespace) -> ManualRearmGate:
+    return ManualRearmGate(state_path=getattr(args, "state_path", None))
+
+
+def cmd_ops_rearm_strategy(args: argparse.Namespace) -> None:
+    gate = _manual_rearm_gate(args)
+    try:
+        gate.rearm_strategy(args.strategy_id)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
+    print(f"Strategy re-armed: {args.strategy_id}")
+
+
+def cmd_ops_rearm_platform(args: argparse.Namespace) -> None:
+    gate = _manual_rearm_gate(args)
+    gate.rearm_platform()
+    print("Platform re-armed.")
+
+
+def cmd_ops_autonomy_status(args: argparse.Namespace) -> None:
+    gate = _manual_rearm_gate(args)
+    print(json.dumps(gate.snapshot(), indent=2, ensure_ascii=False))

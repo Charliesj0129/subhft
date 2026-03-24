@@ -121,6 +121,26 @@ class TestBuildServiceGraph:
         assert registry.broker_id == "shioaji"
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_build_wires_platform_degrade_thresholds_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S", "15")
+        monkeypatch.setenv("HFT_PLATFORM_REDUCE_ONLY_RECONNECT_PENDING_S", "25")
+        monkeypatch.setenv("HFT_PLATFORM_REDUCE_ONLY_RECONNECT_FLAP_BUDGET", "9")
+        monkeypatch.setenv("HFT_PLATFORM_REDUCE_ONLY_QUEUE_DEPTH", "777")
+        monkeypatch.setenv("HFT_PLATFORM_REDUCE_ONLY_RSS_MB", "321")
+        monkeypatch.setenv("HFT_PLATFORM_REDUCE_ONLY_WAL_BACKLOG_FILES", "45")
+
+        registry = _build_with_mocks()
+        inputs = registry.platform_degrade_inputs
+
+        assert inputs is not None
+        assert inputs.feed_gap_threshold_s == 15.0
+        assert inputs.reconnect_pending_threshold_s == 25.0
+        assert inputs.reconnect_flap_budget == 9
+        assert inputs.queue_depth_threshold == 777
+        assert inputs.rss_threshold_mb == 321
+        assert inputs.wal_backlog_files_threshold == 45
+
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
     def test_build_sim_gateway_disabled_by_default(self) -> None:
         registry = _build_with_mocks()
         assert registry.gateway_service is None
@@ -224,6 +244,9 @@ class TestBrokerInjection:
 
         mock_fubon_facade_cls = MagicMock()
         mock_fubon_facade_cls.return_value = MagicMock()
+        mock_fubon_order_codec_cls = MagicMock()
+        fake_codec_module = MagicMock()
+        fake_codec_module.FubonOrderCodec = mock_fubon_order_codec_cls
 
         fake_module = MagicMock()
         fake_module.FubonClientFacade = mock_fubon_facade_cls
@@ -233,12 +256,14 @@ class TestBrokerInjection:
             {
                 "hft_platform.feed_adapter.fubon": MagicMock(),
                 "hft_platform.feed_adapter.fubon.facade": fake_module,
+                "hft_platform.feed_adapter.fubon.order_codec": fake_codec_module,
             },
         ):
             registry = _build_with_mocks()
 
         assert registry.broker_id == "fubon"
         assert mock_fubon_facade_cls.call_count == 2
+        assert mock_fubon_order_codec_cls.call_count == 1
 
     @pytest.mark.usefixtures("_mock_services")
     def test_invalid_broker_raises_value_error(self, monkeypatch: pytest.MonkeyPatch) -> None:

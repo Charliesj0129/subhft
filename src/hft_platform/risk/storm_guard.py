@@ -9,6 +9,7 @@ from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardS
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.audit import get_audit_writer
+from hft_platform.risk.drift_burst_detector import DriftBurstDetector
 
 logger = get_logger("risk.storm_guard")
 
@@ -45,12 +46,14 @@ class StormGuard:
         "_halt_entry_ts",
         "_de_escalate_threshold",
         "_on_halt_callback",
+        "_drift_burst_detector",
     )
 
     def __init__(
         self,
         thresholds: RiskThresholds | None = None,
         on_halt_callback: Callable[[], Any] | None = None,
+        drift_burst_detector: DriftBurstDetector | None = None,
     ):
         self.state = StormGuardState.NORMAL
         self.thresholds = thresholds or RiskThresholds()
@@ -64,6 +67,7 @@ class StormGuard:
         self._halt_entry_ts: float = 0.0  # precision-time
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._on_halt_callback = on_halt_callback
+        self._drift_burst_detector = drift_burst_detector
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -167,6 +171,66 @@ class StormGuard:
         else:
             if new_state >= StormGuardState.STORM:
                 self._de_escalate_count = 0
+
+        return self.state
+
+    def update_with_lob(
+        self,
+        mid_price_x2: int,
+        spread_scaled: int = 0,
+        imbalance: float = 0.0,
+        ts: int = 0,
+    ) -> StormGuardState:
+        """Evaluate LOB-derived drift-burst toxicity and escalate state if needed.
+
+        This method is additive-only: it can escalate the StormGuard state but
+        never de-escalate it. If no DriftBurstDetector is configured, this is
+        a no-op that returns the current state.
+
+        Args:
+            mid_price_x2: best_bid + best_ask (scaled int x10000).
+            spread_scaled: best_ask - best_bid (scaled int x10000).
+            imbalance: LOB imbalance ratio [-1, 1].
+            ts: Timestamp in nanoseconds.
+
+        Returns:
+            Current StormGuardState after potential escalation.
+        """
+        detector = self._drift_burst_detector
+        if detector is None:
+            return self.state
+
+        result = detector.evaluate(mid_price_x2, spread_scaled, imbalance, ts)
+
+        # Determine escalation target from toxicity signal
+        # Only escalate, never de-escalate (additive safety)
+        if result.burst_detected and result.toxicity_score > 0.9:
+            target = StormGuardState.HALT
+            reason = f"DriftBurst HALT: toxicity={result.toxicity_score:.3f}"
+        elif result.toxicity_score > 0.8:
+            target = StormGuardState.STORM
+            reason = f"DriftBurst STORM: toxicity={result.toxicity_score:.3f}"
+        elif result.toxicity_score > 0.5:
+            target = StormGuardState.WARM
+            reason = f"DriftBurst WARM: toxicity={result.toxicity_score:.3f}"
+        else:
+            return self.state
+
+        # Only escalate — never de-escalate from drift burst
+        if target > self.state:
+            now = timebase.now_s()
+            self._de_escalate_count = 0
+            if target >= StormGuardState.STORM and self.state < StormGuardState.STORM:
+                self._storm_entry_ts = now
+            if target == StormGuardState.HALT:
+                self._halt_entry_ts = now
+            self.transition(target, reason)
+            logger.info(
+                "StormGuard drift_burst escalation",
+                new_state=target.name,
+                toxicity_score=f"{result.toxicity_score:.3f}",
+                burst_detected=result.burst_detected,
+            )
 
         return self.state
 

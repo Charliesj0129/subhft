@@ -186,6 +186,35 @@ symbols:
     assert config.symbol_source == ""
 
 
+def test_explicit_symbols_inherit_default_alpha_ids(tmp_path: Path) -> None:
+    """Explicit watchlist symbols should inherit monitor.default_alpha_ids."""
+    watchlist = tmp_path / "watchlist.yaml"
+    watchlist.write_text(
+        """
+monitor:
+  default_alpha_ids: [ofi_surprise]
+symbols:
+  - code: TMFC6
+    alpha_ids: []
+""".strip()
+    )
+
+    symbols = tmp_path / "symbols.yaml"
+    symbols.write_text(
+        """
+symbols:
+  - code: TMFC6
+    name: 微台
+    product_type: future
+""".strip()
+    )
+
+    config = load_watchlist(watchlist, symbols)
+
+    assert len(config.symbols) == 1
+    assert config.symbols[0].alpha_ids == ("ofi_surprise",)
+
+
 def test_is_expired_contract() -> None:
     """S5: expired contract detection for futures month codes."""
     all_codes = {"TMFC6", "TMFE6", "TMFG6"}

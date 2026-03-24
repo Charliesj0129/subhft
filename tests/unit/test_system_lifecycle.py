@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from hft_platform.risk.storm_guard import StormGuardState
+from hft_platform.ops.platform_inputs import PlatformDegradeInputs
 from hft_platform.services.system import HFTSystem
 
 
@@ -102,3 +103,34 @@ def test_restart_service_backoff_prevents_restart_storm():
     system._try_restart_service("md", "MarketDataService", system.md_service.run)
 
     assert system._start_service.call_count == 1
+
+
+def test_init_preserves_registry_platform_degrade_inputs_thresholds():
+    registry = _registry()
+    registry.platform_degrade_inputs = PlatformDegradeInputs(
+        md_service=registry.md_service,
+        recorder=registry.recorder,
+        raw_queue=registry.raw_queue,
+        raw_exec_queue=registry.raw_exec_queue,
+        recorder_queue=registry.recorder_queue,
+        risk_queue=registry.risk_queue,
+        order_queue=registry.order_queue,
+        feed_gap_threshold_s=7.0,
+        reconnect_pending_threshold_s=11.0,
+        reconnect_flap_budget=3,
+        queue_depth_threshold=123,
+        rss_threshold_mb=456,
+        wal_backlog_files_threshold=8,
+    )
+    bootstrapper = MagicMock()
+    bootstrapper.build.return_value = registry
+
+    with patch("hft_platform.services.system.SystemBootstrapper", return_value=bootstrapper):
+        system = HFTSystem({})
+
+    assert system.platform_degrade_inputs.feed_gap_threshold_s == 7.0
+    assert system.platform_degrade_inputs.reconnect_pending_threshold_s == 11.0
+    assert system.platform_degrade_inputs.reconnect_flap_budget == 3
+    assert system.platform_degrade_inputs.queue_depth_threshold == 123
+    assert system.platform_degrade_inputs.rss_threshold_mb == 456
+    assert system.platform_degrade_inputs.wal_backlog_files_threshold == 8

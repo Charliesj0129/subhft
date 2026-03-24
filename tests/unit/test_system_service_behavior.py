@@ -72,6 +72,9 @@ def _make_system():
             sys_obj.strategy_runner = mock_reg.strategy_runner
             sys_obj.recorder = mock_reg.recorder
             sys_obj.gateway_service = None
+            sys_obj.evidence_writer = MagicMock()
+            sys_obj.platform_degrade_controller = MagicMock()
+            sys_obj.platform_degrade_inputs = MagicMock()
             sys_obj.tasks = {}
             sys_obj._recorder_drop_on_full = True
             sys_obj._bootstrap_torn_down = False

@@ -91,6 +91,8 @@
 
 - [ ] Acknowledge any PagerDuty/Slack alerts promptly.
 - [ ] If HALT triggered, follow `halt-recovery.md` runbook.
+- [ ] If `STRATEGY_QUARANTINED` alert fires, isolate the strategy for the rest of the session unless postmortem evidence supports a manual re-arm.
+- [ ] If `PLATFORM_REDUCE_ONLY` alert fires, stop expecting new exposure; verify flatten-only behavior and plan a manual re-arm after reconciliation.
 
 ---
 
@@ -104,6 +106,11 @@
   # Must show zero discrepancies
   ```
 - [ ] **Fill reconciliation**: Compare internal fill count vs broker-reported fills.
+- [ ] **Autonomy state**:
+  ```bash
+  hft ops autonomy-status
+  ```
+  No pending manual re-arm should remain unless the next session is intentionally blocked.
 
 ### Data Flush
 
@@ -147,6 +154,8 @@
   ```bash
   docker compose down
   ```
+- [ ] **Evidence pack**:
+  Verify `outputs/production_rollout/autonomy/<YYYYMMDD>/` contains `state_timeline.jsonl`, `platform_degrade.json`, `strategy_quarantine.json`, and `manual_rearm_requirements.md`.
 
 ---
 

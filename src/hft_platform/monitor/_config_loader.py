@@ -154,7 +154,7 @@ def load_watchlist(
             meta = sym_meta.get(code, {})
             name = meta.get("name", code)
             product_type = meta.get("product_type", "stock")
-            alpha_ids = tuple(str(a) for a in entry.get("alpha_ids", []))
+            alpha_ids = tuple(str(a) for a in entry.get("alpha_ids", [])) or default_alpha_ids
             if not alpha_ids:
                 logger.warning("skipping symbol with no alphas", code=code)
                 continue

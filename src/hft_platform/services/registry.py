@@ -56,3 +56,8 @@ class ServiceRegistry:
     # CE-M2: GatewayService wiring (appended at end for slots safety)
     gateway_service: Optional[Any] = field(default=None)
     intent_channel: Optional[Any] = field(default=None)
+    strategy_governor: Optional[Any] = field(default=None)
+    platform_degrade_controller: Optional[Any] = field(default=None)
+    platform_degrade_inputs: Optional[Any] = field(default=None)
+    evidence_writer: Optional[Any] = field(default=None)
+    manual_rearm_service: Optional[Any] = field(default=None)

@@ -7,6 +7,7 @@ monitor:
   stale_threshold_s: 6.0
   max_retries: 20
   data_source: auto
+  default_alpha_ids: [ofi_surprise]
 
 symbols:
   # === Futures (night + day) — D6 = April 2026 front month ===

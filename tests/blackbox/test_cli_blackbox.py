@@ -98,10 +98,61 @@ def test_cli_feed_status_unreachable():
 
 
 @pytest.mark.blackbox
+def test_cli_ops_rearm_strategy_updates_runtime_state(tmp_path):
+    state_path = tmp_path / "outputs/production_rollout/autonomy/runtime_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "platform": {"manual_rearm_required": False, "reason": None},
+                "strategies": {
+                    "strat_a": {"manual_rearm_required": True, "reason": "strategy_reject_spike"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_cli(["ops", "rearm-strategy", "--strategy-id", "strat_a"], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "strategy re-armed: strat_a" in result.stdout.lower()
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["strategies"]["strat_a"]["manual_rearm_required"] is False
+    assert payload["strategies"]["strat_a"]["reason"] is None
+
+
+@pytest.mark.blackbox
+def test_cli_ops_rearm_platform_emits_success_message(tmp_path):
+    state_path = tmp_path / "outputs/production_rollout/autonomy/runtime_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "platform": {"manual_rearm_required": True, "reason": "clickhouse_unhealthy"},
+                "strategies": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_cli(["ops", "rearm-platform"], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "platform re-armed" in result.stdout.lower()
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["platform"]["manual_rearm_required"] is False
+    assert payload["platform"]["reason"] is None
+
+
+@pytest.mark.blackbox
 def test_cli_backtest_convert_and_run(tmp_path):
     stub = tmp_path / "stub"
     pkg = stub / "hftbacktest"
+    dist_info = stub / "hftbacktest-2.4.0.dist-info"
     pkg.mkdir(parents=True)
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: hftbacktest\nVersion: 2.4.0\n", encoding="utf-8")
 
     (pkg / "__init__.py").write_text(
         "\n".join(
@@ -125,6 +176,7 @@ def test_cli_backtest_convert_and_run(tmp_path):
                 "class HashMapMarketDepthBacktest:",
                 "    def __init__(self, *a, **k):",
                 "        self.current_timestamp = 0",
+                "    def wait_next_feed(self, *a, **k): return 1",
                 "    def run(self): return False",
                 "    def elapse(self, *a, **k): return False",
                 "    def depth(self, *a, **k): raise RuntimeError('depth not used')",
@@ -137,7 +189,7 @@ def test_cli_backtest_convert_and_run(tmp_path):
         )
         + "\n"
     )
-    (pkg / "order.py").write_text("IOC=object()\nROD=object()\nLimit=object()\n")
+    (pkg / "order.py").write_text("IOC=object()\nGTC=object()\nLIMIT=object()\nROD=object()\nLimit=object()\n")
     (pkg / "types.py").write_text(
         "\n".join(
             [
