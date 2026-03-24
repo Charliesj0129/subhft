@@ -9,6 +9,8 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
+from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
+from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
 from hft_platform.services.heartbeat import write_heartbeat
@@ -103,6 +105,27 @@ class HFTSystem:
         self.strategy_runner = self.registry.strategy_runner
         self.recorder = self.registry.recorder
         self.gateway_service = self.registry.gateway_service
+        self.evidence_writer = getattr(self.registry, "evidence_writer", None) or get_shared_autonomy_evidence_writer()
+        self.platform_degrade_controller = (
+            getattr(self.registry, "platform_degrade_controller", None) or get_shared_platform_degrade_controller()
+        )
+        self.platform_degrade_inputs = getattr(self.registry, "platform_degrade_inputs", None) or self.bootstrapper.build_platform_degrade_inputs(
+            md_service=self.md_service,
+            recorder=self.recorder,
+            raw_queue=self.raw_queue,
+            raw_exec_queue=self.raw_exec_queue,
+            recorder_queue=self.recorder_queue,
+            risk_queue=self.risk_queue,
+            order_queue=self.order_queue,
+        )
+        self.platform_degrade_inputs.bind_runtime_probes(
+            redis_client=getattr(self, "redis_client", None),
+            redis_healthcheck=getattr(self, "redis_healthcheck", None),
+        )
+        self.platform_degrade_controller.evidence_writer = self.evidence_writer
+        self.order_adapter.platform_degrade_controller = self.platform_degrade_controller
+        self.order_adapter.position_store = self.position_store
+        self.recon_service.platform_degrade_controller = self.platform_degrade_controller
 
         self._mtm_calculator = None
         try:
@@ -149,6 +172,12 @@ class HFTSystem:
             pass
 
         logger.info("System Starting...")
+        self.evidence_writer.record_transition(
+            scope="platform",
+            mode="NORMAL",
+            reason="system_start",
+            manual_rearm_required=False,
+        )
 
         # Hooks for Shioaji
         self.order_client.set_execution_callbacks(
@@ -325,6 +354,14 @@ class HFTSystem:
         )
         self._start_service(name, coro_factory())
 
+    def _update_platform_degrade_state(self) -> None:
+        controller = getattr(self, "platform_degrade_controller", None)
+        inputs = getattr(self, "platform_degrade_inputs", None)
+        if controller is None or inputs is None:
+            return
+        for reason in inputs.reduce_only_reasons():
+            controller.enter_reduce_only(reason=reason)
+
     async def _supervise(self):
         """
         Active Supervisor Loop.
@@ -375,6 +412,18 @@ class HFTSystem:
                     latency_us=latency_us,
                     feed_gap_s=feed_gap_s,
                 )
+
+                # 4b. Update StormGuard with LOB-derived drift-burst toxicity
+                if hasattr(self.storm_guard, 'update_with_lob'):
+                    lob_engine = getattr(self.md_service, "lob", None)
+                    if lob_engine is not None:
+                        for book in lob_engine.books.values():
+                            if book.mid_price_x2 > 0:
+                                self.storm_guard.update_with_lob(
+                                    mid_price_x2=book.mid_price_x2,
+                                    spread_scaled=book.spread,
+                                    imbalance=book.imbalance,
+                                )
 
                 # 5. Update per-symbol feed gap metrics
                 feed_gap_metric = getattr(metrics, "feed_gap_by_symbol_seconds", None)
@@ -449,6 +498,8 @@ class HFTSystem:
                     raw_exec=self.raw_exec_queue.qsize(),
                 )
 
+            self._update_platform_degrade_state()
+
             now = timebase.now_s()
             t_router = self.tasks.get("exec_router")
             if t_router and not t_router.done():
@@ -510,6 +561,12 @@ class HFTSystem:
 
         self.tasks.clear()
         self._teardown_bootstrap()
+        self.evidence_writer.record_transition(
+            scope="platform",
+            mode="CLOSED",
+            reason="system_stop",
+            manual_rearm_required=False,
+        )
         logger.info("System stopped and tasks cleaned up")
 
     def stop(self):
@@ -526,6 +583,12 @@ class HFTSystem:
         for cn in ("md_client", "order_client"):
             self._close_broker_client(cn)
         self._teardown_bootstrap()
+        self.evidence_writer.record_transition(
+            scope="platform",
+            mode="CLOSED",
+            reason="system_stop",
+            manual_rearm_required=False,
+        )
 
         # Schedule async cleanup if event loop is available
         loop = getattr(self, "loop", None)

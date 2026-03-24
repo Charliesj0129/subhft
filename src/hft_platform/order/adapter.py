@@ -6,7 +6,7 @@ from typing import Any, Dict, TypeAlias, TypeGuard, cast
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, Side, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
@@ -14,6 +14,7 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.protocol import BrokerOrderCodec
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
 from hft_platform.order.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult, RateLimiter
@@ -135,6 +136,8 @@ class OrderAdapter:
         self.per_symbol_rate_limiter = PerSymbolRateLimiter()
         self.strategy_cb_mgr = StrategyCircuitBreakerManager()
         self.shadow_sink = ShadowOrderSink()
+        self.platform_degrade_controller = get_shared_platform_degrade_controller(metrics=self.metrics)
+        self.position_store = None
 
         self.load_config()
 
@@ -306,6 +309,13 @@ class OrderAdapter:
             await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Rate limit exceeded")
             return
 
+        if not self._platform_degrade_allows(intent):
+            self.metrics.order_reject_total.inc()
+            self._emit_trace("order_reject", intent, {"reason": "platform_reduce_only", "cmd_id": int(cmd.cmd_id)})
+            await self._add_to_dlq(intent, "platform_reduce_only", "Platform is in reduce-only mode")
+            return
+        self._reserve_platform_reduce_only_close(intent)
+
         # Shadow mode intercept (WU-10)
         if self.shadow_sink.enabled:
             self.shadow_sink.intercept(intent)
@@ -356,6 +366,116 @@ class OrderAdapter:
         if intent.intent_type == IntentType.AMEND:
             return hasattr(self.client, "update_order")
         return True
+
+    def _platform_degrade_allows(self, intent: OrderIntent) -> bool:
+        controller = getattr(self, "platform_degrade_controller", None)
+        if controller is None:
+            return True
+        if getattr(controller, "reduce_only_active", False) and intent.intent_type == IntentType.NEW:
+            return self._platform_reduce_only_new_order_allowed(intent)
+        return controller.allow_intent(
+            intent_type=intent.intent_type,
+            opens_risk=self._intent_opens_risk(intent),
+        )
+
+    def _platform_reduce_only_new_order_allowed(self, intent: OrderIntent) -> bool:
+        local_capacity = self._available_close_capacity(intent.symbol, intent.side)
+        controller = getattr(self, "platform_degrade_controller", None)
+        reference_capacity = 0
+        if controller is not None:
+            reference_net = controller.reference_available_net_qty(intent.symbol)
+            reference_capacity = self._close_capacity(reference_net or 0, intent.side)
+        return int(intent.qty) <= max(local_capacity, reference_capacity)
+
+    def _intent_opens_risk(self, intent: OrderIntent) -> bool:
+        if intent.intent_type != IntentType.NEW:
+            return False
+
+        net_qty = self._reference_net_position_for_intent(intent)
+        if net_qty == 0:
+            return True
+        if net_qty > 0:
+            return not (intent.side == Side.SELL and intent.qty <= net_qty)
+        return not (intent.side == Side.BUY and intent.qty <= abs(net_qty))
+
+    def _reference_net_position_for_intent(self, intent: OrderIntent) -> int:
+        controller = getattr(self, "platform_degrade_controller", None)
+        if controller is not None:
+            ref_qty = controller.reference_available_net_qty(intent.symbol)
+            if ref_qty is not None:
+                return int(ref_qty)
+        return self._platform_net_position_for_symbol(intent.symbol)
+
+    def _reserve_platform_reduce_only_close(self, intent: OrderIntent) -> None:
+        controller = getattr(self, "platform_degrade_controller", None)
+        if controller is None or not getattr(controller, "reduce_only_active", False):
+            return
+        if intent.intent_type != IntentType.NEW:
+            return
+        reference_net = controller.reference_available_net_qty(intent.symbol)
+        if self._close_capacity(reference_net or 0, intent.side) <= 0:
+            return
+        controller.reserve_reference_close(symbol=intent.symbol, qty=int(intent.qty))
+
+    def _available_close_capacity(self, symbol: str, side: Side) -> int:
+        local_net = self._platform_net_position_for_symbol(symbol)
+        pending_close = self._pending_close_qty(symbol, side)
+        return max(0, self._close_capacity(local_net, side) - pending_close)
+
+    @staticmethod
+    def _close_capacity(net_qty: int, side: Side) -> int:
+        if net_qty > 0 and side == Side.SELL:
+            return int(net_qty)
+        if net_qty < 0 and side == Side.BUY:
+            return int(abs(net_qty))
+        return 0
+
+    def _pending_close_qty(self, symbol: str, side: Side) -> int:
+        pending_qty = 0
+        for trade in self.live_orders.values():
+            if self._live_order_symbol(trade) != symbol:
+                continue
+            if self._live_order_side(trade) != side:
+                continue
+            pending_qty += self._live_order_qty(trade)
+        return pending_qty
+
+    @staticmethod
+    def _live_order_symbol(trade: Any) -> str:
+        if isinstance(trade, dict):
+            return str(trade.get("contract_code") or trade.get("symbol") or "")
+        return str(getattr(trade, "contract_code", "") or getattr(trade, "symbol", ""))
+
+    @staticmethod
+    def _live_order_side(trade: Any) -> Side | None:
+        raw = ""
+        if isinstance(trade, dict):
+            raw = str(trade.get("action") or trade.get("side") or "").upper()
+        else:
+            raw = str(getattr(trade, "action", "") or getattr(trade, "side", "")).upper()
+        if raw in {"SELL", "ACTION.SELL", "1"}:
+            return Side.SELL
+        if raw in {"BUY", "ACTION.BUY", "0"}:
+            return Side.BUY
+        return None
+
+    @staticmethod
+    def _live_order_qty(trade: Any) -> int:
+        if isinstance(trade, dict):
+            return int(trade.get("qty", 0) or 0)
+        return int(getattr(trade, "qty", 0) or 0)
+
+    def _platform_net_position_for_symbol(self, symbol: str) -> int:
+        position_store = getattr(self, "position_store", None)
+        if position_store is None:
+            return 0
+        positions = getattr(position_store, "positions", {})
+        net_qty = 0
+        for pos in positions.values():
+            if getattr(pos, "symbol", None) != symbol:
+                continue
+            net_qty += int(getattr(pos, "net_qty", 0))
+        return net_qty
 
     async def _dispatch_to_api(self, cmd: OrderCommand) -> None:
         intent = cmd.intent

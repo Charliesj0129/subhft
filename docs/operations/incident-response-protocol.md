@@ -11,6 +11,11 @@ Standard operating procedures for HFT Platform production incidents.
 | **P2 - Medium** | Partial degradation, no immediate financial impact | Elevated queue depths, single symbol feed stale, recorder latency spike, non-critical service restart | 30 min acknowledge, 2h first response |
 | **P3 - Low** | Cosmetic or informational, no trading impact | Grafana dashboard error, metrics cardinality warning, non-production environment issue | Next business day |
 
+Autonomy alert severity mapping:
+- `WARN`: strategy quarantine, single dependency wobble, evidence pack ready.
+- `HIGH`: platform `reduce-only`, intraday reconciliation drift, dependency degradation with trading impact.
+- `CRITICAL`: `HALT`, force-flat failure, broker/account state not trustworthy.
+
 ## Escalation Timeline
 
 | Time since detection | Action |
@@ -62,10 +67,9 @@ StormGuard enters HALT state
 ```
 Reconciliation drift detected
 |
-+-- Check magnitude
-|   +-- > 5% or > absolute threshold --> P0, halt new orders for affected symbols
-|   +-- 1-5% --> P1, investigate but continue trading with reduced limits
-|   +-- < 1% --> P2, investigate async
++-- First observation only?
+|   +-- YES --> WARN only, preserve evidence, watch for persistence/growth
+|   +-- NO --> move platform to reduce-only and investigate immediately
 |
 +-- Identify source
 |   +-- Missed fill event --> check broker execution logs, replay if available
@@ -76,6 +80,7 @@ Reconciliation drift detected
 |   +-- Run manual reconciliation: hft reconcile --force --symbol <SYM>
 |   +-- If broker position differs: broker is source of truth, adjust internal state
 |   +-- Log all adjustments with full audit trail
+|   +-- When clean: clear manual lock with `hft ops rearm-platform`
 ```
 
 ### 3. ClickHouse Down

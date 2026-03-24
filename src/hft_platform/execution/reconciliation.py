@@ -12,6 +12,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk.storm_guard import StormGuard
 
 logger = get_logger("reconciliation")
@@ -84,6 +85,7 @@ class ReconciliationService:
         self.store = position_store
         self.config = config
         self.storm_guard = storm_guard
+        self.platform_degrade_controller = get_shared_platform_degrade_controller()
 
         recon_cfg = config.get("reconciliation", {})
 
@@ -108,6 +110,8 @@ class ReconciliationService:
         self.last_heartbeat: float = timebase.now_s()  # precision-ok
         self.running: bool = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
+        self._last_noncritical_drift_signature: dict[str, int] = {}
+        self._noncritical_drift_streak: int = 0
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
 
@@ -221,6 +225,7 @@ class ReconciliationService:
                 local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
 
             logger.info("Portfolio Sync: Local State", positions=local_map)
+            self.platform_degrade_controller.update_reference_positions(local_map=local_map, broker_map=broker_map)
 
             # 4. Compute discrepancies
             discrepancies = self._compute_discrepancies(local_map, broker_map)
@@ -252,16 +257,45 @@ class ReconciliationService:
                 # 8. Check for critical discrepancies and trigger HALT if needed
                 critical = [d for d in discrepancies if d.is_critical]
                 if critical:
+                    self._last_noncritical_drift_signature = {}
+                    self._noncritical_drift_streak = 0
                     await self._trigger_halt(critical)
+                else:
+                    signature = self._noncritical_drift_signature_for(discrepancies)
+                    persists_or_grows = self._noncritical_drift_persists_or_grows(signature)
+                    self._noncritical_drift_streak = self._noncritical_drift_streak + 1 if persists_or_grows else 1
+                    self._last_noncritical_drift_signature = signature
+                    logger.warning(
+                        "Non-critical reconciliation drift observed",
+                        consecutive_observations=self._noncritical_drift_streak,
+                        persists_or_grows=persists_or_grows,
+                    )
+                    if persists_or_grows and self._noncritical_drift_streak >= 2:
+                        self.platform_degrade_controller.enter_reduce_only(reason="reconciliation_drift")
             else:
+                self._last_noncritical_drift_signature = {}
+                self._noncritical_drift_streak = 0
                 logger.info("Portfolio Sync Complete - No discrepancies", count=len(broker_map))
 
         except Exception as e:
+            self._last_noncritical_drift_signature = {}
+            self._noncritical_drift_streak = 0
             duration = time.monotonic() - t0
             self._record_sync_duration(duration)
             self._record_sync_result("failure")
             logger.error("Portfolio Sync Failed", error=str(e), exc_info=True)
             raise
+
+    @staticmethod
+    def _noncritical_drift_signature_for(discrepancies: List[PositionDiscrepancy]) -> dict[str, int]:
+        return {d.symbol: abs(int(d.diff)) for d in discrepancies if not d.is_critical}
+
+    def _noncritical_drift_persists_or_grows(self, current_signature: dict[str, int]) -> bool:
+        previous_signature = self._last_noncritical_drift_signature
+        if not previous_signature or not current_signature:
+            return False
+        overlapping_symbols = set(previous_signature) & set(current_signature)
+        return bool(overlapping_symbols)
 
     def _compute_discrepancies(
         self, local_map: Dict[str, int], broker_map: Dict[str, int]

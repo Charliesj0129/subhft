@@ -40,6 +40,9 @@ from ._ops import (
     cmd_contracts_status,
     cmd_diag,
     cmd_feed_status,
+    cmd_ops_autonomy_status,
+    cmd_ops_rearm_platform,
+    cmd_ops_rearm_strategy,
     cmd_recorder_status,
     cmd_strat_test,
 )
@@ -254,6 +257,22 @@ def build_parser() -> argparse.ArgumentParser:
     recorder_status.add_argument("--wal-dir", help="Override WAL directory path")
     recorder_status.add_argument("--ck-host", help="Override ClickHouse host")
     recorder_status.set_defaults(func=cmd_recorder_status)
+
+    ops = sub.add_parser("ops", help="Autonomy control-plane utilities")
+    ops_sub = ops.add_subparsers(dest="ops_cmd")
+
+    ops_rearm_strategy = ops_sub.add_parser("rearm-strategy", help="Clear manual re-arm for one strategy")
+    ops_rearm_strategy.add_argument("--strategy-id", required=True, help="Strategy id to re-arm")
+    ops_rearm_strategy.add_argument("--state-path", help="Override autonomy runtime state path")
+    ops_rearm_strategy.set_defaults(func=cmd_ops_rearm_strategy)
+
+    ops_rearm_platform = ops_sub.add_parser("rearm-platform", help="Clear platform manual re-arm state")
+    ops_rearm_platform.add_argument("--state-path", help="Override autonomy runtime state path")
+    ops_rearm_platform.set_defaults(func=cmd_ops_rearm_platform)
+
+    ops_status = ops_sub.add_parser("autonomy-status", help="Show persisted autonomy runtime state")
+    ops_status.add_argument("--state-path", help="Override autonomy runtime state path")
+    ops_status.set_defaults(func=cmd_ops_autonomy_status)
 
     # ── Risk Management ────────────────────────────────────────────────
     risk = sub.add_parser("risk", help="Risk management utilities")

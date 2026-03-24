@@ -97,6 +97,15 @@ src/hft_platform/order/adapter.py   — order rate limiter
 src/hft_platform/strategy/runner.py — per-strategy kill-switch
 ```
 
+Existing supporting modules to reuse instead of duplicating behavior:
+```
+src/hft_platform/order/rate_limiter.py       — global/per-symbol sliding window limiter
+src/hft_platform/order/halt_canceller.py     — HALT-triggered cancel fanout
+src/hft_platform/risk/halt_flattener.py      — optional HALT auto-flatten path
+src/hft_platform/execution/reconciliation.py — runtime broker/platform reconciliation hooks
+src/hft_platform/execution/eod_recon.py      — in-process EOD reconciliation trigger
+```
+
 #### Layer 2 — Process-Level Supervision (new)
 
 **Systemd service unit** (`/etc/systemd/system/hft-engine.service`):
@@ -367,7 +376,149 @@ Aggregates Mon-Fri data from ClickHouse and Prometheus, sends Telegram report:
 
 **Holiday and half-day handling**: All scripts import `core.market_calendar` (already exists, 18 references in codebase) to check `is_trading_day()` and `get_session_end_time()`. On non-trading days, scripts exit immediately with a log entry. On half-day sessions, `force_flat_time` and `auto_stop_time` are adjusted relative to the actual session end time.
 
-### 3.6 Phase 1 Deliverables Checklist
+### 3.6 Phase 1 Hardening Controls
+
+Phase 1 is not only about adding components; it is about proving that solo-operator failure defaults to safe behavior.
+
+**Operational invariants**:
+- **Config freeze window**: No config/code changes after `08:15` pre-market PASS. Any change after that automatically invalidates the trading-day evidence pack; the day does not count toward promotion.
+- **Fail-closed startup**: If Telegram, Redis, reconciliation dependency, or risk config fails to initialize, strategy auto-start remains disabled. Feed-only startup is allowed; order progression is not.
+- **No silent degrade for safety controls**: Notification send failure may fail-open, but missing risk limit config, missing reconciliation baseline, or missing force-flat scheduler must fail-closed.
+- **Single source of truth for session state**: `StormGuard`, reconciliation status, and session phase (`pre_open`, `open`, `auto_stop`, `force_flat`, `closed`) must be emitted to logs/metrics so operator decisions are evidence-based, not inferred from scattered logs.
+
+**Change-management rules**:
+- **One profile per phase**: Phase 1 uses only the production-hardening profile. Do not mix `shadow`, `canary`, and ad-hoc env overrides on the same host during validation.
+- **Recorded config fingerprint**: Each daily report includes git commit SHA, active config profile, and a config digest so incidents can be traced to an exact runtime bundle.
+- **Runbook binding**: `docs/runbooks/halt-recovery.md`, `docs/runbooks/daily-ops-checklist.md`, and `docs/operations/incident-response-protocol.md` are part of the deliverable. If the implementation differs from those documents, the phase is not done.
+
+### 3.7 Autonomous Maintenance Control Plane
+
+Because the operator may not watch the system for the entire trading session, production runtime must include a layered autonomous maintenance control plane. The design target is **limited self-healing**:
+
+- **Single-strategy abnormality** → isolate that strategy only.
+- **Platform/infrastructure abnormality** → switch platform to `reduce-only`.
+- **Clear financial/control-loss event** → escalate to `HALT`.
+- **No automatic restore of trading privileges** after quarantine, `reduce-only`, or `HALT`; recovery is always manual.
+
+#### 3.7.1 Runtime States
+
+The runtime adds four operator-visible states on top of existing StormGuard metrics:
+
+| State | Meaning | Allowed Actions |
+|------|---------|-----------------|
+| `NORMAL` | Platform healthy; strategies may open and close positions | all allowed |
+| `STRATEGY_QUARANTINED` | One strategy isolated due to abnormal behavior | quarantined strategy blocked; others continue |
+| `PLATFORM_REDUCE_ONLY` | Infrastructure trust degraded | cancel / close / reconcile / monitor only; no new opens |
+| `HALT` | Risk control failure or critical loss of state trust | cancel / query / evidence capture only |
+
+State transitions must be emitted to metrics, structlog, and the daily evidence pack so the operator can reconstruct exactly when and why the runtime degraded.
+
+#### 3.7.2 Autonomous Controllers
+
+Six controllers should be implemented as first-class production services or policy modules:
+
+1. **Strategy Health Governor**
+   Monitors per-strategy order rate, reject spike, intent/fill ratio, per-strategy drawdown, signal burstiness, and strategy heartbeat.
+   Action: quarantine only the offending strategy, cancel its live orders, preserve all evidence, require manual re-arm.
+
+2. **Platform Degrade Controller**
+   Monitors Redis, ClickHouse, WAL backlog, reconnect flap, queue saturation, and RSS trend.
+   Action: switch platform to `reduce-only`, freeze new opening intents globally, preserve close/cancel/reconcile/monitoring paths.
+
+3. **Session Safety Governor**
+   Enforces session-state transitions: `pre_open -> tradable -> close_only -> force_flat -> closed`.
+   Action: block strategy auto-start after failed pre-market checks, convert late-session trading to close-only, escalate failed force-flat to `HALT`.
+
+4. **Autonomous Reconciliation Guard**
+   Performs lightweight intraday reconciliation of broker open orders, platform open orders, and position snapshots.
+   Action: warn first, then move to `reduce-only` if drift persists or grows; unresolved drift blocks next-day open.
+
+5. **Evidence and Diary Automation**
+   Produces machine-written but human-readable session summaries: state transition timeline, quarantined strategies, reduce-only windows, alerts, and manual-action requirements.
+   Action: persist evidence pack without operator involvement and send concise Telegram summaries.
+
+6. **Manual Re-Arm Gate**
+   Represents the recovery lock.
+   Action: after any quarantine, `reduce-only`, or `HALT`, do not permit automatic return to `NORMAL`; require explicit operator approval after health and reconciliation checks pass.
+
+#### 3.7.3 Trigger Threshold Families
+
+Exact numbers remain config-tunable, but the spec should define threshold families up front:
+
+- **Strategy quarantine thresholds**
+  - intents per rolling window above strategy profile cap
+  - reject rate above threshold for consecutive windows
+  - strategy daily drawdown exceeds strategy loss limit
+  - repeated same-direction signal burst beyond expected policy envelope
+  - missing strategy heartbeat or no state advancement
+
+- **Platform reduce-only thresholds**
+  - reconnect count exceeds daily flap budget
+  - WAL backlog exceeds size/time envelope
+  - queue depth remains above high-water mark for sustained period
+  - RSS exceeds threshold and keeps trending upward
+  - Redis / ClickHouse / reconciliation dependency unhealthy beyond grace period
+
+- **HALT thresholds**
+  - daily loss limit breach
+  - force-flat failure
+  - broker/account state no longer trustworthy
+  - critical reconciliation mismatch
+  - platform continues degrading even after entering `reduce-only`
+
+#### 3.7.4 Telegram and Evidence Model
+
+Telegram must summarize control-plane decisions, not just raw exceptions:
+
+- `INFO`: session start/stop, daily report, evidence pack ready
+- `WARN`: strategy quarantine, single dependency flap, recoverable drift
+- `HIGH`: platform `reduce-only`, sustained dependency failure, intraday reconciliation drift
+- `CRITICAL`: `HALT`, force-flat failure, broker/account state untrusted, daily loss breach
+
+Each session writes:
+```
+outputs/production_rollout/autonomy/<YYYYMMDD>/
+  state_timeline.jsonl
+  strategy_quarantine.json
+  platform_degrade.json
+  alert_digest.md
+  manual_rearm_requirements.md
+```
+
+#### 3.7.5 Manual Recovery Contract
+
+Manual recovery is a control requirement, not an operator convenience feature. Re-arm must be explicit and split by scope:
+
+- `re-arm strategy <id>` only after reviewing quarantine cause, broker/order consistency, and strategy-specific health.
+- `re-arm platform` only after dependency health, reconciliation status, and evidence capture are all green.
+- No generic `resume everything` path should exist in Phase 1-3.
+
+### 3.8 Phase 1 Failure-Drill Matrix
+
+Before Phase 1 can pass, each critical failure mode must be exercised intentionally in a controlled window:
+
+| Drill | Injection Method | Expected Result | Evidence |
+|------|------------------|-----------------|----------|
+| Heartbeat stale | Stop heartbeat writer or pause main loop in dry-run | `check-heartbeat.sh` restarts service within 90s; Telegram HIGH alert | journal excerpt + alert record |
+| Telegram unavailable | Block outbound Telegram API temporarily | trading loop unaffected; WARNING logged; later recovery visible | logs + no loop-lag regression |
+| ClickHouse unavailable | Stop ClickHouse container | WAL/reconciliation fail-safe path behaves as designed; no blocking on main loop | metrics + runbook note |
+| Redis unavailable | Disable Redis during `/stop` test | remote kill-switch becomes unavailable, but local HALT path still works and alert is emitted | operator drill note |
+| Feed gap | Suspend quote ingestion | StormGuard escalates through expected states and blocks new orders | metrics snapshot + logs |
+| HALT with open position | Trigger HALT in simulation with synthetic position | cancel-open-orders path executes; optional flatten path behavior matches config | fills/orders trace |
+
+Evidence for each drill is stored under:
+```
+outputs/production_rollout/phase1/<YYYYMMDD>/
+  pre_market_check.json
+  reconcile.json
+  drill_notes.md
+  metrics_summary.md
+  alerts.jsonl
+```
+
+Days without a complete evidence pack do not count toward the gate.
+
+### 3.9 Phase 1 Deliverables Checklist
 
 ```
 Infrastructure:
@@ -406,7 +557,7 @@ Documentation:
   □ Architecture doc updated: notifications module
 ```
 
-### 3.7 Phase 1 Go/No-Go Gate
+### 3.10 Phase 1 Go/No-Go Gate
 
 ```
 All must PASS to proceed to Phase 2:
@@ -416,6 +567,12 @@ All must PASS to proceed to Phase 2:
   □ Reconciliation: match + mismatch paths both tested
   □ Pre-market: pass + fail paths both tested
   □ All cron jobs run successfully for 3 consecutive days (dry-run mode)
+  □ Autonomous maintenance states (`NORMAL`, `STRATEGY_QUARANTINED`, `PLATFORM_REDUCE_ONLY`, `HALT`) visible in logs/metrics
+  □ Strategy quarantine path tested with manual re-arm
+  □ Platform `reduce-only` path tested with manual re-arm
+  □ All Phase 1 failure drills executed with saved evidence pack
+  □ Config freeze respected for 3 consecutive dry-run days
+  □ HALT recovery runbook followed once end-to-end in simulation
   □ make ci green
 ```
 
@@ -525,7 +682,35 @@ Shadow daily report template:
     StormGuard: NORMAL (全日)
 ```
 
-### 4.4 Shadow Troubleshooting Guide
+### 4.4 Shadow Hardening Controls
+
+Phase 2 exists to validate the real runtime, not to quietly drift into live trading.
+
+**Hard safety boundary**:
+- **Dual lock against accidental live orders**: Phase 2 requires both a non-live runtime profile and `HFT_ORDER_SHADOW_MODE=1`. Startup must refuse to proceed if a shadow profile is combined with live order mode.
+- **Broker call audit**: Every trading day must prove `api.place_order()` was never reached. Evidence can be a broker call counter metric, a monkeypatched test harness in dry-run, or broker-side order history showing zero new orders.
+- **Shadow sink is mandatory**: All accepted `OrderIntent` objects are persisted through `src/hft_platform/order/shadow.py` semantics. Logging-only without structured persistence does not count.
+
+**Observability hardening**:
+- **Daily evidence pack**: save shadow-order count, reject reasons, P50/P95/P99 latency, reconnect count, queue peaks, max RSS, and config fingerprint.
+- **Review cadence**: every trading day ends with a short operator verdict: `promote`, `repeat`, or `rollback-to-phase1-fix`. Days with unresolved anomalies do not count.
+- **Incident budget**: two anomalous days are allowed inside the 12-day window; the third anomaly resets the Phase 2 window after remediation.
+
+**Mode-drift prevention**:
+- **One-way promotion path**: Phase 2 may promote only to Phase 3 canary config. It may not directly relax risk limits or add symbols.
+- **Feature/config freeze after 08:15**: same rule as Phase 1. If a hotfix is required mid-window, the day becomes a non-counting diagnostic day.
+- **Autonomous maintenance remains active**: Shadow mode still exercises strategy quarantine and platform `reduce-only`; only live broker placement remains disabled.
+
+Evidence directory:
+```
+outputs/production_rollout/phase2/<YYYYMMDD>/
+  shadow_daily_report.json
+  latency_summary.json
+  shadow_orders.parquet
+  incident_notes.md
+```
+
+### 4.5 Shadow Troubleshooting Guide
 
 | Symptom | Likely Cause | Action |
 |---------|-------------|--------|
@@ -535,7 +720,7 @@ Shadow daily report template:
 | RSS growing daily | Memory leak (likely in Python, not Rust) | Check object count growth, run `objgraph` analysis |
 | StormGuard HALT | Feed gap or queue overflow | Check feed gap metric, verify queue bounds |
 
-### 4.5 Phase 2 Go/No-Go Gate
+### 4.6 Phase 2 Go/No-Go Gate
 
 ```
 All must PASS to proceed to Phase 3:
@@ -546,6 +731,11 @@ All must PASS to proceed to Phase 3:
   □ Simulated PnL within reasonable range (no bug-induced outliers)
   □ Memory RSS trend: flat or decreasing (no leak)
   □ Latency P95 < 15ms for at least 10 of 12 days
+  □ Zero real broker orders placed during the entire shadow window
+  □ Daily evidence pack complete for all counted days
+  □ At least one strategy quarantine event tested without affecting other strategies
+  □ At least one platform `reduce-only` drill tested while preserving close/cancel/reconcile behavior
+  □ At least one rollback drill: shadow profile restart after injected failure without losing observability
 ```
 
 ---
@@ -609,7 +799,47 @@ canary:
 | Manual HALT recovery | Yes | Configurable |
 | Night session | No | Configurable |
 
-### 5.3 First Day Protocol (Must Be Present)
+### 5.3 Canary Hardening Controls
+
+Phase 3 is the first place where mistakes cost money, so promotion discipline becomes stricter than feature completeness.
+
+**Promotion prerequisites**:
+- Only strategies that have already passed Gate D/E and completed the full Phase 2 shadow window are eligible.
+- Canary profile must be committed and reviewed before Day 1. No inline env var overrides except secrets.
+- Day 1 through Day 3 require operator presence from pre-open through post-close. Autonomous operation is allowed only after three clean canary days.
+
+**In-session guardrails**:
+- **Session FSM**: `pre_open -> tradable -> auto_stop -> force_flat -> closed`. New opening orders are legal only in `tradable`. In `auto_stop`, only reduce/close intents are permitted. In `force_flat` and `closed`, all new orders are rejected.
+- **Restart policy with open risk**: Any engine restart while position is non-flat immediately downgrades the next session back to Shadow until root cause and reconciliation are completed.
+- **Infrastructure faults downgrade before HALT**: Redis/ClickHouse/WAL/reconnect/RSS/queue faults first push the platform into `reduce-only`; only continued deterioration or loss of state trust escalates to `HALT`.
+- **Rollback triggers are hard, not advisory**:
+  - any unreconciled fill at end of day
+  - any manual broker UI intervention
+  - any unexpected live order outside `tradable`
+  - any two HIGH/CRITICAL alerts in a single session from unrelated causes
+  - force-flat failure or force-flat path taking > 30s
+
+**Canary evidence pack**:
+```
+outputs/production_rollout/phase3/<YYYYMMDD>/
+  session_timeline.md
+  order_fill_recon.json
+  alert_timeline.jsonl
+  config_fingerprint.json
+  operator_verdict.md
+```
+
+Each day ends with one explicit verdict:
+- `continue` — counts toward the five-day gate
+- `repeat` — diagnostic day, does not count
+- `rollback_to_shadow` — Phase 3 suspended until remediation completes
+
+Canary-specific recovery policy:
+- a quarantined strategy stays disabled until you explicitly re-arm it
+- platform `reduce-only` stays in force until you explicitly restore normal trading
+- if `reduce-only` persists into the close, the next session starts blocked until pre-market checks and manual review both pass
+
+### 5.4 First Day Protocol (Must Be Present)
 
 ```
 Canary 第一天全程在場，逐步確認每個環節：
@@ -667,7 +897,7 @@ Post-Close Review:
   □ Decision: proceed to Day 2, or fix issues first?
 ```
 
-### 5.4 Day 2+ Routine (Automated)
+### 5.5 Day 2+ Routine (Automated)
 
 ```
 After successful Day 1, transition to automated routine:
@@ -685,7 +915,10 @@ Your involvement:
   On alert: Respond to CRITICAL notifications (HALT, loss limit, mismatch)
 ```
 
-### 5.5 Canary Failure Scenarios & Response
+Additional Day 2+ rule:
+- If a day ends with `repeat` or `rollback_to_shadow`, automation for the next day is disabled until the operator explicitly re-arms canary mode.
+
+### 5.6 Canary Failure Scenarios & Response
 
 | Scenario | Detection | Auto-Response | Your Action |
 |----------|-----------|---------------|-------------|
@@ -697,7 +930,7 @@ Your involvement:
 | ClickHouse down | Recorder WAL fallback | Auto-WAL, Telegram 🟡 | Restart ClickHouse, WAL replay will catch up |
 | Engine OOM | Systemd MemoryMax kill | Auto-restart (max 3/hr) + Telegram 🟠 | Check memory leak, review RSS trend |
 
-### 5.6 Phase 3 Go/No-Go Gate
+### 5.7 Phase 3 Go/No-Go Gate
 
 ```
 All must PASS to proceed to Phase 4:
@@ -709,6 +942,11 @@ All must PASS to proceed to Phase 4:
   □ Position flat at end of every day (force-flat not triggered, or triggered and succeeded)
   □ Telegram notifications: all events received correctly
   □ Latency: within Shadow-period baseline (no degradation)
+  □ No canary rollback trigger fired on counted days
+  □ Operator verdict recorded for all sessions
+  □ At least one controlled strategy-quarantine drill passed without platform-wide interruption
+  □ At least one controlled platform `reduce-only` drill passed with close-only behavior preserved
+  □ At least one manual `/stop` drill performed during a controlled low-risk window
 ```
 
 ---
@@ -805,6 +1043,10 @@ New source files:
   src/hft_platform/notifications/telegram.py
   src/hft_platform/notifications/dispatcher.py
   src/hft_platform/notifications/templates.py
+  src/hft_platform/ops/autonomy.py
+  src/hft_platform/ops/strategy_governor.py
+  src/hft_platform/ops/platform_degrade.py
+  src/hft_platform/ops/manual_rearm.py
 
 New scripts:
   scripts/daily_reconcile.py
@@ -824,8 +1066,18 @@ New infra:
 Modified modules:
   src/hft_platform/risk/engine.py          — daily loss limit integration
   src/hft_platform/order/adapter.py        — order rate limiter + shadow mode
+  src/hft_platform/order/rate_limiter.py   — sliding-window limits
+  src/hft_platform/order/shadow.py         — structured shadow sink
+  src/hft_platform/order/halt_canceller.py — HALT cancel fanout
   src/hft_platform/strategy/runner.py      — per-strategy kill-switch
   src/hft_platform/services/system.py      — watchdog heartbeat
+  src/hft_platform/execution/eod_recon.py  — in-process EOD trigger
+  src/hft_platform/risk/halt_flattener.py  — HALT flatten path
+
+Operator runbooks to update in lockstep:
+  docs/runbooks/halt-recovery.md
+  docs/runbooks/daily-ops-checklist.md
+  docs/operations/incident-response-protocol.md
 ```
 
 ## Appendix B: Environment Variables (New)

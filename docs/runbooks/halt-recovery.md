@@ -6,6 +6,13 @@ When StormGuard enters HALT state, all new order progression is blocked.
 Cancel actions remain allowed. This runbook covers identification, verification,
 and recovery from a HALT event.
 
+Autonomy control-plane states:
+- `STRATEGY_QUARANTINED`: only the offending strategy is isolated; other strategies may continue.
+- `PLATFORM_REDUCE_ONLY`: no new opening orders; close/cancel/reconcile/monitoring stay enabled.
+- `HALT`: cancel/query/evidence only.
+
+Recovery is explicit. Do not assume the runtime will return to `NORMAL` on its own after a quarantine, `reduce-only`, or `HALT`.
+
 ---
 
 ## 1. Identify Trigger
@@ -157,6 +164,18 @@ docker compose restart hft-engine
 
 Monitor for 5 minutes before walking away.
 
+### Step 5: Clear Manual Re-Arm Lock
+
+Only after reconciliation is clean, dependency health is green, and evidence capture is complete:
+
+```bash
+hft ops autonomy-status
+hft ops rearm-platform
+hft ops rearm-strategy --strategy-id <strategy_id>
+```
+
+If the platform remains in `HALT`, keep trading disabled and continue incident handling.
+
 ---
 
 ## 5. Post-Recovery Checklist
@@ -164,6 +183,7 @@ Monitor for 5 minutes before walking away.
 - [ ] Root cause identified and documented
 - [ ] Position reconciliation shows zero diff
 - [ ] StormGuard state is NORMAL
+- [ ] `hft ops autonomy-status` shows no pending manual re-arm requirement
 - [ ] PnL figures match between internal and broker
 - [ ] Metrics pipeline is healthy (Prometheus scraping, Grafana panels green)
 - [ ] WAL directory is not growing unboundedly

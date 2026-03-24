@@ -11,6 +11,7 @@ REMOTE_CH_PORT="${MONITOR_REMOTE_CH_PORT:-8123}"
 WATCHLIST_PATH="${MONITOR_WATCHLIST:-config/watchlist.yaml}"
 SYMBOLS_PATH="${MONITOR_SYMBOLS_PATH:-config/symbols.yaml}"
 SOURCE="${HFT_MONITOR_SOURCE:-${MONITOR_SOURCE:-redis}}"
+DATA_SOURCE="${HFT_MONITOR_DATA_SOURCE:-${MONITOR_DATA_SOURCE:-}}"
 CH_USER="${HFT_CLICKHOUSE_USER:-${MONITOR_CH_USER:-default}}"
 CH_PASSWORD="${HFT_CLICKHOUSE_PASSWORD:-${MONITOR_CH_PASSWORD:-changeme}}"
 REPLAY_TICKS="${HFT_MONITOR_REPLAY_TICKS:-${MONITOR_REPLAY_TICKS:-24}}"
@@ -26,12 +27,21 @@ echo "Signal Monitor TUI"
 echo "Remote: ${REMOTE_USER}@${REMOTE_HOST}"
 echo "Source: ${SOURCE}"
 
+if [ -z "${DATA_SOURCE}" ]; then
+    if [ "$SOURCE" = "redis" ]; then
+        DATA_SOURCE="ch"
+    else
+        DATA_SOURCE="auto"
+    fi
+fi
+
 if [ "$UV_SYNC" = "1" ]; then
     echo "Syncing monitor dependencies..."
     uv sync --extra monitor >/dev/null
 fi
 
 export HFT_MONITOR_SOURCE="${SOURCE}"
+export HFT_MONITOR_DATA_SOURCE="${DATA_SOURCE}"
 export HFT_MONITOR_REPLAY_TICKS="${REPLAY_TICKS}"
 export HFT_MONITOR_BATCH_LIMIT_PER_SYMBOL="${BATCH_LIMIT_PER_SYMBOL}"
 

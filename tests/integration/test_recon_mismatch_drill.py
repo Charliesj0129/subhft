@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -12,6 +12,15 @@ from hft_platform.execution.reconciliation import (
     ReconciliationService,
 )
 from hft_platform.risk.storm_guard import StormGuard, StormGuardState
+
+
+@pytest.fixture(autouse=True)
+def _inline_reconciliation_to_thread():
+    async def _run_inline(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch("hft_platform.execution.reconciliation.asyncio.to_thread", side_effect=_run_inline):
+        yield
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvid
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.ops.strategy_governor import StrategyHealthGovernor
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.strategy.compat import check_strategy_feature_compat
 from hft_platform.strategy.registry import StrategyRegistry
@@ -141,6 +142,7 @@ class StrategyRunner:
 
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
+        self.strategy_governor = StrategyHealthGovernor(metrics=self.metrics)
         self._trace_sampler = _get_trace_sampler()
         self._obs_policy = _obs_policy()
         self._diagnostic_metrics_enabled = self._obs_policy != "minimal"
@@ -543,6 +545,18 @@ class StrategyRunner:
             if target_strat_id and strategy.strategy_id != target_strat_id:
                 continue
 
+            if self.strategy_governor.is_quarantined(strategy.strategy_id):
+                self._emit_trace(
+                    "strategy_quarantine_skip",
+                    trace_id,
+                    {
+                        "strategy_id": strategy.strategy_id,
+                        "event_type": type(event).__name__,
+                        "symbol": getattr(event, "symbol", ""),
+                    },
+                )
+                continue
+
             positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
             ctx.positions = positions
 
@@ -571,6 +585,16 @@ class StrategyRunner:
                     },
                 )
                 intents = []
+                transition = self.strategy_governor.quarantine(strategy.strategy_id, reason="strategy_exception")
+                self._emit_trace(
+                    "strategy_quarantined",
+                    trace_id,
+                    {
+                        "strategy_id": strategy.strategy_id,
+                        "event_type": type(event).__name__,
+                        "reason": transition.reason,
+                    },
+                )
                 if self.metrics:
                     exc_m = getattr(self.metrics, "strategy_exceptions_total", None)
                     if exc_m:

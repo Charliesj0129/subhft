@@ -41,6 +41,24 @@ _VALID_RUNTIME_ROLES = frozenset({"engine", "maintenance", "monitor", "wal_loade
 _FEED_ALLOWED_ROLES = frozenset({"engine"})
 
 
+def _env_float(name: str, default: float, min_value: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
+        value = default
+    return max(min_value, value)
+
+
+def _env_int(name: str, default: int, min_value: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except Exception as exc:
+        logger.debug("operation_fallback", error=str(exc))
+        value = default
+    return max(min_value, value)
+
+
 def _encode_resp(*parts: str) -> bytes:
     """Encode a RESP command for Redis."""
     payload = [f"*{len(parts)}\r\n".encode("utf-8")]
@@ -209,6 +227,49 @@ class SystemBootstrapper:
             logger.warning("Unknown HFT_RUNTIME_ROLE; defaulting to 'engine'", role=raw)
             return "engine"
         return raw
+
+    def build_platform_degrade_inputs(
+        self,
+        *,
+        md_service: Any,
+        recorder: Any,
+        raw_queue: asyncio.Queue[Any],
+        raw_exec_queue: asyncio.Queue[Any],
+        recorder_queue: asyncio.Queue[Any],
+        risk_queue: asyncio.Queue[Any],
+        order_queue: asyncio.Queue[Any],
+    ) -> PlatformDegradeInputs:
+        metrics = None
+        try:
+            from hft_platform.observability.metrics import MetricsRegistry
+
+            metrics = MetricsRegistry.get()
+        except Exception as exc:
+            logger.debug("operation_fallback", error=str(exc))
+
+        inputs = PlatformDegradeInputs(
+            md_service=md_service,
+            recorder=recorder,
+            raw_queue=raw_queue,
+            raw_exec_queue=raw_exec_queue,
+            recorder_queue=recorder_queue,
+            risk_queue=risk_queue,
+            order_queue=order_queue,
+            metrics=metrics,
+        )
+        inputs.configure_thresholds(
+            feed_gap_threshold_s=_env_float("HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S", 120.0, min_value=1.0),
+            reconnect_pending_threshold_s=_env_float(
+                "HFT_PLATFORM_REDUCE_ONLY_RECONNECT_PENDING_S",
+                60.0,
+                min_value=1.0,
+            ),
+            reconnect_flap_budget=_env_int("HFT_PLATFORM_REDUCE_ONLY_RECONNECT_FLAP_BUDGET", 5, min_value=0),
+            queue_depth_threshold=_env_int("HFT_PLATFORM_REDUCE_ONLY_QUEUE_DEPTH", 5000, min_value=1),
+            rss_threshold_mb=_env_int("HFT_PLATFORM_REDUCE_ONLY_RSS_MB", 2048, min_value=1),
+            wal_backlog_files_threshold=_env_int("HFT_PLATFORM_REDUCE_ONLY_WAL_BACKLOG_FILES", 200, min_value=1),
+        )
+        return inputs
 
     def _get_redis_lease_params(self) -> dict:
         """Return Redis session lease connection parameters from environment."""
@@ -831,7 +892,7 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
         )
         recorder = RecorderService(recorder_queue)
-        platform_degrade_inputs = PlatformDegradeInputs(
+        platform_degrade_inputs = self.build_platform_degrade_inputs(
             md_service=md_service,
             recorder=recorder,
             raw_queue=raw_queue,
