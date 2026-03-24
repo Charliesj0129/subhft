@@ -220,3 +220,50 @@ def render_weekly_summary(
         f"RSS 峰值: {rss_peak_gb:.2f} GB\n"
         f"可用率: {uptime_pct:.1f}%"
     )
+
+
+def render_shadow_daily_report(
+    *,
+    date_str: str,
+    intent_count: int,
+    buys: int,
+    sells: int,
+    simulated_pnl_ntd: int,
+    latency_p50_ms: float,
+    latency_p95_ms: float,
+    latency_p99_ms: float,
+    reconnect_count: int,
+    queue_peak_pct: int,
+    rss_gb: float,
+    storm_guard_state: str,
+) -> str:
+    """Shadow strategy daily report for solo operator.
+
+    Args:
+        date_str: Date label, e.g. "2026-04-22 (二)".
+        intent_count: Total number of OrderIntents generated during the day.
+        buys: Number of buy-side OrderIntents.
+        sells: Number of sell-side OrderIntents.
+        simulated_pnl_ntd: Simulated PnL for the day in NTD (with 1-tick slippage).
+        latency_p50_ms: P50 tick-to-signal latency in milliseconds.
+        latency_p95_ms: P95 tick-to-signal latency in milliseconds.
+        latency_p99_ms: P99 tick-to-signal latency in milliseconds.
+        reconnect_count: Number of broker reconnects during the session.
+        queue_peak_pct: Peak queue depth as percentage of capacity.
+        rss_gb: Current RSS memory usage in GB.
+        storm_guard_state: Final StormGuard FSM state name.
+
+    Returns:
+        Multi-line formatted shadow daily report string.
+    """
+    sign = "+" if simulated_pnl_ntd >= 0 else ""
+    return (
+        f"📊 Shadow 日報 {date_str}\n\n"
+        f"🔮 信號: {intent_count} OrderIntents (買 {buys} / 賣 {sells})\n"
+        f"💰 模擬 PnL: {sign}{simulated_pnl_ntd:,} NTD (含 1-tick slippage)\n\n"
+        f"⏱ 延遲:\n"
+        f"  tick→signal P50: {latency_p50_ms:.1f}ms / P95: {latency_p95_ms:.1f}ms / P99: {latency_p99_ms:.1f}ms\n\n"
+        f"📈 系統:\n"
+        f"  Reconnect: {reconnect_count} / Queue peak: {queue_peak_pct}% / RSS: {rss_gb:.1f} GB\n"
+        f"  StormGuard: {storm_guard_state} (全日)"
+    )
