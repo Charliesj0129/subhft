@@ -429,7 +429,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             return
         try:
             symbol = getattr(event, "symbol", "")
-            ingest_ts = getattr(event, "timestamp_ns", 0) or getattr(event, "local_ts", 0)
+            meta = getattr(event, "meta", None)
+            ingest_ts = getattr(meta, "local_ts", 0) if meta else 0
+            if not ingest_ts:
+                ingest_ts = getattr(event, "local_ts", 0) or int(time.time_ns())
             payload: dict = {"symbol": symbol, "ingest_ts": ingest_ts}
             # BidAsk data
             bids = getattr(event, "bids", None)
