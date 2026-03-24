@@ -31,9 +31,7 @@ def render_daily_loss(pnl_ntd: int, limit_ntd: int) -> str:
     Returns:
         Formatted daily-loss alert string.
     """
-    return (
-        f"🔴 日損限額觸及: PnL={pnl_ntd:,} NTD (limit={limit_ntd:,}). HALT activated."
-    )
+    return f"🔴 日損限額觸及: PnL={pnl_ntd:,} NTD (limit={limit_ntd:,}). HALT activated."
 
 
 def render_daily_report(
@@ -117,10 +115,7 @@ def render_pre_market_fail(failed_checks: list[str]) -> str:
         Formatted pre-market FAIL notification string.
     """
     checks_formatted = "\n  • ".join(failed_checks)
-    return (
-        f"🔴 08:15 健檢 FAIL. 策略不啟動.\n"
-        f"失敗項目:\n  • {checks_formatted}"
-    )
+    return f"🔴 08:15 健檢 FAIL. 策略不啟動.\n失敗項目:\n  • {checks_formatted}"
 
 
 def render_reconciliation_mismatch(
@@ -157,10 +152,7 @@ def render_reconnect_alert(count: int, flap_status: str) -> str:
     Returns:
         Formatted reconnect alert string.
     """
-    return (
-        f"🟡 券商重連 (第 {count} 次). "
-        f"Flap 狀態: {flap_status}."
-    )
+    return f"🟡 券商重連 (第 {count} 次). Flap 狀態: {flap_status}."
 
 
 def render_process_restart(attempt: int, max_attempts: int) -> str:
@@ -173,10 +165,7 @@ def render_process_restart(attempt: int, max_attempts: int) -> str:
     Returns:
         Formatted process-restart alert string.
     """
-    return (
-        f"🟡 Process restart attempt {attempt}/{max_attempts}. "
-        f"Supervisor restarting trading engine."
-    )
+    return f"🟡 Process restart attempt {attempt}/{max_attempts}. Supervisor restarting trading engine."
 
 
 def render_weekly_summary(

@@ -148,7 +148,7 @@ class TestDailyLossLimitValidator:
         ok, _ = v.check(make_intent())
         assert ok is False
         ns_per_day = 86_400 * 1_000_000_000
-        v._current_date_ns -= ns_per_day
+        v._current_reset_boundary_ns -= ns_per_day
         ok, reason = v.check(make_intent())
         assert ok is True
         assert reason == "OK"

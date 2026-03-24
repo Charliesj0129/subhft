@@ -3,6 +3,7 @@
 The engine writes to a heartbeat file every 30s. A cron watchdog
 checks the file mtime — if stale (>90s), it restarts the service.
 """
+
 from __future__ import annotations
 
 import os

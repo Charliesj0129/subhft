@@ -1,4 +1,5 @@
 """Tests for enhanced DailyLossLimitValidator (unrealized PnL + 05:00 reset + halt flag)."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -12,7 +13,7 @@ from hft_platform.risk.validators import DailyLossLimitValidator
 # -6,000  NTD  = -60_000_000
 # -8,000  NTD  = -80_000_000
 # +3,000  NTD  = +30_000_000
-_LIMIT = 100_000_000   # 10,000 NTD as positive threshold
+_LIMIT = 100_000_000  # 10,000 NTD as positive threshold
 _REALIZED_5K_LOSS = -50_000_000
 _REALIZED_8K_LOSS = -80_000_000
 _UNREALIZED_6K_LOSS = -60_000_000
@@ -42,7 +43,7 @@ def _make_intent(strategy_id: str = "s1") -> OrderIntent:
 def test_unrealized_pnl_included_in_loss_check() -> None:
     """realized -5k + unrealized -6k = -11k > limit -10k → reject."""
     v = _make_validator()
-    v.record_pnl("s1", _REALIZED_5K_LOSS)   # -50_000_000
+    v.record_pnl("s1", _REALIZED_5K_LOSS)  # -50_000_000
     v.update_unrealized(_UNREALIZED_6K_LOSS)  # -60_000_000
     # total = -110_000_000 → magnitude 110M >= limit 100M → REJECT
     approved, reason = v.check(_make_intent())
@@ -56,7 +57,7 @@ def test_unrealized_pnl_included_in_loss_check() -> None:
 def test_realized_only_below_limit_passes() -> None:
     """realized -5k + unrealized 0 → total -5k < -10k limit → pass."""
     v = _make_validator()
-    v.record_pnl("s1", _REALIZED_5K_LOSS)   # -50_000_000
+    v.record_pnl("s1", _REALIZED_5K_LOSS)  # -50_000_000
     v.update_unrealized(0)
     approved, reason = v.check(_make_intent())
     assert approved
@@ -69,7 +70,7 @@ def test_realized_only_below_limit_passes() -> None:
 def test_unrealized_profit_offsets_realized_loss() -> None:
     """realized -8k + unrealized +3k = -5k → still below 10k limit → pass."""
     v = _make_validator()
-    v.record_pnl("s1", _REALIZED_8K_LOSS)   # -80_000_000
+    v.record_pnl("s1", _REALIZED_8K_LOSS)  # -80_000_000
     v.update_unrealized(_UNREALIZED_3K_GAIN)  # +30_000_000
     # total = -50_000_000 → magnitude 50M < limit 100M → PASS
     approved, reason = v.check(_make_intent())
