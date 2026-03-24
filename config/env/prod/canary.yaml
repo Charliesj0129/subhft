@@ -1,0 +1,14 @@
+# Phase 3 Canary Live Trading configuration
+# 1 strategy, 1 symbol (TMF), minimal risk
+
+canary:
+  enabled: true
+
+  symbol: TMF
+  point_value: 10  # 1 point = 10 NTD
+
+  session:
+    mode: day_only          # 08:45-13:45, no night session
+    auto_start: true        # After pre-market check PASS
+    auto_stop_time: "13:40" # Stop new orders 5 min before close
+    force_flat_time: "13:43" # Force close any open positions

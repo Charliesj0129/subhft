@@ -339,6 +339,28 @@ class PositionStore:
     def _key(self, acc: str, strat: str, sym: str) -> str:
         return f"{acc}:{strat}:{sym}"
 
+    def mark_to_market(self, mid_prices: dict[str, int]) -> int:
+        """Compute total unrealized PnL across all open positions.
+
+        Args:
+            mid_prices: Map of symbol → current mid_price (scaled int x10000).
+
+        Returns:
+            Total unrealized PnL in scaled int x10000.
+            Symbols without a mid_price entry contribute 0.
+        """
+        total = 0
+        for key, pos in self.positions.items():
+            if pos.net_qty == 0:
+                continue
+            # Extract symbol from key "{account}:{strategy}:{symbol}"
+            symbol = key.rsplit(":", 1)[-1]
+            mid = mid_prices.get(symbol)
+            if mid is None:
+                continue
+            total += (mid - pos.avg_price_scaled) * pos.net_qty
+        return total
+
     def _evict_flat_positions(self) -> None:
         """Evict positions with net_qty=0 to free memory."""
         flat_keys = [k for k, pos in self.positions.items() if pos.net_qty == 0]

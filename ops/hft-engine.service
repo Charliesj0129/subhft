@@ -1,0 +1,22 @@
+[Unit]
+Description=HFT Trading Engine
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/charlie/hft_platform
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitIntervalSec=3600
+
+MemoryMax=4G
+MemoryHigh=3G
+
+ExecStartPost=/home/charlie/hft_platform/ops/wait-for-healthy.sh
+
+[Install]
+WantedBy=multi-user.target
