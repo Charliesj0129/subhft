@@ -48,6 +48,7 @@ from ._ops import (
     cmd_strat_test,
 )
 from ._risk import cmd_risk_halt, cmd_risk_resume, cmd_risk_status
+from ._tca import cmd_tca_daily
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
     cmd_resolve_symbols,
@@ -728,6 +729,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alpha_promote_batch.add_argument("--out", help="Optional JSON output path")
     alpha_promote_batch.set_defaults(func=cmd_alpha_promote_batch)
+
+    # ── TCA ─────────────────────────────────────────────────────────────
+    tca = sub.add_parser("tca", help="Transaction Cost Analysis utilities")
+    tca_sub = tca.add_subparsers(dest="tca_cmd")
+
+    tca_daily = tca_sub.add_parser("daily", help="Daily fill cost report from ClickHouse")
+    tca_daily.add_argument("--date", default=None, help="Report date (YYYY-MM-DD, default today)")
+    tca_daily.set_defaults(func=cmd_tca_daily)
 
     # ── Signal Monitor TUI ──────────────────────────────────────────────
     monitor_cmd = sub.add_parser("monitor", help="Signal Monitor TUI (SHM + ClickHouse hybrid)")
