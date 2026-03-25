@@ -490,7 +490,7 @@ def render_position_recovery(
         Formatted position recovery success notification string.
     """
     lines = [
-        f"🟢 部位恢復完成",
+        "🟢 部位恢復完成",
         f"來源: {source} | 載入: {loaded} symbols | 修正: {corrected}",
     ]
     for m in mismatches[:5]:
@@ -517,7 +517,7 @@ def render_position_recovery_failed(
         Formatted position recovery failure alert string (HALT).
     """
     lines = [
-        f"🔴 部位恢復失敗 — HALT",
+        "🔴 部位恢復失敗 — HALT",
         f"來源: {source}",
         f"原因: {reason}",
     ]
