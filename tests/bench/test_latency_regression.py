@@ -134,9 +134,9 @@ class TestNormalizeTickLatency:
 
     def test_normalize_tick_p99_under_threshold(self) -> None:
         """Benchmark the normalizer's tick normalization path."""
-        from hft_platform.feed_adapter.normalizer import Normalizer
+        from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
 
-        normalizer = Normalizer()
+        normalizer = MarketDataNormalizer()
 
         # Simulate a Shioaji-like tick payload
         payload = {

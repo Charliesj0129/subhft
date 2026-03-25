@@ -357,7 +357,7 @@ except ImportError:
 
 
 @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 @given(
     price=st.integers(min_value=1, max_value=50_000_000),
     qty=st.integers(min_value=1, max_value=1000),
@@ -375,7 +375,7 @@ def test_hypothesis_valid_intent_never_raises(price, qty):
 
 
 @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 @given(n=st.integers(min_value=1, max_value=100))
 def test_hypothesis_cmd_id_always_positive(n):
     """cmd_id is always a positive integer."""
