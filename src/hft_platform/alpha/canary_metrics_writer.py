@@ -144,7 +144,7 @@ class CanaryMetricsWriter:
     # ------------------------------------------------------------------
 
     def _fetch_from_clickhouse(self, alpha_id: str) -> dict[str, Any]:
-        """Query ClickHouse ``hft.alpha_trades`` for live slippage metrics.
+        """Query ClickHouse ``hft.trades`` for live slippage metrics.
 
         Computes:
         - ``avg_slippage_bps`` — average fill slippage in basis points
@@ -160,47 +160,72 @@ class CanaryMetricsWriter:
             logger.debug("canary_metrics_writer.ch_skip", alpha_id=alpha_id, reason="no client")
             return {}
 
-        query = (
+        slippage_query = (
             "SELECT "
-            "  avg(slippage_bps)           AS avg_slippage_bps, "
+            "  avg( "
+            "    CASE WHEN side = 'sell' "
+            "         THEN (decision_price_scaled - price_scaled) / decision_price_scaled "
+            "         ELSE (price_scaled - decision_price_scaled) / decision_price_scaled "
+            "    END "
+            "  ) * 10000 AS avg_slippage_bps "
+            "FROM hft.trades "
+            "WHERE strategy_id = %(strategy)s "
+            "  AND toDate(toDateTime(match_ts / 1000000000)) >= today() - %(window_days)s "
+            "  AND decision_price_scaled > 0"
+        )
+        session_query = (
+            "SELECT "
             "  max(drawdown_contribution)  AS max_dd_contrib, "
             "  avg(execution_error_rate)   AS avg_error_rate, "
             "  count(*)                    AS session_count, "
             "  if(stddevPop(session_pnl) > 0, "
             "     avg(session_pnl) / stddevPop(session_pnl) * sqrt(252), "
             "     NULL)                   AS sharpe_live "
-            "FROM hft.alpha_trades "
+            "FROM hft.alpha_canary_sessions "
             "WHERE alpha_id = %(alpha_id)s"
         )
+        result: dict[str, Any] = {}
         try:
-            rows = self._ch_client.execute(query, {"alpha_id": alpha_id})
+            slip_rows = self._ch_client.execute(
+                slippage_query, {"strategy": alpha_id, "window_days": 30}
+            )
+            if slip_rows and slip_rows[0][0] is not None:
+                result["slippage_bps"] = float(slip_rows[0][0])
         except Exception as _exc:  # noqa: BLE001
-            logger.warning("canary_metrics_writer.ch_query_failed", alpha_id=alpha_id, exc_info=True)
-            return {}
+            logger.warning(
+                "canary_metrics_writer.slip_query_failed", alpha_id=alpha_id, exc_info=True
+            )
 
-        if not rows:
+        try:
+            sess_rows = self._ch_client.execute(session_query, {"alpha_id": alpha_id})
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning(
+                "canary_metrics_writer.sess_query_failed", alpha_id=alpha_id, exc_info=True
+            )
+            sess_rows = []
+
+        if not result and not sess_rows:
             logger.debug("canary_metrics_writer.ch_no_rows", alpha_id=alpha_id)
             return {}
 
-        row = rows[0]
-        if len(row) < 4:
-            logger.warning("canary_metrics_writer.ch_bad_shape", alpha_id=alpha_id, row=row)
-            return {}
-
-        avg_slip, max_dd, avg_err, session_count = row[0], row[1], row[2], row[3]
-        sharpe_raw = row[4] if len(row) > 4 else None
-
-        result: dict[str, Any] = {
-            "slippage_bps": float(avg_slip) if avg_slip is not None else 0.0,
-            "drawdown_contribution": float(max_dd) if max_dd is not None else 0.0,
-            "execution_error_rate": float(avg_err) if avg_err is not None else 0.0,
-            "sessions_live": int(session_count) if session_count is not None else 0,
-        }
-        if sharpe_raw is not None:
-            try:
-                result["sharpe_live"] = float(sharpe_raw)
-            except (TypeError, ValueError):
-                pass
+        if sess_rows:
+            row = sess_rows[0]
+            if len(row) >= 3:
+                max_dd, avg_err, session_count = row[0], row[1], row[2]
+                sharpe_raw = row[3] if len(row) > 3 else None
+                result.setdefault("slippage_bps", 0.0)
+                result["drawdown_contribution"] = float(max_dd) if max_dd is not None else 0.0
+                result["execution_error_rate"] = float(avg_err) if avg_err is not None else 0.0
+                result["sessions_live"] = int(session_count) if session_count is not None else 0
+                if sharpe_raw is not None:
+                    try:
+                        result["sharpe_live"] = float(sharpe_raw)
+                    except (TypeError, ValueError):
+                        pass
+            else:
+                logger.warning(
+                    "canary_metrics_writer.ch_bad_shape", alpha_id=alpha_id, row=row
+                )
 
         logger.debug("canary_metrics_writer.ch_fetched", alpha_id=alpha_id, raw=result)
         return result
