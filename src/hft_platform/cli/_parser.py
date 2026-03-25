@@ -47,6 +47,7 @@ from ._ops import (
     cmd_strat_test,
 )
 from ._risk import cmd_risk_halt, cmd_risk_resume, cmd_risk_status
+from ._tca import cmd_tca_report
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
     cmd_resolve_symbols,
@@ -287,6 +288,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     risk_status_cmd = risk_sub.add_parser("status", help="Check kill switch status")
     risk_status_cmd.set_defaults(func=cmd_risk_status)
+
+    # ── Transaction Cost Analysis ──────────────────────────────────────
+    tca = sub.add_parser("tca", help="Transaction cost analysis")
+    tca_sub = tca.add_subparsers(dest="tca_cmd")
+    tca_report = tca_sub.add_parser("report", help="Generate TCA attribution report")
+    tca_report.add_argument("--days", type=int, default=5, help="Lookback days")
+    tca_report.add_argument("--strategy", type=str, default="", help="Strategy ID filter")
+    tca_report.set_defaults(func=cmd_tca_report)
 
     # ── Health Preflight ───────────────────────────────────────────────
     health = sub.add_parser("health", help="Health check utilities")
