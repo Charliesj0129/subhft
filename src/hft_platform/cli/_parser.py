@@ -47,6 +47,7 @@ from ._ops import (
     cmd_strat_test,
 )
 from ._risk import cmd_risk_halt, cmd_risk_resume, cmd_risk_status
+from ._feasibility import cmd_feasibility_report
 from ._tca import cmd_tca_report
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
@@ -730,6 +731,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alpha_promote_batch.add_argument("--out", help="Optional JSON output path")
     alpha_promote_batch.set_defaults(func=cmd_alpha_promote_batch)
+
+    # ── Feasibility Scorecard ────────────────────────────────────────────
+    feasibility = sub.add_parser("feasibility", help="Feasibility validation")
+    feas_sub = feasibility.add_subparsers(dest="feasibility_cmd")
+    feas_report = feas_sub.add_parser("report", help="Generate feasibility scorecard")
+    feas_report.add_argument("--min-days", type=int, default=5, help="Minimum trading days required")
+    feas_report.add_argument("--strategy", type=str, required=True, help="Strategy ID")
+    feas_report.set_defaults(func=cmd_feasibility_report)
 
     # ── Signal Monitor TUI ──────────────────────────────────────────────
     monitor_cmd = sub.add_parser("monitor", help="Signal Monitor TUI (SHM + ClickHouse hybrid)")
