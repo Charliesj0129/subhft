@@ -203,15 +203,19 @@ def format_orders(
 # ---------------------------------------------------------------------------
 
 _TRADES_COLS: list[str] = [
-    "trade_id",
+    "fill_id",
     "order_id",
+    "strategy_id",
     "symbol",
-    "exchange",
     "side",
     "price_scaled",
     "qty",
-    "exch_ts",
-    "ingest_ts",
+    "fee_scaled",
+    "tax_scaled",
+    "decision_price_scaled",
+    "arrival_price_scaled",
+    "gross_pnl_scaled",
+    "match_ts",
 ]
 
 
@@ -226,19 +230,22 @@ def format_trades(
             price_float = r.get("price")
             price = _to_scaled(price_float) if price_float is not None else 0
 
-        exch_ts = int(r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0)
-        ingest_ts = int(r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
+        match_ts = int(r.get("match_ts") or r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0)
 
         row_data = [
-            str(r.get("trade_id", r.get("fill_id", ""))),
+            str(r.get("fill_id", r.get("trade_id", ""))),
             str(r.get("order_id", "")),
+            str(r.get("strategy_id", "")),
             str(r.get("symbol", "")),
-            str(r.get("exchange", r.get("exch", ""))),
             str(r.get("side", r.get("action", ""))),
             int(price),
             int(r.get("qty", r.get("quantity", 0)) or 0),
-            exch_ts,
-            ingest_ts,
+            int(r.get("fee_scaled", r.get("fee", 0)) or 0),
+            int(r.get("tax_scaled", 0) or 0),
+            int(r.get("decision_price_scaled", 0) or 0),
+            int(r.get("arrival_price_scaled", 0) or 0),
+            int(r.get("gross_pnl_scaled", 0) or 0),
+            match_ts,
         ]
         data.append(row_data)
 
