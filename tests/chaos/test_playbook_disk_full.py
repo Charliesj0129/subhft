@@ -5,7 +5,6 @@ circuit breaker activates, recovers when space is freed, does not
 crash trading when active, and caches check results within interval.
 """
 
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest

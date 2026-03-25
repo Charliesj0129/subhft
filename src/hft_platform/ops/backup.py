@@ -27,7 +27,10 @@ class BackupError(Exception):
 
 
 def _get_ch_client(
-    host: str, port: int, user: str, password: str,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
 ) -> Any:
     """Return a clickhouse_driver Client."""
     try:
@@ -45,8 +48,14 @@ class BackupManager:
     """
 
     __slots__ = (
-        "_ch_host", "_ch_port", "_ch_user", "_ch_password",
-        "_retain_days", "_backup_dir", "_notifier", "_metrics",
+        "_ch_host",
+        "_ch_port",
+        "_ch_user",
+        "_ch_password",
+        "_retain_days",
+        "_backup_dir",
+        "_notifier",
+        "_metrics",
     )
 
     def __init__(
@@ -77,6 +86,7 @@ class BackupManager:
         if self._metrics is None:
             try:
                 from hft_platform.observability.metrics import MetricsRegistry
+
                 self._metrics = MetricsRegistry.get()
             except Exception:  # noqa: BLE001
                 pass
@@ -122,9 +132,7 @@ class BackupManager:
     def _abort_stale_backups(self) -> None:
         """Check for in-progress backups and wait/abort."""
         client = self._client()
-        rows = client.execute(
-            "SELECT id, name, status FROM system.backups WHERE status = 'CREATING_BACKUP'"
-        )
+        rows = client.execute("SELECT id, name, status FROM system.backups WHERE status = 'CREATING_BACKUP'")
         if rows:
             logger.warning("Stale backup in progress, aborting", stale_backups=rows)
             raise BackupError(f"Found {len(rows)} in-progress backup(s): {rows}")
@@ -227,6 +235,7 @@ class BackupManager:
 
         if self._notifier:
             import asyncio
+
             asyncio.run(
                 self._notifier.notify_backup_success(
                     date_str=backup_name.removeprefix("daily_"),
@@ -262,6 +271,7 @@ class BackupManager:
 
         if self._notifier:
             import asyncio
+
             asyncio.run(
                 self._notifier.notify_backup_failed(
                     date_str=backup_name.removeprefix("daily_"),
@@ -304,11 +314,7 @@ class BackupManager:
         try:
             self.restore(backup_name, target_db=temp_db)
 
-            tables = [
-                row[0] for row in client.execute(
-                    "SELECT name FROM system.tables WHERE database = 'hft'"
-                )
-            ]
+            tables = [row[0] for row in client.execute("SELECT name FROM system.tables WHERE database = 'hft'")]
 
             results: dict[str, tuple[int, int]] = {}
             mismatches: list[str] = []
@@ -344,10 +350,12 @@ class BackupManager:
             if not match:
                 continue
             size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
-            backups.append({
-                "name": entry.name,
-                "date": match.group(1),
-                "size_bytes": size,
-                "size_mb": round(size / (1024 * 1024), 1),
-            })
+            backups.append(
+                {
+                    "name": entry.name,
+                    "date": match.group(1),
+                    "size_bytes": size,
+                    "size_mb": round(size / (1024 * 1024), 1),
+                }
+            )
         return backups

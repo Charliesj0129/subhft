@@ -100,11 +100,13 @@ class StartupPositionVerifier:
         # Resolve checkpoint path from arg or env
         self.checkpoint_path = checkpoint_path or os.environ.get(_CHECKPOINT_PATH_ENV)
 
-        self._qty_threshold = qty_threshold if qty_threshold is not None else int(
-            os.environ.get("HFT_STARTUP_RECON_QTY_THRESHOLD", "10")
+        self._qty_threshold = (
+            qty_threshold if qty_threshold is not None else int(os.environ.get("HFT_STARTUP_RECON_QTY_THRESHOLD", "10"))
         )
-        self._futures_qty_threshold = futures_qty_threshold if futures_qty_threshold is not None else int(
-            os.environ.get("HFT_STARTUP_RECON_FUTURES_QTY_THRESHOLD", "2")
+        self._futures_qty_threshold = (
+            futures_qty_threshold
+            if futures_qty_threshold is not None
+            else int(os.environ.get("HFT_STARTUP_RECON_FUTURES_QTY_THRESHOLD", "2"))
         )
 
         self.discrepancies: List[PositionDiscrepancy] = []
@@ -322,20 +324,24 @@ class StartupPositionVerifier:
 
             if classification == "critical":
                 has_critical = True
-                mismatches.append({
-                    "symbol": symbol,
-                    "checkpoint_qty": ckpt_qty,
-                    "broker_qty": broker_qty,
-                    "action": "halt",
-                })
+                mismatches.append(
+                    {
+                        "symbol": symbol,
+                        "checkpoint_qty": ckpt_qty,
+                        "broker_qty": broker_qty,
+                        "action": "halt",
+                    }
+                )
             elif classification == "minor":
                 auto_corrected += 1
-                mismatches.append({
-                    "symbol": symbol,
-                    "checkpoint_qty": ckpt_qty,
-                    "broker_qty": broker_qty,
-                    "action": "corrected",
-                })
+                mismatches.append(
+                    {
+                        "symbol": symbol,
+                        "checkpoint_qty": ckpt_qty,
+                        "broker_qty": broker_qty,
+                        "action": "corrected",
+                    }
+                )
                 ckpt_entry = ckpt_by_symbol.get(symbol, {})
                 merged[symbol] = {
                     "net_qty": broker_qty,

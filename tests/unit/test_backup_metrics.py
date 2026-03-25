@@ -21,4 +21,4 @@ def test_backup_gauges_are_settable():
     m.backup_size_bytes.set(1024)
     m.backup_duration_seconds.set(5.5)
     m.backup_retained_count.set(15)
-    # If no exception, gauges work correctly
+    assert m.backup_retained_count._value.get() == 15.0

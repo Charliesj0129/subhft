@@ -150,7 +150,7 @@ class DailyReportService:
 
         query = (
             "SELECT "
-            "  sum(price_scaled * qty) AS pnl_scaled, "  # TODO: use realized_pnl column when available; sum(price*qty) is notional, not PnL
+            "  sum(price_scaled * qty) AS pnl_scaled, "  # TODO: use realized_pnl; this is notional
             "  countIf(side = 'B') AS buy_count, "
             "  countIf(side = 'S') AS sell_count, "
             "  count(*) AS fill_count, "
