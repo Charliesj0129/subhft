@@ -93,7 +93,7 @@ class DailyReportService:
         memory_gb, memory_max_gb = self._get_memory_usage()
 
         storm_state = getattr(self._storm_guard, "state", None)
-        storm_guard_state = storm_state.name if hasattr(storm_state, "name") else str(storm_state)
+        storm_guard_state = getattr(storm_state, "name", None) or str(storm_state)
 
         report_kwargs: dict[str, Any] = {
             "date_str": date_str,
