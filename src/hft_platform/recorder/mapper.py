@@ -158,6 +158,7 @@ def map_event_to_record(
                 "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
                 "qty": int(event.qty),
                 "fee_scaled": _to_ch_price_scaled(symbol, event.fee, metadata, price_codec),
+                "tax_scaled": int(event.tax),
                 "match_ts": int(event.match_ts_ns),
             },
         )

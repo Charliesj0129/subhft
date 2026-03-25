@@ -845,6 +845,26 @@ class SystemBootstrapper:
 
         order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec)
         execution_gateway = ExecutionGateway(order_adapter)
+        # TCA: FeeCalculator injection into ExecutionNormalizer
+        _fee_calculator = None
+        try:
+            from hft_platform.tca.fee_calculator import FeeCalculator
+
+            _fee_yaml = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+                "config",
+                "base",
+                "fees",
+                "futures.yaml",
+            )
+            if os.path.isfile(_fee_yaml):
+                _fee_calculator = FeeCalculator.from_yaml(_fee_yaml)
+                logger.info("fee_calculator_loaded", path=_fee_yaml)
+            else:
+                logger.warning("fee_calculator_yaml_not_found", path=_fee_yaml)
+        except Exception as exc:
+            logger.warning("fee_calculator_init_failed", error=str(exc))
+
         exec_service = ExecutionRouter(
             bus,
             raw_exec_queue,
@@ -852,6 +872,8 @@ class SystemBootstrapper:
             position_store,
             execution_gateway.on_terminal_state,
         )
+        if _fee_calculator is not None:
+            exec_service.normalizer._fee_calculator = _fee_calculator
         risk_engine = RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider)
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
 
