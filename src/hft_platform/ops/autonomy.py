@@ -84,6 +84,22 @@ class AutonomyTransition:
             manual_rearm_required=manual_rearm_required,
         )
 
+    @classmethod
+    def exit_platform_reduce_only(
+        cls,
+        reason: str,
+        *,
+        scope: str = "platform",
+        from_mode: AutonomyMode = AutonomyMode.PLATFORM_REDUCE_ONLY,
+    ) -> "AutonomyTransition":
+        return cls(
+            scope=scope,
+            from_mode=from_mode,
+            to_mode=AutonomyMode.NORMAL,
+            reason=reason,
+            manual_rearm_required=False,
+        )
+
     @property
     def metric_reason(self) -> str:
         return _reason_code_for_metrics(self.reason)
