@@ -50,6 +50,7 @@ from ._ops import (  # noqa: F401
     cmd_contracts_status,
     cmd_diag,
     cmd_feed_status,
+    cmd_ops_flatten,
     cmd_recorder_status,
     cmd_strat_test,
 )
