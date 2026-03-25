@@ -305,6 +305,20 @@ class TestHybridDataSource:
         monkeypatch.setattr(engine_mod, "get_session_info", lambda *a, **kw: (True, "", "Day"))
         monkeypatch.setattr(engine_mod, "get_session_start", lambda *a, **kw: None)
 
+        # Force ShmDataSource to always fail connecting (simulates no SHM segment available)
+        class _FailingShmDataSource:
+            def __init__(self, **kw):
+                self._connected = False
+
+            @property
+            def connected(self):
+                return False
+
+            def connect(self):
+                pass
+
+        monkeypatch.setattr(engine_mod, "ShmDataSource", lambda **kw: _FailingShmDataSource(**kw))
+
         config = MonitorConfig(
             symbols=(WatchlistSymbol(code="2330", name="TSMC", product_type="stock", alpha_ids=("qi",)),),
             data_source="auto",

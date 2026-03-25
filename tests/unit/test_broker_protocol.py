@@ -44,6 +44,12 @@ class _CompliantBrokerStub:
     def set_execution_callbacks(self, on_order: Any, on_deal: Any) -> None:
         pass
 
+    def list_open_orders(self) -> list[Any]:
+        return []
+
+    def is_connected(self) -> bool:
+        return True
+
     def close(self, logout: bool = False) -> None:
         pass
 
