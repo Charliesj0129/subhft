@@ -484,3 +484,13 @@ groups:
         severity: warning
     annotations:
         summary: Order success rate below SLO
+
+  # ── Backup Health ─────────────────────────────────────────────
+  - alert: BackupStale
+    expr: hft_backup_last_success_ts < (time() - 172800)
+    for: 1h
+    labels:
+        severity: critical
+    annotations:
+        summary: ClickHouse backup is stale (>2 days since last success)
+        description: "Last successful backup was {{ $value | humanizeTimestamp }}. Check cron and backup disk."
