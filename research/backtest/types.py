@@ -7,10 +7,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class FuturesCostConfig:
+    """Per-contract fee config for futures."""
+
+    fee_schedule_path: str = "config/base/fees/futures.yaml"
+    use_per_contract_fees: bool = False
 
 
 @dataclass(frozen=True)
@@ -37,6 +45,7 @@ class BacktestConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
+    futures_cost: FuturesCostConfig = field(default_factory=FuturesCostConfig)
 
 
 @dataclass(frozen=True)
