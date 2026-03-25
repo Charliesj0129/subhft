@@ -67,8 +67,11 @@ async def test_webhook_send_posts_json(sender) -> None:
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("aiohttp.ClientSession", return_value=mock_session):
-        result = await sender.send("HALT: risk limit breached")
+    # Patch both the module-level and the lazy-import path to handle
+    # test ordering where real aiohttp may already be imported
+    with patch.dict("sys.modules", {"aiohttp": sys.modules.get("aiohttp", _build_aiohttp_stub())}):
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = await sender.send("HALT: risk limit breached")
 
     assert result is True
     mock_session.post.assert_called_once()
