@@ -387,3 +387,52 @@ def render_shadow_daily_report(
         f"  Reconnect: {reconnect_count} / Queue peak: {queue_peak_pct}% / RSS: {rss_gb:.1f} GB\n"
         f"  StormGuard: {storm_guard_state} (全日)"
     )
+
+
+def render_backup_success(
+    *,
+    date_str: str,
+    size_mb: float,
+    duration_s: float,
+    retained_count: int,
+) -> str:
+    """Daily ClickHouse backup completed successfully.
+
+    Args:
+        date_str: Date label, e.g. "2026-03-25".
+        size_mb: Backup size in megabytes.
+        duration_s: Backup duration in seconds.
+        retained_count: Number of backups currently retained on disk.
+
+    Returns:
+        Formatted backup success notification string.
+    """
+    return (
+        f"🟢 Backup {date_str} 完成\n"
+        f"大小: {size_mb:,.1f} MB | 耗時: {duration_s:.1f}s\n"
+        f"保留: {retained_count} 份備份"
+    )
+
+
+def render_backup_failed(
+    *,
+    date_str: str,
+    error: str,
+    last_success_date: str,
+) -> str:
+    """Daily ClickHouse backup failed.
+
+    Args:
+        date_str: Date label, e.g. "2026-03-25".
+        error: Error message describing the failure.
+        last_success_date: Date of the last successful backup, e.g. "2026-03-24".
+
+    Returns:
+        Formatted backup failure notification string.
+    """
+    return (
+        f"🔴 BACKUP 失敗 {date_str}\n"
+        f"錯誤: {error}\n"
+        f"最後成功備份: {last_success_date}\n"
+        f"請立即檢查備份磁碟"
+    )
