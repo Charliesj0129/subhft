@@ -313,6 +313,12 @@ class RecorderService:
                 memory_guard=self.memory_guard,
                 health_tracker=self.health_tracker,
             ),
+            "slippage_records": Batcher(
+                "hft.slippage_records",
+                writer=self.writer,
+                memory_guard=self.memory_guard,
+                health_tracker=self.health_tracker,
+            ),
         }
 
         # Register all batchers with memory guard

@@ -81,6 +81,7 @@ class OrderAdapter:
         "per_symbol_rate_limiter",
         "strategy_cb_mgr",
         "shadow_sink",
+        "_decision_mid_map",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -101,6 +102,7 @@ class OrderAdapter:
         self.order_id_map = order_id_map if order_id_map is not None else {}
         self._order_id_map_lock = asyncio.Lock()
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
+        self._decision_mid_map: Dict[str, int] = {}
         self.running = False
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
@@ -238,6 +240,7 @@ class OrderAdapter:
 
             if order_key in self.live_orders:
                 logger.info("Removing terminal order", key=order_key)
+                self._decision_mid_map.pop(order_key, None)
                 del self.live_orders[order_key]
 
         # Also clean up rate limit window if needed? No, rate limit is distinct.
@@ -624,6 +627,9 @@ class OrderAdapter:
 
                 # Populate lookup using Shioaji trade attributes (broker ID -> order_key).
                 await self._register_broker_ids(order_key, trade)
+
+                if cmd.intent.decision_mid != 0:
+                    self._decision_mid_map[order_key] = cmd.intent.decision_mid
 
                 self.rate_limiter.record()
                 self.circuit_breaker.record_success()
