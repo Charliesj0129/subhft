@@ -16,3 +16,9 @@ strategies:
   MM_ALPHA_V1:
     max_position: 1                  # Max 1 lot per symbol
     max_order_qty: 1                 # 1 lot per order (conservative)
+
+liquidity_gate:
+  spread_reject_ticks: 3
+  spread_warn_ticks: 2
+  cooldown_s: 5
+  gate_start_offset_s: 60
