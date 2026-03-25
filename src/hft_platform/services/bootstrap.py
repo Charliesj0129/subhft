@@ -751,6 +751,18 @@ class SystemBootstrapper:
         base_shioaji_cfg = dict(self.settings.get("shioaji", {}))
         md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg, broker_id)
 
+        # Position checkpoint writer (periodic serialization)
+        from hft_platform.execution.checkpoint import PositionCheckpointWriter
+        checkpoint_writer = PositionCheckpointWriter(store=position_store)
+
+        # Startup position verifier (dual-source recovery)
+        from hft_platform.execution.startup_recon import StartupPositionVerifier
+        startup_verifier = StartupPositionVerifier(
+            client=md_client,
+            position_store=position_store,
+            checkpoint_path=os.getenv("HFT_POSITION_CHECKPOINT_PATH", ".runtime/position_checkpoint.json"),
+        )
+
         # 4. Services
         feature_engine = None
         feature_profile_registry = None
@@ -1058,6 +1070,8 @@ class SystemBootstrapper:
             session_governor=session_governor,
             autonomy_monitor=autonomy_monitor,
             daily_report_service=daily_report_service,
+            checkpoint_writer=checkpoint_writer,
+            startup_verifier=startup_verifier,
         )
 
 
