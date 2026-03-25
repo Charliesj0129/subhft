@@ -1,6 +1,6 @@
 """Verify TCA fields exist on contracts with correct defaults."""
 from hft_platform.contracts.execution import FillEvent, PositionDelta
-from hft_platform.contracts.strategy import OrderIntent, OrderCommand, Side, IntentType, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, Side, StormGuardState
 
 
 def test_fill_event_has_tca_prices() -> None:

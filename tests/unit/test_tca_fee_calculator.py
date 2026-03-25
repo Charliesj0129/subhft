@@ -6,7 +6,6 @@ import yaml
 
 from hft_platform.contracts.strategy import Side
 from hft_platform.tca.fee_calculator import FeeCalculator
-from hft_platform.tca.types import FeeBreakdown
 
 
 @pytest.fixture()

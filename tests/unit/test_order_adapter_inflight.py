@@ -1,6 +1,10 @@
 """Verify OrderAdapter stores inflight OrderCommands and stamps arrival_price."""
 from hft_platform.contracts.strategy import (
-    OrderCommand, OrderIntent, Side, IntentType, StormGuardState,
+    IntentType,
+    OrderCommand,
+    OrderIntent,
+    Side,
+    StormGuardState,
 )
 from hft_platform.order.adapter import OrderAdapter
 

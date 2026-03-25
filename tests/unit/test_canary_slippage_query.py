@@ -1,5 +1,6 @@
 """Verify canary slippage query reads from hft.trades."""
 import inspect
+
 from hft_platform.alpha.canary_metrics_writer import CanaryMetricsWriter
 
 

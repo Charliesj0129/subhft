@@ -1,5 +1,5 @@
 """Verify StrategyRunner stamps decision_price on OrderIntent."""
-from hft_platform.contracts.strategy import OrderIntent, Side, IntentType
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 
 
 def test_intent_has_decision_price_from_lob() -> None:
