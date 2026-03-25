@@ -179,6 +179,11 @@ class MetricsRegistry:
                 "reconciliation_discrepancy_total",
                 "reconciliation_consecutive_failures",
                 "reconciliation_last_success_ts",
+                # ClickHouse backup metrics
+                "hft_backup_last_success_ts",
+                "hft_backup_size_bytes",
+                "hft_backup_duration_seconds",
+                "hft_backup_retained_count",
             ]
         )
         # Market Data
@@ -743,6 +748,24 @@ class MetricsRegistry:
             "contract_refresh_symbols_changed_total",
             "Symbol changes detected after contract refresh",
             ["change"],  # added|removed|same
+        )
+
+        # ── Backup Metrics ──────────────────────────────────────────
+        self.backup_last_success_ts = Gauge(
+            "hft_backup_last_success_ts",
+            "Unix timestamp of last successful ClickHouse backup",
+        )
+        self.backup_size_bytes = Gauge(
+            "hft_backup_size_bytes",
+            "Size of most recent ClickHouse backup in bytes",
+        )
+        self.backup_duration_seconds = Gauge(
+            "hft_backup_duration_seconds",
+            "Duration of most recent ClickHouse backup in seconds",
+        )
+        self.backup_retained_count = Gauge(
+            "hft_backup_retained_count",
+            "Number of ClickHouse backups currently retained on disk",
         )
 
         # System (v2)
