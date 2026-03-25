@@ -190,6 +190,14 @@ def validate_order_mode_safety() -> None:
             raise SystemExit(
                 "HFT_ORDER_MODE=live with HFT_MODE=sim is invalid. Set HFT_MODE=real to enable live orders."
             )
+        confirm = os.getenv("HFT_LIVE_CONFIRM", "").strip().lower()
+        if confirm != "yes-i-know":
+            logger.critical(
+                "LIVE_MODE_BLOCKED: Set HFT_LIVE_CONFIRM=yes-i-know to confirm live trading",
+                order_mode=order_mode,
+            )
+            raise SystemExit(1)
+        logger.warning("live_mode_confirmed", order_mode=order_mode)
         logger.critical(
             "LIVE ORDER MODE ACTIVE — real money orders will be placed",
             hft_mode=hft_mode,
