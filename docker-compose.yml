@@ -131,6 +131,9 @@ services:
       - ./config/clickhouse_system_logs.xml:/etc/clickhouse-server/config.d/system_logs.xml
       # Memory cap: prevents Docker OOM kill; ClickHouse returns Code: 241 gracefully instead
       - ./config/clickhouse_memory.xml:/etc/clickhouse-server/config.d/memory.xml
+      # Backup disk config + backup storage volume
+      - ./config/clickhouse_backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
+      - ${CH_BACKUP_PATH:-./backups/clickhouse}:/backups
       # Configurable Data Root (Tiered Storage)
       - ${CH_DATA_HOT:-ch_data_hot}:/var/lib/clickhouse/data/hot
       - ${CH_DATA_COLD:-ch_data_cold}:/var/lib/clickhouse/data/cold
