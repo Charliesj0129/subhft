@@ -243,6 +243,141 @@ class NotificationDispatcher:
         )
         await self._sender.send(msg, critical=False)
 
+    async def notify_autonomy_transition(
+        self,
+        *,
+        scope: str,
+        from_mode: str,
+        to_mode: str,
+        reason: str,
+    ) -> None:
+        """Notify operator of an autonomy state transition.
+
+        Args:
+            scope: "platform" or "strategy".
+            from_mode: Previous autonomy mode name.
+            to_mode: New autonomy mode name.
+            reason: Human-readable reason for the transition.
+        """
+        msg = templates.render_autonomy_transition(scope=scope, from_mode=from_mode, to_mode=to_mode, reason=reason)
+        logger.warning(
+            "dispatcher.notify_autonomy_transition",
+            scope=scope,
+            from_mode=from_mode,
+            to_mode=to_mode,
+            reason=reason,
+        )
+        await self._sender.send(msg, critical=(to_mode == "HALT"))
+
+    async def notify_flatten_result(
+        self,
+        *,
+        scope: str,
+        fully_closed: int,
+        partially_closed: int,
+        failed: int,
+        failed_symbols: list[str],
+    ) -> None:
+        """Notify operator of position flattening results.
+
+        Args:
+            scope: "all", "track", or strategy id.
+            fully_closed: Number of positions fully closed.
+            partially_closed: Number of positions partially closed.
+            failed: Number of positions that failed to close.
+            failed_symbols: Symbols that failed to flatten.
+        """
+        msg = templates.render_flatten_result(
+            scope=scope,
+            fully_closed=fully_closed,
+            partially_closed=partially_closed,
+            failed=failed,
+            failed_symbols=failed_symbols,
+        )
+        logger.warning(
+            "dispatcher.notify_flatten_result",
+            scope=scope,
+            fully_closed=fully_closed,
+            failed=failed,
+        )
+        await self._sender.send(msg, critical=(failed > 0))
+
+    async def notify_heartbeat(
+        self,
+        *,
+        autonomy_state: str,
+        pnl_scaled: int,
+        strategies_active: int,
+        feed_status: str,
+    ) -> None:
+        """Send a periodic heartbeat notification.
+
+        Args:
+            autonomy_state: Current StormGuard state name.
+            pnl_scaled: Current PnL (scaled int).
+            strategies_active: Number of active strategies.
+            feed_status: "ok" or "disconnected".
+        """
+        msg = templates.render_heartbeat(
+            autonomy_state=autonomy_state,
+            pnl_scaled=pnl_scaled,
+            strategies_active=strategies_active,
+            feed_status=feed_status,
+        )
+        logger.info("dispatcher.notify_heartbeat", state=autonomy_state)
+        await self._sender.send(msg, critical=False)
+
+    async def notify_session_phase(
+        self,
+        *,
+        track: str,
+        old_phase: str,
+        new_phase: str,
+    ) -> None:
+        """Notify operator of a session phase transition.
+
+        Args:
+            track: Track name (e.g. "stock", "futures_day").
+            old_phase: Previous session phase name.
+            new_phase: New session phase name.
+        """
+        msg = templates.render_session_phase(track=track, old_phase=old_phase, new_phase=new_phase)
+        logger.info(
+            "dispatcher.notify_session_phase",
+            track=track,
+            old_phase=old_phase,
+            new_phase=new_phase,
+        )
+        await self._sender.send(msg, critical=False)
+
+    async def notify_autonomy_daily_summary(
+        self,
+        *,
+        date_str: str,
+        transitions: int,
+        halts: int,
+        flatten_count: int,
+        manual_rearms: int,
+    ) -> None:
+        """Send the end-of-day autonomy summary.
+
+        Args:
+            date_str: Date label, e.g. "2026-03-25".
+            transitions: Total autonomy transitions for the day.
+            halts: Number of HALT events.
+            flatten_count: Number of flatten operations triggered.
+            manual_rearms: Number of manual rearm operations performed.
+        """
+        msg = templates.render_autonomy_daily_summary(
+            date_str=date_str,
+            transitions=transitions,
+            halts=halts,
+            flatten_count=flatten_count,
+            manual_rearms=manual_rearms,
+        )
+        logger.info("dispatcher.notify_autonomy_daily_summary", date_str=date_str)
+        await self._sender.send(msg, critical=False)
+
     async def notify_shadow_daily_report(self, **kwargs) -> None:
         """Send the shadow strategy daily report.
 

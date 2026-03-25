@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from hft_platform.order.shadow_writer import ShadowOrderWriter
 
 _SAMPLE_RECORD = {

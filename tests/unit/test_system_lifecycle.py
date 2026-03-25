@@ -4,8 +4,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.ops.platform_inputs import PlatformDegradeInputs
+from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.system import HFTSystem
 
 

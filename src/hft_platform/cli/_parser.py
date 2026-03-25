@@ -41,6 +41,7 @@ from ._ops import (
     cmd_diag,
     cmd_feed_status,
     cmd_ops_autonomy_status,
+    cmd_ops_flatten,
     cmd_ops_rearm_platform,
     cmd_ops_rearm_strategy,
     cmd_recorder_status,
@@ -273,6 +274,12 @@ def build_parser() -> argparse.ArgumentParser:
     ops_status = ops_sub.add_parser("autonomy-status", help="Show persisted autonomy runtime state")
     ops_status.add_argument("--state-path", help="Override autonomy runtime state path")
     ops_status.set_defaults(func=cmd_ops_autonomy_status)
+
+    ops_flatten = ops_sub.add_parser("flatten", help="Emergency position flattening")
+    ops_flatten.add_argument("--scope", choices=["all", "strategy", "track"], default="all")
+    ops_flatten.add_argument("--scope-id", default=None, help="Strategy ID or track name")
+    ops_flatten.add_argument("--deadline", type=int, default=120, help="Flatten deadline in seconds")
+    ops_flatten.set_defaults(func=cmd_ops_flatten)
 
     # ── Risk Management ────────────────────────────────────────────────
     risk = sub.add_parser("risk", help="Risk management utilities")

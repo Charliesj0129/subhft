@@ -1,0 +1,32 @@
+futures:
+  TX:
+    commission_per_contract: 60
+    tax_rate_bps: 2.0
+    tax_side: sell
+    tick_size: 1
+    point_value: 200
+
+  MTX:
+    commission_per_contract: 30
+    tax_rate_bps: 2.0
+    tax_side: sell
+    tick_size: 1
+    point_value: 50
+
+  XMT:
+    commission_per_contract: 13
+    tax_rate_bps: 2.0
+    tax_side: sell
+    tick_size: 1
+    point_value: 10
+
+  stock_futures_default:
+    commission_per_contract: 20
+    tax_rate_bps: 4.0
+    tax_side: sell
+    tick_size: 0.01
+    point_value: 2000
+
+  overrides:
+    "2330F":
+      commission_per_contract: 25

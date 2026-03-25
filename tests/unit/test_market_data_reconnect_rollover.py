@@ -13,11 +13,17 @@ from hft_platform.services.market_data import MarketDataService
 def service(tmp_path):
     cfg = tmp_path / "symbols.yaml"
     cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
+    _old = os.environ.get("SYMBOLS_CONFIG")
     os.environ["SYMBOLS_CONFIG"] = str(cfg)
     bus = MagicMock(spec=RingBufferBus)
     raw_queue = asyncio.Queue()
     client = MagicMock()
-    return MarketDataService(bus, raw_queue, client)
+    svc = MarketDataService(bus, raw_queue, client)
+    yield svc
+    if _old is None:
+        os.environ.pop("SYMBOLS_CONFIG", None)
+    else:
+        os.environ["SYMBOLS_CONFIG"] = _old
 
 
 def test_weekend_rollover_reconnect_once(service):

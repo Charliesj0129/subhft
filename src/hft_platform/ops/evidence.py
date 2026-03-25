@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 
 from hft_platform.core import timebase
 
@@ -17,9 +17,21 @@ _shared_writer_lock = Lock()
 class AutonomyEvidenceWriter:
     def __init__(self, base_dir: str | Path | None = None) -> None:
         self.base_dir = Path(base_dir) if base_dir is not None else DEFAULT_AUTONOMY_EVIDENCE_DIR
+        self._trading_date: date | None = None
+        self._on_transition_callbacks: list[Callable[[dict[str, Any]], None]] = []
+
+    def set_trading_date(self, d: date) -> None:
+        """Override the trading date used for session directory naming."""
+        self._trading_date = d
+
+    def on_transition(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """Register a callback invoked after each ``record_transition``."""
+        self._on_transition_callbacks.append(callback)
 
     @property
     def session_dir(self) -> Path:
+        if self._trading_date is not None:
+            return self.base_dir / self._trading_date.strftime("%Y%m%d")
         return self.base_dir / datetime.now().strftime("%Y%m%d")
 
     def record_transition(
@@ -52,6 +64,11 @@ class AutonomyEvidenceWriter:
                 reason=reason,
                 metadata=metadata,
             )
+        for cb in self._on_transition_callbacks:
+            try:
+                cb(record)
+            except Exception:
+                pass
         return record
 
     def record_manual_rearm_requirement(
@@ -69,7 +86,8 @@ class AutonomyEvidenceWriter:
         }
         self._append_markdown(
             "manual_rearm_requirements.md",
-            f"- `{record['scope']}` reason=`{record['reason']}` metadata={json.dumps(record['metadata'], ensure_ascii=False)}",
+            f"- `{record['scope']}` reason=`{record['reason']}` "
+            f"metadata={json.dumps(record['metadata'], ensure_ascii=False)}",
         )
         self._update_runtime_state(record)
 
@@ -150,6 +168,19 @@ class AutonomyEvidenceWriter:
         path = self._ensure_session_dir() / filename
         with path.open("a", encoding="utf-8") as handle:
             handle.write(line.rstrip() + "\n")
+
+    def write_daily_summary(self, summary: dict[str, Any]) -> Path:
+        """Write a daily summary JSON file to the session directory.
+
+        Args:
+            summary: Arbitrary summary payload (e.g. PnL, fill counts).
+
+        Returns:
+            Path to the written file.
+        """
+        path = self._ensure_session_dir() / "daily_summary.json"
+        path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+        return path
 
     def _ensure_session_dir(self) -> Path:
         path = self.session_dir

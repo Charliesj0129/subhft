@@ -8,7 +8,7 @@ from typing import Any, List
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import OrderIntent
+from hft_platform.contracts.strategy import IntentType, OrderIntent
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
@@ -103,6 +103,7 @@ class StrategyRunner:
         "_position_key_cache",
         "_strat_index",
         "_feature_compat_fail_fast",
+        "track_gate",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -199,6 +200,9 @@ class StrategyRunner:
                 )
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.warning("rust_circuit_breaker_init_failed", error=str(exc))
+        # TrackGate: per-event session phase filtering (set externally by SessionGovernor)
+        self.track_gate: Any = None  # TrackGate | None
+
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
         # Unit 10: Strategy-by-id index for O(1) targeted dispatch
@@ -545,7 +549,8 @@ class StrategyRunner:
             if target_strat_id and strategy.strategy_id != target_strat_id:
                 continue
 
-            if self.strategy_governor.is_quarantined(strategy.strategy_id):
+            _governor = getattr(self, "strategy_governor", None)
+            if _governor is not None and _governor.is_quarantined(strategy.strategy_id):
                 self._emit_trace(
                     "strategy_quarantine_skip",
                     trace_id,
@@ -555,6 +560,25 @@ class StrategyRunner:
                         "symbol": getattr(event, "symbol", ""),
                     },
                 )
+                # Still update circuit breaker state when quarantine-skipping
+                _qsid = strategy.strategy_id
+                _rc = getattr(self, "_rust_circuit", None)
+                if _rc is not None:
+                    _new_state, _should_disable = _rc.record_failure(_qsid, timebase.now_ns())
+                    if _should_disable:
+                        strategy.enabled = False
+                else:
+                    _q_failures = self._failure_counts.get(_qsid, 0) + 1
+                    self._failure_counts[_qsid] = _q_failures
+                    _q_state = self._circuit_states.get(_qsid, "normal")
+                    _q_half = max(1, self._circuit_threshold // 2)
+                    if _q_state == "normal" and _q_failures >= _q_half:
+                        self._circuit_states[_qsid] = "degraded"
+                    if _q_failures >= self._circuit_threshold and _q_state != "halted":
+                        self._circuit_states[_qsid] = "halted"
+                        strategy.enabled = False
+                    elif _qsid not in self._circuit_states:
+                        self._circuit_states[_qsid] = "normal"
                 continue
 
             positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
@@ -585,16 +609,18 @@ class StrategyRunner:
                     },
                 )
                 intents = []
-                transition = self.strategy_governor.quarantine(strategy.strategy_id, reason="strategy_exception")
-                self._emit_trace(
-                    "strategy_quarantined",
-                    trace_id,
-                    {
-                        "strategy_id": strategy.strategy_id,
-                        "event_type": type(event).__name__,
-                        "reason": transition.reason,
-                    },
-                )
+                _gov = getattr(self, "strategy_governor", None)
+                if _gov is not None:
+                    transition = _gov.quarantine(strategy.strategy_id, reason="strategy_exception")
+                    self._emit_trace(
+                        "strategy_quarantined",
+                        trace_id,
+                        {
+                            "strategy_id": strategy.strategy_id,
+                            "event_type": type(event).__name__,
+                            "reason": transition.reason,
+                        },
+                    )
                 if self.metrics:
                     exc_m = getattr(self.metrics, "strategy_exceptions_total", None)
                     if exc_m:
@@ -654,6 +680,17 @@ class StrategyRunner:
                             self._failure_counts[sid] = 0
                             self._circuit_success_counts[sid] = 0
                             logger.info("Strategy circuit recovered to normal", id=sid)
+
+            # TrackGate per-event filtering (session phase enforcement)
+            if getattr(self, "track_gate", None) is not None and intents:
+                from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
+
+                symbol = getattr(event, "symbol", "")
+                phase = self.track_gate.get_phase(symbol)
+                if phase == SessionPhase.CLOSE_ONLY:
+                    intents = [i for i in intents if i.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)]
+                elif phase in (SessionPhase.FORCE_FLAT, SessionPhase.CLOSED, SessionPhase.PRE_OPEN, SessionPhase.INIT):
+                    intents = []
 
             duration = time.perf_counter_ns() - start
             if getattr(self, "_trace_sampler", None) is not None:
@@ -722,6 +759,11 @@ class StrategyRunner:
 
             if intents:
                 for intent in intents:
+                    # Populate decision_mid from LOB engine's last stats
+                    if hasattr(self.lob_engine, "last_stats") and self.lob_engine.last_stats is not None:
+                        if isinstance(intent, OrderIntent):
+                            intent.decision_mid = self.lob_engine.last_stats.mid_price_x2 // 2
+
                     self._emit_trace(
                         "strategy_intent_submit",
                         trace_id,
