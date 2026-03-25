@@ -103,13 +103,13 @@ class FeatureRegistry:
 # Bump this (and create a new build_default_lob_feature_set_vN function) whenever
 # the feature layout or semantics change incompatibly.  Alpha manifests that declare
 # feature_set_version must match this constant before Gate D promotion.
-FEATURE_SET_VERSION = "lob_shared_v1"
+FEATURE_SET_VERSION = "lob_shared_v2"
 
 
 def build_default_lob_feature_set_v1() -> FeatureSet:
     """Default shared LOB-derived feature set for the initial FeatureEngine prototype."""
     return FeatureSet(
-        feature_set_id=FEATURE_SET_VERSION,
+        feature_set_id="lob_shared_v1",
         schema_version=1,
         features=(
             FeatureSpec("best_bid", "i64", scale=10_000, source_kind="book"),
@@ -137,6 +137,30 @@ def build_default_lob_feature_set_v1() -> FeatureSet:
     )
 
 
+def build_default_lob_feature_set_v2() -> FeatureSet:
+    """LOB feature set v2: adds ISS (impact_surprise) and MLDM (deep_depth_momentum).
+
+    Indices 0-15: identical to v1 (backward compatible).
+    Index 16: impact_surprise_x1000 — Impact Surprise Signal (EMA baseline), scaled x1000.
+    Index 17: deep_depth_momentum_x1000 — Multi-Level Depth Momentum (L2-L5), scaled x1000.
+    """
+    v1 = build_default_lob_feature_set_v1()
+    return FeatureSet(
+        feature_set_id=FEATURE_SET_VERSION,
+        schema_version=2,
+        features=v1.features + (
+            FeatureSpec(
+                "impact_surprise_x1000", "i64", scale=1000,
+                source_kind="book", warmup_min_events=400,
+            ),
+            FeatureSpec(
+                "deep_depth_momentum_x1000", "i64", scale=1000,
+                source_kind="book", warmup_min_events=128,
+            ),
+        ),
+    )
+
+
 def feature_id_to_index(feature_set: FeatureSet, feature_id: str) -> int:
     """Return the integer index for *feature_id* in *feature_set*.
 
@@ -150,5 +174,6 @@ def feature_id_to_index(feature_set: FeatureSet, feature_id: str) -> int:
 
 def default_feature_registry() -> FeatureRegistry:
     reg = FeatureRegistry()
-    reg.register(build_default_lob_feature_set_v1(), make_default=True)
+    reg.register(build_default_lob_feature_set_v1())
+    reg.register(build_default_lob_feature_set_v2(), make_default=True)
     return reg
