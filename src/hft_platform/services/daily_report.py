@@ -103,8 +103,8 @@ class DailyReportService:
             "fills": aggregates["fills"],
             "position_status": position_status,
             "reconciliation_status": "OK",
-            "latency_p95_ms": 0.0,
-            "reconnect_count": 0,
+            "latency_p95_ms": 0.0,  # TODO: wire from Prometheus metrics or LatencyRecorder
+            "reconnect_count": 0,  # TODO: wire from ReconnectOrchestrator counter
             "storm_guard_state": storm_guard_state,
             "memory_gb": memory_gb,
             "memory_max_gb": memory_max_gb,
@@ -150,7 +150,7 @@ class DailyReportService:
 
         query = (
             "SELECT "
-            "  sum(price_scaled * qty) AS pnl_scaled, "
+            "  sum(price_scaled * qty) AS pnl_scaled, "  # TODO: use realized_pnl column when available; sum(price*qty) is notional, not PnL
             "  countIf(side = 'B') AS buy_count, "
             "  countIf(side = 'S') AS sell_count, "
             "  count(*) AS fill_count, "
