@@ -10,6 +10,7 @@ from hft_platform.notifications import templates
 
 if TYPE_CHECKING:
     from hft_platform.notifications.telegram import TelegramSender
+    from hft_platform.notifications.webhook import WebhookSender
 
 logger = structlog.get_logger(__name__)
 
@@ -24,14 +25,25 @@ class NotificationDispatcher:
     * **critical=False**: All other informational/warning events.
     """
 
-    __slots__ = ("_sender",)
+    __slots__ = ("_sender", "_fallback_sender")
 
-    def __init__(self, sender: TelegramSender) -> None:
+    def __init__(
+        self,
+        sender: TelegramSender,
+        fallback_sender: WebhookSender | None = None,
+    ) -> None:
         self._sender = sender
+        self._fallback_sender: WebhookSender | None = fallback_sender
 
     # ------------------------------------------------------------------
     # Critical events (critical=True)
     # ------------------------------------------------------------------
+
+    async def _send_critical(self, msg: str) -> None:
+        """Send to primary (telegram) and fallback (webhook) channels."""
+        await self._sender.send(msg, critical=True)
+        if self._fallback_sender is not None:
+            await self._fallback_sender.send(msg)
 
     async def notify_halt(self, reason: str) -> None:
         """Notify operator that trading has been halted.
@@ -41,7 +53,7 @@ class NotificationDispatcher:
         """
         msg = templates.render_halt(reason=reason)
         logger.warning("dispatcher.notify_halt", reason=reason)
-        await self._sender.send(msg, critical=True)
+        await self._send_critical(msg)
 
     async def notify_daily_loss(self, pnl_ntd: int, limit_ntd: int) -> None:
         """Notify operator that the daily loss limit has been breached.
@@ -52,7 +64,7 @@ class NotificationDispatcher:
         """
         msg = templates.render_daily_loss(pnl_ntd=pnl_ntd, limit_ntd=limit_ntd)
         logger.warning("dispatcher.notify_daily_loss", pnl_ntd=pnl_ntd, limit_ntd=limit_ntd)
-        await self._sender.send(msg, critical=True)
+        await self._send_critical(msg)
 
     # ------------------------------------------------------------------
     # Non-critical events (critical=False)
@@ -398,6 +410,30 @@ class NotificationDispatcher:
         msg = templates.render_shadow_daily_report(**kwargs)
         logger.info("dispatcher.notify_shadow_daily_report", **kwargs)
         await self._sender.send(msg, critical=False)
+
+    async def notify_margin_warning(self, *, ratio: float, used: int, available: int) -> None:
+        """Notify operator that margin utilization has reached warning level.
+
+        Args:
+            ratio: Margin utilization ratio (0.0-1.0+).
+            used: Margin used in NTD.
+            available: Margin available in NTD.
+        """
+        msg = templates.render_margin_warning(ratio=ratio, used=used, available=available)
+        logger.warning("dispatcher.notify_margin_warning", ratio=f"{ratio:.2%}", used=used, available=available)
+        await self._sender.send(msg, critical=False)
+
+    async def notify_margin_critical(self, *, ratio: float, used: int, available: int) -> None:
+        """Notify operator that margin utilization is critical; reduce-only activated.
+
+        Args:
+            ratio: Margin utilization ratio (0.0-1.0+).
+            used: Margin used in NTD.
+            available: Margin available in NTD.
+        """
+        msg = templates.render_margin_critical(ratio=ratio, used=used, available=available)
+        logger.warning("dispatcher.notify_margin_critical", ratio=f"{ratio:.2%}", used=used, available=available)
+        await self._send_critical(msg)
 
     async def notify_backup_success(
         self,
