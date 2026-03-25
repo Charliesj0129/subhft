@@ -105,6 +105,8 @@ class HFTSystem:
         self.strategy_runner = self.registry.strategy_runner
         self.recorder = self.registry.recorder
         self.gateway_service = self.registry.gateway_service
+        self.checkpoint_writer = self.registry.checkpoint_writer
+        self.startup_verifier = self.registry.startup_verifier
         self.session_governor = getattr(self.registry, "session_governor", None)
         self.autonomy_monitor = getattr(self.registry, "autonomy_monitor", None)
         self.daily_report_service = getattr(self.registry, "daily_report_service", None)
@@ -211,6 +213,33 @@ class HFTSystem:
                 self._start_service("risk", self.risk_engine.run())
             self._start_service("order", self.order_adapter.run())
             self._start_service("exec_gateway", self.execution_gateway.run())
+            # ── Position Recovery (must complete before recon + strategy) ──
+            if os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_verifier:
+                try:
+                    recovery = await self.startup_verifier.recover(
+                        account_id=self.registry.broker_id,
+                    )
+                    if recovery.halted:
+                        logger.critical(
+                            "Position recovery HALT — refusing to start trading",
+                            source=recovery.source,
+                            mismatches=recovery.mismatches,
+                        )
+                        return
+                    logger.info(
+                        "Position recovery complete",
+                        source=recovery.source,
+                        loaded=recovery.positions_loaded,
+                        corrected=recovery.auto_corrected,
+                    )
+                except Exception as exc:
+                    logger.critical("Position recovery failed", error=str(exc))
+                    return
+
+            # ── Checkpoint Writer (after recovery, before trading) ──
+            if os.getenv("HFT_CHECKPOINT_ENABLED", "1") == "1" and self.checkpoint_writer:
+                self._start_service("checkpoint_writer", self.checkpoint_writer.run())
+
             self._start_service("recon", self.recon_service.run())
             self._start_service("strat", self.strategy_runner.run())
             self._start_service("recorder", self.recorder.run())
