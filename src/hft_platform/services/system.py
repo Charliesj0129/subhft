@@ -105,6 +105,8 @@ class HFTSystem:
         self.strategy_runner = self.registry.strategy_runner
         self.recorder = self.registry.recorder
         self.gateway_service = self.registry.gateway_service
+        self.session_governor = getattr(self.registry, "session_governor", None)
+        self.autonomy_monitor = getattr(self.registry, "autonomy_monitor", None)
         self.evidence_writer = getattr(self.registry, "evidence_writer", None) or get_shared_autonomy_evidence_writer()
         self.platform_degrade_controller = (
             getattr(self.registry, "platform_degrade_controller", None) or get_shared_platform_degrade_controller()
@@ -186,6 +188,16 @@ class HFTSystem:
         )
 
         try:
+            # Opt-in: start SessionGovernor before market services
+            if self.session_governor is not None:
+                await self.session_governor.start()
+                logger.info("SessionGovernor started")
+
+            # Opt-in: start AutonomyMonitor before market services
+            if self.autonomy_monitor is not None:
+                await self.autonomy_monitor.start()
+                logger.info("AutonomyMonitor started")
+
             # Start Services
             self._start_service("md", self.md_service.run())
             self._start_service("exec_router", self.exec_service.run())
@@ -561,6 +573,21 @@ class HFTSystem:
 
         self.tasks.clear()
         self._teardown_bootstrap()
+
+        # Opt-in: stop AutonomyMonitor first (it reacts to states, stop before governor)
+        if self.autonomy_monitor is not None:
+            try:
+                await self.autonomy_monitor.stop()
+            except Exception as exc:
+                logger.warning("AutonomyMonitor stop failed", error=str(exc))
+
+        # Opt-in: stop SessionGovernor after autonomy monitor
+        if self.session_governor is not None:
+            try:
+                await self.session_governor.stop()
+            except Exception as exc:
+                logger.warning("SessionGovernor stop failed", error=str(exc))
+
         self.evidence_writer.record_transition(
             scope="platform",
             mode="CLOSED",

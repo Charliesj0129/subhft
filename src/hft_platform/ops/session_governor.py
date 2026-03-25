@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
 from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable
@@ -164,9 +163,7 @@ class SessionGovernor:
         """Expose the TrackGate for injection into StrategyRunner."""
         return self._track_gate
 
-    def register_phase_callback(
-        self, callback: Callable[[str, SessionPhase, SessionPhase], None]
-    ) -> None:
+    def register_phase_callback(self, callback: Callable[[str, SessionPhase, SessionPhase], None]) -> None:
         """Register a callback invoked on phase transitions: (track, old, new)."""
         self._phase_callbacks.append(callback)
 

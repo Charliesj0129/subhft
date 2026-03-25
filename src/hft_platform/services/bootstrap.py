@@ -902,6 +902,44 @@ class SystemBootstrapper:
             order_queue=order_queue,
         )
 
+        # Opt-in: SessionGovernor (disabled by default)
+        session_governor = None
+        if os.environ.get("HFT_SESSION_GOVERNOR_ENABLED", "0") == "1":
+            try:
+                from hft_platform.ops.session_governor import SessionGovernor
+
+                from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
+
+                session_governor = SessionGovernor(
+                    evidence_writer=get_shared_autonomy_evidence_writer(),
+                )
+                # Wire TrackGate into StrategyRunner for per-symbol session filtering
+                strategy_runner.track_gate = session_governor.track_gate
+                logger.info("SessionGovernor created and TrackGate wired into StrategyRunner")
+            except Exception as exc:
+                logger.warning("SessionGovernor creation failed", error=str(exc))
+                session_governor = None
+
+        # Opt-in: AutonomyMonitor (disabled by default)
+        autonomy_monitor = None
+        if os.environ.get("HFT_AUTONOMY_MONITOR_ENABLED", "0") == "1":
+            try:
+                from hft_platform.ops.autonomy_monitor import AutonomyMonitor
+
+                from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
+
+                autonomy_monitor = AutonomyMonitor(
+                    storm_guard=storm_guard,
+                    platform_degrade=get_shared_platform_degrade_controller(),
+                    platform_inputs=platform_degrade_inputs,
+                    recon_service=recon_service,
+                    broker_client=order_client,
+                )
+                logger.info("AutonomyMonitor created")
+            except Exception as exc:
+                logger.warning("AutonomyMonitor creation failed", error=str(exc))
+                autonomy_monitor = None
+
         return ServiceRegistry(
             settings=self.settings,
             bus=bus,
@@ -935,6 +973,8 @@ class SystemBootstrapper:
             platform_degrade_inputs=platform_degrade_inputs,
             gateway_service=gateway_service,
             intent_channel=intent_channel,
+            session_governor=session_governor,
+            autonomy_monitor=autonomy_monitor,
         )
 
 
