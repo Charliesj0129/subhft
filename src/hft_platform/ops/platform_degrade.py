@@ -79,7 +79,7 @@ class PlatformDegradeController:
         normalized_intent = self._normalize_intent_type(intent_type)
         if not self.reduce_only_active:
             return True
-        if normalized_intent in {IntentType.CANCEL, IntentType.AMEND}:
+        if normalized_intent in {IntentType.CANCEL, IntentType.AMEND, IntentType.FORCE_FLAT}:
             return True
         if normalized_intent == IntentType.NEW:
             return not opens_risk

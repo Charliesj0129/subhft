@@ -222,6 +222,126 @@ def render_weekly_summary(
     )
 
 
+def render_autonomy_transition(
+    *,
+    scope: str,
+    from_mode: str,
+    to_mode: str,
+    reason: str,
+) -> str:
+    """Autonomy state transition notification.
+
+    Args:
+        scope: "platform" or "strategy".
+        from_mode: Previous autonomy mode name.
+        to_mode: New autonomy mode name.
+        reason: Human-readable reason for the transition.
+
+    Returns:
+        Formatted autonomy transition alert string.
+    """
+    return f"🟠 Autonomy: [{scope}] {from_mode} → {to_mode}. Reason: {reason}."
+
+
+def render_flatten_result(
+    *,
+    scope: str,
+    fully_closed: int,
+    partially_closed: int,
+    failed: int,
+    failed_symbols: list[str],
+) -> str:
+    """Position flattening result notification.
+
+    Args:
+        scope: "all", "track", or strategy id.
+        fully_closed: Number of positions fully closed.
+        partially_closed: Number of positions partially closed.
+        failed: Number of positions that failed to close.
+        failed_symbols: Symbols that failed to flatten.
+
+    Returns:
+        Formatted flatten result string.
+    """
+    icon = "✅" if failed == 0 else "⚠️"
+    lines = [
+        f"{icon} Flatten [{scope}]: closed={fully_closed} partial={partially_closed} failed={failed}",
+    ]
+    if failed_symbols:
+        lines.append(f"Failed: {', '.join(failed_symbols[:5])}")
+    return "\n".join(lines)
+
+
+def render_heartbeat(
+    *,
+    autonomy_state: str,
+    pnl_scaled: int,
+    strategies_active: int,
+    feed_status: str,
+) -> str:
+    """Periodic heartbeat notification.
+
+    Args:
+        autonomy_state: Current StormGuard state name.
+        pnl_scaled: Current PnL (scaled int).
+        strategies_active: Number of active strategies.
+        feed_status: "ok" or "disconnected".
+
+    Returns:
+        Formatted heartbeat string.
+    """
+    return (
+        f"💓 Heartbeat | State: {autonomy_state} | "
+        f"PnL: {pnl_scaled} | Strategies: {strategies_active} | Feed: {feed_status}"
+    )
+
+
+def render_session_phase(
+    *,
+    track: str,
+    old_phase: str,
+    new_phase: str,
+) -> str:
+    """Session phase transition notification.
+
+    Args:
+        track: Track name (e.g. "stock", "futures_day").
+        old_phase: Previous session phase name.
+        new_phase: New session phase name.
+
+    Returns:
+        Formatted session phase change string.
+    """
+    return f"🕐 Session [{track}]: {old_phase} → {new_phase}"
+
+
+def render_autonomy_daily_summary(
+    *,
+    date_str: str,
+    transitions: int,
+    halts: int,
+    flatten_count: int,
+    manual_rearms: int,
+) -> str:
+    """End-of-day autonomy summary notification.
+
+    Args:
+        date_str: Date label, e.g. "2026-03-25".
+        transitions: Total autonomy transitions for the day.
+        halts: Number of HALT events.
+        flatten_count: Number of flatten operations triggered.
+        manual_rearms: Number of manual rearm operations performed.
+
+    Returns:
+        Formatted autonomy daily summary string.
+    """
+    return (
+        f"📋 Autonomy 日報 {date_str}\n"
+        f"Transitions: {transitions} | HALTs: {halts}\n"
+        f"Flatten ops: {flatten_count} | Manual rearms: {manual_rearms}"
+    )
+
+
 def render_shadow_daily_report(
     *,
     date_str: str,

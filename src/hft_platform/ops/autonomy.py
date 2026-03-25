@@ -4,20 +4,24 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-
 _ALLOWED_REASON_CODES = frozenset(
     {
+        "broker_unavailable",
         "clickhouse_unhealthy",
+        "feed_gap_majority",
         "feed_reconnect_flapping",
         "feed_reconnect_pending",
         "feed_reconnect_unhealthy",
         "manual_operator",
+        "memory_pressure",
+        "persistence_failure",
         "pnl_peak_drawdown",
         "pnl_soft_limit",
         "queue_depth_exceeded",
         "reconciliation_drift",
         "redis_unhealthy",
         "rss_unhealthy",
+        "session_close_only",
         "strategy_exception",
         "strategy_reject_spike",
         "unknown",
