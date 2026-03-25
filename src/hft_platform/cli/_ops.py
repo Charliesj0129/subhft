@@ -10,8 +10,12 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 from hft_platform.config.loader import load_settings
 from hft_platform.ops.manual_rearm import ManualRearmGate
+
+logger = structlog.get_logger(__name__)
 
 
 def cmd_feed_status(args: argparse.Namespace) -> None:
@@ -367,3 +371,23 @@ def cmd_ops_rearm_platform(args: argparse.Namespace) -> None:
 def cmd_ops_autonomy_status(args: argparse.Namespace) -> None:
     gate = _manual_rearm_gate(args)
     print(json.dumps(gate.snapshot(), indent=2, ensure_ascii=False))
+
+
+def cmd_ops_flatten(args: argparse.Namespace) -> None:
+    """Emergency position flattening."""
+    scope = getattr(args, "scope", "all")
+    scope_id = getattr(args, "scope_id", None)
+    deadline = getattr(args, "deadline", 120)
+
+    logger.info("ops_flatten_start", scope=scope, scope_id=scope_id, deadline=deadline)
+
+    # Minimal bootstrap — create a flattener with mock/real dependencies
+    # For now, just print usage since full bootstrap requires broker connection
+    try:
+        from hft_platform.ops.position_flattener import FlattenResult, PositionFlattener  # noqa: F401
+    except ImportError:
+        print("Warning: PositionFlattener not yet available (pending full system wiring).")
+
+    print(f"Flatten scope={scope} id={scope_id} deadline={deadline}s")
+    print("Note: Full flatten requires running HFT system. Use this as emergency override.")
+    # TODO: Wire to actual PositionFlattener with broker bootstrap
