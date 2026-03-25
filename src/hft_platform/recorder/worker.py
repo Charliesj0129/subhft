@@ -325,6 +325,12 @@ class RecorderService:
                 memory_guard=self.memory_guard,
                 health_tracker=self.health_tracker,
             ),
+            "liquidity_gate_events": Batcher(
+                "hft.liquidity_gate_events",
+                writer=self.writer,
+                memory_guard=self.memory_guard,
+                health_tracker=self.health_tracker,
+            ),
         }
 
         # Register all batchers with memory guard

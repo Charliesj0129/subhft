@@ -96,6 +96,7 @@ class RiskEngine:
         price_scale_provider: PriceScaleProvider | None = None,
         storm_guard: StormGuard | None = None,
         notification_dispatcher: Any | None = None,
+        lob_engine: Any | None = None,
     ):
         self.config_path = config_path
         self.intent_queue = intent_queue  # Input
@@ -122,6 +123,11 @@ class RiskEngine:
             PositionLimitValidator(self.config, price_scale_provider),
             DailyLossLimitValidator(self.config, price_scale_provider),
         ]
+        if self.config.get("liquidity_gate"):
+            from hft_platform.risk.liquidity_gate import LiquidityGateValidator
+            self.validators.append(
+                LiquidityGateValidator(self.config, price_scale_provider, lob=lob_engine)
+            )
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
