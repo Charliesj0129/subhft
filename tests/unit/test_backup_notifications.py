@@ -30,3 +30,46 @@ def test_render_backup_failed_contains_error_and_last_success():
     assert "Disk full" in msg
     assert "2026-03-24" in msg
     assert "FAIL" in msg.upper() or "失敗" in msg
+
+
+def test_notify_backup_success_sends_non_critical():
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from hft_platform.notifications.dispatcher import NotificationDispatcher
+
+    sender = MagicMock()
+    sender.send = AsyncMock()
+    dispatcher = NotificationDispatcher(sender=sender)
+
+    asyncio.run(
+        dispatcher.notify_backup_success(
+            date_str="2026-03-25",
+            size_mb=1234.5,
+            duration_s=42.3,
+            retained_count=15,
+        )
+    )
+    sender.send.assert_called_once()
+    assert sender.send.call_args.kwargs.get("critical") is False
+
+
+def test_notify_backup_failed_sends_non_critical():
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from hft_platform.notifications.dispatcher import NotificationDispatcher
+
+    sender = MagicMock()
+    sender.send = AsyncMock()
+    dispatcher = NotificationDispatcher(sender=sender)
+
+    asyncio.run(
+        dispatcher.notify_backup_failed(
+            date_str="2026-03-25",
+            error="Disk full",
+            last_success_date="2026-03-24",
+        )
+    )
+    sender.send.assert_called_once()
+    assert sender.send.call_args.kwargs.get("critical") is False

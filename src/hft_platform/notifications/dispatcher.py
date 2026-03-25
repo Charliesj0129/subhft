@@ -398,3 +398,58 @@ class NotificationDispatcher:
         msg = templates.render_shadow_daily_report(**kwargs)
         logger.info("dispatcher.notify_shadow_daily_report", **kwargs)
         await self._sender.send(msg, critical=False)
+
+    async def notify_backup_success(
+        self,
+        *,
+        date_str: str,
+        size_mb: float,
+        duration_s: float,
+        retained_count: int,
+    ) -> None:
+        """Notify operator of a successful ClickHouse backup.
+
+        Args:
+            date_str: Date label, e.g. "2026-03-25".
+            size_mb: Backup size in megabytes.
+            duration_s: Backup duration in seconds.
+            retained_count: Number of backups currently retained.
+        """
+        msg = templates.render_backup_success(
+            date_str=date_str,
+            size_mb=size_mb,
+            duration_s=duration_s,
+            retained_count=retained_count,
+        )
+        logger.info(
+            "dispatcher.notify_backup_success",
+            date_str=date_str,
+            size_mb=size_mb,
+        )
+        await self._sender.send(msg, critical=False)
+
+    async def notify_backup_failed(
+        self,
+        *,
+        date_str: str,
+        error: str,
+        last_success_date: str,
+    ) -> None:
+        """Notify operator of a failed ClickHouse backup.
+
+        Args:
+            date_str: Date label, e.g. "2026-03-25".
+            error: Error message describing the failure.
+            last_success_date: Date of the last successful backup.
+        """
+        msg = templates.render_backup_failed(
+            date_str=date_str,
+            error=error,
+            last_success_date=last_success_date,
+        )
+        logger.warning(
+            "dispatcher.notify_backup_failed",
+            date_str=date_str,
+            error=error,
+        )
+        await self._sender.send(msg, critical=False)
