@@ -9,6 +9,7 @@ from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, Order
 from hft_platform.events import MetaData, TickEvent
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import Position, PositionStore
+from hft_platform.feed_adapter.shioaji.order_codec import ShioajiOrderCodec
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.strategy.base import BaseStrategy
 from hft_platform.strategy.runner import StrategyRunner
@@ -22,7 +23,7 @@ def test_broker_id_cleanup_and_strategy_resolution(mock_load):
     client.get_exchange.return_value = "TSE"
     client.place_order.return_value = {"seq_no": "S1", "ord_no": "O1"}
 
-    adapter = OrderAdapter("config/dummy.yaml", queue, client)
+    adapter = OrderAdapter("config/dummy.yaml", queue, client, broker_codec=ShioajiOrderCodec())
 
     intent = OrderIntent(
         intent_id=1,
@@ -74,6 +75,7 @@ def test_strategy_positions_view():
     runner._strat_executors = []
 
     store = PositionStore()
+    store._rust_tracker = None  # disable Rust path so Python dict is used
     store.positions = {
         "acc:alpha:2330": Position("acc", "alpha", "2330", net_qty=7),
         "acc:beta:2330": Position("acc", "beta", "2330", net_qty=2),
@@ -132,7 +134,7 @@ def test_long_strategy_id_fallback(mock_load):
     client.get_exchange.return_value = "TSE"
     client.place_order.return_value = {"seq_no": "S99", "ord_no": "O99"}
 
-    adapter = OrderAdapter("config/dummy.yaml", queue, client)
+    adapter = OrderAdapter("config/dummy.yaml", queue, client, broker_codec=ShioajiOrderCodec())
 
     strategy_id = "strategy_long_id"
     intent = OrderIntent(

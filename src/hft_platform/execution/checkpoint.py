@@ -12,7 +12,9 @@ import asyncio
 import hashlib
 import os
 import tempfile
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
@@ -50,6 +52,7 @@ class PositionCheckpointWriter:
         "_store",
         "_path",
         "_interval_s",
+        "_trading_date_provider",
         "running",
     )
 
@@ -58,6 +61,7 @@ class PositionCheckpointWriter:
         store: PositionStore,
         path: Optional[str] = None,
         interval_s: Optional[float] = None,
+        trading_date_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self._store = store
         self._path = path or os.getenv(
@@ -65,6 +69,9 @@ class PositionCheckpointWriter:
             ".runtime/position_checkpoint.json",
         )
         self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60"))  # type: ignore[arg-type]
+        self._trading_date_provider: Callable[[], str] = trading_date_provider or (
+            lambda: datetime.now(tz=ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
+        )
         self.running = False
 
     # ------------------------------------------------------------------
@@ -106,6 +113,7 @@ class PositionCheckpointWriter:
             }
 
         body_obj = {
+            "trading_date": self._trading_date_provider(),
             "timestamp_ns": now_ns(),
             "positions": positions_payload,
         }

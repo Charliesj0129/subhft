@@ -31,6 +31,7 @@ class ExecutionNormalizer:
         raw_queue: Any = None,
         order_id_map: Optional[Dict[str, str]] = None,
         strategy_id_resolvers: Optional[list[Callable[[RawExecEvent], Optional[str]]]] = None,
+        fee_calculator: Any = None,
     ) -> None:
         self.raw_queue = raw_queue
         self.metrics = MetricsRegistry.get()
@@ -43,6 +44,7 @@ class ExecutionNormalizer:
             self._resolve_from_custom_field,
             self._resolve_from_order_id_map,
         ]
+        self._fee_calculator = fee_calculator
 
     def _unwrap_data(self, raw: RawExecEvent) -> tuple[Any, Any | None]:
         d = raw.data
@@ -195,6 +197,15 @@ class ExecutionNormalizer:
             # Scale using Decimal to maintain precision until the final integer conversion
             scale_price = self.price_codec.scale_decimal(sym, price_decimal)
 
+            # Compute fees if calculator is available
+            fee = 0
+            tax = 0
+            if self._fee_calculator is not None:
+                side_str = "BUY" if side == Side.BUY else "SELL"
+                breakdown = self._fee_calculator.compute(sym, side_str, qty, scale_price)
+                fee = breakdown.total
+                tax = breakdown.tax
+
             return FillEvent(
                 fill_id=str(get("seqno") or get("seq_no") or ""),
                 account_id=str(get("account_id") or "sim-account-01"),
@@ -204,8 +215,8 @@ class ExecutionNormalizer:
                 side=side,
                 qty=qty,
                 price=scale_price,
-                fee=0,
-                tax=0,
+                fee=fee,
+                tax=tax,
                 ingest_ts_ns=raw.ingest_ts_ns,
                 match_ts_ns=self._normalize_ts_ns(get("ts")),
             )

@@ -110,6 +110,7 @@ def _make_engine(tmp_path, monkeypatch, extra_config=None):
     monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
     monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
     monkeypatch.setenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "0")
+    monkeypatch.setenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "0")
     monkeypatch.setenv("HFT_STORMGUARD_DE_ESCALATE_N", "1")
 
     cfg_path = _write_config(tmp_path, extra_config)
@@ -348,8 +349,8 @@ class TestStormGuardHaltMidSession:
     async def test_halt_blocks_new_allows_cancel_then_recovers(self, tmp_path, monkeypatch):
         engine, intent_q, order_q = _make_engine(tmp_path, monkeypatch)
 
-        # Trigger HALT via pnl drawdown
-        engine.storm_guard.update_pnl(-1_500_000)  # Below halt threshold (-1_000_000)
+        # Trigger HALT via drawdown (drawdown_bps <= halt_drawdown_bps=-200)
+        engine.storm_guard.update(drawdown_bps=-300)  # Below halt threshold (-200 bps)
         assert engine.storm_guard.state == StormGuardState.HALT
 
         # NEW order should be rejected
@@ -369,8 +370,8 @@ class TestStormGuardHaltMidSession:
         cancel_decision = engine.evaluate(cancel_intent)
         assert cancel_decision.approved
 
-        # Recovery: PnL improves above all thresholds
-        engine.storm_guard.update_pnl(0)
+        # Recovery: drawdown clears all thresholds
+        engine.storm_guard.update(drawdown_bps=0)
         assert engine.storm_guard.state == StormGuardState.NORMAL
 
         # New orders should now be approved again

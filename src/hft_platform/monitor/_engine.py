@@ -91,6 +91,9 @@ class MonitorEngine:
         "_warning_filter",
         "_force_poll",
         "_show_problem_log",
+        # Cost attribution panel
+        "_cost_lines",
+        "_cost_last_fetch_ns",
     )
 
     def __init__(self, config: MonitorConfig) -> None:
@@ -134,6 +137,9 @@ class MonitorEngine:
         self._warning_filter: bool = False
         self._force_poll: bool = False
         self._show_problem_log: bool = False
+        # Cost attribution panel
+        self._cost_lines: list[str] = []
+        self._cost_last_fetch_ns: int = 0
 
     @property
     def state(self) -> MonitorState:
@@ -372,6 +378,9 @@ class MonitorEngine:
         # State transitions
         self._update_state()
 
+        # Refresh cost attribution (every 60s)
+        self._maybe_refresh_cost(now_ns)
+
     def _push_event(self, symbol: str, label: str, fired_ns: int) -> None:
         """Push an event into the ring buffer."""
         entry = self._event_ring[self._event_ring_idx]
@@ -554,6 +563,45 @@ class MonitorEngine:
 
     def toggle_problem_log(self) -> None:
         self._show_problem_log = not self._show_problem_log
+
+    # ------------------------------------------------------------------ #
+    # Cost attribution refresh                                             #
+    # ------------------------------------------------------------------ #
+
+    _COST_REFRESH_NS: int = 60_000_000_000  # 60s
+
+    def _maybe_refresh_cost(self, now_ns: int) -> None:
+        """Refresh cost attribution from ClickHouse every 60s."""
+        if now_ns - self._cost_last_fetch_ns < self._COST_REFRESH_NS:
+            return
+        self._cost_last_fetch_ns = now_ns
+
+        ch_client = self._get_ch_client()
+        if ch_client is None:
+            return
+
+        from hft_platform.monitor._pnl_panel import fetch_cost_attribution, render_cost_table
+
+        now = self._last_now or dt.datetime.now(_TZ_TAIPEI)
+        date_str = now.strftime("%Y-%m-%d")
+        data = fetch_cost_attribution(ch_client, date_str)
+        self._cost_lines = render_cost_table(data)
+
+    def _get_ch_client(self) -> Any:
+        """Extract a ClickHouse client from the current data source, if available."""
+        ds = self._data_source
+        if ds is None:
+            return None
+        # CHDataSource wraps a CHPoller which owns the client
+        if isinstance(ds, CHDataSource):
+            poller = getattr(ds, "_poller", None)
+            return getattr(poller, "_client", None)
+        # HybridDataSource has a _ch_source
+        ch_src = getattr(ds, "_ch_source", None)
+        if ch_src is not None:
+            poller = getattr(ch_src, "_poller", None)
+            return getattr(poller, "_client", None)
+        return None
 
     # ------------------------------------------------------------------ #
     # Rendering helpers                                                    #

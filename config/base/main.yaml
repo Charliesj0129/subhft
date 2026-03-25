@@ -2,15 +2,15 @@ broker: shioaji  # shioaji | fubon — selects BrokerFacade implementation
 
 mode: sim
 symbols:
-  - "2330"
+  - "TXFD6"
 
 strategy:
-  id: simple_mm_demo
-  module: hft_platform.strategies.simple_mm
-  class: SimpleMarketMaker
+  id: OPPORTUNISTIC_MM_TXFD6
+  module: hft_platform.strategies.opportunistic_mm
+  class: OpportunisticMM
   params:
-    subscribe_symbols:
-      - "2330"
+    spread_threshold_bps: 2.5
+    tick_size_ratio_pct: 50
 
 paths:
   symbols: config/base/symbols.yaml

@@ -157,7 +157,8 @@ def map_event_to_record(
                 "side": str(event.side.name if hasattr(event.side, "name") else event.side),
                 "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
                 "qty": int(event.qty),
-                "fee_scaled": _to_ch_price_scaled(symbol, event.fee, metadata, price_codec),
+                "fee_scaled": int(event.fee),  # NTD x10000 (flat amount, not instrument price)
+                "tax_scaled": int(event.tax),  # NTD x10000 (tax portion of fee)
                 "match_ts": int(event.match_ts_ns),
             },
         )

@@ -64,3 +64,5 @@ class ServiceRegistry:
     session_governor: Optional[Any] = field(default=None)
     autonomy_monitor: Optional[Any] = field(default=None)
     daily_report_service: Optional[Any] = field(default=None)
+    checkpoint_writer: Optional[Any] = field(default=None)
+    startup_verifier: Optional[Any] = field(default=None)
