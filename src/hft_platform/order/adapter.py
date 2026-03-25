@@ -82,6 +82,8 @@ class OrderAdapter:
         "strategy_cb_mgr",
         "shadow_sink",
         "_decision_mid_map",
+        "_inflight",
+        "_mid_price_fn",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -103,6 +105,8 @@ class OrderAdapter:
         self._order_id_map_lock = asyncio.Lock()
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self._decision_mid_map: Dict[str, int] = {}
+        self._inflight: dict[str, Any] = {}
+        self._mid_price_fn: Any = None
         self.running = False
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
@@ -241,9 +245,14 @@ class OrderAdapter:
             if order_key in self.live_orders:
                 logger.info("Removing terminal order", key=order_key)
                 self._decision_mid_map.pop(order_key, None)
+                self._inflight.pop(order_key, None)
                 del self.live_orders[order_key]
 
         # Also clean up rate limit window if needed? No, rate limit is distinct.
+
+    def get_inflight(self, order_key: str) -> Any:
+        """Return the inflight OrderCommand for the given order_key, or None."""
+        return self._inflight.get(order_key)
 
     async def _register_broker_ids(self, order_key: str, trade: Any) -> None:
         """Register broker IDs to order_key mapping with lock protection."""
@@ -487,6 +496,15 @@ class OrderAdapter:
         )
         try:
             order_key = f"{intent.strategy_id}:{intent.intent_id}"
+
+            # Stamp decision_price passthrough and arrival_price from current mid, then track inflight
+            cmd.decision_price = intent.decision_price
+            if self._mid_price_fn is not None:
+                try:
+                    cmd.arrival_price = self._mid_price_fn(intent.symbol)
+                except Exception:
+                    pass
+            self._inflight[order_key] = cmd
 
             if intent.intent_type == IntentType.NEW:
                 if self._broker_codec is None:
