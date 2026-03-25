@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from structlog import get_logger
 
@@ -13,7 +14,7 @@ from hft_platform.order.shadow_writer import ShadowOrderWriter
 logger = get_logger("order.shadow")
 
 
-def _get_metrics():
+def _get_metrics() -> Any:
     """Lazy import MetricsRegistry to avoid circular imports."""
     try:
         from hft_platform.observability.metrics import MetricsRegistry

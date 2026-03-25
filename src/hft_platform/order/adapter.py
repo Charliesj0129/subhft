@@ -138,7 +138,7 @@ class OrderAdapter:
         self.strategy_cb_mgr = StrategyCircuitBreakerManager()
         self.shadow_sink = ShadowOrderSink()
         self.platform_degrade_controller = get_shared_platform_degrade_controller(metrics=self.metrics)
-        self.position_store = None
+        self.position_store: Any = None
         self._orphan_detector: Any = None  # OrphanDetector, set externally
 
         self.load_config()
@@ -323,7 +323,7 @@ class OrderAdapter:
         if not self._platform_degrade_allows(intent):
             self.metrics.order_reject_total.inc()
             self._emit_trace("order_reject", intent, {"reason": "platform_reduce_only", "cmd_id": int(cmd.cmd_id)})
-            await self._add_to_dlq(intent, "platform_reduce_only", "Platform is in reduce-only mode")
+            await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Platform is in reduce-only mode")
             return
         self._reserve_platform_reduce_only_close(intent)
 
