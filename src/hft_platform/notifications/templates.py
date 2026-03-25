@@ -408,9 +408,7 @@ def render_backup_success(
         Formatted backup success notification string.
     """
     return (
-        f"🟢 Backup {date_str} 完成\n"
-        f"大小: {size_mb:,.1f} MB | 耗時: {duration_s:.1f}s\n"
-        f"保留: {retained_count} 份備份"
+        f"🟢 Backup {date_str} 完成\n大小: {size_mb:,.1f} MB | 耗時: {duration_s:.1f}s\n保留: {retained_count} 份備份"
     )
 
 
@@ -439,12 +437,7 @@ def render_margin_critical(ratio: float, used: int, available: int) -> str:
     Returns:
         Formatted margin critical alert string.
     """
-    return (
-        f"🚨 保證金危急 — 已進入 reduce-only\n"
-        f"使用率: {ratio:.1%}\n"
-        f"已用: {used:,} NTD\n"
-        f"可用: {available:,} NTD"
-    )
+    return f"🚨 保證金危急 — 已進入 reduce-only\n使用率: {ratio:.1%}\n已用: {used:,} NTD\n可用: {available:,} NTD"
 
 
 def render_backup_failed(
@@ -463,12 +456,7 @@ def render_backup_failed(
     Returns:
         Formatted backup failure notification string.
     """
-    return (
-        f"🔴 BACKUP 失敗 {date_str}\n"
-        f"錯誤: {error}\n"
-        f"最後成功備份: {last_success_date}\n"
-        f"請立即檢查備份磁碟"
-    )
+    return f"🔴 BACKUP 失敗 {date_str}\n錯誤: {error}\n最後成功備份: {last_success_date}\n請立即檢查備份磁碟"
 
 
 def render_position_recovery(

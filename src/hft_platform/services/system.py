@@ -105,8 +105,8 @@ class HFTSystem:
         self.strategy_runner = self.registry.strategy_runner
         self.recorder = self.registry.recorder
         self.gateway_service = self.registry.gateway_service
-        self.checkpoint_writer = self.registry.checkpoint_writer
-        self.startup_verifier = self.registry.startup_verifier
+        self.checkpoint_writer = getattr(self.registry, "checkpoint_writer", None)
+        self.startup_verifier = getattr(self.registry, "startup_verifier", None)
         self.session_governor = getattr(self.registry, "session_governor", None)
         self.autonomy_monitor = getattr(self.registry, "autonomy_monitor", None)
         self.daily_report_service = getattr(self.registry, "daily_report_service", None)

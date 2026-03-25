@@ -507,7 +507,10 @@ class NotificationDispatcher:
             mismatches: List of correction details.
         """
         msg = templates.render_position_recovery(
-            source=source, loaded=loaded, corrected=corrected, mismatches=mismatches,
+            source=source,
+            loaded=loaded,
+            corrected=corrected,
+            mismatches=mismatches,
         )
         logger.info("dispatcher.notify_position_recovery", source=source, loaded=loaded)
         await self._sender.send(msg, critical=False)
@@ -527,7 +530,9 @@ class NotificationDispatcher:
             mismatches: List of mismatch details for diagnostics.
         """
         msg = templates.render_position_recovery_failed(
-            source=source, reason=reason, mismatches=mismatches,
+            source=source,
+            reason=reason,
+            mismatches=mismatches,
         )
         logger.warning("dispatcher.notify_position_recovery_failed", source=source, reason=reason)
         await self._sender.send(msg, critical=True)

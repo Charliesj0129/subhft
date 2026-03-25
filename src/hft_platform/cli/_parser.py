@@ -48,7 +48,6 @@ from ._ops import (
     cmd_strat_test,
 )
 from ._risk import cmd_risk_halt, cmd_risk_resume, cmd_risk_status
-from ._tca import cmd_tca_daily
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
     cmd_resolve_symbols,
@@ -57,6 +56,7 @@ from ._symbols import (
     cmd_symbols_sync,
     cmd_symbols_validate,
 )
+from ._tca import cmd_tca_daily
 
 
 def build_parser() -> argparse.ArgumentParser:

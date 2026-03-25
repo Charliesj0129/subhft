@@ -18,9 +18,7 @@ import structlog
 
 logger = structlog.get_logger("flatten_gate")
 
-DEFAULT_FLATTEN_REQUEST_PATH = Path(
-    "outputs/production_rollout/autonomy/flatten_request.json"
-)
+DEFAULT_FLATTEN_REQUEST_PATH = Path("outputs/production_rollout/autonomy/flatten_request.json")
 
 
 class FlattenStatus(enum.Enum):

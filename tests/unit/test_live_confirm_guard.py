@@ -1,4 +1,5 @@
 """Tests for live mode startup confirmation guard."""
+
 import pytest
 
 

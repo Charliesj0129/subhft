@@ -10,7 +10,9 @@ def test_render_position_recovery():
     from hft_platform.notifications.templates import render_position_recovery
 
     msg = render_position_recovery(
-        source="dual", loaded=5, corrected=1,
+        source="dual",
+        loaded=5,
+        corrected=1,
         mismatches=[{"symbol": "2330", "action": "corrected"}],
     )
     assert "dual" in msg
@@ -22,7 +24,8 @@ def test_render_position_recovery_failed():
     from hft_platform.notifications.templates import render_position_recovery_failed
 
     msg = render_position_recovery_failed(
-        source="dual", reason="Side mismatch on 2330",
+        source="dual",
+        reason="Side mismatch on 2330",
         mismatches=[{"symbol": "2330", "checkpoint_qty": 100, "broker_qty": -50}],
     )
     assert "HALT" in msg or "失敗" in msg

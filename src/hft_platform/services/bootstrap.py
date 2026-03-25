@@ -753,10 +753,12 @@ class SystemBootstrapper:
 
         # Position checkpoint writer (periodic serialization)
         from hft_platform.execution.checkpoint import PositionCheckpointWriter
+
         checkpoint_writer = PositionCheckpointWriter(store=position_store)
 
         # Startup position verifier (dual-source recovery)
         from hft_platform.execution.startup_recon import StartupPositionVerifier
+
         startup_verifier = StartupPositionVerifier(
             client=md_client,
             position_store=position_store,
@@ -995,9 +997,7 @@ class SystemBootstrapper:
                 # Get or create notification dispatcher
                 notification_dispatcher = None
                 if session_governor is not None:
-                    notification_dispatcher = getattr(
-                        session_governor, "_notification_dispatcher", None
-                    )
+                    notification_dispatcher = getattr(session_governor, "_notification_dispatcher", None)
                 if notification_dispatcher is None:
                     try:
                         from hft_platform.notifications.dispatcher import (
@@ -1022,14 +1022,10 @@ class SystemBootstrapper:
                     )
                     # Register phase callback on SessionGovernor
                     if session_governor is not None:
-                        session_governor.register_phase_callback(
-                            daily_report_service.on_phase_transition
-                        )
+                        session_governor.register_phase_callback(daily_report_service.on_phase_transition)
                     logger.info("DailyReportService created and wired")
                 else:
-                    logger.warning(
-                        "DailyReportService skipped: no notification dispatcher available"
-                    )
+                    logger.warning("DailyReportService skipped: no notification dispatcher available")
             except Exception as exc:
                 logger.warning("DailyReportService creation failed", error=str(exc))
                 daily_report_service = None
