@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -17,9 +17,16 @@ _shared_writer_lock = Lock()
 class AutonomyEvidenceWriter:
     def __init__(self, base_dir: str | Path | None = None) -> None:
         self.base_dir = Path(base_dir) if base_dir is not None else DEFAULT_AUTONOMY_EVIDENCE_DIR
+        self._trading_date: date | None = None
+        self.on_transition: list = []
+
+    def set_trading_date(self, trading_date: date) -> None:
+        self._trading_date = trading_date
 
     @property
     def session_dir(self) -> Path:
+        if self._trading_date is not None:
+            return self.base_dir / self._trading_date.strftime("%Y%m%d")
         return self.base_dir / datetime.now().strftime("%Y%m%d")
 
     def record_transition(
@@ -52,6 +59,11 @@ class AutonomyEvidenceWriter:
                 reason=reason,
                 metadata=metadata,
             )
+        for cb in self.on_transition:
+            try:
+                cb(record)
+            except Exception:
+                pass
         return record
 
     def record_manual_rearm_requirement(
@@ -145,6 +157,10 @@ class AutonomyEvidenceWriter:
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+
+    def write_daily_summary(self, summary: dict[str, Any]) -> None:
+        path = self._ensure_session_dir() / "daily_summary.json"
+        path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def _append_markdown(self, filename: str, line: str) -> None:
         path = self._ensure_session_dir() / filename

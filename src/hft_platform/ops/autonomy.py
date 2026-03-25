@@ -20,6 +20,11 @@ _ALLOWED_REASON_CODES = frozenset(
         "strategy_reject_spike",
         "unknown",
         "wal_backlog_unhealthy",
+        "broker_unavailable",
+        "feed_gap_majority",
+        "memory_pressure",
+        "persistence_failure",
+        "session_close_only",
     }
 )
 _ALLOWED_SCOPE_CODES = frozenset({"platform", "strategy", "unknown"})

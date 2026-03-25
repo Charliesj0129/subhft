@@ -115,6 +115,10 @@ class ReconciliationService:
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
 
+    @property
+    def drift_streak(self) -> int:
+        return self._noncritical_drift_streak
+
     # ------------------------------------------------------------------
     # Metrics helpers (WU-18)
     # ------------------------------------------------------------------

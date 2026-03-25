@@ -222,6 +222,75 @@ def render_weekly_summary(
     )
 
 
+def render_autonomy_transition(
+    *,
+    scope: str,
+    from_mode: str,
+    to_mode: str,
+    reason: str,
+) -> str:
+    """Autonomy state machine transition notification."""
+    return (
+        f"🔶 自治狀態變更\n"
+        f"範圍: {scope}\n"
+        f"{from_mode} → {to_mode}\n"
+        f"原因: {reason}"
+    )
+
+
+def render_flatten_result(
+    *,
+    symbol: str,
+    qty: int,
+    success: bool,
+    error: str = "",
+) -> str:
+    """Position flatten result notification."""
+    status = "成功" if success else f"失敗: {error}"
+    return f"📤 平倉: {symbol} qty={qty} {status}"
+
+
+def render_heartbeat(
+    *,
+    mode: str,
+    uptime_s: float,
+    open_positions: int,
+) -> str:
+    """Periodic heartbeat notification."""
+    return (
+        f"💓 Heartbeat\n"
+        f"模式: {mode} | 運行: {uptime_s:.0f}s | 持倉: {open_positions}"
+    )
+
+
+def render_session_phase(
+    *,
+    phase: str,
+    detail: str = "",
+) -> str:
+    """Session phase change notification."""
+    msg = f"🕐 交易階段: {phase}"
+    if detail:
+        msg += f" ({detail})"
+    return msg
+
+
+def render_autonomy_daily_summary(
+    *,
+    date_str: str,
+    transitions: int,
+    halts: int,
+    final_mode: str,
+) -> str:
+    """Autonomy daily summary notification."""
+    return (
+        f"📋 自治日報 {date_str}\n"
+        f"狀態轉換: {transitions} 次\n"
+        f"HALT: {halts} 次\n"
+        f"最終模式: {final_mode}"
+    )
+
+
 def render_shadow_daily_report(
     *,
     date_str: str,

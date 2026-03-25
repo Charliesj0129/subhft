@@ -243,6 +243,70 @@ class NotificationDispatcher:
         )
         await self._sender.send(msg, critical=False)
 
+    async def notify_autonomy_transition(
+        self,
+        *,
+        scope: str,
+        from_mode: str,
+        to_mode: str,
+        reason: str,
+    ) -> None:
+        """Notify operator of an autonomy state machine transition."""
+        msg = templates.render_autonomy_transition(
+            scope=scope, from_mode=from_mode, to_mode=to_mode, reason=reason,
+        )
+        logger.warning(
+            "dispatcher.notify_autonomy_transition",
+            scope=scope, from_mode=from_mode, to_mode=to_mode, reason=reason,
+        )
+        await self._sender.send(msg, critical=to_mode == "HALT")
+
+    async def notify_flatten_result(
+        self,
+        *,
+        symbol: str,
+        qty: int,
+        success: bool,
+        error: str = "",
+    ) -> None:
+        """Notify operator of a position flatten result."""
+        msg = templates.render_flatten_result(symbol=symbol, qty=qty, success=success, error=error)
+        logger.info("dispatcher.notify_flatten_result", symbol=symbol, qty=qty, success=success)
+        await self._sender.send(msg, critical=False)
+
+    async def notify_heartbeat(
+        self,
+        *,
+        mode: str,
+        uptime_s: float,
+        open_positions: int,
+    ) -> None:
+        """Send periodic heartbeat notification."""
+        msg = templates.render_heartbeat(mode=mode, uptime_s=uptime_s, open_positions=open_positions)
+        logger.debug("dispatcher.notify_heartbeat", mode=mode)
+        await self._sender.send(msg, critical=False)
+
+    async def notify_session_phase(self, *, phase: str, detail: str = "") -> None:
+        """Notify operator of a session phase change."""
+        msg = templates.render_session_phase(phase=phase, detail=detail)
+        logger.info("dispatcher.notify_session_phase", phase=phase, detail=detail)
+        await self._sender.send(msg, critical=False)
+
+    async def notify_autonomy_daily_summary(
+        self,
+        *,
+        date_str: str,
+        transitions: int,
+        halts: int,
+        final_mode: str,
+    ) -> None:
+        """Send the autonomy daily summary notification."""
+        msg = templates.render_autonomy_daily_summary(
+            date_str=date_str, transitions=transitions, halts=halts, final_mode=final_mode,
+        )
+        logger.info("dispatcher.notify_autonomy_daily_summary", date_str=date_str)
+        await self._sender.send(msg, critical=False)
+
     async def notify_shadow_daily_report(self, **kwargs) -> None:
         """Send the shadow strategy daily report.
 

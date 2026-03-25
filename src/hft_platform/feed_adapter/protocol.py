@@ -68,6 +68,14 @@ class BrokerClientProtocol(Protocol):
         """Register execution-report callbacks (order updates + fills)."""
         ...
 
+    def list_open_orders(self) -> list[dict[str, Any]]:
+        """Return a list of currently open/pending orders from the broker."""
+        ...
+
+    def is_connected(self) -> bool:
+        """Return ``True`` if the broker session is active and healthy."""
+        ...
+
     def close(self, logout: bool = False) -> None:
         """Gracefully release broker resources."""
         ...
