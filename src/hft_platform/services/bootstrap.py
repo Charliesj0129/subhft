@@ -938,6 +938,60 @@ class SystemBootstrapper:
                 logger.warning("AutonomyMonitor creation failed", error=str(exc))
                 autonomy_monitor = None
 
+        # Opt-in: DailyReportService (disabled by default)
+        daily_report_service = None
+        if os.environ.get("HFT_DAILY_REPORT_ENABLED", "0") == "1":
+            try:
+                from hft_platform.services.daily_report import DailyReportService
+
+                # Get CH client from recorder writer if available
+                ch_client = None
+                writer = getattr(recorder, "writer", None)
+                if writer is not None:
+                    ch_client = getattr(writer, "ch_client", None)
+
+                # Get or create notification dispatcher
+                notification_dispatcher = None
+                if session_governor is not None:
+                    notification_dispatcher = getattr(
+                        session_governor, "_notification_dispatcher", None
+                    )
+                if notification_dispatcher is None:
+                    try:
+                        from hft_platform.notifications.dispatcher import (
+                            NotificationDispatcher,
+                        )
+                        from hft_platform.notifications.telegram import TelegramSender
+
+                        sender = TelegramSender()
+                        notification_dispatcher = NotificationDispatcher(sender=sender)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                evidence_writer = get_shared_autonomy_evidence_writer()
+
+                if notification_dispatcher is not None:
+                    daily_report_service = DailyReportService(
+                        ch_client=ch_client,
+                        notification_dispatcher=notification_dispatcher,
+                        evidence_writer=evidence_writer,
+                        position_store=position_store,
+                        storm_guard=storm_guard,
+                    )
+                    # Register phase callback on SessionGovernor
+                    if session_governor is not None:
+                        session_governor.register_phase_callback(
+                            daily_report_service.on_phase_transition
+                        )
+                    logger.info("DailyReportService created and wired")
+                else:
+                    logger.warning(
+                        "DailyReportService skipped: no notification dispatcher available"
+                    )
+            except Exception as exc:
+                logger.warning("DailyReportService creation failed", error=str(exc))
+                daily_report_service = None
+
         return ServiceRegistry(
             settings=self.settings,
             bus=bus,
@@ -973,6 +1027,7 @@ class SystemBootstrapper:
             intent_channel=intent_channel,
             session_governor=session_governor,
             autonomy_monitor=autonomy_monitor,
+            daily_report_service=daily_report_service,
         )
 
 
