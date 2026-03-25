@@ -28,7 +28,7 @@ _RECORD_KEYS: tuple[str, ...] = (
 def _get_ch_client() -> Any:
     """Return a clickhouse_driver Client connected via env-configured host."""
     try:
-        from clickhouse_driver import Client  # type: ignore[import-untyped]
+        from clickhouse_driver import Client
     except ImportError as exc:
         raise RuntimeError("clickhouse_driver is not installed") from exc
 
