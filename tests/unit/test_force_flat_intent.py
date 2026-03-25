@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import os
-from unittest.mock import patch
-
-import pytest
-
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState
 from hft_platform.ops.platform_degrade import PlatformDegradeController
 

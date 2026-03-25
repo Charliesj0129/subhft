@@ -148,6 +148,39 @@ class AutonomyMonitor:
             await asyncio.sleep(self._interval_s)
 
     # ------------------------------------------------------------------
+    # Evaluation helpers
+    # ------------------------------------------------------------------
+
+    def _check_broker_disconnect(self, decisions: list[MonitorDecision], now_ns: int) -> None:
+        if self._broker_client is None:
+            return
+        connected = False
+        try:
+            connected = self._broker_client.is_connected()
+        except Exception:
+            pass
+
+        if not connected:
+            if self._broker_was_connected:
+                self._broker_disconnect_since_ns = now_ns
+                self._broker_was_connected = False
+
+            elapsed_ns = now_ns - self._broker_disconnect_since_ns
+            if elapsed_ns > 300_000_000_000 and not self._is_on_cooldown("broker_disconnect", now_ns):
+                decisions.append(
+                    MonitorDecision(
+                        rule_name="broker_disconnect",
+                        action="enter_reduce_only",
+                        reason="broker_unavailable",
+                        scope="platform",
+                        rearm="auto",
+                    )
+                )
+        else:
+            self._broker_was_connected = True
+            self._broker_disconnect_since_ns = 0
+
+    # ------------------------------------------------------------------
     # Evaluation (pure function of current state)
     # ------------------------------------------------------------------
 
@@ -157,10 +190,7 @@ class AutonomyMonitor:
         now_ns = timebase.now_ns()
 
         # 1. HALT reaction (highest priority)
-        if (
-            self._storm_guard.state == StormGuardState.HALT
-            and not self._halt_reacted
-        ):
+        if self._storm_guard.state == StormGuardState.HALT and not self._halt_reacted:
             decisions.append(
                 MonitorDecision(
                     rule_name="halt_reaction",
@@ -181,35 +211,7 @@ class AutonomyMonitor:
             return decisions
 
         # 2. Broker disconnect > 5 min
-        if self._broker_client is not None:
-            connected = False
-            try:
-                connected = self._broker_client.is_connected()
-            except Exception:
-                pass
-
-            if not connected:
-                if self._broker_was_connected:
-                    self._broker_disconnect_since_ns = now_ns
-                    self._broker_was_connected = False
-
-                elapsed_ns = now_ns - self._broker_disconnect_since_ns
-                if (
-                    elapsed_ns > 300_000_000_000  # 5 min
-                    and not self._is_on_cooldown("broker_disconnect", now_ns)
-                ):
-                    decisions.append(
-                        MonitorDecision(
-                            rule_name="broker_disconnect",
-                            action="enter_reduce_only",
-                            reason="broker_unavailable",
-                            scope="platform",
-                            rearm="auto",
-                        )
-                    )
-            else:
-                self._broker_was_connected = True
-                self._broker_disconnect_since_ns = 0
+        self._check_broker_disconnect(decisions, now_ns)
 
         # 3. Infra health from PlatformDegradeInputs
         try:
@@ -224,11 +226,7 @@ class AutonomyMonitor:
                 "clickhouse_unhealthy",
                 "redis_unhealthy",
             ):
-                rule_name = (
-                    reason
-                    if reason != "wal_backlog_unhealthy"
-                    else "persistence_failure"
-                )
+                rule_name = reason if reason != "wal_backlog_unhealthy" else "persistence_failure"
                 if not self._is_on_cooldown(rule_name, now_ns):
                     decisions.append(
                         MonitorDecision(
@@ -247,9 +245,7 @@ class AutonomyMonitor:
                 drift = self._recon_service.drift_streak
             except Exception:
                 drift = 0
-            if drift >= 2 and not self._is_on_cooldown(
-                "reconciliation_drift", now_ns
-            ):
+            if drift >= 2 and not self._is_on_cooldown("reconciliation_drift", now_ns):
                 decisions.append(
                     MonitorDecision(
                         rule_name="reconciliation_drift",
@@ -292,9 +288,7 @@ class AutonomyMonitor:
 
             elif decision.action == "enter_reduce_only":
                 try:
-                    self._platform_degrade.enter_reduce_only(
-                        reason=decision.reason
-                    )
+                    self._platform_degrade.enter_reduce_only(reason=decision.reason)
                 except Exception as exc:
                     logger.error("enter_reduce_only_failed", error=str(exc))
 
@@ -334,24 +328,18 @@ class AutonomyMonitor:
         if self._notification_dispatcher is None:
             return
         now_ns = timebase.now_ns()
-        if (now_ns - self._last_heartbeat_ns) < int(
-            self._heartbeat_interval_s * 1_000_000_000
-        ):
+        if (now_ns - self._last_heartbeat_ns) < int(self._heartbeat_interval_s * 1_000_000_000):
             return
         self._last_heartbeat_ns = now_ns
         try:
             pnl = 0
             if hasattr(self._storm_guard, "position_store"):
-                pnl = getattr(
-                    self._storm_guard.position_store, "total_pnl", 0
-                )
+                pnl = getattr(self._storm_guard.position_store, "total_pnl", 0)
             await self._notification_dispatcher.notify_heartbeat(
                 autonomy_state=self._storm_guard.state.name,
                 pnl_scaled=pnl,
                 strategies_active=0,  # placeholder
-                feed_status="ok"
-                if self._broker_was_connected
-                else "disconnected",
+                feed_status="ok" if self._broker_was_connected else "disconnected",
             )
         except Exception:
             pass

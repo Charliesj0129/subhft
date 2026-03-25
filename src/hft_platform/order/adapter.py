@@ -139,7 +139,7 @@ class OrderAdapter:
         self.shadow_sink = ShadowOrderSink()
         self.platform_degrade_controller = get_shared_platform_degrade_controller(metrics=self.metrics)
         self.position_store = None
-        self._orphan_detector: "OrphanDetector | None" = None
+        self._orphan_detector: Any = None  # OrphanDetector, set externally
 
         self.load_config()
 

@@ -259,9 +259,7 @@ class NotificationDispatcher:
             to_mode: New autonomy mode name.
             reason: Human-readable reason for the transition.
         """
-        msg = templates.render_autonomy_transition(
-            scope=scope, from_mode=from_mode, to_mode=to_mode, reason=reason
-        )
+        msg = templates.render_autonomy_transition(scope=scope, from_mode=from_mode, to_mode=to_mode, reason=reason)
         logger.warning(
             "dispatcher.notify_autonomy_transition",
             scope=scope,
@@ -343,9 +341,7 @@ class NotificationDispatcher:
             old_phase: Previous session phase name.
             new_phase: New session phase name.
         """
-        msg = templates.render_session_phase(
-            track=track, old_phase=old_phase, new_phase=new_phase
-        )
+        msg = templates.render_session_phase(track=track, old_phase=old_phase, new_phase=new_phase)
         logger.info(
             "dispatcher.notify_session_phase",
             track=track,

@@ -87,4 +87,4 @@ class OrderCommand:
     storm_guard_state: StormGuardState
     created_ns: int = 0
     decision_price: int = 0  # Passthrough from OrderIntent
-    arrival_price: int = 0   # Stamped by OrderAdapter at submit time
+    arrival_price: int = 0  # Stamped by OrderAdapter at submit time

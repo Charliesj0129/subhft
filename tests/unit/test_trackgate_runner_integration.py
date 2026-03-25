@@ -55,6 +55,7 @@ def test_multiple_symbols_different_tracks():
 def test_track_gate_runner_has_attribute():
     """StrategyRunner must expose a track_gate attribute (None by default)."""
     from unittest.mock import MagicMock
+
     from hft_platform.strategy.runner import StrategyRunner
 
     mock_bus = MagicMock()

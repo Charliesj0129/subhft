@@ -6,7 +6,7 @@ from typing import Any
 
 import structlog
 
-from hft_platform.contracts.strategy import IntentType, Side, OrderIntent
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.core import timebase
 
 logger = structlog.get_logger("position_flattener")
@@ -69,7 +69,9 @@ class PositionFlattener:
         return {}
 
     async def _flatten_symbols(
-        self, symbols: list[str], positions: dict[str, int],
+        self,
+        symbols: list[str],
+        positions: dict[str, int],
     ) -> FlattenResult:
         """Core flatten logic: cancel pending, then close all positions."""
         result = FlattenResult()

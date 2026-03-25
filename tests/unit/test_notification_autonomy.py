@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from hft_platform.notifications import templates
 
 
@@ -55,9 +53,7 @@ class TestRenderHeartbeat:
 
 class TestRenderSessionPhase:
     def test_contains_track_and_phases(self) -> None:
-        result = templates.render_session_phase(
-            track="stock", old_phase="OPEN", new_phase="CLOSE_ONLY"
-        )
+        result = templates.render_session_phase(track="stock", old_phase="OPEN", new_phase="CLOSE_ONLY")
         assert "stock" in result
         assert "OPEN" in result
         assert "CLOSE_ONLY" in result

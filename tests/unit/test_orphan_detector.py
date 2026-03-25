@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from hft_platform.order.orphan_detector import OrphanClassification, OrphanDetector
+from hft_platform.order.orphan_detector import OrphanDetector
 
 
 def _make_order(order_id: str, symbol: str, age_ns: int, now_ns: int) -> dict:

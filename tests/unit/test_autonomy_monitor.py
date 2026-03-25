@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from hft_platform.contracts.strategy import StormGuardState
 from hft_platform.ops.autonomy_monitor import AutonomyMonitor, MonitorDecision
 
