@@ -282,7 +282,7 @@ class StormGuard:
 
     def validate(self, intent: OrderIntent) -> tuple[bool, str]:
         if self.state == StormGuardState.HALT:
-            if intent.intent_type == IntentType.CANCEL:
+            if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
                 return True, "OK"
             return False, "STORMGUARD_HALT"
         if self.state == StormGuardState.STORM:

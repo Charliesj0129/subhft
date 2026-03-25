@@ -16,3 +16,12 @@ strategies:
   MM_ALPHA_V1:
     max_position: 1                  # Max 1 lot per symbol
     max_order_qty: 1                 # 1 lot per order (conservative)
+
+intraday_pnl:
+  soft_limit_ntd: 500
+  hard_limit_ntd: 1000
+  peak_drawdown_pct: 0.40
+  soft_recovery_ntd: 300
+  drawdown_recovery_pct: 0.20
+  soft_limit_cooldown_s: 60
+  peak_drawdown_min_peak_ntd: 200

@@ -5,7 +5,7 @@ from typing import Any, Iterable
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, Side
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops.autonomy import AutonomyMode, AutonomyTransition
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
@@ -34,11 +34,7 @@ class StrategyHealthGovernor:
         self._quarantined: dict[str, StrategyQuarantine] = {}
 
     def quarantine(self, strategy_id: str, *, reason: str) -> AutonomyTransition:
-        from_mode = (
-            AutonomyMode.STRATEGY_QUARANTINED
-            if strategy_id in self._quarantined
-            else AutonomyMode.NORMAL
-        )
+        from_mode = AutonomyMode.STRATEGY_QUARANTINED if strategy_id in self._quarantined else AutonomyMode.NORMAL
         transition = self._build_transition(from_mode=from_mode, reason=reason)
         self._quarantined[strategy_id] = StrategyQuarantine(
             strategy_id=strategy_id,
@@ -155,5 +151,5 @@ class StrategyHealthGovernor:
             intent["reason"] = reason
             return intent
         if hasattr(intent, "reason"):
-            setattr(intent, "reason", reason)
+            intent.reason = reason
         return intent

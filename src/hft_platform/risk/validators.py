@@ -184,6 +184,15 @@ class DailyLossLimitValidator(RiskValidator):
 
     Prices are scaled int x10000 per platform conventions.
     Uses timebase.now_ns() for time — never datetime.now().
+
+    Intraday watermark extensions (opt-in via config ``intraday_pnl`` section):
+    - Soft limit: rejects new orders (not CANCEL/FORCE_FLAT) when loss exceeds
+      ``soft_limit_ntd``, with cooldown-guarded recovery.
+    - Peak drawdown: rejects new orders when PnL has fallen more than
+      ``peak_drawdown_pct`` from the intraday peak, provided the peak exceeded
+      ``peak_drawdown_min_peak_ntd``.
+    - Hard limit: triggers HALT when loss exceeds ``hard_limit_ntd`` (overrides
+      ``max_daily_loss`` when intraday_pnl is configured).
     """
 
     __slots__ = (
@@ -192,6 +201,18 @@ class DailyLossLimitValidator(RiskValidator):
         "_current_reset_boundary_ns",
         "_unrealized_pnl",
         "halt_triggered",
+        # Intraday watermark state
+        "_intraday_pnl_enabled",
+        "_peak_pnl_scaled",
+        "soft_limit_active",
+        "_soft_limit_cooldown_until_ns",
+        "_soft_limit_threshold_scaled",
+        "_soft_recovery_threshold_scaled",
+        "_peak_drawdown_pct",
+        "_drawdown_recovery_pct",
+        "_soft_limit_cooldown_ns",
+        "_peak_drawdown_min_peak_scaled",
+        "_hard_limit_threshold_scaled",
     )
 
     # Nanoseconds per calendar day
@@ -211,6 +232,39 @@ class DailyLossLimitValidator(RiskValidator):
         self._unrealized_pnl: int = 0
         # Set to True when limit is breached; cleared only by _force_reset()
         self.halt_triggered: bool = False
+
+        # --- Intraday watermark config ---
+        ipnl_cfg = self.config.get("intraday_pnl", {})
+        self._intraday_pnl_enabled: bool = bool(ipnl_cfg)
+
+        if self._intraday_pnl_enabled:
+            price_scale: int = int(ipnl_cfg.get("price_scale", 10000))
+            point_value: int = int(ipnl_cfg.get("point_value", 10))
+            # 1 NTD = price_scale / point_value scaled units
+            ntd_to_scaled: int = price_scale // point_value
+
+            self._soft_limit_threshold_scaled: int = int(ipnl_cfg.get("soft_limit_ntd", 500) * ntd_to_scaled)
+            self._hard_limit_threshold_scaled: int = int(ipnl_cfg.get("hard_limit_ntd", 1000) * ntd_to_scaled)
+            self._soft_recovery_threshold_scaled: int = int(ipnl_cfg.get("soft_recovery_ntd", 300) * ntd_to_scaled)
+            self._peak_drawdown_pct: float = float(ipnl_cfg.get("peak_drawdown_pct", 0.40))
+            self._drawdown_recovery_pct: float = float(ipnl_cfg.get("drawdown_recovery_pct", 0.20))
+            self._soft_limit_cooldown_ns: int = int(ipnl_cfg.get("soft_limit_cooldown_s", 60) * 1_000_000_000)
+            self._peak_drawdown_min_peak_scaled: int = int(
+                ipnl_cfg.get("peak_drawdown_min_peak_ntd", 200) * ntd_to_scaled
+            )
+        else:
+            self._soft_limit_threshold_scaled = 0
+            self._hard_limit_threshold_scaled = 0
+            self._soft_recovery_threshold_scaled = 0
+            self._peak_drawdown_pct = 0.0
+            self._drawdown_recovery_pct = 0.0
+            self._soft_limit_cooldown_ns = 0
+            self._peak_drawdown_min_peak_scaled = 0
+
+        # Runtime watermark state
+        self._peak_pnl_scaled: int = 0
+        self.soft_limit_active: bool = False
+        self._soft_limit_cooldown_until_ns: int = 0
 
     @staticmethod
     def _current_boundary_ns() -> int:
@@ -235,6 +289,10 @@ class DailyLossLimitValidator(RiskValidator):
             self._unrealized_pnl = 0
             self.halt_triggered = False
             self._current_reset_boundary_ns = boundary_ns
+            # Reset watermark state on daily boundary
+            self._peak_pnl_scaled = 0
+            self.soft_limit_active = False
+            self._soft_limit_cooldown_until_ns = 0
 
     def _force_reset(self) -> None:
         """Unconditionally clear all accumulated state (e.g. for testing or manual override)."""
@@ -242,6 +300,15 @@ class DailyLossLimitValidator(RiskValidator):
         self._unrealized_pnl = 0
         self.halt_triggered = False
         self._current_reset_boundary_ns = self._current_boundary_ns()
+        # Reset watermark state
+        self._peak_pnl_scaled = 0
+        self.soft_limit_active = False
+        self._soft_limit_cooldown_until_ns = 0
+
+    def _update_peak(self, total_pnl: int) -> None:
+        """Update the intraday peak PnL if current total exceeds the recorded peak."""
+        if total_pnl > self._peak_pnl_scaled:
+            self._peak_pnl_scaled = total_pnl
 
     def update_unrealized(self, unrealized_scaled: int) -> None:
         """Update the platform-wide unrealized PnL used in loss calculations.
@@ -264,23 +331,67 @@ class DailyLossLimitValidator(RiskValidator):
         self._accumulated_loss[strategy_id] = current + pnl_delta
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
-        if intent.intent_type == IntentType.CANCEL:
+        # a. Bypass CANCEL and FORCE_FLAT for all checks
+        if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True, "OK"
 
+        # b. Daily reset check
         self._maybe_reset()
 
+        # c. Compute total PnL (realized + unrealized)
         accumulated = self._accumulated_loss.get(intent.strategy_id, 0)
-        # Combine realized + unrealized PnL for the total loss picture
         total_pnl = accumulated + self._unrealized_pnl
 
+        # d. Update peak — always, even when total_pnl >= 0
+        self._update_peak(total_pnl)
+
+        # e. Hard halt is sticky — no recovery (only when intraday watermark is enabled;
+        #    when disabled the original per-strategy evaluation runs each check)
+        if self.halt_triggered and self._intraday_pnl_enabled:
+            return False, "DAILY_LOSS_HALT_TRIGGERED"
+
+        # f. Soft limit recovery / rejection
+        if self.soft_limit_active:
+            now_ns = timebase.now_ns()
+            # Recovery: loss must be below recovery threshold AND cooldown must have elapsed
+            recovery_loss = -total_pnl  # positive = loss, negative = gain
+            if recovery_loss < self._soft_recovery_threshold_scaled and now_ns >= self._soft_limit_cooldown_until_ns:
+                logger.info(
+                    "DailyLossLimitValidator: soft limit recovered",
+                    total_pnl=total_pnl,
+                    recovery_threshold_scaled=self._soft_recovery_threshold_scaled,
+                )
+                self.soft_limit_active = False
+                self._soft_limit_cooldown_until_ns = 0
+            else:
+                return False, f"SOFT_LIMIT: loss={-total_pnl} >= threshold={self._soft_limit_threshold_scaled}"
+
+        # g. Peak drawdown check (before total_pnl >= 0 guard to handle positive-peak scenarios)
+        if self._intraday_pnl_enabled and self._peak_pnl_scaled >= self._peak_drawdown_min_peak_scaled:
+            drawdown = self._peak_pnl_scaled - total_pnl
+            drawdown_limit = int(self._peak_drawdown_pct * self._peak_pnl_scaled)
+            if drawdown > drawdown_limit:
+                logger.warning(
+                    "DailyLossLimitValidator: peak drawdown exceeded",
+                    peak_pnl_scaled=self._peak_pnl_scaled,
+                    total_pnl=total_pnl,
+                    drawdown=drawdown,
+                    drawdown_limit=drawdown_limit,
+                )
+                return False, f"PEAK_DRAWDOWN: drawdown={drawdown} > limit={drawdown_limit}"
+
+        # h. Net gain or breakeven — no further loss checks needed
         if total_pnl >= 0:
-            # Net gain or breakeven — no loss to check
             return True, "OK"
 
         loss_magnitude = -total_pnl  # positive value representing combined loss
 
+        # i. Hard limit check — evaluated before soft limit so hard limit always wins
         strat_cfg = self.strat_configs.get(intent.strategy_id, {})
-        max_daily_loss = int(strat_cfg.get("max_daily_loss", self._default_max_daily_loss))
+        if self._intraday_pnl_enabled:
+            max_daily_loss = self._hard_limit_threshold_scaled
+        else:
+            max_daily_loss = int(strat_cfg.get("max_daily_loss", self._default_max_daily_loss))
 
         if loss_magnitude >= max_daily_loss:
             self.halt_triggered = True
@@ -293,6 +404,19 @@ class DailyLossLimitValidator(RiskValidator):
                 max_daily_loss=max_daily_loss,
             )
             return False, f"DAILY_LOSS_LIMIT_EXCEEDED: loss={loss_magnitude} >= limit={max_daily_loss}"
+
+        # j. Soft limit trigger
+        if self._intraday_pnl_enabled and loss_magnitude >= self._soft_limit_threshold_scaled:
+            now_ns = timebase.now_ns()
+            self.soft_limit_active = True
+            self._soft_limit_cooldown_until_ns = now_ns + self._soft_limit_cooldown_ns
+            logger.warning(
+                "DailyLossLimitValidator: soft limit triggered",
+                strategy_id=intent.strategy_id,
+                total_pnl=total_pnl,
+                soft_limit_threshold=self._soft_limit_threshold_scaled,
+            )
+            return False, f"SOFT_LIMIT: loss={loss_magnitude} >= threshold={self._soft_limit_threshold_scaled}"
 
         return True, "OK"
 
