@@ -628,8 +628,8 @@ class OrderAdapter:
                 # Populate lookup using Shioaji trade attributes (broker ID -> order_key).
                 await self._register_broker_ids(order_key, trade)
 
-                if cmd.intent.decision_mid != 0:
-                    self._decision_mid_map[order_key] = cmd.intent.decision_mid
+                if cmd.intent.decision_price != 0:
+                    self._decision_mid_map[order_key] = cmd.intent.decision_price
 
                 self.rate_limiter.record()
                 self.circuit_breaker.record_success()

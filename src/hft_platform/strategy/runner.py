@@ -402,6 +402,14 @@ class StrategyRunner:
             source_ts_ns = self._current_source_ts_ns
         if trace_id is None:
             trace_id = self._current_trace_id
+        decision_mid = 0
+        if self._lob_l1_source is not None:
+            try:
+                l1 = self._lob_l1_source(symbol)
+                if l1 is not None:
+                    decision_mid = l1[3] // 2  # mid_price_x2 // 2
+            except Exception:
+                pass  # LOB unavailable, leave as 0
         if self._typed_intent_fastpath:
             return (
                 "typed_intent_v1",
@@ -420,6 +428,7 @@ class StrategyRunner:
                 str(trace_id or ""),
                 "",
                 0,
+                int(decision_mid),
             )
         return OrderIntent(
             intent_id=self._intent_seq,
@@ -434,6 +443,7 @@ class StrategyRunner:
             timestamp_ns=timebase.now_ns(),
             source_ts_ns=int(source_ts_ns or 0),
             trace_id=str(trace_id or ""),
+            decision_price=decision_mid,
         )
 
     def _scale_price(self, symbol: str, price: int | Decimal) -> int:
