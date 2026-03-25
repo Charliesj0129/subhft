@@ -153,6 +153,10 @@ research/tools/*
 !research/tools/run_mm_backtest.py
 !research/tools/volume_proxy_explorer.py
 !research/tools/mm_param_sweep.py
+!research/tools/backtest_mm_*.py
+!research/tools/backtest_vpin*.py
+!research/tools/evaluate_drift_burst*.py
+!research/tools/backtest_mm_l2.py
 !research/tools/legacy/
 !research/tools/legacy/**/*.py
 !research/logs/
