@@ -101,7 +101,8 @@ def test_map_order_and_fill(tmp_path):
     topic, row = map_event_to_record(fill, metadata)
     assert topic == "fills"
     assert row["price_scaled"] == 1_200_000
-    assert row["fee_scaled"] == 10_000
+    assert row["fee_scaled"] == 100  # raw int, not price-scaled (fee is NTD, not instrument price)
+    assert row["tax_scaled"] == 0
 
 
 def test_map_unknown_event_returns_none(tmp_path):
