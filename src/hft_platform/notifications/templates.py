@@ -469,3 +469,62 @@ def render_backup_failed(
         f"最後成功備份: {last_success_date}\n"
         f"請立即檢查備份磁碟"
     )
+
+
+def render_position_recovery(
+    *,
+    source: str,
+    loaded: int,
+    corrected: int,
+    mismatches: list[dict],
+) -> str:
+    """Startup position recovery succeeded.
+
+    Args:
+        source: Recovery source (e.g. "dual", "checkpoint", "broker").
+        loaded: Number of symbols loaded from source.
+        corrected: Number of mismatches that were corrected.
+        mismatches: List of correction details (symbols, actions).
+
+    Returns:
+        Formatted position recovery success notification string.
+    """
+    lines = [
+        f"🟢 部位恢復完成",
+        f"來源: {source} | 載入: {loaded} symbols | 修正: {corrected}",
+    ]
+    for m in mismatches[:5]:
+        symbol = m.get("symbol", "?")
+        action = m.get("action", "?")
+        lines.append(f"  {symbol}: {action}")
+    return "\n".join(lines)
+
+
+def render_position_recovery_failed(
+    *,
+    source: str,
+    reason: str,
+    mismatches: list[dict],
+) -> str:
+    """Startup position recovery failed — HALT triggered.
+
+    Args:
+        source: Recovery source (e.g. "dual", "checkpoint", "broker").
+        reason: Human-readable reason for the failure.
+        mismatches: List of mismatch details for diagnostics.
+
+    Returns:
+        Formatted position recovery failure alert string (HALT).
+    """
+    lines = [
+        f"🔴 部位恢復失敗 — HALT",
+        f"來源: {source}",
+        f"原因: {reason}",
+    ]
+    for m in mismatches[:5]:
+        symbol = m.get("symbol", "?")
+        ckpt_qty = m.get("checkpoint_qty", "?")
+        broker_qty = m.get("broker_qty", "?")
+        lines.append(f"  {symbol}: ckpt={ckpt_qty} broker={broker_qty}")
+    lines.append("請手動確認部位後重啟")
+    return "\n".join(lines)
