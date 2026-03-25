@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from prometheus_client import Gauge
@@ -29,9 +30,28 @@ startup_recon_status = Gauge(
     "Startup position reconciliation status (0=not_run, 1=pass, 2=discrepancy, 3=error)",
 )
 startup_recon_status.set(0)
+startup_recon_positions_loaded = Gauge(
+    "startup_recon_positions_loaded",
+    "Number of symbols loaded into PositionStore at startup",
+)
+startup_recon_auto_corrected = Gauge(
+    "startup_recon_auto_corrected",
+    "Number of position discrepancies auto-corrected at startup",
+)
 
 _BLOCK_ENV = "HFT_STARTUP_RECON_BLOCK"
 _CHECKPOINT_PATH_ENV = "HFT_POSITION_CHECKPOINT_PATH"
+
+
+@dataclass
+class RecoveryResult:
+    """Outcome of startup position recovery."""
+
+    source: str  # "dual", "broker_only", "checkpoint_only", "empty"
+    positions_loaded: int = 0
+    auto_corrected: int = 0
+    halted: bool = False
+    mismatches: list[dict] = field(default_factory=list)
 
 
 def _load_checkpoint(path: str) -> Dict[str, int]:
@@ -65,6 +85,8 @@ class StartupPositionVerifier:
         *,
         blocking: bool | None = None,
         checkpoint_path: str | None = None,
+        qty_threshold: int | None = None,
+        futures_qty_threshold: int | None = None,
     ) -> None:
         self.client = client
         self.store = position_store
@@ -77,6 +99,13 @@ class StartupPositionVerifier:
 
         # Resolve checkpoint path from arg or env
         self.checkpoint_path = checkpoint_path or os.environ.get(_CHECKPOINT_PATH_ENV)
+
+        self._qty_threshold = qty_threshold if qty_threshold is not None else int(
+            os.environ.get("HFT_STARTUP_RECON_QTY_THRESHOLD", "10")
+        )
+        self._futures_qty_threshold = futures_qty_threshold if futures_qty_threshold is not None else int(
+            os.environ.get("HFT_STARTUP_RECON_FUTURES_QTY_THRESHOLD", "2")
+        )
 
         self.discrepancies: List[PositionDiscrepancy] = []
         self.status: int = 0  # mirrors the gauge
@@ -195,3 +224,212 @@ class StartupPositionVerifier:
             symbol = pos.symbol
             local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
         return local_map
+
+    # ------------------------------------------------------------------
+    # Position Recovery (dual-source merge + graduated response)
+    # ------------------------------------------------------------------
+
+    async def recover(
+        self,
+        *,
+        trading_date: str | None = None,
+        account_id: str = "default",
+    ) -> RecoveryResult:
+        """Dual-source position recovery with graduated response."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from hft_platform.execution.checkpoint import PositionCheckpointWriter
+
+        if trading_date is None:
+            trading_date = datetime.now(tz=ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
+
+        logger.info("position_recovery: starting", trading_date=trading_date)
+
+        # 1. Load checkpoint
+        ckpt_data = None
+        ckpt_positions: Dict[str, Dict[str, Any]] = {}
+        ckpt_valid = False
+
+        if self.checkpoint_path:
+            ckpt_data = PositionCheckpointWriter.load_checkpoint(self.checkpoint_path)
+            if ckpt_data is not None:
+                ckpt_td = ckpt_data.get("trading_date")
+                if ckpt_td == trading_date:
+                    ckpt_valid = True
+                    ckpt_positions = ckpt_data.get("positions", {})
+                    logger.info("position_recovery: checkpoint valid", symbols=len(ckpt_positions))
+                else:
+                    logger.warning(
+                        "position_recovery: checkpoint stale",
+                        checkpoint_date=ckpt_td,
+                        current_date=trading_date,
+                    )
+            else:
+                logger.info("position_recovery: no checkpoint found")
+
+        # 2. Query broker
+        broker_map: Dict[str, int] = {}
+        broker_available = False
+        try:
+            broker_map = await self._fetch_broker_positions()
+            broker_available = True
+            logger.info("position_recovery: broker positions fetched", symbols=len(broker_map))
+        except Exception as exc:
+            logger.warning("position_recovery: broker unavailable", error=str(exc))
+
+        # 3. Determine source and act
+        if ckpt_valid and broker_available:
+            return self._recover_dual(ckpt_positions, broker_map, account_id)
+        elif broker_available:
+            return self._recover_broker_only(broker_map, account_id)
+        elif ckpt_valid:
+            return self._recover_checkpoint_only(ckpt_positions, account_id)
+        else:
+            startup_recon_status.set(3)
+            return RecoveryResult(source="empty", halted=True)
+
+    def _recover_dual(
+        self,
+        ckpt_positions: Dict[str, Dict[str, Any]],
+        broker_map: Dict[str, int],
+        account_id: str,
+    ) -> RecoveryResult:
+        """Cross-validate checkpoint vs broker, apply graduated response."""
+        all_symbols = set(broker_map.keys())
+        for pos_data in ckpt_positions.values():
+            sym = pos_data.get("symbol", "")
+            if sym:
+                all_symbols.add(sym)
+
+        # Build checkpoint maps keyed by SYMBOL (not composite key)
+        ckpt_qty_map: Dict[str, int] = {}
+        ckpt_by_symbol: Dict[str, Dict[str, Any]] = {}
+        for _key, pos_data in ckpt_positions.items():
+            sym = pos_data.get("symbol", _key)
+            ckpt_qty_map[sym] = pos_data.get("net_qty", 0)
+            ckpt_by_symbol[sym] = pos_data
+
+        mismatches: list[dict] = []
+        has_critical = False
+        auto_corrected = 0
+        merged: Dict[str, Dict[str, Any]] = {}
+
+        for symbol in all_symbols:
+            ckpt_qty = ckpt_qty_map.get(symbol, 0)
+            broker_qty = broker_map.get(symbol, 0)
+            classification = self._classify_discrepancy(symbol, ckpt_qty, broker_qty)
+
+            if classification == "critical":
+                has_critical = True
+                mismatches.append({
+                    "symbol": symbol,
+                    "checkpoint_qty": ckpt_qty,
+                    "broker_qty": broker_qty,
+                    "action": "halt",
+                })
+            elif classification == "minor":
+                auto_corrected += 1
+                mismatches.append({
+                    "symbol": symbol,
+                    "checkpoint_qty": ckpt_qty,
+                    "broker_qty": broker_qty,
+                    "action": "corrected",
+                })
+                ckpt_entry = ckpt_by_symbol.get(symbol, {})
+                merged[symbol] = {
+                    "net_qty": broker_qty,
+                    "avg_price_scaled": ckpt_entry.get("avg_price_scaled", 0),
+                    "realized_pnl_scaled": ckpt_entry.get("realized_pnl_scaled", 0),
+                }
+            else:
+                ckpt_entry = ckpt_by_symbol.get(symbol, {})
+                if broker_qty != 0:
+                    merged[symbol] = {
+                        "net_qty": broker_qty,
+                        "avg_price_scaled": ckpt_entry.get("avg_price_scaled", 0),
+                        "realized_pnl_scaled": ckpt_entry.get("realized_pnl_scaled", 0),
+                    }
+
+        if has_critical:
+            startup_recon_status.set(3)
+            return RecoveryResult(source="dual", halted=True, mismatches=mismatches)
+
+        loaded = self._write_to_store(merged, account_id)
+        status_val = 2 if auto_corrected > 0 else 1
+        startup_recon_status.set(status_val)
+        startup_recon_positions_loaded.set(loaded)
+        startup_recon_auto_corrected.set(auto_corrected)
+        return RecoveryResult(
+            source="dual",
+            positions_loaded=loaded,
+            auto_corrected=auto_corrected,
+            mismatches=mismatches,
+        )
+
+    def _recover_broker_only(self, broker_map: Dict[str, int], account_id: str) -> RecoveryResult:
+        """Use broker positions only (no valid checkpoint)."""
+        merged: Dict[str, Dict[str, Any]] = {}
+        for symbol, qty in broker_map.items():
+            if qty != 0:
+                merged[symbol] = {"net_qty": qty, "avg_price_scaled": 0, "realized_pnl_scaled": 0}
+        loaded = self._write_to_store(merged, account_id)
+        startup_recon_status.set(1)
+        startup_recon_positions_loaded.set(loaded)
+        return RecoveryResult(source="broker_only", positions_loaded=loaded)
+
+    def _recover_checkpoint_only(
+        self,
+        ckpt_positions: Dict[str, Dict[str, Any]],
+        account_id: str,
+    ) -> RecoveryResult:
+        """Use checkpoint positions only (broker unavailable)."""
+        merged: Dict[str, Dict[str, Any]] = {}
+        for _key, pos_data in ckpt_positions.items():
+            sym = pos_data.get("symbol", _key)
+            qty = pos_data.get("net_qty", 0)
+            if qty != 0:
+                merged[sym] = {
+                    "net_qty": qty,
+                    "avg_price_scaled": pos_data.get("avg_price_scaled", 0),
+                    "realized_pnl_scaled": pos_data.get("realized_pnl_scaled", 0),
+                }
+        loaded = self._write_to_store(merged, account_id)
+        startup_recon_status.set(1)
+        startup_recon_positions_loaded.set(loaded)
+        return RecoveryResult(source="checkpoint_only", positions_loaded=loaded)
+
+    def _classify_discrepancy(self, symbol: str, ckpt_qty: int, broker_qty: int) -> str:
+        """Returns 'match', 'minor', or 'critical'."""
+        if ckpt_qty == broker_qty:
+            return "match"
+        diff = abs(ckpt_qty - broker_qty)
+        # Side mismatch (long vs short) is always critical
+        if (ckpt_qty > 0 and broker_qty < 0) or (ckpt_qty < 0 and broker_qty > 0):
+            return "critical"
+        threshold = self._futures_qty_threshold if self._is_futures(symbol) else self._qty_threshold
+        return "minor" if diff <= threshold else "critical"
+
+    @staticmethod
+    def _is_futures(symbol: str) -> bool:
+        """Heuristic: futures symbols contain common TAIFEX prefixes."""
+        return any(c in symbol.upper() for c in ("FD", "FX", "TX", "MX", "TE", "TF"))
+
+    def _write_to_store(self, positions: Dict[str, Dict[str, Any]], account_id: str) -> int:
+        """Write recovered positions into PositionStore. Returns count."""
+        from hft_platform.execution.positions import Position
+
+        count = 0
+        for symbol, data in positions.items():
+            pos = Position(
+                account_id=account_id,
+                strategy_id="",
+                symbol=symbol,
+                net_qty=data["net_qty"],
+                avg_price_scaled=data.get("avg_price_scaled", 0),
+                realized_pnl_scaled=data.get("realized_pnl_scaled", 0),
+            )
+            key = f"{account_id}::{symbol}"
+            self.store.positions[key] = pos
+            count += 1
+        return count
