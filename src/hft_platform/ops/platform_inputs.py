@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from hft_platform.core import timebase
 
@@ -160,7 +160,7 @@ class PlatformDegradeInputs:
     def _wal_backlog_files(self) -> float | None:
         if hasattr(self.recorder, "wal_backlog_files"):
             try:
-                return float(getattr(self.recorder, "wal_backlog_files"))
+                return float(self.recorder.wal_backlog_files)
             except Exception:
                 return None
 

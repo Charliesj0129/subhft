@@ -1,13 +1,18 @@
 """Tests for DailyLossLimitValidator intraday watermark extensions."""
-import pytest
+
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.validators import DailyLossLimitValidator
-from hft_platform.contracts.strategy import OrderIntent, Side, IntentType, TIF
 
 
 def _make_intent(strategy_id="TEST", symbol="TMFD6", side=Side.BUY, price=200000000, qty=1):
     return OrderIntent(
-        intent_id=1, strategy_id=strategy_id, symbol=symbol,
-        intent_type=IntentType.NEW, side=side, price=price, qty=qty,
+        intent_id=1,
+        strategy_id=strategy_id,
+        symbol=symbol,
+        intent_type=IntentType.NEW,
+        side=side,
+        price=price,
+        qty=qty,
     )
 
 

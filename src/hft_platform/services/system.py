@@ -111,7 +111,9 @@ class HFTSystem:
         self.platform_degrade_controller = (
             getattr(self.registry, "platform_degrade_controller", None) or get_shared_platform_degrade_controller()
         )
-        self.platform_degrade_inputs = getattr(self.registry, "platform_degrade_inputs", None) or self.bootstrapper.build_platform_degrade_inputs(
+        self.platform_degrade_inputs = getattr(
+            self.registry, "platform_degrade_inputs", None
+        ) or self.bootstrapper.build_platform_degrade_inputs(
             md_service=self.md_service,
             recorder=self.recorder,
             raw_queue=self.raw_queue,
@@ -426,7 +428,7 @@ class HFTSystem:
                 )
 
                 # 4b. Update StormGuard with LOB-derived drift-burst toxicity
-                if hasattr(self.storm_guard, 'update_with_lob'):
+                if hasattr(self.storm_guard, "update_with_lob"):
                     lob_engine = getattr(self.md_service, "lob", None)
                     if lob_engine is not None:
                         for book in lob_engine.books.values():

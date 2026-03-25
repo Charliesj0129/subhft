@@ -1,4 +1,5 @@
 """TCA data structures. All monetary values NTD scaled x10000."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

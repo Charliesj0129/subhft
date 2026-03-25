@@ -19,15 +19,13 @@ from hft_platform.contracts.strategy import (
     OrderCommand,
     OrderIntent,
     Side,
-    StormGuardState,
 )
-from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_intent(**overrides) -> OrderIntent:
     defaults = {
@@ -78,6 +76,7 @@ def _make_reduce_only_controller() -> MagicMock:
 # Test: FORCE_FLAT bypasses platform degrade check
 # ---------------------------------------------------------------------------
 
+
 def test_force_flat_bypasses_platform_degrade(tmp_path):
     adapter = _make_adapter(tmp_path)
     # Replace controller with one that is reduce-only and would block
@@ -125,6 +124,7 @@ def test_new_open_blocked_by_platform_degrade(tmp_path):
 # Test: _orphan_detector attribute defaults to None
 # ---------------------------------------------------------------------------
 
+
 def test_orphan_detector_defaults_to_none(tmp_path):
     adapter = _make_adapter(tmp_path)
     assert adapter._orphan_detector is None
@@ -133,6 +133,7 @@ def test_orphan_detector_defaults_to_none(tmp_path):
 # ---------------------------------------------------------------------------
 # Test: OrphanDetector is started and stopped with run()
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_orphan_detector_started_and_stopped_with_run(tmp_path):

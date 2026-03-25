@@ -243,20 +243,12 @@ class DailyLossLimitValidator(RiskValidator):
             # 1 NTD = price_scale / point_value scaled units
             ntd_to_scaled: int = price_scale // point_value
 
-            self._soft_limit_threshold_scaled: int = int(
-                ipnl_cfg.get("soft_limit_ntd", 500) * ntd_to_scaled
-            )
-            self._hard_limit_threshold_scaled: int = int(
-                ipnl_cfg.get("hard_limit_ntd", 1000) * ntd_to_scaled
-            )
-            self._soft_recovery_threshold_scaled: int = int(
-                ipnl_cfg.get("soft_recovery_ntd", 300) * ntd_to_scaled
-            )
+            self._soft_limit_threshold_scaled: int = int(ipnl_cfg.get("soft_limit_ntd", 500) * ntd_to_scaled)
+            self._hard_limit_threshold_scaled: int = int(ipnl_cfg.get("hard_limit_ntd", 1000) * ntd_to_scaled)
+            self._soft_recovery_threshold_scaled: int = int(ipnl_cfg.get("soft_recovery_ntd", 300) * ntd_to_scaled)
             self._peak_drawdown_pct: float = float(ipnl_cfg.get("peak_drawdown_pct", 0.40))
             self._drawdown_recovery_pct: float = float(ipnl_cfg.get("drawdown_recovery_pct", 0.20))
-            self._soft_limit_cooldown_ns: int = int(
-                ipnl_cfg.get("soft_limit_cooldown_s", 60) * 1_000_000_000
-            )
+            self._soft_limit_cooldown_ns: int = int(ipnl_cfg.get("soft_limit_cooldown_s", 60) * 1_000_000_000)
             self._peak_drawdown_min_peak_scaled: int = int(
                 ipnl_cfg.get("peak_drawdown_min_peak_ntd", 200) * ntd_to_scaled
             )

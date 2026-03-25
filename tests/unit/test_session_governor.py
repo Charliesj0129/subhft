@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 from hft_platform.ops.session_governor import SessionGovernor, SessionPhase, TrackGate
