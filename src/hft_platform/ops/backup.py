@@ -69,6 +69,8 @@ class BackupManager:
         self._metrics: Any = None
 
     def _client(self) -> Any:
+        assert self._ch_host is not None  # guaranteed by __init__
+        assert self._ch_user is not None  # guaranteed by __init__
         return _get_ch_client(self._ch_host, self._ch_port, self._ch_user, self._ch_password)
 
     def _get_metrics(self) -> Any:
