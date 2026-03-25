@@ -35,7 +35,7 @@
 | 09:00-13:30 | Orphan order detection | `orphan_detector.py` | READY | Broker vs local comparison, 60s stale threshold |
 | 09:00-13:30 | Position reconciliation | `reconciliation.py` | READY | 5s interval, drift_streak tracking, 2x drift -> reduce-only |
 | 09:00-13:30 | AutonomyMonitor patrol | `autonomy_monitor.py` | READY | 5s poll, 4 signal types (StormGuard/Broker/Infra/Recon) |
-| 09:00-13:30 | Real-time notifications | `NotificationDispatcher` | READY | Telegram 20+ event templates, critical bypass rate limit |
+| 09:00-13:30 | Real-time notifications | `NotificationDispatcher` | READY | Telegram 16 event templates, critical bypass rate limit |
 | 09:00-13:30 | Data persistence | `recorder/` + WAL | READY | ClickHouse + WAL fallback, fsync, disk pressure breaker |
 | 13:00 | CLOSE_ONLY | `SessionGovernor` | READY | Phase transition callback |
 | 13:30 | FORCE_FLAT | `position_flattener.py` | READY | all/track/strategy scope, 120s timeout, retry |
@@ -56,9 +56,9 @@ Both weak points are "data collection done, analysis/report automation incomplet
 |-----------|-------|---------------|
 | **Trade Execution** | 4/5 | Complete tick->intent->risk->order->fill pipeline; dual broker (Shioaji+Fubon); circuit breaker + dead letter + orphan detector. -1: TCA analysis layer incomplete |
 | **Risk Control** | 5/5 | 6 validators + StormGuard 4-state FSM + drift-burst toxicity + intraday watermark (soft/peak/hard) + position reconciliation + circuit breaker |
-| **Autonomous Operations** | 4/5 | SessionGovernor multi-track + AutonomyMonitor 4-signal patrol + PositionFlattener + platform degradation. -1: daily report orchestrator not automated; `hft ops flatten` CLI is stub |
+| **Autonomous Operations** | 4/5 | SessionGovernor multi-track + AutonomyMonitor 4-signal patrol + PositionFlattener + platform degradation. -1: daily report orchestrator not automated |
 | **Data Persistence** | 5/5 | ClickHouse direct + WAL fallback + fsync + disk pressure breaker + dedup replay + manifest tracking |
-| **Observability** | 4/5 | Prometheus + Grafana + structlog + Telegram 20+ events + TUI monitor. -1: missing attribution analysis dashboard |
+| **Observability** | 4/5 | Prometheus + Grafana + structlog + Telegram 16 event templates + TUI monitor. -1: missing attribution analysis dashboard |
 | **Alpha Research** | 5/5 | Gates A-F fully automated + canary FSM + drift detector + batch promotion + 16 alpha templates |
 | **Resilience/Recovery** | 4/5 | Exponential backoff reconnect + trading hours guard + quote verification + heartbeat + WAL replay. -1: chaos testing not yet executed |
 | **Deployment/Ops** | 4/5 | Docker Compose full stack + ops.sh (tune/isolate/replay) + 160+ Makefile targets. -1: no CI/CD pipeline, no config validation |
@@ -78,8 +78,8 @@ Both weak points are "data collection done, analysis/report automation incomplet
 
 | ID | Gap | Current State | Fix | Effort | Priority |
 |----|-----|---------------|-----|--------|----------|
-| E1 | TCA analysis engine | `tca/types.py` data structures only | `TCAAnalyzer`: aggregate per-fill slippage, implementation shortfall, realized spread from ClickHouse `hft.slippage_records` | 3-4 days | P1 |
-| E2 | Fee calculation integration | `config/base/fees/futures.yaml` exists | Inject `FeeCalculator` into ExecutionRouter, auto-compute commission+tax per fill, write `FeeBreakdown` | 2 days | P1 |
+| E1 | TCA analysis engine | `tca/types.py` data structures only | `TCAAnalyzer`: aggregate per-fill slippage, implementation shortfall, realized spread from ClickHouse `hft.slippage_records`. **Depends on E2** (needs fee data for meaningful analysis) | 3-4 days | P1 |
+| E2 | Fee calculation integration | `config/base/fees/futures.yaml` exists | Inject `FeeCalculator` into ExecutionRouter, auto-compute commission+tax per fill, write `FeeBreakdown`. **E1 depends on this** | 2 days | P1 |
 | E3 | TCA daily CLI | None | `hft tca daily --date 2026-03-25`: per-strategy slippage, cost breakdown, fill quality | 2 days | P2 |
 | E4 | Execution quality dashboard | None | Grafana panel: avg slippage, fill rate, cancel rate by strategy/symbol | 1-2 days | P2 |
 
@@ -88,7 +88,7 @@ Both weak points are "data collection done, analysis/report automation incomplet
 | ID | Gap | Current State | Fix | Effort | Priority |
 |----|-----|---------------|-----|--------|----------|
 | A1 | Daily report orchestrator | Templates + Evidence exist, no auto-trigger | `DailyReportService`: SessionGovernor CLOSED callback -> collect from ClickHouse -> `notify_daily_report()` + `write_daily_summary()` | 2 days | P0 |
-| A2 | `hft ops flatten` implementation | CLI stub, prints TODO | Connect to running PositionFlattener via Unix socket or shared state, support `--scope all/track/strategy` | 2 days | P1 |
+| A2 | `hft ops flatten` implementation | CLI stub, prints TODO | Connect to running PositionFlattener via Unix socket or shared state, support `--scope all/track/strategy` | 2 days | P0 |
 | A3 | Weekly report automation | `notify_weekly_summary()` template exists | Sunday cron trigger, aggregate 5 daily reports -> Telegram weekly summary | 1 day | P2 |
 
 ### Dimension: Observability (4->5)
@@ -116,12 +116,23 @@ Both weak points are "data collection done, analysis/report automation incomplet
 | D2 | Automated deployment | Manual `docker compose build` | CI green -> build image -> push registry -> SSH deploy (or watchtower) | 2 days | P2 |
 | D3 | Config validation | Manual YAML check | Pydantic schema validation for all YAML at startup, fail-fast with clear error | 1 day | P1 |
 
+### Cross-Cutting: Solo Operator Safety (identified by spec review)
+
+| ID | Gap | Current State | Fix | Effort | Priority |
+|----|-----|---------------|-----|--------|----------|
+| S1 | Margin/capital monitoring | No margin utilization tracking (DailyLossLimit tracks PnL, not margin) | AutonomyMonitor polls broker margin API; alert at 80% utilization, reduce-only at 90% | 2 days | P1 |
+| S2 | ClickHouse backup strategy | WAL replay covers write failures, but no backup for disk corruption/loss | Nightly `clickhouse-backup` cron -> local or S3, 7-day retention | 1 day | P1 |
+| S3 | Notification channel redundancy | Telegram is sole channel; bot down = all alerts lost | Add webhook fallback (LINE Notify or Discord webhook as secondary); critical alerts fan-out to both | 1 day | P1 |
+| S4 | Dead man's switch (Mode B only) | No unacknowledged-alert escalation | If critical alert not acknowledged within N minutes -> auto-flatten + halt. Needed for Phase 2 (night session) | 2 days | P1 (Phase 2) |
+| S5 | Live mode startup guard | Only `HFT_ORDER_MODE=sim` default prevents accidental live orders | Startup confirmation gate: `HFT_ORDER_MODE=live` requires `HFT_LIVE_CONFIRM=yes-i-know` or interactive prompt | 0.5 day | P1 |
+
 ### Priority Summary
 
 | Priority | Items | Total Effort | Significance |
 |----------|-------|--------------|--------------|
-| **P0** | A1, R1, R2 | ~4.5 days | **Blockers**: no auto daily report = manual check daily; chaos not executed = resilience is theoretical |
-| **P1** | E1, E2, A2, O1, O2, R3, R4, D1, D3 | ~16 days | **Pre-live hardening**: TCA engine, flatten CLI, Grafana dashboard, CI pipeline |
+| **P0** | A1, A2, R1, R2 | ~6.5 days | **Blockers**: no auto daily report = manual check daily; flatten CLI is safety-critical for emergency ops; chaos not executed = resilience is theoretical |
+| **P1** | E1, E2, O1, O2, R3, R4, D1, D3, S1, S2, S3, S5 | ~19.5 days | **Pre-live hardening**: TCA engine, Grafana dashboard, CI pipeline, margin monitoring, backup, notification redundancy, live mode guard |
+| **P1 (Phase 2)** | S4 | 2 days | **Mode B blocker**: dead man's switch for unattended night sessions |
 | **P2** | E3, E4, A3, O3, D2 | ~8 days | **Nice-to-have**: TCA CLI, weekly report, alpha tracking, auto-deploy |
 
 **Recommended execution**: P0 first (1 week) -> P1 in two batches (2-3 weeks) -> P2 as needed
@@ -139,8 +150,9 @@ Both weak points are "data collection done, analysis/report automation incomplet
 | Day 1-2 | **A1** Daily report orchestrator | SessionGovernor CLOSED -> auto-collect + send Telegram daily report |
 | Day 3-4 | **R1** 5 chaos test playbooks | 5 repeatable fault injection scripts + expected behavior docs |
 | Day 5 | **R2** WAL replay live drill | Verification report: WAL accumulation -> replay -> dedup -> row count reconciliation |
+| Day 6-7 | **A2** `hft ops flatten` implementation | Emergency flatten CLI operational, connects to running PositionFlattener |
 
-**Phase 0 exit criteria**: Daily report arrives automatically after close + all 5 chaos playbooks PASS
+**Phase 0 exit criteria**: Daily report arrives automatically after close + `hft ops flatten --scope all` works + all 5 chaos playbooks PASS
 
 ### Phase 1: Mode A Completion (Weeks 2-4)
 
@@ -171,6 +183,7 @@ Both weak points are "data collection done, analysis/report automation incomplet
 | W5 | Cross-midnight trading_date | Evidence + DailyLossLimit | Night session 22:00 trade belongs to "today" or "tomorrow" -- `set_trading_date()` API exists, wire to SessionGovernor |
 | W6 | Heartbeat upgrade | Current: PID file + cron | Need: Telegram heartbeat every 30min (`notify_heartbeat()` template exists), configurable night quiet hours |
 | W6 | Process supervisor | Current: cron watchdog | Need: systemd unit or PM2, crash -> auto-restart -> notify |
+| W6 | **S4** Dead man's switch | No unacknowledged-alert escalation | Critical alert not acked within N min -> auto-flatten + halt. Essential for unattended night sessions |
 | W7 | Night session chaos addendum | 2 new playbooks | (6) Cross-midnight reconnect (7) Night feed gap >30s (low liquidity, more likely to trigger) |
 | W7 | **A3** Weekly report + P2 wrap-up | Weekly report automation + TCA CLI | Sunday auto-send 5-day aggregation |
 
@@ -214,12 +227,12 @@ All module assessments are based on actual code review, not file existence check
 
 | Module | Files | LOC | Status |
 |--------|-------|-----|--------|
-| SessionGovernor | 1 | ~100 | Production-ready: multi-track, 5 phases, YAML config |
-| AutonomyMonitor | 1 | ~400 | Production-ready: 4 signals, cooldown, decision matrix |
-| PositionFlattener | 1 | ~200 | Production-ready: 3 scopes, timeout, retry |
+| SessionGovernor | 1 | ~207 | Production-ready: multi-track, 6 phases (incl. INIT), YAML config |
+| AutonomyMonitor | 1 | ~345 | Production-ready: 4 signals, cooldown, decision matrix |
+| PositionFlattener | 1 | ~145 | Production-ready: 3 scopes, timeout, retry |
 | OrphanDetector | 1 | ~100 | Production-ready: stateless, 60s threshold |
 | EvidenceWriter | 1 | ~150 | Production-ready: 9 event types, trading_date override |
-| NotificationDispatcher | 1 | ~500 | Production-ready: 20+ Telegram templates |
+| NotificationDispatcher | 1 | ~400 | Production-ready: 16 Telegram event templates |
 | DriftBurstDetector | 1 | ~100 | Production-ready: Christensen et al. (2022), ring buffers |
 | DailyLossLimitValidator | 1 | ~300 | Production-ready: soft/peak/hard, intraday watermark |
 | StormGuard | 1 | ~295 | Production-ready: 4-state FSM, hysteresis, drift-burst integrated |
