@@ -408,10 +408,36 @@ def render_backup_success(
         Formatted backup success notification string.
     """
     return (
-        f"🟢 Backup {date_str} 完成\n"
-        f"大小: {size_mb:,.1f} MB | 耗時: {duration_s:.1f}s\n"
-        f"保留: {retained_count} 份備份"
+        f"🟢 Backup {date_str} 完成\n大小: {size_mb:,.1f} MB | 耗時: {duration_s:.1f}s\n保留: {retained_count} 份備份"
     )
+
+
+def render_margin_warning(ratio: float, used: int, available: int) -> str:
+    """Margin utilization has reached the warning threshold.
+
+    Args:
+        ratio: Margin utilization ratio (0.0-1.0+).
+        used: Margin used in NTD.
+        available: Margin available in NTD.
+
+    Returns:
+        Formatted margin warning alert string.
+    """
+    return f"⚠️ 保證金警告\n使用率: {ratio:.1%}\n已用: {used:,} NTD\n可用: {available:,} NTD"
+
+
+def render_margin_critical(ratio: float, used: int, available: int) -> str:
+    """Margin utilization has reached critical threshold; reduce-only activated.
+
+    Args:
+        ratio: Margin utilization ratio (0.0-1.0+).
+        used: Margin used in NTD.
+        available: Margin available in NTD.
+
+    Returns:
+        Formatted margin critical alert string.
+    """
+    return f"🚨 保證金危急 — 已進入 reduce-only\n使用率: {ratio:.1%}\n已用: {used:,} NTD\n可用: {available:,} NTD"
 
 
 def render_backup_failed(
@@ -430,9 +456,63 @@ def render_backup_failed(
     Returns:
         Formatted backup failure notification string.
     """
-    return (
-        f"🔴 BACKUP 失敗 {date_str}\n"
-        f"錯誤: {error}\n"
-        f"最後成功備份: {last_success_date}\n"
-        f"請立即檢查備份磁碟"
-    )
+    return f"🔴 BACKUP 失敗 {date_str}\n錯誤: {error}\n最後成功備份: {last_success_date}\n請立即檢查備份磁碟"
+
+
+def render_position_recovery(
+    *,
+    source: str,
+    loaded: int,
+    corrected: int,
+    mismatches: list[dict],
+) -> str:
+    """Startup position recovery succeeded.
+
+    Args:
+        source: Recovery source (e.g. "dual", "checkpoint", "broker").
+        loaded: Number of symbols loaded from source.
+        corrected: Number of mismatches that were corrected.
+        mismatches: List of correction details (symbols, actions).
+
+    Returns:
+        Formatted position recovery success notification string.
+    """
+    lines = [
+        "🟢 部位恢復完成",
+        f"來源: {source} | 載入: {loaded} symbols | 修正: {corrected}",
+    ]
+    for m in mismatches[:5]:
+        symbol = m.get("symbol", "?")
+        action = m.get("action", "?")
+        lines.append(f"  {symbol}: {action}")
+    return "\n".join(lines)
+
+
+def render_position_recovery_failed(
+    *,
+    source: str,
+    reason: str,
+    mismatches: list[dict],
+) -> str:
+    """Startup position recovery failed — HALT triggered.
+
+    Args:
+        source: Recovery source (e.g. "dual", "checkpoint", "broker").
+        reason: Human-readable reason for the failure.
+        mismatches: List of mismatch details for diagnostics.
+
+    Returns:
+        Formatted position recovery failure alert string (HALT).
+    """
+    lines = [
+        "🔴 部位恢復失敗 — HALT",
+        f"來源: {source}",
+        f"原因: {reason}",
+    ]
+    for m in mismatches[:5]:
+        symbol = m.get("symbol", "?")
+        ckpt_qty = m.get("checkpoint_qty", "?")
+        broker_qty = m.get("broker_qty", "?")
+        lines.append(f"  {symbol}: ckpt={ckpt_qty} broker={broker_qty}")
+    lines.append("請手動確認部位後重啟")
+    return "\n".join(lines)

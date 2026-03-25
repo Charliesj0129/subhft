@@ -8,7 +8,6 @@ is handled gracefully, and WAL files remain replayable.
 import asyncio
 import json
 import os
-import tempfile
 
 import pytest
 

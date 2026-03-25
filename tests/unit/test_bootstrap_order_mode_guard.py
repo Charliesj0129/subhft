@@ -18,13 +18,13 @@ def test_live_order_mode_requires_real_hft_mode():
 
 
 def test_live_order_mode_accepted_with_real_hft_mode():
-    env = {"HFT_MODE": "real", "HFT_ORDER_MODE": "live"}
+    env = {"HFT_MODE": "real", "HFT_ORDER_MODE": "live", "HFT_LIVE_CONFIRM": "yes-i-know"}
     with patch.dict(os.environ, env, clear=False):
         validate_order_mode_safety()
 
 
 def test_live_order_mode_accepted_with_live_hft_mode():
-    env = {"HFT_MODE": "live", "HFT_ORDER_MODE": "live"}
+    env = {"HFT_MODE": "live", "HFT_ORDER_MODE": "live", "HFT_LIVE_CONFIRM": "yes-i-know"}
     with patch.dict(os.environ, env, clear=False):
         validate_order_mode_safety()
 

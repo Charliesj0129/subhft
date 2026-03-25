@@ -759,6 +759,24 @@ def build_help_overlay() -> Panel:
 # ------------------------------------------------------------------ #
 
 
+def build_cost_section(cost_lines: list[str], width: int) -> list[str]:
+    """Build section lines with a header for the cost attribution panel.
+
+    Parameters
+    ----------
+    cost_lines:
+        Output of ``render_cost_table()`` from ``_pnl_panel``.
+    width:
+        Terminal width (reserved for future formatting).
+
+    Returns
+    -------
+    list[str]
+        Header ``"Cost Attribution:"`` followed by cost_lines.
+    """
+    return ["Cost Attribution:"] + cost_lines
+
+
 def build_header_with_toast(ctx: HeaderContext, toast: Toast | None = None) -> Text:
     """Build header text, appending toast notification if active."""
     parts = build_header(ctx)

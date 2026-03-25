@@ -24,6 +24,8 @@ async def run_monitor(
     from rich.layout import Layout
     from rich.live import Live
     from rich.panel import Panel
+    from rich.style import Style
+    from rich.text import Text
 
     from hft_platform.monitor._detail_panel import build_detail_panel
 
@@ -88,6 +90,16 @@ async def run_monitor(
             _health = get_cached_health()
             if _health is not None:
                 parts.append(Layout(build_health_panel(_health), size=8, name="health"))
+
+        # Cost attribution panel (after health)
+        if engine._cost_lines:
+            from hft_platform.monitor._renderer import build_cost_section
+
+            cost_section = build_cost_section(engine._cost_lines, width=console.width)
+            cost_text = Text("\n".join(cost_section), style=Style(dim=True))
+            cost_panel = Panel(cost_text, title="Cost Attribution", border_style="dim")
+            cost_size = len(cost_section) + 2
+            parts.append(Layout(cost_panel, size=cost_size, name="cost"))
 
         # Footer help bar (computed before help overlay check)
         footer_text = build_footer(

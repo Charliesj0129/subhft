@@ -190,6 +190,14 @@ def validate_order_mode_safety() -> None:
             raise SystemExit(
                 "HFT_ORDER_MODE=live with HFT_MODE=sim is invalid. Set HFT_MODE=real to enable live orders."
             )
+        confirm = os.getenv("HFT_LIVE_CONFIRM", "").strip().lower()
+        if confirm != "yes-i-know":
+            logger.critical(
+                "LIVE_MODE_BLOCKED: Set HFT_LIVE_CONFIRM=yes-i-know to confirm live trading",
+                order_mode=order_mode,
+            )
+            raise SystemExit(1)
+        logger.warning("live_mode_confirmed", order_mode=order_mode)
         logger.critical(
             "LIVE ORDER MODE ACTIVE — real money orders will be placed",
             hft_mode=hft_mode,
@@ -743,6 +751,20 @@ class SystemBootstrapper:
         base_shioaji_cfg = dict(self.settings.get("shioaji", {}))
         md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg, broker_id)
 
+        # Position checkpoint writer (periodic serialization)
+        from hft_platform.execution.checkpoint import PositionCheckpointWriter
+
+        checkpoint_writer = PositionCheckpointWriter(store=position_store)
+
+        # Startup position verifier (dual-source recovery)
+        from hft_platform.execution.startup_recon import StartupPositionVerifier
+
+        startup_verifier = StartupPositionVerifier(
+            client=md_client,
+            position_store=position_store,
+            checkpoint_path=os.getenv("HFT_POSITION_CHECKPOINT_PATH", ".runtime/position_checkpoint.json"),
+        )
+
         # 4. Services
         feature_engine = None
         feature_profile_registry = None
@@ -845,6 +867,26 @@ class SystemBootstrapper:
 
         order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec)
         execution_gateway = ExecutionGateway(order_adapter)
+        # TCA: FeeCalculator injection into ExecutionNormalizer
+        _fee_calculator = None
+        try:
+            from hft_platform.tca.fee_calculator import FeeCalculator
+
+            _fee_yaml = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+                "config",
+                "base",
+                "fees",
+                "futures.yaml",
+            )
+            if os.path.isfile(_fee_yaml):
+                _fee_calculator = FeeCalculator.from_yaml(_fee_yaml)
+                logger.info("fee_calculator_loaded", path=_fee_yaml)
+            else:
+                logger.warning("fee_calculator_yaml_not_found", path=_fee_yaml)
+        except Exception as exc:
+            logger.warning("fee_calculator_init_failed", error=str(exc))
+
         exec_service = ExecutionRouter(
             bus,
             raw_exec_queue,
@@ -852,6 +894,8 @@ class SystemBootstrapper:
             position_store,
             execution_gateway.on_terminal_state,
         )
+        if _fee_calculator is not None:
+            exec_service.normalizer._fee_calculator = _fee_calculator
         risk_engine = RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider)
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
 
@@ -953,9 +997,7 @@ class SystemBootstrapper:
                 # Get or create notification dispatcher
                 notification_dispatcher = None
                 if session_governor is not None:
-                    notification_dispatcher = getattr(
-                        session_governor, "_notification_dispatcher", None
-                    )
+                    notification_dispatcher = getattr(session_governor, "_notification_dispatcher", None)
                 if notification_dispatcher is None:
                     try:
                         from hft_platform.notifications.dispatcher import (
@@ -980,14 +1022,10 @@ class SystemBootstrapper:
                     )
                     # Register phase callback on SessionGovernor
                     if session_governor is not None:
-                        session_governor.register_phase_callback(
-                            daily_report_service.on_phase_transition
-                        )
+                        session_governor.register_phase_callback(daily_report_service.on_phase_transition)
                     logger.info("DailyReportService created and wired")
                 else:
-                    logger.warning(
-                        "DailyReportService skipped: no notification dispatcher available"
-                    )
+                    logger.warning("DailyReportService skipped: no notification dispatcher available")
             except Exception as exc:
                 logger.warning("DailyReportService creation failed", error=str(exc))
                 daily_report_service = None
@@ -1028,6 +1066,8 @@ class SystemBootstrapper:
             session_governor=session_governor,
             autonomy_monitor=autonomy_monitor,
             daily_report_service=daily_report_service,
+            checkpoint_writer=checkpoint_writer,
+            startup_verifier=startup_verifier,
         )
 
 

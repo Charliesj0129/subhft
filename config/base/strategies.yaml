@@ -1,9 +1,16 @@
-# strategy:
-#   id: "MM_ALPHA_V1"
-#   module: "hft_platform.strategies.simple_mm"
-#   class: "SimpleMarketMaker"
-#   params:
-#     subscribe_symbols: ["2330", "2357"] # Major liquid names
-#     risk_aversion: 0.1
-#   # Or select by tags from symbols.yaml
-#   # symbol_tags: ["futures", "front_month"]
+# Strategy Registry — loaded by strategy/registry.py
+# Format: strategies: list of {id, module, class, params, ...}
+
+strategies:
+  # --- OpportunisticMM Paper Trade (Shadow Mode) ---
+  # Spread-gated MM on TXFD6: only quotes when spread > 2.5 bps
+  # Research: outputs/team_artifacts/alpha-research/
+  - id: "OPPORTUNISTIC_MM_TXFD6"
+    module: "hft_platform.strategies.opportunistic_mm"
+    class: "OpportunisticMM"
+    enabled: true
+    product_type: "FUT"
+    symbols: ["TXFD6"]
+    params:
+      spread_threshold_bps: 2.5
+      tick_size_ratio_pct: 50

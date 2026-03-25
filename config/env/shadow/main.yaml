@@ -1,5 +1,5 @@
 # Phase 2 Shadow Trading: real feed, strategy-driven signals, no real orders
-# Usage: HFT_MODE=sim HFT_ORDER_SHADOW_MODE=1
+# Usage: HFT_MODE=sim HFT_ORDER_SHADOW_MODE=1 HFT_SYMBOLS=TXFD6
 
 mode: sim
 
@@ -8,3 +8,15 @@ shadow:
 
 shioaji:
   activate_ca: false
+
+# OpportunisticMM on TXFD6 — paper trade config
+strategy:
+  id: OPPORTUNISTIC_MM_TXFD6
+  module: hft_platform.strategies.opportunistic_mm
+  class: OpportunisticMM
+  params:
+    spread_threshold_bps: 2.5
+    tick_size_ratio_pct: 50
+
+symbols:
+  - "TXFD6"

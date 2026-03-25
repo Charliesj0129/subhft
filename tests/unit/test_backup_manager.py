@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 def test_backup_error_is_exception():
@@ -15,12 +15,15 @@ def test_backup_error_is_exception():
 
 
 def test_constructor_defaults_from_env():
-    with patch.dict(os.environ, {
-        "HFT_CLICKHOUSE_HOST": "ch-host",
-        "HFT_CLICKHOUSE_PORT": "9999",
-        "HFT_CLICKHOUSE_USER": "admin",
-        "HFT_CLICKHOUSE_PASSWORD": "secret",
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "HFT_CLICKHOUSE_HOST": "ch-host",
+            "HFT_CLICKHOUSE_PORT": "9999",
+            "HFT_CLICKHOUSE_USER": "admin",
+            "HFT_CLICKHOUSE_PASSWORD": "secret",
+        },
+    ):
         from hft_platform.ops.backup import BackupManager
 
         mgr = BackupManager()

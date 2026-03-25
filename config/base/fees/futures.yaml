@@ -30,3 +30,11 @@ futures:
   overrides:
     "2330F":
       commission_per_contract: 25
+
+symbol_map:
+  TXF: TX
+  TXFL5: TX
+  TXFR1: TX
+  MXF: MTX
+  MXFR1: MTX
+  XMT: XMT

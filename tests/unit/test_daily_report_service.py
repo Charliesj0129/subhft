@@ -130,7 +130,7 @@ class TestDailyReportService:
             evidence_writer=evidence,
         )
 
-        asyncio.get_event_loop().run_until_complete(svc.on_session_closed("equity"))
+        asyncio.run(svc.on_session_closed("equity"))
 
         assert len(dispatcher.calls) == 1
         call = dispatcher.calls[0]
@@ -145,7 +145,7 @@ class TestDailyReportService:
         evidence = FakeEvidenceWriter()
         svc = _make_service(ch_client=ch, evidence_writer=evidence)
 
-        asyncio.get_event_loop().run_until_complete(svc.on_session_closed("equity"))
+        asyncio.run(svc.on_session_closed("equity"))
 
         assert len(evidence.summaries) == 1
         summary = evidence.summaries[0]
@@ -159,7 +159,7 @@ class TestDailyReportService:
         dispatcher = FakeNotificationDispatcher()
         svc = _make_service(ch_client=ch, notification_dispatcher=dispatcher)
 
-        asyncio.get_event_loop().run_until_complete(svc.on_session_closed("equity"))
+        asyncio.run(svc.on_session_closed("equity"))
 
         assert len(dispatcher.calls) == 1
         call = dispatcher.calls[0]
@@ -172,7 +172,7 @@ class TestDailyReportService:
         dispatcher = FakeNotificationDispatcher()
         svc = _make_service(ch_client=ch, notification_dispatcher=dispatcher)
 
-        asyncio.get_event_loop().run_until_complete(svc.on_session_closed("equity"))
+        asyncio.run(svc.on_session_closed("equity"))
 
         assert len(dispatcher.calls) == 1
         call = dispatcher.calls[0]

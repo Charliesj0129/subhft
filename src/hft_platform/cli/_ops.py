@@ -423,9 +423,11 @@ def cmd_ops_flatten(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if result.status == FlattenStatus.COMPLETED:
-        print(f"Flatten completed: fully_closed={result.fully_closed} "
-              f"partially_closed={result.partially_closed} "
-              f"failed={result.failed}")
+        print(
+            f"Flatten completed: fully_closed={result.fully_closed} "
+            f"partially_closed={result.partially_closed} "
+            f"failed={result.failed}"
+        )
         if result.failed_symbols:
             print(f"Failed symbols: {', '.join(result.failed_symbols)}")
     elif result.status == FlattenStatus.FAILED:
