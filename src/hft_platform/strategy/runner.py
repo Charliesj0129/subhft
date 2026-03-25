@@ -549,7 +549,8 @@ class StrategyRunner:
             if target_strat_id and strategy.strategy_id != target_strat_id:
                 continue
 
-            if self.strategy_governor.is_quarantined(strategy.strategy_id):
+            _governor = getattr(self, "strategy_governor", None)
+            if _governor is not None and _governor.is_quarantined(strategy.strategy_id):
                 self._emit_trace(
                     "strategy_quarantine_skip",
                     trace_id,
@@ -559,6 +560,25 @@ class StrategyRunner:
                         "symbol": getattr(event, "symbol", ""),
                     },
                 )
+                # Still update circuit breaker state when quarantine-skipping
+                _qsid = strategy.strategy_id
+                _rc = getattr(self, "_rust_circuit", None)
+                if _rc is not None:
+                    _new_state, _should_disable = _rc.record_failure(_qsid, timebase.now_ns())
+                    if _should_disable:
+                        strategy.enabled = False
+                else:
+                    _q_failures = self._failure_counts.get(_qsid, 0) + 1
+                    self._failure_counts[_qsid] = _q_failures
+                    _q_state = self._circuit_states.get(_qsid, "normal")
+                    _q_half = max(1, self._circuit_threshold // 2)
+                    if _q_state == "normal" and _q_failures >= _q_half:
+                        self._circuit_states[_qsid] = "degraded"
+                    if _q_failures >= self._circuit_threshold and _q_state != "halted":
+                        self._circuit_states[_qsid] = "halted"
+                        strategy.enabled = False
+                    elif _qsid not in self._circuit_states:
+                        self._circuit_states[_qsid] = "normal"
                 continue
 
             positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
@@ -589,16 +609,18 @@ class StrategyRunner:
                     },
                 )
                 intents = []
-                transition = self.strategy_governor.quarantine(strategy.strategy_id, reason="strategy_exception")
-                self._emit_trace(
-                    "strategy_quarantined",
-                    trace_id,
-                    {
-                        "strategy_id": strategy.strategy_id,
-                        "event_type": type(event).__name__,
-                        "reason": transition.reason,
-                    },
-                )
+                _gov = getattr(self, "strategy_governor", None)
+                if _gov is not None:
+                    transition = _gov.quarantine(strategy.strategy_id, reason="strategy_exception")
+                    self._emit_trace(
+                        "strategy_quarantined",
+                        trace_id,
+                        {
+                            "strategy_id": strategy.strategy_id,
+                            "event_type": type(event).__name__,
+                            "reason": transition.reason,
+                        },
+                    )
                 if self.metrics:
                     exc_m = getattr(self.metrics, "strategy_exceptions_total", None)
                     if exc_m:
@@ -660,15 +682,13 @@ class StrategyRunner:
                             logger.info("Strategy circuit recovered to normal", id=sid)
 
             # TrackGate per-event filtering (session phase enforcement)
-            if self.track_gate is not None and intents:
+            if getattr(self, "track_gate", None) is not None and intents:
                 from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
+
                 symbol = getattr(event, "symbol", "")
                 phase = self.track_gate.get_phase(symbol)
                 if phase == SessionPhase.CLOSE_ONLY:
-                    intents = [
-                        i for i in intents
-                        if i.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
-                    ]
+                    intents = [i for i in intents if i.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)]
                 elif phase in (SessionPhase.FORCE_FLAT, SessionPhase.CLOSED, SessionPhase.PRE_OPEN, SessionPhase.INIT):
                     intents = []
 

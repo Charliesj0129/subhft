@@ -279,7 +279,7 @@ class SystemBootstrapper:
         return {
             "host": os.getenv("HFT_REDIS_HOST") or os.getenv("REDIS_HOST", "redis"),
             "port": int(port_raw),
-            "password": os.getenv("HFT_REDIS_PASSWORD") or os.getenv("REDIS_PASSWORD") or "",
+            "password": os.getenv("HFT_REDIS_PASSWORD") or os.getenv("REDIS_PASSWORD") or os.getenv("REDIS_PASS") or "",
             "key": os.getenv("HFT_FEED_SESSION_OWNER_KEY", "feed:session:owner"),
             "owner_id": os.getenv("HFT_RUNTIME_INSTANCE_ID") or f"{os.getenv('HOSTNAME', 'unknown')}:{os.getpid()}",
             "ttl_s": max(30, int(os.getenv("HFT_FEED_SESSION_OWNER_TTL_S", "300"))),
@@ -906,9 +906,8 @@ class SystemBootstrapper:
         session_governor = None
         if os.environ.get("HFT_SESSION_GOVERNOR_ENABLED", "0") == "1":
             try:
-                from hft_platform.ops.session_governor import SessionGovernor
-
                 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
+                from hft_platform.ops.session_governor import SessionGovernor
 
                 session_governor = SessionGovernor(
                     evidence_writer=get_shared_autonomy_evidence_writer(),
@@ -925,7 +924,6 @@ class SystemBootstrapper:
         if os.environ.get("HFT_AUTONOMY_MONITOR_ENABLED", "0") == "1":
             try:
                 from hft_platform.ops.autonomy_monitor import AutonomyMonitor
-
                 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 
                 autonomy_monitor = AutonomyMonitor(
