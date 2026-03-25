@@ -51,7 +51,8 @@ class Position:
     net_qty: int = 0
     avg_price_scaled: int = 0  # Fixed-point integer (scaled by price scale)
 
-    realized_pnl_scaled: int = 0  # Fixed-point integer
+    realized_pnl_scaled: int = 0  # Fixed-point integer (net of fees)
+    gross_pnl_scaled: int = 0  # Fixed-point integer (before fees, closing fills only)
     fees_scaled: int = 0  # Fixed-point integer
 
     last_update_ts: int = 0
@@ -100,8 +101,10 @@ class Position:
         is_buy = fill.side == Side.BUY
         signed_fill_qty = fill_qty if is_buy else -fill_qty
 
-        # Accumulate fees (already scaled)
-        self.fees_scaled += fill.fee + fill.tax
+        # Accumulate fees (already scaled) and deduct from realized PnL
+        cost = fill.fee + fill.tax
+        self.fees_scaled += cost
+        self.realized_pnl_scaled -= cost  # Fees are a realized cost at execution time
 
         # Check if closing: signs are different
         current_sign = 1 if self.net_qty > 0 else -1 if self.net_qty < 0 else 0
@@ -122,7 +125,8 @@ class Position:
             else:  # Selling a LONG
                 pnl = (fill_price_scaled - self.avg_price_scaled) * close_qty * contract_multiplier
 
-            self.realized_pnl_scaled += pnl
+            self.gross_pnl_scaled += pnl   # Track gross separately for TCA decomposition
+            self.realized_pnl_scaled += pnl  # Net = gross already reduced by fee above
 
             # Update Net Qty
             self.net_qty += signed_fill_qty
@@ -295,6 +299,7 @@ class PositionStore:
             realized_pnl=realized_pnl_scaled,
             unrealized_pnl=0,
             delta_source="FILL",
+            fees=fill.fee + fill.tax,
         )
 
     def _on_fill_python(self, fill: FillEvent, key: str) -> PositionDelta:
@@ -334,6 +339,8 @@ class PositionStore:
             realized_pnl=pos.realized_pnl_scaled,
             unrealized_pnl=0,
             delta_source="FILL",
+            gross_pnl=pos.gross_pnl_scaled,
+            fees=fill.fee + fill.tax,
         )
 
     def _key(self, acc: str, strat: str, sym: str) -> str:
