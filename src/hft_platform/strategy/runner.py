@@ -8,7 +8,7 @@ from typing import Any, List
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import OrderIntent
+from hft_platform.contracts.strategy import IntentType, OrderIntent
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
@@ -103,6 +103,7 @@ class StrategyRunner:
         "_position_key_cache",
         "_strat_index",
         "_feature_compat_fail_fast",
+        "track_gate",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -199,6 +200,9 @@ class StrategyRunner:
                 )
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.warning("rust_circuit_breaker_init_failed", error=str(exc))
+        # TrackGate: per-event session phase filtering (set externally by SessionGovernor)
+        self.track_gate: Any = None  # TrackGate | None
+
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
         # Unit 10: Strategy-by-id index for O(1) targeted dispatch
@@ -654,6 +658,19 @@ class StrategyRunner:
                             self._failure_counts[sid] = 0
                             self._circuit_success_counts[sid] = 0
                             logger.info("Strategy circuit recovered to normal", id=sid)
+
+            # TrackGate per-event filtering (session phase enforcement)
+            if self.track_gate is not None and intents:
+                from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
+                symbol = getattr(event, "symbol", "")
+                phase = self.track_gate.get_phase(symbol)
+                if phase == SessionPhase.CLOSE_ONLY:
+                    intents = [
+                        i for i in intents
+                        if i.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                    ]
+                elif phase in (SessionPhase.FORCE_FLAT, SessionPhase.CLOSED, SessionPhase.PRE_OPEN, SessionPhase.INIT):
+                    intents = []
 
             duration = time.perf_counter_ns() - start
             if getattr(self, "_trace_sampler", None) is not None:

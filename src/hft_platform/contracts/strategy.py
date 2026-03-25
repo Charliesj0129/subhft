@@ -19,6 +19,7 @@ class IntentType(IntEnum):
     NEW = 0
     AMEND = 1
     CANCEL = 2
+    FORCE_FLAT = 3
 
 
 class StormGuardState(IntEnum):
