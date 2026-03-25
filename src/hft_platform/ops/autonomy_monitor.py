@@ -7,13 +7,12 @@ connectivity) and transitions the autonomy state machine accordingly.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Callable
 
 from structlog import get_logger
 
-from hft_platform.core import timebase
 from hft_platform.ops.autonomy import AutonomyMode, AutonomyTransition
 from hft_platform.ops.evidence import AutonomyEvidenceWriter
 

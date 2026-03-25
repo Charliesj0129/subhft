@@ -81,7 +81,8 @@ class AutonomyEvidenceWriter:
         }
         self._append_markdown(
             "manual_rearm_requirements.md",
-            f"- `{record['scope']}` reason=`{record['reason']}` metadata={json.dumps(record['metadata'], ensure_ascii=False)}",
+            f"- `{record['scope']}` reason=`{record['reason']}` "
+            f"metadata={json.dumps(record['metadata'], ensure_ascii=False)}",
         )
         self._update_runtime_state(record)
 

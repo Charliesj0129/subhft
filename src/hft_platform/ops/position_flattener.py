@@ -10,7 +10,7 @@ from typing import Any
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.core import timebase
 
 logger = get_logger("ops.position_flattener")
