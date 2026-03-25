@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from prometheus_client import Gauge
@@ -29,9 +30,28 @@ startup_recon_status = Gauge(
     "Startup position reconciliation status (0=not_run, 1=pass, 2=discrepancy, 3=error)",
 )
 startup_recon_status.set(0)
+startup_recon_positions_loaded = Gauge(
+    "startup_recon_positions_loaded",
+    "Number of symbols loaded into PositionStore at startup",
+)
+startup_recon_auto_corrected = Gauge(
+    "startup_recon_auto_corrected",
+    "Number of position discrepancies auto-corrected at startup",
+)
 
 _BLOCK_ENV = "HFT_STARTUP_RECON_BLOCK"
 _CHECKPOINT_PATH_ENV = "HFT_POSITION_CHECKPOINT_PATH"
+
+
+@dataclass
+class RecoveryResult:
+    """Outcome of startup position recovery."""
+
+    source: str  # "dual", "broker_only", "checkpoint_only", "empty"
+    positions_loaded: int = 0
+    auto_corrected: int = 0
+    halted: bool = False
+    mismatches: list[dict] = field(default_factory=list)
 
 
 def _load_checkpoint(path: str) -> Dict[str, int]:
@@ -65,21 +85,28 @@ class StartupPositionVerifier:
         *,
         blocking: bool | None = None,
         checkpoint_path: str | None = None,
+        qty_threshold: int | None = None,
+        futures_qty_threshold: int | None = None,
     ) -> None:
         self.client = client
         self.store = position_store
 
-        # Resolve blocking mode from arg or env
         if blocking is not None:
             self.blocking = blocking
         else:
             self.blocking = os.environ.get(_BLOCK_ENV, "0") == "1"
 
-        # Resolve checkpoint path from arg or env
         self.checkpoint_path = checkpoint_path or os.environ.get(_CHECKPOINT_PATH_ENV)
 
+        self._qty_threshold = qty_threshold if qty_threshold is not None else int(
+            os.environ.get("HFT_STARTUP_RECON_QTY_THRESHOLD", "10")
+        )
+        self._futures_qty_threshold = futures_qty_threshold if futures_qty_threshold is not None else int(
+            os.environ.get("HFT_STARTUP_RECON_FUTURES_QTY_THRESHOLD", "2")
+        )
+
         self.discrepancies: List[PositionDiscrepancy] = []
-        self.status: int = 0  # mirrors the gauge
+        self.status: int = 0
 
     async def verify(self) -> List[PositionDiscrepancy]:
         """Run the one-shot verification.
