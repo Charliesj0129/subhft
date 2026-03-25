@@ -22,3 +22,11 @@ prometheus_port: 9090
 replay:
   start_date: null
   end_date: null
+
+tca:
+  enabled: false
+  report_times:
+    - "13:50"
+    - "05:05"
+  output_dir: "reports/tca"
+  retention_days: 90
