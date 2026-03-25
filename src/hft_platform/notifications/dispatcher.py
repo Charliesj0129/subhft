@@ -489,3 +489,45 @@ class NotificationDispatcher:
             error=error,
         )
         await self._sender.send(msg, critical=False)
+
+    async def notify_position_recovery(
+        self,
+        *,
+        source: str,
+        loaded: int,
+        corrected: int,
+        mismatches: list[dict],
+    ) -> None:
+        """Notify operator of successful position recovery.
+
+        Args:
+            source: Recovery source (e.g. "dual", "checkpoint", "broker").
+            loaded: Number of symbols loaded from source.
+            corrected: Number of mismatches that were corrected.
+            mismatches: List of correction details.
+        """
+        msg = templates.render_position_recovery(
+            source=source, loaded=loaded, corrected=corrected, mismatches=mismatches,
+        )
+        logger.info("dispatcher.notify_position_recovery", source=source, loaded=loaded)
+        await self._sender.send(msg, critical=False)
+
+    async def notify_position_recovery_failed(
+        self,
+        *,
+        source: str,
+        reason: str,
+        mismatches: list[dict],
+    ) -> None:
+        """Notify operator of failed position recovery (HALT).
+
+        Args:
+            source: Recovery source (e.g. "dual", "checkpoint", "broker").
+            reason: Human-readable reason for the failure.
+            mismatches: List of mismatch details for diagnostics.
+        """
+        msg = templates.render_position_recovery_failed(
+            source=source, reason=reason, mismatches=mismatches,
+        )
+        logger.warning("dispatcher.notify_position_recovery_failed", source=source, reason=reason)
+        await self._sender.send(msg, critical=True)
