@@ -69,6 +69,39 @@ class PlatformDegradeController:
             transition.record_transition(self.metrics)
         return transition
 
+    def exit_reduce_only(self, *, reason: str) -> AutonomyTransition:
+        if not self.reduce_only_active:
+            return AutonomyTransition.enter_platform_reduce_only(
+                reason,
+                from_mode=AutonomyMode.NORMAL,
+            )
+
+        transition = AutonomyTransition.exit_platform_reduce_only(
+            reason,
+            from_mode=AutonomyMode.PLATFORM_REDUCE_ONLY,
+        )
+        self.reduce_only_active = False
+        self.last_transition = transition
+        self._reference_positions = {}
+        self._reference_close_reservations = {}
+        self._sync_metrics()
+        logger.info(
+            "platform_reduce_only_exited",
+            reason=reason,
+            from_mode=transition.from_mode.value,
+            to_mode=transition.to_mode.value,
+        )
+        if self.evidence_writer is not None:
+            self.evidence_writer.record_transition(
+                scope="platform",
+                mode=transition.to_mode.value,
+                reason=transition.reason,
+                manual_rearm_required=False,
+            )
+        if self.metrics is not None:
+            transition.record_transition(self.metrics)
+        return transition
+
     def allow_open(self) -> bool:
         return not self.reduce_only_active
 
