@@ -15,6 +15,7 @@ import structlog
 
 from hft_platform.contracts.strategy import StormGuardState
 from hft_platform.core import timebase
+from hft_platform.ops.flatten_gate import FlattenGate
 
 logger = structlog.get_logger("autonomy_monitor")
 
@@ -48,6 +49,7 @@ class AutonomyMonitor:
         "_position_flattener",
         "_broker_client",
         "_notification_dispatcher",
+        "_flatten_gate",
         "_interval_s",
         "_heartbeat_interval_s",
         "_running",
@@ -70,6 +72,7 @@ class AutonomyMonitor:
         position_flattener: Any | None = None,
         broker_client: Any | None = None,
         notification_dispatcher: Any | None = None,
+        flatten_gate: FlattenGate | None = None,
         interval_s: float = 5.0,
         heartbeat_interval_s: float = 1800.0,
     ) -> None:
@@ -81,6 +84,7 @@ class AutonomyMonitor:
         self._position_flattener = position_flattener
         self._broker_client = broker_client
         self._notification_dispatcher = notification_dispatcher
+        self._flatten_gate = flatten_gate
         self._interval_s = interval_s
         self._heartbeat_interval_s = heartbeat_interval_s
         self._running: bool = False
@@ -141,6 +145,8 @@ class AutonomyMonitor:
                     await self._execute(decisions)
                     self._apply_cooldowns(decisions)
                 await self._maybe_heartbeat()
+                if self._flatten_gate is not None and self._position_flattener is not None:
+                    await _handle_flatten_request(self._flatten_gate, self._position_flattener)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -343,3 +349,39 @@ class AutonomyMonitor:
             )
         except Exception:
             pass
+
+
+async def _handle_flatten_request(gate: FlattenGate, flattener: Any) -> None:
+    """Poll FlattenGate and execute if a PENDING request exists.
+
+    Called from AutonomyMonitor._monitor_loop each iteration.
+    Claims the request, dispatches to the appropriate flattener method,
+    and writes back the result via gate.complete() or gate.fail().
+    """
+    req = gate.claim()
+    if req is None:
+        return
+
+    try:
+        if req.scope == "track" and req.scope_id:
+            result = await flattener.flatten_track(req.scope_id, [])
+        elif req.scope == "strategy" and req.scope_id:
+            result = await flattener.flatten_strategy(req.scope_id)
+        else:
+            result = await flattener.flatten_all()
+
+        gate.complete(
+            fully_closed=result.fully_closed,
+            partially_closed=result.partially_closed,
+            failed=result.failed,
+            failed_symbols=result.failed_symbols,
+        )
+        logger.info(
+            "flatten_gate_executed",
+            scope=req.scope,
+            fully_closed=result.fully_closed,
+            failed=result.failed,
+        )
+    except Exception as exc:
+        gate.fail(str(exc))
+        logger.error("flatten_gate_error", scope=req.scope, error=str(exc))
