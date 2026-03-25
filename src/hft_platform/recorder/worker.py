@@ -319,6 +319,12 @@ class RecorderService:
                 memory_guard=self.memory_guard,
                 health_tracker=self.health_tracker,
             ),
+            "daily_reports": Batcher(
+                "hft.daily_reports",
+                writer=self.writer,
+                memory_guard=self.memory_guard,
+                health_tracker=self.health_tracker,
+            ),
         }
 
         # Register all batchers with memory guard
