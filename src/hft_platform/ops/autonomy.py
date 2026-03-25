@@ -12,6 +12,8 @@ _ALLOWED_REASON_CODES = frozenset(
         "feed_reconnect_pending",
         "feed_reconnect_unhealthy",
         "manual_operator",
+        "pnl_peak_drawdown",
+        "pnl_soft_limit",
         "queue_depth_exceeded",
         "reconciliation_drift",
         "redis_unhealthy",
