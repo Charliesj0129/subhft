@@ -107,6 +107,7 @@ class HFTSystem:
         self.gateway_service = self.registry.gateway_service
         self.session_governor = getattr(self.registry, "session_governor", None)
         self.autonomy_monitor = getattr(self.registry, "autonomy_monitor", None)
+        self.daily_report_service = getattr(self.registry, "daily_report_service", None)
         self.evidence_writer = getattr(self.registry, "evidence_writer", None) or get_shared_autonomy_evidence_writer()
         self.platform_degrade_controller = (
             getattr(self.registry, "platform_degrade_controller", None) or get_shared_platform_degrade_controller()

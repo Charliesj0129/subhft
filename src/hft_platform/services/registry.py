@@ -63,3 +63,4 @@ class ServiceRegistry:
     manual_rearm_service: Optional[Any] = field(default=None)
     session_governor: Optional[Any] = field(default=None)
     autonomy_monitor: Optional[Any] = field(default=None)
+    daily_report_service: Optional[Any] = field(default=None)
