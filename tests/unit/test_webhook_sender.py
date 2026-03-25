@@ -28,7 +28,7 @@ def sender():
 
 
 @pytest.mark.asyncio
-async def test_webhook_send_posts_json(sender) -> None:
+async def test_webhook_send_posts_json() -> None:
     """Verify POST sends JSON payload {"content": text} to the configured URL."""
     mock_resp = AsyncMock()
     mock_resp.status = 200
@@ -45,9 +45,19 @@ async def test_webhook_send_posts_json(sender) -> None:
     mock_aiohttp.ClientSession = mock_client_session_cls
     mock_aiohttp.ClientTimeout = MagicMock()
 
-    # Patch the import itself — webhook.py does `import aiohttp` lazily
-    with patch.dict("sys.modules", {"aiohttp": mock_aiohttp}):
-        result = await sender.send("HALT: risk limit breached")
+    # Patch sys.modules AND reimport webhook so it picks up the mock aiohttp.
+    # This is needed because in full test suite runs, other tests may have
+    # already caused aiohttp stub to be cached differently in sys.modules.
+    import importlib
+    import sys
+
+    with patch.dict(sys.modules, {"aiohttp": mock_aiohttp}):
+        # Re-import webhook module to force fresh aiohttp resolution
+        import hft_platform.notifications.webhook as webhook_mod
+
+        importlib.reload(webhook_mod)
+        fresh_sender = webhook_mod.WebhookSender(url=WEBHOOK_URL, timeout=5.0)
+        result = await fresh_sender.send("HALT: risk limit breached")
 
     assert result is True
     mock_session.post.assert_called_once()
