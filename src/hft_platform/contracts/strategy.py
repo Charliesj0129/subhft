@@ -19,6 +19,7 @@ class IntentType(IntEnum):
     NEW = 0
     AMEND = 1
     CANCEL = 2
+    FORCE_FLAT = 3
 
 
 class StormGuardState(IntEnum):
@@ -55,6 +56,9 @@ class OrderIntent:
     idempotency_key: str = ""  # Caller-supplied dedup key; empty = no dedup
     ttl_ns: int = 0  # Expiry in nanoseconds from enqueue; 0 = no expiry
 
+    # TCA: decision-time price capture (scaled int x10000)
+    decision_price: int = 0  # LOB mid-price at signal time (x10000)
+
 
 @dataclass(slots=True)
 class RiskDecision:
@@ -79,3 +83,5 @@ class OrderCommand:
     deadline_ns: int
     storm_guard_state: StormGuardState
     created_ns: int = 0
+    decision_price: int = 0  # Passthrough from OrderIntent
+    arrival_price: int = 0   # Stamped by OrderAdapter at submit time

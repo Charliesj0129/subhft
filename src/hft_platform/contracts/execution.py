@@ -51,6 +51,8 @@ class FillEvent:
     tax: int  # Fixed-point (x10000)
     ingest_ts_ns: int
     match_ts_ns: int
+    decision_price: int = 0   # Mid-price at signal time (x10000)
+    arrival_price: int = 0    # Mid-price at order submit time (x10000)
 
 
 @dataclass(slots=True)
@@ -67,3 +69,5 @@ class PositionDelta:
     realized_pnl: int  # Fixed-point
     unrealized_pnl: int  # Fixed-point
     delta_source: str  # "FILL", "RECONCILE", "MARK"
+    gross_pnl: int = 0   # Gross PnL before fees (x10000)
+    fees: int = 0         # Total fees for this fill (x10000)
