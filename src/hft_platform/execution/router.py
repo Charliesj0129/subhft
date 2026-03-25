@@ -59,13 +59,22 @@ class ExecutionRouter:
         position_store: PositionStore,
         terminal_handler: Union[Callable[[str, str], None], object],
         risk_engine: Optional[object] = None,
+        order_adapter: Optional[object] = None,
+        fee_calculator: Optional[object] = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
-        self.normalizer = ExecutionNormalizer(raw_queue, order_id_map)
+        self._order_id_map = order_id_map
+        self.normalizer = ExecutionNormalizer(
+            raw_queue,
+            order_id_map,
+            fee_calculator=fee_calculator,
+        )
         self.position_store = position_store
         self.terminal_handler = terminal_handler
         self._risk_engine = risk_engine
+        self._order_adapter = order_adapter
+        self._fee_calculator = fee_calculator
         self.running = False
         self.metrics = MetricsRegistry.get()
 
@@ -106,7 +115,22 @@ class ExecutionRouter:
                                     )
 
                 elif raw.topic == "deal":
-                    fill_event = self.normalizer.normalize_fill(raw)
+                    order_cmd = None
+                    if self._order_adapter is not None:
+                        order_key = ""
+                        if hasattr(raw, "order_id"):
+                            order_key = self._order_id_map.get(raw.order_id, "")
+                        if not order_key:
+                            for attr in ("order_id", "id", "ordno", "seqno"):
+                                val = getattr(raw, attr, None) or (
+                                    raw.data.get(attr) if isinstance(getattr(raw, "data", None), dict) else None
+                                )
+                                if val and str(val) in self._order_id_map:
+                                    order_key = self._order_id_map[str(val)]
+                                    break
+                        if order_key:
+                            order_cmd = self._order_adapter.get_inflight(order_key)
+                    fill_event = self.normalizer.normalize_fill(raw, order_cmd)
                     if fill_event:
                         if fill_event.strategy_id == "UNKNOWN":
                             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
