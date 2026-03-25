@@ -16,6 +16,7 @@ import structlog
 from hft_platform.contracts.strategy import StormGuardState
 from hft_platform.core import timebase
 from hft_platform.ops.flatten_gate import FlattenGate
+from hft_platform.ops.margin_monitor import MarginMonitor
 
 logger = structlog.get_logger("autonomy_monitor")
 
@@ -50,6 +51,7 @@ class AutonomyMonitor:
         "_broker_client",
         "_notification_dispatcher",
         "_flatten_gate",
+        "_margin_monitor",
         "_interval_s",
         "_heartbeat_interval_s",
         "_running",
@@ -73,6 +75,7 @@ class AutonomyMonitor:
         broker_client: Any | None = None,
         notification_dispatcher: Any | None = None,
         flatten_gate: FlattenGate | None = None,
+        margin_monitor: MarginMonitor | None = None,
         interval_s: float = 5.0,
         heartbeat_interval_s: float = 1800.0,
     ) -> None:
@@ -85,6 +88,7 @@ class AutonomyMonitor:
         self._broker_client = broker_client
         self._notification_dispatcher = notification_dispatcher
         self._flatten_gate = flatten_gate
+        self._margin_monitor = margin_monitor
         self._interval_s = interval_s
         self._heartbeat_interval_s = heartbeat_interval_s
         self._running: bool = False
@@ -147,11 +151,44 @@ class AutonomyMonitor:
                 await self._maybe_heartbeat()
                 if self._flatten_gate is not None and self._position_flattener is not None:
                     await _handle_flatten_request(self._flatten_gate, self._position_flattener)
+                await self._check_margin()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.error("autonomy_monitor_error", error=str(exc))
             await asyncio.sleep(self._interval_s)
+
+    # ------------------------------------------------------------------
+    # Margin monitoring
+    # ------------------------------------------------------------------
+
+    async def _check_margin(self) -> None:
+        """Poll margin monitor and act on threshold breaches."""
+        if self._margin_monitor is None:
+            return
+
+        now_ns = timebase.now_ns()
+        result = await self._margin_monitor.check(now_ns)
+        if result is None:
+            return
+
+        if result.action == "critical":
+            self._platform_degrade.enter_reduce_only(
+                reason=f"margin_critical_{result.ratio:.0%}",
+            )
+            if self._notification_dispatcher:
+                await self._notification_dispatcher.notify_margin_critical(
+                    ratio=result.ratio,
+                    used=result.margin_used,
+                    available=result.margin_available,
+                )
+        elif result.action == "warn":
+            if self._notification_dispatcher:
+                await self._notification_dispatcher.notify_margin_warning(
+                    ratio=result.ratio,
+                    used=result.margin_used,
+                    available=result.margin_available,
+                )
 
     # ------------------------------------------------------------------
     # Evaluation helpers

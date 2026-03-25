@@ -414,6 +414,39 @@ def render_backup_success(
     )
 
 
+def render_margin_warning(ratio: float, used: int, available: int) -> str:
+    """Margin utilization has reached the warning threshold.
+
+    Args:
+        ratio: Margin utilization ratio (0.0-1.0+).
+        used: Margin used in NTD.
+        available: Margin available in NTD.
+
+    Returns:
+        Formatted margin warning alert string.
+    """
+    return f"⚠️ 保證金警告\n使用率: {ratio:.1%}\n已用: {used:,} NTD\n可用: {available:,} NTD"
+
+
+def render_margin_critical(ratio: float, used: int, available: int) -> str:
+    """Margin utilization has reached critical threshold; reduce-only activated.
+
+    Args:
+        ratio: Margin utilization ratio (0.0-1.0+).
+        used: Margin used in NTD.
+        available: Margin available in NTD.
+
+    Returns:
+        Formatted margin critical alert string.
+    """
+    return (
+        f"🚨 保證金危急 — 已進入 reduce-only\n"
+        f"使用率: {ratio:.1%}\n"
+        f"已用: {used:,} NTD\n"
+        f"可用: {available:,} NTD"
+    )
+
+
 def render_backup_failed(
     *,
     date_str: str,
