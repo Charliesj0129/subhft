@@ -201,6 +201,10 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_BACKUP_ENABLED`        | `0`                    | `1` = enable automated daily ClickHouse backup |
 | `HFT_BACKUP_RETAIN_DAYS`    | `30`                   | Number of daily backups to retain               |
 | `CH_BACKUP_PATH`            | `./backups/clickhouse`  | Host path for ClickHouse backup volume mount    |
+| `HFT_STARTUP_RECON_ENABLED`              | `1`   | Enable startup position recovery            |
+| `HFT_STARTUP_RECON_QTY_THRESHOLD`        | `10`  | Stock discrepancy auto-correct threshold    |
+| `HFT_STARTUP_RECON_FUTURES_QTY_THRESHOLD`| `2`   | Futures discrepancy auto-correct threshold  |
+| `HFT_CHECKPOINT_ENABLED`                 | `1`   | Enable periodic position checkpoint writing |
 
 ## 🎨 Coding Style (Strict)
 
