@@ -1,8 +1,7 @@
 """Daily PnL report: aggregation, Telegram formatting, and ClickHouse persistence."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from structlog import get_logger
 
@@ -62,7 +61,7 @@ class DailyPnLReport:
         lines = [
             f"📊 Daily Summary — {data.report_date}",
             "",
-            f"Sessions: futures_day ✅",
+            "Sessions: futures_day ✅",
             f"P&L: {data.realized_pnl_ntd:+d} NTD (realized) / {data.unrealized_pnl_ntd:+d} NTD (unrealized)",
             f"Orders: {data.orders_sent} sent / {data.orders_filled} filled / {data.orders_cancelled} cancelled",
             f"Fills: avg slippage {data.avg_slippage_ticks:.1f} 點/筆, cost {data.slippage_cost_ntd} NTD",

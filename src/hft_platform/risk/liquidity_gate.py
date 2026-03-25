@@ -1,10 +1,13 @@
 """Liquidity gate validator: rejects new orders when spread is abnormally wide."""
 from __future__ import annotations
+
 from typing import Any, Tuple
+
 from structlog import get_logger
+
 from hft_platform.contracts.strategy import IntentType, OrderIntent
-from hft_platform.risk.validators import RiskValidator
 from hft_platform.core import timebase
+from hft_platform.risk.validators import RiskValidator
 
 logger = get_logger("risk.liquidity_gate")
 

@@ -1,8 +1,11 @@
 """Per-fill slippage tracking: captures decision-time mid-price vs fill price."""
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Optional
+
 from structlog import get_logger
+
 from hft_platform.contracts.strategy import Side
 
 logger = get_logger("execution.slippage_tracker")
