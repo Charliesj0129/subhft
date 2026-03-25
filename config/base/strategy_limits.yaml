@@ -16,6 +16,9 @@ strategies:
   MM_ALPHA_V1:
     max_position: 1                  # Max 1 lot per symbol
     max_order_qty: 1                 # 1 lot per order (conservative)
+  OPPORTUNISTIC_MM_TXFD6:
+    max_position: 5                  # Max 5 lots (Challenger recommendation)
+    max_order_qty: 1                 # 1 lot per order
 
 intraday_pnl:
   soft_limit_ntd: 500
