@@ -13,6 +13,7 @@ from typing import Any
 import structlog
 
 from hft_platform.config.loader import load_settings
+from hft_platform.ops.flatten_gate import FlattenGate, FlattenRequest, FlattenStatus
 from hft_platform.ops.manual_rearm import ManualRearmGate
 
 logger = structlog.get_logger(__name__)
@@ -373,21 +374,60 @@ def cmd_ops_autonomy_status(args: argparse.Namespace) -> None:
     print(json.dumps(gate.snapshot(), indent=2, ensure_ascii=False))
 
 
+def _flatten_via_gate(
+    scope: str,
+    scope_id: str | None,
+    deadline: int,
+    gate: FlattenGate | None = None,
+    poll_timeout_s: float = 300.0,
+) -> FlattenRequest | None:
+    """Submit a flatten request via FlattenGate and poll for result.
+
+    Returns the final FlattenRequest on completion/failure, or None on timeout.
+    """
+    if gate is None:
+        gate = FlattenGate()
+
+    gate.submit(scope=scope, scope_id=scope_id, deadline_s=deadline)
+    print(f"Flatten request submitted: scope={scope} id={scope_id} deadline={deadline}s")
+    print("Waiting for running engine to process...")
+
+    import time
+
+    start = time.monotonic()
+    while (time.monotonic() - start) < poll_timeout_s:
+        req = gate.read_request()
+        if req is not None and req.status in (
+            FlattenStatus.COMPLETED,
+            FlattenStatus.FAILED,
+        ):
+            return req
+        time.sleep(0.5)
+
+    print("Timeout: engine did not process flatten request within poll window.")
+    return None
+
+
 def cmd_ops_flatten(args: argparse.Namespace) -> None:
-    """Emergency position flattening."""
+    """Emergency position flattening via file-based IPC."""
     scope = getattr(args, "scope", "all")
     scope_id = getattr(args, "scope_id", None)
     deadline = getattr(args, "deadline", 120)
 
     logger.info("ops_flatten_start", scope=scope, scope_id=scope_id, deadline=deadline)
 
-    # Minimal bootstrap — create a flattener with mock/real dependencies
-    # For now, just print usage since full bootstrap requires broker connection
-    try:
-        from hft_platform.ops.position_flattener import FlattenResult, PositionFlattener  # noqa: F401
-    except ImportError:
-        print("Warning: PositionFlattener not yet available (pending full system wiring).")
+    result = _flatten_via_gate(scope=scope, scope_id=scope_id, deadline=deadline)
 
-    print(f"Flatten scope={scope} id={scope_id} deadline={deadline}s")
-    print("Note: Full flatten requires running HFT system. Use this as emergency override.")
-    # TODO: Wire to actual PositionFlattener with broker bootstrap
+    if result is None:
+        print("Flatten request timed out. Check if the HFT engine is running.")
+        sys.exit(1)
+
+    if result.status == FlattenStatus.COMPLETED:
+        print(f"Flatten completed: fully_closed={result.fully_closed} "
+              f"partially_closed={result.partially_closed} "
+              f"failed={result.failed}")
+        if result.failed_symbols:
+            print(f"Failed symbols: {', '.join(result.failed_symbols)}")
+    elif result.status == FlattenStatus.FAILED:
+        print(f"Flatten failed: {result.error}")
+        sys.exit(1)
