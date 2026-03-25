@@ -279,7 +279,7 @@ class SystemBootstrapper:
         return {
             "host": os.getenv("HFT_REDIS_HOST") or os.getenv("REDIS_HOST", "redis"),
             "port": int(port_raw),
-            "password": os.getenv("HFT_REDIS_PASSWORD") or os.getenv("REDIS_PASSWORD") or os.getenv("REDIS_PASS") or "",
+            "password": os.getenv("HFT_REDIS_PASSWORD") or os.getenv("REDIS_PASSWORD") or "",
             "key": os.getenv("HFT_FEED_SESSION_OWNER_KEY", "feed:session:owner"),
             "owner_id": os.getenv("HFT_RUNTIME_INSTANCE_ID") or f"{os.getenv('HOSTNAME', 'unknown')}:{os.getpid()}",
             "ttl_s": max(30, int(os.getenv("HFT_FEED_SESSION_OWNER_TTL_S", "300"))),
