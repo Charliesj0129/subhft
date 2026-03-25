@@ -5,6 +5,7 @@ import os
 import socket
 import threading
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
@@ -33,6 +34,7 @@ from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.services.registry import ServiceRegistry
 from hft_platform.strategy.runner import StrategyRunner
+from hft_platform.tca.fee_calculator import FeeCalculator
 
 logger = get_logger("bootstrap")
 
@@ -707,6 +709,14 @@ class SystemBootstrapper:
         # 2. Shared State
         position_store = PositionStore()
         order_id_map: Dict[str, str] = {}
+        _fee_schedule_path = os.environ.get("HFT_FEE_SCHEDULE_PATH", "config/base/fees/futures.yaml")
+        _fee_calculator = None
+        if Path(_fee_schedule_path).exists():
+            try:
+                _fee_calculator = FeeCalculator.from_yaml(_fee_schedule_path)
+                logger.info("fee_calculator_loaded", path=_fee_schedule_path)
+            except Exception:
+                logger.warning("fee_calculator_load_failed", path=_fee_schedule_path)
         # DriftBurst detector for StormGuard (opt-in via env var)
         drift_burst_detector = None
         if os.getenv("HFT_STORMGUARD_DRIFT_BURST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
@@ -844,6 +854,18 @@ class SystemBootstrapper:
             _broker_codec = ShioajiOrderCodec()
 
         order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec)
+
+        def _get_mid_price(symbol: str) -> int:
+            try:
+                l1 = md_service.lob.get_l1_scaled(symbol)
+                if l1 is not None:
+                    return l1[3] // 2
+            except Exception:
+                pass
+            return 0
+
+        order_adapter._mid_price_fn = _get_mid_price
+
         execution_gateway = ExecutionGateway(order_adapter)
         exec_service = ExecutionRouter(
             bus,
@@ -851,6 +873,8 @@ class SystemBootstrapper:
             order_id_map,
             position_store,
             execution_gateway.on_terminal_state,
+            order_adapter=order_adapter,
+            fee_calculator=_fee_calculator,
         )
         risk_engine = RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider, lob_engine=md_service.lob)
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
