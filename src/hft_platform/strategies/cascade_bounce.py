@@ -42,8 +42,12 @@ _DEFAULT_DETECT_WINDOW_NS: int = 600_000_000_000  # 600s
 _DEFAULT_HOLD_NS: int = 300_000_000_000  # 300s
 _DEFAULT_STOP_LOSS_BPS: int = 15
 _DEFAULT_COOLDOWN_NS: int = 5_000_000_000  # 5s after detection before entry
-_DEFAULT_SESSION_START_OFFSET_NS: int = 30 * 60 * 1_000_000_000  # 30 min after open
-_DEFAULT_SESSION_END_BEFORE_CLOSE_NS: int = 10 * 60 * 1_000_000_000  # 10 min before close
+
+# Wall-clock session boundaries (seconds since midnight, local time)
+# TMFD6 regular session: 08:45-13:45 TST. Active window: 09:15-13:35.
+_DEFAULT_SESSION_START_SEC: int = 9 * 3600 + 15 * 60   # 09:15 = 33300
+_DEFAULT_SESSION_END_SEC: int = 13 * 3600 + 35 * 60    # 13:35 = 48900
+_UTC_OFFSET_SEC: int = 8 * 3600  # UTC+8 for Asia/Taipei (TAIFEX)
 
 
 class _PriceEntry:
@@ -73,10 +77,12 @@ class CascadeBounceStrategy(BaseStrategy):
         Maximum adverse move (bps) before stop-loss exit.
     cooldown_ns : int
         Cooldown (ns) after move detection before entry.
-    session_start_offset_ns : int
-        Offset from first event (ns) before strategy activates (skip opening).
-    session_end_before_close_ns : int
-        Stop trading this many ns before session end.
+    session_start_sec : int
+        Earliest wall-clock second-of-day (local) for new entries.
+    session_end_sec : int
+        Latest wall-clock second-of-day (local) for new entries.
+    utc_offset_sec : int
+        UTC offset in seconds for exchange timestamps (default: +28800 for Asia/Taipei).
     **kwargs
         Passed through to BaseStrategy.
     """
@@ -87,15 +93,15 @@ class CascadeBounceStrategy(BaseStrategy):
         "_hold_ns",
         "_stop_loss_bps",
         "_cooldown_ns",
-        "_session_start_offset_ns",
-        "_session_end_before_close_ns",
+        "_session_start_sec",
+        "_session_end_sec",
+        "_utc_offset_sec",
         "_price_buf",
         "_state",
         "_entry_ts_ns",
         "_entry_mid_x2",
         "_direction",
         "_next_allowed_ts",
-        "_session_first_ts",
     )
 
     def __init__(
@@ -106,8 +112,9 @@ class CascadeBounceStrategy(BaseStrategy):
         hold_ns: int = _DEFAULT_HOLD_NS,
         stop_loss_bps: int = _DEFAULT_STOP_LOSS_BPS,
         cooldown_ns: int = _DEFAULT_COOLDOWN_NS,
-        session_start_offset_ns: int = _DEFAULT_SESSION_START_OFFSET_NS,
-        session_end_before_close_ns: int = _DEFAULT_SESSION_END_BEFORE_CLOSE_NS,
+        session_start_sec: int = _DEFAULT_SESSION_START_SEC,
+        session_end_sec: int = _DEFAULT_SESSION_END_SEC,
+        utc_offset_sec: int = _UTC_OFFSET_SEC,
         **kwargs: object,
     ) -> None:
         super().__init__(strategy_id=strategy_id, **kwargs)
@@ -116,8 +123,9 @@ class CascadeBounceStrategy(BaseStrategy):
         self._hold_ns: int = hold_ns
         self._stop_loss_bps: int = stop_loss_bps
         self._cooldown_ns: int = cooldown_ns
-        self._session_start_offset_ns: int = session_start_offset_ns
-        self._session_end_before_close_ns: int = session_end_before_close_ns
+        self._session_start_sec: int = session_start_sec
+        self._session_end_sec: int = session_end_sec
+        self._utc_offset_sec: int = utc_offset_sec
 
         # Per-symbol state
         self._price_buf: dict[str, deque[_PriceEntry]] = {}
@@ -126,7 +134,6 @@ class CascadeBounceStrategy(BaseStrategy):
         self._entry_mid_x2: dict[str, int] = {}
         self._direction: dict[str, int] = {}  # +1 = long, -1 = short
         self._next_allowed_ts: dict[str, int] = {}
-        self._session_first_ts: dict[str, int] = {}
 
     def _init_symbol(self, symbol: str) -> None:
         """Lazily initialize per-symbol state."""
@@ -137,7 +144,6 @@ class CascadeBounceStrategy(BaseStrategy):
             self._entry_mid_x2[symbol] = 0
             self._direction[symbol] = 0
             self._next_allowed_ts[symbol] = 0
-            self._session_first_ts[symbol] = 0
 
     def on_stats(self, event: LOBStatsEvent) -> None:
         """Process LOB stats: maintain price window, detect moves, manage position."""
@@ -151,10 +157,6 @@ class CascadeBounceStrategy(BaseStrategy):
         now_ns = event.ts
         if now_ns <= 0:
             now_ns = timebase.now_ns()
-
-        # Track session start
-        if self._session_first_ts[symbol] == 0:
-            self._session_first_ts[symbol] = now_ns
 
         # Update price buffer (expire old entries)
         buf = self._price_buf[symbol]
@@ -170,13 +172,14 @@ class CascadeBounceStrategy(BaseStrategy):
         elif state == "idle":
             self._check_entry(symbol, now_ns, mid_x2, event)
 
-    def _in_session(self, symbol: str, now_ns: int) -> bool:
-        """Check if we're within the active trading session (skip opening)."""
-        first_ts = self._session_first_ts[symbol]
-        if first_ts == 0:
-            return False
-        elapsed = now_ns - first_ts
-        return elapsed >= self._session_start_offset_ns
+    def _in_session(self, now_ns: int) -> bool:
+        """Check if wall-clock time is within active trading window.
+
+        Converts the UTC epoch timestamp to local second-of-day using
+        the configured UTC offset (default: +8h for Asia/Taipei).
+        """
+        sec_of_day = ((now_ns // 1_000_000_000) + self._utc_offset_sec) % 86400
+        return self._session_start_sec <= sec_of_day <= self._session_end_sec
 
     def _check_entry(
         self,
@@ -190,8 +193,8 @@ class CascadeBounceStrategy(BaseStrategy):
         if now_ns < self._next_allowed_ts[symbol]:
             return
 
-        # Session gate
-        if not self._in_session(symbol, now_ns):
+        # Session gate (wall-clock time)
+        if not self._in_session(now_ns):
             return
 
         # Need sufficient price history

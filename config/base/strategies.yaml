@@ -15,11 +15,26 @@ strategies:
       spread_threshold_bps: 2.5
       tick_size_ratio_pct: 50
 
+  # --- OpportunisticMM on TMFD6 (微台指) ---
+  # Spread-gated MM on TMFD6: only quotes when spread > 1.67 bps (~5 pts at 30K)
+  # Research: Round 16, outputs/team_artifacts/alpha-research/round16_tmfd6_feasibility.md
+  # Economics: RT cost 4 pts (40 NTD), median spread 7 pts, 78% tradeable time
+  # Gross edge: 3 pts/RT when quoting at BBO during wide-spread events
+  # Realistic P&L estimate: 1,000-5,000 NTD/day (Challenger-adjusted)
+  - id: "OPPORTUNISTIC_MM_TMFD6"
+    module: "hft_platform.strategies.opportunistic_mm"
+    class: "OpportunisticMM"
+    enabled: false  # Enable after shadow validation
+    product_type: "FUT"
+    symbols: ["TMFD6"]
+    params:
+      spread_threshold_bps: 1.67  # 5 pts / 30000 * 10000 = 1.67 bps (break-even = 4 pts)
+
   # --- Cascade Bounce Strategy (Shadow Mode) ---
   # Contrarian entry after large intraday price moves (>= 40 bps in 600s)
   # Research: Round 14, outputs/team_artifacts/alpha-research/round14_stage34_cbs_backtest.md
   # OOS: +3.00 bps/trade (TMF cost model), 7/10 days profitable
-  # Session gate: rest-of-day only (opening 30 min excluded)
+  # Session gate: wall-clock 09:15-13:35 TST (opening 30 min excluded, 10 min before close)
   - id: "CBS_TMFD6"
     module: "hft_platform.strategies.cascade_bounce"
     class: "CascadeBounceStrategy"
@@ -32,4 +47,5 @@ strategies:
       hold_ns: 300000000000            # 300s
       stop_loss_bps: 15
       cooldown_ns: 5000000000          # 5s
-      session_start_offset_ns: 1800000000000  # 30 min (skip opening)
+      session_start_sec: 33300         # 09:15 TST (skip opening 30 min)
+      session_end_sec: 48900           # 13:35 TST (10 min before close)
