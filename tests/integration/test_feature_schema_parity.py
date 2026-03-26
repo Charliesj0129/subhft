@@ -38,10 +38,20 @@ def _run_engine_on_events(
     events: list[LOBStatsEvent],
     backend: str = "python",
     symbol: str = _SYMBOL,
+    feature_set_id: str | None = None,
 ) -> dict[str, float]:
-    """Run a FeatureEngine on events and return the last feature dict for *symbol*."""
+    """Run a FeatureEngine on events and return the last feature dict for *symbol*.
+
+    *feature_set_id* can be used to override the default feature set (e.g. to test
+    Python vs Rust parity on the v1 feature set that the Rust kernel supports).
+    """
     registry = default_feature_registry()
-    engine = FeatureEngine(registry=registry, kernel_backend=backend, emit_events=False)
+    engine = FeatureEngine(
+        registry=registry,
+        feature_set_id=feature_set_id,
+        kernel_backend=backend,
+        emit_events=False,
+    )
     for ev in events:
         engine.process_lob_stats(ev)
     tup = engine.get_feature_tuple(symbol)
@@ -169,7 +179,7 @@ class TestSchemaParity:
         assert status["kernel_backend"] == ("rust" if _rust_available() else "python")
 
     def test_python_registry_has_expected_feature_ids(self) -> None:
-        """Smoke-test: Python default registry has the expected 16 canonical feature IDs."""
+        """Smoke-test: Python default registry has the expected 19 canonical feature IDs (v2)."""
         registry = default_feature_registry()
         fs = registry.get_default()
         feature_ids = fs.feature_ids
@@ -191,10 +201,14 @@ class TestSchemaParity:
             "ofi_l1_ema8",
             "spread_ema8_scaled",
             "depth_imbalance_ema8_ppm",
+            # v2 additions
+            "ofi_depth_norm_ppm",
+            "ret_autocov_5s_x1e6",
+            "tob_survival_ms",
         }
 
         assert set(feature_ids) == expected
-        assert len(feature_ids) == 16
+        assert len(feature_ids) == 19
 
     def test_python_registry_warmup_semantics(self) -> None:
         """Rolling features (OFI, EMA) require warmup_min_events >= 2."""
@@ -250,10 +264,13 @@ class TestBackendParity:
 
     @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
     def test_check_backend_parity_zero_mismatches_on_synthetic_data(self) -> None:
-        """Python and Rust backends must produce identical integer feature vectors on 100 events."""
+        """Python and Rust backends must produce identical integer feature vectors on 100 events.
+
+        Uses lob_shared_v1 because LobFeatureKernelV1 (Rust) only implements the v1 feature set.
+        """
         events = _make_synthetic_events(100)
-        py_features = _run_engine_on_events(events, backend="python")
-        rust_features = _run_engine_on_events(events, backend="rust")
+        py_features = _run_engine_on_events(events, backend="python", feature_set_id="lob_shared_v1")
+        rust_features = _run_engine_on_events(events, backend="rust", feature_set_id="lob_shared_v1")
         report = check_backend_parity(py_features, rust_features)
 
         assert report.passed, f"Backend parity failed with {len(report.mismatches)} mismatch(es):\n" + "\n".join(
@@ -263,7 +280,10 @@ class TestBackendParity:
 
     @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
     def test_check_backend_parity_multi_symbol(self) -> None:
-        """Parity holds when events span multiple symbols."""
+        """Parity holds when events span multiple symbols.
+
+        Uses lob_shared_v1 because LobFeatureKernelV1 (Rust) only implements the v1 feature set.
+        """
         symbols = ["SYM_A", "SYM_B", "SYM_C"]
         rng = random.Random(99)
         events: list[LOBStatsEvent] = []
@@ -285,8 +305,12 @@ class TestBackendParity:
             )
 
         for symbol in symbols:
-            py_features = _run_engine_on_events(events, backend="python", symbol=symbol)
-            rust_features = _run_engine_on_events(events, backend="rust", symbol=symbol)
+            py_features = _run_engine_on_events(
+                events, backend="python", symbol=symbol, feature_set_id="lob_shared_v1"
+            )
+            rust_features = _run_engine_on_events(
+                events, backend="rust", symbol=symbol, feature_set_id="lob_shared_v1"
+            )
             assert py_features, f"Expected Python features for {symbol}"
             assert rust_features, f"Expected Rust features for {symbol}"
             report = check_backend_parity(py_features, rust_features)
@@ -296,7 +320,10 @@ class TestBackendParity:
 
     @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
     def test_check_backend_parity_edge_cases(self) -> None:
-        """Parity holds for edge-case inputs: zero depths, equal bid/ask, single event."""
+        """Parity holds for edge-case inputs: zero depths, equal bid/ask, single event.
+
+        Uses lob_shared_v1 because LobFeatureKernelV1 (Rust) only implements the v1 feature set.
+        """
         ts = 1_700_000_000_000_000_000
         edge_events = [
             # Equal bid/ask (zero spread)
@@ -324,8 +351,8 @@ class TestBackendParity:
                 ask_depth=1,
             ),
         ]
-        py_features = _run_engine_on_events(edge_events, backend="python")
-        rust_features = _run_engine_on_events(edge_events, backend="rust")
+        py_features = _run_engine_on_events(edge_events, backend="python", feature_set_id="lob_shared_v1")
+        rust_features = _run_engine_on_events(edge_events, backend="rust", feature_set_id="lob_shared_v1")
         report = check_backend_parity(py_features, rust_features)
         assert report.passed, f"Edge-case backend parity failed: {len(report.mismatches)} mismatch(es)\n" + "\n".join(
             str(m) for m in report.mismatches
@@ -395,12 +422,21 @@ class TestMismatchDetection:
 
     @pytest.mark.skipif(not _rust_available(), reason="Rust backend not compiled")
     def test_requested_runtime_backend_matches_python_reference(self) -> None:
-        """A rust-requested engine must use the real runtime backend and stay in parity."""
+        """A rust-requested engine must use the real runtime backend and stay in parity.
+
+        Uses lob_shared_v1 because LobFeatureKernelV1 (Rust) only implements the v1 feature set.
+        The v2 features (ofi_depth_norm_ppm, ret_autocov_5s_x1e6, tob_survival_ms) are Python-only
+        until a Rust v2 kernel is implemented.
+        """
         events = _make_synthetic_events(30)
         registry = default_feature_registry()
 
-        python_engine = FeatureEngine(registry=registry, kernel_backend="python", emit_events=False)
-        runtime_engine = FeatureEngine(registry=registry, kernel_backend="rust", emit_events=False)
+        python_engine = FeatureEngine(
+            registry=registry, feature_set_id="lob_shared_v1", kernel_backend="python", emit_events=False
+        )
+        runtime_engine = FeatureEngine(
+            registry=registry, feature_set_id="lob_shared_v1", kernel_backend="rust", emit_events=False
+        )
 
         for event in events:
             python_engine.process_lob_stats(event)
