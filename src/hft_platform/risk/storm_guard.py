@@ -94,6 +94,20 @@ class StormGuard:
             except ValueError:
                 logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
 
+        latency_storm = os.getenv("HFT_STORMGUARD_LATENCY_STORM_US")
+        if latency_storm:
+            try:
+                self.thresholds.latency_storm_us = int(latency_storm)
+            except ValueError:
+                logger.warning("Invalid HFT_STORMGUARD_LATENCY_STORM_US", value=latency_storm)
+
+        latency_warm = os.getenv("HFT_STORMGUARD_LATENCY_WARM_US")
+        if latency_warm:
+            try:
+                self.thresholds.latency_warm_us = int(latency_warm)
+            except ValueError:
+                logger.warning("Invalid HFT_STORMGUARD_LATENCY_WARM_US", value=latency_warm)
+
     def _evaluate_target_state(
         self,
         drawdown_bps: int,
