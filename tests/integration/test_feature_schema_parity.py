@@ -179,7 +179,7 @@ class TestSchemaParity:
         assert status["kernel_backend"] == ("rust" if _rust_available() else "python")
 
     def test_python_registry_has_expected_feature_ids(self) -> None:
-        """Smoke-test: Python default registry has the expected 19 canonical feature IDs (v2)."""
+        """Smoke-test: Python default registry has the expected 21 canonical feature IDs (v2)."""
         registry = default_feature_registry()
         fs = registry.get_default()
         feature_ids = fs.feature_ids
@@ -201,14 +201,17 @@ class TestSchemaParity:
             "ofi_l1_ema8",
             "spread_ema8_scaled",
             "depth_imbalance_ema8_ppm",
-            # v2 additions
+            # v2 additions (Round 16)
             "ofi_depth_norm_ppm",
             "ret_autocov_5s_x1e6",
             "tob_survival_ms",
+            # v2 additions (ISS/MLDM)
+            "impact_surprise_x1000",
+            "deep_depth_momentum_x1000",
         }
 
         assert set(feature_ids) == expected
-        assert len(feature_ids) == 19
+        assert len(feature_ids) == 21
 
     def test_python_registry_warmup_semantics(self) -> None:
         """Rolling features (OFI, EMA) require warmup_min_events >= 2."""

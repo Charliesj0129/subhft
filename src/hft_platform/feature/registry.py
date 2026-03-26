@@ -167,13 +167,19 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
             FeatureSpec("tob_survival_ms", "i64", source_kind="book", warmup_min_events=2),
             # [19] Impact Surprise Signal (EMA baseline), scaled x1000.
             FeatureSpec(
-                "impact_surprise_x1000", "i64", scale=1000,
-                source_kind="book", warmup_min_events=400,
+                "impact_surprise_x1000",
+                "i64",
+                scale=1000,
+                source_kind="book",
+                warmup_min_events=400,
             ),
             # [20] Multi-Level Depth Momentum (L2-L5), scaled x1000.
             FeatureSpec(
-                "deep_depth_momentum_x1000", "i64", scale=1000,
-                source_kind="book", warmup_min_events=128,
+                "deep_depth_momentum_x1000",
+                "i64",
+                scale=1000,
+                source_kind="book",
+                warmup_min_events=128,
             ),
         ),
     )

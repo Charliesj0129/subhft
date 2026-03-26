@@ -592,9 +592,7 @@ class FeatureEngine:
     _MLDM_CLIP: float = 2.0
     _MLDM_WARMUP: int = 128
 
-    def _compute_iss(
-        self, ks: "_LobKernelState", ofi_raw: int, mid_x2: int, bid_depth: int, ask_depth: int
-    ) -> int:
+    def _compute_iss(self, ks: "_LobKernelState", ofi_raw: int, mid_x2: int, bid_depth: int, ask_depth: int) -> int:
         """Compute Impact Surprise Signal. Returns scaled int x1000 (milli-units)."""
         import math as _math
 
@@ -638,8 +636,13 @@ class FeatureEngine:
         return int(round(max(-self._ISS_CLIP, min(self._ISS_CLIP, raw)) * 1000))
 
     def _compute_mldm(
-        self, ks: "_LobKernelState", event: object | None, best_bid: int, best_ask: int,
-        prev_best_bid: int = 0, prev_best_ask: int = 0,
+        self,
+        ks: "_LobKernelState",
+        event: object | None,
+        best_bid: int,
+        best_ask: int,
+        prev_best_bid: int = 0,
+        prev_best_ask: int = 0,
     ) -> int:
         """Compute Multi-Level Depth Momentum. Returns scaled int x1000."""
         import numpy as _np
@@ -671,16 +674,11 @@ class FeatureEngine:
                     pass
 
         # BBO-shift guard: zero deep_net when best price changes
-        bbo_shifted = (
-            ks.initialized
-            and (best_bid != prev_best_bid or best_ask != prev_best_ask)
-        )
+        bbo_shifted = ks.initialized and (best_bid != prev_best_bid or best_ask != prev_best_ask)
         thin_book = n_bid_levels < 2 or n_ask_levels < 2
 
-        prev_bq = [ks.mldm_prev_bid_qty_l2, ks.mldm_prev_bid_qty_l3,
-                    ks.mldm_prev_bid_qty_l4, ks.mldm_prev_bid_qty_l5]
-        prev_aq = [ks.mldm_prev_ask_qty_l2, ks.mldm_prev_ask_qty_l3,
-                    ks.mldm_prev_ask_qty_l4, ks.mldm_prev_ask_qty_l5]
+        prev_bq = [ks.mldm_prev_bid_qty_l2, ks.mldm_prev_bid_qty_l3, ks.mldm_prev_bid_qty_l4, ks.mldm_prev_bid_qty_l5]
+        prev_aq = [ks.mldm_prev_ask_qty_l2, ks.mldm_prev_ask_qty_l3, ks.mldm_prev_ask_qty_l4, ks.mldm_prev_ask_qty_l5]
 
         # Update stored prev quantities
         ks.mldm_prev_bid_qty_l2 = cur_bq[0]
@@ -695,8 +693,7 @@ class FeatureEngine:
         if bbo_shifted or thin_book or event is None:
             deep_net = 0.0
         else:
-            deep_net = sum(cur_bq[i] - prev_bq[i] for i in range(4)) - \
-                       sum(cur_aq[i] - prev_aq[i] for i in range(4))
+            deep_net = sum(cur_bq[i] - prev_bq[i] for i in range(4)) - sum(cur_aq[i] - prev_aq[i] for i in range(4))
 
         ks.mldm_deep_ema_fast += self._MLDM_EMA_FAST * (deep_net - ks.mldm_deep_ema_fast)
         ks.mldm_deep_ema_slow += self._MLDM_EMA_SLOW * (deep_net - ks.mldm_deep_ema_slow)
