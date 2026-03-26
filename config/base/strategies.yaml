@@ -14,3 +14,22 @@ strategies:
     params:
       spread_threshold_bps: 2.5
       tick_size_ratio_pct: 50
+
+  # --- Cascade Bounce Strategy (Shadow Mode) ---
+  # Contrarian entry after large intraday price moves (>= 40 bps in 600s)
+  # Research: Round 14, outputs/team_artifacts/alpha-research/round14_stage34_cbs_backtest.md
+  # OOS: +3.00 bps/trade (TMF cost model), 7/10 days profitable
+  # Session gate: rest-of-day only (opening 30 min excluded)
+  - id: "CBS_TMFD6"
+    module: "hft_platform.strategies.cascade_bounce"
+    class: "CascadeBounceStrategy"
+    enabled: false  # Enable after 5 days TMF L1 data collection
+    product_type: "FUT"
+    symbols: ["TMFD6"]
+    params:
+      move_threshold_bps: 40
+      detect_window_ns: 600000000000   # 600s
+      hold_ns: 300000000000            # 300s
+      stop_loss_bps: 15
+      cooldown_ns: 5000000000          # 5s
+      session_start_offset_ns: 1800000000000  # 30 min (skip opening)

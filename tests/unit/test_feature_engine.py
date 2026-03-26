@@ -210,6 +210,7 @@ def test_get_feature_tuple_length():
     assert tpl is not None
     # Default is v2 — verify count matches registry definition
     from hft_platform.feature.registry import build_default_lob_feature_set_v2
+
     fs = build_default_lob_feature_set_v2()
     assert len(tpl) == len(fs.features)
 

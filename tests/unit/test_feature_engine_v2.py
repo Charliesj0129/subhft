@@ -18,9 +18,15 @@ def _make_stats(symbol: str, bb: int, ba: int, bd: int, ad: int, ts: int = 1000)
     mid_x2 = bb + ba
     spread = ba - bb
     return LOBStatsEvent(
-        symbol=symbol, ts=ts, imbalance=0.0,
-        best_bid=bb, best_ask=ba, bid_depth=bd, ask_depth=ad,
-        mid_price_x2=mid_x2, spread_scaled=spread,
+        symbol=symbol,
+        ts=ts,
+        imbalance=0.0,
+        best_bid=bb,
+        best_ask=ba,
+        bid_depth=bd,
+        ask_depth=ad,
+        mid_price_x2=mid_x2,
+        spread_scaled=spread,
     )
 
 
@@ -35,19 +41,20 @@ def _make_event(bids: list[list[int]], asks: list[list[int]]) -> BidAskEvent:
 
 # --- Registry ---
 
-def test_v2_feature_set_has_18_features() -> None:
+
+def test_v2_feature_set_has_21_features() -> None:
     fs = build_default_lob_feature_set_v2()
-    assert len(fs.features) == 18
+    assert len(fs.features) == 21
 
 
-def test_v2_iss_at_index_16() -> None:
+def test_v2_iss_at_index_19() -> None:
     fs = build_default_lob_feature_set_v2()
-    assert fs.features[16].feature_id == "impact_surprise_x1000"
+    assert fs.features[19].feature_id == "impact_surprise_x1000"
 
 
-def test_v2_mldm_at_index_17() -> None:
+def test_v2_mldm_at_index_20() -> None:
     fs = build_default_lob_feature_set_v2()
-    assert fs.features[17].feature_id == "deep_depth_momentum_x1000"
+    assert fs.features[20].feature_id == "deep_depth_momentum_x1000"
 
 
 def test_v1_backward_compatible() -> None:
@@ -74,6 +81,7 @@ def test_feature_set_version_is_v2() -> None:
 
 # --- FeatureEngine v2 tuple ---
 
+
 def test_v2_engine_produces_18_features() -> None:
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
     stats = _make_stats("TEST", 100_0000, 101_0000, 50, 50)
@@ -84,7 +92,7 @@ def test_v2_engine_produces_18_features() -> None:
     engine.process_lob_update(event, stats)
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
-    assert len(vals) == 18
+    assert len(vals) == 21
 
 
 def test_v1_engine_still_produces_16_features() -> None:
@@ -115,6 +123,7 @@ def test_v2_first_16_match_v1() -> None:
 
 
 # --- ISS behavior ---
+
 
 def test_iss_zero_during_warmup() -> None:
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
@@ -151,6 +160,7 @@ def test_iss_nonzero_after_warmup_with_correlated_data() -> None:
 
 # --- MLDM behavior ---
 
+
 def test_mldm_zero_with_no_event() -> None:
     """MLDM should be 0 when no BidAskEvent is passed (event=None)."""
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
@@ -159,7 +169,7 @@ def test_mldm_zero_with_no_event() -> None:
         engine.process_lob_update(None, stats)
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
-    assert vals[17] == 0
+    assert vals[20] == 0
 
 
 def test_mldm_responds_to_deep_book_changes() -> None:
@@ -183,7 +193,7 @@ def test_mldm_responds_to_deep_book_changes() -> None:
         engine.process_lob_update(event, stats)
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
-    assert vals[17] > 0, f"MLDM should be positive with growing bid L2-L5 depth, got {vals[17]}"
+    assert vals[20] > 0, f"MLDM should be positive with growing bid L2-L5 depth, got {vals[20]}"
 
 
 def test_mldm_bbo_shift_guard() -> None:
@@ -207,8 +217,9 @@ def test_mldm_bbo_shift_guard() -> None:
     engine.process_lob_update(event_shifted, stats_shifted)
     val_after = engine.get_feature_tuple("TEST")[17]
     # After BBO shift, MLDM should not spike from the level-shift artifact
-    assert abs(val_after) <= abs(val_before) + 100, \
+    assert abs(val_after) <= abs(val_before) + 100, (
         f"MLDM should be guarded on BBO shift: before={val_before}, after={val_after}"
+    )
 
 
 def test_mldm_thin_book_guard() -> None:
@@ -220,10 +231,11 @@ def test_mldm_thin_book_guard() -> None:
         engine.process_lob_update(event, stats)
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
-    assert vals[17] == 0
+    assert vals[20] == 0
 
 
 # --- Feature access ---
+
 
 def test_get_feature_by_id_iss() -> None:
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")

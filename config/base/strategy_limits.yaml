@@ -9,7 +9,7 @@ global_limits:
 global_defaults:
   max_notional: 500000000            # 50K NTD x10000
   per_symbol_max_notional: 5000000000 # Single symbol = full capital for futures
-  max_position_lots: 1               # Max 1 lot open
+  max_position_lots: 2               # Max 2 lots (OpMM + CBS concurrent)
   max_daily_loss: 50000000           # 5,000 NTD x10000 (triggers rejection)
 
 strategies:
@@ -18,6 +18,9 @@ strategies:
     max_order_qty: 1                 # 1 lot per order (conservative)
   OPPORTUNISTIC_MM_TXFD6:
     max_position: 5                  # Max 5 lots (Challenger recommendation)
+    max_order_qty: 1                 # 1 lot per order
+  CBS_TMFD6:
+    max_position: 1                  # Conservative single lot
     max_order_qty: 1                 # 1 lot per order
 
 intraday_pnl:
