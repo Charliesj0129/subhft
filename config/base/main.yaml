@@ -9,7 +9,7 @@ strategy:
   module: hft_platform.strategies.opportunistic_mm
   class: OpportunisticMM
   params:
-    spread_threshold_bps: 2.5
+    spread_threshold_bps: 0.8
     tick_size_ratio_pct: 50
 
 paths:

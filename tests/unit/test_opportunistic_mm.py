@@ -30,7 +30,7 @@ def _make_event(
 # --- Construction ---
 def test_default_threshold() -> None:
     mm = OpportunisticMM()
-    assert mm.spread_threshold_bps == 2.5
+    assert mm.spread_threshold_bps == 0.8
 
 
 def test_custom_threshold() -> None:
@@ -46,7 +46,7 @@ def test_inherits_simple_mm() -> None:
 
 # --- Spread gate ---
 def test_tight_spread_does_not_quote() -> None:
-    mm = OpportunisticMM(spread_threshold_bps=2.5)
+    mm = OpportunisticMM(spread_threshold_bps=0.8)
     mm.ctx = MagicMock()
     mm._generated_intents = []
     # mid_x2=660000, spread=8 -> spread_bps = 8/660000 * 20000 = 0.24 bps (tight)
@@ -57,7 +57,7 @@ def test_tight_spread_does_not_quote() -> None:
 
 def test_wide_spread_delegates_to_super() -> None:
     """When spread is wide, on_stats delegates to SimpleMM (does not return early)."""
-    mm = OpportunisticMM(spread_threshold_bps=2.5)
+    mm = OpportunisticMM(spread_threshold_bps=0.8)
     mm.ctx = MagicMock()
     mm.ctx.place_order = MagicMock(return_value=MagicMock())
     mm._generated_intents = []
@@ -205,10 +205,39 @@ def test_reversal_filter_permissive_with_v1_features() -> None:
     assert mm._check_reversal_condition("TXFD6") is True
 
 
+def test_observability_counters() -> None:
+    """Verify internal counters track gate decisions correctly."""
+    mm = OpportunisticMM(spread_threshold_bps=0.8)
+    mm.ctx = MagicMock()
+    mm.ctx.place_order = MagicMock(return_value=MagicMock())
+    mm._generated_intents = []
+    mm.position = MagicMock(return_value=0)
+
+    # Tight spread — blocked
+    ev_tight = _make_event(mid_x2=660000, spread_scaled=8)
+    mm.on_stats(ev_tight)
+    assert mm._gate_blocked_count == 1
+    assert mm._gate_passed_count == 0
+
+    # Wide spread — passed
+    ev_wide = _make_event(mid_x2=660000, spread_scaled=100, best_bid=329950, best_ask=330050, imbalance=0.1)
+    mm.on_stats(ev_wide)
+    assert mm._gate_passed_count == 1
+    assert mm._stats_count == 2
+
+    # Invalid data — None
+    ev_none = MagicMock()
+    ev_none.mid_price_x2 = None
+    ev_none.spread_scaled = 10
+    ev_none.symbol = "TXFD6"
+    mm.on_stats(ev_none)
+    assert mm._invalid_data_count == 1
+
+
 def test_reversal_filter_gates_quoting() -> None:
     """When reversal filter is enabled and conditions are bad, on_stats should not quote."""
     mm = OpportunisticMM(
-        spread_threshold_bps=2.5,
+        spread_threshold_bps=0.8,
         reversal_filter_enabled=True,
         reversal_autocov_threshold=0,
     )
@@ -231,7 +260,7 @@ def test_reversal_filter_gates_quoting() -> None:
 def test_reversal_filter_allows_quoting() -> None:
     """When reversal filter passes, on_stats delegates to super."""
     mm = OpportunisticMM(
-        spread_threshold_bps=2.5,
+        spread_threshold_bps=0.8,
         reversal_filter_enabled=True,
         reversal_autocov_threshold=0,
     )

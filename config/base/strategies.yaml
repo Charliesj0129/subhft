@@ -3,7 +3,8 @@
 
 strategies:
   # --- OpportunisticMM Paper Trade (Shadow Mode) ---
-  # Spread-gated MM on TXFD6: only quotes when spread > 2.5 bps
+  # Spread-gated MM on TXFD6: only quotes when spread > 0.8 bps (3 ticks)
+  # TXFD6: price ~33445, tick=1pt, 0.8 bps=2.7 ticks, RT cost=0.18 bps
   # Research: outputs/team_artifacts/alpha-research/
   - id: "OPPORTUNISTIC_MM_TXFD6"
     module: "hft_platform.strategies.opportunistic_mm"
@@ -12,7 +13,7 @@ strategies:
     product_type: "FUT"
     symbols: ["TXFD6"]
     params:
-      spread_threshold_bps: 2.5
+      spread_threshold_bps: 0.8
       tick_size_ratio_pct: 50
 
   # --- OpportunisticMM on TMFD6 (微台指) ---

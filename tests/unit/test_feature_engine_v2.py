@@ -154,8 +154,8 @@ def test_iss_nonzero_after_warmup_with_correlated_data() -> None:
         engine.process_lob_update(event, stats)
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
-    # ISS may or may not be nonzero depending on OFI/return correlation, but should be finite
-    assert isinstance(vals[16], int)
+    # ISS at index 19 may or may not be nonzero depending on OFI/return correlation, but should be finite
+    assert isinstance(vals[19], int)
 
 
 # --- MLDM behavior ---
@@ -207,7 +207,7 @@ def test_mldm_bbo_shift_guard() -> None:
         )
         stats = _make_stats("TEST", 100_0000, 101_0000, 50, 50, ts=1000 + i)
         engine.process_lob_update(event, stats)
-    val_before = engine.get_feature_tuple("TEST")[17]
+    val_before = engine.get_feature_tuple("TEST")[20]
     # BBO shift: bid moves from 100 to 101
     event_shifted = _make_event(
         [[101_0000, 200], [100_0000, 300], [99_0000, 200], [98_0000, 100], [97_0000, 50]],
@@ -215,7 +215,7 @@ def test_mldm_bbo_shift_guard() -> None:
     )
     stats_shifted = _make_stats("TEST", 101_0000, 102_0000, 200, 50, ts=1201)
     engine.process_lob_update(event_shifted, stats_shifted)
-    val_after = engine.get_feature_tuple("TEST")[17]
+    val_after = engine.get_feature_tuple("TEST")[20]
     # After BBO shift, MLDM should not spike from the level-shift artifact
     assert abs(val_after) <= abs(val_before) + 100, (
         f"MLDM should be guarded on BBO shift: before={val_before}, after={val_after}"
