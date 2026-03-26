@@ -91,13 +91,11 @@ class StartupPositionVerifier:
         self.client = client
         self.store = position_store
 
-        # Resolve blocking mode from arg or env
         if blocking is not None:
             self.blocking = blocking
         else:
             self.blocking = os.environ.get(_BLOCK_ENV, "0") == "1"
 
-        # Resolve checkpoint path from arg or env
         self.checkpoint_path = checkpoint_path or os.environ.get(_CHECKPOINT_PATH_ENV)
 
         self._qty_threshold = (
@@ -110,7 +108,7 @@ class StartupPositionVerifier:
         )
 
         self.discrepancies: List[PositionDiscrepancy] = []
-        self.status: int = 0  # mirrors the gauge
+        self.status: int = 0
 
     async def verify(self) -> List[PositionDiscrepancy]:
         """Run the one-shot verification.

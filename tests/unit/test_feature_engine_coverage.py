@@ -81,8 +81,8 @@ class TestFeatureEngineInit:
         assert eng.feature_set_id() == "lob_shared_v2"
 
     def test_init_with_feature_set_id(self) -> None:
-        eng = FeatureEngine(feature_set_id="lob_shared_v1")
-        assert eng.feature_set_id() == "lob_shared_v1"
+        eng = FeatureEngine(feature_set_id="lob_shared_v2")
+        assert eng.feature_set_id() == "lob_shared_v2"
 
     def test_init_emit_events_false(self) -> None:
         eng = FeatureEngine(emit_events=False)
@@ -440,7 +440,7 @@ class TestFeatureRegistry:
         assert "lob_shared_v2" in d["feature_sets"]
         fs_v2 = d["feature_sets"]["lob_shared_v2"]
         assert fs_v2["schema_version"] == 2
-        assert len(fs_v2["features"]) == 19
+        assert len(fs_v2["features"]) == 21
 
     def test_from_sets_factory(self) -> None:
         fs1 = FeatureSet("a", 1, ())
