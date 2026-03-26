@@ -15,8 +15,8 @@ futures:
 
   XMT:
     commission_per_contract: 13
-    tax_rate_bps: 2.0
-    tax_side: sell
+    tax_per_contract: 7
+    tax_side: both
     tick_size: 1
     point_value: 10
 

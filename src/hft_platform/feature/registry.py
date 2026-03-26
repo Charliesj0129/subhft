@@ -103,13 +103,13 @@ class FeatureRegistry:
 # Bump this (and create a new build_default_lob_feature_set_vN function) whenever
 # the feature layout or semantics change incompatibly.  Alpha manifests that declare
 # feature_set_version must match this constant before Gate D promotion.
-FEATURE_SET_VERSION = "lob_shared_v1"
+FEATURE_SET_VERSION = "lob_shared_v2"
 
 
 def build_default_lob_feature_set_v1() -> FeatureSet:
     """Default shared LOB-derived feature set for the initial FeatureEngine prototype."""
     return FeatureSet(
-        feature_set_id=FEATURE_SET_VERSION,
+        feature_set_id="lob_shared_v1",
         schema_version=1,
         features=(
             FeatureSpec("best_bid", "i64", scale=10_000, source_kind="book"),
@@ -137,6 +137,33 @@ def build_default_lob_feature_set_v1() -> FeatureSet:
     )
 
 
+def build_default_lob_feature_set_v2() -> FeatureSet:
+    """LOB feature set v2: v1 + depth-normalized OFI, return autocovariance, TOB survival.
+
+    Paper references:
+    - ofi_depth_norm_ppm: Takahashi 2508.06788 (price impact ~ 1/2D)
+    - ret_autocov_5s_x1e6: Albers et al. 2502.18625 (reversal prediction)
+    - tob_survival_ms: Albers et al. 2502.18625 (top-of-book stability)
+    """
+    v1 = build_default_lob_feature_set_v1()
+    return FeatureSet(
+        feature_set_id="lob_shared_v2",
+        schema_version=2,
+        features=v1.features
+        + (
+            # [16] OFI EMA8 normalized by avg L1 depth (ppm scale).
+            # Captures depth-dependent price impact: thin book → OFI matters more.
+            FeatureSpec("ofi_depth_norm_ppm", "i64", scale=1_000_000, source_kind="book", warmup_min_events=8),
+            # [17] Return autocovariance over ~40 ticks (5s at 125ms cadence).
+            # Negative autocov → oscillating prices → reversal likely. Scaled x1e6.
+            FeatureSpec("ret_autocov_5s_x1e6", "i64", scale=1_000_000, source_kind="book", warmup_min_events=42),
+            # [18] Milliseconds since last best price (bid or ask) change.
+            # Short survival → volatile TOB → reversal conditions.
+            FeatureSpec("tob_survival_ms", "i64", source_kind="book", warmup_min_events=2),
+        ),
+    )
+
+
 def feature_id_to_index(feature_set: FeatureSet, feature_id: str) -> int:
     """Return the integer index for *feature_id* in *feature_set*.
 
@@ -150,5 +177,6 @@ def feature_id_to_index(feature_set: FeatureSet, feature_id: str) -> int:
 
 def default_feature_registry() -> FeatureRegistry:
     reg = FeatureRegistry()
-    reg.register(build_default_lob_feature_set_v1(), make_default=True)
+    reg.register(build_default_lob_feature_set_v1())
+    reg.register(build_default_lob_feature_set_v2(), make_default=True)
     return reg

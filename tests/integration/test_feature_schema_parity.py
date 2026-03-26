@@ -305,12 +305,8 @@ class TestBackendParity:
             )
 
         for symbol in symbols:
-            py_features = _run_engine_on_events(
-                events, backend="python", symbol=symbol, feature_set_id="lob_shared_v1"
-            )
-            rust_features = _run_engine_on_events(
-                events, backend="rust", symbol=symbol, feature_set_id="lob_shared_v1"
-            )
+            py_features = _run_engine_on_events(events, backend="python", symbol=symbol, feature_set_id="lob_shared_v1")
+            rust_features = _run_engine_on_events(events, backend="rust", symbol=symbol, feature_set_id="lob_shared_v1")
             assert py_features, f"Expected Python features for {symbol}"
             assert rust_features, f"Expected Rust features for {symbol}"
             report = check_backend_parity(py_features, rust_features)
