@@ -1,35 +1,37 @@
 # Strategy Registry — loaded by strategy/registry.py
 # Format: strategies: list of {id, module, class, params, ...}
+#
+# IMPORTANT: All spread thresholds use POINTS (not bps).
+# Points are stable across price levels; bps shifts with index value.
+# Breakeven = RT_cost_NTD / point_value_NTD (e.g. TMFD6: 40/10 = 4 pts)
 
 strategies:
-  # --- OpportunisticMM Paper Trade (Shadow Mode) ---
-  # Spread-gated MM on TXFD6: only quotes when spread > 0.8 bps (3 ticks)
-  # TXFD6: price ~33445, tick=1pt, 0.8 bps=2.7 ticks, RT cost=0.18 bps
-  # Research: outputs/team_artifacts/alpha-research/
-  - id: "OPPORTUNISTIC_MM_TXFD6"
+  # --- OpportunisticMM on TMFD6 (微台指) — SHADOW MODE ---
+  # Point-based threshold: RT cost = 40 NTD = 4 pts, threshold = 5 pts (1 pt edge)
+  # Economics: 1 pt = 10 NTD, median spread 4 pts, avg profitable spread 19.7 pts
+  # Research: Round 16, docs/alpha-research/
+  - id: "OPPORTUNISTIC_MM_TMFD6"
     module: "hft_platform.strategies.opportunistic_mm"
     class: "OpportunisticMM"
     enabled: true
     product_type: "FUT"
-    symbols: ["TXFD6"]
-    params:
-      spread_threshold_bps: 0.8
-      tick_size_ratio_pct: 50
-
-  # --- OpportunisticMM on TMFD6 (微台指) ---
-  # Spread-gated MM on TMFD6: only quotes when spread > 1.67 bps (~5 pts at 30K)
-  # Research: Round 16, outputs/team_artifacts/alpha-research/round16_tmfd6_feasibility.md
-  # Economics: RT cost 4 pts (40 NTD), median spread 7 pts, 78% tradeable time
-  # Gross edge: 3 pts/RT when quoting at BBO during wide-spread events
-  # Realistic P&L estimate: 1,000-5,000 NTD/day (Challenger-adjusted)
-  - id: "OPPORTUNISTIC_MM_TMFD6"
-    module: "hft_platform.strategies.opportunistic_mm"
-    class: "OpportunisticMM"
-    enabled: false  # Enable after shadow validation
-    product_type: "FUT"
     symbols: ["TMFD6"]
     params:
-      spread_threshold_bps: 1.67  # 5 pts / 30000 * 10000 = 1.67 bps (break-even = 4 pts)
+      spread_threshold_pts: 5    # 5 pts > 4 pts breakeven (RT 40 NTD / 10 NTD per pt)
+      tick_size_ratio_pct: 50
+
+  # --- OpportunisticMM on TXFD6 (大台) — DISABLED ---
+  # Point-based threshold: RT cost ≈ 60 NTD ≈ 0.3 pts (1 pt = 200 NTD), threshold = 3 pts
+  # Disabled: switching shadow focus to TMFD6
+  - id: "OPPORTUNISTIC_MM_TXFD6"
+    module: "hft_platform.strategies.opportunistic_mm"
+    class: "OpportunisticMM"
+    enabled: false
+    product_type: "FUT"
+    symbols: ["TXFD6"]
+    params:
+      spread_threshold_pts: 3    # 3 pts (conservative for 大台)
+      tick_size_ratio_pct: 50
 
   # --- Cascade Bounce Strategy (Shadow Mode) ---
   # Contrarian entry after large intraday price moves (>= 40 bps in 600s)

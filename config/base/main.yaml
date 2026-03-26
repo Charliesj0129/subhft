@@ -2,14 +2,14 @@ broker: shioaji  # shioaji | fubon — selects BrokerFacade implementation
 
 mode: sim
 symbols:
-  - "TXFD6"
+  - "TMFD6"
 
 strategy:
-  id: OPPORTUNISTIC_MM_TXFD6
+  id: OPPORTUNISTIC_MM_TMFD6
   module: hft_platform.strategies.opportunistic_mm
   class: OpportunisticMM
   params:
-    spread_threshold_bps: 0.8
+    spread_threshold_pts: 5    # 5 pts > 4 pts breakeven (RT 40 NTD / 10 NTD per pt)
     tick_size_ratio_pct: 50
 
 paths:

@@ -1,9 +1,16 @@
 """Opportunistic Market Maker — quotes only when spread is wide enough.
 
 Extends SimpleMarketMaker with a spread-width gate:
-- Only sends quotes when spread > threshold (default 0.8 bps)
+- Only sends quotes when spread > threshold (in points, not bps)
 - Cancels existing quotes when spread tightens below threshold
 - Inherits imbalance-driven skewing and inventory management from SimpleMM
+
+Point-based threshold rationale:
+    Breakeven is a FIXED point cost (RT fee / point_value), independent of price level.
+    Using bps incorrectly ties the threshold to the index level, causing:
+    - At high prices: threshold too lax (below breakeven)
+    - At low prices: threshold too strict (misses profitable trades)
+    Points-based threshold is stable across all price levels.
 
 v2 Enhancement (Round 16, Candidates A+B):
 - Depth-normalized OFI signal (Takahashi 2508.06788): modulates entry quality
@@ -11,11 +18,10 @@ v2 Enhancement (Round 16, Candidates A+B):
   Features: return autocovariance, TOB survival, depth-normalized OFI
   Negative autocov + short TOB survival + elevated depth-norm OFI = reversal likely
 
-Economics (TXFD6):
-    RT cost: 0.18 bps (commission only, no sell tax on futures)
-    Price ~33445 pts, tick = 1 pt
-    1 tick = 0.3 bps, 2 ticks = 0.6 bps, 3 ticks = 0.9 bps
-    0.8 bps threshold = ~3 ticks (positive expectancy with 2+ tick spread)
+Economics (TMFD6 — 微台指):
+    1 point = 10 NTD, RT cost = 40 NTD = 4 points
+    Breakeven spread: > 4 points
+    Default threshold: 5 points (1 point edge over breakeven)
 """
 
 from __future__ import annotations
@@ -37,6 +43,9 @@ _IDX_L1_ASK_QTY = 9
 # Log sampling: emit debug log every N events to avoid flooding
 _LOG_SAMPLE_INTERVAL = 500
 
+# Price scale factor (all prices are int x10000)
+_PRICE_SCALE = 10000
+
 
 class OpportunisticMM(SimpleMarketMaker):
     """MM that only quotes when spread exceeds a cost-viable threshold.
@@ -45,8 +54,11 @@ class OpportunisticMM(SimpleMarketMaker):
     ----------
     strategy_id : str
         Strategy identifier.
-    spread_threshold_bps : float
-        Minimum spread in bps to activate quoting.  Default 0.8.
+    spread_threshold_pts : int
+        Minimum spread in index points to activate quoting.  Default 5.
+        This is the number of raw price points (ticks), NOT bps.
+        Example: TMFD6 breakeven = 4 pts (40 NTD / 10 NTD per pt),
+        so threshold = 5 gives 1 pt edge.
     reversal_filter_enabled : bool
         Enable reversal-condition gating (v2 features required). Default False.
     reversal_autocov_threshold : int
@@ -65,7 +77,7 @@ class OpportunisticMM(SimpleMarketMaker):
     def __init__(
         self,
         strategy_id: str = "opportunistic_mm",
-        spread_threshold_bps: float = 0.8,
+        spread_threshold_pts: int = 5,
         reversal_filter_enabled: bool = False,
         reversal_autocov_threshold: int = 0,
         reversal_tob_max_ms: int = 2000,
@@ -73,7 +85,9 @@ class OpportunisticMM(SimpleMarketMaker):
         **kwargs: object,
     ) -> None:
         super().__init__(strategy_id=strategy_id, **kwargs)
-        self._spread_threshold_bps: float = spread_threshold_bps
+        self._spread_threshold_pts: int = int(spread_threshold_pts)
+        # Pre-compute scaled threshold to avoid per-tick multiplication
+        self._spread_threshold_scaled: int = self._spread_threshold_pts * _PRICE_SCALE
         self._reversal_filter_enabled: bool = reversal_filter_enabled
         self._reversal_autocov_threshold: int = reversal_autocov_threshold
         self._reversal_tob_max_ms: int = reversal_tob_max_ms
@@ -90,7 +104,8 @@ class OpportunisticMM(SimpleMarketMaker):
         logger.info(
             "OpportunisticMM initialized",
             strategy_id=strategy_id,
-            spread_threshold_bps=spread_threshold_bps,
+            spread_threshold_pts=self._spread_threshold_pts,
+            spread_threshold_scaled=self._spread_threshold_scaled,
             reversal_filter_enabled=reversal_filter_enabled,
         )
 
@@ -169,18 +184,17 @@ class OpportunisticMM(SimpleMarketMaker):
                 )
             return
 
-        # Compute spread in bps: spread_bps = spread_scaled / mid_price_x2 * 20000
-        spread_bps = event.spread_scaled / event.mid_price_x2 * 20000.0
+        spread_pts = event.spread_scaled // _PRICE_SCALE
 
         # Sampled diagnostic log (every N events)
         if self._stats_count % _LOG_SAMPLE_INTERVAL == 1:
             logger.info(
                 "opmm_stats_sample",
                 symbol=symbol,
-                spread_bps=round(spread_bps, 3),
-                threshold_bps=self._spread_threshold_bps,
-                mid_price_x2=event.mid_price_x2,
+                spread_pts=spread_pts,
                 spread_scaled=event.spread_scaled,
+                threshold_pts=self._spread_threshold_pts,
+                mid_price_x2=event.mid_price_x2,
                 best_bid=event.best_bid,
                 best_ask=event.best_ask,
                 imbalance=round(event.imbalance, 3),
@@ -191,8 +205,8 @@ class OpportunisticMM(SimpleMarketMaker):
                 reversal_blocked=self._reversal_blocked_count,
             )
 
-        # Spread gate: only quote when spread is wide enough to cover RT cost
-        if spread_bps < self._spread_threshold_bps:
+        # Spread gate: only quote when spread >= threshold (integer comparison, no float)
+        if event.spread_scaled < self._spread_threshold_scaled:
             self._gate_blocked_count += 1
             # Cancel existing quotes to avoid stale orders at tight spreads
             if hasattr(self, "_bid_oid") and self._bid_oid:
@@ -214,7 +228,7 @@ class OpportunisticMM(SimpleMarketMaker):
             logger.info(
                 "opmm_quoting",
                 symbol=symbol,
-                spread_bps=round(spread_bps, 3),
+                spread_pts=spread_pts,
                 best_bid=event.best_bid,
                 best_ask=event.best_ask,
                 gate_passed_n=self._gate_passed_count,
@@ -222,8 +236,8 @@ class OpportunisticMM(SimpleMarketMaker):
         super().on_stats(event)
 
     @property
-    def spread_threshold_bps(self) -> float:
-        return self._spread_threshold_bps
+    def spread_threshold_pts(self) -> int:
+        return self._spread_threshold_pts
 
     @property
     def reversal_filter_enabled(self) -> bool:
