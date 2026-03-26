@@ -33,8 +33,12 @@ futures:
 
 symbol_map:
   TXF: TX
+  TXFD6: TX
   TXFL5: TX
   TXFR1: TX
   MXF: MTX
+  MXFD6: MTX
   MXFR1: MTX
   XMT: XMT
+  TMF: XMT
+  TMFD6: XMT
