@@ -73,9 +73,6 @@ class PositionCheckpointWriter:
             lambda: datetime.now(tz=ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
         )
         self.running = False
-        self._trading_date_provider: Callable[[], str] = trading_date_provider or (
-            lambda: datetime.now(tz=ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
-        )
 
     # ------------------------------------------------------------------
     # Public API
