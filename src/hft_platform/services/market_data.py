@@ -1394,22 +1394,43 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
     # -- public API ----------------------------------------------------------
 
+    # Option symbol prefixes excluded from feed-gap calculation.
+    # These instruments are often illiquid (especially far-OTM contracts
+    # during night sessions) and can go minutes without a tick, which
+    # would falsely trigger StormGuard STORM if included.
+    _FEED_GAP_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
+
     def get_max_feed_gap_s(self) -> float:
-        """Return the maximum feed gap across all symbols in seconds."""
+        """Return the maximum feed gap across *core* (non-option) symbols.
+
+        Option symbols (prefixed with TXO, MXO, etc.) are excluded because
+        far-OTM contracts may not trade for minutes during night sessions,
+        producing large gaps that would falsely trigger StormGuard STORM.
+
+        The raw per-symbol gaps are available via :meth:`get_feed_gaps_by_symbol`.
+        """
         try:
-            tick_values = list(self._symbol_last_tick.values())
+            snapshot = dict(self._symbol_last_tick)
         except RuntimeError:
             return 0.0
 
-        if not tick_values:
+        if not snapshot:
             return float(os.getenv("HFT_FEED_GAP_NO_DATA_S", "0.0"))
 
         now = time.monotonic()
         max_gap = 0.0
-        for last_ts in tick_values:
+        core_count = 0
+        for symbol, last_ts in snapshot.items():
+            if any(symbol.startswith(p) for p in self._FEED_GAP_EXCLUDE_PREFIXES):
+                continue
+            core_count += 1
             gap = now - last_ts
             if gap > max_gap:
                 max_gap = gap
+
+        if core_count == 0:
+            # All symbols are options — fall back to global max
+            return max(now - ts for ts in snapshot.values())
         return max_gap
 
     def get_feed_gaps_by_symbol(self) -> dict[str, float]:
