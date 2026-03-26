@@ -1,4 +1,5 @@
 x-hft-common: &hft-common
+  env_file: .env
   build: .
   image: ${HFT_IMAGE:-hft-platform:latest}
   restart: always
