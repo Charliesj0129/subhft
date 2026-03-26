@@ -50,8 +50,8 @@ def _stats(
 
 def _make_profile(
     *,
-    feature_set_id: str = "lob_shared_v1",
-    schema_version: int | None = 1,
+    feature_set_id: str = "lob_shared_v2",
+    schema_version: int | None = 2,
     params: dict | None = None,
 ) -> FeatureProfile:
     return FeatureProfile(
@@ -70,15 +70,15 @@ def _make_profile(
 class TestFeatureEngineInit:
     def test_default_init(self) -> None:
         eng = FeatureEngine()
-        assert eng.feature_set_id() == "lob_shared_v1"
-        assert eng.schema_version() == 1
+        assert eng.feature_set_id() == "lob_shared_v2"
+        assert eng.schema_version() == 2
         assert eng.kernel_backend() == "python"
         assert eng.active_profile_id() is None
 
     def test_init_with_explicit_registry(self) -> None:
         reg = default_feature_registry()
         eng = FeatureEngine(registry=reg)
-        assert eng.feature_set_id() == "lob_shared_v1"
+        assert eng.feature_set_id() == "lob_shared_v2"
 
     def test_init_with_feature_set_id(self) -> None:
         eng = FeatureEngine(feature_set_id="lob_shared_v1")
@@ -265,11 +265,11 @@ class TestWarmupReadyMask:
                 assert bit == 0, f"{spec.feature_id} should NOT be warm"
 
     def test_second_tick_all_warm(self) -> None:
-        eng = FeatureEngine(emit_events=True)
+        eng = FeatureEngine(emit_events=True, feature_set_id="lob_shared_v1")
         eng.process_lob_stats(_stats(ts=1))
         evt = eng.process_lob_stats(_stats(ts=2))
         assert evt is not None
-        # All features have warmup_min_events <= 2
+        # All v1 features have warmup_min_events <= 2
         fs = build_default_lob_feature_set_v1()
         expected_mask = (1 << len(fs.features)) - 1
         assert evt.warmup_ready_mask == expected_mask
@@ -304,8 +304,8 @@ class TestGetFeatureView:
         view = eng.get_feature_view("TXFD6")
         assert view is not None
         assert view["symbol"] == "TXFD6"
-        assert view["feature_set_id"] == "lob_shared_v1"
-        assert view["schema_version"] == 1
+        assert view["feature_set_id"] == "lob_shared_v2"
+        assert view["schema_version"] == 2
         assert view["seq"] == 1
         assert "feature_ids" in view
         assert "values" in view
@@ -435,11 +435,12 @@ class TestFeatureRegistry:
     def test_to_dict_structure(self) -> None:
         reg = default_feature_registry()
         d = reg.to_dict()
-        assert d["default"] == "lob_shared_v1"
+        assert d["default"] == "lob_shared_v2"
         assert "lob_shared_v1" in d["feature_sets"]
-        fs_info = d["feature_sets"]["lob_shared_v1"]
-        assert fs_info["schema_version"] == 1
-        assert len(fs_info["features"]) == 16
+        assert "lob_shared_v2" in d["feature_sets"]
+        fs_v2 = d["feature_sets"]["lob_shared_v2"]
+        assert fs_v2["schema_version"] == 2
+        assert len(fs_v2["features"]) == 19
 
     def test_from_sets_factory(self) -> None:
         fs1 = FeatureSet("a", 1, ())

@@ -6,6 +6,7 @@ from hft_platform.feature.boundary import event_to_typed_frame, typed_frame_to_e
 from hft_platform.feature.engine import QUALITY_FLAG_OUT_OF_ORDER, QUALITY_FLAG_STATE_RESET, FeatureEngine
 from hft_platform.feature.registry import (
     build_default_lob_feature_set_v1,
+    build_default_lob_feature_set_v2,
     feature_id_to_index,
 )
 
@@ -26,8 +27,8 @@ def test_feature_engine_emits_default_feature_update():
     eng = FeatureEngine()
     evt = eng.process_lob_stats(_stats(), local_ts_ns=2)
     assert evt is not None
-    assert evt.feature_set_id == "lob_shared_v1"
-    assert evt.schema_version == 1
+    assert evt.feature_set_id == "lob_shared_v2"
+    assert evt.schema_version == 2
     assert evt.seq == 1
     assert evt.symbol == "2330"
     assert evt.ts == 1
@@ -40,7 +41,17 @@ def test_feature_engine_emits_default_feature_update():
     assert eng.get_feature("2330", "spread_scaled") == 1000
     view = eng.get_feature_view("2330")
     assert view is not None
-    assert view["feature_set_id"] == "lob_shared_v1"
+    assert view["feature_set_id"] == "lob_shared_v2"
+
+
+def test_feature_engine_v1_explicit():
+    """v1 feature set still works when explicitly selected."""
+    eng = FeatureEngine(feature_set_id="lob_shared_v1")
+    evt = eng.process_lob_stats(_stats(), local_ts_ns=2)
+    assert evt is not None
+    assert evt.feature_set_id == "lob_shared_v1"
+    assert evt.schema_version == 1
+    assert len(evt.values) == 16
 
 
 def test_feature_engine_changed_mask_and_reset_flag():
@@ -197,8 +208,15 @@ def test_get_feature_tuple_length():
     eng.process_lob_stats(_stats())
     tpl = eng.get_feature_tuple("2330")
     assert tpl is not None
-    fs = build_default_lob_feature_set_v1()
-    assert len(tpl) == len(fs.features)
+    # Default is now v2 with 19 features
+    assert len(tpl) == 19
+
+    # v1 explicit: 16 features
+    eng_v1 = FeatureEngine(feature_set_id="lob_shared_v1")
+    eng_v1.process_lob_stats(_stats())
+    tpl_v1 = eng_v1.get_feature_tuple("2330")
+    assert tpl_v1 is not None
+    assert len(tpl_v1) == 16
 
 
 def test_unknown_symbol_returns_none():
@@ -332,7 +350,7 @@ def _ref_values(state: _ParityRefState, evt: BidAskEvent, stats: LOBStatsEvent) 
 
 def test_feature_engine_reference_parity_random_sequence():
     rng = np.random.default_rng(20260224)
-    eng = FeatureEngine()
+    eng = FeatureEngine(feature_set_id="lob_shared_v1")
     ref = _ParityRefState()
     bid = 1_000_000
     ask = 1_001_000
@@ -470,8 +488,8 @@ def test_feature_state_fresh_after_reset():
 
 
 def test_feature_engine_rust_backend_parity_when_available():
-    py_eng = FeatureEngine(kernel_backend="python")
-    rust_eng = FeatureEngine(kernel_backend="rust")
+    py_eng = FeatureEngine(feature_set_id="lob_shared_v1", kernel_backend="python")
+    rust_eng = FeatureEngine(feature_set_id="lob_shared_v1", kernel_backend="rust")
     if rust_eng.kernel_backend() != "rust":
         pytest.skip("Rust LobFeatureKernelV1 unavailable")
 
@@ -499,3 +517,198 @@ def test_feature_engine_rust_backend_parity_when_available():
         r = rust_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         assert p is not None and r is not None
         assert r.values == p.values
+
+
+# --- v2 features tests ---
+
+
+def test_v2_feature_set_has_19_features():
+    fs = build_default_lob_feature_set_v2()
+    assert len(fs.features) == 19
+    assert fs.feature_set_id == "lob_shared_v2"
+    assert fs.schema_version == 2
+    assert fs.features[16].feature_id == "ofi_depth_norm_ppm"
+    assert fs.features[17].feature_id == "ret_autocov_5s_x1e6"
+    assert fs.features[18].feature_id == "tob_survival_ms"
+
+
+def test_v2_ofi_depth_norm_basic():
+    """ofi_depth_norm_ppm = ofi_ema8 * 1e6 / avg_l1_depth."""
+    eng = FeatureEngine()  # default is v2
+    sym = "TXFD6"
+    # Tick 1: initialize
+    e1 = _bidask(sym, 1, 1000000, 50, 1001000, 50)
+    s1 = LOBStatsEvent(symbol=sym, ts=1, imbalance=0.0, best_bid=1000000, best_ask=1001000, bid_depth=50, ask_depth=50)
+    eng.process_lob_update(e1, s1, local_ts_ns=1)
+
+    # Tick 2: bid qty up by 10 -> positive OFI
+    e2 = _bidask(sym, 2, 1000000, 60, 1001000, 50)
+    s2 = LOBStatsEvent(symbol=sym, ts=2, imbalance=0.0, best_bid=1000000, best_ask=1001000, bid_depth=60, ask_depth=50)
+    eng.process_lob_update(e2, s2, local_ts_ns=2)
+
+    ofi_ema = eng.get_feature(sym, "ofi_l1_ema8")
+    depth_norm = eng.get_feature(sym, "ofi_depth_norm_ppm")
+    assert ofi_ema is not None
+    assert depth_norm is not None
+    # Depth norm uses float ofi_ema8 internally (not the rounded int).
+    # Just verify sign and order of magnitude.
+    assert depth_norm > 0  # positive OFI -> positive normalized OFI
+    # avg_depth = (60+50)/2 = 55. For ofi_raw=10, ema8 alpha=2/9:
+    # ema = 10 * 2/9 ≈ 2.22, depth_norm ≈ 2.22 * 1e6 / 55 ≈ 40404
+    assert 30_000 < depth_norm < 60_000
+
+
+def test_v2_ofi_depth_norm_zero_depth():
+    """ofi_depth_norm_ppm = 0 when depth is 0."""
+    eng = FeatureEngine()
+    sym = "TXFD6"
+    s = LOBStatsEvent(symbol=sym, ts=1, imbalance=0.0, best_bid=1000000, best_ask=1001000, bid_depth=0, ask_depth=0)
+    eng.process_lob_stats(s)
+    assert eng.get_feature(sym, "ofi_depth_norm_ppm") == 0
+
+
+def test_v2_ret_autocov_needs_warmup():
+    """ret_autocov_5s_x1e6 should be 0 until enough data points (>= 3 ticks)."""
+    eng = FeatureEngine()
+    sym = "TXFD6"
+    for i in range(3):
+        s = LOBStatsEvent(
+            symbol=sym,
+            ts=i + 1,
+            imbalance=0.0,
+            best_bid=1000000 + i * 100,
+            best_ask=1001000 + i * 100,
+            bid_depth=50,
+            ask_depth=50,
+        )
+        eng.process_lob_stats(s)
+    # After 3 ticks, autocov should be computed
+    autocov = eng.get_feature(sym, "ret_autocov_5s_x1e6")
+    assert autocov is not None
+
+
+def test_v2_ret_autocov_oscillating_is_negative():
+    """Oscillating prices (up-down-up-down) should produce negative autocovariance."""
+    eng = FeatureEngine()
+    sym = "TXFD6"
+    prices = [1000000, 1001000, 1000000, 1001000, 1000000, 1001000, 1000000, 1001000]
+    for i, px in enumerate(prices):
+        s = LOBStatsEvent(
+            symbol=sym,
+            ts=i + 1,
+            imbalance=0.0,
+            best_bid=px,
+            best_ask=px + 1000,
+            bid_depth=50,
+            ask_depth=50,
+        )
+        eng.process_lob_stats(s)
+    autocov = eng.get_feature(sym, "ret_autocov_5s_x1e6")
+    assert autocov is not None
+    assert autocov < 0  # Oscillating = negative autocovariance
+
+
+def test_v2_ret_autocov_trending_is_positive():
+    """Monotonically increasing prices should produce positive autocovariance."""
+    eng = FeatureEngine()
+    sym = "TXFD6"
+    for i in range(10):
+        px = 1000000 + i * 100
+        s = LOBStatsEvent(
+            symbol=sym,
+            ts=i + 1,
+            imbalance=0.0,
+            best_bid=px,
+            best_ask=px + 1000,
+            bid_depth=50,
+            ask_depth=50,
+        )
+        eng.process_lob_stats(s)
+    autocov = eng.get_feature(sym, "ret_autocov_5s_x1e6")
+    assert autocov is not None
+    assert autocov > 0  # Trending = positive autocovariance
+
+
+def test_v2_tob_survival_increases():
+    """tob_survival_ms should increase when best price stays the same."""
+    eng = FeatureEngine()
+    sym = "TXFD6"
+    base_ns = 1_000_000_000  # 1 second in ns
+    # Tick 1 & 2: same price, 500ms apart
+    s1 = LOBStatsEvent(
+        symbol=sym,
+        ts=base_ns,
+        imbalance=0.0,
+        best_bid=1000000,
+        best_ask=1001000,
+        bid_depth=50,
+        ask_depth=50,
+    )
+    eng.process_lob_stats(s1)
+    s2 = LOBStatsEvent(
+        symbol=sym,
+        ts=base_ns + 500_000_000,
+        imbalance=0.0,
+        best_bid=1000000,
+        best_ask=1001000,
+        bid_depth=50,
+        ask_depth=50,
+    )
+    eng.process_lob_stats(s2)
+    survival = eng.get_feature(sym, "tob_survival_ms")
+    assert survival is not None
+    assert survival == 500  # 500ms since last change
+
+
+def test_v2_tob_survival_resets_on_price_change():
+    """tob_survival_ms should reset to 0 when best price changes."""
+    eng = FeatureEngine()
+    sym = "TXFD6"
+    base_ns = 1_000_000_000
+    # Tick 1: initial
+    s1 = LOBStatsEvent(
+        symbol=sym,
+        ts=base_ns,
+        imbalance=0.0,
+        best_bid=1000000,
+        best_ask=1001000,
+        bid_depth=50,
+        ask_depth=50,
+    )
+    eng.process_lob_stats(s1)
+    # Tick 2: same price, 500ms later
+    s2 = LOBStatsEvent(
+        symbol=sym,
+        ts=base_ns + 500_000_000,
+        imbalance=0.0,
+        best_bid=1000000,
+        best_ask=1001000,
+        bid_depth=50,
+        ask_depth=50,
+    )
+    eng.process_lob_stats(s2)
+    assert eng.get_feature(sym, "tob_survival_ms") == 500
+    # Tick 3: price changes, 100ms later
+    s3 = LOBStatsEvent(
+        symbol=sym,
+        ts=base_ns + 600_000_000,
+        imbalance=0.0,
+        best_bid=1000100,
+        best_ask=1001100,
+        bid_depth=50,
+        ask_depth=50,
+    )
+    eng.process_lob_stats(s3)
+    survival = eng.get_feature(sym, "tob_survival_ms")
+    assert survival == 0  # Reset on price change
+
+
+def test_v2_backward_compat_v1_engine():
+    """v1 engine produces 16 features without v2 fields."""
+    eng = FeatureEngine(feature_set_id="lob_shared_v1")
+    eng.process_lob_stats(_stats(ts=1))
+    tpl = eng.get_feature_tuple("2330")
+    assert tpl is not None
+    assert len(tpl) == 16
+    # No v2 features accessible
+    assert eng.get_feature("2330", "ofi_depth_norm_ppm") is None

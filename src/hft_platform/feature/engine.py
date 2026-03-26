@@ -87,6 +87,9 @@ class _FeatureState:
     quality_flags: int = 0
 
 
+_RET_AUTOCOV_WINDOW = 40  # ~5s at 125ms tick cadence
+
+
 @dataclass(slots=True)
 class _LobKernelState:
     prev_best_bid: int = 0
@@ -98,6 +101,14 @@ class _LobKernelState:
     spread_ema8: float = 0.0
     imbalance_ema8_ppm: float = 0.0
     initialized: bool = False
+    # --- v2 fields ---
+    # Ring buffer for mid_price_x2 returns (for autocovariance)
+    ret_buf: list[int] | None = None  # circular buffer of mid_price_x2 deltas
+    ret_buf_pos: int = 0  # write position in ring buffer
+    ret_buf_count: int = 0  # number of valid entries
+    prev_mid_price_x2: int = 0  # previous mid_price_x2 for delta
+    # TOB survival: timestamp of last best price change
+    last_tob_change_ns: int = 0
 
 
 class FeatureEngine:
@@ -440,12 +451,27 @@ class FeatureEngine:
             spread_ema8_scaled = int(round(ks.spread_ema8))
             depth_imbalance_ema8_ppm = int(round(ks.imbalance_ema8_ppm))
 
+        # --- v2 features ---
+        compute_v2 = len(self._feature_ids) > 16
+        if compute_v2:
+            v2 = self._compute_v2_features(
+                ks,
+                stats,
+                mid_price_x2,
+                l1_bid_qty,
+                l1_ask_qty,
+                best_bid,
+                best_ask,
+            )
+        else:
+            v2 = ()
+
         ks.prev_best_bid = best_bid
         ks.prev_best_ask = best_ask
         ks.prev_l1_bid_qty = l1_bid_qty
         ks.prev_l1_ask_qty = l1_ask_qty
 
-        return (
+        v1_tuple = (
             best_bid,
             best_ask,
             mid_price_x2,
@@ -463,6 +489,61 @@ class FeatureEngine:
             int(spread_ema8_scaled),
             int(depth_imbalance_ema8_ppm),
         )
+        return v1_tuple if not v2 else v1_tuple + v2
+
+    def _compute_v2_features(
+        self,
+        ks: _LobKernelState,
+        stats: LOBStatsEvent | _StatsTupleProxy,
+        mid_price_x2: int,
+        l1_bid_qty: int,
+        l1_ask_qty: int,
+        best_bid: int,
+        best_ask: int,
+    ) -> tuple[int, int, int]:
+        """Compute v2-only features: depth-norm OFI, return autocov, TOB survival."""
+        # [16] ofi_depth_norm_ppm = ofi_ema8 / avg_l1_depth * 1_000_000
+        avg_l1_depth = (l1_bid_qty + l1_ask_qty) // 2
+        if avg_l1_depth > 0:
+            ofi_depth_norm_ppm = int(round(ks.ofi_l1_ema8 * 1_000_000.0 / float(avg_l1_depth)))
+        else:
+            ofi_depth_norm_ppm = 0
+
+        # [17] ret_autocov_5s_x1e6: lag-1 autocovariance of mid_price_x2 returns
+        if ks.ret_buf is None:
+            ks.ret_buf = [0] * _RET_AUTOCOV_WINDOW
+        ret = mid_price_x2 - ks.prev_mid_price_x2 if ks.prev_mid_price_x2 != 0 else 0
+        buf = ks.ret_buf
+        pos = ks.ret_buf_pos
+        buf[pos] = ret
+        ks.ret_buf_pos = (pos + 1) % _RET_AUTOCOV_WINDOW
+        if ks.ret_buf_count < _RET_AUTOCOV_WINDOW:
+            ks.ret_buf_count += 1
+        count = ks.ret_buf_count
+        ret_autocov_5s_x1e6 = 0
+        if count >= 3:
+            autocov_sum = 0
+            n_pairs = 0
+            for i in range(1, count):
+                idx_curr = (pos - count + i) % _RET_AUTOCOV_WINDOW
+                idx_prev = (pos - count + i - 1) % _RET_AUTOCOV_WINDOW
+                autocov_sum += buf[idx_curr] * buf[idx_prev]
+                n_pairs += 1
+            if n_pairs > 0:
+                ret_autocov_5s_x1e6 = int(round(float(autocov_sum) * 1_000_000.0 / float(n_pairs)))
+        ks.prev_mid_price_x2 = mid_price_x2
+
+        # [18] tob_survival_ms: ms since last best price change
+        source_ts_ns = int(getattr(stats, "ts", 0) or 0)
+        tob_changed = (best_bid != ks.prev_best_bid) or (best_ask != ks.prev_best_ask)
+        if tob_changed or ks.last_tob_change_ns == 0:
+            ks.last_tob_change_ns = source_ts_ns
+        if source_ts_ns > 0 and ks.last_tob_change_ns > 0:
+            tob_survival_ms = int((source_ts_ns - ks.last_tob_change_ns) // 1_000_000)
+        else:
+            tob_survival_ms = 0
+
+        return (int(ofi_depth_norm_ppm), int(ret_autocov_5s_x1e6), int(tob_survival_ms))
 
     def _compute_values_rust(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
