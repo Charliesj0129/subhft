@@ -138,16 +138,21 @@ def build_default_lob_feature_set_v1() -> FeatureSet:
 
 
 def build_default_lob_feature_set_v2() -> FeatureSet:
-    """LOB feature set v2: v1 + depth-normalized OFI, return autocovariance, TOB survival.
+    """LOB feature set v2: v1 + depth-normalized OFI, return autocovariance, TOB survival,
+    ISS (impact_surprise), and MLDM (deep_depth_momentum).
+
+    Indices 0-15: identical to v1 (backward compatible).
 
     Paper references:
-    - ofi_depth_norm_ppm: Takahashi 2508.06788 (price impact ~ 1/2D)
-    - ret_autocov_5s_x1e6: Albers et al. 2502.18625 (reversal prediction)
-    - tob_survival_ms: Albers et al. 2502.18625 (top-of-book stability)
+    - ofi_depth_norm_ppm [16]: Takahashi 2508.06788 (price impact ~ 1/2D)
+    - ret_autocov_5s_x1e6 [17]: Albers et al. 2502.18625 (reversal prediction)
+    - tob_survival_ms [18]: Albers et al. 2502.18625 (top-of-book stability)
+    - impact_surprise_x1000 [19]: Impact Surprise Signal (EMA baseline), scaled x1000.
+    - deep_depth_momentum_x1000 [20]: Multi-Level Depth Momentum (L2-L5), scaled x1000.
     """
     v1 = build_default_lob_feature_set_v1()
     return FeatureSet(
-        feature_set_id="lob_shared_v2",
+        feature_set_id=FEATURE_SET_VERSION,
         schema_version=2,
         features=v1.features
         + (
@@ -160,6 +165,16 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
             # [18] Milliseconds since last best price (bid or ask) change.
             # Short survival → volatile TOB → reversal conditions.
             FeatureSpec("tob_survival_ms", "i64", source_kind="book", warmup_min_events=2),
+            # [19] Impact Surprise Signal (EMA baseline), scaled x1000.
+            FeatureSpec(
+                "impact_surprise_x1000", "i64", scale=1000,
+                source_kind="book", warmup_min_events=400,
+            ),
+            # [20] Multi-Level Depth Momentum (L2-L5), scaled x1000.
+            FeatureSpec(
+                "deep_depth_momentum_x1000", "i64", scale=1000,
+                source_kind="book", warmup_min_events=128,
+            ),
         ),
     )
 

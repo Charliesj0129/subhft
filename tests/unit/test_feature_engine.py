@@ -208,8 +208,10 @@ def test_get_feature_tuple_length():
     eng.process_lob_stats(_stats())
     tpl = eng.get_feature_tuple("2330")
     assert tpl is not None
-    # Default is now v2 with 19 features
-    assert len(tpl) == 19
+    # Default is v2 — verify count matches registry definition
+    from hft_platform.feature.registry import build_default_lob_feature_set_v2
+    fs = build_default_lob_feature_set_v2()
+    assert len(tpl) == len(fs.features)
 
     # v1 explicit: 16 features
     eng_v1 = FeatureEngine(feature_set_id="lob_shared_v1")
@@ -374,7 +376,8 @@ def test_feature_engine_reference_parity_random_sequence():
         )
         got = eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         assert got is not None
-        assert got.values == _ref_values(ref, evt, stats)
+        # Compare v1 features (first 16) — v2 features (ISS/MLDM) appended after
+        assert got.values[:16] == _ref_values(ref, evt, stats)
 
 
 def test_feature_update_event_typed_frame_roundtrip():
@@ -516,20 +519,24 @@ def test_feature_engine_rust_backend_parity_when_available():
         p = py_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         r = rust_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         assert p is not None and r is not None
-        assert r.values == p.values
+        # Rust kernel produces v1 (16 features); Python produces v2 (21).
+        # Compare first 16 for parity.
+        assert r.values[:16] == p.values[:16]
 
 
 # --- v2 features tests ---
 
 
-def test_v2_feature_set_has_19_features():
+def test_v2_feature_set_has_21_features():
     fs = build_default_lob_feature_set_v2()
-    assert len(fs.features) == 19
+    assert len(fs.features) == 21
     assert fs.feature_set_id == "lob_shared_v2"
     assert fs.schema_version == 2
     assert fs.features[16].feature_id == "ofi_depth_norm_ppm"
     assert fs.features[17].feature_id == "ret_autocov_5s_x1e6"
     assert fs.features[18].feature_id == "tob_survival_ms"
+    assert fs.features[19].feature_id == "impact_surprise_x1000"
+    assert fs.features[20].feature_id == "deep_depth_momentum_x1000"
 
 
 def test_v2_ofi_depth_norm_basic():

@@ -101,7 +101,7 @@ class _LobKernelState:
     spread_ema8: float = 0.0
     imbalance_ema8_ppm: float = 0.0
     initialized: bool = False
-    # --- v2 fields ---
+    # --- v2 fields: ofi_depth_norm, ret_autocov, tob_survival ---
     # Ring buffer for mid_price_x2 returns (for autocovariance)
     ret_buf: list[int] | None = None  # circular buffer of mid_price_x2 deltas
     ret_buf_pos: int = 0  # write position in ring buffer
@@ -109,6 +109,26 @@ class _LobKernelState:
     prev_mid_price_x2: int = 0  # previous mid_price_x2 for delta
     # TOB survival: timestamp of last best price change
     last_tob_change_ns: int = 0
+    # --- v2 fields: ISS (Impact Surprise Signal) ---
+    iss_ema_ofi: float = 0.0
+    iss_ema_ret: float = 0.0
+    iss_ema_ofi2: float = 1.0
+    iss_ema_ofi_ret: float = 0.0
+    iss_baseline_ema: float = 0.0
+    iss_prev_mid_x2: int = 0
+    iss_tick_count: int = 0
+    # --- v2 fields: MLDM (Multi-Level Depth Momentum) ---
+    mldm_prev_bid_qty_l2: float = 0.0
+    mldm_prev_bid_qty_l3: float = 0.0
+    mldm_prev_bid_qty_l4: float = 0.0
+    mldm_prev_bid_qty_l5: float = 0.0
+    mldm_prev_ask_qty_l2: float = 0.0
+    mldm_prev_ask_qty_l3: float = 0.0
+    mldm_prev_ask_qty_l4: float = 0.0
+    mldm_prev_ask_qty_l5: float = 0.0
+    mldm_deep_ema_fast: float = 0.0
+    mldm_deep_ema_slow: float = 0.0
+    mldm_output_ema: float = 0.0
 
 
 class FeatureEngine:
@@ -451,26 +471,6 @@ class FeatureEngine:
             spread_ema8_scaled = int(round(ks.spread_ema8))
             depth_imbalance_ema8_ppm = int(round(ks.imbalance_ema8_ppm))
 
-        # --- v2 features ---
-        compute_v2 = len(self._feature_ids) > 16
-        if compute_v2:
-            v2 = self._compute_v2_features(
-                ks,
-                stats,
-                mid_price_x2,
-                l1_bid_qty,
-                l1_ask_qty,
-                best_bid,
-                best_ask,
-            )
-        else:
-            v2 = ()
-
-        ks.prev_best_bid = best_bid
-        ks.prev_best_ask = best_ask
-        ks.prev_l1_bid_qty = l1_bid_qty
-        ks.prev_l1_ask_qty = l1_ask_qty
-
         v1_tuple = (
             best_bid,
             best_ask,
@@ -489,7 +489,39 @@ class FeatureEngine:
             int(spread_ema8_scaled),
             int(depth_imbalance_ema8_ppm),
         )
-        return v1_tuple if not v2 else v1_tuple + v2
+
+        # --- v2 features ---
+        # Must be computed BEFORE updating ks.prev_best_bid/ask (TOB survival needs old values).
+        n_features = len(self._feature_ids)
+        if n_features > 16:
+            # Save previous BBO for MLDM guard (needed before BBO update below)
+            _prev_bb_for_mldm = ks.prev_best_bid
+            _prev_ba_for_mldm = ks.prev_best_ask
+
+            v2_base = self._compute_v2_features(
+                ks,
+                stats,
+                mid_price_x2,
+                l1_bid_qty,
+                l1_ask_qty,
+                best_bid,
+                best_ask,
+            )
+
+        ks.prev_best_bid = best_bid
+        ks.prev_best_ask = best_ask
+        ks.prev_l1_bid_qty = l1_bid_qty
+        ks.prev_l1_ask_qty = l1_ask_qty
+
+        if n_features <= 16:
+            return v1_tuple
+
+        if n_features <= 19:
+            return v1_tuple + v2_base  # type: ignore[possibly-undefined]
+
+        iss_val = self._compute_iss(ks, int(ofi_l1_raw), mid_price_x2, bid_depth, ask_depth)
+        mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)  # type: ignore[possibly-undefined]
+        return v1_tuple + v2_base + (iss_val, mldm_val)  # type: ignore[possibly-undefined]
 
     def _compute_v2_features(
         self,
@@ -544,6 +576,138 @@ class FeatureEngine:
             tob_survival_ms = 0
 
         return (int(ofi_depth_norm_ppm), int(ret_autocov_5s_x1e6), int(tob_survival_ms))
+
+    # --- v2 feature methods: ISS + MLDM ---
+
+    _ISS_EMA_ALPHA: float = 2.0 / 201.0  # span=200
+    _ISS_BASELINE_ALPHA: float = 2.0 / 2001.0  # span=2000
+    _ISS_VAR_MIN: float = 0.01
+    _ISS_THRESHOLD: float = 0.3
+    _ISS_WARMUP: int = 400
+    _ISS_CLIP: float = 1.0
+
+    _MLDM_EMA_FAST: float = 0.11750309741540453  # 1 - exp(-1/8)
+    _MLDM_EMA_SLOW: float = 0.015503876312911768  # 1 - exp(-1/64)
+    _MLDM_EMA_OUT: float = 0.06058693718652422  # 1 - exp(-1/16)
+    _MLDM_CLIP: float = 2.0
+    _MLDM_WARMUP: int = 128
+
+    def _compute_iss(
+        self, ks: "_LobKernelState", ofi_raw: int, mid_x2: int, bid_depth: int, ask_depth: int
+    ) -> int:
+        """Compute Impact Surprise Signal. Returns scaled int x1000 (milli-units)."""
+        import math as _math
+
+        total_depth = float(max(bid_depth + ask_depth, 1))
+        depth_b_eq = 1.0 / (2.0 * total_depth + 1.0)
+
+        ks.iss_tick_count += 1
+
+        if ks.iss_tick_count <= 1:
+            ks.iss_prev_mid_x2 = mid_x2
+            ks.iss_baseline_ema = depth_b_eq
+            return 0
+
+        ret = float(mid_x2 - ks.iss_prev_mid_x2)
+        ks.iss_prev_mid_x2 = mid_x2
+        ofi_f = float(ofi_raw)
+        a = self._ISS_EMA_ALPHA
+
+        ks.iss_ema_ofi = (1.0 - a) * ks.iss_ema_ofi + a * ofi_f
+        ks.iss_ema_ret = (1.0 - a) * ks.iss_ema_ret + a * ret
+        ks.iss_ema_ofi2 = (1.0 - a) * ks.iss_ema_ofi2 + a * ofi_f * ofi_f
+        ks.iss_ema_ofi_ret = (1.0 - a) * ks.iss_ema_ofi_ret + a * ofi_f * ret
+
+        cov_hat = ks.iss_ema_ofi_ret - ks.iss_ema_ofi * ks.iss_ema_ret
+        var_hat = ks.iss_ema_ofi2 - ks.iss_ema_ofi * ks.iss_ema_ofi
+
+        b_hat = cov_hat / var_hat if var_hat > self._ISS_VAR_MIN else depth_b_eq
+
+        ba = self._ISS_BASELINE_ALPHA
+        ks.iss_baseline_ema = (1.0 - ba) * ks.iss_baseline_ema + ba * b_hat
+        b_eq = ks.iss_baseline_ema if ks.iss_baseline_ema > 1e-15 else depth_b_eq
+
+        if ks.iss_tick_count < self._ISS_WARMUP:
+            return 0
+
+        deviation = (b_hat - b_eq) / b_eq if b_eq > 1e-15 else 0.0
+        if abs(deviation) < self._ISS_THRESHOLD:
+            return 0
+
+        raw = _math.copysign(min(abs(deviation), self._ISS_CLIP), deviation)
+        return int(round(max(-self._ISS_CLIP, min(self._ISS_CLIP, raw)) * 1000))
+
+    def _compute_mldm(
+        self, ks: "_LobKernelState", event: object | None, best_bid: int, best_ask: int,
+        prev_best_bid: int = 0, prev_best_ask: int = 0,
+    ) -> int:
+        """Compute Multi-Level Depth Momentum. Returns scaled int x1000."""
+        import numpy as _np
+
+        # Extract L2-L5 quantities from event
+        cur_bq = [0.0, 0.0, 0.0, 0.0]  # L2,L3,L4,L5
+        cur_aq = [0.0, 0.0, 0.0, 0.0]
+        n_bid_levels = 0
+        n_ask_levels = 0
+
+        if event is not None:
+            bids = getattr(event, "bids", None)
+            asks = getattr(event, "asks", None)
+            if bids is not None:
+                try:
+                    b = _np.asarray(bids)
+                    n_bid_levels = min(b.shape[0], 5)
+                    for j in range(1, min(n_bid_levels, 5)):
+                        cur_bq[j - 1] = float(b[j][1]) if len(b[j]) > 1 else 0.0
+                except Exception:
+                    pass
+            if asks is not None:
+                try:
+                    a = _np.asarray(asks)
+                    n_ask_levels = min(a.shape[0], 5)
+                    for j in range(1, min(n_ask_levels, 5)):
+                        cur_aq[j - 1] = float(a[j][1]) if len(a[j]) > 1 else 0.0
+                except Exception:
+                    pass
+
+        # BBO-shift guard: zero deep_net when best price changes
+        bbo_shifted = (
+            ks.initialized
+            and (best_bid != prev_best_bid or best_ask != prev_best_ask)
+        )
+        thin_book = n_bid_levels < 2 or n_ask_levels < 2
+
+        prev_bq = [ks.mldm_prev_bid_qty_l2, ks.mldm_prev_bid_qty_l3,
+                    ks.mldm_prev_bid_qty_l4, ks.mldm_prev_bid_qty_l5]
+        prev_aq = [ks.mldm_prev_ask_qty_l2, ks.mldm_prev_ask_qty_l3,
+                    ks.mldm_prev_ask_qty_l4, ks.mldm_prev_ask_qty_l5]
+
+        # Update stored prev quantities
+        ks.mldm_prev_bid_qty_l2 = cur_bq[0]
+        ks.mldm_prev_bid_qty_l3 = cur_bq[1]
+        ks.mldm_prev_bid_qty_l4 = cur_bq[2]
+        ks.mldm_prev_bid_qty_l5 = cur_bq[3]
+        ks.mldm_prev_ask_qty_l2 = cur_aq[0]
+        ks.mldm_prev_ask_qty_l3 = cur_aq[1]
+        ks.mldm_prev_ask_qty_l4 = cur_aq[2]
+        ks.mldm_prev_ask_qty_l5 = cur_aq[3]
+
+        if bbo_shifted or thin_book or event is None:
+            deep_net = 0.0
+        else:
+            deep_net = sum(cur_bq[i] - prev_bq[i] for i in range(4)) - \
+                       sum(cur_aq[i] - prev_aq[i] for i in range(4))
+
+        ks.mldm_deep_ema_fast += self._MLDM_EMA_FAST * (deep_net - ks.mldm_deep_ema_fast)
+        ks.mldm_deep_ema_slow += self._MLDM_EMA_SLOW * (deep_net - ks.mldm_deep_ema_slow)
+        raw_momentum = ks.mldm_deep_ema_fast - ks.mldm_deep_ema_slow
+        ks.mldm_output_ema += self._MLDM_EMA_OUT * (raw_momentum - ks.mldm_output_ema)
+
+        if ks.iss_tick_count < self._MLDM_WARMUP:
+            return 0
+
+        clipped = max(-self._MLDM_CLIP, min(self._MLDM_CLIP, ks.mldm_output_ema))
+        return int(round(clipped * 1000))
 
     def _compute_values_rust(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
