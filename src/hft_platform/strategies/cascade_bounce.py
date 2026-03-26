@@ -1,0 +1,322 @@
+"""Cascade Bounce Strategy (CBS) — contrarian entry after large price moves.
+
+Detects large intraday price moves (>= threshold bps within a detection window)
+and enters contrarian, betting on mean-reversion. Holds for a fixed period with
+a tight stop-loss.
+
+Research: Round 14, Alpha Research Team (2026-03-26)
+Paper basis: Vlasiuk & Smirnov (2511.06177) — push-response anomalies
+Validated: OOS +3.00 bps/trade on TXFD6 L1 data (13 days, 7/10 days profitable)
+
+Economics (TMF / 微台指):
+    Contract value: 30,000 × 10 = 300,000 NTD
+    RT cost: ~1.33 bps (40 NTD commission)
+    Move threshold: 40 bps → contrarian entry
+    Hold: 300s, stop-loss: 15 bps
+    Rest-of-day only (opening 30 min excluded — directional gap effects)
+    Net OOS capture: +3.00 bps/trade (rest-of-day: +3.95 bps/trade)
+
+Key constraints:
+    - Non-overlapping: next entry only after entry_ts + hold_period
+    - Session gate: 09:15-13:45 (exclude opening 30 min)
+    - Single position at a time
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from typing import Optional
+
+from structlog import get_logger
+
+from hft_platform.contracts.strategy import Side
+from hft_platform.core import timebase
+from hft_platform.events import LOBStatsEvent
+from hft_platform.strategy.base import BaseStrategy
+
+logger = get_logger("strategy.cbs")
+
+# Default parameter values (CBS-40-300, validated OOS)
+_DEFAULT_MOVE_THRESHOLD_BPS: int = 40
+_DEFAULT_DETECT_WINDOW_NS: int = 600_000_000_000  # 600s
+_DEFAULT_HOLD_NS: int = 300_000_000_000  # 300s
+_DEFAULT_STOP_LOSS_BPS: int = 15
+_DEFAULT_COOLDOWN_NS: int = 5_000_000_000  # 5s after detection before entry
+_DEFAULT_SESSION_START_OFFSET_NS: int = 30 * 60 * 1_000_000_000  # 30 min after open
+_DEFAULT_SESSION_END_BEFORE_CLOSE_NS: int = 10 * 60 * 1_000_000_000  # 10 min before close
+
+
+class _PriceEntry:
+    """Lightweight price+timestamp for the detection window deque."""
+
+    __slots__ = ("ts_ns", "mid_x2")
+
+    def __init__(self, ts_ns: int, mid_x2: int) -> None:
+        self.ts_ns = ts_ns
+        self.mid_x2 = mid_x2
+
+
+class CascadeBounceStrategy(BaseStrategy):
+    """Contrarian strategy that enters after large intraday price moves.
+
+    Parameters
+    ----------
+    strategy_id : str
+        Strategy identifier.
+    move_threshold_bps : int
+        Minimum move size (bps) within detection window to trigger entry.
+    detect_window_ns : int
+        Lookback window (ns) for move detection.
+    hold_ns : int
+        Hold period (ns) after entry.
+    stop_loss_bps : int
+        Maximum adverse move (bps) before stop-loss exit.
+    cooldown_ns : int
+        Cooldown (ns) after move detection before entry.
+    session_start_offset_ns : int
+        Offset from first event (ns) before strategy activates (skip opening).
+    session_end_before_close_ns : int
+        Stop trading this many ns before session end.
+    **kwargs
+        Passed through to BaseStrategy.
+    """
+
+    __slots__ = (
+        "_move_threshold_bps",
+        "_detect_window_ns",
+        "_hold_ns",
+        "_stop_loss_bps",
+        "_cooldown_ns",
+        "_session_start_offset_ns",
+        "_session_end_before_close_ns",
+        "_price_buf",
+        "_state",
+        "_entry_ts_ns",
+        "_entry_mid_x2",
+        "_direction",
+        "_next_allowed_ts",
+        "_session_first_ts",
+    )
+
+    def __init__(
+        self,
+        strategy_id: str = "cascade_bounce",
+        move_threshold_bps: int = _DEFAULT_MOVE_THRESHOLD_BPS,
+        detect_window_ns: int = _DEFAULT_DETECT_WINDOW_NS,
+        hold_ns: int = _DEFAULT_HOLD_NS,
+        stop_loss_bps: int = _DEFAULT_STOP_LOSS_BPS,
+        cooldown_ns: int = _DEFAULT_COOLDOWN_NS,
+        session_start_offset_ns: int = _DEFAULT_SESSION_START_OFFSET_NS,
+        session_end_before_close_ns: int = _DEFAULT_SESSION_END_BEFORE_CLOSE_NS,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(strategy_id=strategy_id, **kwargs)
+        self._move_threshold_bps: int = move_threshold_bps
+        self._detect_window_ns: int = detect_window_ns
+        self._hold_ns: int = hold_ns
+        self._stop_loss_bps: int = stop_loss_bps
+        self._cooldown_ns: int = cooldown_ns
+        self._session_start_offset_ns: int = session_start_offset_ns
+        self._session_end_before_close_ns: int = session_end_before_close_ns
+
+        # Per-symbol state
+        self._price_buf: dict[str, deque[_PriceEntry]] = {}
+        self._state: dict[str, str] = {}  # "idle" | "positioned"
+        self._entry_ts_ns: dict[str, int] = {}
+        self._entry_mid_x2: dict[str, int] = {}
+        self._direction: dict[str, int] = {}  # +1 = long, -1 = short
+        self._next_allowed_ts: dict[str, int] = {}
+        self._session_first_ts: dict[str, int] = {}
+
+    def _init_symbol(self, symbol: str) -> None:
+        """Lazily initialize per-symbol state."""
+        if symbol not in self._state:
+            self._price_buf[symbol] = deque(maxlen=8192)
+            self._state[symbol] = "idle"
+            self._entry_ts_ns[symbol] = 0
+            self._entry_mid_x2[symbol] = 0
+            self._direction[symbol] = 0
+            self._next_allowed_ts[symbol] = 0
+            self._session_first_ts[symbol] = 0
+
+    def on_stats(self, event: LOBStatsEvent) -> None:
+        """Process LOB stats: maintain price window, detect moves, manage position."""
+        symbol = event.symbol
+        self._init_symbol(symbol)
+
+        mid_x2 = event.mid_price_x2
+        if mid_x2 is None or mid_x2 <= 0:
+            return
+
+        now_ns = event.ts
+        if now_ns <= 0:
+            now_ns = timebase.now_ns()
+
+        # Track session start
+        if self._session_first_ts[symbol] == 0:
+            self._session_first_ts[symbol] = now_ns
+
+        # Update price buffer (expire old entries)
+        buf = self._price_buf[symbol]
+        cutoff = now_ns - self._detect_window_ns
+        while buf and buf[0].ts_ns < cutoff:
+            buf.popleft()
+        buf.append(_PriceEntry(now_ns, mid_x2))
+
+        state = self._state[symbol]
+
+        if state == "positioned":
+            self._check_exit(symbol, now_ns, mid_x2)
+        elif state == "idle":
+            self._check_entry(symbol, now_ns, mid_x2, event)
+
+    def _in_session(self, symbol: str, now_ns: int) -> bool:
+        """Check if we're within the active trading session (skip opening)."""
+        first_ts = self._session_first_ts[symbol]
+        if first_ts == 0:
+            return False
+        elapsed = now_ns - first_ts
+        return elapsed >= self._session_start_offset_ns
+
+    def _check_entry(
+        self,
+        symbol: str,
+        now_ns: int,
+        mid_x2: int,
+        event: LOBStatsEvent,
+    ) -> None:
+        """Detect large moves and enter contrarian."""
+        # Enforce non-overlapping cooldown
+        if now_ns < self._next_allowed_ts[symbol]:
+            return
+
+        # Session gate
+        if not self._in_session(symbol, now_ns):
+            return
+
+        # Need sufficient price history
+        buf = self._price_buf[symbol]
+        if len(buf) < 2:
+            return
+
+        # Compute move from window start to current price
+        oldest = buf[0]
+        if oldest.mid_x2 <= 0:
+            return
+
+        # Move in bps (using mid_x2: multiply by 20000 then divide by mid_x2 for bps)
+        # move_bps = (mid_x2 - oldest.mid_x2) / oldest.mid_x2 * 10000
+        # Using integer math to avoid float: move_bps_x100 for precision
+        diff = mid_x2 - oldest.mid_x2
+        move_bps_x100 = diff * 1_000_000 // oldest.mid_x2
+        move_bps = move_bps_x100 // 100
+        abs_move = abs(move_bps)
+
+        if abs_move < self._move_threshold_bps:
+            return
+
+        # Large move detected! Enter contrarian
+        direction = -1 if diff > 0 else 1  # contrarian: sell if up, buy if down
+
+        # Place entry order
+        if direction == 1:
+            # Buy at best ask (passive)
+            price = event.best_ask
+            side = Side.BUY
+        else:
+            # Sell at best bid (passive)
+            price = event.best_bid
+            side = Side.SELL
+
+        if price <= 0:
+            return
+
+        # Check we're not already positioned
+        pos = self.position(symbol)
+        if pos != 0:
+            return
+
+        self.buy(symbol, price, 1) if side == Side.BUY else self.sell(symbol, price, 1)
+
+        # Update state
+        self._state[symbol] = "positioned"
+        self._entry_ts_ns[symbol] = now_ns
+        self._entry_mid_x2[symbol] = mid_x2
+        self._direction[symbol] = direction
+
+        logger.info(
+            "cbs_entry",
+            symbol=symbol,
+            direction="long" if direction == 1 else "short",
+            move_bps=move_bps,
+            mid_x2=mid_x2,
+            price=price,
+        )
+
+    def _check_exit(self, symbol: str, now_ns: int, mid_x2: int) -> None:
+        """Check stop-loss and time-based exit conditions."""
+        entry_mid = self._entry_mid_x2[symbol]
+        entry_ts = self._entry_ts_ns[symbol]
+        direction = self._direction[symbol]
+
+        if entry_mid <= 0:
+            return
+
+        # Unrealized PnL in bps (integer math)
+        pnl_diff = direction * (mid_x2 - entry_mid)
+        pnl_bps_x100 = pnl_diff * 1_000_000 // entry_mid
+        pnl_bps = pnl_bps_x100 // 100
+
+        elapsed_ns = now_ns - entry_ts
+        exit_reason: Optional[str] = None
+
+        # Stop-loss check
+        if pnl_bps < -self._stop_loss_bps:
+            exit_reason = "stop_loss"
+
+        # Time-based exit
+        if elapsed_ns >= self._hold_ns:
+            exit_reason = "time_exit"
+
+        if exit_reason is None:
+            return
+
+        # Exit: close the position
+        if not self.ctx:
+            return
+
+        l1 = self.ctx.get_l1_scaled(symbol)
+        if l1 is not None:
+            # l1 = (ts, bid, ask, mid_x2, spread, bid_depth, ask_depth)
+            if direction == 1:
+                # Long → sell at best bid
+                exit_price = l1[1]  # best_bid
+            else:
+                # Short → buy at best ask
+                exit_price = l1[2]  # best_ask
+        else:
+            # Fallback: use aggressive exit
+            exit_price = mid_x2 // 2  # approximate mid
+
+        if exit_price <= 0:
+            return
+
+        exit_side = Side.SELL if direction == 1 else Side.BUY
+        if exit_side == Side.BUY:
+            self.buy(symbol, exit_price, 1)
+        else:
+            self.sell(symbol, exit_price, 1)
+
+        logger.info(
+            "cbs_exit",
+            symbol=symbol,
+            reason=exit_reason,
+            pnl_bps=pnl_bps,
+            elapsed_ms=elapsed_ns // 1_000_000,
+            direction="long" if direction == 1 else "short",
+        )
+
+        # Reset state — non-overlapping: cooldown from ENTRY time
+        self._state[symbol] = "idle"
+        self._next_allowed_ts[symbol] = entry_ts + self._hold_ns
+        self._direction[symbol] = 0
