@@ -1030,6 +1030,16 @@ class SystemBootstrapper:
                 logger.warning("DailyReportService creation failed", error=str(exc))
                 daily_report_service = None
 
+        # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
+        try:
+            from hft_platform.notifications.alertmanager_bridge import AlertmanagerBridge
+
+            _alert_bridge = AlertmanagerBridge()
+            asyncio.get_event_loop().create_task(_alert_bridge.run())
+            logger.info("alertmanager_bridge_scheduled")
+        except Exception:  # noqa: BLE001
+            logger.warning("alertmanager_bridge_start_failed", exc_info=True)
+
         return ServiceRegistry(
             settings=self.settings,
             bus=bus,
