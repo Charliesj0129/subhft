@@ -758,6 +758,8 @@ class StrategyRunner:
                 )
 
             if intents:
+                _d7_submitted = 0
+                _d7_dropped = 0
                 for intent in intents:
                     # Populate decision_mid from LOB engine's last stats
                     if hasattr(self.lob_engine, "last_stats") and self.lob_engine.last_stats is not None:
@@ -775,15 +777,44 @@ class StrategyRunner:
                             "typed": bool(isinstance(intent, tuple) and intent and intent[0] == "typed_intent_v1"),
                         },
                     )
-                    if (
-                        self._typed_intent_fastpath
-                        and isinstance(intent, tuple)
-                        and intent
-                        and intent[0] == "typed_intent_v1"
-                    ):
-                        self._risk_submit_typed(intent)
+                    try:
+                        if (
+                            self._typed_intent_fastpath
+                            and isinstance(intent, tuple)
+                            and intent
+                            and intent[0] == "typed_intent_v1"
+                        ):
+                            self._risk_submit_typed(intent)
+                        else:
+                            self._risk_submit(intent)
+                        _d7_submitted += 1
+                    except asyncio.QueueFull:
+                        _d7_dropped += 1
+                        self.metrics.intent_queue_full_total.inc()
+                        logger.error(
+                            "intent_submit_queue_full",
+                            strategy_id=getattr(intent, "strategy_id", "?"),
+                            submitted=_d7_submitted,
+                            dropped=_d7_dropped,
+                            batch_size=len(intents),
+                        )
+                if _d7_dropped > 0:
+                    _sid = strategy.strategy_id
+                    if self._rust_circuit is not None:
+                        self._rust_circuit.record_failure(_sid, time.monotonic_ns())
                     else:
-                        self._risk_submit(intent)
+                        _failures = self._failure_counts.get(_sid, 0) + 1
+                        self._failure_counts[_sid] = _failures
+                        _state = self._circuit_states.get(_sid, "normal")
+                        _half = max(1, self._circuit_threshold // 2)
+                        if _state == "normal" and _failures >= _half:
+                            self._circuit_states[_sid] = "degraded"
+                            logger.warning("strategy_circuit_degraded", id=_sid, reason="queue_full_partial_batch")
+                        if _failures >= self._circuit_threshold and _state != "halted":
+                            self._circuit_states[_sid] = "halted"
+                            strategy.enabled = False
+                            self._circuit_halted_at_ns[_sid] = time.monotonic_ns()
+                            logger.error("strategy_circuit_halted", id=_sid, reason="queue_full_partial_batch")
 
     def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
         sampler = getattr(self, "_trace_sampler", None)
