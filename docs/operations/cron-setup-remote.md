@@ -86,10 +86,15 @@ Then paste the entries below (adjust paths as needed for your deployment root).
 # Output: /home/charl/subhft/outputs/reliability/monthly/monthly_<YYYY-MM>_*.{json,md}
 10 19 1 * * cd /home/charl/subhft && MONTH=$(date -d '1 month ago' +\%Y-\%m) RUN_DRILL=1 QUERY_GUARD_MIN_RUNS=5 QUERY_GUARD_MIN_SUITE_RUNS=5 FEATURE_CANARY_MIN_RUNS=4 CALLBACK_LATENCY_MIN_RUNS=4 make reliability-monthly-pack >> /tmp/hft_reliability_monthly.log 2>&1
 
-# --- SSD Health Snapshot (requires smartmontools) ---
-# Install: sudo apt install smartmontools
-# Uncomment after installation. Records SSD health weekly for wear tracking.
-# 0 4 * * 0 sudo smartctl -a /dev/sda >> /tmp/ssd_health.log 2>&1
+# --- Research Data 4-Tier Rotation ---
+# Archives raw/ dirs older than 90 days, purges old archives, cleans synthetic/, prunes runs/.
+# Emits hft_research_data_bytes + hft_research_runs_bytes to Prometheus textfile.
+0 4 * * 0 cd /home/charl/subhft && ./scripts/research_data_rotate.sh >> /tmp/research_data_rotate.log 2>&1
+
+# --- SMART Disk Health → Prometheus Textfile ---
+# Requires: sudo apt install smartmontools
+# Emits smartmon_* metrics (reallocated sectors, wear level, power-on hours, temp).
+0 5 * * 1 cd /home/charl/subhft && ./scripts/smart_check.sh >> /tmp/smart_check.log 2>&1
 ```
 
 ## WAL Archive Retention Decision
