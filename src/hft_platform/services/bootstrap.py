@@ -1030,6 +1030,25 @@ class SystemBootstrapper:
                 logger.warning("DailyReportService creation failed", error=str(exc))
                 daily_report_service = None
 
+        # Startup config snapshot (non-blocking)
+        from hft_platform.ops.config_snapshot import build_snapshot, write_snapshot_to_clickhouse
+
+        try:
+            _yaml_paths = [
+                "config/base/main.yaml",
+                str(self.settings.get("paths", {}).get("symbols", "config/symbols.yaml")),
+                str(self.settings.get("paths", {}).get("strategy_limits", "config/base/strategy_limits.yaml")),
+            ]
+            _snapshot = build_snapshot(yaml_paths=_yaml_paths)
+            if ch_client is not None:
+                asyncio.get_event_loop().create_task(
+                    write_snapshot_to_clickhouse(ch_client, _snapshot)
+                )
+            else:
+                logger.info("config_snapshot_fallback", **_snapshot)
+        except Exception:  # noqa: BLE001
+            logger.warning("config_snapshot_build_failed", exc_info=True)
+
         # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:
             from hft_platform.notifications.alertmanager_bridge import AlertmanagerBridge

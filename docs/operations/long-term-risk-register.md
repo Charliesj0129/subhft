@@ -118,7 +118,7 @@ free after the 2026-03-02 cleanup). Research data remains the largest uncontroll
 - **Timeline**: Gradual drift over time makes incident recreation harder
 - **Cause**: No mechanism to snapshot active config (YAML + env vars) at each startup
 - **Mitigation**: Future enhancement — log config hash to ClickHouse at boot
-- **Status**: 🔵 Backlog (low urgency)
+- **Status**: ✅ Done — allowlisted env snapshot (2026-03-27)
 
 ---
 
