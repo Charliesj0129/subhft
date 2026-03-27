@@ -52,6 +52,10 @@ class FillEvent:
     ingest_ts_ns: int
     match_ts_ns: int
 
+    # TCA: passthrough from OrderCommand for slippage decomposition
+    decision_price: int = 0  # LOB mid-price at signal time (x10000)
+    arrival_price: int = 0  # Price at order submit time (x10000)
+
 
 @dataclass(slots=True)
 class PositionDelta:
