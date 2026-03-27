@@ -25,6 +25,7 @@ from ._alpha import (
     cmd_alpha_validate,
     cmd_alpha_validate_batch,
 )
+from ._feasibility import cmd_feasibility_report
 from ._feature import (
     cmd_feature_preflight,
     cmd_feature_profiles,
@@ -737,6 +738,14 @@ def build_parser() -> argparse.ArgumentParser:
     tca_daily = tca_sub.add_parser("daily", help="Daily fill cost report from ClickHouse")
     tca_daily.add_argument("--date", default=None, help="Report date (YYYY-MM-DD, default today)")
     tca_daily.set_defaults(func=cmd_tca_daily)
+
+    # ── Feasibility ──────────────────────────────────────────────────────
+    feasibility = sub.add_parser("feasibility", help="Feasibility analysis")
+    feasibility_sub = feasibility.add_subparsers(dest="feasibility_cmd")
+
+    feas_report = feasibility_sub.add_parser("report", help="Generate feasibility report")
+    feas_report.add_argument("--date", default=None, help="Date (YYYY-MM-DD), default today")
+    feas_report.set_defaults(func=cmd_feasibility_report)
 
     # ── Signal Monitor TUI ──────────────────────────────────────────────
     monitor_cmd = sub.add_parser("monitor", help="Signal Monitor TUI (SHM + ClickHouse hybrid)")

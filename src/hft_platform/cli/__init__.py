@@ -37,6 +37,7 @@ from ._alpha import (  # noqa: F401
     cmd_alpha_search,
     cmd_alpha_validate,
 )
+from ._feasibility import cmd_feasibility_report  # noqa: F401
 from ._feature import (  # noqa: F401
     cmd_feature_preflight,
     cmd_feature_profiles,
