@@ -184,6 +184,15 @@ class MetricsRegistry:
                 "hft_backup_size_bytes",
                 "hft_backup_duration_seconds",
                 "hft_backup_retained_count",
+                # Pipeline Determinism & Async Defense (D1-D8)
+                "exec_queue_overflow_total",
+                "exec_overflow_drained_total",
+                "exec_overflow_evicted_total",
+                "terminal_before_registration_total",
+                "deferred_terminal_expired_total",
+                "risk_halt_blocked_total",
+                "order_queue_full_total",
+                "intent_queue_full_total",
             ]
         )
         # Market Data
@@ -766,6 +775,40 @@ class MetricsRegistry:
         self.backup_retained_count = Gauge(
             "hft_backup_retained_count",
             "Number of ClickHouse backups currently retained on disk",
+        )
+
+        # ── Pipeline Determinism & Async Defense (D1-D8) ─────────────
+        self.exec_queue_overflow_total = Counter(
+            "exec_queue_overflow_total",
+            "Fills routed to overflow buffer when raw_exec_queue is full",
+        )
+        self.exec_overflow_drained_total = Counter(
+            "exec_overflow_drained_total",
+            "Fills successfully drained from overflow buffer",
+        )
+        self.exec_overflow_evicted_total = Counter(
+            "exec_overflow_evicted_total",
+            "Fills LOST when overflow buffer is also full",
+        )
+        self.terminal_before_registration_total = Counter(
+            "terminal_before_registration_total",
+            "Terminal callbacks deferred because order not yet registered",
+        )
+        self.deferred_terminal_expired_total = Counter(
+            "deferred_terminal_expired_total",
+            "Deferred terminal callbacks that expired without resolution",
+        )
+        self.risk_halt_blocked_total = Counter(
+            "risk_halt_blocked_total",
+            "Commands blocked by RiskEngine HALT guard before dispatch",
+        )
+        self.order_queue_full_total = Counter(
+            "order_queue_full_total",
+            "Approved commands dropped due to order_queue full in RiskEngine",
+        )
+        self.intent_queue_full_total = Counter(
+            "intent_queue_full_total",
+            "Intents dropped due to QueueFull in StrategyRunner submit loop",
         )
 
         # System (v2)
