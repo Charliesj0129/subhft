@@ -22,6 +22,9 @@ from hft_platform.order.shadow import ShadowOrderSink
 
 logger = get_logger("order_adapter")
 
+_PENDING_SENTINEL = object()
+_TERMINAL_BEFORE_REGISTERED = object()
+
 
 TypedOrderCommandFrame: TypeAlias = tuple[
     str,  # marker: typed_order_cmd_v1
@@ -82,6 +85,8 @@ class OrderAdapter:
         "strategy_cb_mgr",
         "shadow_sink",
         "_orphan_detector",
+        "_pending_order_keys",
+        "_deferred_terminals",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -111,6 +116,8 @@ class OrderAdapter:
         # State - Protected by _live_orders_lock for concurrent access
         self.live_orders: Dict[str, Any] = {}  # Map "strategy_id:intent_id" -> Trade Object or Status dict
         self._live_orders_lock = asyncio.Lock()
+        self._pending_order_keys: set[str] = set()
+        self._deferred_terminals: list[tuple[str, str, float]] = []
 
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
@@ -229,7 +236,7 @@ class OrderAdapter:
         for key in live_keys:
             async with self._live_orders_lock:
                 trade = self.live_orders.get(key)
-            if trade is None:
+            if trade is None or trade is _PENDING_SENTINEL or trade is _TERMINAL_BEFORE_REGISTERED:
                 continue
             try:
                 await asyncio.wait_for(asyncio.to_thread(self.client.cancel_order, trade), timeout=timeout_s)
@@ -246,7 +253,27 @@ class OrderAdapter:
         """Called when an order reaches a terminal state (Filled, Cancelled, Rejected)."""
         async with self._live_orders_lock:
             order_key = self.order_id_resolver.resolve_order_key(strategy_id, order_id, self.live_orders)
+            entry = self.live_orders.get(order_key)
 
+            if entry is not None and entry is not _PENDING_SENTINEL:
+                # Normal path — order is registered, clean up
+                logger.info("Removing terminal order", key=order_key)
+                del self.live_orders[order_key]
+                return
+
+            # Check if any order for this strategy is in-flight
+            has_pending = any(k.startswith(f"{strategy_id}:") for k in self._pending_order_keys)
+            if has_pending:
+                self._deferred_terminals.append((strategy_id, order_id, time.monotonic()))
+                self.metrics.terminal_before_registration_total.inc()
+                logger.warning(
+                    "terminal_before_registration",
+                    strategy_id=strategy_id,
+                    broker_order_id=order_id,
+                )
+                return
+
+            # No pending orders — genuine orphan or already cleaned up
             if order_key in self.live_orders:
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
@@ -294,6 +321,34 @@ class OrderAdapter:
 
             for oid in ids:
                 self.order_id_map[str(oid)] = order_key
+
+    async def _drain_deferred_terminals(self, order_key: str, trade: Any) -> None:
+        """Re-process deferred terminal callbacks now that broker IDs are registered."""
+        now = time.monotonic()
+        remaining: list[tuple[str, str, float]] = []
+        async with self._live_orders_lock:
+            for sid, oid, ts in self._deferred_terminals:
+                if now - ts >= 30.0:
+                    logger.error(
+                        "deferred_terminal_expired",
+                        strategy_id=sid,
+                        broker_order_id=oid,
+                        age_s=round(now - ts, 1),
+                    )
+                    self.metrics.deferred_terminal_expired_total.inc()
+                    continue
+                resolved = self.order_id_resolver.resolve_order_key(sid, oid, self.live_orders)
+                if resolved in self.live_orders:
+                    del self.live_orders[resolved]
+                    logger.info(
+                        "deferred_terminal_cleanup",
+                        key=resolved,
+                        broker_order_id=oid,
+                        defer_age_ms=int((now - ts) * 1000),
+                    )
+                else:
+                    remaining.append((sid, oid, ts))
+            self._deferred_terminals = remaining
 
     async def execute(self, cmd: OrderCommand) -> None:
         intent = cmd.intent
@@ -446,7 +501,11 @@ class OrderAdapter:
 
     def _pending_close_qty(self, symbol: str, side: Side) -> int:
         pending_qty = 0
-        for trade in self.live_orders.values():
+        # Note: live_orders snapshot for thread safety — full lock in async callers
+        orders_snapshot = dict(self.live_orders)
+        for trade in orders_snapshot.values():
+            if trade is _PENDING_SENTINEL or trade is _TERMINAL_BEFORE_REGISTERED:
+                continue
             if self._live_order_symbol(trade) != symbol:
                 continue
             if self._live_order_side(trade) != side:
@@ -571,6 +630,11 @@ class OrderAdapter:
                 # TIF Mapping via broker codec
                 tif_str = self._broker_codec.encode_tif(intent.tif)
 
+                # D2: Pre-register sentinel to track in-flight order
+                async with self._live_orders_lock:
+                    self.live_orders[order_key] = _PENDING_SENTINEL
+                    self._pending_order_keys.add(order_key)
+
                 # Broker-specific price type encoding + validation
                 price_type = self._broker_codec.encode_price_type(str(order_params.get("price_type", "LMT")))
                 if price_type in {"MKT", "MKP"} and tif_str == "ROD":
@@ -582,6 +646,9 @@ class OrderAdapter:
                         tif=tif_str,
                     )
                     self.metrics.order_reject_total.inc()
+                    async with self._live_orders_lock:
+                        self.live_orders.pop(order_key, None)
+                        self._pending_order_keys.discard(order_key)
                     return
 
                 # Live safety: CA must be active when enabled
@@ -592,6 +659,9 @@ class OrderAdapter:
                             symbol=intent.symbol,
                         )
                         self.metrics.order_reject_total.inc()
+                        async with self._live_orders_lock:
+                            self.live_orders.pop(order_key, None)
+                            self._pending_order_keys.discard(order_key)
                         return
 
                 trade = await self._call_api(
@@ -611,6 +681,9 @@ class OrderAdapter:
                     **order_params,
                 )
                 if trade is None:
+                    async with self._live_orders_lock:
+                        self.live_orders.pop(order_key, None)
+                        self._pending_order_keys.discard(order_key)
                     return
 
                 self.metrics.order_actions_total.labels(type="new").inc()
@@ -632,12 +705,14 @@ class OrderAdapter:
                         trade["_external_timestamp"] = trade_ts
                     # For objects, we'll rely on live_orders insertion time
 
-                # Store with lock protection
+                # D2: Replace sentinel with real trade
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = trade
+                    self._pending_order_keys.discard(order_key)
 
                 # Populate lookup using Shioaji trade attributes (broker ID -> order_key).
                 await self._register_broker_ids(order_key, trade)
+                await self._drain_deferred_terminals(order_key, trade)
 
                 self.rate_limiter.record()
                 self.circuit_breaker.record_success()
