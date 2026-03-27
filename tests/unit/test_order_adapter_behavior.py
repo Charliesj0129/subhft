@@ -117,7 +117,7 @@ def test_circuit_breaker_blocks(mock_load):
     asyncio.run(adapter._dispatch_to_api(_cmd(intent)))
     asyncio.run(adapter._dispatch_to_api(_cmd(intent)))
 
-    assert adapter.circuit_breaker.open_until > time.time()
+    assert adapter.circuit_breaker.open_until > time.monotonic()
 
     asyncio.run(adapter.execute(_cmd(intent)))
     assert client.place_order.call_count == 2

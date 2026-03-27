@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -59,7 +60,7 @@ class StormGuard:
         self.thresholds = thresholds or RiskThresholds()
         self._apply_env_overrides()
         self.metrics = MetricsRegistry.get()
-        self.last_state_change = timebase.now_s()
+        self.last_state_change = time.monotonic()
         self._de_escalate_count: int = 0
         self._storm_entry_ts: float = 0.0  # precision-time
         self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
@@ -147,7 +148,7 @@ class StormGuard:
         new_state, reason = self._evaluate_target_state(drawdown_bps, latency_us, feed_gap_s)
 
         # Transition Logic (with hysteresis protection for de-escalation)
-        now = timebase.now_s()
+        now = time.monotonic()
         if new_state > self.state:
             # Escalation: always instant (safety-first)
             self._de_escalate_count = 0
@@ -232,7 +233,7 @@ class StormGuard:
 
         # Only escalate — never de-escalate from drift burst
         if target > self.state:
-            now = timebase.now_s()
+            now = time.monotonic()
             self._de_escalate_count = 0
             if target >= StormGuardState.STORM and self.state < StormGuardState.STORM:
                 self._storm_entry_ts = now
@@ -251,7 +252,13 @@ class StormGuard:
     def transition(self, new_state: StormGuardState, reason: str) -> None:
         old_state = self.state
         self.state = new_state
-        self.last_state_change = timebase.now_s()
+        now_mono = time.monotonic()
+        self.last_state_change = now_mono
+        # Track entry timestamps for cooldown calculations when transition() is called directly
+        if new_state >= StormGuardState.STORM and old_state < StormGuardState.STORM:
+            self._storm_entry_ts = now_mono
+        if new_state == StormGuardState.HALT:
+            self._halt_entry_ts = now_mono
 
         logger.warning("StormGuard Transition", old=old_state.name, new=new_state.name, reason=reason)
 

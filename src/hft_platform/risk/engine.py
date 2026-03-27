@@ -440,7 +440,7 @@ class RiskEngine:
     def create_typed_command_frame_from_typed_frame(self, frame: Any) -> tuple[Any, ...]:
         """Prototype typed command frame for OrderAdapter typed consume path."""
         cmd_id = self._next_cmd_id()
-        deadline = timebase.now_ns() + 500_000_000
+        deadline = time.monotonic_ns() + 500_000_000
         created_ns = timebase.now_ns()
         return (
             "typed_order_cmd_v1",
@@ -473,7 +473,7 @@ class RiskEngine:
     def create_command(self, intent: OrderIntent) -> OrderCommand:
         cmd_id = self._next_cmd_id()
         # Set 500ms deadline from now (relaxed for Python/Docker latency)
-        deadline = timebase.now_ns() + 500_000_000
+        deadline = time.monotonic_ns() + 500_000_000
 
         cmd = OrderCommand(
             cmd_id=cmd_id,

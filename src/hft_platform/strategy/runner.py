@@ -534,7 +534,7 @@ class StrategyRunner:
                         continue
                 elif self._circuit_states.get(sid) == "halted":
                     halted_at = self._circuit_halted_at_ns.get(sid, 0)
-                    if halted_at and timebase.now_ns() - halted_at >= self._circuit_cooldown_ns:
+                    if halted_at and time.monotonic_ns() - halted_at >= self._circuit_cooldown_ns:
                         self._circuit_states[sid] = "degraded"
                         self._failure_counts[sid] = self._circuit_threshold // 2
                         self._circuit_success_counts[sid] = 0
@@ -655,7 +655,7 @@ class StrategyRunner:
                     if failures >= self._circuit_threshold and state != "halted":
                         self._circuit_states[sid] = "halted"
                         strategy.enabled = False
-                        self._circuit_halted_at_ns[sid] = timebase.now_ns()
+                        self._circuit_halted_at_ns[sid] = time.monotonic_ns()
                         logger.error(
                             "Strategy circuit breaker halted",
                             id=sid,

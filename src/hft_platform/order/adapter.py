@@ -189,7 +189,7 @@ class OrderAdapter:
                     continue
 
                 # Check Deadline
-                if timebase.now_ns() > cmd.deadline_ns:
+                if time.monotonic_ns() > cmd.deadline_ns:
                     logger.warning("Order Timeout (Pre-dispatch)", cmd_id=cmd.cmd_id)
                     self.order_queue.task_done()
                     continue
