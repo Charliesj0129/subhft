@@ -646,6 +646,9 @@ experiment-gc-dry-run: ## Dry-run experiment GC (print what would be deleted)
 hotpath-profile: ## Profile per-stage latency: normalizer → LOB → feature → strategy → risk (10k iterations)
 	uv run python scripts/latency/hotpath_profile_matrix.py
 
+quarterly-health-check: ## Run quarterly infrastructure health check
+	uv run python scripts/quarterly_health_check.py
+
 # ============================================================================
 # Help
 # ============================================================================

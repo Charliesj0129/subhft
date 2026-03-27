@@ -95,6 +95,11 @@ Then paste the entries below (adjust paths as needed for your deployment root).
 # Requires: sudo apt install smartmontools
 # Emits smartmon_* metrics (reallocated sectors, wear level, power-on hours, temp).
 0 5 * * 1 cd /home/charl/subhft && ./scripts/smart_check.sh >> /tmp/smart_check.log 2>&1
+
+# --- Quarterly Infrastructure Health Check (quarterly) ---
+# Checks: ClickHouse TTL, Prometheus storage, OS updates, SMART, Shioaji SDK pin.
+# Outputs JSON report + optional Telegram summary.
+0 7 1 1,4,7,10 * cd ~/subhft && make quarterly-health-check >> /tmp/hft_quarterly_health.log 2>&1
 ```
 
 ## WAL Archive Retention Decision
