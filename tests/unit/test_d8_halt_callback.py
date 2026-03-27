@@ -1,4 +1,5 @@
 """D8: StormGuard halt callback exceptions must be logged, not silently swallowed."""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +13,7 @@ from hft_platform.risk.storm_guard import StormGuard, StormGuardState
 @pytest.fixture()
 def storm_guard_with_failing_callback():
     """StormGuard whose halt callback raises RuntimeError."""
+
     async def _bad_callback():
         raise RuntimeError("callback boom")
 
@@ -43,6 +45,7 @@ def test_halt_callback_exception_is_logged(storm_guard_with_failing_callback, ca
 
 def test_halt_callback_success_no_error_log(capsys):
     """When the halt callback coroutine succeeds, no error is logged."""
+
     async def _ok_callback():
         pass
 

@@ -1,10 +1,8 @@
 """D3: Timeout/cooldown paths must use monotonic clock, not wall-clock."""
+
 from __future__ import annotations
 
-import time
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 class TestStormGuardMonotonic:
@@ -21,9 +19,7 @@ class TestStormGuardMonotonic:
             sg._de_escalate_count = 0
             sg.update(drawdown_bps=sg.thresholds.storm_drawdown_bps - 1)
 
-        assert sg._storm_entry_ts == 1000.0, (
-            f"Expected monotonic value 1000.0, got {sg._storm_entry_ts}"
-        )
+        assert sg._storm_entry_ts == 1000.0, f"Expected monotonic value 1000.0, got {sg._storm_entry_ts}"
 
     def test_halt_cooldown_uses_monotonic(self):
         from hft_platform.risk.storm_guard import StormGuard, StormGuardState
@@ -119,6 +115,4 @@ class TestRiskEngineDeadlineMonotonic:
         with patch("time.monotonic_ns", return_value=5_000_000_000):
             cmd = engine.create_command(mock_intent)
 
-        assert cmd.deadline_ns == 5_500_000_000, (
-            f"Expected 5_500_000_000, got {cmd.deadline_ns}"
-        )
+        assert cmd.deadline_ns == 5_500_000_000, f"Expected 5_500_000_000, got {cmd.deadline_ns}"

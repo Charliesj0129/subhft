@@ -4,6 +4,7 @@
 Computes slippage for each fill and exports Prometheus metrics.
 Not hot-path: called in the fill callback path (parallel to recording).
 """
+
 from __future__ import annotations
 
 from structlog import get_logger
@@ -14,15 +15,15 @@ from hft_platform.tca.slippage import SlippageDecomposer
 logger = get_logger("execution.slippage_tracker")
 
 try:
-    from prometheus_client import Histogram, Counter
+    from prometheus_client import Counter, Histogram
 
-    SLIPPAGE_BPS = Histogram(
+    SLIPPAGE_BPS: Histogram | None = Histogram(
         "hft_fill_slippage_bps",
         "Per-fill total slippage in basis points",
         ["strategy", "symbol"],
         buckets=[0, 0.5, 1, 2, 5, 10, 20, 50],
     )
-    FILLS_TRACKED = Counter(
+    FILLS_TRACKED: Counter | None = Counter(
         "hft_slippage_fills_tracked_total",
         "Total fills processed by slippage tracker",
     )

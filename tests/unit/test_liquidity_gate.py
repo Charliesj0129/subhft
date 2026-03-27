@@ -1,8 +1,7 @@
 # tests/unit/test_liquidity_gate.py
 """Tests for spread-based liquidity gate."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from hft_platform.risk.liquidity_gate import LiquidityGate
 

@@ -2,6 +2,7 @@
 
 Designed to integrate as a section within DailyReportService, not standalone.
 """
+
 from __future__ import annotations
 
 from hft_platform.tca.types import TCADailyReport

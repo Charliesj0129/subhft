@@ -10,6 +10,7 @@ Components:
 
 WARNING: float arithmetic — offline TCA analysis only, NOT for live accounting.
 """
+
 from __future__ import annotations
 
 from hft_platform.tca.types import SlippageBreakdown
@@ -34,8 +35,12 @@ class SlippageDecomposer:
     ) -> SlippageBreakdown:
         if notional_ntd == 0:
             return SlippageBreakdown(
-                commission_bps=0.0, tax_bps=0.0, delay_cost_bps=0.0,
-                execution_cost_bps=0.0, market_impact_bps=0.0, total_bps=0.0,
+                commission_bps=0.0,
+                tax_bps=0.0,
+                delay_cost_bps=0.0,
+                execution_cost_bps=0.0,
+                market_impact_bps=0.0,
+                total_bps=0.0,
             )
 
         notional = float(notional_ntd)
@@ -58,7 +63,10 @@ class SlippageDecomposer:
         total_bps = commission_bps + tax_bps + delay_cost_bps + execution_cost_bps + market_impact_bps
 
         return SlippageBreakdown(
-            commission_bps=commission_bps, tax_bps=tax_bps,
-            delay_cost_bps=delay_cost_bps, execution_cost_bps=execution_cost_bps,
-            market_impact_bps=market_impact_bps, total_bps=total_bps,
+            commission_bps=commission_bps,
+            tax_bps=tax_bps,
+            delay_cost_bps=delay_cost_bps,
+            execution_cost_bps=execution_cost_bps,
+            market_impact_bps=market_impact_bps,
+            total_bps=total_bps,
         )

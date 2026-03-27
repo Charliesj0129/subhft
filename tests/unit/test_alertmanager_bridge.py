@@ -1,4 +1,5 @@
 """Tests for Alertmanager → Telegram bridge."""
+
 from __future__ import annotations
 
 import asyncio
@@ -126,19 +127,13 @@ class TestAlertmanagerBridgeServer:
         mock_sender.send = AsyncMock(return_value=True)
         bridge = AlertmanagerBridge(port=0, sender=mock_sender)
 
-        bridge._server = await asyncio.start_server(
-            bridge._handle_connection, "127.0.0.1", 0
-        )
+        bridge._server = await asyncio.start_server(bridge._handle_connection, "127.0.0.1", 0)
         port = bridge._server.sockets[0].getsockname()[1]
 
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
             body = json.dumps(SAMPLE_FIRING).encode()
-            request = (
-                f"POST /webhook/alertmanager HTTP/1.1\r\n"
-                f"Content-Length: {len(body)}\r\n"
-                f"\r\n"
-            ).encode() + body
+            request = (f"POST /webhook/alertmanager HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body
             writer.write(request)
             await writer.drain()
             response = await asyncio.wait_for(reader.read(4096), timeout=5.0)
@@ -156,9 +151,7 @@ class TestAlertmanagerBridgeServer:
     async def test_healthz_returns_ok(self) -> None:
         mock_sender = AsyncMock(spec=TelegramSender)
         bridge = AlertmanagerBridge(port=0, sender=mock_sender)
-        bridge._server = await asyncio.start_server(
-            bridge._handle_connection, "127.0.0.1", 0
-        )
+        bridge._server = await asyncio.start_server(bridge._handle_connection, "127.0.0.1", 0)
         port = bridge._server.sockets[0].getsockname()[1]
 
         try:
@@ -175,9 +168,7 @@ class TestAlertmanagerBridgeServer:
     async def test_unknown_path_returns_404(self) -> None:
         mock_sender = AsyncMock(spec=TelegramSender)
         bridge = AlertmanagerBridge(port=0, sender=mock_sender)
-        bridge._server = await asyncio.start_server(
-            bridge._handle_connection, "127.0.0.1", 0
-        )
+        bridge._server = await asyncio.start_server(bridge._handle_connection, "127.0.0.1", 0)
         port = bridge._server.sockets[0].getsockname()[1]
 
         try:
@@ -194,19 +185,13 @@ class TestAlertmanagerBridgeServer:
     async def test_invalid_json_returns_400(self) -> None:
         mock_sender = AsyncMock(spec=TelegramSender)
         bridge = AlertmanagerBridge(port=0, sender=mock_sender)
-        bridge._server = await asyncio.start_server(
-            bridge._handle_connection, "127.0.0.1", 0
-        )
+        bridge._server = await asyncio.start_server(bridge._handle_connection, "127.0.0.1", 0)
         port = bridge._server.sockets[0].getsockname()[1]
 
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
             body = b"not valid json {"
-            request = (
-                f"POST /webhook/alertmanager HTTP/1.1\r\n"
-                f"Content-Length: {len(body)}\r\n"
-                f"\r\n"
-            ).encode() + body
+            request = (f"POST /webhook/alertmanager HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body
             writer.write(request)
             await writer.drain()
             response = await asyncio.wait_for(reader.read(4096), timeout=5.0)
@@ -220,19 +205,13 @@ class TestAlertmanagerBridgeServer:
         mock_sender = AsyncMock(spec=TelegramSender)
         mock_sender.send = AsyncMock(return_value=True)
         bridge = AlertmanagerBridge(port=0, sender=mock_sender)
-        bridge._server = await asyncio.start_server(
-            bridge._handle_connection, "127.0.0.1", 0
-        )
+        bridge._server = await asyncio.start_server(bridge._handle_connection, "127.0.0.1", 0)
         port = bridge._server.sockets[0].getsockname()[1]
 
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
             body = json.dumps({"status": "firing", "alerts": []}).encode()
-            request = (
-                f"POST /webhook/alertmanager HTTP/1.1\r\n"
-                f"Content-Length: {len(body)}\r\n"
-                f"\r\n"
-            ).encode() + body
+            request = (f"POST /webhook/alertmanager HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body
             writer.write(request)
             await writer.drain()
             response = await asyncio.wait_for(reader.read(4096), timeout=5.0)
@@ -248,9 +227,7 @@ class TestAlertmanagerBridgeServer:
         mock_sender = AsyncMock(spec=TelegramSender)
         mock_sender.send = AsyncMock(return_value=True)
         bridge = AlertmanagerBridge(port=0, sender=mock_sender)
-        bridge._server = await asyncio.start_server(
-            bridge._handle_connection, "127.0.0.1", 0
-        )
+        bridge._server = await asyncio.start_server(bridge._handle_connection, "127.0.0.1", 0)
         port = bridge._server.sockets[0].getsockname()[1]
 
         try:
@@ -266,11 +243,7 @@ class TestAlertmanagerBridgeServer:
                 ],
             }
             body = json.dumps(payload).encode()
-            request = (
-                f"POST /webhook/alertmanager HTTP/1.1\r\n"
-                f"Content-Length: {len(body)}\r\n"
-                f"\r\n"
-            ).encode() + body
+            request = (f"POST /webhook/alertmanager HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body
             writer.write(request)
             await writer.drain()
             response = await asyncio.wait_for(reader.read(4096), timeout=5.0)

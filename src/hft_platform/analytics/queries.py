@@ -1,4 +1,5 @@
 """ClickHouse aggregation queries for analytics and feasibility reporting."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -22,8 +23,11 @@ def query_daily_pnl(ch_client: Any, date_str: str) -> list[dict[str, Any]]:
     )
     return [
         {
-            "strategy": r[0], "symbol": r[1], "fill_count": r[2],
-            "total_qty": r[3], "total_cost_ntd": r[4],
+            "strategy": r[0],
+            "symbol": r[1],
+            "fill_count": r[2],
+            "total_qty": r[3],
+            "total_cost_ntd": r[4],
         }
         for r in rows
     ]
@@ -43,10 +47,7 @@ def query_slippage_distribution(ch_client: Any, date_str: str) -> list[dict[str,
         """,
         {"date": date_str},
     )
-    return [
-        {"symbol": r[0], "count": r[1], "avg_ticks": r[2], "p95_ticks": r[3]}
-        for r in rows
-    ]
+    return [{"symbol": r[0], "count": r[1], "avg_ticks": r[2], "p95_ticks": r[3]} for r in rows]
 
 
 def query_fill_quality(ch_client: Any, date_str: str) -> list[dict[str, Any]]:
@@ -66,8 +67,11 @@ def query_fill_quality(ch_client: Any, date_str: str) -> list[dict[str, Any]]:
     )
     return [
         {
-            "strategy": r[0], "symbol": r[1], "count": r[2],
-            "avg_latency_ms": r[3], "p95_latency_ms": r[4],
+            "strategy": r[0],
+            "symbol": r[1],
+            "count": r[2],
+            "avg_latency_ms": r[3],
+            "p95_latency_ms": r[4],
         }
         for r in rows
     ]
@@ -87,7 +91,4 @@ def query_liquidity_gate_stats(ch_client: Any, date_str: str) -> list[dict[str, 
         """,
         {"date": date_str},
     )
-    return [
-        {"symbol": r[0], "rejected": r[1], "passed": r[2], "total": r[3]}
-        for r in rows
-    ]
+    return [{"symbol": r[0], "rejected": r[1], "passed": r[2], "total": r[3]} for r in rows]

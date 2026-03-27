@@ -1,4 +1,5 @@
 """Daily PnL report section — integrates into DailyReportService."""
+
 from __future__ import annotations
 
 

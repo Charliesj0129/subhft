@@ -5,6 +5,7 @@ Receives Alertmanager webhook POSTs and forwards to Telegram.
 
 Port configured via ``HFT_ALERT_BRIDGE_PORT`` (default 8081).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,11 +42,7 @@ def format_alert_message(payload: dict[str, Any]) -> str:
         description = annotations.get("description", "")
 
         icon = "\u26a0\ufe0f" if status == "FIRING" else "\u2705"
-        lines.append(
-            f"{icon} <b>[{status}] {name}</b>\n"
-            f"  Severity: {severity}\n"
-            f"  {summary}"
-        )
+        lines.append(f"{icon} <b>[{status}] {name}</b>\n  Severity: {severity}\n  {summary}")
         if description:
             lines.append(f"  {description}")
 
@@ -68,12 +65,8 @@ class AlertmanagerBridge:
         port: int = 0,
         sender: TelegramSender | None = None,
     ) -> None:
-        self._port: int = port or int(
-            os.getenv("HFT_ALERT_BRIDGE_PORT", str(_DEFAULT_PORT))
-        )
-        self._sender: TelegramSender = sender if sender is not None else TelegramSender(
-            enabled=True
-        )
+        self._port: int = port or int(os.getenv("HFT_ALERT_BRIDGE_PORT", str(_DEFAULT_PORT)))
+        self._sender: TelegramSender = sender if sender is not None else TelegramSender(enabled=True)
         self._server: asyncio.Server | None = None
 
     # -- HTTP protocol handler -----------------------------------------------
@@ -103,9 +96,7 @@ class AlertmanagerBridge:
 
             body = b""
             if content_length > 0:
-                body = await asyncio.wait_for(
-                    reader.readexactly(content_length), timeout=5.0
-                )
+                body = await asyncio.wait_for(reader.readexactly(content_length), timeout=5.0)
 
             if method == "POST" and path == "/webhook/alertmanager":
                 await self._handle_webhook(body, writer)
@@ -129,9 +120,7 @@ class AlertmanagerBridge:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _handle_webhook(
-        self, body: bytes, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _handle_webhook(self, body: bytes, writer: asyncio.StreamWriter) -> None:
         """Parse payload, format message, and forward to Telegram."""
         try:
             payload = json.loads(body)
@@ -141,10 +130,7 @@ class AlertmanagerBridge:
 
         msg = format_alert_message(payload)
         if msg:
-            is_critical = any(
-                a.get("labels", {}).get("severity") == "critical"
-                for a in payload.get("alerts", [])
-            )
+            is_critical = any(a.get("labels", {}).get("severity") == "critical" for a in payload.get("alerts", []))
             sent = await self._sender.send(msg, critical=is_critical)
             logger.info(
                 "alertmanager_webhook_forwarded",
@@ -178,12 +164,12 @@ class AlertmanagerBridge:
         """Start the bridge HTTP server and serve until cancelled."""
         try:
             self._server = await asyncio.start_server(
-                self._handle_connection, "0.0.0.0", self._port  # nosec B104
+                self._handle_connection,
+                "0.0.0.0",
+                self._port,  # nosec B104
             )
         except OSError as exc:
-            logger.error(
-                "alertmanager_bridge_bind_failed", port=self._port, error=str(exc)
-            )
+            logger.error("alertmanager_bridge_bind_failed", port=self._port, error=str(exc))
             return
 
         actual_port = self._server.sockets[0].getsockname()[1]

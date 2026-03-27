@@ -43,8 +43,10 @@ def _make_intent(**overrides) -> OrderIntent:
 
 def _make_cmd(intent: OrderIntent, deadline_ns: int | None = None, cmd_id: int = 1) -> OrderCommand:
     """Create an OrderCommand with explicit or future deadline."""
+    import time
+
     if deadline_ns is None:
-        deadline_ns = timebase.now_ns() + 5_000_000_000  # 5s in future
+        deadline_ns = time.monotonic_ns() + 5_000_000_000  # 5s in future
     return OrderCommand(
         cmd_id=cmd_id,
         intent=intent,
@@ -82,17 +84,21 @@ def _make_adapter(tmp_path, client=None) -> OrderAdapter:
 @pytest.mark.asyncio
 async def test_deadline_expiry_drops_command(tmp_path):
     """A command whose deadline_ns < now_ns must be consumed but NOT dispatched."""
+    from unittest.mock import patch
+
     adapter = _make_adapter(tmp_path)
 
     # Create command with deadline already in the past
-    expired_deadline = timebase.now_ns() - 1_000_000  # 1ms ago
+    import time
+
+    expired_deadline = time.monotonic_ns() - 1_000_000  # 1ms ago
     intent = _make_intent()
     cmd = _make_cmd(intent, deadline_ns=expired_deadline)
 
     # Put expired command in queue
     await adapter.order_queue.put(cmd)
 
-    # Track whether execute is called
+    # Track whether execute is called via patch.object (__slots__ class)
     execute_called = False
     original_execute = adapter.execute
 
@@ -101,21 +107,18 @@ async def test_deadline_expiry_drops_command(tmp_path):
         execute_called = True
         await original_execute(c)
 
-    adapter.execute = mock_execute
-
     # Run adapter briefly, then stop
     async def stop_after_consume():
-        # Wait until queue is consumed
         while not adapter.order_queue.empty():
             await asyncio.sleep(0.01)
-        # Give a small buffer for processing
         await asyncio.sleep(0.05)
         adapter.running = False
 
-    await asyncio.gather(
-        adapter.run(),
-        stop_after_consume(),
-    )
+    with patch.object(type(adapter), "execute", side_effect=mock_execute):
+        await asyncio.gather(
+            adapter.run(),
+            stop_after_consume(),
+        )
 
     # Command was consumed (queue is empty) but execute was NOT called
     assert adapter.order_queue.empty()

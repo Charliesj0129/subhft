@@ -1,8 +1,7 @@
 # tests/unit/test_slippage_tracker.py
 """Tests for per-fill real-time slippage tracker."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import Side
@@ -19,10 +18,20 @@ def _make_fill(
     tax: int = 0,
 ) -> FillEvent:
     return FillEvent(
-        fill_id="f1", account_id="acc", order_id="o1", strategy_id="strat",
-        symbol="TXFD6", side=Side.BUY, qty=qty, price=price,
-        fee=fee, tax=tax, ingest_ts_ns=0, match_ts_ns=0,
-        decision_price=decision_price, arrival_price=arrival_price,
+        fill_id="f1",
+        account_id="acc",
+        order_id="o1",
+        strategy_id="strat",
+        symbol="TXFD6",
+        side=Side.BUY,
+        qty=qty,
+        price=price,
+        fee=fee,
+        tax=tax,
+        ingest_ts_ns=0,
+        match_ts_ns=0,
+        decision_price=decision_price,
+        arrival_price=arrival_price,
     )
 
 

@@ -1,10 +1,9 @@
 """D5: PositionStore.snapshot_positions() must be atomic under _fill_lock."""
+
 from __future__ import annotations
 
 import threading
 import time
-
-import pytest
 
 
 def test_snapshot_positions_exists():
@@ -21,7 +20,6 @@ def test_snapshot_positions_exists():
 
 def test_snapshot_holds_lock_during_copy():
     """snapshot_positions must hold _fill_lock during dict copy."""
-    from unittest.mock import MagicMock, patch
 
     from hft_platform.execution.positions import PositionStore
 

@@ -286,8 +286,10 @@ class TestCircuitBreaker:
         cb.record_failure()
         assert cb.is_open() is True
 
-        # Simulate cooldown by setting open_until to the past
-        cb.open_until = timebase.now_s() - 1
+        # Simulate cooldown by setting open_until to the past (monotonic clock)
+        import time
+
+        cb.open_until = time.monotonic() - 1
         assert cb.is_open() is False
 
     def test_record_success_resets_failure_count(self):

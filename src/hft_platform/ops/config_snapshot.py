@@ -4,6 +4,7 @@ Security: uses ALLOWLIST strategy. Only HFT_* vars that are NOT secret are captu
 Defense-in-depth: any var name containing PASSWORD, SECRET, TOKEN, KEY, or CERT is excluded
 regardless of prefix.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -18,9 +19,15 @@ from hft_platform.core import timebase
 
 logger = get_logger("ops.config_snapshot")
 
-REDACT_KEYWORDS: frozenset[str] = frozenset({
-    "PASSWORD", "SECRET", "TOKEN", "KEY", "CERT",
-})
+REDACT_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "PASSWORD",
+        "SECRET",
+        "TOKEN",
+        "KEY",
+        "CERT",
+    }
+)
 
 _ALLOWED_PREFIXES: tuple[str, ...] = ("HFT_",)
 
@@ -56,7 +63,9 @@ def _get_git_sha() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else "unknown"
     except Exception:  # noqa: BLE001
@@ -64,7 +73,9 @@ def _get_git_sha() -> str:
 
 
 def build_snapshot(
-    *, yaml_paths: list[str] | None = None, git_sha: str = "",
+    *,
+    yaml_paths: list[str] | None = None,
+    git_sha: str = "",
 ) -> dict[str, Any]:
     env_vars = collect_allowed_env_vars()
     return {
@@ -77,15 +88,21 @@ def build_snapshot(
 
 
 async def write_snapshot_to_clickhouse(
-    ch_client: Any, snapshot: dict[str, Any],
+    ch_client: Any,
+    snapshot: dict[str, Any],
 ) -> bool:
     try:
         ch_client.execute(
             "INSERT INTO hft.config_snapshots (boot_ts, config_hash, git_sha, env_json, yaml_json) VALUES",
-            [(
-                snapshot["boot_ts"], snapshot["config_hash"], snapshot["git_sha"],
-                snapshot["env_json"], snapshot["yaml_json"],
-            )],
+            [
+                (
+                    snapshot["boot_ts"],
+                    snapshot["config_hash"],
+                    snapshot["git_sha"],
+                    snapshot["env_json"],
+                    snapshot["yaml_json"],
+                )
+            ],
         )
         logger.info("config_snapshot_written", config_hash=snapshot["config_hash"])
         return True

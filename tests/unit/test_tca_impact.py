@@ -1,8 +1,7 @@
 # tests/unit/test_tca_impact.py
 """Tests for TCA SqrtImpactModel."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from hft_platform.tca.impact import SqrtImpactModel
 

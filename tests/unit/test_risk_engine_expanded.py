@@ -236,10 +236,10 @@ class TestEvaluatePythonValidators:
 
 class TestCreateCommand:
     def test_deadline_is_in_future(self, engine: RiskEngine) -> None:
-        from hft_platform.core import timebase
+        import time
 
         intent = _make_intent()
-        now = timebase.now_ns()
+        now = time.monotonic_ns()
         cmd = engine.create_command(intent)
         assert cmd.deadline_ns > now
         assert cmd.deadline_ns - now <= 600_000_000  # within ~600ms

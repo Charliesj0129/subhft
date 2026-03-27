@@ -1,10 +1,9 @@
 """D7: QueueFull during intent submit must not crash the runner; must record circuit failure."""
+
 from __future__ import annotations
 
 import asyncio
 from unittest.mock import MagicMock
-
-import pytest
 
 
 def _make_intent(strategy_id="s1", symbol="TXFD6", intent_type=1):
@@ -50,6 +49,7 @@ def test_circuit_failure_recorded_on_drop():
     circuit_states: dict[str, str] = {}
 
     call_count = 0
+
     def _submit(intent):
         nonlocal call_count
         call_count += 1

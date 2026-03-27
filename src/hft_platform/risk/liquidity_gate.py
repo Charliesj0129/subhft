@@ -1,5 +1,6 @@
 # src/hft_platform/risk/liquidity_gate.py
 """Spread-based liquidity gate — rejects orders when spread exceeds threshold."""
+
 from __future__ import annotations
 
 from structlog import get_logger
@@ -9,7 +10,7 @@ logger = get_logger("risk.liquidity_gate")
 try:
     from prometheus_client import Counter
 
-    GATE_CHECKS = Counter(
+    GATE_CHECKS: Counter | None = Counter(
         "hft_liquidity_gate_checks_total",
         "Total liquidity gate checks",
         ["result"],

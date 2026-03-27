@@ -1,4 +1,3 @@
-import time
 from unittest.mock import patch
 
 from hft_platform.order.circuit_breaker import CircuitBreaker

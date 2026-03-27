@@ -214,7 +214,9 @@ async def test_client_validation_failure_rejects_to_dlq(adapter):
 async def test_expired_deadline_skipped_in_run(adapter):
     """Commands past deadline are skipped in the run loop."""
     cmd = make_cmd()
-    cmd.deadline_ns = timebase.now_ns() - 1_000_000
+    import time
+
+    cmd.deadline_ns = time.monotonic_ns() - 1_000_000
 
     adapter.order_queue.put_nowait(cmd)
 

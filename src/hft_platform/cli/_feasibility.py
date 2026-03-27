@@ -1,4 +1,5 @@
 """CLI command: hft feasibility report — aggregated feasibility scorecard."""
+
 from __future__ import annotations
 
 import argparse
@@ -38,9 +39,11 @@ def cmd_feasibility_report(args: argparse.Namespace) -> None:
     print("--- Daily PnL ---")
     if pnl:
         for row in pnl:
-            print(f"  {row['strategy']:20s} {row['symbol']:10s} "
-                  f"fills={row['fill_count']} qty={row['total_qty']} "
-                  f"cost={row['total_cost_ntd']:.0f} NTD")
+            print(
+                f"  {row['strategy']:20s} {row['symbol']:10s} "
+                f"fills={row['fill_count']} qty={row['total_qty']} "
+                f"cost={row['total_cost_ntd']:.0f} NTD"
+            )
     else:
         print("  No fills found.")
 
@@ -48,8 +51,10 @@ def cmd_feasibility_report(args: argparse.Namespace) -> None:
     print("\n--- Slippage Distribution ---")
     if slip:
         for row in slip:
-            print(f"  {row['symbol']:10s} n={row['count']} "
-                  f"avg={row['avg_ticks']:.1f} ticks P95={row['p95_ticks']:.1f} ticks")
+            print(
+                f"  {row['symbol']:10s} n={row['count']} "
+                f"avg={row['avg_ticks']:.1f} ticks P95={row['p95_ticks']:.1f} ticks"
+            )
     else:
         print("  No slippage records found.")
 
@@ -57,9 +62,11 @@ def cmd_feasibility_report(args: argparse.Namespace) -> None:
     print("\n--- Fill Quality ---")
     if fq:
         for row in fq:
-            print(f"  {row['strategy']:20s} {row['symbol']:10s} "
-                  f"n={row['count']} avg={row['avg_latency_ms']:.1f}ms "
-                  f"P95={row['p95_latency_ms']:.1f}ms")
+            print(
+                f"  {row['strategy']:20s} {row['symbol']:10s} "
+                f"n={row['count']} avg={row['avg_latency_ms']:.1f}ms "
+                f"P95={row['p95_latency_ms']:.1f}ms"
+            )
     else:
         print("  No fill quality data.")
 
@@ -67,10 +74,10 @@ def cmd_feasibility_report(args: argparse.Namespace) -> None:
     print("\n--- Liquidity Gate ---")
     if lg:
         for row in lg:
-            reject_pct = (row['rejected'] / row['total'] * 100) if row['total'] > 0 else 0
-            print(f"  {row['symbol']:10s} "
-                  f"passed={row['passed']} rejected={row['rejected']} "
-                  f"({reject_pct:.1f}% rejected)")
+            reject_pct = (row["rejected"] / row["total"] * 100) if row["total"] > 0 else 0
+            print(
+                f"  {row['symbol']:10s} passed={row['passed']} rejected={row['rejected']} ({reject_pct:.1f}% rejected)"
+            )
     else:
         print("  No gate events.")
 

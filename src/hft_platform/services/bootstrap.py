@@ -1041,9 +1041,7 @@ class SystemBootstrapper:
             ]
             _snapshot = build_snapshot(yaml_paths=_yaml_paths)
             if ch_client is not None:
-                asyncio.get_event_loop().create_task(
-                    write_snapshot_to_clickhouse(ch_client, _snapshot)
-                )
+                asyncio.get_event_loop().create_task(write_snapshot_to_clickhouse(ch_client, _snapshot))
             else:
                 logger.info("config_snapshot_fallback", **_snapshot)
         except Exception:  # noqa: BLE001

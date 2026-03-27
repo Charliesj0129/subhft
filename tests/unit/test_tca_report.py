@@ -1,7 +1,6 @@
 """Tests for TCAReportGenerator."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from hft_platform.tca.report import TCAReportGenerator
 from hft_platform.tca.types import TCADailyReport
@@ -58,10 +57,7 @@ class TestTCAReportGenerator:
 
     def test_format_preserves_all_reports(self) -> None:
         gen = TCAReportGenerator()
-        reports = [
-            _make_report(strategy=f"s{i}", trade_count=i)
-            for i in range(1, 4)
-        ]
+        reports = [_make_report(strategy=f"s{i}", trade_count=i) for i in range(1, 4)]
         msg = gen.format_telegram_section(reports)
         assert "s1" in msg
         assert "s2" in msg
@@ -83,12 +79,21 @@ class TestTCAReportGenerator:
     def test_format_single_report_matches_spec(self) -> None:
         gen = TCAReportGenerator()
         report = TCADailyReport(
-            date="2026-03-27", strategy="CBS_TMFD6", symbol="TMFD6",
-            trade_count=10, volume=50, notional=500_000,
-            commission_bps_mean=1.2, tax_bps_mean=0.6,
-            delay_cost_bps_mean=0.3, delay_cost_bps_p95=0.8,
-            exec_cost_bps_mean=0.5, exec_cost_bps_p95=1.2,
-            impact_bps_mean=0.0, total_cost_bps_mean=2.6, total_cost_bps_p95=3.5,
+            date="2026-03-27",
+            strategy="CBS_TMFD6",
+            symbol="TMFD6",
+            trade_count=10,
+            volume=50,
+            notional=500_000,
+            commission_bps_mean=1.2,
+            tax_bps_mean=0.6,
+            delay_cost_bps_mean=0.3,
+            delay_cost_bps_p95=0.8,
+            exec_cost_bps_mean=0.5,
+            exec_cost_bps_p95=1.2,
+            impact_bps_mean=0.0,
+            total_cost_bps_mean=2.6,
+            total_cost_bps_p95=3.5,
         )
         msg = gen.format_telegram_section([report])
         assert "CBS_TMFD6" in msg

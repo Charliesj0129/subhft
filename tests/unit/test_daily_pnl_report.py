@@ -1,7 +1,6 @@
 """Tests for DailyPnlSection."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from hft_platform.ops.daily_pnl_report import DailyPnlSection
 

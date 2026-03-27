@@ -4,6 +4,7 @@
 Model: impact_bps = eta * sigma * sqrt(V / ADV) * 10000
 WARNING: float arithmetic — offline TCA analysis only.
 """
+
 from __future__ import annotations
 
 import math
