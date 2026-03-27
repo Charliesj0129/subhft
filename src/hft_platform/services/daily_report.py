@@ -95,6 +95,34 @@ class DailyReportService:
         storm_state = getattr(self._storm_guard, "state", None)
         storm_guard_state = getattr(storm_state, "name", None) or str(storm_state)
 
+        # TCA section
+        tca_section = ""
+        try:
+            from hft_platform.tca.analyzer import TCAAnalyzer
+            from hft_platform.tca.report import TCAReportGenerator
+
+            tca_gen = TCAReportGenerator()
+            tca_analyzer = TCAAnalyzer(self._ch_client)
+            tca_reports = tca_analyzer.daily_report(date_str)
+            tca_section = tca_gen.format_telegram_section(tca_reports)
+        except Exception:  # noqa: BLE001
+            logger.warning("daily_report_tca_section_failed", exc_info=True)
+
+        # PnL section
+        pnl_section = ""
+        try:
+            from hft_platform.ops.daily_pnl_report import DailyPnlSection
+
+            pnl_gen = DailyPnlSection()
+            pnl_section = pnl_gen.format_telegram_section(
+                realized_pnl_ntd=aggregates.get("pnl_ntd", 0),
+                unrealized_pnl_ntd=0,  # TODO: wire from position_store
+                trade_count=aggregates.get("buys", 0) + aggregates.get("sells", 0),
+                fill_count=aggregates.get("fills", 0),
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("daily_report_pnl_section_failed", exc_info=True)
+
         report_kwargs: dict[str, Any] = {
             "date_str": date_str,
             "pnl_ntd": aggregates["pnl_ntd"],
@@ -115,6 +143,15 @@ class DailyReportService:
             logger.info("daily_report.sent", date_str=date_str, pnl_ntd=aggregates["pnl_ntd"])
         except Exception as exc:  # noqa: BLE001
             logger.error("daily_report.send_failed", error=str(exc))
+
+        # Send TCA + PnL supplement as a follow-up message
+        try:
+            await self._notification_dispatcher.notify_tca_pnl_supplement(
+                tca_section=tca_section,
+                pnl_section=pnl_section,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("daily_report.supplement_send_failed", error=str(exc))
 
         # Write evidence summary
         try:
