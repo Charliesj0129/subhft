@@ -104,7 +104,7 @@ free after the 2026-03-02 cleanup). Research data remains the largest uncontroll
 - **Cause**: `pyproject.toml` specifies `shioaji` without a version upper bound
 - **Mitigation**: Pin to `shioaji==X.Y.Z` after validating; document that upgrades require
   re-running latency baseline (`docs/architecture/latency-baseline-shioaji-sim-vs-system.md`)
-- **Status**: ⚠️ Action required — check `pyproject.toml`
+- **Status**: ✅ Done — pinned to `shioaji[speed]==1.2.9` (2026-03-27)
 
 ### R11 — Ubuntu Security Updates Pending
 - **Severity**: LOW-MEDIUM
