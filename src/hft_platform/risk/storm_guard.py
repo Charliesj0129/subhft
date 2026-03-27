@@ -279,7 +279,8 @@ class StormGuard:
                 if asyncio.iscoroutine(result):
                     try:
                         loop = asyncio.get_running_loop()
-                        loop.create_task(result)
+                        task = loop.create_task(result)
+                        task.add_done_callback(self._halt_callback_done)
                     except RuntimeError:
                         # No running event loop; log and discard
                         logger.warning("halt_callback_coroutine_no_loop")
@@ -289,6 +290,18 @@ class StormGuard:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+
+    def _halt_callback_done(self, task: asyncio.Task) -> None:
+        """Log errors from fire-and-forget halt callback tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "halt_callback_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     def trigger_halt(self, reason: str) -> None:
         """Manual or Supervisor override to force HALT."""
