@@ -485,6 +485,16 @@ groups:
     annotations:
         summary: Order success rate below SLO
 
+  # Loki Health
+  - alert: LokiDown
+    expr: up{job="loki"} == 0
+    for: 2m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Loki log aggregation is down"
+        description: "Loki has been unreachable for >2 minutes. Log search unavailable."
+
   # ── Backup Health ─────────────────────────────────────────────
   - alert: BackupStale
     expr: hft_backup_last_success_ts < (time() - 172800)
