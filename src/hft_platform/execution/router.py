@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import inspect
 from collections.abc import Coroutine
 from typing import Any, Callable, Dict, Optional, Union
@@ -59,6 +60,7 @@ class ExecutionRouter:
         position_store: PositionStore,
         terminal_handler: Union[Callable[[str, str], None], object],
         risk_engine: Optional[object] = None,
+        overflow_buf: Optional[collections.deque] = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
@@ -66,6 +68,7 @@ class ExecutionRouter:
         self.position_store = position_store
         self.terminal_handler = terminal_handler
         self._risk_engine = risk_engine
+        self._overflow_buf = overflow_buf
         self.running = False
         self.metrics = MetricsRegistry.get()
 
@@ -77,6 +80,14 @@ class ExecutionRouter:
         while self.running:
             try:
                 raw: RawExecEvent = await self.raw_queue.get()
+                # D1: Drain overflow buffer back into main queue when space is available
+                if self._overflow_buf:
+                    while self._overflow_buf:
+                        try:
+                            self.raw_queue.put_nowait(self._overflow_buf.popleft())
+                            self.metrics.exec_overflow_drained_total.inc()
+                        except asyncio.QueueFull:
+                            break  # Queue still full, leave remaining for next iteration
                 now_ns = timebase.now_ns()
                 if raw.ingest_ts_ns:
                     self.metrics.execution_router_lag_ns.observe(now_ns - raw.ingest_ts_ns)

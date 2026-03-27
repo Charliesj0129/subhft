@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import gc
 import os
 from typing import Any, Dict, Optional
@@ -83,6 +84,10 @@ class HFTSystem:
         self.bus = self.registry.bus
         self.raw_queue = self.registry.raw_queue
         self.raw_exec_queue = self.registry.raw_exec_queue
+        self._exec_overflow_buf: collections.deque = collections.deque()
+        self._EXEC_OVERFLOW_MAX: int = 4096
+        self._exec_overflow_counter: int = 0
+        self._exec_overflow_evicted: int = 0
         self.risk_queue = self.registry.risk_queue
         self.order_queue = self.registry.order_queue
         self.recorder_queue = self.registry.recorder_queue
@@ -100,6 +105,8 @@ class HFTSystem:
         self.order_adapter = self.registry.order_adapter
         self.execution_gateway = self.registry.execution_gateway
         self.exec_service = self.registry.exec_service
+        # D1: Wire overflow buffer to router (buffer lives on system, router drains it)
+        self.exec_service._overflow_buf = self._exec_overflow_buf
         self.risk_engine = self.registry.risk_engine
         self.recon_service = self.registry.recon_service
         self.strategy_runner = self.registry.strategy_runner
@@ -668,6 +675,35 @@ class HFTSystem:
         self.tasks.clear()
         self._teardown_bootstrap()
 
+    def _safe_enqueue_exec(self, event) -> None:
+        """Enqueue exec event with overflow buffer fallback."""
+        from hft_platform.observability.metrics import MetricsRegistry
+
+        try:
+            self.raw_exec_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            buf_len = len(self._exec_overflow_buf)
+            if buf_len >= self._EXEC_OVERFLOW_MAX:
+                self._exec_overflow_evicted += 1
+                MetricsRegistry.get().exec_overflow_evicted_total.inc()
+                logger.critical(
+                    "exec_overflow_buf FULL — fill LOST",
+                    evicted_count=self._exec_overflow_evicted,
+                    event_topic=getattr(event, "topic", "?"),
+                )
+                self.storm_guard.trigger_halt("exec_overflow_buf_exhausted")
+                return
+            self._exec_overflow_buf.append(event)
+            self._exec_overflow_counter += 1
+            MetricsRegistry.get().exec_queue_overflow_total.inc()
+            logger.critical(
+                "raw_exec_queue FULL — fill routed to overflow buffer",
+                overflow_count=self._exec_overflow_counter,
+                buf_depth=buf_len + 1,
+            )
+            if self._exec_overflow_counter >= 3:
+                self.storm_guard.trigger_halt("exec_queue_overflow_repeated")
+
     def _on_exec(self, topic, data):
         # This callback runs in Shioaji thread.
         # We must schedule work on the main loop.
@@ -676,7 +712,7 @@ class HFTSystem:
             from hft_platform.execution.normalizer import RawExecEvent
 
             event = RawExecEvent(topic, data, timebase.now_ns())
-            loop.call_soon_threadsafe(self.raw_exec_queue.put_nowait, event)
+            loop.call_soon_threadsafe(self._safe_enqueue_exec, event)
 
     async def _recorder_bridge(self):
         """Bridge all Bus events to Recorder."""
