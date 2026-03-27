@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import importlib
 import os
 import threading
@@ -8,7 +9,7 @@ from typing import Any
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, RiskDecision
+from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, RiskDecision, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
@@ -85,6 +86,8 @@ class RiskEngine:
         "_fast_gate_reason_map",
         "_trace_sampler",
         "_notification_dispatcher",
+        "_order_dlq",
+        "_ORDER_DLQ_MAX",
         "__dict__",
     )
 
@@ -147,6 +150,8 @@ class RiskEngine:
             5: "FASTGATE_BAD_QTY_NEG",
         }
         self._trace_sampler = _get_trace_sampler()
+        self._order_dlq: collections.deque = collections.deque()
+        self._ORDER_DLQ_MAX: int = 256
 
     @staticmethod
     def _bool_env(value: Any, default: bool = False) -> bool:
@@ -313,7 +318,27 @@ class RiskEngine:
 
                 if decision.approved:
                     cmd = self.create_command(decision.intent)
-                    await self.order_queue.put(cmd)
+                    if self.storm_guard.state == StormGuardState.HALT:
+                        logger.warning(
+                            "risk_engine_blocked_by_halt",
+                            cmd_id=cmd.cmd_id,
+                        )
+                        self.metrics.risk_halt_blocked_total.inc()
+                    else:
+                        try:
+                            self.order_queue.put_nowait(cmd)
+                        except asyncio.QueueFull:
+                            logger.error(
+                                "order_queue_full_in_risk",
+                                cmd_id=cmd.cmd_id,
+                                strategy_id=cmd.intent.strategy_id,
+                                symbol=cmd.intent.symbol,
+                            )
+                            self.metrics.order_queue_full_total.inc()
+                            self._order_dlq.append((cmd, time.monotonic_ns()))
+                            if len(self._order_dlq) > self._ORDER_DLQ_MAX:
+                                self._order_dlq.popleft()
+                            self.storm_guard.trigger_halt("order_queue_full")
                 else:
                     logger.warning("Order Rejected by Risk", sid=intent.strategy_id, reason=decision.reason_code)
                     self._emit_reject_metric(intent.strategy_id, decision.reason_code)
