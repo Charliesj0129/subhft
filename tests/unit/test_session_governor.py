@@ -33,9 +33,9 @@ class TestSessionPhaseOrdering:
 
 
 class TestTrackGate:
-    def test_unknown_symbol_defaults_to_open(self) -> None:
+    def test_unknown_symbol_defaults_to_closed(self) -> None:
         gate = TrackGate()
-        assert gate.get_phase("UNKNOWN") == SessionPhase.OPEN
+        assert gate.get_phase("UNKNOWN") == SessionPhase.CLOSED
 
     def test_register_and_query(self) -> None:
         gate = TrackGate()
@@ -49,7 +49,7 @@ class TestTrackGate:
         snapshot = gate.track_phases
         gate.set_track_phase("stock", SessionPhase.CLOSED)
         assert snapshot["stock"] == SessionPhase.OPEN
-        assert gate.get_phase("2330") == SessionPhase.OPEN  # unknown symbol, default
+        assert gate.get_phase("2330") == SessionPhase.CLOSED  # unknown symbol, default CLOSED
 
     def test_symbol_to_track_snapshot(self) -> None:
         gate = TrackGate()
@@ -78,7 +78,7 @@ class TestSessionGovernorConfigLoading:
 
     def test_missing_config_does_not_raise(self, tmp_path: Path) -> None:
         gov = SessionGovernor(config_path=tmp_path / "nonexistent.yaml")
-        assert gov.track_gate.get_phase("ANY") == SessionPhase.OPEN
+        assert gov.track_gate.get_phase("ANY") == SessionPhase.CLOSED
 
     def test_transition_track_fires_callback(self, tmp_path: Path) -> None:
         config = {"tracks": {"stock": {"symbols": ["2330"], "schedule": []}}}

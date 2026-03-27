@@ -8,6 +8,7 @@ to filter intents per-symbol based on current session phase.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -72,11 +73,13 @@ class TrackGate:
     Designed to be read from the strategy hot path with minimal overhead.
     """
 
-    __slots__ = ("_symbol_to_track", "_track_phases")
+    __slots__ = ("_symbol_to_track", "_track_phases", "_warned_unknown", "_default_open")
 
     def __init__(self) -> None:
         self._symbol_to_track: dict[str, str] = {}
         self._track_phases: dict[str, SessionPhase] = {}
+        self._warned_unknown: set[str] = set()
+        self._default_open: bool = os.getenv("HFT_TRACK_GATE_DEFAULT_OPEN", "0") in ("1", "true", "yes")
 
     def register_symbol(self, symbol: str, track_name: str) -> None:
         """Register a symbol to a track."""
@@ -87,11 +90,16 @@ class TrackGate:
         self._track_phases[track_name] = phase
 
     def get_phase(self, symbol: str) -> SessionPhase:
-        """Return current phase for *symbol*. Unknown symbols default to OPEN."""
+        """Return current phase for *symbol*. Unknown symbols default to CLOSED."""
         track = self._symbol_to_track.get(symbol)
         if track is None:
-            return SessionPhase.OPEN
-        return self._track_phases.get(track, SessionPhase.OPEN)
+            if self._default_open:
+                return SessionPhase.OPEN
+            if symbol not in self._warned_unknown:
+                self._warned_unknown.add(symbol)
+                logger.warning("track_gate_unknown_symbol_blocked", symbol=symbol, default_phase="CLOSED")
+            return SessionPhase.CLOSED
+        return self._track_phases.get(track, SessionPhase.CLOSED)
 
     @property
     def track_phases(self) -> dict[str, SessionPhase]:

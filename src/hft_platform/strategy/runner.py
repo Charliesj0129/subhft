@@ -681,16 +681,20 @@ class StrategyRunner:
                             self._circuit_success_counts[sid] = 0
                             logger.info("Strategy circuit recovered to normal", id=sid)
 
-            # TrackGate per-event filtering (session phase enforcement)
+            # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:
                 from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
 
-                symbol = getattr(event, "symbol", "")
-                phase = self.track_gate.get_phase(symbol)
-                if phase == SessionPhase.CLOSE_ONLY:
-                    intents = [i for i in intents if i.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)]
-                elif phase in (SessionPhase.FORCE_FLAT, SessionPhase.CLOSED, SessionPhase.PRE_OPEN, SessionPhase.INIT):
-                    intents = []
+                _CLOSE_ONLY_TYPES = (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                _filtered: list = []
+                for _intent in intents:
+                    _phase = self.track_gate.get_phase(_intent.symbol)
+                    if _phase == SessionPhase.OPEN:
+                        _filtered.append(_intent)
+                    elif _phase == SessionPhase.CLOSE_ONLY:
+                        if _intent.intent_type in _CLOSE_ONLY_TYPES:
+                            _filtered.append(_intent)
+                intents = _filtered
 
             duration = time.perf_counter_ns() - start
             if getattr(self, "_trace_sampler", None) is not None:
