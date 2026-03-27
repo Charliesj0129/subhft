@@ -7,7 +7,6 @@ from typing import Any, Callable
 from structlog import get_logger
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
-from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.audit import get_audit_writer
 from hft_platform.risk.drift_burst_detector import DriftBurstDetector
