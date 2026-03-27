@@ -281,6 +281,7 @@ def test_build_positions_rust_tracker_fallback(runner_factory):
 def test_build_positions_from_dict_key(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions  # force Python fallback path
 
     class _Pos:
         net_qty = 5
@@ -295,6 +296,7 @@ def test_build_positions_from_dict_key(runner_factory):
 def test_build_positions_from_dict_object_value(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions  # force Python fallback path
     pos = MagicMock()
     pos.strategy_id = "strat_b"
     pos.symbol = "2330"
@@ -309,6 +311,7 @@ def test_build_positions_from_dict_object_value(runner_factory):
 def test_build_positions_fallback_wildcard(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
+    del pos_store.snapshot_positions  # force Python fallback path
     pos_store.positions = {"unknown_key": 99}
     runner, _, _ = runner_factory(position_store=pos_store)
     result = runner._build_positions_by_strategy()

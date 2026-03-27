@@ -453,13 +453,13 @@ class StrategyRunner:
                 return rust_tracker.get_positions_by_strategy()
             except Exception:
                 pass  # Fallback to Python path
-        raw = getattr(self.position_store, "positions", None)
-        if not isinstance(raw, dict):
-            return {}
-
-        # S1: Take a snapshot before iteration to prevent dict-changed-during-iteration
-        # from concurrent broker callback threads that may update positions.
-        raw = dict(raw)
+        if hasattr(self.position_store, "snapshot_positions"):
+            raw = self.position_store.snapshot_positions()
+        else:
+            raw = getattr(self.position_store, "positions", None)
+            if not isinstance(raw, dict):
+                return {}
+            raw = dict(raw)
 
         positions_by_strategy: dict = {}
         fallback: dict = {}

@@ -361,6 +361,11 @@ class PositionStore:
             total += (mid - pos.avg_price_scaled) * pos.net_qty
         return total
 
+    def snapshot_positions(self) -> dict:
+        """Return a consistent shallow copy of positions under fill lock."""
+        with self._fill_lock:
+            return dict(self.positions)
+
     def _evict_flat_positions(self) -> None:
         """Evict positions with net_qty=0 to free memory."""
         flat_keys = [k for k, pos in self.positions.items() if pos.net_qty == 0]
