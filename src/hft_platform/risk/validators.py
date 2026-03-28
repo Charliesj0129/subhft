@@ -42,6 +42,11 @@ class RiskValidator:
 
 
 class PriceBandValidator(RiskValidator):
+    _PRODUCT_CAP_KEYS: dict[str, str] = {
+        "future": "max_price_cap_futures",
+        "option": "max_price_cap_options",
+    }
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))  # precision-config
@@ -49,6 +54,23 @@ class PriceBandValidator(RiskValidator):
         self._max_price_scaled_cache: Dict[str, int] = {}
         self._tick_size_scaled_cache: Dict[str, int] = {}
         self._band_ticks_cache: Dict[str, int] = {}
+        self._product_caps_raw: Dict[str, float] = {}
+        for ptype, key in self._PRODUCT_CAP_KEYS.items():
+            val = self.defaults.get(key)
+            if val is not None:
+                self._product_caps_raw[ptype] = float(val)
+
+    def _resolve_cap_raw(self, symbol: str) -> float:
+        """Resolve price cap: per-symbol > per-product-type > global."""
+        sym_cap = self.defaults.get(f"max_price_cap_{symbol}")
+        if sym_cap is not None:
+            return float(sym_cap)
+        metadata = getattr(getattr(self.price_codec, "provider", None), "metadata", None)
+        if metadata is not None:
+            ptype = metadata.product_type(symbol)
+            if ptype in self._product_caps_raw:
+                return self._product_caps_raw[ptype]
+        return self._max_price_cap_raw
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         if intent.intent_type == IntentType.CANCEL:
@@ -61,11 +83,12 @@ class PriceBandValidator(RiskValidator):
         scale = self._scale_factor(intent.symbol)
         max_price_scaled = self._max_price_scaled_cache.get(intent.symbol)
         if max_price_scaled is None:
-            max_price_scaled = int(self._max_price_cap_raw * scale)
+            cap_raw = self._resolve_cap_raw(intent.symbol)
+            max_price_scaled = int(cap_raw * scale)
             self._max_price_scaled_cache[intent.symbol] = max_price_scaled
 
         if intent.price > max_price_scaled:
-            return False, f"PRICE_EXCEEDS_CAP: {intent.price} > {max_price_scaled}"
+            return False, f"PRICE_EXCEEDS_CAP({intent.symbol}): {intent.price} > {max_price_scaled}"
 
         # LOB-relative price band validation
         if self.lob is not None:

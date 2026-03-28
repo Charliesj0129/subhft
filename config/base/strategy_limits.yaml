@@ -11,6 +11,9 @@ global_defaults:
   per_symbol_max_notional: 5000000000 # Single symbol = full capital for futures
   max_position_lots: 3               # Max 3 lots (OpMM_TX + OpMM_TMF + CBS concurrent)
   max_daily_loss: 50000000           # 5,000 NTD x10000 (triggers rejection)
+  max_price_cap: 5000.0              # Stocks: max 5,000 NTD per share
+  max_price_cap_futures: 50000.0     # Futures: max 50,000 NTD (covers TMFD6/TXFD6/MXFD6)
+  max_price_cap_options: 10000.0     # TXO options: max 10,000 NTD
 
 strategies:
   MM_ALPHA_V1:
