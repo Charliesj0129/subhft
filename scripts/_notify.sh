@@ -9,9 +9,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_ROOT="${DEPLOY_ROOT:-/home/charl/subhft}"
 
 # Load .env for Telegram credentials (if present)
+# Uses read+case instead of eval to prevent command injection from .env values
 if [ -f "${DEPLOY_ROOT}/.env" ]; then
-    # Source only lines matching known Telegram vars to avoid side effects
-    eval "$(grep -E '^HFT_TELEGRAM_(BOT_TOKEN|CHAT_ID)=' "${DEPLOY_ROOT}/.env")"
+    while IFS='=' read -r key value; do
+        case "$key" in
+            HFT_TELEGRAM_BOT_TOKEN) export HFT_TELEGRAM_BOT_TOKEN="${value%%#*}" ;;
+            HFT_TELEGRAM_CHAT_ID)   export HFT_TELEGRAM_CHAT_ID="${value%%#*}" ;;
+        esac
+    done < <(grep -E '^HFT_TELEGRAM_(BOT_TOKEN|CHAT_ID)=' "${DEPLOY_ROOT}/.env")
 fi
 
 notify_telegram() {

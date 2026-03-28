@@ -44,8 +44,8 @@ declare -A ALIAS_SECRETS=(
 
 # Conditional secrets (only checked if condition met)
 CONDITIONAL_SECRETS=()
-source "$ENV_FILE" 2>/dev/null || true
-if [ "${HFT_BROKER:-shioaji}" = "fubon" ]; then
+HFT_BROKER_VAL=$(grep -E '^HFT_BROKER=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | xargs || echo "shioaji")
+if [ "${HFT_BROKER_VAL}" = "fubon" ]; then
     CONDITIONAL_SECRETS+=("HFT_FUBON_PASSWORD")
 fi
 
@@ -96,9 +96,10 @@ done
 for alias_name in "${!ALIAS_SECRETS[@]}"; do
     primary_name="${ALIAS_SECRETS[$alias_name]}"
     # Only check if alias is actually set in .env
-    alias_val=$(grep -E "^${alias_name}=" "$ENV_FILE" | head -1 | cut -d= -f2- | cut -d'#' -f1 | xargs || echo "")
+    # Strip only # ROTATED: suffix (not arbitrary #) to handle passwords containing #
+    alias_val=$(grep -E "^${alias_name}=" "$ENV_FILE" | head -1 | sed 's/#[[:space:]]*ROTATED:.*$//' | cut -d= -f2- | xargs || echo "")
     if [ -n "$alias_val" ]; then
-        primary_val=$(grep -E "^${primary_name}=" "$ENV_FILE" | head -1 | cut -d= -f2- | cut -d'#' -f1 | xargs || echo "")
+        primary_val=$(grep -E "^${primary_name}=" "$ENV_FILE" | head -1 | sed 's/#[[:space:]]*ROTATED:.*$//' | cut -d= -f2- | xargs || echo "")
         if [ "$alias_val" != "$primary_val" ]; then
             warnings="${warnings}${alias_name} != ${primary_name} (consistency violation)\n"
             overdue_count=$((overdue_count + 1))

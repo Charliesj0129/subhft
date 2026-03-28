@@ -46,14 +46,13 @@ if [ "$DRY_RUN" = true ]; then
 fi
 
 echo ">> Applying security updates..." | tee -a "$LOG_FILE"
-# Use unattended-upgrades for security-only updates
-if command -v unattended-upgrades &> /dev/null; then
-    unattended-upgrades -v 2>&1 | tee -a "$LOG_FILE"
-else
-    # Fallback: apt upgrade with security sources only
-    echo ">> WARNING: unattended-upgrades not installed, using apt upgrade" | tee -a "$LOG_FILE"
-    DEBIAN_FRONTEND=noninteractive apt upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tee -a "$LOG_FILE"
+# Use unattended-upgrades for security-only updates (required dependency)
+if ! command -v unattended-upgrades &> /dev/null; then
+    echo "ERROR: unattended-upgrades not installed. Run: sudo apt install unattended-upgrades" | tee -a "$LOG_FILE"
+    notify_telegram "❌ *Security Update Failed*: unattended-upgrades not installed"
+    exit 1
 fi
+unattended-upgrades -v 2>&1 | tee -a "$LOG_FILE"
 
 # 4. Check if reboot required
 REBOOT_NEEDED="no"

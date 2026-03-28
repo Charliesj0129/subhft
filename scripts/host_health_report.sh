@@ -82,11 +82,12 @@ if [ -f /var/run/reboot-required ]; then
     alerts="${alerts}Reboot required (pending kernel update)\n"
 fi
 
-# 8. Secret status (reuse secret_age_check.sh --quiet)
+# 8. Secret status (reuse secret_age_check.sh --quiet, single invocation)
 secret_status="all OK"
-if ! bash "$(dirname "$0")/secret_age_check.sh" --quiet > /dev/null 2>&1; then
-    # Count overdue from output
-    OVERDUE_N=$(bash "$(dirname "$0")/secret_age_check.sh" --quiet 2>/dev/null | head -1 | grep -oP '\d+' || echo "?")
+secret_output=$(bash "$(dirname "$0")/secret_age_check.sh" --quiet 2>&1) || secret_rc=$?
+secret_rc=${secret_rc:-0}
+if [ "$secret_rc" -ne 0 ]; then
+    OVERDUE_N=$(echo "$secret_output" | head -1 | grep -oP '\d+(?= issue)' || echo "?")
     secret_status="${OVERDUE_N} overdue"
     # Don't add to alerts — secret_age_check cron already notifies at 07:00
 fi
