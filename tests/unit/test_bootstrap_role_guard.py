@@ -39,7 +39,10 @@ def test_runtime_role_normalization():
         assert bootstrapper._get_runtime_role() == "wal_loader"
 
 
-def test_check_session_ownership_conflict_does_not_override():
+def test_check_session_ownership_conflict_does_not_override(monkeypatch):
+    monkeypatch.delenv("HFT_REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_PASS", raising=False)
     bootstrapper = SystemBootstrapper({})
 
     class _DummySock:
@@ -83,7 +86,10 @@ def test_check_session_ownership_conflict_does_not_override():
     conflict_counter.labels.return_value.inc.assert_called_once()
 
 
-def test_check_session_ownership_cleans_stale_owner_and_acquires():
+def test_check_session_ownership_cleans_stale_owner_and_acquires(monkeypatch):
+    monkeypatch.delenv("HFT_REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_PASS", raising=False)
     bootstrapper = SystemBootstrapper({})
 
     class _DummySock:
@@ -187,8 +193,11 @@ def test_lease_refresh_thread_starts_and_stops():
     assert bootstrapper._lease_refresh_thread is None
 
 
-def test_teardown_sends_del():
+def test_teardown_sends_del(monkeypatch):
     """OPS-03: teardown() sends DEL command to Redis for engine role."""
+    monkeypatch.delenv("HFT_REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_PASS", raising=False)
     bootstrapper = SystemBootstrapper({})
     bootstrapper._last_role = "engine"
 

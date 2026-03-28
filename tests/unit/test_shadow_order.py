@@ -20,7 +20,8 @@ def _make_intent(**kwargs):
 
 
 class TestShadowOrderSinkInit:
-    def test_disabled_by_default(self):
+    def test_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("HFT_ORDER_SHADOW_MODE", raising=False)
         sink = ShadowOrderSink()
         assert sink.enabled is False
 
