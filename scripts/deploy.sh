@@ -23,7 +23,7 @@ set -euo pipefail
 REGISTRY="${REGISTRY:-ghcr.io}"
 HEALTH_RETRIES=3
 HEALTH_INTERVAL=10
-REMOTE_DIR="/opt/hft-platform"
+REMOTE_DIR="${DEPLOY_ROOT:-/home/charl/subhft}"
 
 # ── Argument parsing ──────────────────────────────────────────────────────
 
@@ -112,6 +112,13 @@ fi
 echo "==> Deploying to ${DEPLOY_USER}@${DEPLOY_HOST}"
 
 SSH_OPTS="-i ${DEPLOY_KEY} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
+# Remote preflight
+echo "==> Running remote preflight..."
+# shellcheck disable=SC2029
+ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
+    "cd ${REMOTE_DIR} && bash scripts/host_preflight.sh" \
+    || { echo "FATAL: Remote preflight failed. Aborting deploy."; exit 1; }
 
 # Pull and restart
 # shellcheck disable=SC2029
