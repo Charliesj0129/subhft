@@ -92,10 +92,16 @@ ExecuteFn = Callable[[str], list[tuple[Any, ...]]]
 
 def _make_execute(host: str) -> ExecuteFn:
     """Return a ``(sql) -> list[tuple]`` callable using whichever CH client is installed."""
+    user = os.environ.get("HFT_CLICKHOUSE_USER", os.environ.get("CLICKHOUSE_USER", "default"))
+    password = os.environ.get("HFT_CLICKHOUSE_PASSWORD", os.environ.get("CLICKHOUSE_PASSWORD", ""))
+
     try:
         import clickhouse_connect
 
-        client = clickhouse_connect.get_client(host=host)
+        kwargs: dict[str, Any] = {"host": host, "username": user}
+        if password:
+            kwargs["password"] = password
+        client = clickhouse_connect.get_client(**kwargs)
         log.info("DataCollector using clickhouse_connect", host=host)
 
         def _exec(sql: str) -> list[tuple[Any, ...]]:
@@ -107,7 +113,7 @@ def _make_execute(host: str) -> ExecuteFn:
 
     from clickhouse_driver import Client  # type: ignore[import-untyped]
 
-    client_native = Client(host=host)
+    client_native = Client(host=host, user=user, password=password)
     log.info("DataCollector using clickhouse_driver", host=host)
 
     def _exec_native(sql: str) -> list[tuple[Any, ...]]:
