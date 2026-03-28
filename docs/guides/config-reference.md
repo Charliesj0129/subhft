@@ -109,11 +109,18 @@
 - `HFT_DIAG_TRACE_MAX_BYTES`
 
 ### 3.9 Gateway / CE-M2/HA
-- `HFT_GATEWAY_ENABLED`（由系統配置決定是否啟用）
+- `HFT_GATEWAY_ENABLED`（單節點 shadow 部署建議維持 `0`）
 - `HFT_GATEWAY_HA_ENABLED`
 - `HFT_GATEWAY_LEADER_LEASE_PATH`
 - `HFT_GATEWAY_LEADER_LEASE_REFRESH_S`
 - `HFT_GATEWAY_METRICS`
+- `HFT_ORDER_MODE=sim|live`
+- `HFT_ORDER_SHADOW_MODE=0|1`
+
+Shadow caveat:
+- `HFT_ORDER_MODE=sim` 只代表不送 live broker order。
+- 要讓 `ShadowOrderSink` 攔截並記錄 shadow order，還需要 `HFT_ORDER_SHADOW_MODE=1`。
+- 若同時開 `HFT_GATEWAY_ENABLED=1`，intent 會先進 gateway path；目前運行上應先確認 gateway/risk 路徑不會在到達 shadow intercept 前就拒單。
 
 ### 3.10 Monitor（Live Signal TUI）
 - `HFT_MONITOR_SOURCE=clickhouse|redis|hybrid`（Monitor 資料來源，預設 `clickhouse`）

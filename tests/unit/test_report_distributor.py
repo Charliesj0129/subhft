@@ -1,4 +1,5 @@
 """Unit tests for hft_platform.reports.distributor."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -42,9 +43,7 @@ class TestLoadChannels:
         assert tiers["free_id"] == "free"
         assert all(c.enabled for c in channels)
 
-    def test_disabled_channel_when_enabled_not_set(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_disabled_channel_when_enabled_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HFT_TELEGRAM_CHAT_ID", raising=False)
         monkeypatch.setenv("HFT_REPORT_PAID_CHANNEL_ID", "paid_id")
         monkeypatch.delenv("HFT_REPORT_PAID_ENABLED", raising=False)
@@ -107,12 +106,8 @@ class TestReportSender:
 class TestDistributor:
     @pytest.mark.asyncio
     async def test_routes_by_tier(self) -> None:
-        owner_channel = ChannelConfig(
-            name="owner", chat_id="owner_id", tier="paid", enabled=True
-        )
-        free_channel = ChannelConfig(
-            name="free", chat_id="free_id", tier="free", enabled=True
-        )
+        owner_channel = ChannelConfig(name="owner", chat_id="owner_id", tier="paid", enabled=True)
+        free_channel = ChannelConfig(name="free", chat_id="free_id", tier="free", enabled=True)
 
         sender = MagicMock()
         sender.send_batch = AsyncMock(return_value=1)
@@ -131,9 +126,7 @@ class TestDistributor:
 
     @pytest.mark.asyncio
     async def test_skips_disabled_channels(self) -> None:
-        disabled_channel = ChannelConfig(
-            name="disabled", chat_id="disabled_id", tier="paid", enabled=False
-        )
+        disabled_channel = ChannelConfig(name="disabled", chat_id="disabled_id", tier="paid", enabled=False)
 
         sender = MagicMock()
         sender.send_batch = AsyncMock(return_value=0)

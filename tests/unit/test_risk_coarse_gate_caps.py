@@ -30,10 +30,12 @@ class TestFastGateMaxCap:
     def test_fast_gate_uses_max_of_all_caps(self, tmp_path, monkeypatch):
         """FastGate should use max(5000, 50000, 10000) = 50000."""
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "1")
-        config = _make_config({
-            "max_price_cap_futures": 50000.0,
-            "max_price_cap_options": 10000.0,
-        })
+        config = _make_config(
+            {
+                "max_price_cap_futures": 50000.0,
+                "max_price_cap_options": 10000.0,
+            }
+        )
         config_path = _write_config(tmp_path, config)
         q1 = MagicMock()
         q2 = MagicMock()

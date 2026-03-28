@@ -3,6 +3,7 @@
 Each function is pure: given a SignalReport, return a Scenario or None.
 All price fields use ScaledPrice (int x10000) per the Precision Law.
 """
+
 from __future__ import annotations
 
 from hft_platform.reports.models import Scenario, SignalReport

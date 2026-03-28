@@ -45,8 +45,8 @@ _DEFAULT_COOLDOWN_NS: int = 5_000_000_000  # 5s after detection before entry
 
 # Wall-clock session boundaries (seconds since midnight, local time)
 # TMFD6 regular session: 08:45-13:45 TST. Active window: 09:15-13:35.
-_DEFAULT_SESSION_START_SEC: int = 9 * 3600 + 15 * 60   # 09:15 = 33300
-_DEFAULT_SESSION_END_SEC: int = 13 * 3600 + 35 * 60    # 13:35 = 48900
+_DEFAULT_SESSION_START_SEC: int = 9 * 3600 + 15 * 60  # 09:15 = 33300
+_DEFAULT_SESSION_END_SEC: int = 13 * 3600 + 35 * 60  # 13:35 = 48900
 _UTC_OFFSET_SEC: int = 8 * 3600  # UTC+8 for Asia/Taipei (TAIFEX)
 
 

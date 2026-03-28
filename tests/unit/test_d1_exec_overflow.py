@@ -1,11 +1,10 @@
 """D1: Exec queue overflow must route to buffer, not silently drop fills."""
+
 from __future__ import annotations
 
 import asyncio
 import collections
 from unittest.mock import MagicMock
-
-import pytest
 
 
 class TestSafeEnqueueExec:

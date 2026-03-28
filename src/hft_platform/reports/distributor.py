@@ -5,6 +5,7 @@ This module is intentionally separate from the existing TelegramSender
 retry logic (429 back-off, 5xx exponential back-off) suitable for
 scheduled daily report delivery where message loss is unacceptable.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -50,23 +51,17 @@ def load_channels() -> list[ChannelConfig]:
 
     owner_id = os.environ.get("HFT_TELEGRAM_CHAT_ID", "").strip()
     if owner_id:
-        channels.append(
-            ChannelConfig(name="owner", chat_id=owner_id, tier="paid", enabled=True)
-        )
+        channels.append(ChannelConfig(name="owner", chat_id=owner_id, tier="paid", enabled=True))
 
     paid_id = os.environ.get("HFT_REPORT_PAID_CHANNEL_ID", "").strip()
     if paid_id:
         paid_enabled = os.environ.get("HFT_REPORT_PAID_ENABLED", "0").strip() == "1"
-        channels.append(
-            ChannelConfig(name="paid", chat_id=paid_id, tier="paid", enabled=paid_enabled)
-        )
+        channels.append(ChannelConfig(name="paid", chat_id=paid_id, tier="paid", enabled=paid_enabled))
 
     free_id = os.environ.get("HFT_REPORT_FREE_CHANNEL_ID", "").strip()
     if free_id:
         free_enabled = os.environ.get("HFT_REPORT_FREE_ENABLED", "0").strip() == "1"
-        channels.append(
-            ChannelConfig(name="free", chat_id=free_id, tier="free", enabled=free_enabled)
-        )
+        channels.append(ChannelConfig(name="free", chat_id=free_id, tier="free", enabled=free_enabled))
 
     return channels
 
@@ -127,9 +122,7 @@ class ReportSender:
                         retry_after: float = 5.0
                         try:
                             data = await resp.json()
-                            retry_after = float(
-                                data.get("parameters", {}).get("retry_after", 5)
-                            )
+                            retry_after = float(data.get("parameters", {}).get("retry_after", 5))
                         except Exception:  # noqa: BLE001
                             pass
                         logger.warning(

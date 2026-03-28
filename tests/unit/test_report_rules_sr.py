@@ -3,6 +3,7 @@
 Each test function covers at least one rule and asserts observable behaviour,
 not mere absence of exceptions.
 """
+
 from __future__ import annotations
 
 import pytest

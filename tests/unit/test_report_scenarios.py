@@ -2,6 +2,7 @@
 
 TDD: tests written first, then implementation.
 """
+
 from __future__ import annotations
 
 from hft_platform.reports.models import (

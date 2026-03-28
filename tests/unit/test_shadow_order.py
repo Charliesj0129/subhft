@@ -59,9 +59,7 @@ class TestShadowModeMetric:
         mock_metrics = MagicMock()
         mock_gauge = MagicMock()
         mock_metrics.shadow_mode_active = mock_gauge
-        monkeypatch.setattr(
-            "hft_platform.order.shadow._get_metrics", lambda: mock_metrics
-        )
+        monkeypatch.setattr("hft_platform.order.shadow._get_metrics", lambda: mock_metrics)
         ShadowOrderSink(enabled=True)
         mock_gauge.set.assert_called_once_with(1)
 
@@ -70,8 +68,6 @@ class TestShadowModeMetric:
         mock_metrics = MagicMock()
         mock_gauge = MagicMock()
         mock_metrics.shadow_mode_active = mock_gauge
-        monkeypatch.setattr(
-            "hft_platform.order.shadow._get_metrics", lambda: mock_metrics
-        )
+        monkeypatch.setattr("hft_platform.order.shadow._get_metrics", lambda: mock_metrics)
         ShadowOrderSink(enabled=False)
         mock_gauge.set.assert_called_once_with(0)

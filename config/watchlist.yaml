@@ -7,7 +7,9 @@ monitor:
   stale_threshold_s: 6.0
   max_retries: 20
   data_source: auto
-  default_alpha_ids: [ofi_surprise]
+  # Keep the shipped default on an alpha that exists in research/alphas
+  # and can run directly on the monitor's L1 payload shape.
+  default_alpha_ids: [lob_kinetic_energy]
 
 symbols:
   # === Futures (night + day) — D6 = April 2026 front month ===

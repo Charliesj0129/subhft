@@ -5,6 +5,7 @@ Environment variables:
                         Without this (and without --dry-run / --debug), the
                         pipeline exits early with a warning.
 """
+
 from __future__ import annotations
 
 import argparse

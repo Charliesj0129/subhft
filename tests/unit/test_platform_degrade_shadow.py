@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from hft_platform.contracts.strategy import IntentType
 from hft_platform.ops.platform_degrade import (
-    PlatformDegradeController,
     _AUTO_RECOVERABLE_REASONS,
+    PlatformDegradeController,
     get_shared_platform_degrade_controller,
     reset_shared_platform_degrade_controller,
 )

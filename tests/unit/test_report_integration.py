@@ -1,4 +1,5 @@
 """Integration test for the full report pipeline."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -69,17 +70,13 @@ def _mock_session_data() -> SessionData:
         flow_5m=flow,
         large_trades=trades,
         spread_dist={3: 147202, 4: 81011},
-        depth_imbalance=[
-            DepthBar(hour=15, avg_bid_vol=3.0, avg_ask_vol=2.8, bid_ratio=0.517)
-        ],
+        depth_imbalance=[DepthBar(hour=15, avg_bid_vol=3.0, avg_ask_vol=2.8, bid_ratio=0.517)],
     )
 
 
 class TestPipelineIntegration:
     @pytest.mark.asyncio
-    async def test_dry_run_produces_output(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    async def test_dry_run_produces_output(self, capsys: pytest.CaptureFixture[str]) -> None:
         mock_collector = MagicMock()
         mock_collector.collect = MagicMock(return_value=_mock_session_data())
 
@@ -99,10 +96,13 @@ class TestPipelineIntegration:
         mock_collector = MagicMock()
         mock_collector.collect = MagicMock(return_value=_mock_session_data())
 
-        with patch(
-            "hft_platform.reports.collector.DataCollector",
-            return_value=mock_collector,
-        ), patch("hft_platform.reports.distributor.load_channels") as mock_load:
+        with (
+            patch(
+                "hft_platform.reports.collector.DataCollector",
+                return_value=mock_collector,
+            ),
+            patch("hft_platform.reports.distributor.load_channels") as mock_load,
+        ):
             await run_pipeline("night", "2026-03-27", dry_run=True)
             mock_load.assert_not_called()
 
@@ -127,9 +127,12 @@ class TestPipelineIntegration:
         mock_collector = MagicMock()
         mock_collector.collect = MagicMock(return_value=empty_sd)
 
-        with patch(
-            "hft_platform.reports.collector.DataCollector",
-            return_value=mock_collector,
-        ), patch("hft_platform.reports.signals.SignalEngine") as mock_engine:
+        with (
+            patch(
+                "hft_platform.reports.collector.DataCollector",
+                return_value=mock_collector,
+            ),
+            patch("hft_platform.reports.signals.SignalEngine") as mock_engine,
+        ):
             await run_pipeline("day", "2026-03-27", dry_run=True)
             mock_engine.assert_not_called()

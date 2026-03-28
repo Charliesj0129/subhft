@@ -3,6 +3,7 @@
 All price fields use ScaledPrice (int x10000) per the Precision Law.
 All functions are pure; _assign_directions returns a new list and never mutates input.
 """
+
 from __future__ import annotations
 
 from hft_platform.reports.models import FlowBar, LargeTrade, PriceLevel, SessionData, SignalReport
@@ -175,16 +176,20 @@ class SignalEngine:
         total_net_flow = sum(b.net_flow for b in sd.flow_5m)
 
         if sd.flow_5m:
-            ud_ratio_session = sum(b.uptick_vol for b in sd.flow_5m) / max(
-                1, sum(b.downtick_vol for b in sd.flow_5m)
-            )
+            ud_ratio_session = sum(b.uptick_vol for b in sd.flow_5m) / max(1, sum(b.downtick_vol for b in sd.flow_5m))
             strongest_sell = min(sd.flow_5m, key=lambda b: b.ud_ratio)
             strongest_buy = max(sd.flow_5m, key=lambda b: b.ud_ratio)
         else:
             ud_ratio_session = 1.0
             _dummy = FlowBar(
-                ts="", ticks=0, total_vol=0, uptick_vol=0,
-                downtick_vol=0, flat_vol=0, ud_ratio=1.0, net_flow=0,
+                ts="",
+                ticks=0,
+                total_vol=0,
+                uptick_vol=0,
+                downtick_vol=0,
+                flat_vol=0,
+                ud_ratio=1.0,
+                net_flow=0,
             )
             strongest_sell = _dummy
             strongest_buy = _dummy

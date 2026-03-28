@@ -6,6 +6,7 @@ Tests cover:
 - rule_scores dict contains required keys
 - Empty session handling
 """
+
 from __future__ import annotations
 
 import pytest
@@ -103,9 +104,7 @@ class TestBias:
 class TestDirectionAssignment:
     def test_trade_at_session_low_becomes_sell(self) -> None:
         """Trade priced at session low (≤ midpoint) should be classified as 'sell'."""
-        sd = _make_sd(
-            trades=[LargeTrade(ts="t", price=323_750_000, volume=50, direction="unknown")]
-        )
+        sd = _make_sd(trades=[LargeTrade(ts="t", price=323_750_000, volume=50, direction="unknown")])
         engine = SignalEngine()
         report = engine.analyze(sd)
 
@@ -121,9 +120,7 @@ class TestDirectionAssignment:
 
     def test_trade_at_session_high_becomes_buy(self) -> None:
         """Trade priced at session high (> midpoint) should be classified as 'buy'."""
-        sd = _make_sd(
-            trades=[LargeTrade(ts="t", price=330_490_000, volume=50, direction="unknown")]
-        )
+        sd = _make_sd(trades=[LargeTrade(ts="t", price=330_490_000, volume=50, direction="unknown")])
         engine = SignalEngine()
         report = engine.analyze(sd)
 
@@ -241,9 +238,7 @@ class TestSRLevels:
         report = engine.analyze(sd)
 
         for level in report.supports:
-            assert level.price <= sd.close, (
-                f"Support at {level.price} > close {sd.close}"
-            )
+            assert level.price <= sd.close, f"Support at {level.price} > close {sd.close}"
 
     def test_resistances_above_close(self) -> None:
         sd = _make_sd()
@@ -251,9 +246,7 @@ class TestSRLevels:
         report = engine.analyze(sd)
 
         for level in report.resistances:
-            assert level.price > sd.close, (
-                f"Resistance at {level.price} <= close {sd.close}"
-            )
+            assert level.price > sd.close, f"Resistance at {level.price} <= close {sd.close}"
 
     def test_at_most_three_supports(self) -> None:
         sd = _make_sd()

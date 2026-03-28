@@ -4,6 +4,7 @@ All functions are pure (no side effects) and return scores in [-1.0, +1.0]
 unless noted otherwise.  Inputs use the platform's ScaledPrice convention
 (int x10000) for all price fields.
 """
+
 from __future__ import annotations
 
 from hft_platform.reports.models import FlowBar, LargeTrade
@@ -20,6 +21,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, value))
@@ -49,6 +51,7 @@ def _ratio_to_score(ratio: float) -> float:
 # IF-01  score_session_ud
 # ---------------------------------------------------------------------------
 
+
 def score_session_ud(bars: list[FlowBar]) -> float:
     """IF-01: Session-wide up/down volume ratio score.
 
@@ -66,6 +69,7 @@ def score_session_ud(bars: list[FlowBar]) -> float:
 # ---------------------------------------------------------------------------
 # IF-02  score_sustained_pressure
 # ---------------------------------------------------------------------------
+
 
 def score_sustained_pressure(bars: list[FlowBar]) -> float:
     """IF-02: Maximum consecutive run of strongly directional bars.
@@ -106,6 +110,7 @@ def score_sustained_pressure(bars: list[FlowBar]) -> float:
 # IF-03  score_large_trade_net
 # ---------------------------------------------------------------------------
 
+
 def score_large_trade_net(trades: list[LargeTrade]) -> float:
     """IF-03: Net directional volume of large trades.
 
@@ -130,6 +135,7 @@ def score_large_trade_net(trades: list[LargeTrade]) -> float:
 # ---------------------------------------------------------------------------
 # IF-04  find_large_trade_clusters
 # ---------------------------------------------------------------------------
+
 
 def find_large_trade_clusters(
     trades: list[LargeTrade],
@@ -178,6 +184,7 @@ def find_large_trade_clusters(
 # IF-05  score_end_of_session_drift
 # ---------------------------------------------------------------------------
 
+
 def score_end_of_session_drift(bars: list[FlowBar]) -> float:
     """IF-05: End-of-session U/D drift vs full session.
 
@@ -212,6 +219,7 @@ def score_end_of_session_drift(bars: list[FlowBar]) -> float:
 # ---------------------------------------------------------------------------
 # IF-06  score_volume_spike
 # ---------------------------------------------------------------------------
+
 
 def score_volume_spike(
     bars: list[FlowBar],

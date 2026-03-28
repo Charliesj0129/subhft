@@ -1,4 +1,5 @@
 """Tests for informed flow rules IF-01 through IF-06."""
+
 from __future__ import annotations
 
 import pytest
@@ -16,6 +17,7 @@ from hft_platform.reports.rules.informed_flow import (
 # ---------------------------------------------------------------------------
 # Test helper
 # ---------------------------------------------------------------------------
+
 
 def _fb(ud: float, net: int = 0, vol: int = 100, ticks: int = 50) -> FlowBar:
     up = int(vol * ud / (1 + ud)) if ud > 0 else 0
@@ -39,6 +41,7 @@ def _lt(price: int, volume: int, direction: str) -> LargeTrade:
 # ---------------------------------------------------------------------------
 # IF-01  score_session_ud
 # ---------------------------------------------------------------------------
+
 
 class TestScoreSessionUD:
     def test_empty_bars_returns_zero(self) -> None:
@@ -66,15 +69,28 @@ class TestScoreSessionUD:
 
     def test_very_bearish_clamped_to_minus_one(self) -> None:
         # ratio = 0.0 (no uptick) → should clamp to -1.0
-        bars = [FlowBar(ts="t", ticks=10, total_vol=100, uptick_vol=0,
-                        downtick_vol=100, flat_vol=0, ud_ratio=0.0, net_flow=-100)]
+        bars = [
+            FlowBar(
+                ts="t", ticks=10, total_vol=100, uptick_vol=0, downtick_vol=100, flat_vol=0, ud_ratio=0.0, net_flow=-100
+            )
+        ]
         result = score_session_ud(bars)
         assert result == pytest.approx(-1.0)
 
     def test_very_bullish_clamped_to_plus_one(self) -> None:
         # ratio >> 1.1 → clamp to +1.0
-        bars = [FlowBar(ts="t", ticks=10, total_vol=100, uptick_vol=100,
-                        downtick_vol=0, flat_vol=0, ud_ratio=100.0, net_flow=100)]
+        bars = [
+            FlowBar(
+                ts="t",
+                ticks=10,
+                total_vol=100,
+                uptick_vol=100,
+                downtick_vol=0,
+                flat_vol=0,
+                ud_ratio=100.0,
+                net_flow=100,
+            )
+        ]
         result = score_session_ud(bars)
         assert result == pytest.approx(1.0)
 
@@ -82,6 +98,7 @@ class TestScoreSessionUD:
 # ---------------------------------------------------------------------------
 # IF-02  score_sustained_pressure
 # ---------------------------------------------------------------------------
+
 
 class TestScoreSustainedPressure:
     def test_no_sustained_run_returns_zero(self) -> None:
@@ -117,6 +134,7 @@ class TestScoreSustainedPressure:
 # ---------------------------------------------------------------------------
 # IF-03  score_large_trade_net
 # ---------------------------------------------------------------------------
+
 
 class TestScoreLargeTradeNet:
     def test_empty_returns_zero(self) -> None:
@@ -156,6 +174,7 @@ class TestScoreLargeTradeNet:
 # IF-04  find_large_trade_clusters
 # ---------------------------------------------------------------------------
 
+
 class TestFindLargeTradeClusters:
     def test_no_cluster_returns_empty(self) -> None:
         trades = [_lt(1_000_000, 100, "buy"), _lt(2_000_000, 100, "sell")]
@@ -193,6 +212,7 @@ class TestFindLargeTradeClusters:
 # ---------------------------------------------------------------------------
 # IF-05  score_end_of_session_drift
 # ---------------------------------------------------------------------------
+
 
 class TestScoreEndOfSessionDrift:
     def test_less_than_8_bars_returns_zero(self) -> None:
@@ -232,6 +252,7 @@ class TestScoreEndOfSessionDrift:
 # IF-06  score_volume_spike
 # ---------------------------------------------------------------------------
 
+
 class TestScoreVolumeSpike:
     def test_no_spike_returns_zero_empty_list(self) -> None:
         bars = [_fb(1.0, vol=100)] * 6
@@ -242,8 +263,14 @@ class TestScoreVolumeSpike:
     def test_bearish_spike_returns_negative_score(self) -> None:
         normal = [_fb(1.0, net=0, vol=100)] * 5
         spike = FlowBar(
-            ts="t", ticks=50, total_vol=300, uptick_vol=50,
-            downtick_vol=250, flat_vol=0, ud_ratio=0.2, net_flow=-200,
+            ts="t",
+            ticks=50,
+            total_vol=300,
+            uptick_vol=50,
+            downtick_vol=250,
+            flat_vol=0,
+            ud_ratio=0.2,
+            net_flow=-200,
         )
         bars = normal + [spike]
         score, spikes = score_volume_spike(bars)
@@ -253,8 +280,14 @@ class TestScoreVolumeSpike:
     def test_bullish_spike_returns_positive_score(self) -> None:
         normal = [_fb(1.0, net=0, vol=100)] * 5
         spike = FlowBar(
-            ts="t", ticks=50, total_vol=300, uptick_vol=250,
-            downtick_vol=50, flat_vol=0, ud_ratio=5.0, net_flow=200,
+            ts="t",
+            ticks=50,
+            total_vol=300,
+            uptick_vol=250,
+            downtick_vol=50,
+            flat_vol=0,
+            ud_ratio=5.0,
+            net_flow=200,
         )
         bars = normal + [spike]
         score, spikes = score_volume_spike(bars)

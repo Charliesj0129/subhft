@@ -1,4 +1,5 @@
 """Unit tests for hft_platform.reports.pipeline date resolution and CLI."""
+
 from __future__ import annotations
 
 from datetime import datetime

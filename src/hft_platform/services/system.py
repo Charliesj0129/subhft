@@ -414,7 +414,8 @@ class HFTSystem:
         for reason in reasons:
             controller.enter_reduce_only(reason=reason)
         controller.check_auto_recovery(
-            current_reasons=reasons, now_ns=timebase.now_ns(),
+            current_reasons=reasons,
+            now_ns=timebase.now_ns(),
         )
 
     async def _supervise(self):

@@ -3,6 +3,7 @@
 All price arguments are ScaledPrice (int x10_000) per the Precision Law.
 All functions return list[PriceLevel] and are pure (no side effects).
 """
+
 from __future__ import annotations
 
 from collections import defaultdict

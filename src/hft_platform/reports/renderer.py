@@ -5,6 +5,7 @@ Paid tier:  [summary, flow_detail, levels, scenarios, disclaimer] = 5 messages
 
 All prices are scaled int x10_000 per the platform Precision Law.
 """
+
 from __future__ import annotations
 
 from typing import Final
@@ -206,11 +207,7 @@ def _build_scenarios(report: ScenarioReport) -> str:
 
 
 def _build_disclaimer() -> str:
-    return (
-        "⚠️ 本報告基於歷史行情數據自動生成，\n"
-        "僅供參考，不構成投資建議。\n"
-        "投資有風險，請自行評估。"
-    )
+    return "⚠️ 本報告基於歷史行情數據自動生成，\n僅供參考，不構成投資建議。\n投資有風險，請自行評估。"
 
 
 # ---------------------------------------------------------------------------

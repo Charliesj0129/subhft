@@ -1,4 +1,5 @@
 """Tests for reports.collector — pure-function tests only (no CH connection needed)."""
+
 from __future__ import annotations
 
 from hft_platform.reports.collector import _ch_to_platform, _day_filter, _night_filter

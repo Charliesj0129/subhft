@@ -1,4 +1,5 @@
 """Unit tests for hft_platform.reports.models data contracts."""
+
 from __future__ import annotations
 
 import pytest

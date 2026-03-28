@@ -5,6 +5,7 @@ Orchestrates scenario rules SC-01 through SC-03 and computes trade levels
 
 All price fields use ScaledPrice (int x10000) per the Precision Law.
 """
+
 from __future__ import annotations
 
 from hft_platform.reports.models import KeyLevel, ScenarioReport, SignalReport
@@ -132,11 +133,7 @@ class ScenarioBuilder:
         # ---------------------------------------------------------------
         # Scenarios: run all generators, collect non-None results
         # ---------------------------------------------------------------
-        scenarios = [
-            sc
-            for gen in _SCENARIO_GENERATORS
-            if (sc := gen(signal)) is not None
-        ]
+        scenarios = [sc for gen in _SCENARIO_GENERATORS if (sc := gen(signal)) is not None]
 
         # ---------------------------------------------------------------
         # Trade levels

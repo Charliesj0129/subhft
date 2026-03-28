@@ -11,6 +11,7 @@ The spread query groups by integer *points* so it divides by 10,000 in SQL
 units after the bids_price/asks_price subtraction which is in CH units, so
 we divide by 10,000 to get integer points).
 """
+
 from __future__ import annotations
 
 import os
@@ -81,10 +82,7 @@ def _night_filter(date: str) -> str:
     Uses exch_ts range without toDate() to avoid UTC confusion.
     """
     start = f"toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') * 1000000000"
-    end = (
-        f"(toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei')"
-        f" + INTERVAL 14 HOUR) * 1000000000"
-    )
+    end = f"(toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') + INTERVAL 14 HOUR) * 1000000000"
     return f"exch_ts >= {start} AND exch_ts < {end}"
 
 

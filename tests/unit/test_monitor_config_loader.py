@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from hft_platform.monitor._alpha_dispatcher import _call_alpha, _probe_dispatch_keys
 from hft_platform.monitor._config_loader import _is_expired_contract, load_watchlist
+from hft_platform.monitor._types import AlphaState
+from research.registry.alpha_registry import AlphaRegistry
 
 
 def test_load_watchlist_respects_monitor_env_overrides(
@@ -226,3 +229,50 @@ def test_is_expired_contract() -> None:
     assert _is_expired_contract("TMFG6", all_codes) is False
     # Stock codes are never expired
     assert _is_expired_contract("2330", {"2330"}) is False
+
+
+def test_repo_watchlist_default_alphas_are_discoverable_and_monitor_compatible() -> None:
+    """Shipped watchlist must only reference alphas the monitor can actually run."""
+    config = load_watchlist(Path("config/watchlist.yaml"), Path("config/symbols.yaml"))
+
+    registry = AlphaRegistry()
+    discovered = registry.discover("research/alphas")
+
+    sample_payload = {
+        "bid_px": 100.0,
+        "ask_px": 100.1,
+        "bid_qty": 10.0,
+        "ask_qty": 12.0,
+        "mid_price": 100.05,
+        "microprice_x2": 2001000,
+        "spread_scaled": 1000,
+        "spread_bps": 9.995,
+        "imbalance": -0.0909,
+        "ofi_l1_raw": -2.0,
+        "ofi_l1_cum": -2.0,
+        "local_ts": 1,
+    }
+
+    missing: list[str] = []
+    incompatible: list[str] = []
+
+    for alpha_id in config.default_alpha_ids:
+        alpha = discovered.get(alpha_id)
+        if alpha is None:
+            missing.append(alpha_id)
+            continue
+
+        dispatch_keys = _probe_dispatch_keys(alpha)
+        filtered_buf = {k: 0.0 for k in dispatch_keys} if dispatch_keys else {}
+        state = AlphaState(
+            alpha_id=alpha_id,
+            runtime=alpha,
+            _dispatch_keys=dispatch_keys,
+            _filtered_buf=filtered_buf,
+        )
+        signal = _call_alpha(state, sample_payload)
+        if signal is None:
+            incompatible.append(alpha_id)
+
+    assert not missing, f"watchlist references undiscoverable alphas: {missing}"
+    assert not incompatible, f"watchlist references monitor-incompatible alphas: {incompatible}"

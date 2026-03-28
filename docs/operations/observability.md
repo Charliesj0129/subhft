@@ -23,10 +23,16 @@
 - `strategy_intents_total{strategy=...}`
 - `risk_reject_total{reason=...,strategy=...}`
 - `stormguard_mode{strategy=...}`
+- `gateway_reject_total{reason=...}` when `HFT_GATEWAY_ENABLED=1`
+- `platform_reduce_only_active`
+- `manual_rearm_required{scope=...}`
+- `autonomy_transitions_total{scope=...,from_mode=...,to_mode=...,reason=...}`
 
 ## 4) Execution / Order
 - `order_actions_total{type=...}`
 - `order_reject_total`
+- `shadow_orders_total{strategy=...,symbol=...,side=...}`
+- `shadow_mode_active`
 - `execution_events_total{type=...}`
 - `execution_router_lag_ns`
 
@@ -64,3 +70,23 @@ rg -n "Traceback|AttributeError|Catcher" /tmp/metrics.txt
 # 3) 核心 metric 存在
 rg -n "feed_events_total|queue_depth|shioaji_api_latency_ms" /tmp/metrics.txt
 ```
+
+Shadow / gateway runtime quick checks:
+```bash
+# Strategy emits intents
+grep '^strategy_intents_total' /tmp/metrics.txt
+
+# Shadow intercept is active
+grep -E '^(shadow_orders_total|shadow_mode_active)' /tmp/metrics.txt
+
+# Gateway is not silently rejecting futures prices
+grep '^gateway_reject_total' /tmp/metrics.txt
+
+# Platform is not stuck in reduce-only
+grep -E '^(platform_reduce_only_active|manual_rearm_required|autonomy_transitions_total)' /tmp/metrics.txt
+```
+
+Read this carefully:
+- `strategy_intents_total > 0` with `shadow_orders_total = 0` means the strategy is alive, but the shadow intercept/write path is not being hit.
+- `gateway_reject_total{reason="PRICE_EXCEEDS_CAP: ... > 50000000"}` means price-cap configuration is incompatible with the instrument scale.
+- `platform_reduce_only_active 1` means opening orders are intentionally blocked until operator review and re-arm.

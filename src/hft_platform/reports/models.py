@@ -4,6 +4,7 @@ All price fields use ScaledPrice (int x10000) per the platform Precision Law.
 All dataclasses use slots=True for memory efficiency and to prevent accidental
 attribute pollution (hot-path safety).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

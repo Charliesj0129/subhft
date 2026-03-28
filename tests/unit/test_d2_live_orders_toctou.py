@@ -1,4 +1,5 @@
 """D2: Terminal callback arriving before _register_broker_ids must be deferred and drained."""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,6 +21,7 @@ class TestDeferredTerminal:
     @pytest.fixture()
     def adapter(self):
         from hft_platform.order.adapter import OrderAdapter
+
         a = OrderAdapter.__new__(OrderAdapter)
         a.live_orders = {}
         a._live_orders_lock = asyncio.Lock()
@@ -103,6 +105,7 @@ class TestDeferredTerminal:
 class TestPendingCloseQtySentinelFilter:
     def test_sentinels_are_skipped(self):
         from hft_platform.order.adapter import OrderAdapter
+
         a = OrderAdapter.__new__(OrderAdapter)
         real_trade = {"contract_code": "2330", "action": "BUY", "qty": 5}
         a.live_orders = {
@@ -110,28 +113,33 @@ class TestPendingCloseQtySentinelFilter:
             "s1:2": real_trade,
         }
         from hft_platform.contracts.strategy import Side
+
         qty = a._pending_close_qty("2330", Side.BUY)
         # Only real_trade counts, sentinel is skipped
         assert qty == 5
 
     def test_terminal_before_registered_sentinel_skipped(self):
         from hft_platform.order.adapter import OrderAdapter
+
         a = OrderAdapter.__new__(OrderAdapter)
         a.live_orders = {
             "s1:1": _TERMINAL_BEFORE_REGISTERED,
             "s1:2": {"contract_code": "2330", "action": "SELL", "qty": 3},
         }
         from hft_platform.contracts.strategy import Side
+
         qty = a._pending_close_qty("2330", Side.SELL)
         assert qty == 3
 
     def test_no_sentinels_normal_operation(self):
         from hft_platform.order.adapter import OrderAdapter
+
         a = OrderAdapter.__new__(OrderAdapter)
         a.live_orders = {
             "s1:1": {"contract_code": "2330", "action": "BUY", "qty": 10},
             "s1:2": {"contract_code": "2330", "action": "BUY", "qty": 5},
         }
         from hft_platform.contracts.strategy import Side
+
         qty = a._pending_close_qty("2330", Side.BUY)
         assert qty == 15
