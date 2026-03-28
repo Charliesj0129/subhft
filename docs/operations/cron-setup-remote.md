@@ -24,7 +24,7 @@ Then paste the entries below (adjust paths as needed for your deployment root).
 # =============================================================================
 # HFT Platform — Remote Machine Maintenance Crontab
 # Deployment root: /home/charl/subhft
-# Last updated: 2026-03-05
+# Last updated: 2026-03-28
 # =============================================================================
 
 # --- WAL Archive Cleanup ---
@@ -96,6 +96,21 @@ Then paste the entries below (adjust paths as needed for your deployment root).
 # Emits smartmon_* metrics (reallocated sectors, wear level, power-on hours, temp).
 0 5 * * 1 cd /home/charl/subhft && ./scripts/smart_check.sh >> /tmp/smart_check.log 2>&1
 
+# --- Host Security Update (weekly Sunday 03:30) ---
+# Applies security-only apt updates and sends Telegram summary.
+# Does NOT auto-reboot — only notifies if reboot is required.
+# Requires: sudo apt install unattended-upgrades
+30 3 * * 0 cd /home/charl/subhft && sudo bash scripts/host_security_update.sh >> /tmp/hft_security_update.log 2>&1
+
+# --- Secret Age Check (daily 07:00, before market open) ---
+# Warns via Telegram if any secret exceeds 90 days without rotation.
+# Secrets tracked via # ROTATED: YYYY-MM-DD annotations in .env.
+0 7 * * 1-5 cd /home/charl/subhft && bash scripts/secret_age_check.sh >> /tmp/hft_secret_age.log 2>&1
+
+# --- Host Health Report (daily 16:45, after market close) ---
+# Consolidated host health summary: disk, RAM, load, Docker, CH lag, uptime, secrets.
+45 16 * * 1-5 cd /home/charl/subhft && bash scripts/host_health_report.sh >> /tmp/hft_host_health.log 2>&1
+
 # --- Quarterly Infrastructure Health Check (quarterly) ---
 # Checks: ClickHouse TTL, Prometheus storage, OS updates, SMART, Shioaji SDK pin.
 # Outputs JSON report + optional Telegram summary.
@@ -152,6 +167,11 @@ tail -50 /tmp/hft_callback_latency.log
 tail -50 /tmp/hft_query_guard_suite.log
 tail -50 /tmp/hft_wal_dlq_status.log
 tail -50 /tmp/hft_reliability_monthly.log
+
+# Check governance script logs
+tail -50 /tmp/hft_security_update.log
+tail -50 /tmp/hft_secret_age.log
+tail -50 /tmp/hft_host_health.log
 
 # Check generated reports
 ls -lh /home/charl/subhft/outputs/soak_reports/daily/ | tail -20
