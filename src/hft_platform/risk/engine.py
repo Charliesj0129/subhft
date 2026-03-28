@@ -184,7 +184,13 @@ class RiskEngine:
         except ValueError:
             scale = 10_000
         max_price_cap = float(defaults.get("max_price_cap", 5000.0))  # precision-config
-        max_price_scaled = int(max_price_cap * max(1, scale))
+        all_caps = [max_price_cap]
+        for key in ("max_price_cap_futures", "max_price_cap_options"):
+            val = defaults.get(key)
+            if val is not None:
+                all_caps.append(float(val))
+        coarse_cap = max(all_caps)
+        max_price_scaled = int(coarse_cap * max(1, scale))
         max_qty = int(
             os.getenv(
                 "HFT_RISK_FAST_GATE_MAX_QTY",
@@ -214,6 +220,12 @@ class RiskEngine:
         try:
             defaults = self.config.get("global_defaults", {})
             max_price_cap_raw = float(defaults.get("max_price_cap", 5000.0))  # precision-config
+            all_caps = [max_price_cap_raw]
+            for key in ("max_price_cap_futures", "max_price_cap_options"):
+                val = defaults.get(key)
+                if val is not None:
+                    all_caps.append(float(val))
+            max_price_cap_raw = max(all_caps)
             tick_size_raw = float(defaults.get("tick_size", 0.01))  # precision-config
             band_ticks = int(defaults.get("price_band_ticks", 20))
             max_notional_raw = defaults.get("max_notional", 10_000_000)
