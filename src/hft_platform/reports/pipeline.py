@@ -77,30 +77,80 @@ async def run_pipeline(
 ) -> None:
     """Execute the full report pipeline for the given session and date.
 
-    This is a skeleton implementation that logs start/complete.
-    Subsequent tasks will inject DataCollector, SignalEngine,
-    ScenarioBuilder, ReportRenderer, and ReportSender stages here.
-
     Args:
         session:  "day" or "night".
         date:     ISO date string, e.g. "2026-03-27".
         dry_run:  If True, skip actual output dispatch.
-        debug:    If True, enable verbose logging.
+        debug:    If True, enable verbose logging and print rendered output.
     """
+    from hft_platform.reports.collector import DataCollector
+    from hft_platform.reports.distributor import Distributor, ReportSender, load_channels
+    from hft_platform.reports.renderer import ReportRenderer
+    from hft_platform.reports.scenarios import ScenarioBuilder
+    from hft_platform.reports.signals import SignalEngine
+
+    _log.info("report_pipeline_start", session=session, date=date, dry_run=dry_run)
+
+    # Stage 1: collect session data
+    collector = DataCollector()
+    session_data = collector.collect(session, date)
+    _log.info("stage1_complete", ticks=session_data.tick_count, bars=len(session_data.bars_5m))
+
+    if session_data.tick_count == 0:
+        _log.warning("report_pipeline_empty_session", session=session, date=date)
+        return
+
+    # Stage 2: derive signals
+    engine = SignalEngine()
+    signal_report = engine.analyze(session_data)
     _log.info(
-        "report_pipeline.start",
-        session=session,
-        date=date,
-        dry_run=dry_run,
-        debug=debug,
+        "stage2_complete",
+        bias=signal_report.bias,
+        confidence=signal_report.bias_confidence,
     )
-    # TODO(T3-T9): inject DataCollector → SignalEngine → ScenarioBuilder
-    #              → ReportRenderer → ReportSender stages
+
+    # Stage 3: build scenarios
+    builder = ScenarioBuilder()
+    scenario_report = builder.build(signal_report)
     _log.info(
-        "report_pipeline.complete",
-        session=session,
-        date=date,
+        "stage3_complete",
+        direction=scenario_report.direction,
+        scenarios=len(scenario_report.scenarios),
     )
+
+    # Stage 4: render messages
+    renderer = ReportRenderer()
+    rendered = {
+        "free": renderer.render(scenario_report, tier="free"),
+        "paid": renderer.render(scenario_report, tier="paid"),
+    }
+    _log.info(
+        "stage4_complete",
+        free_msgs=len(rendered["free"]),
+        paid_msgs=len(rendered["paid"]),
+    )
+
+    if debug:
+        for tier, msgs in rendered.items():
+            print(f"\n{'=' * 40} {tier.upper()} {'=' * 40}")
+            for i, m in enumerate(msgs, 1):
+                print(f"\n--- Message {i}/{len(msgs)} ({len(m)} chars) ---")
+                print(m)
+
+    if dry_run:
+        _log.info("report_pipeline_dry_run_complete")
+        return
+
+    # Stage 5: distribute
+    channels = load_channels()
+    sender = ReportSender()
+    distributor = Distributor(sender=sender, channels=channels)
+    try:
+        await distributor.send(rendered)
+    finally:
+        await sender.close()
+
+    _log.info("report_pipeline_complete", session=session, date=date)
 
 
 def main() -> None:
