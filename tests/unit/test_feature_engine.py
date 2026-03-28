@@ -528,9 +528,9 @@ def test_feature_engine_rust_backend_parity_when_available():
 # --- v2 features tests ---
 
 
-def test_v2_feature_set_has_22_features():
+def test_v2_feature_set_has_21_features():
     fs = build_default_lob_feature_set_v2()
-    assert len(fs.features) == 22
+    assert len(fs.features) == 21
     assert fs.feature_set_id == "lob_shared_v2"
     assert fs.schema_version == 2
     assert fs.features[16].feature_id == "ofi_depth_norm_ppm"
