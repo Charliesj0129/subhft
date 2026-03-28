@@ -1,8 +1,23 @@
 # Remote Host Daily Governance — Design Spec
 
 **Date**: 2026-03-28
-**Scope**: Single remote host (`charl@100.91.176.126:~/subhft`) daily maintenance automation
+**Scope**: Single remote host daily maintenance automation
 **Approach**: Pure shell scripts, zero new dependencies, integrated into existing cron + Telegram notification system
+
+### Remote Root Directory Discrepancy
+
+Two paths exist in the codebase for the remote deployment root:
+- `scripts/deploy.sh` uses `REMOTE_DIR="/opt/hft-platform"` (L26)
+- `docs/operations/cron-setup-remote.md` uses `/home/charl/subhft`
+
+**Resolution**: All governance scripts use `DEPLOY_ROOT` variable (sourced from `_notify.sh`), defaulting to `/home/charl/subhft` (matching the active cron entries). `deploy.sh` should also be updated to use this variable. The canonical remote root is whatever `DEPLOY_ROOT` resolves to — a single source of truth.
+
+```bash
+# In scripts/_notify.sh
+DEPLOY_ROOT="${DEPLOY_ROOT:-/home/charl/subhft}"
+```
+
+As a follow-up, `deploy.sh`'s `REMOTE_DIR` should be aligned to `DEPLOY_ROOT` or read from the same env var. This is tracked as an integration item in the implementation plan.
 
 ---
 
@@ -89,13 +104,19 @@ Logic:
 3. Threshold: 90 days (override via `SECRET_MAX_AGE_DAYS` env var)
 4. Over threshold → Telegram: `Secret CLICKHOUSE_PASSWORD aged 102 days (max: 90)`
 5. Missing `# ROTATED:` annotation → treated as "never rotated", always warns
+6. `--quiet` flag: suppress Telegram, only set exit code (0 = all OK, 1 = overdue). Used by `host_health_report.sh` to avoid duplicate notifications.
 
-Tracked secrets (hardcoded list):
+Tracked secrets (canonical set — aligned with `validate_env.sh`):
 - `CLICKHOUSE_PASSWORD`
 - `REDIS_PASSWORD`
 - `SHIOAJI_API_KEY`
 - `SHIOAJI_SECRET_KEY`
 - `HFT_TELEGRAM_BOT_TOKEN`
+- `MONITOR_CH_PASSWORD` (alias — if set, must match `CLICKHOUSE_PASSWORD`)
+- `MONITOR_REDIS_PASSWORD` (alias — if set, must match `REDIS_PASSWORD`)
+- `HFT_FUBON_PASSWORD` (conditional — only if `HFT_BROKER=fubon`)
+
+**Alias/override rule**: For alias secrets (`MONITOR_*`), the age check reports the age of the _primary_ secret they must match. If an alias is set but has no `# ROTATED:` annotation, it inherits the primary's rotation date. If an alias is set and _differs_ from its primary, the check emits a WARNING (consistency violation, same as `validate_env.sh` L33-41).
 
 ### 5. `scripts/host_health_report.sh` — Daily Health Summary
 
@@ -110,6 +131,8 @@ Tracked secrets (hardcoded list):
 | ClickHouse lag | `curl localhost:8123` query latest data timestamp | > 30 min during trading hours |
 | System uptime | `uptime` | < 1 day (unexpected restart) |
 | Pending reboot | `/var/run/reboot-required` | File exists |
+
+**Secret status line**: The health report calls `secret_age_check.sh --quiet` (exit code only, no Telegram). Exit 0 → "Secrets: all OK". Exit 1 → "Secrets: N overdue" (details already sent by the 07:00 secret_age_check cron). This avoids duplicating `.env` parsing logic across two scripts.
 
 Telegram output (normal):
 ```
@@ -151,11 +174,16 @@ Schedule rationale:
 
 ### deploy.sh Gate
 
-Add preflight as first step in `scripts/deploy.sh`:
+Preflight must run **on the remote host**, not the local dev machine. Insert after the SSH connection is established (after L110 in current `deploy.sh`), before the `docker pull` step:
+
 ```bash
-echo ">> Running host preflight..."
-bash "$(dirname "$0")/host_preflight.sh" || { echo "FATAL: Preflight failed. Aborting deploy."; exit 1; }
+echo "==> Running remote preflight..."
+ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
+    "cd ${REMOTE_DIR} && bash scripts/host_preflight.sh" \
+    || { echo "FATAL: Remote preflight failed. Aborting deploy."; exit 1; }
 ```
+
+This ensures Docker version, disk, memory, `.env`, and service health are all checked on the target host. The preflight script itself is already present on the remote host (deployed via git or rsync as part of the code checkout).
 
 ### .env Annotation
 
