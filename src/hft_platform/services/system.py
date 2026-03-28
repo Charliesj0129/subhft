@@ -410,8 +410,12 @@ class HFTSystem:
         inputs = getattr(self, "platform_degrade_inputs", None)
         if controller is None or inputs is None:
             return
-        for reason in inputs.reduce_only_reasons():
+        reasons = inputs.reduce_only_reasons()
+        for reason in reasons:
             controller.enter_reduce_only(reason=reason)
+        controller.check_auto_recovery(
+            current_reasons=reasons, now_ns=timebase.now_ns(),
+        )
 
     async def _supervise(self):
         """

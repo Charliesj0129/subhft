@@ -5,6 +5,7 @@ from __future__ import annotations
 from hft_platform.contracts.strategy import IntentType
 from hft_platform.ops.platform_degrade import (
     PlatformDegradeController,
+    _AUTO_RECOVERABLE_REASONS,
     get_shared_platform_degrade_controller,
     reset_shared_platform_degrade_controller,
 )
@@ -88,3 +89,68 @@ class TestActiveReasons:
         ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
         ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
         assert ctrl._active_reasons == {"feed_reconnect_unhealthy"}
+
+
+class TestAutoRecovery:
+    def test_auto_recovery_after_all_reasons_cleared(self):
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        # Reasons cleared, start cooldown
+        ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
+        assert ctrl.reduce_only_active is True  # still in cooldown
+        # Cooldown elapses (60s = 60_000_000_000 ns)
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
+        assert recovered is True
+        assert ctrl.reduce_only_active is False
+
+    def test_auto_recovery_blocked_by_non_recoverable_reason(self):
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        ctrl.enter_reduce_only(reason="reconciliation_drift")
+        # Feed clears but reconciliation_drift remains
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
+        assert recovered is False
+        # Even after cooldown
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
+        assert recovered is False
+        assert ctrl.reduce_only_active is True
+
+    def test_auto_recovery_reset_on_retrigger(self):
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        # Reasons cleared, start cooldown at t=1s
+        ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
+        # Reason re-appears at t=30s
+        ctrl.check_auto_recovery(current_reasons=["feed_reconnect_unhealthy"], now_ns=30_000_000_000)
+        # Clears again at t=50s
+        ctrl.check_auto_recovery(current_reasons=[], now_ns=50_000_000_000)
+        # 60s from t=50s would be t=110s — should NOT recover at t=70s
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=70_000_000_000)
+        assert recovered is False
+        # Should recover at t=111s (60s after re-clear)
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=111_000_000_000)
+        assert recovered is True
+
+    def test_auto_recovery_disabled(self):
+        ctrl = PlatformDegradeController(auto_recovery_enabled=False, auto_recovery_cooldown_s=60)
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=999_000_000_000)
+        assert recovered is False
+        assert ctrl.reduce_only_active is True
+
+    def test_auto_recovery_clears_auto_recoverable_reasons_from_set(self):
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=1)
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        # Input no longer reports feed_reconnect_unhealthy
+        ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
+        assert "feed_reconnect_unhealthy" not in ctrl._active_reasons
+
+    def test_auto_recovery_not_triggered_when_not_active(self):
+        ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=1)
+        recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=999_000_000_000)
+        assert recovered is False
+
+    def test_auto_recoverable_reasons_are_feed_related(self):
+        assert "feed_reconnect_unhealthy" in _AUTO_RECOVERABLE_REASONS
+        assert "feed_gap_exceeded" in _AUTO_RECOVERABLE_REASONS
+        assert "reconciliation_drift" not in _AUTO_RECOVERABLE_REASONS

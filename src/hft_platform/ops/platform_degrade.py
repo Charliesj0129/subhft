@@ -17,6 +17,11 @@ _AUTONOMY_MODE_VALUES = {
     AutonomyMode.HALT: 3,
 }
 
+_AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset({
+    "feed_reconnect_unhealthy",
+    "feed_gap_exceeded",
+})
+
 _shared_controller: "PlatformDegradeController | None" = None
 _shared_controller_lock = Lock()
 logger = get_logger("platform_degrade")
@@ -24,8 +29,14 @@ logger = get_logger("platform_degrade")
 
 class PlatformDegradeController:
     def __init__(self, *, metrics: Any | None = None, evidence_writer: Any | None = None,
-                 shadow_mode: bool = False) -> None:
+                 shadow_mode: bool = False,
+                 auto_recovery_enabled: bool = True,
+                 auto_recovery_cooldown_s: int = 60) -> None:
         self._shadow_mode = shadow_mode
+        self._auto_recovery_enabled = auto_recovery_enabled
+        self._auto_recovery_cooldown_s = auto_recovery_cooldown_s
+        self._auto_recovery_cooldown_ns = int(auto_recovery_cooldown_s * 1_000_000_000)
+        self._recovery_started_ns: int = 0
         self.metrics = metrics or self._default_metrics()
         self.evidence_writer = evidence_writer or get_shared_autonomy_evidence_writer()
         self.reduce_only_active = False
@@ -111,6 +122,59 @@ class PlatformDegradeController:
             transition.record_transition(self.metrics)
         return transition
 
+    def check_auto_recovery(self, *, current_reasons: list[str], now_ns: int) -> bool:
+        """Check if auto-recovery should trigger. Called from supervisor loop.
+
+        Returns True if recovery was performed.
+        """
+        if not self.reduce_only_active or not self._auto_recovery_enabled:
+            return False
+
+        # Sync: remove auto-recoverable reasons that inputs no longer report
+        input_reason_set = set(current_reasons)
+        auto_recoverable_active = self._active_reasons & _AUTO_RECOVERABLE_REASONS
+        cleared = auto_recoverable_active - input_reason_set
+        if cleared:
+            self._active_reasons -= cleared
+            logger.info("auto_recovery_reasons_cleared", cleared=sorted(cleared),
+                        remaining=sorted(self._active_reasons))
+
+        # Sync: re-add auto-recoverable reasons that are re-firing in inputs
+        re_fired = (input_reason_set & _AUTO_RECOVERABLE_REASONS) - self._active_reasons
+        if re_fired:
+            self._active_reasons |= re_fired
+            self._recovery_started_ns = 0
+            logger.info("auto_recovery_reasons_refired", refired=sorted(re_fired),
+                        active_reasons=sorted(self._active_reasons))
+
+        # If ANY non-auto-recoverable reason remains, block auto-recovery
+        non_recoverable = self._active_reasons - _AUTO_RECOVERABLE_REASONS
+        if non_recoverable:
+            self._recovery_started_ns = 0
+            return False
+
+        # If any active reason remains (auto-recoverable but still firing), reset
+        if self._active_reasons:
+            self._recovery_started_ns = 0
+            return False
+
+        # All reasons cleared — run cooldown timer
+        if self._recovery_started_ns == 0:
+            self._recovery_started_ns = now_ns
+            logger.info("auto_recovery_cooldown_started",
+                        cooldown_s=self._auto_recovery_cooldown_s)
+            return False
+
+        elapsed_ns = now_ns - self._recovery_started_ns
+        if elapsed_ns >= self._auto_recovery_cooldown_ns:
+            self.exit_reduce_only(
+                reason=f"auto_recovery: all_reasons_cleared_{self._auto_recovery_cooldown_s}s"
+            )
+            self._recovery_started_ns = 0
+            return True
+
+        return False
+
     def allow_open(self) -> bool:
         return not self.reduce_only_active
 
@@ -194,8 +258,15 @@ def get_shared_platform_degrade_controller(
             _shadow = shadow_mode if shadow_mode is not None else (
                 os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1"
             )
+            _auto_enabled = os.getenv("HFT_PLATFORM_AUTO_RECOVERY_ENABLED", "1") == "1"
+            try:
+                _cooldown = int(os.getenv("HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S", "60"))
+            except ValueError:
+                _cooldown = 60
             _shared_controller = PlatformDegradeController(
                 metrics=metrics, shadow_mode=_shadow,
+                auto_recovery_enabled=_auto_enabled,
+                auto_recovery_cooldown_s=_cooldown,
             )
         elif metrics is not None and _shared_controller.metrics is None:
             _shared_controller.metrics = metrics
