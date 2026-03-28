@@ -8,6 +8,7 @@ All price fields use ScaledPrice (int x10000) per the Precision Law.
 
 from __future__ import annotations
 
+from hft_platform.contracts.types import ScaledPrice
 from hft_platform.reports.models import KeyLevel, ScenarioReport, SignalReport
 from hft_platform.reports.rules.scenario_rules import (
     scenario_break_below_support,
@@ -42,7 +43,7 @@ def _importance_from_strength(strength: float) -> int:
 
 def _compute_trade_levels(
     signal: SignalReport,
-) -> tuple[tuple[int, int], int, int]:
+) -> tuple[tuple[ScaledPrice, ScaledPrice], ScaledPrice, ScaledPrice]:
     """Return (entry_zone, target, stop_loss) for the primary trade direction.
 
     ATR proxy = session high - low (ScaledPrice integers).
@@ -61,32 +62,32 @@ def _compute_trade_levels(
 
     if signal.bias == "bearish" and signal.resistances:
         r1_price = signal.resistances[0].price
-        s1_price = signal.supports[0].price if signal.supports else r1_price - atr // 5
+        s1_price = signal.supports[0].price if signal.supports else ScaledPrice(r1_price - atr // 5)
         atr_step = atr // 5 if atr else r1_price // 100
         entry_high = r1_price
-        entry_low = r1_price - atr_step
+        entry_low = ScaledPrice(r1_price - atr_step)
         target = s1_price
-        stop_loss = r1_price + atr_step
+        stop_loss = ScaledPrice(r1_price + atr_step)
         return (entry_low, entry_high), target, stop_loss
 
     if signal.bias == "bullish" and signal.supports:
         s1_price = signal.supports[0].price
-        r1_price = signal.resistances[0].price if signal.resistances else s1_price + atr // 5
+        r1_price = signal.resistances[0].price if signal.resistances else ScaledPrice(s1_price + atr // 5)
         atr_step = atr // 5 if atr else s1_price // 100
         entry_low = s1_price
-        entry_high = s1_price + atr_step
+        entry_high = ScaledPrice(s1_price + atr_step)
         target = r1_price
-        stop_loss = s1_price - atr_step
+        stop_loss = ScaledPrice(s1_price - atr_step)
         return (entry_low, entry_high), target, stop_loss
 
     # Neutral or no levels available
     midpoint = (sd.high + sd.low) // 2
     atr_step = atr // 10 if atr else midpoint // 200
-    entry_low = midpoint - atr_step
-    entry_high = midpoint + atr_step
+    entry_low = ScaledPrice(midpoint - atr_step)
+    entry_high = ScaledPrice(midpoint + atr_step)
     # Neutral: no strong directional bias; stop = entry_low - step, target = entry_high + step
-    target = entry_high + atr_step
-    stop_loss = entry_low - atr_step
+    target = ScaledPrice(entry_high + atr_step)
+    stop_loss = ScaledPrice(entry_low - atr_step)
     return (entry_low, entry_high), target, stop_loss
 
 

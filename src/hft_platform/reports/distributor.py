@@ -19,7 +19,7 @@ from hft_platform.reports.models import ChannelConfig
 try:
     import aiohttp
 except ImportError:  # pragma: no cover
-    aiohttp = None  # type: ignore[assignment]
+    aiohttp = None  # noqa: F841
 
 if TYPE_CHECKING:
     pass
@@ -85,7 +85,7 @@ class ReportSender:
 
     def __init__(self, bot_token: str = "") -> None:
         self._token: str = bot_token or os.environ.get("HFT_TELEGRAM_BOT_TOKEN", "")
-        self._session: aiohttp.ClientSession | None = None  # type: ignore[name-defined]
+        self._session: aiohttp.ClientSession | None = None
 
     async def _ensure_session(self) -> None:
         """Lazily create the aiohttp ClientSession."""

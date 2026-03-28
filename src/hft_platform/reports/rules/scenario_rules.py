@@ -6,6 +6,7 @@ All price fields use ScaledPrice (int x10000) per the Precision Law.
 
 from __future__ import annotations
 
+from hft_platform.contracts.types import ScaledPrice
 from hft_platform.reports.models import Scenario, SignalReport
 
 __all__ = [
@@ -91,6 +92,6 @@ def scenario_range_bound(signal: SignalReport) -> Scenario | None:
         label="區間震盪",
         probability="較低",
         condition=condition,
-        target=0,
+        target=ScaledPrice(0),
         description=f"在 {_fmt(s1.price)} 至 {_fmt(r1.price)} 區間來回震盪",
     )

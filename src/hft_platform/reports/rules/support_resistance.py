@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from hft_platform.contracts.types import ScaledPrice
 from hft_platform.reports.models import Bar5m, LargeTrade, PriceLevel, SessionData
 
 __all__ = [
@@ -100,7 +101,7 @@ def find_double_bottoms_tops(
             higher_middle = any(ml > max(low_i, low_j) for ml in middle_lows)
             if not higher_middle:
                 continue
-            avg_price = (low_i + low_j) // 2
+            avg_price = ScaledPrice((low_i + low_j) // 2)
             levels.append(
                 PriceLevel(
                     price=avg_price,
@@ -123,7 +124,7 @@ def find_double_bottoms_tops(
             lower_middle = any(mh < min(high_i, high_j) for mh in middle_highs)
             if not lower_middle:
                 continue
-            avg_price = (high_i + high_j) // 2
+            avg_price = ScaledPrice((high_i + high_j) // 2)
             levels.append(
                 PriceLevel(
                     price=avg_price,
@@ -176,7 +177,7 @@ def find_round_numbers(low: int, high: int) -> list[PriceLevel]:
 
     levels: list[PriceLevel] = [
         PriceLevel(
-            price=p,
+            price=ScaledPrice(p),
             strength=importance / 3.0,
             reason=f"整數關卡 {_fmt(p)}",
         )
@@ -255,7 +256,7 @@ def find_volume_at_price(
         strength = min(1.0, vol / total_vol * 2.0)
         result.append(
             PriceLevel(
-                price=bucket_price,
+                price=ScaledPrice(bucket_price),
                 strength=strength,
                 reason=f"成交量集中 {_fmt(bucket_price)}",
             )
