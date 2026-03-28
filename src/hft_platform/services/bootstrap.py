@@ -222,6 +222,17 @@ def validate_shadow_lock() -> None:
         raise SystemExit(1)
 
 
+def log_shadow_config_summary() -> None:
+    """Log all shadow-relevant env vars at startup for debugging."""
+    logger.info(
+        "shadow_config_summary",
+        shadow_mode=os.getenv("HFT_ORDER_SHADOW_MODE", "0"),
+        gateway_enabled=os.getenv("HFT_GATEWAY_ENABLED", "0"),
+        order_mode=os.getenv("HFT_ORDER_MODE", "sim"),
+        auto_recovery_enabled=os.getenv("HFT_PLATFORM_AUTO_RECOVERY_ENABLED", "1"),
+    )
+
+
 class SystemBootstrapper:
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         self.settings = settings if settings is not None else {}
@@ -683,6 +694,10 @@ class SystemBootstrapper:
             self._start_lease_refresh_thread(**params)
         elif role in _FEED_ALLOWED_ROLES:
             logger.warning("session_lease_refresh_not_started", role=role, reason="lease_not_owned")
+
+        # Preflight safety checks
+        validate_shadow_lock()
+        log_shadow_config_summary()
 
         # 1. Infrastructure
         # Note: StormGuard is created below, so we set it after creation

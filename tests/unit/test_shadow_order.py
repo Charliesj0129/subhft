@@ -51,3 +51,27 @@ class TestShadowOrderSinkIntercept:
         sink = ShadowOrderSink(enabled=False)
         sink.enabled = True
         assert sink.enabled is True
+
+
+class TestShadowModeMetric:
+    def test_enabled_sets_metric_to_1(self, monkeypatch):
+        """shadow_mode_active gauge should be 1 when enabled."""
+        mock_metrics = MagicMock()
+        mock_gauge = MagicMock()
+        mock_metrics.shadow_mode_active = mock_gauge
+        monkeypatch.setattr(
+            "hft_platform.order.shadow._get_metrics", lambda: mock_metrics
+        )
+        ShadowOrderSink(enabled=True)
+        mock_gauge.set.assert_called_once_with(1)
+
+    def test_disabled_sets_metric_to_0(self, monkeypatch):
+        """shadow_mode_active gauge should be 0 when disabled."""
+        mock_metrics = MagicMock()
+        mock_gauge = MagicMock()
+        mock_metrics.shadow_mode_active = mock_gauge
+        monkeypatch.setattr(
+            "hft_platform.order.shadow._get_metrics", lambda: mock_metrics
+        )
+        ShadowOrderSink(enabled=False)
+        mock_gauge.set.assert_called_once_with(0)

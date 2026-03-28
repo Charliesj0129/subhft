@@ -36,6 +36,10 @@ class ShadowOrderSink:
             self._enabled = os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1"
         self._counter = 0
         self._writer = writer
+        # Set shadow_mode_active gauge
+        metrics = _get_metrics()
+        if metrics and hasattr(metrics, "shadow_mode_active"):
+            metrics.shadow_mode_active.set(1 if self._enabled else 0)
 
     @property
     def enabled(self) -> bool:
