@@ -191,7 +191,7 @@ class FubonClient:
     def update_order(
         self,
         trade: Any,
-        price: float | None = None,
+        price: int | None = None,
         qty: int | None = None,
     ) -> Any:
         """Delegate to FubonOrderGateway.update_order."""

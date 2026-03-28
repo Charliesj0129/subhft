@@ -100,6 +100,9 @@ class OpportunisticMM(SimpleMarketMaker):
         self._gate_blocked_count: int = 0
         self._invalid_data_count: int = 0
         self._reversal_blocked_count: int = 0
+        # Tracked order IDs for spread-gate cancellation
+        self._bid_oid: str | None = None
+        self._ask_oid: str | None = None
 
         logger.info(
             "OpportunisticMM initialized",
@@ -209,10 +212,10 @@ class OpportunisticMM(SimpleMarketMaker):
         if event.spread_scaled < self._spread_threshold_scaled:
             self._gate_blocked_count += 1
             # Cancel existing quotes to avoid stale orders at tight spreads
-            if hasattr(self, "_bid_oid") and self._bid_oid:
+            if self._bid_oid:
                 self.cancel(symbol, self._bid_oid)
                 self._bid_oid = None
-            if hasattr(self, "_ask_oid") and self._ask_oid:
+            if self._ask_oid:
                 self.cancel(symbol, self._ask_oid)
                 self._ask_oid = None
             return

@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from structlog import get_logger
 
@@ -58,7 +58,7 @@ def _check_alertmanager_config() -> dict[str, Any]:
     return {"name": "alertmanager_config", "ok": exists, "detail": f"found: {path}" if exists else f"missing: {path}"}
 
 
-_ALL_CHECKS = {
+_ALL_CHECKS: dict[str, Callable[[], dict[str, Any]]] = {
     "kill_switch": _check_kill_switch,
     "position_checkpoint": _check_position_checkpoint,
     "wal_backlog": _check_wal_backlog,

@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
-from hft_platform.contracts.strategy import OrderCommand, OrderIntent
+from hft_platform.contracts.strategy import OrderCommand, OrderIntent, StormGuardState
 
 
 @dataclass(slots=True)
@@ -53,7 +53,7 @@ async def run(events: Sequence[Any], strategy_callback: Callable[[Any], Sequence
                 cmd_id=cmd_id,
                 intent=intent,
                 deadline_ns=0,
-                storm_guard_state=intent.timestamp_ns,
+                storm_guard_state=StormGuardState.NORMAL,
                 created_ns=time.perf_counter_ns(),
             )
             adapter.submit(cmd)

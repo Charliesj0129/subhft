@@ -55,6 +55,7 @@ class FubonContractsRuntime:
         self._last_reload_ns: int = 0
 
         # Resolve initial config: explicit config takes priority over file path.
+        self._symbols_config: dict[str, Any] | list[dict[str, Any]] | None
         if symbols_config is not None:
             self._symbols_config = symbols_config
         elif symbols_path is not None:
@@ -171,7 +172,7 @@ class FubonContractsRuntime:
             data = yaml.safe_load(text)
             if data is None:
                 return {}
-            return data  # type: ignore[return-value]
+            return data
         except Exception as exc:
             logger.error("fubon_symbols_yaml_load_failed", path=path, error=str(exc))
             return {}

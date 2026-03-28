@@ -78,9 +78,9 @@ def _check_kill_switch() -> dict[str, Any]:
 
 def _check_config_valid() -> dict[str, Any]:
     try:
-        from hft_platform.config.loader import load_config
+        from hft_platform.config.loader import load_settings
 
-        load_config()
+        load_settings()
         return {"name": "config_valid", "ok": True, "detail": "loaded successfully"}
     except Exception as exc:
         return {"name": "config_valid", "ok": False, "detail": str(exc)}
