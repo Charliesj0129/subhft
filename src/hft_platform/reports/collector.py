@@ -60,15 +60,18 @@ def _ch_to_platform(ch_price: int) -> int:
     return ch_price // CH_TO_PLATFORM_DIVISOR
 
 
+_TS = "toDateTime64(exch_ts/1e9, 3, 'Asia/Taipei')"
+
+
 def _day_filter(date: str) -> str:
     """Return a SQL WHERE snippet for the day session (07:00–13:45 CST).
 
-    Uses exch_ts range comparison with explicit Asia/Taipei timezone.
+    Compares parsed exch_ts (as Asia/Taipei DateTime64) against boundaries.
     Does NOT use toDate() to avoid UTC drift.
     """
     return (
-        f"exch_ts >= toDateTime64('{date} 07:00:00', 3, 'Asia/Taipei') * 1000000000"
-        f" AND exch_ts < toDateTime64('{date} 13:45:00', 3, 'Asia/Taipei') * 1000000000"
+        f"{_TS} >= toDateTime64('{date} 07:00:00', 3, 'Asia/Taipei')"
+        f" AND {_TS} < toDateTime64('{date} 13:45:00', 3, 'Asia/Taipei')"
     )
 
 
@@ -76,11 +79,11 @@ def _night_filter(date: str) -> str:
     """Return a SQL WHERE snippet for the night session (15:00 CST → 05:00 next day).
 
     Night session starts at 15:00 CST on *date* and runs for 14 hours.
-    Uses exch_ts range without toDate() to avoid UTC confusion.
+    Compares parsed exch_ts timestamps (NOT toDate()) to avoid UTC confusion.
     """
-    start = f"toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') * 1000000000"
-    end = f"(toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') + INTERVAL 14 HOUR) * 1000000000"
-    return f"exch_ts >= {start} AND exch_ts < {end}"
+    start = f"toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei')"
+    end = f"toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') + INTERVAL 14 HOUR"
+    return f"{_TS} >= {start} AND {_TS} < {end}"
 
 
 # ---------------------------------------------------------------------------
