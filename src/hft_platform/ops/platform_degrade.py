@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from threading import Lock
 from typing import Any
 
@@ -22,7 +23,9 @@ logger = get_logger("platform_degrade")
 
 
 class PlatformDegradeController:
-    def __init__(self, metrics: Any | None = None, evidence_writer: Any | None = None) -> None:
+    def __init__(self, *, metrics: Any | None = None, evidence_writer: Any | None = None,
+                 shadow_mode: bool = False) -> None:
+        self._shadow_mode = shadow_mode
         self.metrics = metrics or self._default_metrics()
         self.evidence_writer = evidence_writer or get_shared_autonomy_evidence_writer()
         self.reduce_only_active = False
@@ -109,6 +112,8 @@ class PlatformDegradeController:
         return True
 
     def allow_intent(self, *, intent_type: IntentType | int | str, opens_risk: bool) -> bool:
+        if self._shadow_mode:
+            return True
         normalized_intent = self._normalize_intent_type(intent_type)
         if not self.reduce_only_active:
             return True
@@ -174,11 +179,18 @@ class PlatformDegradeController:
             manual_rearm_required.labels(scope="platform").set(1 if self.reduce_only_active else 0)
 
 
-def get_shared_platform_degrade_controller(*, metrics: Any | None = None) -> PlatformDegradeController:
+def get_shared_platform_degrade_controller(
+    *, metrics: Any | None = None, shadow_mode: bool | None = None,
+) -> PlatformDegradeController:
     global _shared_controller
     with _shared_controller_lock:
         if _shared_controller is None:
-            _shared_controller = PlatformDegradeController(metrics=metrics)
+            _shadow = shadow_mode if shadow_mode is not None else (
+                os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1"
+            )
+            _shared_controller = PlatformDegradeController(
+                metrics=metrics, shadow_mode=_shadow,
+            )
         elif metrics is not None and _shared_controller.metrics is None:
             _shared_controller.metrics = metrics
             _shared_controller._sync_metrics()
