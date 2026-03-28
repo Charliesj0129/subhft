@@ -266,9 +266,7 @@ class CascadeBounceStrategy(BaseStrategy):
         near_depth = bid_depth if direction == 1 else ask_depth
         opp_depth = ask_depth if direction == 1 else bid_depth
         imbalance_ppm = int(
-            ((bid_depth - ask_depth) * 1_000_000 // max(bid_depth + ask_depth, 1))
-            if (bid_depth + ask_depth) > 0
-            else 0
+            ((bid_depth - ask_depth) * 1_000_000 // max(bid_depth + ask_depth, 1)) if (bid_depth + ask_depth) > 0 else 0
         )
 
         order_type = self._exec_optimizer.decide(
@@ -312,9 +310,7 @@ class CascadeBounceStrategy(BaseStrategy):
         else:
             self.sell(symbol, price, 1, tif=tif)
 
-    def _check_pending_limit(
-        self, symbol: str, now_ns: int, event: LOBStatsEvent
-    ) -> None:
+    def _check_pending_limit(self, symbol: str, now_ns: int, event: LOBStatsEvent) -> None:
         """Check if pending limit entry has timed out."""
         # Check if we got filled (position changed)
         pos = self.position(symbol)

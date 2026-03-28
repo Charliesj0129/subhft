@@ -527,7 +527,8 @@ class TestCBSExecutionOptimizer:
         cbs.handle_event(
             ctx,
             _make_stats(
-                ts=ts_drop, mid_x2=drop_mid,
+                ts=ts_drop,
+                mid_x2=drop_mid,
                 spread_scaled=30_000,
                 best_bid=drop_mid // 2 - 15000,
                 best_ask=drop_mid // 2 + 15000,
@@ -565,7 +566,8 @@ class TestCBSExecutionOptimizer:
         cbs.handle_event(
             ctx,
             _make_stats(
-                ts=ts_drop, mid_x2=drop_mid,
+                ts=ts_drop,
+                mid_x2=drop_mid,
                 spread_scaled=30_000,
                 best_bid=drop_mid // 2 - 15000,
                 best_ask=drop_mid // 2 + 15000,
@@ -578,7 +580,8 @@ class TestCBSExecutionOptimizer:
         intents = cbs.handle_event(
             ctx,
             _make_stats(
-                ts=ts_timeout, mid_x2=drop_mid,
+                ts=ts_timeout,
+                mid_x2=drop_mid,
                 best_bid=drop_mid // 2 - 15000,
                 best_ask=drop_mid // 2 + 15000,
             ),
