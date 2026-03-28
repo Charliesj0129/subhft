@@ -32,6 +32,7 @@ class PlatformDegradeController:
         self.last_transition: AutonomyTransition | None = None
         self._reference_positions: dict[str, int] = {}
         self._reference_close_reservations: dict[str, int] = {}
+        self._active_reasons: set[str] = set()
         self._sync_metrics()
 
     @staticmethod
@@ -44,7 +45,10 @@ class PlatformDegradeController:
             return None
 
     def enter_reduce_only(self, *, reason: str) -> AutonomyTransition:
+        self._active_reasons.add(reason)
         if self.reduce_only_active and self.last_transition is not None:
+            logger.info("platform_reduce_only_reason_added", reason=reason,
+                        active_reasons=sorted(self._active_reasons))
             return self.last_transition
 
         transition = AutonomyTransition.enter_platform_reduce_only(
@@ -60,6 +64,7 @@ class PlatformDegradeController:
             from_mode=transition.from_mode.value,
             to_mode=transition.to_mode.value,
             manual_rearm_required=transition.manual_rearm_required,
+            active_reasons=sorted(self._active_reasons),
         )
         if self.evidence_writer is not None:
             self.evidence_writer.record_transition(
@@ -87,6 +92,7 @@ class PlatformDegradeController:
         self.last_transition = transition
         self._reference_positions = {}
         self._reference_close_reservations = {}
+        self._active_reasons.clear()
         self._sync_metrics()
         logger.info(
             "platform_reduce_only_exited",

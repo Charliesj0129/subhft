@@ -54,3 +54,37 @@ class TestSingletonEnvWiring:
         monkeypatch.setenv("HFT_ORDER_SHADOW_MODE", "1")
         ctrl = get_shared_platform_degrade_controller(shadow_mode=False)
         assert ctrl._shadow_mode is False
+
+
+class TestActiveReasons:
+    def test_reasons_accumulate_on_multiple_entries(self):
+        ctrl = PlatformDegradeController()
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        ctrl.enter_reduce_only(reason="reconciliation_drift")
+        assert ctrl._active_reasons == {"feed_reconnect_unhealthy", "reconciliation_drift"}
+
+    def test_first_entry_activates_reduce_only(self):
+        ctrl = PlatformDegradeController()
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        assert ctrl.reduce_only_active is True
+
+    def test_second_entry_stays_active_adds_reason(self):
+        ctrl = PlatformDegradeController()
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        ctrl.enter_reduce_only(reason="reconciliation_drift")
+        assert ctrl.reduce_only_active is True
+        assert len(ctrl._active_reasons) == 2
+
+    def test_exit_clears_all_reasons(self):
+        ctrl = PlatformDegradeController()
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        ctrl.enter_reduce_only(reason="reconciliation_drift")
+        ctrl.exit_reduce_only(reason="operator_manual")
+        assert ctrl._active_reasons == set()
+        assert ctrl.reduce_only_active is False
+
+    def test_duplicate_reason_not_double_counted(self):
+        ctrl = PlatformDegradeController()
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
+        assert ctrl._active_reasons == {"feed_reconnect_unhealthy"}
