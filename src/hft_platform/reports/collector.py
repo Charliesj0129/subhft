@@ -176,8 +176,18 @@ class DataCollector:
         bars = self._query_5m_bars(symbol, time_filter)
         flow = self._query_flow(symbol, time_filter)
         large = self._query_large_trades(symbol, time_filter)
-        spread = self._query_spread_dist(symbol, time_filter)
-        depth = self._query_depth_imbalance(symbol, time_filter)
+        # Spread and depth queries touch Array columns and can OOM on large sessions.
+        # Gracefully degrade if they fail.
+        try:
+            spread = self._query_spread_dist(symbol, time_filter)
+        except Exception:  # noqa: BLE001
+            log.warning("Q5 spread query failed (likely OOM), skipping", symbol=symbol)
+            spread = {}
+        try:
+            depth = self._query_depth_imbalance(symbol, time_filter)
+        except Exception:  # noqa: BLE001
+            log.warning("Q6 depth query failed (likely OOM), skipping", symbol=symbol)
+            depth = []
 
         return SessionData(
             session=session,
@@ -391,10 +401,11 @@ class DataCollector:
               AND type = 'BidAsk'
               AND length(bids_price) > 0
               AND length(asks_price) > 0
+              AND asks_price[1] > bids_price[1]
               AND {time_filter}
             GROUP BY spread_pts
             ORDER BY spread_pts
-            {_SETTINGS}
+            SETTINGS max_memory_usage = 3000000000
         """
         rows = self._execute(sql)
         return {int(row[0]): int(row[1]) for row in rows}
