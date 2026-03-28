@@ -86,8 +86,8 @@ class MarginMonitor:
 
         # Extract margin values from broker response
         if isinstance(margin_data, dict):
-            used = int(margin_data.get("margin_used", margin_data.get("equity_used", 0)))
-            available = int(margin_data.get("margin_available", margin_data.get("equity", 1)))
+            used = int(margin_data.get("margin_used", margin_data.get("equity_used", 0)) or 0)
+            available = int(margin_data.get("margin_available", margin_data.get("equity", 1)) or 1)
         else:
             used = int(getattr(margin_data, "margin_used", 0))
             available = int(getattr(margin_data, "margin_available", 1))

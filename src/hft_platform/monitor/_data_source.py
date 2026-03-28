@@ -138,11 +138,6 @@ _SHM_BACKOFF_MAX_S: float = 60.0
 _SHM_BACKOFF_FACTOR: float = 2.0
 
 
-_SHM_BACKOFF_MIN_S: float = 1.0
-_SHM_BACKOFF_MAX_S: float = 60.0
-_SHM_BACKOFF_FACTOR: float = 2.0
-
-
 class ShmDataSource:
     """Reads ShmSnapshotReader, converts slots to RowView format.
 

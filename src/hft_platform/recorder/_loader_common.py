@@ -28,8 +28,8 @@ try:
 except ImportError:
     import json
 
-    _dumps = json.dumps  # type: ignore[assignment]
-    _loads = json.loads  # type: ignore[assignment]
+    _dumps = json.dumps
+    _loads = json.loads
 
 # ---------------------------------------------------------------------------
 # ClickHouse price scale constant

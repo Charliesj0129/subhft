@@ -19,7 +19,7 @@ try:
 except ImportError:
     import json
 
-    _dumps = json.dumps  # type: ignore[assignment]
+    _dumps = json.dumps
 
 from hft_platform.core import timebase
 from hft_platform.monitor._redis_wire import _DEFAULT_TIMEOUT_S, RedisClient

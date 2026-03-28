@@ -111,7 +111,7 @@ class SessionHookManager:
             from zoneinfo import ZoneInfo
 
             tz_name = os.getenv("HFT_TS_TZ", "Asia/Taipei")
-            tz = ZoneInfo(tz_name)
+            tz: dt.tzinfo = ZoneInfo(tz_name)
         except Exception:
             tz = dt.timezone(dt.timedelta(hours=8))
 

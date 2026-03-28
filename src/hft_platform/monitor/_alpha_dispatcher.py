@@ -188,6 +188,8 @@ def _probe_dispatch_keys(runtime: Any) -> tuple[str, ...] | None:
 def _call_alpha(astate: AlphaState, payload: dict[str, Any]) -> float | None:
     """Call alpha.update() using pre-probed dispatch keys. No exception-based fallback."""
     try:
+        if astate.runtime is None:
+            return None
         keys = astate._dispatch_keys
         if keys is None:
             result = astate.runtime.update(**payload)

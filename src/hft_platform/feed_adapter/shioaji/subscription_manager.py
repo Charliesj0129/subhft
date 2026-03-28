@@ -18,7 +18,7 @@ from hft_platform.core import timebase
 try:
     import shioaji as _sj
 except Exception:  # pragma: no cover - fallback when library absent
-    _sj = None  # type: ignore[assignment]
+    _sj = None
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
@@ -218,7 +218,7 @@ class SubscriptionManager:
         cooldown = getattr(c, "resubscribe_cooldown", 1.5)
         if now - last < cooldown:
             return
-        c._last_resubscribe_ts = now
+        c._last_resubscribe_ts = now  # type: ignore[attr-defined]
         c.subscribed_codes = set()
         c.subscribed_count = 0
         for sym in c.symbols:
@@ -275,5 +275,5 @@ class SubscriptionManager:
             except Exception as exc:
                 logger.error("Execution callback failed", error=str(exc))
 
-        c._order_callback = _order_cb
-        c.api.set_order_callback(c._order_callback)
+        c._order_callback = _order_cb  # type: ignore[attr-defined]
+        c.api.set_order_callback(c._order_callback)  # type: ignore[attr-defined]

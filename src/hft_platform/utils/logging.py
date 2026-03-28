@@ -1,6 +1,6 @@
 import logging
 import sys
-from typing import Any
+from typing import Any, MutableMapping
 
 import structlog
 
@@ -19,7 +19,9 @@ _SENSITIVE_PATTERNS: frozenset[str] = frozenset(
 _MASK = "***"
 
 
-def credential_scrubber(logger: Any, method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+def credential_scrubber(
+    logger: Any, method_name: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
     """Structlog processor that masks sensitive field values."""
     for key in event_dict:
         if any(p in key.lower() for p in _SENSITIVE_PATTERNS):

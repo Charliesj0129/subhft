@@ -16,7 +16,10 @@ import asyncio
 import os
 import threading
 import time
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
+
+if TYPE_CHECKING:
+    from hft_platform.recorder.wal_scheduler import WALScheduler
 
 from hft_platform.core import timebase
 from hft_platform.recorder import _loader_batch as _batch
@@ -114,7 +117,7 @@ class WALLoaderService:
         self._eta_sample_last_ts = timebase.now_s()
         self._eta_sample_last_processed = 0
         self.metrics = None  # Will be set when run() is called
-        self._wal_scheduler = None
+        self._wal_scheduler: WALScheduler | None = None
 
         # P0-4: Async mode configuration
         self._async_enabled = os.getenv("HFT_LOADER_ASYNC", "1").lower() not in {"0", "false", "no", "off"}

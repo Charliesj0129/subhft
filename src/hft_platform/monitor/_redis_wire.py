@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+from io import IOBase
 from typing import Any
 
 _DEFAULT_TIMEOUT_S = float(os.getenv("HFT_MONITOR_REDIS_TIMEOUT_S", "5.0"))
@@ -54,8 +55,8 @@ class RedisClient:
         self.port = int(port)
         self.password = password
         self.timeout_s = float(timeout_s)
-        self._sock = None
-        self._stream = None
+        self._sock: socket.socket | None = None
+        self._stream: IOBase | None = None
 
     @property
     def connected(self) -> bool:

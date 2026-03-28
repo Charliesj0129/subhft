@@ -16,7 +16,7 @@ logger = get_logger("feed_adapter.contract_fetcher")
 try:
     import shioaji as sj
 except ImportError:
-    sj = None  # type: ignore[assignment]
+    sj = None
 
 
 def _login_shioaji() -> Any:

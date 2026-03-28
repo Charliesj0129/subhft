@@ -18,7 +18,7 @@ import structlog
 try:
     from fubon_neo.sdk import FubonSDK
 except ImportError:
-    FubonSDK = None  # type: ignore[assignment,misc]
+    FubonSDK = None
 
 # Sub-component imports with inline stub fallbacks for independent mergeability.
 try:
@@ -299,7 +299,7 @@ class FubonClientFacade:
         price: float | None = None,
         qty: int | None = None,
     ) -> Any:
-        return self._order_gateway.update_order(trade, price=price, qty=qty)
+        return self._order_gateway.update_order(trade, price=int(price) if price is not None else None, qty=qty)
 
     # ------------------------------------------------------------------ #
     # Account

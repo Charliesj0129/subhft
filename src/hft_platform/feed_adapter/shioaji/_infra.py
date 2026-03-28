@@ -231,6 +231,7 @@ def ensure_session_lock(
             fcntl_mod.flock(new_fd.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
         return True, new_fd
     except Exception as exc:
+        outer_exc = exc
         if new_fd is not None:
             try:
                 new_fd.close()
@@ -240,7 +241,7 @@ def ensure_session_lock(
         logger.warning(
             "Potential duplicate broker runtime detected: session lock unavailable",
             lock_path=lock_path,
-            error=str(exc),
+            error=str(outer_exc),
         )
         if metrics and hasattr(metrics, "shioaji_session_lock_conflicts_total"):
             try:

@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import os
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 try:
     import aiohttp
 except ImportError:  # pragma: no cover — aiohttp optional at import time
-    aiohttp = None  # type: ignore[assignment]
+    aiohttp = None
 
 if TYPE_CHECKING:
-    import aiohttp as _aiohttp_type  # noqa: F401
+    from aiohttp import ClientSession as _AiohttpClientSession
 
 logger = structlog.get_logger(__name__)
 
@@ -52,7 +52,7 @@ class TelegramSender:
         self._enabled: bool = enabled and bool(token) and bool(cid)
         self._rate_limit_s: float = rate_limit_seconds
         self._last_send_ts: float = 0.0
-        self._session: Optional[object] = None
+        self._session: _AiohttpClientSession | None = None
 
     async def send(self, text: str, *, critical: bool = False) -> bool:
         """Send a message to the configured chat.
@@ -81,7 +81,7 @@ class TelegramSender:
             return False
 
         try:
-            if self._session is None or self._session.closed:  # type: ignore[union-attr]
+            if self._session is None or self._session.closed:
                 self._session = aiohttp.ClientSession()
 
             url = _TELEGRAM_API_BASE.format(token=self._token, method="sendMessage")
@@ -90,7 +90,7 @@ class TelegramSender:
                 "text": text,
                 "parse_mode": "HTML",
             }
-            async with self._session.post(url, json=payload) as resp:  # type: ignore[union-attr]
+            async with self._session.post(url, json=payload) as resp:
                 if resp.status == 200:
                     self._last_send_ts = time.monotonic()
                     logger.debug("telegram.sent", chat_id=self._chat_id, critical=critical)
@@ -110,8 +110,8 @@ class TelegramSender:
         """Close the underlying aiohttp session."""
         if self._session is not None:
             session = self._session
-            if not session.closed:  # type: ignore[union-attr]
-                await session.close()  # type: ignore[union-attr]
+            if not session.closed:
+                await session.close()
         self._session = None
 
 
@@ -133,21 +133,21 @@ class TelegramCommandPoller:
         self,
         bot_token: str,
         chat_id: str,
-        redis_client: object,
+        redis_client: Any,
         poll_interval: float = 5.0,
     ) -> None:
         self._token: str = bot_token
         self._chat_id: str = str(chat_id)
-        self._redis = redis_client
+        self._redis: Any = redis_client
         self._poll_interval: float = poll_interval
         self._offset: int = 0
 
-    async def _reply(self, session: object, text: str) -> None:
+    async def _reply(self, session: _AiohttpClientSession, text: str) -> None:
         """Send a reply back to the operator chat (best-effort)."""
         url = _TELEGRAM_API_BASE.format(token=self._token, method="sendMessage")
         payload = {"chat_id": self._chat_id, "text": text, "parse_mode": "HTML"}
         try:
-            async with session.post(url, json=payload):  # type: ignore[union-attr]
+            async with session.post(url, json=payload):
                 pass
         except Exception as exc:  # noqa: BLE001
             logger.warning("telegram.reply_exception", exc=str(exc))
