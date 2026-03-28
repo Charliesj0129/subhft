@@ -180,25 +180,36 @@ class TestReconnectWindow:
         svc.reconnect_hours_2 = ""
         assert svc._within_reconnect_window() is False
 
-    def test_correct_day_no_hours_passes(self, _symbols_config):
+    def test_correct_day_no_hours_passes(self, _symbols_config, monkeypatch):
         """If today's weekday is in the set but no hour window, returns True."""
         svc = _make_service()
-        today_abbr = dt.datetime.now(tz=svc._reconnect_tzinfo).strftime("%a").lower()
+        # Freeze time to a known Wednesday at 03:00 UTC (outside TAIFEX hours)
+        frozen_now = dt.datetime(2024, 1, 3, 3, 0, 0, tzinfo=dt.timezone.utc).astimezone(svc._reconnect_tzinfo)
+        today_abbr = frozen_now.strftime("%a").lower()
         svc.reconnect_days = {today_abbr}
         svc.reconnect_hours = ""
         svc.reconnect_hours_2 = ""
-        assert svc._within_reconnect_window() is True
+        monkeypatch.setenv("HFT_RECONNECT_USE_CALENDAR", "0")
+        with patch("hft_platform.services.market_data.dt.datetime") as mock_dt:
+            mock_dt.now.return_value = frozen_now
+            mock_dt.fromtimestamp = dt.datetime.fromtimestamp
+            assert svc._within_reconnect_window() is True
 
-    def test_hour_window_match(self, _symbols_config):
+    def test_hour_window_match(self, _symbols_config, monkeypatch):
         """If current time falls in reconnect_hours window, returns True."""
         svc = _make_service()
         svc.reconnect_days = set()
-        now_local = dt.datetime.now(tz=svc._reconnect_tzinfo)
-        # Build a window that spans the current minute
-        start = (now_local - dt.timedelta(minutes=5)).strftime("%H:%M")
-        end = (now_local + dt.timedelta(minutes=5)).strftime("%H:%M")
+        # Freeze time to a known Wednesday at 03:00 UTC (outside TAIFEX hours)
+        frozen_now = dt.datetime(2024, 1, 3, 3, 0, 0, tzinfo=dt.timezone.utc).astimezone(svc._reconnect_tzinfo)
+        # Build a window that spans the frozen time
+        start = (frozen_now - dt.timedelta(minutes=5)).strftime("%H:%M")
+        end = (frozen_now + dt.timedelta(minutes=5)).strftime("%H:%M")
         svc.reconnect_hours = f"{start}-{end}"
-        assert svc._within_reconnect_window() is True
+        monkeypatch.setenv("HFT_RECONNECT_USE_CALENDAR", "0")
+        with patch("hft_platform.services.market_data.dt.datetime") as mock_dt:
+            mock_dt.now.return_value = frozen_now
+            mock_dt.fromtimestamp = dt.datetime.fromtimestamp
+            assert svc._within_reconnect_window() is True
 
     def test_hour_window_miss(self, _symbols_config):
         """If current time is outside the reconnect_hours window, returns False."""

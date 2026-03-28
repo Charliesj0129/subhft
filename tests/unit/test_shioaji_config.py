@@ -105,8 +105,24 @@ class TestLoadShioajiConfig:
         assert cfg.ca_password == "secret"
 
     def test_ca_password_env_indirection(self) -> None:
-        with mock.patch.dict(os.environ, {"MY_CA_PASS": "s3cret", "HFT_MODE": "real"}, clear=False):
-            cfg = load_shioaji_config(settings={"ca_password_env": "MY_CA_PASS"})
+        # Explicitly remove env vars that would shadow the ca_password_env indirection.
+        # SHIOAJI_CA_PASSWORD and CA_PASSWORD are checked first in load_shioaji_config;
+        # if either is set (e.g. leaked from another test), the indirection path is
+        # skipped and the assertion on cfg.ca_password == "s3cret" would fail.
+        # Build a combined patch that adds our vars AND records the shadowing keys
+        # as absent so patch.dict restores them correctly on exit.
+        _env_patch = {"MY_CA_PASS": "s3cret", "HFT_MODE": "real"}
+        # patch.dict with clear=False only modifies the specified keys; it will
+        # restore them on __exit__.  To also ensure SHIOAJI_CA_PASSWORD and
+        # CA_PASSWORD are absent during the test without leaving the env dirty,
+        # we save-and-restore them manually around the call.
+        _shadow_keys = ("SHIOAJI_CA_PASSWORD", "CA_PASSWORD")
+        with mock.patch.dict(os.environ, _env_patch, clear=False):
+            _saved = {k: os.environ.pop(k) for k in _shadow_keys if k in os.environ}
+            try:
+                cfg = load_shioaji_config(settings={"ca_password_env": "MY_CA_PASS"})
+            finally:
+                os.environ.update(_saved)
         assert cfg.ca_password == "s3cret"
 
     def test_quote_version_v0(self) -> None:

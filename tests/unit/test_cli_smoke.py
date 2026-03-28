@@ -25,9 +25,12 @@ class TestCLISmoke(unittest.TestCase):
             mock_makedirs.assert_called()
 
     def test_check_command(self):
+        # Patch load_settings directly to avoid broad builtins.open / os.path.exists
+        # patches that interact unpredictably with config loading under cross-test
+        # pollution (other tests may alter env vars or module-level state).
+        _valid_settings = {"symbols": ["2330"], "strategy": {"id": "demo"}}
         with (
-            patch("os.path.exists", return_value=True),
-            patch("builtins.open", unittest.mock.mock_open()),
+            patch("hft_platform.cli._run.load_settings", return_value=(_valid_settings, {})),
             patch("hft_platform.cli._safe_write") as mock_write,
         ):
             args = MagicMock()
