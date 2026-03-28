@@ -90,7 +90,8 @@ class TestReportSender:
         mock_session.post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_send_no_token_returns_false(self) -> None:
+    async def test_send_no_token_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HFT_TELEGRAM_BOT_TOKEN", raising=False)
         sender = ReportSender(bot_token="")
 
         result = await sender.send("chat123", "hello")
