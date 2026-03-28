@@ -71,19 +71,20 @@ class TestFindLargeTradeLevels:
         trades = [_trade(20000, 30, "buy")]
         levels = find_large_trade_levels(trades)
         assert len(levels) == 1
-        assert levels[0].reason == "支撐"
+        assert "大單買" in levels[0].reason
         assert levels[0].price == 20000 * SCALE
 
     def test_sell_creates_resistance(self) -> None:
         trades = [_trade(21000, 40, "sell")]
         levels = find_large_trade_levels(trades)
         assert len(levels) == 1
-        assert levels[0].reason == "壓力"
+        assert "大單賣" in levels[0].reason
 
     def test_unknown_creates_key_level(self) -> None:
         trades = [_trade(20500, 25, "unknown")]
         levels = find_large_trade_levels(trades)
-        assert levels[0].reason == "關鍵"
+        assert "大單" in levels[0].reason
+        assert "25口" in levels[0].reason
 
     def test_below_min_volume_excluded(self) -> None:
         trades = [_trade(20000, 10, "buy")]

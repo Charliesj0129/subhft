@@ -311,7 +311,7 @@ class DataCollector:
             up = int(row[3])
             dn = int(row[4])
             total = int(row[2])
-            ud_ratio = (up - dn) / total if total > 0 else 0.0
+            ud_ratio = up / dn if dn > 0 else (float(up) if up > 0 else 1.0)
             result.append(
                 FlowBar(
                     ts=str(row[0]),
@@ -377,7 +377,7 @@ class DataCollector:
         """
         sql = f"""
             SELECT
-                toInt32((asks_price[1] - bids_price[1]) / 10000) AS spread_pts,
+                toInt32((asks_price[1] - bids_price[1]) / 1000000) AS spread_pts,
                 count()                                            AS cnt
             FROM hft.market_data
             WHERE symbol = '{symbol}'

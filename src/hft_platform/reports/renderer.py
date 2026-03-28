@@ -135,29 +135,31 @@ def _build_flow_detail(report: ScenarioReport) -> str:
         f"  🔴 賣方 ~{sig.large_sell_volume:,} 口  🟢 買方 ~{sig.large_buy_volume:,} 口",
     ]
 
-    # Top 5 key trades
+    # Top 5 key trades sorted by volume
     if sig.key_large_trades:
-        top5 = sig.key_large_trades[:5]
+        top5 = sorted(sig.key_large_trades, key=lambda t: t.volume, reverse=True)[:5]
         for trade in top5:
-            icon = "🔴" if trade.direction == "sell" else "🟢"
-            lines.append(f"  {icon} {trade.volume:,}@{_p(trade.price)}")
+            icon = "🔴" if trade.direction == "sell" else "🟢" if trade.direction == "buy" else "⚪"
+            lines.append(f"  {icon} {trade.volume}口@{_p(trade.price)}")
 
-    # Time-of-day U/D breakdown using flow_5m in ~2-hour chunks (24 bars each)
+    # Time-of-day U/D breakdown using flow_5m in ~2-hour chunks
     flow_bars = sig.session_data.flow_5m
     if flow_bars:
         lines.append("")
         lines.append("▎時段 U/D:")
+        # Split into 5-6 chunks of roughly equal size
         chunk_size = max(1, len(flow_bars) // 5) if len(flow_bars) >= 5 else len(flow_bars)
-        chunks: list[list] = []
         for i in range(0, len(flow_bars), chunk_size):
             chunk = flow_bars[i : i + chunk_size]
-            if chunk:
-                chunks.append(chunk)
-        # Limit to first 5 chunks to keep message concise
-        for chunk in chunks[:5]:
-            avg_ud = sum(b.ud_ratio for b in chunk) / len(chunk)
-            start_ts = chunk[0].ts[11:16]  # HH:MM
-            lines.append(f"  {start_ts}  {_ud_bar(avg_ud)}  ({avg_ud:.3f})")
+            if not chunk:
+                break
+            # Compute U/D ratio from raw volumes (not average of ratios)
+            up = sum(b.uptick_vol for b in chunk)
+            dn = sum(b.downtick_vol for b in chunk)
+            chunk_ud = up / dn if dn > 0 else (float(up) if up > 0 else 1.0)
+            start_ts = chunk[0].ts[11:16] if len(chunk[0].ts) >= 16 else chunk[0].ts[-5:]
+            end_ts = chunk[-1].ts[11:16] if len(chunk[-1].ts) >= 16 else chunk[-1].ts[-5:]
+            lines.append(f"  {start_ts}-{end_ts} {_ud_bar(chunk_ud)} ({chunk_ud:.2f})")
 
     return "\n".join(lines)
 

@@ -50,12 +50,8 @@ def find_large_trade_levels(
     for trade in trades:
         if trade.volume < min_volume:
             continue
-        if trade.direction == "buy":
-            reason = "支撐"
-        elif trade.direction == "sell":
-            reason = "壓力"
-        else:
-            reason = "關鍵"
+        dir_label = "買" if trade.direction == "buy" else "賣" if trade.direction == "sell" else ""
+        reason = f"大單{dir_label} {trade.volume}口@{trade.price // PLATFORM_SCALE:,}"
         strength = min(1.0, trade.volume / 50.0)
         levels.append(PriceLevel(price=trade.price, strength=strength, reason=reason))
     return levels
