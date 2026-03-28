@@ -215,18 +215,17 @@ class TestDeEscalation:
         sg.update(drawdown_bps=0)
         assert sg.state == StormGuardState.STORM
 
-    @patch("hft_platform.risk.storm_guard.timebase")
-    def test_storm_cooldown_elapsed_allows_de_escalation(self, mock_tb: MagicMock) -> None:
-        t = 1000.0
-        mock_tb.now_s.return_value = t
+    def test_storm_cooldown_elapsed_allows_de_escalation(self) -> None:
         sg = _guard(cooldown_s=30.0, de_escalate_n=1)
 
-        sg.update(drawdown_bps=-100)
+        # Enter STORM at monotonic=1000
+        with patch("time.monotonic", return_value=1000.0):
+            sg.update(drawdown_bps=-100)
         assert sg.state == StormGuardState.STORM
 
-        # Advance time past cooldown
-        mock_tb.now_s.return_value = t + 31.0
-        sg.update(drawdown_bps=0)
+        # Advance time past cooldown (D3: now uses time.monotonic)
+        with patch("time.monotonic", return_value=1031.0):
+            sg.update(drawdown_bps=0)
         assert sg.state == StormGuardState.NORMAL
 
     def test_halt_to_warm_with_zero_cooldown(self) -> None:

@@ -25,9 +25,10 @@ def test_track_gate_passes_in_open():
     assert gate.get_phase("2330") == SessionPhase.OPEN
 
 
-def test_unknown_symbol_defaults_to_open():
+def test_unknown_symbol_defaults_to_closed():
+    """D6: Unknown symbols now default to CLOSED (fail-safe)."""
     gate = TrackGate()
-    assert gate.get_phase("UNKNOWN_SYM") == SessionPhase.OPEN
+    assert gate.get_phase("UNKNOWN_SYM") == SessionPhase.CLOSED
 
 
 def test_close_only_allows_cancel_and_force_flat():

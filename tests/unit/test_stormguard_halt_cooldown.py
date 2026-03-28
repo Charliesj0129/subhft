@@ -30,27 +30,26 @@ class TestStormGuardHaltCooldown:
         guard.update(drawdown_bps=-200)
         assert guard.state == StormGuardState.HALT
 
-        # Simulate time passing beyond cooldown
-        with patch("hft_platform.risk.storm_guard.timebase") as mock_tb:
-            # First update: record HALT entry time
-            mock_tb.now_s.return_value = 100.0
-            guard._halt_entry_ts = 100.0
+        # Simulate time passing beyond cooldown (D3: now uses time.monotonic)
+        guard._halt_entry_ts = 100.0
 
-            # Clear evals before cooldown — should stay HALT
-            mock_tb.now_s.return_value = 102.0  # only 2s, cooldown is 5s
+        # Clear evals before cooldown — should stay HALT
+        with patch("time.monotonic", return_value=102.0):  # only 2s, cooldown is 5s
             guard.update(drawdown_bps=0)
-            assert guard.state == StormGuardState.HALT
+        assert guard.state == StormGuardState.HALT
 
-            # After cooldown, need N consecutive clears
-            mock_tb.now_s.return_value = 106.0  # 6s > 5s cooldown
+        # After cooldown, need N consecutive clears
+        with patch("time.monotonic", return_value=106.0):  # 6s > 5s cooldown
             guard.update(drawdown_bps=0)  # 1st clear
-            assert guard.state == StormGuardState.HALT
+        assert guard.state == StormGuardState.HALT
 
+        with patch("time.monotonic", return_value=106.0):
             guard.update(drawdown_bps=0)  # 2nd clear
-            assert guard.state == StormGuardState.HALT
+        assert guard.state == StormGuardState.HALT
 
+        with patch("time.monotonic", return_value=106.0):
             guard.update(drawdown_bps=0)  # 3rd clear — should recover
-            assert guard.state == StormGuardState.NORMAL
+        assert guard.state == StormGuardState.NORMAL
 
     def test_halt_cooldown_configurable_via_env(self):
         """HFT_STORMGUARD_HALT_COOLDOWN_S env var sets the cooldown."""
