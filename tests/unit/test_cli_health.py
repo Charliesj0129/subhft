@@ -60,6 +60,12 @@ class TestCmdHealthPreflight:
         # Isolate from env leakage that may affect config loading
         monkeypatch.delenv("HFT_REDIS_PASSWORD", raising=False)
         monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+        # Patch _check_config_valid to avoid cross-test pollution from
+        # cached config loader state in full suite runs with coverage
+        monkeypatch.setattr(
+            "hft_platform.cli._health._check_config_valid",
+            lambda: {"name": "config_valid", "ok": True, "detail": "mocked"},
+        )
         with pytest.raises(SystemExit):
             cmd_health_preflight(Namespace(timeout=0.5, json=True))
         data = json.loads(capsys.readouterr().out)
