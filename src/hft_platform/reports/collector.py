@@ -15,7 +15,7 @@ we divide by 10,000 to get integer points).
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import Any, Callable
 
 import structlog
 
@@ -28,9 +28,6 @@ from hft_platform.reports.models import (
     LargeTrade,
     SessionData,
 )
-
-if TYPE_CHECKING:
-    from clickhouse_driver import Client
 
 log = structlog.get_logger(__name__)
 
@@ -87,18 +84,53 @@ def _night_filter(date: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ClickHouse client abstraction
+# ---------------------------------------------------------------------------
+
+ExecuteFn = Callable[[str], list[tuple[Any, ...]]]
+
+
+def _make_execute(host: str) -> ExecuteFn:
+    """Return a ``(sql) -> list[tuple]`` callable using whichever CH client is installed."""
+    try:
+        import clickhouse_connect
+
+        client = clickhouse_connect.get_client(host=host)
+        log.info("DataCollector using clickhouse_connect", host=host)
+
+        def _exec(sql: str) -> list[tuple[Any, ...]]:
+            return client.query(sql).result_rows  # type: ignore[return-value]
+
+        return _exec
+    except ImportError:
+        pass
+
+    from clickhouse_driver import Client  # type: ignore[import-untyped]
+
+    client_native = Client(host=host)
+    log.info("DataCollector using clickhouse_driver", host=host)
+
+    def _exec_native(sql: str) -> list[tuple[Any, ...]]:
+        return client_native.execute(sql)
+
+    return _exec_native
+
+
+# ---------------------------------------------------------------------------
 # DataCollector
 # ---------------------------------------------------------------------------
 
 
 class DataCollector:
-    """Fetch and normalise market data from ClickHouse for one session."""
+    """Fetch and normalise market data from ClickHouse for one session.
+
+    Supports both ``clickhouse-connect`` (production Docker image) and
+    ``clickhouse-driver`` (dev) transparently.
+    """
 
     def __init__(self, ch_host: str = "") -> None:
-        from clickhouse_driver import Client  # guarded import
-
         host = ch_host or os.environ.get("HFT_CLICKHOUSE_HOST", "localhost")
-        self._client: Client = Client(host=host)
+        self._execute = _make_execute(host)
         log.info("DataCollector initialised", ch_host=host)
 
     # ------------------------------------------------------------------
@@ -183,7 +215,7 @@ class DataCollector:
               AND {time_filter}
             {_SETTINGS}
         """
-        rows = self._client.execute(sql)
+        rows = self._execute(sql)
         if not rows or not rows[0][0]:
             log.warning("Q1 OHLCV returned no data", symbol=symbol)
             return {"open": 0, "high": 0, "low": 0, "close": 0, "volume": 0, "tick_count": 0}
@@ -218,7 +250,7 @@ class DataCollector:
             ORDER BY ts
             {_SETTINGS}
         """
-        rows = self._client.execute(sql)
+        rows = self._execute(sql)
         return [
             Bar5m(
                 ts=str(row[0]),
@@ -263,7 +295,7 @@ class DataCollector:
             ORDER BY bucket
             {_SETTINGS}
         """
-        rows = self._client.execute(sql)
+        rows = self._execute(sql)
         result: list[FlowBar] = []
         for row in rows:
             ticks = int(row[1])
@@ -307,7 +339,7 @@ class DataCollector:
             ORDER BY ts
             {_SETTINGS}
         """
-        rows = self._client.execute(sql)
+        rows = self._execute(sql)
         result: list[LargeTrade] = []
         for row in rows:
             price_ch = int(row[1])
@@ -348,7 +380,7 @@ class DataCollector:
             ORDER BY spread_pts
             {_SETTINGS}
         """
-        rows = self._client.execute(sql)
+        rows = self._execute(sql)
         return {int(row[0]): int(row[1]) for row in rows}
 
     def _query_depth_imbalance(self, symbol: str, time_filter: str) -> list[DepthBar]:
@@ -368,7 +400,7 @@ class DataCollector:
             ORDER BY hour
             {_SETTINGS}
         """
-        rows = self._client.execute(sql)
+        rows = self._execute(sql)
         result: list[DepthBar] = []
         for row in rows:
             avg_bid = float(row[1])
