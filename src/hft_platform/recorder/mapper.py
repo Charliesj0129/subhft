@@ -100,6 +100,7 @@ def map_event_to_record(
                 "asks_price": [],
                 "asks_vol": [],
                 "seq_no": int(event.meta.seq),
+                "trade_direction": int(event.trade_direction),
             },
         )
 

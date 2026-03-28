@@ -149,6 +149,7 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
     - tob_survival_ms [18]: Albers et al. 2502.18625 (top-of-book stability)
     - impact_surprise_x1000 [19]: Impact Surprise Signal (EMA baseline), scaled x1000.
     - deep_depth_momentum_x1000 [20]: Multi-Level Depth Momentum (L2-L5), scaled x1000.
+    - vrr_5_300_x1000 [21]: Multi-scale realized volatility ratio (RV_5s/RV_300s), scaled x1000.
     """
     v1 = build_default_lob_feature_set_v1()
     return FeatureSet(
@@ -180,6 +181,15 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
                 scale=1000,
                 source_kind="book",
                 warmup_min_events=128,
+            ),
+            # [21] Multi-scale realized volatility ratio (RV_5s/RV_300s), scaled x1000.
+            # Clamped to [0, 10000] (vrr range [0.0, 10.0]).
+            FeatureSpec(
+                "vrr_5_300_x1000",
+                "i64",
+                scale=1000,
+                source_kind="book",
+                warmup_min_events=2400,
             ),
         ),
     )

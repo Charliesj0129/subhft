@@ -427,3 +427,163 @@ class TestCBSNonOverlapping:
 
         assert cbs._state["TMFD6"] == "idle"
         assert len(intents) == 0
+
+
+class TestCBSExecutionOptimizer:
+    """Tests for ExecutionOptimizer integration into CBS."""
+
+    def test_optimizer_disabled_by_default(self) -> None:
+        """Default CBS uses market orders (optimizer disabled)."""
+        cbs = _all_session_cbs(move_threshold_bps=40)
+        assert cbs._exec_optimizer.enabled is False
+
+    def test_optimizer_enabled_uses_limit_on_wide_spread(self) -> None:
+        """With optimizer enabled and wide spread, should use limit order."""
+        cbs = _all_session_cbs(
+            move_threshold_bps=40,
+            exec_optimizer_enabled=True,
+            exec_spread_threshold_pts=2,
+            exec_fill_score_threshold=1.0,
+        )
+        ctx = _make_ctx()
+        base_ts = _TS_0930_UTC_NS
+        base_mid = 660_000_000
+
+        for i in range(100):
+            ts = base_ts + i * _ONE_SEC_NS
+            cbs.handle_event(ctx, _make_stats(ts=ts, mid_x2=base_mid))
+
+        # 50 bps drop with wide spread (3 pts = 30000 scaled) + favorable depth
+        drop_mid = int(base_mid * (1 - 50 / 10000))
+        ts_drop = base_ts + 100 * _ONE_SEC_NS
+        intents = cbs.handle_event(
+            ctx,
+            _make_stats(
+                ts=ts_drop,
+                mid_x2=drop_mid,
+                spread_scaled=30_000,  # 3 pts
+                best_bid=drop_mid // 2 - 15000,
+                best_ask=drop_mid // 2 + 15000,
+            ),
+        )
+
+        assert len(intents) == 1
+        # With optimizer enabled + wide spread, enters pending_limit
+        assert cbs._state["TMFD6"] == "pending_limit"
+
+    def test_optimizer_enabled_narrow_spread_uses_market(self) -> None:
+        """With optimizer enabled but narrow spread, should use market order."""
+        cbs = _all_session_cbs(
+            move_threshold_bps=40,
+            exec_optimizer_enabled=True,
+            exec_spread_threshold_pts=2,
+            exec_fill_score_threshold=1.0,
+        )
+        ctx = _make_ctx()
+        base_ts = _TS_0930_UTC_NS
+        base_mid = 660_000_000
+
+        for i in range(100):
+            ts = base_ts + i * _ONE_SEC_NS
+            cbs.handle_event(ctx, _make_stats(ts=ts, mid_x2=base_mid))
+
+        # 50 bps drop with narrow spread (1 pt = 10000 scaled)
+        drop_mid = int(base_mid * (1 - 50 / 10000))
+        ts_drop = base_ts + 100 * _ONE_SEC_NS
+        intents = cbs.handle_event(
+            ctx,
+            _make_stats(
+                ts=ts_drop,
+                mid_x2=drop_mid,
+                spread_scaled=10_000,  # 1 pt, below threshold
+                best_bid=drop_mid // 2 - 5000,
+                best_ask=drop_mid // 2 + 5000,
+            ),
+        )
+
+        assert len(intents) == 1
+        # Narrow spread → market order → positioned directly
+        assert cbs._state["TMFD6"] == "positioned"
+
+    def test_pending_limit_transitions_to_positioned_on_fill(self) -> None:
+        """When pending limit fills, state transitions to positioned."""
+        cbs = _all_session_cbs(
+            move_threshold_bps=40,
+            exec_optimizer_enabled=True,
+            exec_spread_threshold_pts=2,
+            exec_fill_score_threshold=1.0,
+        )
+        ctx = _make_ctx()
+        base_ts = _TS_0930_UTC_NS
+        base_mid = 660_000_000
+
+        for i in range(100):
+            ts = base_ts + i * _ONE_SEC_NS
+            cbs.handle_event(ctx, _make_stats(ts=ts, mid_x2=base_mid))
+
+        # Enter pending_limit (wide spread)
+        drop_mid = int(base_mid * (1 - 50 / 10000))
+        ts_drop = base_ts + 100 * _ONE_SEC_NS
+        cbs.handle_event(
+            ctx,
+            _make_stats(
+                ts=ts_drop, mid_x2=drop_mid,
+                spread_scaled=30_000,
+                best_bid=drop_mid // 2 - 15000,
+                best_ask=drop_mid // 2 + 15000,
+            ),
+        )
+        assert cbs._state["TMFD6"] == "pending_limit"
+
+        # Simulate fill — position becomes +1
+        ctx.positions["TMFD6"] = 1
+        ts_fill = ts_drop + _ONE_SEC_NS
+        cbs.handle_event(ctx, _make_stats(ts=ts_fill, mid_x2=drop_mid))
+
+        assert cbs._state["TMFD6"] == "positioned"
+
+    def test_pending_limit_timeout_falls_back_to_market(self) -> None:
+        """After timeout, pending limit should cancel and use market order."""
+        cbs = _all_session_cbs(
+            move_threshold_bps=40,
+            exec_optimizer_enabled=True,
+            exec_spread_threshold_pts=2,
+            exec_fill_score_threshold=1.0,
+            exec_limit_timeout_ns=2_000_000_000,  # 2s timeout
+        )
+        ctx = _make_ctx()
+        base_ts = _TS_0930_UTC_NS
+        base_mid = 660_000_000
+
+        for i in range(100):
+            ts = base_ts + i * _ONE_SEC_NS
+            cbs.handle_event(ctx, _make_stats(ts=ts, mid_x2=base_mid))
+
+        # Enter pending_limit
+        drop_mid = int(base_mid * (1 - 50 / 10000))
+        ts_drop = base_ts + 100 * _ONE_SEC_NS
+        cbs.handle_event(
+            ctx,
+            _make_stats(
+                ts=ts_drop, mid_x2=drop_mid,
+                spread_scaled=30_000,
+                best_bid=drop_mid // 2 - 15000,
+                best_ask=drop_mid // 2 + 15000,
+            ),
+        )
+        assert cbs._state["TMFD6"] == "pending_limit"
+
+        # Position NOT filled (still 0), timeout elapsed (3s > 2s timeout)
+        ts_timeout = ts_drop + 3 * _ONE_SEC_NS
+        intents = cbs.handle_event(
+            ctx,
+            _make_stats(
+                ts=ts_timeout, mid_x2=drop_mid,
+                best_bid=drop_mid // 2 - 15000,
+                best_ask=drop_mid // 2 + 15000,
+            ),
+        )
+
+        # Should have placed market fallback order
+        assert len(intents) == 1
+        assert cbs._state["TMFD6"] == "positioned"

@@ -11,6 +11,7 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.events import BidAskEvent, MetaData, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.trade_classifier import TradeClassifier
 
 # Validated Imports
 
@@ -328,6 +329,7 @@ class MarketDataNormalizer:
         "_fixed5_ask_prices_np",
         "_fixed5_ask_vols_np",
         "_fused",
+        "_trade_classifier",
     )
 
     def __init__(self, config_path: str | None = None, metadata: SymbolMetadata | None = None):
@@ -344,6 +346,7 @@ class MarketDataNormalizer:
         self._last_local_ts_bidask: int = 0
         self._last_local_ts_snapshot: int = 0
         self._last_skew_log_ns = 0
+        self._trade_classifier = TradeClassifier()
         self._fused: Any = None
         if _HAS_FUSED and _RustNormalizerLobFused is not None:
             try:
@@ -562,6 +565,7 @@ class MarketDataNormalizer:
                                 source_ts=exch_ts,
                                 local_ts=local_ts,
                             )
+                            _td, _tc = self._trade_classifier.classify(_sym, int(price))
                             return TickEvent(
                                 meta=meta,
                                 symbol=_sym,
@@ -572,6 +576,8 @@ class MarketDataNormalizer:
                                 ask_side_total_vol=0,
                                 is_simtrade=bool(is_simtrade),
                                 is_odd_lot=bool(is_odd_lot),
+                                trade_direction=_td,
+                                trade_confidence=_tc,
                             )
                     except Exception as exc:
                         logger.debug("rust_tick_fallback", error=str(exc))
@@ -598,6 +604,7 @@ class MarketDataNormalizer:
             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_tick")
             meta = MetaData(seq=self._next_seq(), topic="tick", source_ts=exch_ts, local_ts=local_ts)
 
+            _td, _tc = self._trade_classifier.classify(symbol, price)
             return TickEvent(
                 meta=meta,
                 symbol=symbol,
@@ -608,6 +615,8 @@ class MarketDataNormalizer:
                 ask_side_total_vol=0,
                 is_simtrade=is_simtrade,
                 is_odd_lot=is_odd_lot,
+                trade_direction=_td,
+                trade_confidence=_tc,
             )
         except Exception as e:
             logger.error("Normalize Tick Error", error=str(e), payload_type=str(type(payload)))
@@ -678,6 +687,8 @@ class MarketDataNormalizer:
                         compat_stats = (bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)
                         # Fused stats: integer mid_x2 + spread_scaled for LOBEngine bypass
                         fused_stats = (bb, ba, bd, ad, mx2, ss, timb)
+
+                        self._trade_classifier.update_quotes(symbol, bb, ba)
 
                         if _RETURN_TUPLE:
                             return (
@@ -979,6 +990,15 @@ class MarketDataNormalizer:
 
             if not synthesized:
                 bids_final, asks_final, synthesized = self._maybe_synthesize_side(symbol, bids_final, asks_final, scale)
+
+            # Update trade classifier with latest best bid/ask
+            if stats is not None:
+                self._trade_classifier.update_quotes(symbol, stats[0], stats[1])
+            elif bids_final and asks_final:
+                _bb = int(bids_final[0][0]) if hasattr(bids_final, "__getitem__") and len(bids_final) > 0 else 0
+                _ba = int(asks_final[0][0]) if hasattr(asks_final, "__getitem__") and len(asks_final) > 0 else 0
+                if _bb > 0 and _ba > 0:
+                    self._trade_classifier.update_quotes(symbol, _bb, _ba)
 
             if _RETURN_TUPLE:
                 if stats is not None and not synthesized:

@@ -440,7 +440,7 @@ class TestFeatureRegistry:
         assert "lob_shared_v2" in d["feature_sets"]
         fs_v2 = d["feature_sets"]["lob_shared_v2"]
         assert fs_v2["schema_version"] == 2
-        assert len(fs_v2["features"]) == 21
+        assert len(fs_v2["features"]) == 22
 
     def test_from_sets_factory(self) -> None:
         fs1 = FeatureSet("a", 1, ())

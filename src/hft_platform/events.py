@@ -37,6 +37,11 @@ class TickEvent:
     is_simtrade: bool = False
     is_odd_lot: bool = False
 
+    # EMO trade classification: +1=BUY, -1=SELL, 0=UNKNOWN
+    trade_direction: int = 0
+    # Classification confidence (scaled x1000): 1000=at-quote, 800=inside, 500=tick-rule, 0=unknown
+    trade_confidence: int = 0
+
 
 @dataclass(slots=True)
 class BidAskEvent:

@@ -42,9 +42,9 @@ def _make_event(bids: list[list[int]], asks: list[list[int]]) -> BidAskEvent:
 # --- Registry ---
 
 
-def test_v2_feature_set_has_21_features() -> None:
+def test_v2_feature_set_has_22_features() -> None:
     fs = build_default_lob_feature_set_v2()
-    assert len(fs.features) == 21
+    assert len(fs.features) == 22
 
 
 def test_v2_iss_at_index_19() -> None:
@@ -92,7 +92,7 @@ def test_v2_engine_produces_18_features() -> None:
     engine.process_lob_update(event, stats)
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
-    assert len(vals) == 21
+    assert len(vals) == 22
 
 
 def test_v1_engine_still_produces_16_features() -> None:

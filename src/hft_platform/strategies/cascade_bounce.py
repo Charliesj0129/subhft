@@ -29,9 +29,10 @@ from typing import Optional
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import Side
+from hft_platform.contracts.strategy import TIF, Side
 from hft_platform.core import timebase
 from hft_platform.events import LOBStatsEvent
+from hft_platform.execution.execution_optimizer import ExecutionOptimizer, OrderType
 from hft_platform.strategy.base import BaseStrategy
 
 logger = get_logger("strategy.cbs")
@@ -102,6 +103,9 @@ class CascadeBounceStrategy(BaseStrategy):
         "_entry_mid_x2",
         "_direction",
         "_next_allowed_ts",
+        "_exec_optimizer",
+        "_pending_entry_symbol",
+        "_pending_entry_price",
     )
 
     def __init__(
@@ -115,6 +119,10 @@ class CascadeBounceStrategy(BaseStrategy):
         session_start_sec: int = _DEFAULT_SESSION_START_SEC,
         session_end_sec: int = _DEFAULT_SESSION_END_SEC,
         utc_offset_sec: int = _UTC_OFFSET_SEC,
+        exec_optimizer_enabled: bool = False,
+        exec_spread_threshold_pts: int = 2,
+        exec_fill_score_threshold: float = 1.5,
+        exec_limit_timeout_ns: int = 3_000_000_000,
         **kwargs: object,
     ) -> None:
         super().__init__(strategy_id=strategy_id, **kwargs)
@@ -127,9 +135,19 @@ class CascadeBounceStrategy(BaseStrategy):
         self._session_end_sec: int = session_end_sec
         self._utc_offset_sec: int = utc_offset_sec
 
+        # Execution optimizer (limit vs market order decision)
+        self._exec_optimizer = ExecutionOptimizer(
+            spread_threshold_pts=exec_spread_threshold_pts,
+            fill_score_threshold=exec_fill_score_threshold,
+            limit_timeout_ns=exec_limit_timeout_ns,
+            enabled=exec_optimizer_enabled,
+        )
+        self._pending_entry_symbol: str = ""
+        self._pending_entry_price: int = 0
+
         # Per-symbol state
         self._price_buf: dict[str, deque[_PriceEntry]] = {}
-        self._state: dict[str, str] = {}  # "idle" | "positioned"
+        self._state: dict[str, str] = {}  # "idle" | "pending_limit" | "positioned"
         self._entry_ts_ns: dict[str, int] = {}
         self._entry_mid_x2: dict[str, int] = {}
         self._direction: dict[str, int] = {}  # +1 = long, -1 = short
@@ -169,6 +187,8 @@ class CascadeBounceStrategy(BaseStrategy):
 
         if state == "positioned":
             self._check_exit(symbol, now_ns, mid_x2)
+        elif state == "pending_limit":
+            self._check_pending_limit(symbol, now_ns, event)
         elif state == "idle":
             self._check_entry(symbol, now_ns, mid_x2, event)
 
@@ -221,28 +241,56 @@ class CascadeBounceStrategy(BaseStrategy):
         # Large move detected! Enter contrarian
         direction = -1 if diff > 0 else 1  # contrarian: sell if up, buy if down
 
-        # Place entry order
-        if direction == 1:
-            # Buy at best ask (passive)
-            price = event.best_ask
-            side = Side.BUY
-        else:
-            # Sell at best bid (passive)
-            price = event.best_bid
-            side = Side.SELL
-
-        if price <= 0:
-            return
-
         # Check we're not already positioned
         pos = self.position(symbol)
         if pos != 0:
             return
 
-        self.buy(symbol, price, 1) if side == Side.BUY else self.sell(symbol, price, 1)
+        # Determine entry side and prices
+        if direction == 1:
+            side = Side.BUY
+            aggressive_price = event.best_ask  # cross the spread
+            passive_price = event.best_bid  # join the bid
+        else:
+            side = Side.SELL
+            aggressive_price = event.best_bid  # cross the spread
+            passive_price = event.best_ask  # join the ask
 
-        # Update state
-        self._state[symbol] = "positioned"
+        if aggressive_price <= 0:
+            return
+
+        # Execution optimizer: limit vs market decision
+        spread_pts = event.spread_scaled // 10000 if event.spread_scaled else 0
+        bid_depth = int(event.bid_depth or 0)
+        ask_depth = int(event.ask_depth or 0)
+        near_depth = bid_depth if direction == 1 else ask_depth
+        opp_depth = ask_depth if direction == 1 else bid_depth
+        imbalance_ppm = int(
+            ((bid_depth - ask_depth) * 1_000_000 // max(bid_depth + ask_depth, 1))
+            if (bid_depth + ask_depth) > 0
+            else 0
+        )
+
+        order_type = self._exec_optimizer.decide(
+            spread_pts=spread_pts,
+            near_depth=near_depth,
+            opp_depth=opp_depth,
+            imbalance_ppm=imbalance_ppm,
+            side=direction,
+            ts_ns=now_ns,
+        )
+
+        if order_type == OrderType.LIMIT and passive_price > 0:
+            # Passive limit order — join the queue
+            self._place_entry(symbol, side, passive_price, TIF.LIMIT)
+            self._state[symbol] = "pending_limit"
+            self._pending_entry_symbol = symbol
+            self._pending_entry_price = passive_price
+        else:
+            # Aggressive market order — cross the spread
+            self._place_entry(symbol, side, aggressive_price, TIF.IOC)
+            self._state[symbol] = "positioned"
+
         self._entry_ts_ns[symbol] = now_ns
         self._entry_mid_x2[symbol] = mid_x2
         self._direction[symbol] = direction
@@ -251,10 +299,58 @@ class CascadeBounceStrategy(BaseStrategy):
             "cbs_entry",
             symbol=symbol,
             direction="long" if direction == 1 else "short",
+            order_type="LIMIT" if order_type == OrderType.LIMIT else "MARKET",
             move_bps=move_bps,
             mid_x2=mid_x2,
-            price=price,
+            spread_pts=spread_pts,
         )
+
+    def _place_entry(self, symbol: str, side: Side, price: int, tif: TIF) -> None:
+        """Place an entry order with the specified TIF."""
+        if side == Side.BUY:
+            self.buy(symbol, price, 1, tif=tif)
+        else:
+            self.sell(symbol, price, 1, tif=tif)
+
+    def _check_pending_limit(
+        self, symbol: str, now_ns: int, event: LOBStatsEvent
+    ) -> None:
+        """Check if pending limit entry has timed out."""
+        # Check if we got filled (position changed)
+        pos = self.position(symbol)
+        expected_pos = self._direction[symbol]  # +1 or -1
+        if (expected_pos > 0 and pos > 0) or (expected_pos < 0 and pos < 0):
+            # Filled — transition to positioned
+            self._state[symbol] = "positioned"
+            self._exec_optimizer.on_fill()
+            logger.info("cbs_limit_filled", symbol=symbol)
+            return
+
+        # Check timeout
+        if self._exec_optimizer.check_timeout(now_ns):
+            # Timeout — cancel limit and switch to aggressive market order
+            self._exec_optimizer.on_cancel()
+            direction = self._direction[symbol]
+            if direction == 1:
+                price = int(event.best_ask or 0)
+                side = Side.BUY
+            else:
+                price = int(event.best_bid or 0)
+                side = Side.SELL
+
+            if price > 0:
+                self._place_entry(symbol, side, price, TIF.IOC)
+                self._state[symbol] = "positioned"
+                logger.info(
+                    "cbs_limit_timeout_market_fallback",
+                    symbol=symbol,
+                    fallback_price=price,
+                )
+            else:
+                # No valid price — abort entry
+                self._state[symbol] = "idle"
+                self._direction[symbol] = 0
+                logger.warning("cbs_limit_timeout_no_price", symbol=symbol)
 
     def _check_exit(self, symbol: str, now_ns: int, mid_x2: int) -> None:
         """Check stop-loss and time-based exit conditions."""
