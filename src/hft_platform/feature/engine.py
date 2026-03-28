@@ -129,12 +129,6 @@ class _LobKernelState:
     mldm_deep_ema_fast: float = 0.0
     mldm_deep_ema_slow: float = 0.0
     mldm_output_ema: float = 0.0
-    # --- v2 fields: VRR (Volatility Ratio Regime) ---
-    vrr_prev_mid_x2: int = 0
-    vrr_ew_mean_s: float = 0.0
-    vrr_ew_var_s: float = 0.0
-    vrr_ew_mean_l: float = 0.0
-    vrr_ew_var_l: float = 0.0
 
 
 class FeatureEngine:
@@ -523,16 +517,11 @@ class FeatureEngine:
             return v1_tuple
 
         if n_features <= 19:
-            return v1_tuple + v2_base
+            return v1_tuple + v2_base  # type: ignore[possibly-undefined]
 
         iss_val = self._compute_iss(ks, int(ofi_l1_raw), mid_price_x2, bid_depth, ask_depth)
-        mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)
-
-        if n_features <= 21:
-            return v1_tuple + v2_base + (iss_val, mldm_val)
-
-        vrr_val = self._compute_vrr(ks, mid_price_x2)
-        return v1_tuple + v2_base + (iss_val, mldm_val, vrr_val)
+        mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)  # type: ignore[possibly-undefined]
+        return v1_tuple + v2_base + (iss_val, mldm_val)  # type: ignore[possibly-undefined]
 
     def _compute_v2_features(
         self,
@@ -602,14 +591,6 @@ class FeatureEngine:
     _MLDM_EMA_OUT: float = 0.06058693718652422  # 1 - exp(-1/16)
     _MLDM_CLIP: float = 2.0
     _MLDM_WARMUP: int = 128
-
-    # VRR constants (fixed TMFD6-like 0.125s tick cadence)
-    _VRR_TICK_DT_S: float = 0.125
-    # alpha = 1 - exp(-ln(2) * dt / halflife)
-    _VRR_ALPHA_SHORT: float = 0.017179401454748944  # 1 - exp(-ln(2) * 0.125 / 5.0)
-    _VRR_ALPHA_LONG: float = 0.00028876962325730116  # 1 - exp(-ln(2) * 0.125 / 300.0)
-    _VRR_WARMUP: int = 2400
-    _VRR_CLAMP_MAX: float = 10.0
 
     def _compute_iss(self, ks: "_LobKernelState", ofi_raw: int, mid_x2: int, bid_depth: int, ask_depth: int) -> int:
         """Compute Impact Surprise Signal. Returns scaled int x1000 (milli-units)."""
@@ -724,41 +705,6 @@ class FeatureEngine:
 
         clipped = max(-self._MLDM_CLIP, min(self._MLDM_CLIP, ks.mldm_output_ema))
         return int(round(clipped * 1000))
-
-    def _compute_vrr(self, ks: "_LobKernelState", mid_price_x2: int) -> int:
-        """Compute multi-scale realized volatility ratio (RV_5s / RV_300s).
-
-        Returns scaled int x1000, clamped to [0, 10000].
-        Uses EW Welford variance with fixed tick cadence (0.125s).
-        """
-        if ks.vrr_prev_mid_x2 == 0:
-            ks.vrr_prev_mid_x2 = mid_price_x2
-            return 0
-
-        prev = ks.vrr_prev_mid_x2
-        ks.vrr_prev_mid_x2 = mid_price_x2
-
-        # Raw price difference (matches prototype gate_zero.py which was validated)
-        ret = float(mid_price_x2 - prev)
-
-        # Short-window EW variance (Welford online)
-        a_s = self._VRR_ALPHA_SHORT
-        delta_s = ret - ks.vrr_ew_mean_s
-        ks.vrr_ew_mean_s += a_s * delta_s
-        ks.vrr_ew_var_s = (1.0 - a_s) * (ks.vrr_ew_var_s + a_s * delta_s * delta_s)
-
-        # Long-window EW variance (Welford online)
-        a_l = self._VRR_ALPHA_LONG
-        delta_l = ret - ks.vrr_ew_mean_l
-        ks.vrr_ew_mean_l += a_l * delta_l
-        ks.vrr_ew_var_l = (1.0 - a_l) * (ks.vrr_ew_var_l + a_l * delta_l * delta_l)
-
-        if ks.vrr_ew_var_l < 1e-15:
-            return 0
-
-        vrr = ks.vrr_ew_var_s / ks.vrr_ew_var_l
-        clamped = max(0.0, min(self._VRR_CLAMP_MAX, vrr))
-        return int(round(clamped * 1000))
 
     def _compute_values_rust(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
