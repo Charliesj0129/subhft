@@ -73,21 +73,15 @@ class TestLoadChannels:
 class TestReportSender:
     @pytest.mark.asyncio
     async def test_send_success_returns_true(self) -> None:
-        mock_resp = AsyncMock()
-        mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={"ok": True})
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-        mock_session = AsyncMock()
-        mock_session.post = MagicMock(return_value=mock_resp)
-
         sender = ReportSender(bot_token="test")
-        sender._session = mock_session
+
+        async def _mock_post(_url: str, _payload: dict) -> tuple[int, str]:  # type: ignore[type-arg]
+            return 200, '{"ok": true}'
+
+        sender._do_post = _mock_post  # type: ignore[assignment]
 
         result = await sender.send("chat123", "hello")
-
         assert result is True
-        mock_session.post.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_send_no_token_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:

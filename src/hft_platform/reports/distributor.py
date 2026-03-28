@@ -10,19 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING
 
 import structlog
 
 from hft_platform.reports.models import ChannelConfig
 
 try:
+    import requests as _requests
+except ImportError:  # pragma: no cover
+    _requests = None  # type: ignore[assignment]
+
+try:
     import aiohttp
 except ImportError:  # pragma: no cover
     aiohttp = None  # noqa: F841
-
-if TYPE_CHECKING:
-    pass
 
 logger = structlog.get_logger(__name__)
 
@@ -83,16 +84,31 @@ class ReportSender:
 
     _MAX_RETRIES = 3
 
+    async def _do_post(self, url: str, payload: dict) -> tuple[int, str]:  # type: ignore[type-arg]
+        """POST JSON to URL. Returns (status_code, response_body).
+
+        Uses ``requests`` (sync, in thread) if available, else ``aiohttp``.
+        """
+        if _requests is not None:
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: _requests.post(url, json=payload, timeout=30),
+            )
+            return resp.status_code, resp.text
+
+        if aiohttp is not None:
+            if self._session is None:
+                self._session = aiohttp.ClientSession()
+            async with self._session.post(url, json=payload) as resp:
+                body = await resp.text()
+                return resp.status, body
+
+        raise RuntimeError("Neither requests nor aiohttp available for ReportSender")
+
     def __init__(self, bot_token: str = "") -> None:
         self._token: str = bot_token or os.environ.get("HFT_TELEGRAM_BOT_TOKEN", "")
-        self._session: aiohttp.ClientSession | None = None
-
-    async def _ensure_session(self) -> None:
-        """Lazily create the aiohttp ClientSession."""
-        if self._session is None:
-            if aiohttp is None:  # pragma: no cover
-                raise RuntimeError("aiohttp is required for ReportSender")
-            self._session = aiohttp.ClientSession()
+        self._session: object | None = None  # aiohttp.ClientSession or None
 
     async def send(
         self,
@@ -102,55 +118,40 @@ class ReportSender:
     ) -> bool:
         """Send a single message to *chat_id*.
 
+        Uses ``requests`` (sync) if available, falls back to ``aiohttp``.
         Returns True on success, False on permanent failure.
         """
         if not self._token:
             logger.warning("report_sender.no_token", chat_id=chat_id)
             return False
 
-        await self._ensure_session()
         url = _TELEGRAM_API.format(token=self._token)
         payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
 
         for attempt in range(self._MAX_RETRIES):
             try:
-                async with self._session.post(url, json=payload) as resp:  # type: ignore[union-attr]
-                    status = resp.status
-                    if status == 200:
-                        return True
-                    if status == 429:
-                        retry_after: float = 5.0
-                        try:
-                            data = await resp.json()
-                            retry_after = float(data.get("parameters", {}).get("retry_after", 5))
-                        except Exception:  # noqa: BLE001
-                            pass
-                        logger.warning(
-                            "report_sender.rate_limited",
-                            attempt=attempt,
-                            retry_after=retry_after,
-                            chat_id=chat_id,
-                        )
-                        await asyncio.sleep(retry_after)
-                        continue
-                    if status >= 500:
-                        backoff = 2**attempt
-                        logger.warning(
-                            "report_sender.server_error",
-                            status=status,
-                            attempt=attempt,
-                            backoff=backoff,
-                            chat_id=chat_id,
-                        )
-                        await asyncio.sleep(backoff)
-                        continue
-                    # 4xx other — permanent failure
-                    logger.error(
-                        "report_sender.client_error",
-                        status=status,
-                        chat_id=chat_id,
-                    )
-                    return False
+                status, body = await self._do_post(url, payload)
+                if status == 200:
+                    return True
+                if status == 429:
+                    retry_after = 5.0
+                    try:
+                        import json
+
+                        data = json.loads(body) if isinstance(body, str) else body
+                        retry_after = float(data.get("parameters", {}).get("retry_after", 5))
+                    except Exception:  # noqa: BLE001
+                        pass
+                    logger.warning("report_sender.rate_limited", attempt=attempt, retry_after=retry_after)
+                    await asyncio.sleep(retry_after)
+                    continue
+                if status >= 500:
+                    backoff = 2**attempt
+                    logger.warning("report_sender.server_error", status=status, attempt=attempt, backoff=backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.error("report_sender.client_error", status=status, chat_id=chat_id)
+                return False
             except Exception as exc:  # noqa: BLE001
                 backoff = 2**attempt
                 logger.warning(
@@ -185,9 +186,9 @@ class ReportSender:
         return sent
 
     async def close(self) -> None:
-        """Close the underlying aiohttp session."""
-        if self._session is not None:
-            await self._session.close()
+        """Close the underlying HTTP session if any."""
+        if self._session is not None and hasattr(self._session, "close"):
+            await self._session.close()  # type: ignore[misc]
             self._session = None
 
 
