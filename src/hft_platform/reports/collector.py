@@ -66,24 +66,31 @@ _TS = "toDateTime64(exch_ts/1e9, 3, 'Asia/Taipei')"
 def _day_filter(date: str) -> str:
     """Return a SQL WHERE snippet for the day session (07:00–13:45 CST).
 
-    Compares parsed exch_ts (as Asia/Taipei DateTime64) against boundaries.
-    Does NOT use toDate() to avoid UTC drift.
+    Uses toUnixTimestamp64Nano for efficient exch_ts range pre-filtering,
+    then precise DateTime64 comparison for correctness.
     """
+    lo = f"toUnixTimestamp64Nano(toDateTime64('{date} 06:00:00', 3, 'Asia/Taipei'))"
+    hi = f"toUnixTimestamp64Nano(toDateTime64('{date} 14:00:00', 3, 'Asia/Taipei'))"
     return (
-        f"{_TS} >= toDateTime64('{date} 07:00:00', 3, 'Asia/Taipei')"
-        f" AND {_TS} < toDateTime64('{date} 13:45:00', 3, 'Asia/Taipei')"
+        f"exch_ts >= {lo} AND exch_ts < {hi} "
+        f"AND {_TS} >= toDateTime64('{date} 07:00:00', 3, 'Asia/Taipei') "
+        f"AND {_TS} < toDateTime64('{date} 13:45:00', 3, 'Asia/Taipei')"
     )
 
 
 def _night_filter(date: str) -> str:
     """Return a SQL WHERE snippet for the night session (15:00 CST → 05:00 next day).
 
-    Night session starts at 15:00 CST on *date* and runs for 14 hours.
-    Compares parsed exch_ts timestamps (NOT toDate()) to avoid UTC confusion.
+    Uses toUnixTimestamp64Nano for efficient exch_ts range pre-filtering.
+    Night session: 15:00 CST on *date* for 14 hours.
     """
-    start = f"toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei')"
-    end = f"toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') + INTERVAL 14 HOUR"
-    return f"{_TS} >= {start} AND {_TS} < {end}"
+    lo = f"toUnixTimestamp64Nano(toDateTime64('{date} 14:00:00', 3, 'Asia/Taipei'))"
+    hi = f"toUnixTimestamp64Nano(toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') + INTERVAL 15 HOUR)"
+    return (
+        f"exch_ts >= {lo} AND exch_ts < {hi} "
+        f"AND {_TS} >= toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') "
+        f"AND {_TS} < toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') + INTERVAL 14 HOUR"
+    )
 
 
 # ---------------------------------------------------------------------------
