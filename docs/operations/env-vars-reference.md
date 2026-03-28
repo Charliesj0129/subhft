@@ -192,10 +192,47 @@ Base YAML (config/base/main.yaml)
 | `HFT_FEATURE_METRICS_SAMPLE_EVERY` | `policy-dependent` | feature metrics 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
 | `HFT_FEATURE_LATENCY_SAMPLE_EVERY` | `policy-dependent` | feature latency 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
 | `HFT_ORDER_MODE` | — | 下單模式：`sim` / `live`（覆蓋 shioaji.simulation） | — |
+| `HFT_ORDER_SHADOW_MODE` | `0` | `1` = 啟用 ShadowOrderSink，攔截 NEW/CANCEL/AMEND 並記錄 shadow order | shadow rollout 必須設 `1`；`HFT_ORDER_MODE=sim` 單獨不足以保證 shadow persistence |
 | `HFT_ORDER_SIMULATION` | — | `1` = 模擬模式（舊版相容） | 優先使用 `HFT_ORDER_MODE` |
 | `HFT_ORDER_NO_CA` | `0` | `1` = 停用 CA 認證（sim 環境） | — |
 
 **Runbook 參考**: [feature-plane-operations](../runbooks/feature-plane-operations.md), [feature-plane-shadow-canary-runbook](../runbooks/feature-plane-shadow-canary-runbook.md), [gateway-ha-failover](../runbooks/gateway-ha-failover.md)
+
+Shadow deployment note:
+- 單節點 old-computer shadow 部署建議 `HFT_GATEWAY_ENABLED=0`。
+- 若 `HFT_GATEWAY_ENABLED=1`，intent 會先經 `GatewayService`；目前 code path 可能在 gateway/risk/reduce-only 之前就被拒絕，且不一定會經過 `OrderAdapter.execute()` 的 shadow intercept。
+- futures shadow 部署前務必確認風控 price cap (`max_price_cap`) 與實際合約價格量級相容，否則會出現大量 `PRICE_EXCEEDS_CAP` 拒單。
+
+### 8.1 Platform Reduce-Only / Manual Re-Arm
+
+以下條件會讓平台進入 `PLATFORM_REDUCE_ONLY`，阻止新的 opening orders：
+
+- `feed_reconnect_unhealthy`
+- `feed_reconnect_pending`
+- `feed_reconnect_flapping`
+- `queue_depth_exceeded`
+- `rss_unhealthy`
+- `redis_unhealthy`
+- `wal_backlog_unhealthy`
+- `clickhouse_unhealthy`
+
+關鍵觀測指標：
+- `platform_reduce_only_active`
+- `manual_rearm_required{scope="platform"}`
+- `autonomy_transitions_total{scope="platform",...}`
+
+自動恢復（Auto-Recovery）：
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_PLATFORM_AUTO_RECOVERY_ENABLED` | `1` | `1` = feed 相關 reduce-only 觸發清除後自動恢復 | 保守環境可設 `0` 維持純手動 |
+| `HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S` | `60` | 所有觸發條件清除後等待秒數，確認穩定才恢復 | 過短可能造成 flapping |
+
+重點：
+- `platform_reduce_only_active=1` 時，shadow 策略即使仍在產生 intents，也可能沒有任何 new order 能往下游流動。
+- Shadow mode (`HFT_ORDER_SHADOW_MODE=1`) 繞過 reduce-only gate — shadow orders 無金融風險，不受 reduce-only 限制。
+- 自動恢復僅適用於 feed 相關觸發（`feed_reconnect_unhealthy`, `feed_gap_exceeded`）。若有非 feed 觸發（如 reconciliation drift），自動恢復會被阻擋。
+- `manual_rearm_required=1` 表示依賴問題解除後仍需人工 re-arm（除非自動恢復已啟用且所有觸發條件已清除）。
 
 ---
 
