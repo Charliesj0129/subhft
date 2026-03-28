@@ -112,7 +112,7 @@ class TestWriteSnapshotToClickhouse:
             "env_json": '{"HFT_MODE": "sim"}',
             "yaml_json": '["config/base/main.yaml"]',
         }
-        result = asyncio.get_event_loop().run_until_complete(write_snapshot_to_clickhouse(ch_client, snapshot))
+        result = asyncio.run(write_snapshot_to_clickhouse(ch_client, snapshot))
         assert result is True
         ch_client.execute.assert_called_once()
 
@@ -130,5 +130,5 @@ class TestWriteSnapshotToClickhouse:
             "env_json": '{"HFT_MODE": "sim"}',
             "yaml_json": "[]",
         }
-        result = asyncio.get_event_loop().run_until_complete(write_snapshot_to_clickhouse(ch_client, snapshot))
+        result = asyncio.run(write_snapshot_to_clickhouse(ch_client, snapshot))
         assert result is False
