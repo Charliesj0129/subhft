@@ -61,6 +61,8 @@ claude.json
 
 # Project Specific
 reports/
+!src/hft_platform/reports/
+!src/hft_platform/reports/**
 artifacts/
 outputs/
 !outputs/production_rollout/
