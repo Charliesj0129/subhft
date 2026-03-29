@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from hft_platform.reports.distributor import Distributor, ReportSender, load_channels
-from hft_platform.reports.models import ChannelConfig
+from hft_platform.reports.models import ChannelConfig, ComposedReport, MessagePart
 
 # ---------------------------------------------------------------------------
 # TestLoadChannels
@@ -105,30 +105,35 @@ class TestDistributor:
         free_channel = ChannelConfig(name="free", chat_id="free_id", tier="free", enabled=True)
 
         sender = MagicMock()
-        sender.send_batch = AsyncMock(return_value=1)
+        sender.send = AsyncMock(return_value=True)
 
         distributor = Distributor(sender=sender, channels=[owner_channel, free_channel])
 
-        rendered = {
-            "paid": ["paid msg 1", "paid msg 2"],
-            "free": ["free msg 1"],
-        }
-        await distributor.send(rendered)
+        composed = ComposedReport(messages=[
+            MessagePart(kind="text", content="free summary", min_tier="free"),
+            MessagePart(kind="text", content="paid detail", min_tier="paid"),
+        ])
+        await distributor.send(composed)
 
-        calls = {call.args[0]: call.args[1] for call in sender.send_batch.call_args_list}
-        assert calls["owner_id"] == ["paid msg 1", "paid msg 2"]
-        assert calls["free_id"] == ["free msg 1"]
+        owner_calls = [c for c in sender.send.call_args_list if c[0][0] == "owner_id"]
+        assert len(owner_calls) == 2
+
+        free_calls = [c for c in sender.send.call_args_list if c[0][0] == "free_id"]
+        assert len(free_calls) == 1
+        assert free_calls[0][0][1] == "free summary"
 
     @pytest.mark.asyncio
     async def test_skips_disabled_channels(self) -> None:
         disabled_channel = ChannelConfig(name="disabled", chat_id="disabled_id", tier="paid", enabled=False)
 
         sender = MagicMock()
-        sender.send_batch = AsyncMock(return_value=0)
+        sender.send = AsyncMock(return_value=True)
 
         distributor = Distributor(sender=sender, channels=[disabled_channel])
 
-        rendered = {"paid": ["msg 1"]}
-        await distributor.send(rendered)
+        composed = ComposedReport(messages=[
+            MessagePart(kind="text", content="msg 1", min_tier="free"),
+        ])
+        await distributor.send(composed)
 
-        sender.send_batch.assert_not_called()
+        sender.send.assert_not_called()
