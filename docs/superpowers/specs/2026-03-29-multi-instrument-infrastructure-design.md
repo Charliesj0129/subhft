@@ -119,8 +119,35 @@ class InstrumentRegistry:
 
 ### 2.5 Migration from SymbolMetadata
 
-`SymbolMetadata` becomes a thin wrapper around `InstrumentRegistry`:
-- All existing call sites continue to work unchanged
+`SymbolMetadata` becomes a thin wrapper delegating to `InstrumentRegistry`. The wrapper must cover the **full** public API surface (8 methods + 2 attributes + 1 class constant):
+
+**Methods** (all have production callers):
+
+| Method | Callers |
+|--------|---------|
+| `price_scale(symbol) -> int` | `normalizer.py:420`, `mapper.py:28,44`, `pricing.py:26,43` |
+| `contract_multiplier(symbol) -> int` | `positions.py:244,309` |
+| `exchange(symbol) -> str` | `adapter.py:562`, `mapper.py:92,115`, `normalizer.py:267` (internal) |
+| `product_type(symbol) -> str` | `adapter.py:585`, `validators.py:70` |
+| `order_params(symbol) -> dict` | `adapter.py:597` |
+| `symbols_for_tags(tags) -> set[str]` | `runner.py:296,303` |
+| `reload() -> None` | indirect via `reload_if_changed` |
+| `reload_if_changed() -> bool` | `market_data.py:893` |
+
+**Attributes** (directly accessed):
+
+| Attribute | Access |
+|-----------|--------|
+| `meta: dict[str, dict]` | `market_data.py:894` (read `len()`) |
+| `symbols_by_tag: dict[str, set[str]]` | `test_strategy_runner_behavior.py:159,167` (write in tests) |
+
+**Class constant**: `DEFAULT_SCALE = 10_000` — referenced by `MarketDataNormalizer` and tests.
+
+**Migration strategy:**
+- Wrapper class preserves all above signatures, delegating to `InstrumentRegistry` internals
+- `meta` and `symbols_by_tag` exposed as properties that delegate to registry's internal dicts
+- `reload_if_changed()` triggers `InstrumentRegistry` reload from `symbols.yaml`
+- `order_params()` delegates to registry (needs `InstrumentProfile` to carry order params or a separate lookup)
 - Gradual migration: new code uses `InstrumentRegistry` directly
 - `SymbolMetadata` deprecated after all callers migrated (no timeline pressure)
 
@@ -169,13 +196,32 @@ New file: `src/hft_platform/feature/cross_instrument.py` (~150 LOC)
 
 ### 3.5 Change Scope
 
+**Corrected entry points** (no `_get_or_create_state()` method exists):
+
+- Main entry: `process_lob_update()` (`engine.py:346`) — called from `MarketDataService._maybe_update_features()`
+- Tick entry: `on_tick()` (`engine.py:765`) — **already wired** in `market_data.py:960` (not a pending fix)
+- State init: `_lob_kernel_states` is lazily populated by `process_lob_update`, not by `on_tick`. `on_tick` silently no-ops if kernel state doesn't exist for the symbol.
+
+**Instrument-type routing** must be added in `process_lob_update()`, not a hypothetical `_get_or_create_state()`:
+
+```python
+# In process_lob_update(), before kernel state init:
+profile = self._registry.get(symbol)  # InstrumentRegistry lookup
+if profile.instrument_type == InstrumentType.INDEX:
+    return  # skip
+feature_set_id = _INSTRUMENT_FEATURE_SET[profile.instrument_type]
+# Use feature_set_id for state init and computation
+```
+
 | File | Change |
 |------|--------|
-| `feature/engine.py` | Add instrument_type routing in `_get_or_create_state()` (~10 LOC) |
+| `feature/engine.py` | Add instrument_type routing in `process_lob_update()` (~15 LOC). Inject `InstrumentRegistry` in `__init__`. |
 | `feature/registry.py` | Register `option_flow_v1` feature set |
 | `feature/option_features.py` | NEW: option-specific feature computations |
 | `feature/cross_instrument.py` | NEW: cross-instrument aggregation engine |
 | Existing futures/equity path | Zero changes |
+
+**Note**: The `on_tick()` wiring fix listed in Phase 1 is **already done** (`market_data.py:960`). Removed from Phase 1 scope. However, `on_tick` for options symbols needs the kernel state to be initialized first by a `process_lob_update` call — this ordering dependency is already guaranteed by the existing pipeline (BidAsk events arrive before/alongside Tick events).
 
 ---
 
@@ -231,13 +277,24 @@ v1 ships first. Uses conservative vol assumption (30%) until IV can be derived f
 
 ### 4.3 Risk Validators (Options-Specific)
 
-New validators, only activated for `instrument_type == OPTION`:
+**Wiring prerequisite**: The current `RiskValidator` base class (`validators.py:16`) only accepts `(config, price_scale_provider, lob)`. The `check(intent: OrderIntent) -> Tuple[bool, str]` interface takes only an `OrderIntent`. Greeks validators need `PositionStore`, `GreeksProvider`, and `InstrumentRegistry` at construction time.
+
+**Required changes to existing code:**
+
+1. `RiskEngine.__init__` (`engine.py:94`): Add 3 optional kwargs: `position_store`, `greeks_provider`, `instrument_registry`. Forward to new validators only.
+2. New validators subclass `RiskValidator` directly, inject deps in their own `__init__`, bypass base class for new deps (zero-footprint path — existing validators untouched).
+3. `check()` contract unchanged — new validators read from `self.position_store` / `self.greeks_provider` internally.
+4. Bootstrap caller must pass the new deps when constructing `RiskEngine`.
+
+**New validators** (only activated for `instrument_type == OPTION`):
 
 | Validator | Config Key | Logic |
 |-----------|-----------|-------|
-| `DeltaLimitValidator` | `max_net_delta_lots` | Reject if \|new_net_delta\| > limit per underlying |
-| `GammaLimitValidator` | `max_net_gamma` | Strict on expiry week (pin risk) |
-| `VegaLimitValidator` | `max_portfolio_vega` | Total portfolio vega cap |
+| `DeltaLimitValidator` | `max_net_delta_lots` | Queries `PortfolioView.get_underlying_exposure()`, reject if \|new_net_delta\| > limit per underlying |
+| `GammaLimitValidator` | `max_net_gamma` | Queries `PortfolioView`, strict on expiry week (pin risk) |
+| `VegaLimitValidator` | `max_portfolio_vega` | Total portfolio vega cap via `PortfolioView` |
+
+Each validator skips non-option intents early: `if registry.get(intent.symbol).instrument_type != OPTION: return (True, "OK")`.
 
 ### 4.4 tick_size Fix
 
@@ -337,10 +394,27 @@ TTL toDateTime(snapshot_ts / 1000000000) + INTERVAL 3 MONTH;
 
 ### 5.5 WAL Compatibility
 
-- WAL format is dict-based — new fields automatically carried
-- Replay old WAL on new schema: new columns get DEFAULT values — safe
-- Replay new WAL on old schema: extra fields ignored — safe
-- No WAL format version bump needed
+**Important**: INSERT uses explicit `column_names=cols` (not schema-less append). Two independent column lists exist:
+
+| List | Location | Used by |
+|------|----------|---------|
+| `MARKET_DATA_COLUMNS` | `recorder/worker.py:16` | Live ingest Batcher path |
+| `_MARKET_DATA_COLS` | `recorder/_loader_batch.py:23` | WAL replay loader |
+
+**Compatibility matrix:**
+
+| Scenario | Result | Action |
+|----------|--------|--------|
+| Old WAL → new schema | Safe — new columns get DEFAULT values | No action needed |
+| New WAL → old schema | **FAILS** — INSERT references columns that don't exist | **Forward replay requires migration first** |
+| New ingest code → old schema | **FAILS** — same column mismatch | Migration must run before deploying new recorder code |
+
+**Deployment order (strict)**:
+1. Run ClickHouse migration (add columns with DEFAULT)
+2. Deploy new recorder code (extended column lists)
+3. WAL files written after step 2 can only replay on migrated schema
+
+**Both column lists must be updated in sync** — `worker.py:MARKET_DATA_COLUMNS` and `_loader_batch.py:_MARKET_DATA_COLS`. A mismatch between them would cause live-ingest and WAL-replay to produce different column sets, leading to silent data loss or insert errors.
 
 ---
 
@@ -405,15 +479,11 @@ options_chains:
 
 Bootstrap flow: load `symbols.yaml` → expand `options_chains` via existing `_expand_options()` DSL → `ContractsRuntime` resolves contracts → `InstrumentRegistry.bulk_register()`.
 
-### 6.4 on_tick() Wiring Fix (Bundled)
+### 6.4 on_tick() Wiring — Already Done
 
-```python
-# market_data.py: _process_raw() — add after normalize, before LOB
-if self.feature_engine is not None and event_type == "tick":
-    self.feature_engine.on_tick(symbol, price, volume, ts, trade_direction)
-```
+`feature_engine.on_tick()` is already called at `market_data.py:960` inside `_maybe_update_features()`, guarded by `isinstance(event, TickEvent) and event.trade_direction != 0`. No fix needed.
 
-~5 LOC. Fixes toxicity being permanently 0 in production.
+**Caveat for options**: `on_tick()` is a no-op if `_lob_kernel_states[symbol]` hasn't been initialized by a prior `process_lob_update()` call. This is fine — BidAsk events arrive before/alongside Tick events in the existing pipeline, ensuring kernel state exists before `on_tick` runs.
 
 ---
 
@@ -421,7 +491,7 @@ if self.feature_engine is not None and event_type == "tick":
 
 | Phase | Scope | Duration | Deliverable |
 |-------|-------|----------|-------------|
-| **1: Foundation** | InstrumentRegistry, SymbolMetadata wrapper, CH migration, recorder extension, on_tick fix, vrr cleanup | ~1 week | Existing futures pipeline unchanged, new columns in CH |
+| **1: Foundation** | InstrumentRegistry, SymbolMetadata wrapper, CH migration (+ deploy order gate), recorder extension (worker.py + _loader_batch.py sync), vrr cleanup | ~1 week | Existing futures pipeline unchanged, new columns in CH |
 | **2: Options Data Path** | symbols.yaml DSL wiring, ContractsRuntime → registry, TXO subscription, options_chain_snapshot recorder, FeatureEngine type dispatch | ~1 week | TXO data flowing into ClickHouse |
 | **3: Options Features & Risk** | option_flow_v1 (6 features), GreeksProvider (Black-76), PortfolioView, Delta/Gamma/Vega validators, OrderIntent.oc_type, OrderGateway wiring | ~1 week | Shadow-mode options orders with Greeks risk gates |
 | **4: Cross-Instrument & Equity** | CrossInstrumentEngine, equity subscription, cross-asset lead-lag signal pipeline | ~1 week | Cross-instrument features to FeatureUpdateEvent |
