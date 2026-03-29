@@ -166,12 +166,15 @@ HFT_REPORT_PAID_ENABLED=1
   dispatch). However, the current bot code (`handlers.py`, `scheduler.py`) bypasses
   `Distributor` entirely — it sends `rendered["paid"]` directly via
   `context.bot.send_message()` to the owner chat.
-- **Phase 2 migration required**: Refactor both `handlers.py` (on-demand) and
-  `scheduler.py` (scheduled push) to route through `Distributor.send(rendered)` instead
-  of direct sends. This ensures free/paid channel routing works automatically.
-  - Phase 1 can keep direct sends (owner-only, always "paid" tier).
-  - Phase 2 implementation MUST switch to Distributor before enabling free/paid channels.
-  - Estimated: ~20 LOC change per file (replace send loop with Distributor call).
+- **Phase 2 migration — two distinct send paths**:
+  - **Scheduled push** (`scheduler.py`): Migrate to `Distributor.send(rendered)`.
+    This broadcasts to all enabled channels (owner + free + paid) as intended.
+  - **Interactive commands** (`handlers.py` `/report`, `/levels`, `/flow`): Keep
+    direct `context.bot.send_message()` to `update.effective_chat.id` (owner only).
+    These are on-demand queries and MUST NOT broadcast to public channels.
+  - Phase 1 can keep direct sends everywhere (owner-only, always "paid" tier).
+  - Phase 2: only `scheduler.py` switches to Distributor. `handlers.py` stays direct.
+  - Estimated: ~20 LOC change in `scheduler.py` only.
 - Member management: manual invite/remove via Telegram.
 
 ### Free vs Paid Content
@@ -198,15 +201,27 @@ HFT_REPORT_PAID_ENABLED=1
 
 ### Docker Compose Service
 
+The bot service reuses the existing `x-hft-common` anchor (shared build context,
+common env vars including `CLICKHOUSE_PASSWORD`) and adds bot-specific overrides.
+
+**Prerequisite**: The `.[bot]` optional extra must be installed. Two options:
+
+- **Option A (recommended)**: Add `bot` to the default install in the shared Docker
+  image. Since the image already installs all deps, adding `python-telegram-bot[job-queue]`
+  to the main build keeps one image for all services.
+- **Option B**: Separate Dockerfile stage or `pip install ".[bot]"` in the command.
+  Only needed if image size is a concern (adds ~5 MB).
+
 ```yaml
 hft-bot:
-  build: .
+  <<: *hft-common                    # inherits build, CH password, common env
   command: python -m hft_platform.bot
   environment:
     - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN}
     - HFT_TELEGRAM_CHAT_ID=${HFT_TELEGRAM_CHAT_ID}
     - HFT_REPORT_SYMBOLS=TXFD6,TMFD6,2330
     - HFT_CLICKHOUSE_HOST=clickhouse
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
   depends_on:
     clickhouse:
       condition: service_healthy
@@ -215,9 +230,10 @@ hft-bot:
   cpus: 0.5
 ```
 
-- Independent container from `hft-engine`.
+- Independent container from `hft-engine`, but shares the same image.
 - Only requires ClickHouse connectivity. No Redis, no broker SDK.
 - Resource: 256 MB RAM, 0.5 CPU.
+- `CLICKHOUSE_PASSWORD` is inherited from `x-hft-common` or explicitly set above.
 
 ### Monitoring
 
@@ -260,8 +276,10 @@ hft-bot:
 
 | File                                  | Change                                                        |
 | ------------------------------------- | ------------------------------------------------------------- |
-| `src/hft_platform/bot/handlers.py`    | Replace direct `context.bot.send_message()` with `Distributor.send()` |
-| `src/hft_platform/bot/scheduler.py`   | Replace direct `context.bot.send_message()` with `Distributor.send()` |
+| `src/hft_platform/bot/scheduler.py`   | Replace direct `context.bot.send_message()` with `Distributor.send()` for multi-channel broadcast |
+
+Note: `handlers.py` stays with direct sends in Phase 2 — interactive queries are
+owner-only and must not broadcast to public channels.
 
 ### Unchanged
 
