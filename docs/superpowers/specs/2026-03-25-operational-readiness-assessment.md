@@ -182,7 +182,7 @@ Both weak points are "data collection done, analysis/report automation incomplet
 | W5 | Night session track config | `session_governor.yaml` add `futures_night` track | Schedule: 15:00 PRE_OPEN -> 15:15 OPEN -> 05:00 CLOSE_ONLY -> 05:15 FORCE_FLAT |
 | W5 | Cross-midnight trading_date | Evidence + DailyLossLimit | Night session 22:00 trade belongs to "today" or "tomorrow" -- `set_trading_date()` API exists, wire to SessionGovernor |
 | W6 | Heartbeat upgrade | Current: PID file + cron | Need: Telegram heartbeat every 30min (`notify_heartbeat()` template exists), configurable night quiet hours |
-| W6 | Process supervisor | Current: cron watchdog | Need: systemd unit or PM2, crash -> auto-restart -> notify |
+| W6 | Process supervisor | Current: cron watchdog | Need: Docker `restart: unless-stopped` or systemd unit, crash -> auto-restart -> notify |
 | W6 | **S4** Dead man's switch | No unacknowledged-alert escalation | Critical alert not acked within N min -> auto-flatten + halt. Essential for unattended night sessions |
 | W7 | Night session chaos addendum | 2 new playbooks | (6) Cross-midnight reconnect (7) Night feed gap >30s (low liquidity, more likely to trigger) |
 | W7 | **A3** Weekly report + P2 wrap-up | Weekly report automation + TCA CLI | Sunday auto-send 5-day aggregation |
