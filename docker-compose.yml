@@ -349,21 +349,17 @@ services:
         max-file: "3"
 
   hft-bot:
-    build: .
+    <<: *hft-common
     container_name: hft-bot
-    command: ["python", "-m", "hft_platform.bot"]
+    command: ["sh", "-lc", "python -m hft_platform.bot"]
     environment:
-      - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN:-}
-      - HFT_TELEGRAM_CHAT_ID=${HFT_TELEGRAM_CHAT_ID:-}
+      - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN:?HFT_TELEGRAM_BOT_TOKEN must be set}
+      - HFT_TELEGRAM_CHAT_ID=${HFT_TELEGRAM_CHAT_ID:?HFT_TELEGRAM_CHAT_ID must be set}
+      - HFT_REPORT_SYMBOLS=${HFT_REPORT_SYMBOLS:-TXFD6}
       - HFT_CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
-      - HFT_BOT_SYMBOL=${HFT_BOT_SYMBOL:-TXFD6}
-      - TZ=Asia/Taipei
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONDONTWRITEBYTECODE=1
-    volumes:
-      - ./src:/app/src
+      - TZ=Asia/Taipei
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -371,13 +367,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.25'
-          memory: 512M
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
+          memory: 256M
+          cpus: "0.5"
 
 volumes:
   ch_data_hot:
