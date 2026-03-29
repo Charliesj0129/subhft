@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 import time
 from typing import Any
 
-from structlog import get_logger
-
-logger = get_logger(__name__)
-_DEFAULT_KILL_SWITCH_PATH = ".runtime/kill_switch"
+from hft_platform.cli._checks import check_disk_space, check_kill_switch, check_wal_backlog
 
 
 def _check_clickhouse(timeout: float) -> dict[str, Any]:
@@ -39,15 +35,6 @@ def _check_checkpoint_recent(max_age_s: float = 300.0) -> dict[str, Any]:
     return {"name": "checkpoint_recent", "ok": ok, "detail": f"age={age_s:.0f}s (max={max_age_s:.0f}s)"}
 
 
-def _check_wal_backlog(max_files: int = 100) -> dict[str, Any]:
-    wal_dir = os.getenv("HFT_WAL_DIR", ".wal")
-    if not os.path.isdir(wal_dir):
-        return {"name": "wal_backlog", "ok": True, "detail": f"no wal dir: {wal_dir}"}
-    count = len([f for f in os.listdir(wal_dir) if f.endswith(".wal")])
-    ok = count <= max_files
-    return {"name": "wal_backlog", "ok": ok, "detail": f"files={count} (max={max_files})"}
-
-
 def _check_prometheus(timeout: float) -> dict[str, Any]:
     host = os.getenv("HFT_PROMETHEUS_HOST", "localhost")
     port = os.getenv("HFT_PROMETHEUS_PORT", "9091")
@@ -61,19 +48,6 @@ def _check_prometheus(timeout: float) -> dict[str, Any]:
         return {"name": "prometheus", "ok": ok, "detail": f"{host}:{port} status={resp.status}"}
     except Exception as exc:
         return {"name": "prometheus", "ok": False, "detail": str(exc)}
-
-
-def _check_disk_space(min_gb: float = 1.0) -> dict[str, Any]:
-    usage = shutil.disk_usage(".")
-    free_gb = usage.free / (1024**3)
-    ok = free_gb >= min_gb
-    return {"name": "disk_space", "ok": ok, "detail": f"free={free_gb:.1f}GB (min={min_gb:.1f}GB)"}
-
-
-def _check_kill_switch() -> dict[str, Any]:
-    path = os.getenv("HFT_KILL_SWITCH_PATH", _DEFAULT_KILL_SWITCH_PATH)
-    active = os.path.exists(path)
-    return {"name": "kill_switch", "ok": not active, "detail": "ACTIVE" if active else "inactive"}
 
 
 def _check_config_valid() -> dict[str, Any]:
@@ -92,10 +66,10 @@ def cmd_health_preflight(args) -> None:
     checks = [
         _check_clickhouse(timeout),
         _check_checkpoint_recent(),
-        _check_wal_backlog(),
+        check_wal_backlog(max_files=100),
         _check_prometheus(timeout),
-        _check_disk_space(),
-        _check_kill_switch(),
+        check_disk_space(min_gb=1.0),
+        check_kill_switch(),
         _check_config_valid(),
     ]
     all_ok = all(c["ok"] for c in checks)

@@ -611,33 +611,3 @@ class TestNormalizeSnapshot:
         assert isinstance(result, BidAskEvent)
         assert result.is_snapshot is True
 
-
-# ===================================================================
-# _get_field tests
-# ===================================================================
-
-
-class TestGetField:
-    """Tests for _get_field helper."""
-
-    def test_dict_payload(self, tmp_path, monkeypatch):
-        """Get field from dict."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
-        val = norm._get_field({"code": "2330", "Code": "WRONG"}, ["code", "Code"])
-        assert val == "2330"
-
-    def test_object_payload(self, tmp_path, monkeypatch):
-        """Get field from object attributes."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
-
-        class Obj:
-            code = "2330"
-
-        val = norm._get_field(Obj(), ["code", "Code"])
-        assert val == "2330"
-
-    def test_missing_field(self, tmp_path, monkeypatch):
-        """Missing field returns None."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
-        val = norm._get_field({}, ["nonexistent"])
-        assert val is None

@@ -5,19 +5,20 @@ from argparse import Namespace
 
 import pytest
 
-from hft_platform.cli._golive import _check_config_not_sim, _check_kill_switch, cmd_golive_check
+from hft_platform.cli._checks import check_kill_switch
+from hft_platform.cli._golive import _check_config_not_sim, cmd_golive_check
 
 
 class TestCheckKillSwitch:
     def test_inactive(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HFT_KILL_SWITCH_PATH", str(tmp_path / "m"))
-        assert _check_kill_switch()["ok"] is True
+        assert check_kill_switch()["ok"] is True
 
     def test_active(self, tmp_path, monkeypatch):
         p = tmp_path / "ks"
         p.write_text("{}")
         monkeypatch.setenv("HFT_KILL_SWITCH_PATH", str(p))
-        assert _check_kill_switch()["ok"] is False
+        assert check_kill_switch()["ok"] is False
 
 
 class TestCheckConfigNotSim:

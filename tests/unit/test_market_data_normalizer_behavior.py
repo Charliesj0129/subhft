@@ -427,20 +427,3 @@ def test_product_type_cached(sym_yaml):
     sm.product_type("TSMC")
     sm.product_type("TSMC")
     assert "TSMC" in sm._product_type_cache
-
-
-# ---------------------------------------------------------------------------
-# _get_field
-# ---------------------------------------------------------------------------
-
-
-def test_get_field_on_tick():
-    from hft_platform.feed_adapter.normalizer import _RUST_GET_FIELD
-
-    tick = _make_tick_obj()
-    if _RUST_GET_FIELD is not None:
-        # keys must be an iterable of field names (list), not a bare string
-        val = _RUST_GET_FIELD(tick, ["price"])
-        assert val == 500.0  # default price from _make_tick_obj()
-    else:
-        assert getattr(tick, "code") == "TSMC"

@@ -1,6 +1,6 @@
 # HFT Platform Current Architecture Baseline
 
-Date: 2026-03-14
+Date: 2026-03-29
 Scope: As-built implementation under `src/hft_platform`, `research`, `rust_core`, `rust`, `config`, and `docker-compose.yml`.
 Companion target document: `.agent/library/target-architecture.md`.
 Companion C4 diagrams: `.agent/library/c4-model-current.md`.
@@ -43,7 +43,8 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping.
 - `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events (Python/Rust paths).
 - `src/hft_platform/feed_adapter/lob_engine.py`: per-symbol LOB + stats.
-- ✅ Implemented: `FeatureEngine` (Phase 18) with 16 features (8 stateless + 8 rolling), feature-flagged via `HFT_FEATURE_ENGINE_ENABLED=1` (default on). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+- ✅ Implemented: `FeatureEngine` (Phase 18→v3) with 27 features across 3 schema versions (`lob_shared_v1`:16, `lob_shared_v2`:22, `lob_shared_v3`:27). Default set: `lob_shared_v3`. Enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
+- `BurstDetector` (`feature/burst_detector.py`): intensity-based tick arrival rate surge detection (Christensen 2024). Pre-allocated ring buffer, zero heap allocation on hot path.
 
 3. Decision plane
 
@@ -57,6 +58,8 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `src/hft_platform/execution/router.py`: normalizes order/deal callbacks, updates position store, republishes events.
 - `src/hft_platform/execution/positions.py`: position accounting (Python + optional Rust tracker).
 - `src/hft_platform/execution/reconciliation.py`: broker/local reconciliation, can trigger HALT.
+- `src/hft_platform/execution/execution_optimizer.py`: limit vs market order decision based on LOB state (Albers et al. 2025 — fill probability from queue depth). Integrated in CascadeBounceStrategy.
+- `src/hft_platform/execution/imbalance_timer.py`: delays order execution until LOB imbalance is favorable (IC=+0.116 at 1s on TXFD6). Configurable threshold/timeout with urgent bypass.
 
 5. Persistence plane
 
@@ -86,7 +89,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - Shioaji callback -> `raw_queue`
 - `MarketDataService`: normalize -> LOB update -> publish events to bus
 - optional direct recorder mapping to `recorder_queue`
-- ✅ Implemented path (feature-flagged): `LOBEngine -> FeatureEngine -> StrategyRunner` for shared microstructure features (16 features, `HFT_FEATURE_ENGINE_ENABLED=1`)
+- ✅ Implemented path (default on): `LOBEngine -> FeatureEngine -> StrategyRunner` for shared microstructure features (27 features in v3, `HFT_FEATURE_ENGINE_ENABLED=1`)
 
 4. Strategy:
 
@@ -160,9 +163,10 @@ Planned direction:
 
 Status:
 
-- ✅ `FeatureEngine` runtime component and strategy pull APIs implemented (feature-flagged rollout, 16 features)
+- ✅ `FeatureEngine` runtime component and strategy pull APIs implemented (default-on rollout, 27 features in v3)
 - ✅ `HftBacktestAdapter` feature-first mode (`lob_feature`) implemented (L1 synthesized compatibility path)
-- ✅ Feature ABI/versioning/parity gates implemented; Rust transport and production kernel promotion remain backlog
+- ✅ Feature ABI/versioning/parity gates implemented; three schema versions (v1/v2/v3) with backward-compatible indices
+- ✅ v3 multi-window EMA aggregation (5s/30s/300s) + trade-signed toxicity feature; Rust transport and production kernel promotion remain backlog
 
 ## 5. Module Inventory (Current)
 
@@ -176,7 +180,7 @@ Status:
 | `strategy`/`strategies`  | strategy SDK and implementations                                                                                | `src/hft_platform/strategy/*.py`, `src/hft_platform/strategies/*.py`                                                   |
 | `risk`                   | risk checks, fast gate, StormGuard                                                                              | `src/hft_platform/risk/*.py`                                                                                           |
 | `order`                  | broker dispatch and order-path guardrails                                                                       | `src/hft_platform/order/*.py`                                                                                          |
-| `execution`              | execution normalization, routing, reconciliation, position store                                                | `src/hft_platform/execution/*.py`                                                                                      |
+| `execution`              | execution normalization, routing, reconciliation, position store, execution optimizer, imbalance timer           | `src/hft_platform/execution/*.py` (incl. `execution_optimizer.py`, `imbalance_timer.py`)                               |
 | `recorder`               | recorder batching, writer, WAL, replay; WAL-first mode (CE-M3)                                                  | `src/hft_platform/recorder/*.py`; `wal_first.py`, `disk_monitor.py`, `mode.py`, `shard_claim.py`, `replay_contract.py` |
 | `gateway`                | order/risk gateway; ExposureStore, IdempotencyStore, GatewayPolicy (CE-M2, enabled via `HFT_GATEWAY_ENABLED=1`) | `src/hft_platform/gateway/` (channel, dedup, exposure, policy, service)                                                |
 | `observability`          | Prometheus and latency spans                                                                                    | `src/hft_platform/observability/*.py`                                                                                  |
@@ -185,7 +189,7 @@ Status:
 | `research.backtest`      | standardized research backtest and metrics                                                                      | `research/backtest/*.py`                                                                                               |
 | `research.combinatorial` | expression language + alpha search engine                                                                       | `research/combinatorial/*.py`                                                                                          |
 | `research.rl`            | RL alpha adapter and lifecycle integration                                                                      | `research/rl/*.py`                                                                                                     |
-| `feature`                | Feature Engine (16 features), registry, rollout, profile, compat                                                | `src/hft_platform/feature/engine.py`, `registry.py`, `rollout.py`, `profile.py`, `boundary.py`, `compat.py`           |
+| `feature`                | Feature Engine v3 (27 features), registry, rollout, profile, compat, burst detection                            | `src/hft_platform/feature/engine.py`, `registry.py`, `rollout.py`, `profile.py`, `boundary.py`, `compat.py`, `burst_detector.py` |
 | `backtest`               | runtime backtest runner/adapter/reporting with real-equity-first extraction                                     | `src/hft_platform/backtest/*.py`                                                                                       |
 
 ## 6. Rust Boundary (Current)
@@ -261,10 +265,11 @@ Status:
 
 - Previously, audit tables were not auto-initialized. This has now been fixed using the new Migration Runner (`src/hft_platform/migrations/clickhouse/`).
 
-3. Broker adapter decomposition not yet done (LOW — D2 pending)
+3. Broker adapter decomposition (RESOLVED)
 
-- `ShioajiClient` still centralizes many concerns (session, quote stream, orders, account/cache).
-- Decomposition into `session`, `contracts`, `quote_stream`, `order_gateway`, `account` submodules is backlogged as M2.
+- Both Shioaji and Fubon fully decomposed into subpackages under `feed_adapter/<broker>/`.
+- Each broker: `session_runtime.py`, `quote_runtime.py`, `order_gateway.py`, `account_gateway.py`, `contracts_runtime.py`.
+- Registry pattern via `broker_registry.py`, selected by `HFT_BROKER` env var.
 
 4. Schema duplication still present on disk (RESOLVED)
 

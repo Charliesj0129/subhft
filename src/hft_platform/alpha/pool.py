@@ -15,17 +15,12 @@ from hft_platform.alpha.experiments import ExperimentTracker
 class AlphaPool:
     """Thread-safe pool of alpha factors with weighted combination.
 
-    Weights are applied via ``optimize_pool_weights()`` through the
-    ``AlphaWeightScheduler``.  All mutations use atomic pointer swap so
-    readers never observe a partially-updated state.
+    Weights are applied via ``optimize_pool_weights()``.  All mutations
+    use atomic pointer swap so readers never observe a partially-updated
+    state.
 
     Args:
         alpha_ids: Initial list of alpha IDs.  Equal weights assigned.
-
-    Environment
-    -----------
-    Used by ``AlphaWeightScheduler`` (``set_weights``) and by signal
-    aggregation pipelines (``get_weights``).
     """
 
     def __init__(self, alpha_ids: list[str] | None = None) -> None:

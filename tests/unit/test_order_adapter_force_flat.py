@@ -1,11 +1,9 @@
-"""Tests for FORCE_FLAT bypass and OrphanDetector wiring in OrderAdapter.
+"""Tests for FORCE_FLAT bypass in OrderAdapter.
 
 Verifies:
 - FORCE_FLAT intents bypass platform degrade reduce-only checks
 - CANCEL intents continue to bypass platform degrade checks
 - NEW intents are blocked when reduce-only is active (control)
-- _orphan_detector attribute is initialised to None by default
-- OrphanDetector is started/stopped with the adapter run loop
 """
 
 import asyncio
@@ -118,60 +116,3 @@ def test_new_open_blocked_by_platform_degrade(tmp_path):
         result = adapter._platform_degrade_allows(intent)
 
     assert result is False, "NEW order opening risk should be blocked in reduce-only mode"
-
-
-# ---------------------------------------------------------------------------
-# Test: _orphan_detector attribute defaults to None
-# ---------------------------------------------------------------------------
-
-
-def test_orphan_detector_defaults_to_none(tmp_path):
-    adapter = _make_adapter(tmp_path)
-    assert adapter._orphan_detector is None
-
-
-# ---------------------------------------------------------------------------
-# Test: OrphanDetector is started and stopped with run()
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_orphan_detector_started_and_stopped_with_run(tmp_path):
-    adapter = _make_adapter(tmp_path)
-
-    detector = MagicMock()
-    detector.start = AsyncMock()
-    detector.stop = AsyncMock()
-    adapter._orphan_detector = detector
-
-    # Run the adapter briefly then stop it
-    async def _stop_soon():
-        await asyncio.sleep(0.05)
-        adapter.running = False
-
-    stop_task = asyncio.create_task(_stop_soon())
-    run_task = asyncio.create_task(adapter.run())
-
-    await asyncio.gather(stop_task, run_task, return_exceptions=True)
-
-    detector.start.assert_awaited_once()
-    detector.stop.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_orphan_detector_not_started_when_none(tmp_path):
-    """When _orphan_detector is None the run loop must not crash."""
-    adapter = _make_adapter(tmp_path)
-    assert adapter._orphan_detector is None
-
-    async def _stop_soon():
-        await asyncio.sleep(0.05)
-        adapter.running = False
-
-    stop_task = asyncio.create_task(_stop_soon())
-    run_task = asyncio.create_task(adapter.run())
-
-    results = await asyncio.gather(stop_task, run_task, return_exceptions=True)
-    # Neither task should have raised
-    for r in results:
-        assert not isinstance(r, Exception), f"Unexpected exception: {r}"

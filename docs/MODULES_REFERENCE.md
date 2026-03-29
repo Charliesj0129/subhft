@@ -16,9 +16,9 @@ These modules run the primary event loop. Any changes here must adhere strictly 
 | **strategy**     | `BaseStrategy`, `StrategyRunner`, `StrategyContext`       | Houses the `StrategyRunner` which consumes bus events, triggers strategy user logic (`handle_event`), and outputs `OrderIntent`.                                     |
 | **risk**         | `RiskEngine`, `StormGuardFSM`, validators                 | Synchronous CPU checks. Evaluates `OrderIntent`. If approved, outputs `OrderCommand`. `StormGuardFSM` handles global HALT/WARM risk states.                          |
 | **order**        | `OrderAdapter`, `CircuitBreaker`, `SlidingWindowLimiter`  | Outbound flow. Validates rate limits, circuit breakers, and sends `OrderCommand` to `ShioajiClient.place_order()`.                                                   |
-| **execution**    | `ExecutionRouter`, `PositionStore`, `ExecutionNormalizer` | Normalizes incoming fills/callbacks. Tracks position in O(1) time using ONLY integers (`RustPositionTracker`). Publishes `PositionDelta`.                            |
+| **execution**    | `ExecutionRouter`, `PositionStore`, `ExecutionNormalizer`, `ExecutionOptimizer`, `ImbalanceTimer` | Normalizes incoming fills/callbacks. Tracks position in O(1) time using ONLY integers (`RustPositionTracker`). Publishes `PositionDelta`. `ExecutionOptimizer`: limit vs market order decision based on LOB state (Albers 2025). `ImbalanceTimer`: delays entry until LOB imbalance is favorable. |
 | **gateway**      | `GatewayService`, `ExposureStore`, `GatewayPolicy`        | (CE-M2 only) Optional HA gateway to serialize intents. Handles Dedup, Policy, and Exposure Limits. Default disabled (`HFT_GATEWAY_ENABLED=0`).                       |
-| **feature**      | `FeatureEngine`, `FeatureRegistry`, `FeatureRollout`      | Computes 16 LOB-derived microstructure features (8 stateless + 8 rolling). Wired between LOBEngine and EventBus. Feature-flagged (`HFT_FEATURE_ENGINE_ENABLED`). |
+| **feature**      | `FeatureEngine`, `FeatureRegistry`, `FeatureRollout`, `BurstDetector` | Computes 27 LOB-derived microstructure features (v3: v1 stateless/rolling + v2 depth/toxicity + v3 multi-window EMA). Default set: `lob_shared_v3`. Burst detection for tick intensity surges. Wired between LOBEngine and EventBus (`HFT_FEATURE_ENGINE_ENABLED=1`). |
 
 ## Data & Event Models (Contracts)
 
@@ -45,7 +45,7 @@ These modules run the primary event loop. Any changes here must adhere strictly 
 | Subpackage         | Key Classes / Files                     | Responsibility                                                                             |
 | ------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------ |
 | **cli** / **main** | `cli.py`, `__main__.py`                 | CLI Entry point. Commands: `run sim`, `run live`, `init`, `strat test`, `check`.           |
-| **strategies**     | `simple_mm.py`, `rust_alpha.py`         | Built-in implementations of strategies. You can use these as templates.                    |
+| **strategies**     | `simple_mm.py`, `rust_alpha.py`, `cascade_bounce.py`, `opportunistic_mm.py` | Built-in strategy implementations: SimpleMM, RustAlpha, CascadeBounce (CBS), OpportunisticMM. |
 | **backtest**       | `adapter.py`, `convert.py`, `runner.py` | Integration with `hftbacktest`. Converts JSONL → NPZ and generates HTML scorecard reports. |
 | **alpha**          | `validation.py`, `promotion.py`, `canary.py`, `audit.py`, `experiments.py`, `pool.py` | Alpha governance pipeline: Gate A-E validation, promotion decisions, canary lifecycle, experiment tracking, pool management. 102+ alpha implementations in `research/alphas/`. |
 | **data_quality**   | Data quality checks and validation pipelines             | Data quality checks and validation pipelines                                               |
