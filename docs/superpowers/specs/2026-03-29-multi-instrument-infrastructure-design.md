@@ -146,7 +146,7 @@ class InstrumentRegistry:
 **Migration strategy:**
 - Wrapper class preserves all above signatures, delegating to `InstrumentRegistry` internals
 - `meta` and `symbols_by_tag` exposed as properties that delegate to registry's internal dicts
-- `reload_if_changed()` triggers `InstrumentRegistry` reload from `symbols.yaml`
+- `reload_if_changed()` triggers a **static-only reload**: re-reads `symbols.yaml` and upserts static profiles (futures, equities) into the registry, but **preserves all dynamically-registered profiles** (options from `ContractsRuntime.refresh()` and first-seen callbacks). Internally the registry maintains a `_source: Literal["static", "dynamic"]` tag per profile; reload only touches `source == "static"` entries.
 - `order_params()` delegates to registry (needs `InstrumentProfile` to carry order params or a separate lookup)
 - Gradual migration: new code uses `InstrumentRegistry` directly
 - `SymbolMetadata` deprecated after all callers migrated (no timeline pressure)
@@ -157,7 +157,7 @@ class InstrumentRegistry:
 
 ### 3.1 Feature Set Routing
 
-`FeatureEngine._get_or_create_state()` queries `InstrumentRegistry` to select the feature set:
+`FeatureEngine.process_lob_update()` (`engine.py:346`) queries `InstrumentRegistry` to select the feature set:
 
 | InstrumentType | Feature Set | Features |
 |----------------|-------------|----------|
@@ -450,7 +450,17 @@ No changes to `OrderCommand`, `PositionDelta`, or other contracts.
 | `ContractsRuntime` | On `refresh()`, call `InstrumentRegistry.bulk_register()` with options profiles extracted from Shioaji contract objects (strike, right, expiry) |
 | `SubscriptionManager` | No change — subscribe() is product-type-agnostic |
 | `QuoteRuntime` | No change — `on_tick_fop_v1` handles futures + options |
-| `OrderGateway._place_order_typed()` | Read `OrderIntent.oc_type`: AUTO → query PositionStore; OPEN/CLOSE → direct map to `sj.constant.FuturesOCType` |
+| `OrderGateway._place_order_typed()` | Receives already-resolved `oc_type` (OPEN/CLOSE) → direct map to `sj.constant.FuturesOCType`. No PositionStore dependency. |
+
+**OCType.AUTO resolution** is handled in `OrderAdapter` (not OrderGateway), which already holds `position_store` (`adapter.py:147`) and has `_platform_net_position_for_symbol()` (`adapter.py:530`). The resolution flow:
+
+```
+Strategy → OrderIntent(oc_type=AUTO)
+  → OrderAdapter: resolve AUTO → OPEN/CLOSE via _platform_net_position_for_symbol()
+    → OrderGateway: receives resolved oc_type, maps to sj.constant.FuturesOCType
+```
+
+This avoids injecting PositionStore into the downstream gateway layer.
 
 ### 6.3 symbols.yaml Extension
 
