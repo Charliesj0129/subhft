@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,21 +23,38 @@ def _get_symbol() -> str:
     return os.environ.get("HFT_BOT_SYMBOL", "TXFD6")
 
 
+def _prev_trading_date(now: datetime) -> str:
+    """Return the most recent trading day (skip Sat/Sun) as YYYY-MM-DD."""
+    d = now.astimezone(_TZ)
+    # weekday: 0=Mon .. 6=Sun
+    if d.weekday() == 5:  # Saturday → Friday
+        d -= timedelta(days=1)
+    elif d.weekday() == 6:  # Sunday → Friday
+        d -= timedelta(days=2)
+    return d.strftime("%Y-%m-%d")
+
+
 def _collect_core_for_latest() -> Any:
-    """Run collect_core() for the most recent session."""
+    """Run collect_core() for the most recent session, skipping weekends.
+
+    Tries up to 5 days back to find a session with data.
+    """
     from hft_platform.reports.collector import DataCollector, _day_filter, _night_filter
-    from hft_platform.reports.pipeline import resolve_trading_date
 
     now = datetime.now(_TZ)
     symbol = _get_symbol()
+    collector = DataCollector()
+    sd = None
 
-    for session in ("day", "night"):
-        date = resolve_trading_date(session, now=now)
-        time_filter = _day_filter(date) if session == "day" else _night_filter(date)
-        collector = DataCollector()
-        sd = collector.collect_core(symbol, time_filter, session=session, date=date)
-        if sd.tick_count > 0:
-            return sd
+    for days_back in range(5):
+        check_time = now - timedelta(days=days_back)
+        date = _prev_trading_date(check_time)
+
+        for session in ("day", "night"):
+            time_filter = _day_filter(date) if session == "day" else _night_filter(date)
+            sd = collector.collect_core(symbol, time_filter, session=session, date=date)
+            if sd.tick_count > 0:
+                return sd
 
     return sd  # Return last attempt even if empty
 
@@ -60,7 +77,7 @@ async def cmd_start(update: Any, context: Any) -> None:
 async def cmd_report(update: Any, context: Any) -> None:
     """Handle /report [day|night] command."""
     import hft_platform.bot.app as bot_app
-    from hft_platform.reports.pipeline import build_report, resolve_trading_date
+    from hft_platform.reports.pipeline import build_report
 
     args = context.args or []
     if args and args[0] in ("day", "night"):
@@ -69,7 +86,7 @@ async def cmd_report(update: Any, context: Any) -> None:
         now = datetime.now(_TZ)
         session = "day" if 7 <= now.hour < 15 else "night"
 
-    date = resolve_trading_date(session)
+    date = _prev_trading_date(datetime.now(_TZ))
     await update.message.reply_text(f"產生報告中... ({session} {date})")
 
     try:
