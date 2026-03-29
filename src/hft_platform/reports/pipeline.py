@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
-__all__ = ["resolve_trading_date", "run_pipeline", "main"]
+__all__ = ["resolve_trading_date", "build_report", "run_pipeline", "main"]
 
 _log = structlog.get_logger(__name__)
 
@@ -69,37 +69,37 @@ def resolve_trading_date(session: str, *, now: datetime | None = None) -> str:
         return yesterday.strftime("%Y-%m-%d")
 
 
-async def run_pipeline(
+def build_report(
     session: str,
     date: str,
-    *,
-    dry_run: bool = False,
-    debug: bool = False,
-) -> None:
-    """Execute the full report pipeline for the given session and date.
+    symbol: str = "TXFD6",
+) -> dict[str, list[str]] | None:
+    """Run pipeline stages 1-4 (collect → signal → scenario → render).
 
     Args:
-        session:  "day" or "night".
-        date:     ISO date string, e.g. "2026-03-27".
-        dry_run:  If True, skip actual output dispatch.
-        debug:    If True, enable verbose logging and print rendered output.
+        session: "day" or "night".
+        date:    ISO date string, e.g. "2026-03-27".
+        symbol:  Instrument symbol to collect data for. Defaults to "TXFD6".
+
+    Returns:
+        A dict with "free" and "paid" keys, each containing a list of rendered
+        message strings. Returns None when the session has no tick data.
     """
     from hft_platform.reports.collector import DataCollector
-    from hft_platform.reports.distributor import Distributor, ReportSender, load_channels
     from hft_platform.reports.renderer import ReportRenderer
     from hft_platform.reports.scenarios import ScenarioBuilder
     from hft_platform.reports.signals import SignalEngine
 
-    _log.info("report_pipeline_start", session=session, date=date, dry_run=dry_run)
+    _log.info("build_report_start", session=session, date=date, symbol=symbol)
 
     # Stage 1: collect session data
     collector = DataCollector()
-    session_data = collector.collect(session, date)
+    session_data = collector.collect(session, date, symbol)
     _log.info("stage1_complete", ticks=session_data.tick_count, bars=len(session_data.bars_5m))
 
     if session_data.tick_count == 0:
-        _log.warning("report_pipeline_empty_session", session=session, date=date)
-        return
+        _log.warning("build_report_empty_session", session=session, date=date)
+        return None
 
     # Stage 2: derive signals
     engine = SignalEngine()
@@ -130,6 +130,29 @@ async def run_pipeline(
         free_msgs=len(rendered["free"]),
         paid_msgs=len(rendered["paid"]),
     )
+    return rendered
+
+
+async def run_pipeline(
+    session: str,
+    date: str,
+    *,
+    dry_run: bool = False,
+    debug: bool = False,
+) -> None:
+    """Execute the full report pipeline for the given session and date.
+
+    Args:
+        session:  "day" or "night".
+        date:     ISO date string, e.g. "2026-03-27".
+        dry_run:  If True, skip actual output dispatch.
+        debug:    If True, enable verbose logging and print rendered output.
+    """
+    _log.info("report_pipeline_start", session=session, date=date, dry_run=dry_run)
+
+    rendered = build_report(session, date)
+    if rendered is None:
+        return
 
     if debug:
         for tier, msgs in rendered.items():
@@ -143,6 +166,8 @@ async def run_pipeline(
         return
 
     # Stage 5: distribute
+    from hft_platform.reports.distributor import Distributor, ReportSender, load_channels
+
     channels = load_channels()
     sender = ReportSender()
     distributor = Distributor(sender=sender, channels=channels)
