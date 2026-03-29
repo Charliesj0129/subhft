@@ -332,7 +332,7 @@ def test_halt_callback_done_successful_task_is_silent(guard):
 def test_transition_audit_failure_does_not_propagate(guard):
     """If audit writer raises, transition should complete without error."""
     with patch(
-        "hft_platform.risk.storm_guard.get_audit_writer",
+        "hft_platform.recorder.audit.get_audit_writer",
         side_effect=RuntimeError("audit unavailable"),
     ):
         # Should not raise — audit is best-effort

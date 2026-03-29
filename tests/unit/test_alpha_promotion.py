@@ -630,3 +630,153 @@ def test_gate_d_feature_set_version_match_passes(tmp_path: Path):
     report = json.loads(Path(result.integration_report_path).read_text())
     fsv_check = report.get("checks", {}).get("feature_set_version", {})
     assert fsv_check.get("match") is True
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: uncovered branches in promote_alpha
+# ---------------------------------------------------------------------------
+
+
+def test_promote_alpha_raises_file_not_found_for_missing_scorecard(tmp_path: Path):
+    """promote_alpha raises FileNotFoundError when scorecard_path does not exist."""
+    missing = str(tmp_path / "no_such_scorecard.json")
+    with pytest.raises(FileNotFoundError, match="scorecard not found"):
+        promote_alpha(
+            PromotionConfig(
+                alpha_id="ofi_mc",
+                owner="charlie",
+                project_root=str(tmp_path),
+                scorecard_path=missing,
+            )
+        )
+
+
+def test_promote_alpha_write_promotion_config_disabled_adds_reason(tmp_path: Path):
+    """approved + write_promotion_config=False appends research-only reason."""
+    scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
+    _write_scorecard(scorecard, sharpe=1.6, max_drawdown=-0.08, turnover=0.2, corr=0.3)
+
+    result = promote_alpha(
+        PromotionConfig(
+            alpha_id="ofi_mc",
+            owner="charlie",
+            project_root=str(tmp_path),
+            shadow_sessions=6,
+            write_promotion_config=False,
+        )
+    )
+    assert result.approved
+    assert result.promotion_config_path is None
+    assert any("research-only" in r for r in result.reasons)
+
+
+def test_promote_alpha_explicit_relative_scorecard_path(tmp_path: Path):
+    """scorecard_path as a relative path is resolved against project_root."""
+    # Create scorecard at a custom relative location
+    scorecard_dir = tmp_path / "custom" / "sc"
+    scorecard_dir.mkdir(parents=True)
+    scorecard_file = scorecard_dir / "scorecard.json"
+    _write_scorecard(scorecard_file, sharpe=1.5, max_drawdown=-0.1, turnover=0.5, corr=0.3)
+
+    result = promote_alpha(
+        PromotionConfig(
+            alpha_id="ofi_mc",
+            owner="charlie",
+            project_root=str(tmp_path),
+            scorecard_path="custom/sc/scorecard.json",
+            shadow_sessions=6,
+        )
+    )
+    assert result.gate_d_passed
+
+
+def test_promote_alpha_rust_benchmark_gate_passes(monkeypatch, tmp_path: Path):
+    """enforce_rust_benchmark_gate=True runs benchmark cmd and passes if returncode=0."""
+    scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
+    _write_scorecard(scorecard, sharpe=1.4, max_drawdown=-0.1, turnover=0.2, corr=0.2)
+
+    class _Proc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: _Proc())
+
+    result = promote_alpha(
+        PromotionConfig(
+            alpha_id="ofi_mc",
+            owner="charlie",
+            project_root=str(tmp_path),
+            shadow_sessions=6,
+            enable_rust_readiness_gate=True,
+            rust_module_name="hft_platform.rust_core",
+            enforce_rust_benchmark_gate=True,
+        )
+    )
+    assert result.gate_f_passed
+
+
+def test_promote_alpha_rust_parity_timeout(monkeypatch, tmp_path: Path):
+    """Parity subprocess timeout is handled gracefully (gate F fails, no crash)."""
+    import subprocess
+
+    scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
+    _write_scorecard(scorecard, sharpe=1.4, max_drawdown=-0.1, turnover=0.2, corr=0.2)
+
+    def _raise_timeout(*a, **k):
+        exc = subprocess.TimeoutExpired(cmd=["uv"], timeout=1)
+        exc.stdout = b""
+        exc.stderr = b""
+        raise exc
+
+    monkeypatch.setattr("subprocess.run", _raise_timeout)
+
+    result = promote_alpha(
+        PromotionConfig(
+            alpha_id="ofi_mc",
+            owner="charlie",
+            project_root=str(tmp_path),
+            shadow_sessions=6,
+            enable_rust_readiness_gate=True,
+            rust_module_name="hft_platform.rust_core",
+        )
+    )
+    assert not result.gate_f_passed
+
+
+def test_build_checklist_with_paper_governance_adds_extra_items(tmp_path: Path):
+    """require_paper_trade_governance=True adds 4 extra items to checklist (11 total)."""
+    scorecard = tmp_path / "research" / "alphas" / "pg_alpha" / "scorecard.json"
+    _write_scorecard(scorecard, sharpe=1.5, max_drawdown=-0.1, turnover=0.5, corr=0.3)
+
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "alpha_id": "pg_alpha",
+                "session_count": 6,
+                "distinct_trading_days": 5,
+                "calendar_span_days": 7,
+                "min_session_duration_seconds": 7200,
+                "invalid_session_duration_count": 0,
+                "drift_alerts_total": 0,
+                "execution_reject_rate_mean": 0.001,
+                "regimes_covered": ["trending", "mean_reverting"],
+            }
+        )
+    )
+
+    result = promote_alpha(
+        PromotionConfig(
+            alpha_id="pg_alpha",
+            owner="charlie",
+            project_root=str(tmp_path),
+            require_paper_trade_governance=True,
+            paper_trade_summary_path=str(summary_path),
+            min_paper_trade_session_minutes=30,
+        )
+    )
+    assert result.checklist is not None
+    # Base 7 items + 4 paper-trade items = 11
+    assert len(result.checklist.items) == 11
+    assert result.checklist.all_passed() is True
