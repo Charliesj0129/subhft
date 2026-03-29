@@ -62,6 +62,7 @@ research = [
 shioaji-broker = ["shioaji[speed]"]  # Shioaji (SinoPac) broker SDK
 fubon = ["fubon-neo>=2.2.7"]  # Fubon broker SDK (not on PyPI; install from Fubon's index)
 monitor = ["rich>=13.0"]  # Signal monitor TUI (rich.live + rich.table)
+bot = ["python-telegram-bot[job-queue]>=21.0"]  # Telegram Bot interactive service
 
 [build-system]
 requires = ["hatchling"]
