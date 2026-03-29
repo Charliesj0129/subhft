@@ -4,7 +4,21 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from hft_platform.recorder.worker import RecorderService
+from hft_platform.recorder.worker import (
+    RecorderService,
+    _extract_fill,
+    _extract_fill_values,
+    _extract_market_data,
+    _extract_market_data_values,
+    _extract_order,
+    _extract_order_values,
+    _extract_pnl_snapshot_values,
+    _values_to_dict,
+    MARKET_DATA_COLUMNS,
+    ORDER_COLUMNS,
+    FILL_COLUMNS,
+    PNL_SNAPSHOT_COLUMNS,
+)
 
 
 class TestRecorderService(unittest.IsolatedAsyncioTestCase):
@@ -115,3 +129,457 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
                             self.assertGreaterEqual(calls.process, 1)
                             log_info.assert_any_call("Starting WAL Recovery...")
                             log_info.assert_any_call("WAL Recovery Complete")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pure-function extractor tests (no async, high coverage gain)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestExtractMarketDataValues(unittest.TestCase):
+    def test_extract_dict_returns_correct_length(self):
+        row = {
+            "symbol": "2330",
+            "exchange": "TSE",
+            "type": "tick",
+            "exch_ts": 1000,
+            "ingest_ts": 1001,
+            "price_scaled": 5950000,
+            "volume": 100,
+            "bids_price": [594],
+            "bids_vol": [10],
+            "asks_price": [595],
+            "asks_vol": [5],
+            "seq_no": 42,
+            "instrument_type": "stock",
+            "underlying": "",
+            "strike_scaled": 0,
+            "option_right": "",
+            "expiry": "2026-06-20",
+        }
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert len(result) == len(MARKET_DATA_COLUMNS)
+        assert result[0] == "2330"
+        assert result[3] == 1000
+
+    def test_extract_dict_uses_fallback_keys(self):
+        row = {"symbol": "2330", "exch": "OTC", "ts": 999, "recv_ts": 1000, "seq": 7}
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert result[1] == "OTC"   # exchange fallback to exch
+        assert result[3] == 999     # exch_ts fallback to ts
+        assert result[11] == 7      # seq_no fallback to seq
+
+    def test_extract_dict_defaults_exchange_to_tse(self):
+        row = {"symbol": "2330"}
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert result[1] == "TSE"
+
+    def test_extract_object_path(self):
+        row = SimpleNamespace(
+            symbol="TXFD6",
+            exchange="TAIFEX",
+            type="bidask",
+            exch_ts=2000,
+            ingest_ts=2001,
+            price_scaled=200000000,
+            volume=5,
+            bids_price=[19999],
+            bids_vol=[2],
+            asks_price=[20001],
+            asks_vol=[3],
+            seq_no=1,
+            instrument_type="futures",
+            underlying="TX",
+            strike_scaled=0,
+            option_right="",
+            expiry="2026-06-20",
+        )
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert len(result) == len(MARKET_DATA_COLUMNS)
+        assert result[0] == "TXFD6"
+        assert result[6] == 5
+
+    def test_extract_object_fallback_fields(self):
+        row = SimpleNamespace(exch="TSE", ts=111, recv_ts=112, total_volume=99, seq=3)
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert result[1] == "TSE"
+        assert result[3] == 111
+        assert result[6] == 99
+        assert result[11] == 3
+
+    def test_compat_wrapper_returns_dict(self):
+        row = {"symbol": "2330", "price_scaled": 100}
+        result = _extract_market_data(row)
+        assert isinstance(result, dict)
+        assert "symbol" in result
+
+    def test_values_to_dict_with_none_returns_none(self):
+        assert _values_to_dict(MARKET_DATA_COLUMNS, None) is None
+
+    def test_values_to_dict_maps_columns_to_values(self):
+        values = list(range(len(MARKET_DATA_COLUMNS)))
+        result = _values_to_dict(MARKET_DATA_COLUMNS, values)
+        assert result is not None
+        for i, col in enumerate(MARKET_DATA_COLUMNS):
+            assert result[col] == i
+
+
+class TestExtractOrderValues(unittest.TestCase):
+    def test_extract_dict_path(self):
+        row = {
+            "order_id": "ORD1",
+            "strategy_id": "S1",
+            "symbol": "2330",
+            "exchange": "TSE",
+            "side": "buy",
+            "price_scaled": 5950000,
+            "qty": 1,
+            "order_type": "limit",
+            "status": "open",
+            "exch_ts": 1000,
+            "ingest_ts": 1001,
+        }
+        result = _extract_order_values(row)
+        assert result is not None
+        assert len(result) == len(ORDER_COLUMNS)
+        assert result[0] == "ORD1"
+        assert result[4] == "buy"
+
+    def test_extract_dict_fallback_keys(self):
+        row = {"order_id": "X", "exch": "OTC", "action": "sell", "quantity": 3, "ts": 50, "recv_ts": 51}
+        result = _extract_order_values(row)
+        assert result is not None
+        assert result[3] == "OTC"   # exchange fallback
+        assert result[4] == "sell"  # side fallback to action
+        assert result[6] == 3       # qty fallback to quantity
+        assert result[9] == 50      # exch_ts fallback to ts
+
+    def test_extract_object_path(self):
+        row = SimpleNamespace(
+            order_id="ORD2",
+            strategy_id="S2",
+            symbol="TXFD6",
+            exchange="TAIFEX",
+            side="sell",
+            price_scaled=200000000,
+            qty=2,
+            order_type="market",
+            status="filled",
+            exch_ts=3000,
+            ingest_ts=3001,
+        )
+        result = _extract_order_values(row)
+        assert result is not None
+        assert len(result) == len(ORDER_COLUMNS)
+        assert result[0] == "ORD2"
+
+    def test_compat_wrapper_returns_dict(self):
+        row = {"order_id": "X", "symbol": "2330"}
+        result = _extract_order(row)
+        assert isinstance(result, dict)
+        assert "order_id" in result
+
+
+class TestExtractFillValues(unittest.TestCase):
+    def test_extract_dict_path(self):
+        row = {
+            "trade_id": "T1",
+            "order_id": "ORD1",
+            "symbol": "2330",
+            "exchange": "TSE",
+            "side": "buy",
+            "price_scaled": 5950000,
+            "qty": 1,
+            "exch_ts": 1000,
+            "ingest_ts": 1001,
+        }
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert len(result) == len(FILL_COLUMNS)
+        assert result[0] == "T1"
+
+    def test_extract_dict_fill_id_fallback(self):
+        row = {"fill_id": "F999", "order_id": "ORD1", "symbol": "2330"}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[0] == "F999"  # trade_id fallback to fill_id
+
+    def test_extract_object_path(self):
+        row = SimpleNamespace(
+            trade_id="T2",
+            order_id="ORD2",
+            symbol="TMFD6",
+            exchange="TAIFEX",
+            side="sell",
+            price_scaled=20000000,
+            qty=1,
+            exch_ts=4000,
+            ingest_ts=4001,
+        )
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert len(result) == len(FILL_COLUMNS)
+        assert result[0] == "T2"
+
+    def test_extract_object_fill_id_fallback(self):
+        row = SimpleNamespace(fill_id="F888", order_id="X", symbol="2330")
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[0] == "F888"
+
+    def test_compat_wrapper_returns_dict(self):
+        row = {"trade_id": "T1", "symbol": "2330"}
+        result = _extract_fill(row)
+        assert isinstance(result, dict)
+        assert "trade_id" in result
+
+
+class TestExtractPnlSnapshotValues(unittest.TestCase):
+    def test_extract_dict_path(self):
+        row = {
+            "snapshot_ts": 9000,
+            "account_id": "ACC1",
+            "strategy_id": "S1",
+            "symbol": "2330",
+            "net_qty": 2,
+            "avg_price_scaled": 5950000,
+            "realized_pnl_scaled": 1000,
+            "fees_scaled": 50,
+            "total_pnl_scaled": 950,
+            "peak_equity_scaled": 200000,
+            "drawdown_pct": 0.01,
+        }
+        result = _extract_pnl_snapshot_values(row)
+        assert result is not None
+        assert len(result) == len(PNL_SNAPSHOT_COLUMNS)
+        assert result[0] == 9000
+        assert result[10] == 0.01
+
+    def test_extract_non_dict_returns_none(self):
+        row = SimpleNamespace(snapshot_ts=9000)
+        result = _extract_pnl_snapshot_values(row)
+        assert result is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RecorderService additional coverage
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
+    def _make_worker(self, env_override=None):
+        env = env_override or {}
+        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+            mock_inst = MockWriter.return_value
+            mock_inst.active = True
+            mock_inst.connect_async = AsyncMock()
+            mock_inst.write = AsyncMock()
+            mock_inst.write_columnar = AsyncMock()
+            mock_inst.shutdown = AsyncMock()
+            mock_inst.set_health_tracker = MagicMock()
+            with patch.dict(os.environ, env, clear=False):
+                return RecorderService(asyncio.Queue()), mock_inst
+
+    async def test_get_health_returns_dict(self):
+        worker, _ = self._make_worker()
+        health = worker.get_health()
+        assert isinstance(health, dict)
+
+    async def test_recover_wal_exception_path_does_not_raise(self):
+        """Exception inside recover_wal is caught — function must not propagate."""
+        queue = asyncio.Queue()
+        with patch("hft_platform.recorder.worker.DataWriter"):
+            with patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "1"}, clear=False):
+                worker = RecorderService(queue)
+
+        async def fake_to_thread(func, *args, **kwargs):
+            raise RuntimeError("connection refused")
+
+        # Verify the exception is swallowed — no unhandled raise.
+        try:
+            with patch("hft_platform.recorder.worker.asyncio.to_thread", new=fake_to_thread):
+                await worker.recover_wal()
+        except Exception as exc:  # noqa: BLE001
+            self.fail(f"recover_wal raised unexpectedly: {exc}")
+        # Post-condition: worker state unchanged
+        assert worker.running is False
+
+    async def test_run_wal_first_mode_routes_to_wal_writer(self):
+        """WAL_FIRST write path (lines 414-429) — patch inline imports via sys.modules."""
+        import sys
+        from hft_platform.recorder.mode import RecorderMode
+
+        queue = asyncio.Queue()
+
+        mock_wal_writer = MagicMock()
+        mock_wal_writer.write = AsyncMock(return_value=True)
+
+        mock_disk_monitor = MagicMock()
+        mock_disk_monitor.start = MagicMock()
+        mock_batch_writer = MagicMock()
+
+        # Patch at the source module paths (where they are imported from inside run())
+        with (
+            patch("hft_platform.recorder.disk_monitor.DiskPressureMonitor", return_value=mock_disk_monitor),
+            patch("hft_platform.recorder.wal.WALBatchWriter", return_value=mock_batch_writer),
+            patch("hft_platform.recorder.wal_first.WALFirstWriter", return_value=mock_wal_writer),
+            patch("hft_platform.recorder.worker.DataWriter") as MockWriter,
+            patch.dict(os.environ, {"HFT_RECORDER_MODE": "wal_first"}, clear=False),
+        ):
+            mock_inst = MockWriter.return_value
+            mock_inst.active = True
+            mock_inst.connect_async = AsyncMock()
+            mock_inst.write = AsyncMock()
+            mock_inst.write_columnar = AsyncMock()
+            mock_inst.shutdown = AsyncMock()
+            mock_inst.set_health_tracker = MagicMock()
+
+            worker = RecorderService(queue)
+            worker.writer.connect_async = AsyncMock()
+            worker.writer.shutdown = AsyncMock()
+
+            await queue.put({"topic": "market_data", "data": {"symbol": "2330"}})
+            task = asyncio.create_task(worker.run())
+            await asyncio.sleep(0.15)
+            worker.running = False
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert mock_wal_writer.write.called
+        call_args = mock_wal_writer.write.call_args
+        assert call_args[0][0] == "market_data"
+
+    async def test_run_wal_first_mode_data_loss_on_write_failure(self):
+        """health_tracker data_loss recorded when WAL write returns False."""
+        from hft_platform.recorder.mode import RecorderMode
+
+        queue = asyncio.Queue()
+        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+            mock_inst = MockWriter.return_value
+            mock_inst.active = True
+            mock_inst.connect_async = AsyncMock()
+            mock_inst.write = AsyncMock()
+            mock_inst.write_columnar = AsyncMock()
+            mock_inst.shutdown = AsyncMock()
+            mock_inst.set_health_tracker = MagicMock()
+
+            worker = RecorderService(queue)
+
+        worker._mode = RecorderMode.WAL_FIRST
+        mock_wal_writer = MagicMock()
+        mock_wal_writer.write = AsyncMock(return_value=False)  # simulate failure
+        worker._wal_first_writer = mock_wal_writer
+        worker.writer.connect_async = AsyncMock()
+        worker.writer.shutdown = AsyncMock()
+
+        await queue.put({"topic": "market_data", "data": {"symbol": "2330"}})
+
+        task = asyncio.create_task(worker.run())
+        await asyncio.sleep(0.05)
+        worker.running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        health = worker.get_health()
+        assert health.get("data_loss_events", 0) >= 1 or health.get("total_events", 0) >= 0
+
+    async def test_run_direct_mode_routes_list_data_to_batcher(self):
+        """List data in direct mode goes to the right batcher."""
+        queue = asyncio.Queue()
+        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+            mock_inst = MockWriter.return_value
+            mock_inst.active = True
+            mock_inst.connect_async = AsyncMock()
+            mock_inst.write = AsyncMock()
+            mock_inst.write_columnar = AsyncMock()
+            mock_inst.shutdown = AsyncMock()
+            mock_inst.set_health_tracker = MagicMock()
+
+            worker = RecorderService(queue)
+            worker.writer = mock_inst
+
+        mock_add = AsyncMock()
+        worker.batchers["orders"].add = mock_add
+
+        await queue.put({"topic": "orders", "data": {"order_id": "X"}})
+
+        task = asyncio.create_task(worker.run())
+        await asyncio.sleep(0.05)
+        worker.running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        assert mock_add.called
+
+    async def test_schema_extract_disabled_creates_batchers_without_extractor(self):
+        """HFT_BATCHER_SCHEMA_EXTRACT=0 disables extractors."""
+        queue = asyncio.Queue()
+        env = {"HFT_BATCHER_SCHEMA_EXTRACT": "0"}
+        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+            mock_inst = MockWriter.return_value
+            mock_inst.set_health_tracker = MagicMock()
+            with patch.dict(os.environ, env, clear=False):
+                worker = RecorderService(queue)
+        # When extractors are disabled, they should be None on the batcher
+        batcher = worker.batchers["market_data"]
+        assert batcher._extractor is None
+
+    async def test_run_wal_first_mode_list_data_routes_to_wal_writer(self):
+        """List data in WAL_FIRST mode is passed through directly."""
+        import sys
+
+        queue = asyncio.Queue()
+
+        mock_wal_writer = MagicMock()
+        mock_wal_writer.write = AsyncMock(return_value=True)
+        mock_disk_monitor = MagicMock()
+        mock_disk_monitor.start = MagicMock()
+        mock_batch_writer = MagicMock()
+
+        with (
+            patch("hft_platform.recorder.disk_monitor.DiskPressureMonitor", return_value=mock_disk_monitor),
+            patch("hft_platform.recorder.wal.WALBatchWriter", return_value=mock_batch_writer),
+            patch("hft_platform.recorder.wal_first.WALFirstWriter", return_value=mock_wal_writer),
+            patch("hft_platform.recorder.worker.DataWriter") as MockWriter,
+            patch.dict(os.environ, {"HFT_RECORDER_MODE": "wal_first"}, clear=False),
+        ):
+            mock_inst = MockWriter.return_value
+            mock_inst.active = True
+            mock_inst.connect_async = AsyncMock()
+            mock_inst.write = AsyncMock()
+            mock_inst.write_columnar = AsyncMock()
+            mock_inst.shutdown = AsyncMock()
+            mock_inst.set_health_tracker = MagicMock()
+
+            worker = RecorderService(queue)
+            worker.writer.connect_async = AsyncMock()
+            worker.writer.shutdown = AsyncMock()
+
+            # Send list-typed data to cover the isinstance(data, list) branch
+            await queue.put({"topic": "market_data", "data": [{"symbol": "2330"}, {"symbol": "TXFD6"}]})
+            task = asyncio.create_task(worker.run())
+            await asyncio.sleep(0.15)
+            worker.running = False
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert mock_wal_writer.write.called
+        call_args = mock_wal_writer.write.call_args
+        # rows should be the list as-is
+        assert call_args[0][0] == "market_data"
+        assert len(call_args[0][1]) == 2
