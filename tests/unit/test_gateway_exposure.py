@@ -248,3 +248,263 @@ def test_symbol_limit_concurrent_no_overshoot():
     assert store._symbol_count <= max_syms
     # All approvals must be within the allowed set (no overshoot)
     assert sum(approved) <= max_syms
+
+
+# ── Additional coverage tests ──────────────────────────────────────────────────
+
+
+def test_release_exposure_cancel_intent_is_no_op():
+    """release_exposure() with CANCEL intent skips the notional reduction."""
+    store = ExposureStore(global_max_notional=5_000_000)
+    intent = _make_intent(price=1_000_000, qty=1)
+    key = _key()
+    store.check_and_update(key, intent)
+    notional_before = store.get_global_notional()
+
+    cancel_intent = _make_intent(intent_type=IntentType.CANCEL)
+    store.release_exposure(key, cancel_intent)
+
+    # Notional must be unchanged — cancel intent was skipped
+    assert store.get_global_notional() == notional_before
+
+
+def test_release_exposure_symbol_not_present_does_not_raise():
+    """release_exposure() for a symbol that was never tracked must not raise."""
+    store = ExposureStore(global_max_notional=0)
+    key = ExposureKey(account="acct", strategy_id="strat", symbol="TSE:NEVER")
+    intent = _make_intent(price=500_000, qty=2)
+    # No prior check_and_update — symbol is absent
+    store.release_exposure(key, intent)
+    # Global notional should clamp to 0 (not go negative)
+    assert store.get_global_notional() == 0
+
+
+def test_release_exposure_clamps_global_notional_at_zero():
+    """release_exposure() clamps global notional to 0, never negative."""
+    store = ExposureStore(global_max_notional=0)
+    key = _key()
+    intent = _make_intent(price=1_000_000, qty=2)
+    store.check_and_update(key, intent)
+    # Release more than what was added
+    store.release_exposure(key, _make_intent(price=1_000_000, qty=10))
+    assert store.get_global_notional() == 0
+
+
+def test_release_exposure_typed_cancel_is_no_op():
+    """release_exposure_typed() with CANCEL intent_type is a no-op."""
+    store = ExposureStore(global_max_notional=5_000_000)
+    key = _key()
+    intent = _make_intent(1_000_000, 1)
+    store.check_and_update(key, intent)
+    notional_before = store.get_global_notional()
+
+    store.release_exposure_typed(
+        key,
+        intent_type=int(IntentType.CANCEL),
+        price=1_000_000,
+        qty=1,
+    )
+    assert store.get_global_notional() == notional_before
+
+
+def test_release_exposure_typed_symbol_not_present_does_not_raise():
+    """release_exposure_typed() for absent symbol is safe."""
+    store = ExposureStore(global_max_notional=0)
+    key = ExposureKey(account="acct", strategy_id="strat", symbol="TSE:ABSENT")
+    store.release_exposure_typed(
+        key,
+        intent_type=int(IntentType.NEW),
+        price=500_000,
+        qty=1,
+    )
+    assert store.get_global_notional() == 0
+
+
+def test_get_exposure_existing_key():
+    """get_exposure() returns accurate notional for tracked symbol."""
+    store = ExposureStore(global_max_notional=0)
+    key = _key()
+    intent = _make_intent(price=2_000_000, qty=3)
+    store.check_and_update(key, intent)
+    exposure = store.get_exposure(key.account, key.strategy_id, key.symbol)
+    assert exposure == 2_000_000 * 3
+
+
+def test_get_exposure_nonexistent_key_returns_zero():
+    """get_exposure() returns 0 for a symbol that was never tracked."""
+    store = ExposureStore(global_max_notional=0)
+    assert store.get_exposure("no-account", "no-strat", "TSE:NONE") == 0
+
+
+def test_evict_zeroes_removes_empty_strategy_and_account_maps():
+    """_evict_zeroes() cascades cleanup of empty strategy and account maps."""
+    store = ExposureStore(global_max_notional=0, max_symbols=2)
+    # Add two symbols for the same account/strategy
+    for sym in ("TSE:A", "TSE:B"):
+        key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
+        intent = _make_intent_for_symbol(sym)
+        store.check_and_update(key, intent)
+
+    # Release both — sets notional to 0
+    for sym in ("TSE:A", "TSE:B"):
+        key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
+        intent = _make_intent_for_symbol(sym)
+        store.release_exposure(key, intent)
+
+    assert store._symbol_count == 2
+    # Call _evict_zeroes manually under lock
+    with store._lock:
+        store._evict_zeroes()
+
+    # After eviction, symbol count should be 0 and maps should be empty
+    assert store._symbol_count == 0
+    assert "acct" not in store._exposure
+
+
+def test_check_and_update_typed_cancel_returns_ok():
+    """check_and_update_typed() with CANCEL intent_type always returns (True, OK)."""
+    store = ExposureStore(global_max_notional=1)  # very tight limit
+    key = _key()
+    ok, reason = store.check_and_update_typed(
+        key,
+        intent_type=int(IntentType.CANCEL),
+        price=999_999_999,
+        qty=999,
+    )
+    assert ok is True
+    assert reason == "OK"
+
+
+def test_check_and_update_typed_global_limit_blocks():
+    """check_and_update_typed() Python fallback rejects when global max exceeded."""
+    store = ExposureStore(global_max_notional=1_000_000)
+    key = _key()
+    ok1, _ = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+    assert ok1 is True
+    ok2, reason2 = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+    assert ok2 is False
+    assert reason2 == "GLOBAL_EXPOSURE_LIMIT"
+
+
+def test_check_and_update_typed_strategy_limit_blocks():
+    """check_and_update_typed() Python fallback rejects when strategy limit exceeded."""
+    limits = {"s1": ExposureLimits(max_notional_scaled=1_000_000)}
+    store = ExposureStore(global_max_notional=0, limits=limits)
+    key = _key()
+    ok1, _ = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+    assert ok1 is True
+    ok2, reason2 = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+    assert ok2 is False
+    assert reason2 == "STRATEGY_EXPOSURE_LIMIT"
+
+
+def test_check_and_update_typed_symbol_limit_raises():
+    """check_and_update_typed() Python fallback raises ExposureLimitError at cardinality bound."""
+    import pytest
+
+    store = ExposureStore(global_max_notional=0, max_symbols=2)
+    for sym in ("TSE:A", "TSE:B"):
+        key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
+        store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+
+    overflow_key = ExposureKey(account="acct", strategy_id="strat", symbol="TSE:C")
+    with pytest.raises(ExposureLimitError):
+        store.check_and_update_typed(overflow_key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+
+
+def test_check_and_update_typed_with_rust_store_not_ok():
+    """check_and_update_typed() with Rust store propagates rejection reason."""
+
+    class _MockRust:
+        def check_and_update(self, account, strategy_id, symbol, intent_type, price, qty):
+            return (False, 1)  # code 1 → not ExposureLimitError
+
+        def reason_str(self, code):
+            return "GLOBAL_EXPOSURE_LIMIT"
+
+    store = ExposureStore(global_max_notional=0)
+    store._rust_store = _MockRust()
+    key = _key()
+    ok, reason = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+    assert ok is False
+    assert reason == "GLOBAL_EXPOSURE_LIMIT"
+
+
+def test_check_and_update_typed_with_rust_store_symbol_limit_error():
+    """check_and_update_typed() with Rust store raises ExposureLimitError when code==3."""
+    import pytest
+
+    class _MockRust:
+        def check_and_update(self, account, strategy_id, symbol, intent_type, price, qty):
+            return (False, 3)
+
+        def reason_str(self, code):
+            return "SYMBOL_LIMIT"
+
+    store = ExposureStore(global_max_notional=0)
+    store._rust_store = _MockRust()
+    key = _key()
+    with pytest.raises(ExposureLimitError):
+        store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+
+
+def test_check_and_update_typed_with_rust_store_ok():
+    """check_and_update_typed() delegates to Rust store and returns OK on success."""
+
+    class _MockRust:
+        def check_and_update(self, account, strategy_id, symbol, intent_type, price, qty):
+            return (True, 0)
+
+        def reason_str(self, code):
+            return "OK"
+
+    store = ExposureStore(global_max_notional=0)
+    store._rust_store = _MockRust()
+    key = _key()
+    ok, reason = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+    assert ok is True
+    assert reason == "OK"
+
+
+def test_release_exposure_typed_with_rust_store_delegates():
+    """release_exposure_typed() calls Rust store release() when available."""
+
+    class _MockRust:
+        def __init__(self):
+            self.calls = []
+
+        def release(self, account, strategy_id, symbol, intent_type, price, qty):
+            self.calls.append((account, strategy_id, symbol, intent_type, price, qty))
+
+    store = ExposureStore(global_max_notional=0)
+    mock = _MockRust()
+    store._rust_store = mock
+    key = ExposureKey(account="acct", strategy_id="strat", symbol="TSE:2330")
+    store.release_exposure_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
+    assert len(mock.calls) == 1
+    assert mock.calls[0] == ("acct", "strat", "TSE:2330", int(IntentType.NEW), 1_000_000, 1)
+
+
+def test_get_global_notional_accumulates_across_symbols():
+    """get_global_notional() returns sum across all accounts, strategies, symbols."""
+    store = ExposureStore(global_max_notional=0)
+    for sym in ("TSE:A", "TSE:B", "TSE:C"):
+        key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
+        intent = _make_intent_for_symbol(sym)
+        store.check_and_update(key, intent)
+    # Each intent is price=1_000_000, qty=1 → notional=1_000_000
+    assert store.get_global_notional() == 3_000_000
+
+
+def test_exposure_env_var_global_max(monkeypatch):
+    """HFT_EXPOSURE_GLOBAL_MAX_NOTIONAL env var sets the global max."""
+    monkeypatch.setenv("HFT_EXPOSURE_GLOBAL_MAX_NOTIONAL", "500000")
+    store = ExposureStore()
+    assert store._global_max == 500_000
+
+
+def test_exposure_env_var_max_symbols(monkeypatch):
+    """HFT_EXPOSURE_MAX_SYMBOLS env var controls max symbol cardinality."""
+    monkeypatch.setenv("HFT_EXPOSURE_MAX_SYMBOLS", "7")
+    store = ExposureStore()
+    assert store._max_symbols == 7
