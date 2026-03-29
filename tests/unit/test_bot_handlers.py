@@ -166,3 +166,73 @@ class TestFlowHandler:
             await cmd_flow(update, ctx)
         reply_text = update.message.reply_text.call_args[0][0]
         assert "流向摘要" in reply_text
+
+
+class TestReportIntegration:
+    """Integration test: /report with real pipeline stages but mocked CH."""
+
+    @pytest.mark.asyncio
+    async def test_full_report_flow(self) -> None:
+        from hft_platform.bot.handlers import cmd_report
+        from hft_platform.reports.models import (
+            Bar5m,
+            FlowBar,
+            LargeTrade,
+            SessionData,
+        )
+
+        SCALE = 10_000
+
+        fake_sd = SessionData(
+            session="day",
+            symbol="TXFD6",
+            date="2026-03-28",
+            open=20000 * SCALE,
+            high=20500 * SCALE,
+            low=19500 * SCALE,
+            close=20200 * SCALE,
+            volume=50000,
+            tick_count=1000,
+            bars_5m=[
+                Bar5m(ts="2026-03-28 09:00:00", open=20000 * SCALE, high=20200 * SCALE,
+                      low=19900 * SCALE, close=20100 * SCALE, volume=5000, ticks=100),
+                Bar5m(ts="2026-03-28 09:05:00", open=20100 * SCALE, high=20500 * SCALE,
+                      low=20000 * SCALE, close=20300 * SCALE, volume=6000, ticks=120),
+                Bar5m(ts="2026-03-28 09:10:00", open=20300 * SCALE, high=20400 * SCALE,
+                      low=20100 * SCALE, close=20200 * SCALE, volume=4000, ticks=80),
+            ],
+            flow_5m=[
+                FlowBar(ts="2026-03-28 09:00:00", ticks=100, total_vol=5000,
+                         uptick_vol=3000, downtick_vol=2000, flat_vol=0, ud_ratio=1.5, net_flow=1000),
+                FlowBar(ts="2026-03-28 09:05:00", ticks=120, total_vol=6000,
+                         uptick_vol=2000, downtick_vol=4000, flat_vol=0, ud_ratio=0.5, net_flow=-2000),
+                FlowBar(ts="2026-03-28 09:10:00", ticks=80, total_vol=4000,
+                         uptick_vol=1500, downtick_vol=2500, flat_vol=0, ud_ratio=0.6, net_flow=-1000),
+            ],
+            large_trades=[
+                LargeTrade(ts="2026-03-28 09:02:00", price=20100 * SCALE, volume=30, direction="buy"),
+            ],
+            spread_dist={1: 500, 2: 300},
+            depth_imbalance=[],
+        )
+
+        update = _make_update(chat_id=12345, text="/report day")
+        ctx = _make_context()
+        ctx.args = ["day"]
+
+        with patch("hft_platform.reports.collector.DataCollector.collect") as mock_collect:
+            mock_collect.return_value = fake_sd
+            with patch("hft_platform.reports.collector.DataCollector.__init__", return_value=None):
+                with patch("hft_platform.bot.handlers.asyncio") as mock_asyncio:
+                    mock_asyncio.sleep = AsyncMock()
+                    await cmd_report(update, ctx)
+
+        # Should have sent placeholder + multiple paid messages
+        assert update.message.reply_text.call_count >= 1
+        send_calls = ctx.bot.send_message.call_args_list
+        assert len(send_calls) >= 3  # At least summary + flow + levels
+        # Verify messages are strings with content (disclaimer may be short, so threshold = 20)
+        for call in send_calls:
+            msg_text = call.kwargs["text"]
+            assert isinstance(msg_text, str)
+            assert len(msg_text) > 20
