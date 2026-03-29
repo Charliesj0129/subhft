@@ -86,3 +86,49 @@ class TestPushJob:
         await _push_report(ctx, "day")
 
         ctx.bot.send_message.assert_not_called()
+
+
+class TestMultiSymbolPush:
+    @pytest.mark.asyncio
+    async def test_push_iterates_over_all_symbols(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", "TXFD6,TMFD6,2330")
+        from hft_platform.bot.scheduler import _push_report
+
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+
+        with (
+            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
+        ):
+            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_asyncio.sleep = AsyncMock()
+            await _push_report(ctx, "day")
+
+        # build_report should be called 3 times (one per symbol)
+        assert mock_build.call_count == 3
+        symbols_called = [call[0][2] for call in mock_build.call_args_list]
+        assert symbols_called == ["TXFD6", "TMFD6", "2330"]
+
+    @pytest.mark.asyncio
+    async def test_push_skips_symbol_with_no_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", "TXFD6,NOSYMBOL")
+        from hft_platform.bot.scheduler import _push_report
+
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+
+        def side_effect(session: str, date: object, symbol: str) -> dict | None:
+            if symbol == "NOSYMBOL":
+                return None
+            return {"paid": ["msg1"], "free": ["fmsg"]}
+
+        with (
+            patch("hft_platform.reports.pipeline.build_report", side_effect=side_effect),
+            patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.sleep = AsyncMock()
+            await _push_report(ctx, "day")
+
+        # Only 1 message sent (TXFD6), NOSYMBOL skipped
+        assert ctx.bot.send_message.call_count == 1

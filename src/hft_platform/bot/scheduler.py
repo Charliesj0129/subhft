@@ -18,13 +18,10 @@ def _get_owner_chat_id() -> str:
     return os.environ.get("HFT_TELEGRAM_CHAT_ID", "")
 
 
-def _get_symbol() -> str:
-    return os.environ.get("HFT_BOT_SYMBOL", "TXFD6")
-
-
 async def _push_report(context: Any, session: str) -> None:
-    """Shared logic for scheduled report push."""
+    """Push reports for all configured symbols."""
     import hft_platform.bot.app as bot_app
+    from hft_platform.bot.app import get_report_symbols
     from hft_platform.reports.pipeline import build_report, resolve_trading_date
 
     chat_id = _get_owner_chat_id()
@@ -33,22 +30,24 @@ async def _push_report(context: Any, session: str) -> None:
         return
 
     date = resolve_trading_date(session)
-    _log.info("bot.push_start", session=session, date=date)
+    symbols = get_report_symbols()
+    _log.info("bot.push_start", session=session, date=date, symbols=symbols)
 
-    try:
-        rendered = build_report(session, date, _get_symbol())
-        bot_app.last_ch_ok = datetime.now(_TZ)
-    except Exception as exc:
-        _log.error("bot.push_error", session=session, exc=str(exc), exc_info=True)
-        return
+    for symbol in symbols:
+        try:
+            rendered = build_report(session, date, symbol)
+            bot_app.last_ch_ok = datetime.now(_TZ)
+        except Exception as exc:
+            _log.error("bot.push_error", session=session, symbol=symbol, exc=str(exc), exc_info=True)
+            continue
 
-    if rendered is None:
-        _log.info("bot.push_no_data", session=session, date=date)
-        return
+        if rendered is None:
+            _log.info("bot.push_no_data", session=session, date=date, symbol=symbol)
+            continue
 
-    for msg in rendered["paid"]:
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
-        await asyncio.sleep(1.5)
+        for msg in rendered["paid"]:
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+            await asyncio.sleep(1.5)
 
     now = datetime.now(_TZ)
     if session == "day":
@@ -56,7 +55,7 @@ async def _push_report(context: Any, session: str) -> None:
     else:
         bot_app.last_night_report = now
 
-    _log.info("bot.push_complete", session=session, date=date, messages=len(rendered["paid"]))
+    _log.info("bot.push_complete", session=session, date=date, symbols=len(symbols))
 
 
 async def _push_day(context: Any) -> None:
