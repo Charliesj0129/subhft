@@ -171,6 +171,7 @@ class FeatureEngine:
         "_alpha_5s",
         "_alpha_30s",
         "_alpha_300s",
+        "_event_cache",
     )
 
     def __init__(
@@ -199,6 +200,7 @@ class FeatureEngine:
                 "off",
             }
         self._emit_events = bool(emit_events)
+        self._event_cache: dict[str, FeatureUpdateEvent] = {}
         self._quality_flags_next: dict[str, int] = {}
         self._feature_profile = None
         self._ema_alpha = 2.0 / 9.0
@@ -403,7 +405,18 @@ class FeatureEngine:
 
         if not self._emit_events:
             return None
-        return FeatureUpdateEvent(
+        # Hot-path: reuse per-symbol event object to avoid per-tick allocation
+        cached = self._event_cache.get(symbol)
+        if cached is not None:
+            cached.ts = source_ts_ns
+            cached.local_ts = local_ts_ns
+            cached.seq = seq
+            cached.changed_mask = changed_mask
+            cached.warmup_ready_mask = warmup_ready_mask
+            cached.quality_flags = qflags
+            cached.values = values
+            return cached
+        evt = FeatureUpdateEvent(
             symbol=symbol,
             ts=source_ts_ns,
             local_ts=local_ts_ns,
@@ -416,6 +429,8 @@ class FeatureEngine:
             feature_ids=self._feature_ids,
             values=values,
         )
+        self._event_cache[symbol] = evt
+        return evt
 
     def _compute_values(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
@@ -539,15 +554,14 @@ class FeatureEngine:
             return v1_tuple
 
         if n_features <= 19:
-            return v1_tuple + v2_base  # type: ignore[possibly-undefined]
+            return (*v1_tuple, *v2_base)  # type: ignore[possibly-undefined]
 
         iss_val = self._compute_iss(ks, int(ofi_l1_raw), mid_price_x2, bid_depth, ask_depth)
         mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)  # type: ignore[possibly-undefined]
         tox_val = self._compute_toxicity(ks)
-        v2_full = v2_base + (iss_val, mldm_val, tox_val)  # type: ignore[possibly-undefined]
 
         if n_features <= 22:
-            return v1_tuple + v2_full
+            return (*v1_tuple, *v2_base, iss_val, mldm_val, tox_val)  # type: ignore[possibly-undefined]
 
         # --- v3 EMA aggregation features ---
         a5 = self._alpha_5s
@@ -560,14 +574,18 @@ class FeatureEngine:
         ks.agg_spread_ema30s += a30 * (float(spread_scaled) - ks.agg_spread_ema30s)
         ks.agg_spread_ema300s += a300 * (float(spread_scaled) - ks.agg_spread_ema300s)
 
-        v3_agg = (
+        return (
+            *v1_tuple,
+            *v2_base,  # type: ignore[possibly-undefined]
+            iss_val,
+            mldm_val,
+            tox_val,
             int(round(ks.agg_ofi_ema5s)),
             int(round(ks.agg_ofi_ema30s)),
             int(round(ks.agg_imb_ema5s)),
             int(round(ks.agg_spread_ema30s)),
             int(round(ks.agg_spread_ema300s)),
         )
-        return v1_tuple + v2_full + v3_agg
 
     def _compute_v2_features(
         self,

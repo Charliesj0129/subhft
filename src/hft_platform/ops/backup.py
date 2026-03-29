@@ -20,6 +20,7 @@ logger = get_logger("ops.backup")
 
 _TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 _BACKUP_NAME_RE = re.compile(r"^daily_(\d{8})$")
+_IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 
 
 class BackupError(Exception):
@@ -284,6 +285,10 @@ class BackupManager:
 
     def restore(self, backup_name: str, target_db: str = "hft") -> None:
         """Restore full database from backup."""
+        if not _BACKUP_NAME_RE.match(backup_name):
+            raise ValueError(f"Invalid backup_name: {backup_name!r}")
+        if not _IDENTIFIER_RE.match(target_db):
+            raise ValueError(f"Invalid target_db: {target_db!r}")
         client = self._client()
         if target_db == "hft":
             sql = f"RESTORE DATABASE hft FROM Disk('backup_local', '{backup_name}/')"
@@ -294,6 +299,12 @@ class BackupManager:
 
     def restore_table(self, backup_name: str, table: str, target_db: str = "hft") -> None:
         """Restore a single table from backup."""
+        if not _BACKUP_NAME_RE.match(backup_name):
+            raise ValueError(f"Invalid backup_name: {backup_name!r}")
+        if not _IDENTIFIER_RE.match(table):
+            raise ValueError(f"Invalid table: {table!r}")
+        if not _IDENTIFIER_RE.match(target_db):
+            raise ValueError(f"Invalid target_db: {target_db!r}")
         client = self._client()
         if target_db == "hft":
             sql = f"RESTORE TABLE hft.{table} FROM Disk('backup_local', '{backup_name}/')"

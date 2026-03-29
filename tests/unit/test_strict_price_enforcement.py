@@ -10,7 +10,7 @@ class TestFloatReject:
         with (
             patch("hft_platform.risk.engine.MetricsRegistry") as m,
             patch("hft_platform.risk.engine.LatencyRecorder") as lr,
-            patch("hft_platform.risk.engine.get_audit_writer"),
+            patch("hft_platform.recorder.audit.get_audit_writer"),
             patch("builtins.open", mock_open(read_data="")),
             patch("hft_platform.risk.engine.yaml") as y,
             patch(

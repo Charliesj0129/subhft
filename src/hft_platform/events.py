@@ -86,6 +86,14 @@ class LOBStatsEvent:
     spread_scaled: int | None = None  # best_ask - best_bid (scaled integer)
 
     def __post_init__(self) -> None:
+        # Fast path: when both integer fields are provided, skip backward-compat logic
+        if self.mid_price_x2 is not None and self.spread_scaled is not None:
+            if self.mid_price is None:
+                self.mid_price = self.mid_price_x2 / 2.0
+            if self.spread is None:
+                self.spread = float(self.spread_scaled)
+            return
+
         if self.mid_price_x2 is None:
             if self.best_bid is not None and self.best_ask is not None:
                 self.mid_price_x2 = int(self.best_bid) + int(self.best_ask)

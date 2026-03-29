@@ -55,7 +55,7 @@ from hft_platform.feed_adapter.shioaji._infra import (
 )
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 from hft_platform.observability.metrics import MetricsRegistry
-from hft_platform.order.rate_limiter import RateLimiter
+from hft_platform.core.rate_limiter import RateLimiter
 
 try:
     import shioaji as sj

@@ -199,7 +199,7 @@ class TestCmdIdMonotonicity:
             with (
                 patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
                 patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
-                patch("hft_platform.risk.engine.get_audit_writer"),
+                patch("hft_platform.recorder.audit.get_audit_writer"),
             ):
                 mock_mr.get.return_value = _mock_metrics()
                 mock_lr.get.return_value = MagicMock()
@@ -241,7 +241,7 @@ class TestCmdIdMonotonicity:
             with (
                 patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
                 patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
-                patch("hft_platform.risk.engine.get_audit_writer"),
+                patch("hft_platform.recorder.audit.get_audit_writer"),
             ):
                 mock_mr.get.return_value = _mock_metrics()
                 mock_lr.get.return_value = MagicMock()
@@ -397,7 +397,7 @@ class TestRiskEvaluateConcurrent:
         with (
             patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
-            patch("hft_platform.risk.engine.get_audit_writer"),
+            patch("hft_platform.recorder.audit.get_audit_writer"),
         ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()
@@ -470,7 +470,7 @@ class TestConfigReloadDuringEvaluation:
         with (
             patch("hft_platform.risk.engine.MetricsRegistry") as mock_mr,
             patch("hft_platform.risk.engine.LatencyRecorder") as mock_lr,
-            patch("hft_platform.risk.engine.get_audit_writer"),
+            patch("hft_platform.recorder.audit.get_audit_writer"),
         ):
             mock_mr.get.return_value = _mock_metrics()
             mock_lr.get.return_value = MagicMock()

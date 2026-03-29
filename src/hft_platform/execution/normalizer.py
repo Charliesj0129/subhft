@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, Optional
 
 from structlog import get_logger
@@ -87,20 +86,20 @@ class ExecutionNormalizer:
         if value is None:
             return timebase.now_ns()
         try:
-            from decimal import Decimal, InvalidOperation
-
-            ts = Decimal(str(value))
-        except (TypeError, ValueError, InvalidOperation):
+            # Use float arithmetic to avoid Decimal allocation on exec path.
+            # Detect magnitude then multiply, rounding at the end.
+            fv = float(value)
+        except (TypeError, ValueError, OverflowError):
             return timebase.now_ns()
-        if ts <= 0:
+        if fv <= 0.0:
             return timebase.now_ns()
-        if ts > Decimal("1e17"):
-            return int(ts)
-        if ts > Decimal("1e14"):
-            return int(ts * Decimal("1000"))  # microseconds -> ns
-        if ts > Decimal("1e11"):
-            return int(ts * Decimal("1000000"))  # milliseconds -> ns
-        return int(ts * Decimal("1000000000"))  # seconds -> ns
+        if fv > 1e17:
+            return int(fv)  # already nanoseconds
+        if fv > 1e14:
+            return int(fv * 1_000)  # microseconds -> ns
+        if fv > 1e11:
+            return int(fv * 1_000_000)  # milliseconds -> ns
+        return int(fv * 1_000_000_000)  # seconds -> ns
 
     def normalize_order(self, raw: RawExecEvent) -> Optional[OrderEvent]:
         self.metrics.execution_events_total.labels(type="order").inc()
@@ -168,12 +167,7 @@ class ExecutionNormalizer:
 
         try:
             qty = int(get("quantity") or get("qty") or get("volume") or 0)
-            # Use Decimal for precise price parsing before scaling to integer
             price_value = get("price") or 0
-            try:
-                price_decimal = Decimal(str(price_value))
-            except (TypeError, ValueError, InvalidOperation):
-                price_decimal = Decimal(0)
 
             # Map action/side
             action = get("action")
@@ -194,8 +188,8 @@ class ExecutionNormalizer:
                         sym = getattr(c, "code", "")
 
             strategy_id = self._resolve_strategy_id(raw)
-            # Scale using Decimal to maintain precision until the final integer conversion
-            scale_price = self.price_codec.scale_decimal(sym, price_decimal)
+            # scale() handles float/int/Decimal inputs with precision
+            scale_price = self.price_codec.scale(sym, price_value)
 
             # Compute fees if calculator is available
             fee = 0

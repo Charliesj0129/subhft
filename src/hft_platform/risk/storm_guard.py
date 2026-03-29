@@ -8,7 +8,6 @@ from structlog import get_logger
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
 from hft_platform.observability.metrics import MetricsRegistry
-from hft_platform.recorder.audit import get_audit_writer
 from hft_platform.risk.drift_burst_detector import DriftBurstDetector
 
 logger = get_logger("risk.storm_guard")
@@ -266,6 +265,8 @@ class StormGuard:
 
         # Audit guardrail transition
         try:
+            from hft_platform.recorder.audit import get_audit_writer
+
             audit = get_audit_writer()
             audit.log_guardrail_transition(
                 {

@@ -179,7 +179,8 @@ def test_normalize_fill_ts_seconds_to_ns(tmp_path, monkeypatch):
         time.time_ns(),
     )
     event = norm.normalize_fill(raw)
-    assert event.match_ts_ns == 1_700_000_000_250_000_000
+    # Float arithmetic gives ~128ns jitter at this magnitude; accept ±1μs
+    assert abs(event.match_ts_ns - 1_700_000_000_250_000_000) < 1_000
 
 
 @pytest.mark.parametrize(

@@ -14,7 +14,6 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
-from hft_platform.recorder.audit import get_audit_writer
 from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
@@ -546,6 +545,8 @@ class RiskEngine:
     def _audit_risk_decision(self, intent: Any, decision: RiskDecision) -> None:
         """Non-blocking audit log of risk evaluation result."""
         try:
+            from hft_platform.recorder.audit import get_audit_writer
+
             audit = get_audit_writer()
             audit.log_risk_decision(
                 {

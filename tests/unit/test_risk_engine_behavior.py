@@ -515,7 +515,7 @@ def test_emit_reject_metric_cache_stale_owner_id(engine):
 
 def test_audit_risk_decision_called_on_approve(engine):
     """_audit_risk_decision is called after a passing evaluate."""
-    with patch("hft_platform.risk.engine.get_audit_writer") as mock_aw:
+    with patch("hft_platform.recorder.audit.get_audit_writer") as mock_aw:
         mock_writer = MagicMock()
         mock_aw.return_value = mock_writer
 
@@ -525,7 +525,7 @@ def test_audit_risk_decision_called_on_approve(engine):
 
 def test_audit_risk_decision_exception_swallowed(engine):
     """Exception in _audit_risk_decision does not propagate."""
-    with patch("hft_platform.risk.engine.get_audit_writer", side_effect=RuntimeError("audit fail")):
+    with patch("hft_platform.recorder.audit.get_audit_writer", side_effect=RuntimeError("audit fail")):
         intent = _intent()
         decision = RiskDecision(approved=True, intent=intent)
         engine._audit_risk_decision(intent, decision)  # Must not raise

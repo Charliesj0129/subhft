@@ -30,7 +30,7 @@ def _patch_storm_externals():
 
     with (
         patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=mock_metrics),
-        patch("hft_platform.risk.storm_guard.get_audit_writer", return_value=mock_audit),
+        patch("hft_platform.recorder.audit.get_audit_writer", return_value=mock_audit),
         patch("hft_platform.risk.storm_guard.timebase") as mock_tb,
     ):
         mock_tb.now_s = _now_s

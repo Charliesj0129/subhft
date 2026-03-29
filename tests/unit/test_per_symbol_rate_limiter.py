@@ -51,7 +51,7 @@ class TestPerSymbolRateLimiterCheck:
 
     def test_window_expiry(self):
         limiter = PerSymbolRateLimiter(soft_limit=3, hard_limit=5, window_s=1.0)
-        with patch("hft_platform.order.rate_limiter.timebase") as m:
+        with patch("hft_platform.core.rate_limiter.timebase") as m:
             m.now_s.return_value = 100.0
             for _ in range(5):
                 limiter.record("2330")
