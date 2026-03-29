@@ -33,6 +33,12 @@ _MARKET_DATA_COLS: list[str] = [
     "asks_price",
     "asks_vol",
     "seq_no",
+    # Multi-instrument fields (added 2026-03-30)
+    "instrument_type",
+    "underlying",
+    "strike_scaled",
+    "option_right",
+    "expiry",
 ]
 
 
@@ -141,6 +147,12 @@ def format_market_data(
             asks_price or [],
             asks_vol or [],
             int(r.get("seq_no", r.get("seq") or 0)),
+            # Multi-instrument fields (added 2026-03-30)
+            r.get("instrument_type", ""),
+            r.get("underlying", ""),
+            int(r.get("strike_scaled", 0)),
+            r.get("option_right", ""),
+            str(r.get("expiry", "1970-01-01")),
         ]
         data.append(row_data)
 

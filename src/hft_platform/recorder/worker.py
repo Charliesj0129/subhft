@@ -26,6 +26,12 @@ MARKET_DATA_COLUMNS = [
     "asks_price",
     "asks_vol",
     "seq_no",
+    # Multi-instrument fields (added 2026-03-30)
+    "instrument_type",
+    "underlying",
+    "strike_scaled",
+    "option_right",
+    "expiry",
 ]
 
 ORDER_COLUMNS = [
@@ -87,6 +93,12 @@ def _extract_market_data_values(row) -> list | None:
                 get("asks_price"),
                 get("asks_vol"),
                 get("seq_no", get("seq", 0)),
+                # Multi-instrument fields (added 2026-03-30)
+                get("instrument_type", ""),
+                get("underlying", ""),
+                int(get("strike_scaled", 0)),
+                get("option_right", ""),
+                str(get("expiry", "1970-01-01")),
             ]
         return [
             getattr(row, "symbol", None),
@@ -101,6 +113,12 @@ def _extract_market_data_values(row) -> list | None:
             getattr(row, "asks_price", None),
             getattr(row, "asks_vol", None),
             getattr(row, "seq_no", None) or getattr(row, "seq", None) or 0,
+            # Multi-instrument fields (added 2026-03-30)
+            getattr(row, "instrument_type", ""),
+            getattr(row, "underlying", ""),
+            int(getattr(row, "strike_scaled", 0)),
+            getattr(row, "option_right", ""),
+            str(getattr(row, "expiry", "1970-01-01")),
         ]
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
