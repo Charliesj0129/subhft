@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
+from hft_platform.reports.models import ComposedReport
+
 __all__ = ["resolve_trading_date", "build_report", "run_pipeline", "main"]
 
 _log = structlog.get_logger(__name__)
@@ -73,8 +75,8 @@ def build_report(
     session: str,
     date: str,
     symbol: str = "TXFD6",
-) -> dict[str, list[str]] | None:
-    """Run pipeline stages 1-4 (collect → signal → scenario → render).
+) -> ComposedReport | None:
+    """Run pipeline stages 1-4 (collect → extract → reason → compose).
 
     Args:
         session: "day" or "night".
@@ -82,13 +84,13 @@ def build_report(
         symbol:  Instrument symbol to collect data for. Defaults to "TXFD6".
 
     Returns:
-        A dict with "free" and "paid" keys, each containing a list of rendered
-        message strings. Returns None when the session has no tick data.
+        A :class:`ComposedReport` containing tier-aware message parts.
+        Returns None when the session has no tick data.
     """
     from hft_platform.reports.collector import DataCollector
-    from hft_platform.reports.renderer import ReportRenderer
-    from hft_platform.reports.scenarios import ScenarioBuilder
-    from hft_platform.reports.signals import SignalEngine
+    from hft_platform.reports.composer import ReportComposer
+    from hft_platform.reports.facts import extract_all
+    from hft_platform.reports.reasoner import reason_all
 
     _log.info("build_report_start", session=session, date=date, symbol=symbol)
 
@@ -101,36 +103,26 @@ def build_report(
         _log.warning("build_report_empty_session", session=session, date=date)
         return None
 
-    # Stage 2: derive signals
-    engine = SignalEngine()
-    signal_report = engine.analyze(session_data)
+    # Stage 1b: cross-day data
+    prev_days = collector.collect_cross_day(symbol, session, date)
+
+    # Stage 2: extract facts
+    fact_report = extract_all(session_data, prev_days=prev_days)
+    _log.info("stage2_facts_complete", segments=len(fact_report.segments))
+
+    # Stage 3: reason
+    reasoning_report = reason_all(fact_report)
     _log.info(
-        "stage2_complete",
-        bias=signal_report.bias,
-        confidence=signal_report.bias_confidence,
+        "stage3_reasoning_complete",
+        bias=reasoning_report.bias.bias,
+        confidence=reasoning_report.bias.confidence,
+        levels=len(reasoning_report.levels),
     )
 
-    # Stage 3: build scenarios
-    builder = ScenarioBuilder()
-    scenario_report = builder.build(signal_report)
-    _log.info(
-        "stage3_complete",
-        direction=scenario_report.direction,
-        scenarios=len(scenario_report.scenarios),
-    )
-
-    # Stage 4: render messages
-    renderer = ReportRenderer()
-    rendered = {
-        "free": renderer.render(scenario_report, tier="free"),
-        "paid": renderer.render(scenario_report, tier="paid"),
-    }
-    _log.info(
-        "stage4_complete",
-        free_msgs=len(rendered["free"]),
-        paid_msgs=len(rendered["paid"]),
-    )
-    return rendered
+    # Stage 4: compose
+    composed = ReportComposer().compose(fact_report, reasoning_report)
+    _log.info("stage4_compose_complete", parts=len(composed.messages))
+    return composed
 
 
 async def run_pipeline(
@@ -150,16 +142,19 @@ async def run_pipeline(
     """
     _log.info("report_pipeline_start", session=session, date=date, dry_run=dry_run)
 
-    rendered = build_report(session, date)
-    if rendered is None:
+    composed = build_report(session, date)
+    if composed is None:
         return
 
     if debug:
-        for tier, msgs in rendered.items():
-            print(f"\n{'=' * 40} {tier.upper()} {'=' * 40}")
-            for i, m in enumerate(msgs, 1):
-                print(f"\n--- Message {i}/{len(msgs)} ({len(m)} chars) ---")
-                print(m)
+        print(f"\n{'=' * 40} REPORT {'=' * 40}")
+        for i, part in enumerate(composed.messages, 1):
+            if part.kind == "text":
+                print(f"\n--- Part {i} [{part.min_tier}] ({len(part.content)} chars) ---")
+                print(part.content)
+            elif part.kind == "image":
+                print(f"\n--- Part {i} [{part.min_tier}] IMAGE ({len(part.image or b'')} bytes) ---")
+                print(f"  caption: {part.caption}")
 
     if dry_run:
         _log.info("report_pipeline_dry_run_complete")
@@ -172,7 +167,7 @@ async def run_pipeline(
     sender = ReportSender()
     distributor = Distributor(sender=sender, channels=channels)
     try:
-        await distributor.send(rendered)
+        await distributor.send(composed)
     finally:
         await sender.close()
 
