@@ -42,9 +42,9 @@ def _make_event(bids: list[list[int]], asks: list[list[int]]) -> BidAskEvent:
 # --- Registry ---
 
 
-def test_v2_feature_set_has_21_features() -> None:
+def test_v2_feature_set_has_22_features() -> None:
     fs = build_default_lob_feature_set_v2()
-    assert len(fs.features) == 21
+    assert len(fs.features) == 22
 
 
 def test_v2_iss_at_index_19() -> None:
@@ -64,9 +64,9 @@ def test_v1_backward_compatible() -> None:
         assert fs_v2.features[i].feature_id == fs_v1.features[i].feature_id
 
 
-def test_default_registry_is_v2() -> None:
+def test_default_registry_is_v3() -> None:
     reg = default_feature_registry()
-    assert reg.get_default().feature_set_id == "lob_shared_v2"
+    assert reg.get_default().feature_set_id == "lob_shared_v3"
 
 
 def test_v1_still_accessible() -> None:
@@ -75,14 +75,14 @@ def test_v1_still_accessible() -> None:
     assert len(v1.features) == 16
 
 
-def test_feature_set_version_is_v2() -> None:
-    assert FEATURE_SET_VERSION == "lob_shared_v2"
+def test_feature_set_version_is_v3() -> None:
+    assert FEATURE_SET_VERSION == "lob_shared_v3"
 
 
 # --- FeatureEngine v2 tuple ---
 
 
-def test_v2_engine_produces_18_features() -> None:
+def test_v2_engine_produces_22_features() -> None:
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
     stats = _make_stats("TEST", 100_0000, 101_0000, 50, 50)
     event = _make_event(
@@ -92,7 +92,7 @@ def test_v2_engine_produces_18_features() -> None:
     engine.process_lob_update(event, stats)
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
-    assert len(vals) == 21
+    assert len(vals) == 22
 
 
 def test_v1_engine_still_produces_16_features() -> None:
@@ -261,3 +261,42 @@ def test_get_feature_by_id_mldm() -> None:
     mldm = engine.get_feature("TEST", "deep_depth_momentum_x1000")
     assert mldm is not None
     assert isinstance(mldm, int)
+
+
+# --- v3 registry ---
+
+
+def test_v3_registry_has_27_features() -> None:
+    from hft_platform.feature.registry import build_default_lob_feature_set_v3
+    v3 = build_default_lob_feature_set_v3()
+    assert v3.feature_set_id == "lob_shared_v3"
+    assert v3.schema_version == 3
+    assert len(v3.features) == 27
+    assert v3.features[0].feature_id == "best_bid"
+    assert v3.features[21].feature_id == "toxicity_ema50_x1000"
+    assert v3.features[22].feature_id == "ofi_l1_ema5s"
+    assert v3.features[23].feature_id == "ofi_l1_ema30s"
+    assert v3.features[24].feature_id == "imbalance_ema5s_ppm"
+    assert v3.features[25].feature_id == "spread_ema30s"
+    assert v3.features[26].feature_id == "spread_ema300s"
+
+
+def test_v3_is_default_in_registry() -> None:
+    from hft_platform.feature.registry import default_feature_registry, FEATURE_SET_VERSION
+    reg = default_feature_registry()
+    assert FEATURE_SET_VERSION == "lob_shared_v3"
+    default = reg.get_default()
+    assert default.feature_set_id == "lob_shared_v3"
+    v2 = reg.get("lob_shared_v2")
+    assert len(v2.features) == 22
+
+
+def test_v3_backward_compatible_with_v2_indices() -> None:
+    from hft_platform.feature.registry import (
+        build_default_lob_feature_set_v2,
+        build_default_lob_feature_set_v3,
+    )
+    v2 = build_default_lob_feature_set_v2()
+    v3 = build_default_lob_feature_set_v3()
+    for i, spec in enumerate(v2.features):
+        assert v3.features[i].feature_id == spec.feature_id, f"Index {i} mismatch"

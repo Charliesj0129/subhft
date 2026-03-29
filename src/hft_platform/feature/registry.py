@@ -103,7 +103,7 @@ class FeatureRegistry:
 # Bump this (and create a new build_default_lob_feature_set_vN function) whenever
 # the feature layout or semantics change incompatibly.  Alpha manifests that declare
 # feature_set_version must match this constant before Gate D promotion.
-FEATURE_SET_VERSION = "lob_shared_v2"
+FEATURE_SET_VERSION = "lob_shared_v3"
 
 
 def build_default_lob_feature_set_v1() -> FeatureSet:
@@ -152,7 +152,7 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
     """
     v1 = build_default_lob_feature_set_v1()
     return FeatureSet(
-        feature_set_id=FEATURE_SET_VERSION,
+        feature_set_id="lob_shared_v2",
         schema_version=2,
         features=v1.features
         + (
@@ -181,6 +181,42 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
                 source_kind="book",
                 warmup_min_events=128,
             ),
+            # [21] Trade-signed toxicity: EMA of signed-trade imbalance / total volume, scaled x1000.
+            # High toxicity = informed flow dominance = adverse fill likely. Gate signal for MM.
+            FeatureSpec(
+                "toxicity_ema50_x1000",
+                "i64",
+                scale=1000,
+                source_kind="tick",
+                warmup_min_events=50,
+            ),
+        ),
+    )
+
+
+def build_default_lob_feature_set_v3() -> FeatureSet:
+    """LOB feature set v3: v2 + multi-window EMA aggregation features.
+
+    Indices 0-21: identical to v2 (backward compatible).
+
+    New features:
+    - ofi_l1_ema5s [22]: OFI L1 EMA with 5s window (~40 ticks at 125ms)
+    - ofi_l1_ema30s [23]: OFI L1 EMA with 30s window (~240 ticks)
+    - imbalance_ema5s_ppm [24]: L1 imbalance EMA with 5s window (ppm)
+    - spread_ema30s [25]: Spread EMA with 30s window (x10000)
+    - spread_ema300s [26]: Spread EMA with 300s window (x10000)
+    """
+    v2 = build_default_lob_feature_set_v2()
+    return FeatureSet(
+        feature_set_id="lob_shared_v3",
+        schema_version=3,
+        features=v2.features
+        + (
+            FeatureSpec("ofi_l1_ema5s", "i64", source_kind="book", warmup_min_events=40),
+            FeatureSpec("ofi_l1_ema30s", "i64", source_kind="book", warmup_min_events=240),
+            FeatureSpec("imbalance_ema5s_ppm", "i64", scale=1_000_000, source_kind="book", warmup_min_events=40),
+            FeatureSpec("spread_ema30s", "i64", scale=10_000, source_kind="book", warmup_min_events=240),
+            FeatureSpec("spread_ema300s", "i64", scale=10_000, source_kind="book", warmup_min_events=2400),
         ),
     )
 
@@ -199,5 +235,6 @@ def feature_id_to_index(feature_set: FeatureSet, feature_id: str) -> int:
 def default_feature_registry() -> FeatureRegistry:
     reg = FeatureRegistry()
     reg.register(build_default_lob_feature_set_v1())
-    reg.register(build_default_lob_feature_set_v2(), make_default=True)
+    reg.register(build_default_lob_feature_set_v2())
+    reg.register(build_default_lob_feature_set_v3(), make_default=True)
     return reg
