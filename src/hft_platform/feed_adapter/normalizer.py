@@ -555,7 +555,8 @@ class MarketDataNormalizer:
                             if exch_ts_py:
                                 exch_ts = exch_ts_py
                             if _RETURN_TUPLE:
-                                return rust_tuple
+                                _td, _tc = self._trade_classifier.classify(_sym, int(price))
+                                return rust_tuple + (_td, _tc)
                             local_ts = timebase.now_ns()
                             exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "tick", _sym)
                             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_tick")
@@ -588,6 +589,7 @@ class MarketDataNormalizer:
             volume = int(vol_val) if vol_val is not None else 0
 
             if _RETURN_TUPLE:
+                _td, _tc = self._trade_classifier.classify(symbol, price)
                 return (
                     "tick",
                     symbol,
@@ -597,6 +599,8 @@ class MarketDataNormalizer:
                     is_simtrade,
                     is_odd_lot,
                     exch_ts,
+                    _td,
+                    _tc,
                 )
 
             local_ts = timebase.now_ns()
