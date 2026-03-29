@@ -46,18 +46,29 @@ class MessagePart:
     content: str    # text content (for kind="text")
     image: bytes | None = None  # PNG bytes (for kind="image")
     caption: str = ""  # image caption (for kind="image")
+    min_tier: str = "free"  # minimum tier to receive this part: "free" or "paid"
 
 @dataclass(slots=True)
 class ComposedReport:
     messages: list[MessagePart]   # ordered list of text + image parts
 ```
 
-Backward compatibility:
+Each `MessagePart` carries a `min_tier` field. Tier filtering is done at distribution time:
+- `"free"` parts → sent to all channels (free + paid + owner)
+- `"paid"` parts → sent only to channels with tier `"paid"` or `"owner"`
+
+Default tier assignment by ReportComposer:
+- Summary (msg 1), Disclaimer (msg 8): `min_tier="free"`
+- All other messages and heatmap image: `min_tier="paid"`
+
+This preserves the existing `ChannelConfig.tier` routing in `distributor.py` while supporting mixed text + image output.
+
+Migration path (all changes ship together, no legacy wrapper):
 - `pipeline.py::build_report()` returns `ComposedReport` (new signature)
-- `pipeline.py::build_report_legacy()` wraps `build_report()` → `dict[str, list[str]]` (drops images, preserves text). Used by CLI `run_pipeline()` until distributor is updated.
-- `distributor.py::Distributor.send()` updated to accept `ComposedReport`. For each part: `kind="text"` → `send_message()`, `kind="image"` → `send_photo()`.
-- `bot/handlers.py` and `bot/scheduler.py` use new `ComposedReport` directly.
-- CLI distribution path: if channel type is `telegram`, send both text + image. If channel type is `file` or `stdout`, skip image parts.
+- `pipeline.py::run_pipeline()` updated to pass `ComposedReport` to distributor
+- `distributor.py::Distributor.send()` updated to accept `ComposedReport`. For each channel, filters parts by `min_tier` vs `channel.tier`, then dispatches: `kind="text"` → `send_message()`, `kind="image"` → `send_photo()`.
+- `bot/handlers.py` and `bot/scheduler.py` use `ComposedReport` directly.
+- CLI `--dry-run` / `--debug` paths: iterate `ComposedReport.messages`, print text parts, skip image parts.
 
 ### 3.1 Layer 1 — FactExtractor
 
@@ -169,11 +180,17 @@ Computed from existing Q2 (5m bars), no new query needed:
 class VolatilityFacts:
     atr_5m: int            # Average True Range of 5m bars (scaled int)
     session_range: int     # high - low (scaled int)
-    range_vs_atr: float    # session_range / (atr_5m * bar_count) — expansion/contraction
+    range_atr_ratio: float # session_range / atr_session — expansion/contraction ratio
+    atr_session: int       # atr_5m * sqrt(bar_count), annualized to session (scaled int)
 ```
 
-ATR is computed from 5m bars' high-low-prev_close (standard Wilder ATR).
-Used by ScenarioReasoner for target/stop calculation and range_bound trigger.
+- `atr_5m`: standard Wilder ATR computed from 5m bars' high-low-prev_close.
+- `atr_session`: session-level ATR estimate = `atr_5m * sqrt(bar_count)`. Used as the reference unit for targets/stops.
+- `range_atr_ratio`: `session_range / atr_session`. Values < 0.7 = contraction, > 1.3 = expansion.
+
+Used by ScenarioReasoner:
+- Target/stop calculation: multiples of `atr_session` (e.g., target = entry ± 1.5 × atr_session)
+- `range_bound` trigger: `range_atr_ratio < 0.7` + bias neutral
 
 #### CrossDayFacts (NEW — requires Q7 query)
 
@@ -293,7 +310,7 @@ Fact-triggered, dynamic count:
 | 守支撐反彈 | hold_bounce | S1 exists + any bullish evidence | R1 or prev_day_high |
 | 趨勢延續 | trend_continue | cross_day trend ≥ 2 days same direction + bias concordant | ATR extension |
 | 跳空回補 | gap_fill | open vs prev_close gap ≥ 0.3% | prev_close |
-| 區間震盪 | range_bound | intraday range < ATR × 0.7 + bias neutral | range boundaries |
+| 區間震盪 | range_bound | range_atr_ratio < 0.7 + bias neutral | range boundaries |
 
 Only scenarios with satisfied triggers are generated. Each includes:
 
