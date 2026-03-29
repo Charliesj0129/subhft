@@ -205,28 +205,44 @@ def validate_order_mode_safety() -> None:
         )
 
 
-def validate_shadow_lock() -> None:
+def _is_shadow_enabled_by_config(settings: dict[str, Any] | None = None) -> bool:
+    """Check if shadow mode is enabled via YAML config (shadow.enabled: true)."""
+    if settings is not None:
+        return bool(settings.get("shadow", {}).get("enabled", False))
+    return False
+
+
+def validate_shadow_lock(settings: dict[str, Any] | None = None) -> None:
     """Dual-lock: refuse startup if shadow mode + live order mode are both active.
 
-    HFT_ORDER_SHADOW_MODE=1 is an observation-only mode — orders are logged but
-    never sent to the broker. Combining it with HFT_ORDER_MODE=live/real is a
-    contradictory and dangerous configuration that must be rejected at boot.
+    Shadow mode can be enabled by EITHER:
+    - HFT_ORDER_SHADOW_MODE=1 env var
+    - shadow.enabled: true in YAML config (e.g. config/env/shadow/main.yaml)
+
+    Combining shadow with HFT_ORDER_MODE=live/real is contradictory and dangerous.
     """
-    shadow = os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1"
+    shadow = os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1" or _is_shadow_enabled_by_config(settings)
     order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
     if shadow and order_mode in {"live", "real"}:
         logger.critical(
-            "FATAL: HFT_ORDER_SHADOW_MODE=1 cannot be combined with HFT_ORDER_MODE=live/real",
+            "FATAL: shadow mode cannot be combined with HFT_ORDER_MODE=live/real",
             order_mode=order_mode,
+            shadow_env=os.getenv("HFT_ORDER_SHADOW_MODE", "0"),
+            shadow_yaml=_is_shadow_enabled_by_config(settings),
         )
         raise SystemExit(1)
 
 
-def log_shadow_config_summary() -> None:
-    """Log all shadow-relevant env vars at startup for debugging."""
+def log_shadow_config_summary(settings: dict[str, Any] | None = None) -> None:
+    """Log all shadow-relevant config at startup for debugging."""
+    shadow_yaml = _is_shadow_enabled_by_config(settings)
+    shadow_env = os.getenv("HFT_ORDER_SHADOW_MODE", "0")
+    shadow_effective = shadow_env == "1" or shadow_yaml
     logger.info(
         "shadow_config_summary",
-        shadow_mode=os.getenv("HFT_ORDER_SHADOW_MODE", "0"),
+        shadow_mode=shadow_env,
+        shadow_yaml_enabled=shadow_yaml,
+        shadow_effective=shadow_effective,
         gateway_enabled=os.getenv("HFT_GATEWAY_ENABLED", "0"),
         order_mode=os.getenv("HFT_ORDER_MODE", "sim"),
         auto_recovery_enabled=os.getenv("HFT_PLATFORM_AUTO_RECOVERY_ENABLED", "1"),
@@ -696,8 +712,8 @@ class SystemBootstrapper:
             logger.warning("session_lease_refresh_not_started", role=role, reason="lease_not_owned")
 
         # Preflight safety checks
-        validate_shadow_lock()
-        log_shadow_config_summary()
+        validate_shadow_lock(self.settings)
+        log_shadow_config_summary(self.settings)
 
         # 1. Infrastructure
         # Note: StormGuard is created below, so we set it after creation
@@ -881,6 +897,14 @@ class SystemBootstrapper:
             _broker_codec = ShioajiOrderCodec()
 
         order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec)
+
+        # Wire shadow mode from YAML config (shadow.enabled: true) into ShadowOrderSink.
+        # Previously only HFT_ORDER_SHADOW_MODE env var was checked, causing a config disconnect
+        # where shadow.enabled in YAML was silently ignored.
+        if _is_shadow_enabled_by_config(self.settings) and not order_adapter.shadow_sink.enabled:
+            order_adapter.shadow_sink.enabled = True
+            logger.info("shadow_mode_enabled_via_yaml_config")
+
         execution_gateway = ExecutionGateway(order_adapter)
         # TCA: FeeCalculator injection into ExecutionNormalizer
         _fee_calculator = None
