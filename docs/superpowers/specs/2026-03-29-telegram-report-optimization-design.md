@@ -30,18 +30,55 @@ Layer 1: FactExtractor → FactReport
     ↓
 Layer 2: Reasoner → ReasoningReport
     ↓
-Layer 3: ReportComposer → list[Message] + heatmap image
+Layer 3: ReportComposer → ComposedReport
 ```
+
+### Pipeline/Distributor Contract Update
+
+Current `build_report()` returns `dict[str, list[str]]` (tier → text messages).
+New `build_report()` returns `ComposedReport`:
+
+```python
+@dataclass(slots=True)
+class MessagePart:
+    """A single part of the composed report."""
+    kind: str       # "text" or "image"
+    content: str    # text content (for kind="text")
+    image: bytes | None = None  # PNG bytes (for kind="image")
+    caption: str = ""  # image caption (for kind="image")
+
+@dataclass(slots=True)
+class ComposedReport:
+    messages: list[MessagePart]   # ordered list of text + image parts
+```
+
+Backward compatibility:
+- `pipeline.py::build_report()` returns `ComposedReport` (new signature)
+- `pipeline.py::build_report_legacy()` wraps `build_report()` → `dict[str, list[str]]` (drops images, preserves text). Used by CLI `run_pipeline()` until distributor is updated.
+- `distributor.py::Distributor.send()` updated to accept `ComposedReport`. For each part: `kind="text"` → `send_message()`, `kind="image"` → `send_photo()`.
+- `bot/handlers.py` and `bot/scheduler.py` use new `ComposedReport` directly.
+- CLI distribution path: if channel type is `telegram`, send both text + image. If channel type is `file` or `stdout`, skip image parts.
 
 ### 3.1 Layer 1 — FactExtractor
 
-Pure facts, no judgment. Five fact extractors:
+Pure facts, no judgment. Six fact extractors:
 
 #### TimeSegmentFacts
 
-Split session into 3 segments:
-- Day: opening 08:45-09:30, midday 09:30-12:00, closing 12:00-13:30
-- Night: opening 15:00-15:45, midday 15:45-03:00, closing 03:00-05:00
+Split session into segments aligned with actual collector time ranges:
+
+- Day session (collector: 07:00-13:45 CST):
+  - pre_open: 07:00-08:45 (pre-market matching, typically low volume)
+  - opening: 08:45-09:30
+  - midday: 09:30-12:00
+  - closing: 12:00-13:45
+
+- Night session (collector: 15:00-05:00 next day CST):
+  - opening: 15:00-15:45
+  - midday: 15:45-03:00
+  - closing: 03:00-05:00
+
+All segment volumes sum to SessionData.volume (no orphan ticks). `pre_open` is included in totals but may have zero ticks on some instruments. Segment boundaries are inclusive-start, exclusive-end.
 
 ```python
 @dataclass(slots=True)
@@ -72,6 +109,9 @@ class ChipCluster:
     sell_volume: int
     trade_count: int
     dominant_side: str     # "buy" / "sell" / "mixed"
+    first_ts: str          # earliest trade timestamp in cluster
+    last_ts: str           # latest trade timestamp in cluster
+    time_range: str        # "09:15-10:30" human-readable
 
 @dataclass(slots=True)
 class ChipFacts:
@@ -79,7 +119,12 @@ class ChipFacts:
     vap_peaks: list[PriceLevel]
     buy_zone: tuple[int, int] | None   # buy-dominant price range
     sell_zone: tuple[int, int] | None  # sell-dominant price range
+    total_buy_volume: int              # session-wide large trade buy volume
+    total_sell_volume: int             # session-wide large trade sell volume
+    net_ratio: float                   # buy / (buy + sell), 0.5 = balanced
 ```
+
+`total_buy_volume`, `total_sell_volume`, `net_ratio` are aggregated at extraction time so Layer 2 never needs to read raw trades. `ChipCluster.first_ts`/`last_ts` enable NarrativeReasoner to place cluster events on the timeline without breaking layer separation.
 
 Clustering tolerance: configurable, default 50,000 scaled units (~5 pts). Improved from current IF-04's fixed 30,000 (~3 pts).
 
@@ -114,6 +159,21 @@ class StructureFacts:
     session_high: PriceLevel
     session_low: PriceLevel
 ```
+
+#### VolatilityFacts
+
+Computed from existing Q2 (5m bars), no new query needed:
+
+```python
+@dataclass(slots=True)
+class VolatilityFacts:
+    atr_5m: int            # Average True Range of 5m bars (scaled int)
+    session_range: int     # high - low (scaled int)
+    range_vs_atr: float    # session_range / (atr_5m * bar_count) — expansion/contraction
+```
+
+ATR is computed from 5m bars' high-low-prev_close (standard Wilder ATR).
+Used by ScenarioReasoner for target/stop calculation and range_bound trigger.
 
 #### CrossDayFacts (NEW — requires Q7 query)
 
@@ -151,6 +211,7 @@ class FactReport:
     chips: ChipFacts
     flow: FlowFacts
     structure: StructureFacts
+    volatility: VolatilityFacts
     cross_day: CrossDayFacts
 ```
 
@@ -185,7 +246,7 @@ Evidence sources and weights:
 | flow.session_ud | 0.20 | > 1.15 | < 0.85 |
 | flow.eod_drift | 0.15 | > +0.20 | < -0.20 |
 | flow.sustained_runs | 0.15 | bull run ≥ 4 bars | bear run ≥ 4 bars |
-| chips.net_direction | 0.20 | buy_vol > sell_vol × 1.3 | sell_vol > buy_vol × 1.3 |
+| chips.net_ratio | 0.20 | net_ratio > 0.57 (buy > sell × 1.3) | net_ratio < 0.43 (sell > buy × 1.3) |
 | segments.closing | 0.10 | closing.dominant_side == "bull" | closing.dominant_side == "bear" |
 | cross_day.trend | 0.10 | trend_direction == "up" | trend_direction == "down" |
 | cross_day.flow_reversal | 0.05 | reversal to bull | reversal to bear |
@@ -377,8 +438,10 @@ Logic preserved, organization upgraded. Old modules (`signals.py`, `scenarios.py
 | `reports/heatmap.py` | NEW | Flow heatmap generation |
 | `reports/models.py` | MODIFY | Add new dataclasses (Evidence, BiasJudgment, EnrichedLevel, etc.) |
 | `reports/collector.py` | MODIFY | Add Q7 cross-day query |
-| `reports/pipeline.py` | MODIFY | `build_report()` rewired to three-layer pipeline |
+| `reports/pipeline.py` | MODIFY | `build_report()` returns `ComposedReport`, add `build_report_legacy()` wrapper |
+| `reports/distributor.py` | MODIFY | `Distributor.send()` accepts `ComposedReport`, handles text + image parts |
 | `bot/handlers.py` | MODIFY | `/levels`, `/flow` use new architecture |
+| `bot/scheduler.py` | MODIFY | Use `ComposedReport` for scheduled push |
 | `Dockerfile` | MODIFY | Add `matplotlib` |
 | `reports/signals.py` | DELETE | Logic migrated to facts.py + reasoner.py |
 | `reports/scenarios.py` | DELETE | Logic migrated to reasoner.py |
