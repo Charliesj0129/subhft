@@ -33,6 +33,7 @@ async def _push_report(context: Any, session: str) -> None:
     symbols = get_report_symbols()
     _log.info("bot.push_start", session=session, date=date, symbols=symbols)
 
+    sent_any = False
     for symbol in symbols:
         try:
             rendered = build_report(session, date, symbol)
@@ -48,12 +49,14 @@ async def _push_report(context: Any, session: str) -> None:
         for msg in rendered["paid"]:
             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
             await asyncio.sleep(1.5)
+        sent_any = True
 
-    now = datetime.now(_TZ)
-    if session == "day":
-        bot_app.last_day_report = now
-    else:
-        bot_app.last_night_report = now
+    if sent_any:
+        now = datetime.now(_TZ)
+        if session == "day":
+            bot_app.last_day_report = now
+        else:
+            bot_app.last_night_report = now
 
     _log.info("bot.push_complete", session=session, date=date, symbols=len(symbols))
 

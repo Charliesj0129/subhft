@@ -132,3 +132,44 @@ class TestMultiSymbolPush:
 
         # Only 1 message sent (TXFD6), NOSYMBOL skipped
         assert ctx.bot.send_message.call_count == 1
+
+
+class TestPushTimestampTracking:
+    @pytest.mark.asyncio
+    async def test_push_does_not_update_timestamp_when_all_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", "NOSYM1,NOSYM2")
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.scheduler import _push_report
+
+        bot_app.last_day_report = None
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+
+        with patch("hft_platform.reports.pipeline.build_report", return_value=None):
+            await _push_report(ctx, "day")
+
+        assert bot_app.last_day_report is None
+
+    @pytest.mark.asyncio
+    async def test_push_updates_timestamp_when_any_sent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", "TXFD6,NOSYMBOL")
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.scheduler import _push_report
+
+        bot_app.last_day_report = None
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+
+        def side_effect(session: str, date: object, symbol: str) -> dict | None:
+            if symbol == "NOSYMBOL":
+                return None
+            return {"paid": ["msg1"], "free": ["fmsg"]}
+
+        with (
+            patch("hft_platform.reports.pipeline.build_report", side_effect=side_effect),
+            patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.sleep = AsyncMock()
+            await _push_report(ctx, "day")
+
+        assert bot_app.last_day_report is not None
