@@ -87,10 +87,11 @@ async def cmd_start(update: Any, context: Any) -> None:
     text = (
         "HFT 市場分析 Bot\n\n"
         "可用指令：\n"
-        "/report [day|night] — 取得完整分析報告\n"
-        "/levels — 當前支撐壓力位\n"
-        "/flow — 最新流向摘要\n"
-        "/status — Bot 運行狀態"
+        "/report [symbol] [day|night] — 完整分析報告\n"
+        "/levels [symbol] — 支撐壓力位\n"
+        "/flow [symbol] — 流向摘要\n"
+        "/status — Bot 運行狀態\n\n"
+        "symbol 可省略，預設使用第一個設定商品"
     )
     await update.message.reply_text(text)
 
