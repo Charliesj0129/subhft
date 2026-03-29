@@ -15,6 +15,7 @@ we divide by 10,000 to get integer points).
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Callable
 
 import structlog
@@ -23,6 +24,7 @@ from hft_platform.contracts.types import ScaledPrice
 from hft_platform.monitor._types import CH_TO_PLATFORM_DIVISOR
 from hft_platform.reports.models import (
     Bar5m,
+    DaySnapshot,
     DepthBar,
     FlowBar,
     LargeTrade,
@@ -47,8 +49,26 @@ _LARGE_TRADE_THRESHOLDS: dict[str, int] = {
 }
 _DEFAULT_LARGE_TRADE_THRESHOLD = 10
 
+# Input validation patterns
+_SYMBOL_RE = re.compile(r"^[A-Za-z0-9]{1,20}$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 # Memory cap for every CH query
 _SETTINGS = "SETTINGS max_memory_usage = 2000000000"
+
+
+def _validate_symbol(symbol: str) -> str:
+    """Validate and return symbol, raising ValueError on bad input."""
+    if not _SYMBOL_RE.match(symbol):
+        raise ValueError(f"Invalid symbol: {symbol!r}")
+    return symbol
+
+
+def _validate_date(date: str) -> str:
+    """Validate and return ISO date string, raising ValueError on bad input."""
+    if not _DATE_RE.match(date):
+        raise ValueError(f"Invalid date: {date!r}")
+    return date
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +206,7 @@ class DataCollector:
         date:
             Optional ISO date string stored on the result; defaults to ``""``.
         """
+        _validate_symbol(symbol)
         ohlcv = self._query_ohlcv(symbol, time_filter)
         bars = self._query_5m_bars(symbol, time_filter)
         flow = self._query_flow(symbol, time_filter)
@@ -228,6 +249,8 @@ class DataCollector:
         symbol:
             Instrument identifier, e.g. ``"TXFD6"``.
         """
+        _validate_symbol(symbol)
+        _validate_date(date)
         time_filter = _day_filter(date) if session == "day" else _night_filter(date)
 
         sd = self.collect_core(symbol, time_filter, session=session, date=date)
@@ -499,3 +522,110 @@ class DataCollector:
                 )
             )
         return result
+
+    # ------------------------------------------------------------------
+    # Q7: Cross-day OHLCV + flow
+    # ------------------------------------------------------------------
+
+    def collect_cross_day(
+        self,
+        symbol: str,
+        session: str,
+        date: str,
+        lookback_days: int = 3,
+    ) -> list[DaySnapshot]:
+        """Q7: Fetch OHLCV + uptick/downtick for previous N trading days.
+
+        Returns list of :class:`DaySnapshot` sorted by date descending
+        (most recent first).  Weekends (Saturday/Sunday) are skipped.
+
+        Parameters
+        ----------
+        symbol:
+            Instrument identifier, e.g. ``"TXFD6"``.
+        session:
+            ``"day"`` or ``"night"``.
+        date:
+            Reference ISO date string (not included in results).
+        lookback_days:
+            Number of previous trading days to fetch (default 3).
+        """
+        _validate_symbol(symbol)
+        _validate_date(date)
+
+        from datetime import date as _date
+        from datetime import timedelta
+
+        ref = _date.fromisoformat(date)
+        prev_dates: list[str] = []
+        cursor = ref - timedelta(days=1)
+        while len(prev_dates) < lookback_days:
+            # Skip weekends: 5 = Saturday, 6 = Sunday
+            if cursor.weekday() < 5:
+                prev_dates.append(cursor.isoformat())
+            cursor -= timedelta(days=1)
+            # Safety: don't look back more than 30 calendar days
+            if (ref - cursor).days > 30:
+                break
+
+        if not prev_dates:
+            return []
+
+        # Build a single UNION ALL query for all dates
+        filter_fn = _day_filter if session == "day" else _night_filter
+        parts: list[str] = []
+        for d in prev_dates:
+            tf = filter_fn(d)
+            part = f"""
+                SELECT
+                    '{d}'                                     AS day,
+                    argMin(price_scaled, exch_ts)             AS open_ch,
+                    max(price_scaled)                         AS high_ch,
+                    min(price_scaled)                         AS low_ch,
+                    argMax(price_scaled, exch_ts)             AS close_ch,
+                    sum(volume)                               AS total_vol,
+                    sumIf(volume, price_scaled > lagInFrame(price_scaled) OVER (
+                        ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+                    ))                                        AS uptick_vol,
+                    sumIf(volume, price_scaled < lagInFrame(price_scaled) OVER (
+                        ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+                    ))                                        AS downtick_vol
+                FROM hft.market_data
+                WHERE symbol = '{symbol}'
+                  AND type = 'Tick'
+                  AND {tf}
+            """
+            parts.append(part)
+
+        sql = " UNION ALL ".join(parts) + f" ORDER BY day DESC {_SETTINGS}"
+
+        try:
+            rows = self._execute(sql)
+        except Exception:  # noqa: BLE001
+            log.warning("Q7 cross-day query failed", symbol=symbol)
+            return []
+
+        snapshots: list[DaySnapshot] = []
+        for row in rows:
+            day_str = str(row[0])
+            total_vol = int(row[5])
+            if total_vol == 0:
+                continue
+            up = int(row[6])
+            dn = int(row[7])
+            ud_ratio = up / dn if dn > 0 else 99.0
+            net_flow = up - dn
+            snapshots.append(
+                DaySnapshot(
+                    date=day_str,
+                    session=session,
+                    open=_ch_to_platform(int(row[1])),
+                    high=_ch_to_platform(int(row[2])),
+                    low=_ch_to_platform(int(row[3])),
+                    close=_ch_to_platform(int(row[4])),
+                    volume=total_vol,
+                    ud_ratio=ud_ratio,
+                    net_flow=net_flow,
+                )
+            )
+        return snapshots
