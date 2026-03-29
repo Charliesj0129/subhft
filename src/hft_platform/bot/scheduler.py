@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 from datetime import datetime, time
 from typing import Any
@@ -36,19 +37,23 @@ async def _push_report(context: Any, session: str) -> None:
     sent_any = False
     for symbol in symbols:
         try:
-            rendered = build_report(session, date, symbol)
+            composed = build_report(session, date, symbol)
             bot_app.last_ch_ok = datetime.now(_TZ)
         except Exception as exc:
             _log.error("bot.push_error", session=session, symbol=symbol, exc=str(exc), exc_info=True)
             continue
 
-        if rendered is None:
+        if composed is None:
             _log.info("bot.push_no_data", session=session, date=date, symbol=symbol)
             continue
 
-        for msg in rendered["paid"]:
-            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
-            await asyncio.sleep(1.5)
+        for i, part in enumerate(composed.messages):
+            if part.kind == "text":
+                await context.bot.send_message(chat_id=chat_id, text=part.content, parse_mode="HTML")
+            elif part.kind == "image" and part.image is not None:
+                await context.bot.send_photo(chat_id=chat_id, photo=io.BytesIO(part.image), caption=part.caption)
+            if i < len(composed.messages) - 1:
+                await asyncio.sleep(1.5)
         sent_any = True
 
     if sent_any:

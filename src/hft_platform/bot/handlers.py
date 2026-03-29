@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -117,21 +118,25 @@ async def cmd_report(update: Any, context: Any) -> None:
     await update.message.reply_text(f"產生報告中... ({symbol} {session} {date})")
 
     try:
-        rendered = build_report(session, date, symbol)
+        composed = build_report(session, date, symbol)
         bot_app.last_ch_ok = datetime.now(_TZ)
     except Exception as exc:
         _log.error("bot.report_error", exc=str(exc), exc_info=True)
         await update.message.reply_text(f"報告產生失敗：{exc}")
         return
 
-    if rendered is None:
+    if composed is None:
         await update.message.reply_text("該時段無交易資料")
         return
 
     chat_id = update.effective_chat.id
-    for msg in rendered["paid"]:
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
-        await asyncio.sleep(1.5)
+    for i, part in enumerate(composed.messages):
+        if part.kind == "text":
+            await context.bot.send_message(chat_id=chat_id, text=part.content, parse_mode="HTML")
+        elif part.kind == "image" and part.image is not None:
+            await context.bot.send_photo(chat_id=chat_id, photo=io.BytesIO(part.image), caption=part.caption)
+        if i < len(composed.messages) - 1:
+            await asyncio.sleep(1.5)
 
     if session == "day":
         bot_app.last_day_report = datetime.now(_TZ)
@@ -143,7 +148,8 @@ async def cmd_report(update: Any, context: Any) -> None:
 async def cmd_levels(update: Any, context: Any) -> None:
     """Handle /levels command."""
     import hft_platform.bot.app as bot_app
-    from hft_platform.reports.signals import SignalEngine
+    from hft_platform.reports.facts import extract_all
+    from hft_platform.reports.reasoner import LevelReasoner
 
     args = context.args or []
     symbol = args[0].upper() if args else None
@@ -160,25 +166,30 @@ async def cmd_levels(update: Any, context: Any) -> None:
         await update.message.reply_text("該時段無交易資料")
         return
 
-    engine = SignalEngine()
-    signal = engine.analyze(sd)
+    fr = extract_all(sd, prev_days=[])
+    levels = LevelReasoner().analyze(fr)
 
     session_label = "日盤" if sd.session == "day" else "夜盤"
     lines = [f"支撐壓力位 ({sd.symbol} {session_label} {sd.date})\n"]
 
-    if signal.resistances:
+    resistances = [lv for lv in levels if lv.side == "resistance"]
+    supports = [lv for lv in levels if lv.side == "support"]
+
+    if resistances:
         lines.append("壓力：")
-        for i, r in enumerate(signal.resistances, 1):
+        for i, r in enumerate(resistances, 1):
             stars = "★" * max(1, int(r.strength * 3))
-            lines.append(f"  R{i}: {r.price // PLATFORM_SCALE:,} {stars} {r.reason}")
+            sources_str = ", ".join(r.sources)
+            lines.append(f"  R{i}: {r.price // PLATFORM_SCALE:,} {stars} [{sources_str}]")
 
-    if signal.supports:
+    if supports:
         lines.append("\n支撐：")
-        for i, s in enumerate(signal.supports, 1):
+        for i, s in enumerate(supports, 1):
             stars = "★" * max(1, int(s.strength * 3))
-            lines.append(f"  S{i}: {s.price // PLATFORM_SCALE:,} {stars} {s.reason}")
+            sources_str = ", ".join(s.sources)
+            lines.append(f"  S{i}: {s.price // PLATFORM_SCALE:,} {stars} [{sources_str}]")
 
-    if not signal.resistances and not signal.supports:
+    if not resistances and not supports:
         lines.append("（未偵測到顯著支撐壓力位）")
 
     await update.message.reply_text("\n".join(lines))
@@ -188,6 +199,7 @@ async def cmd_levels(update: Any, context: Any) -> None:
 async def cmd_flow(update: Any, context: Any) -> None:
     """Handle /flow command."""
     import hft_platform.bot.app as bot_app
+    from hft_platform.reports.facts import extract_all
 
     args = context.args or []
     symbol = args[0].upper() if args else None
@@ -204,35 +216,35 @@ async def cmd_flow(update: Any, context: Any) -> None:
         await update.message.reply_text("該時段無交易資料")
         return
 
+    fr = extract_all(sd, prev_days=[])
+    flow = fr.flow
+
     session_label = "日盤" if sd.session == "day" else "夜盤"
 
-    total_up = sum(f.uptick_vol for f in sd.flow_5m)
-    total_dn = sum(f.downtick_vol for f in sd.flow_5m)
-    ud_ratio = total_up / total_dn if total_dn > 0 else (float(total_up) if total_up > 0 else 1.0)
-
-    if ud_ratio >= 1.1:
+    if flow.session_ud >= 1.1:
         bias_label = "偏多"
-    elif ud_ratio <= 0.9:
+    elif flow.session_ud <= 0.9:
         bias_label = "偏空"
     else:
         bias_label = "中性"
 
-    buy_trades = sum(1 for t in sd.large_trades if t.direction == "buy")
-    sell_trades = sum(1 for t in sd.large_trades if t.direction == "sell")
-
     lines = [
         f"流向摘要 ({sd.symbol} {session_label} {sd.date})\n",
-        f"U/D Ratio: {ud_ratio:.2f} ({bias_label})",
+        f"U/D Ratio: {flow.session_ud:.2f} ({bias_label})",
+        f"Net Flow: {flow.session_net_flow:+,}",
         f"成交量: {sd.volume:,}",
-        f"大單: 買 {buy_trades} 筆 / 賣 {sell_trades} 筆",
     ]
 
-    recent = sd.flow_5m[-5:] if sd.flow_5m else []
-    if recent:
-        lines.append("\n最近 5 根 K棒流向：")
-        for bar in recent:
-            arrow = "▲" if bar.ud_ratio >= 1.0 else "▼"
-            lines.append(f"{bar.ts[-8:-3]} {arrow} {bar.ud_ratio:.2f}")
+    # Strongest bars
+    lines.append(f"\n最強買: {flow.strongest_buy_bar.ts[-8:-3]} UD={flow.strongest_buy_bar.ud_ratio:.2f}")
+    lines.append(f"最強賣: {flow.strongest_sell_bar.ts[-8:-3]} UD={flow.strongest_sell_bar.ud_ratio:.2f}")
+
+    # Segment summaries
+    if fr.segments:
+        lines.append("\n時段摘要：")
+        for seg in fr.segments:
+            side_icon = "▲" if seg.dominant_side == "bull" else ("▼" if seg.dominant_side == "bear" else "─")
+            lines.append(f"  {seg.name}: {side_icon} UD={seg.ud_ratio:.2f} vol={seg.volume:,}")
 
     await update.message.reply_text("\n".join(lines))
 

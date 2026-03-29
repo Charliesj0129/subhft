@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from hft_platform.reports.models import ComposedReport, MessagePart
+
 OWNER_CHAT_ID = "12345"
 
 
@@ -32,8 +34,18 @@ def _make_update(chat_id: int, text: str = "/start") -> MagicMock:
 def _make_context() -> MagicMock:
     ctx = MagicMock()
     ctx.bot.send_message = AsyncMock()
+    ctx.bot.send_photo = AsyncMock()
     ctx.args = []
     return ctx
+
+
+def _make_composed(msgs: list[str] | None = None) -> ComposedReport:
+    """Build a ComposedReport from a list of text strings (all paid tier)."""
+    if msgs is None:
+        msgs = ["msg1", "msg2"]
+    return ComposedReport(
+        messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs]
+    )
 
 
 class TestPrevTradingDate:
@@ -132,14 +144,14 @@ class TestStartHandler:
 
 class TestReportHandler:
     @pytest.mark.asyncio
-    async def test_report_sends_paid_messages(self) -> None:
+    async def test_report_sends_composed_messages(self) -> None:
         from hft_platform.bot.handlers import cmd_report
 
         update = _make_update(chat_id=12345, text="/report day")
         ctx = _make_context()
         ctx.args = ["day"]
         with patch("hft_platform.reports.pipeline.build_report") as mock_build:
-            mock_build.return_value = {"paid": ["msg1", "msg2"], "free": ["msg1"]}
+            mock_build.return_value = _make_composed(["msg1", "msg2"])
             with patch("hft_platform.bot.handlers.asyncio") as mock_asyncio:
                 mock_asyncio.sleep = AsyncMock()
                 await cmd_report(update, ctx)
@@ -188,15 +200,14 @@ class TestLevelsHandler:
         fake_sd.session = "day"
         fake_sd.date = "2026-03-28"
         fake_sd.symbol = "TXFD6"
-        fake_signal = MagicMock()
-        fake_signal.supports = []
-        fake_signal.resistances = []
+        fake_fr = MagicMock()
         with (
             patch("hft_platform.bot.handlers._collect_core_for_latest") as mock_collect,
-            patch("hft_platform.reports.signals.SignalEngine") as MockSignal,
+            patch("hft_platform.reports.facts.extract_all", return_value=fake_fr),
+            patch("hft_platform.reports.reasoner.LevelReasoner") as MockLR,
         ):
             mock_collect.return_value = fake_sd
-            MockSignal.return_value.analyze.return_value = fake_signal
+            MockLR.return_value.analyze.return_value = []
             await cmd_levels(update, ctx)
         reply_text = update.message.reply_text.call_args[0][0]
         assert "支撐壓力位" in reply_text
@@ -215,9 +226,18 @@ class TestFlowHandler:
         fake_sd.date = "2026-03-28"
         fake_sd.symbol = "TXFD6"
         fake_sd.volume = 50000
-        fake_sd.flow_5m = []
-        fake_sd.large_trades = []
-        with patch("hft_platform.bot.handlers._collect_core_for_latest") as mock_collect:
+        fake_fr = MagicMock()
+        fake_fr.flow.session_ud = 1.15
+        fake_fr.flow.session_net_flow = 5000
+        fake_fr.flow.strongest_buy_bar.ts = "2026-03-28 09:00:00"
+        fake_fr.flow.strongest_buy_bar.ud_ratio = 1.8
+        fake_fr.flow.strongest_sell_bar.ts = "2026-03-28 10:30:00"
+        fake_fr.flow.strongest_sell_bar.ud_ratio = 0.4
+        fake_fr.segments = []
+        with (
+            patch("hft_platform.bot.handlers._collect_core_for_latest") as mock_collect,
+            patch("hft_platform.reports.facts.extract_all", return_value=fake_fr),
+        ):
             mock_collect.return_value = fake_sd
             await cmd_flow(update, ctx)
         reply_text = update.message.reply_text.call_args[0][0]
@@ -239,7 +259,7 @@ class TestReportArgParsing:
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
             patch("hft_platform.bot.app.get_report_symbols", return_value=["TXFD6", "TMFD6"]),
         ):
-            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_build.return_value = _make_composed(["msg1"])
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
             # First positional arg to build_report is session, second is date, third is symbol
@@ -256,7 +276,7 @@ class TestReportArgParsing:
             patch("hft_platform.reports.pipeline.build_report") as mock_build,
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
         ):
-            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_build.return_value = _make_composed(["msg1"])
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
             assert mock_build.call_args[0][2] == "2330"
@@ -272,7 +292,7 @@ class TestReportArgParsing:
             patch("hft_platform.reports.pipeline.build_report") as mock_build,
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
         ):
-            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_build.return_value = _make_composed(["msg1"])
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
             assert mock_build.call_args[0][0] == "night"
@@ -288,7 +308,7 @@ class TestReportArgParsing:
             patch("hft_platform.reports.pipeline.build_report") as mock_build,
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
         ):
-            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_build.return_value = _make_composed(["msg1"])
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
             assert mock_build.call_args[0][0] == "night"
@@ -308,15 +328,14 @@ class TestLevelsWithSymbol:
         fake_sd.session = "day"
         fake_sd.date = "2026-03-28"
         fake_sd.symbol = "2330"
-        fake_signal = MagicMock()
-        fake_signal.supports = []
-        fake_signal.resistances = []
+        fake_fr = MagicMock()
         with (
             patch("hft_platform.bot.handlers._collect_core_for_latest") as mock_collect,
-            patch("hft_platform.reports.signals.SignalEngine") as MockSignal,
+            patch("hft_platform.reports.facts.extract_all", return_value=fake_fr),
+            patch("hft_platform.reports.reasoner.LevelReasoner") as MockLR,
         ):
             mock_collect.return_value = fake_sd
-            MockSignal.return_value.analyze.return_value = fake_signal
+            MockLR.return_value.analyze.return_value = []
             await cmd_levels(update, ctx)
         mock_collect.assert_called_once_with("2330")
 
@@ -335,9 +354,18 @@ class TestFlowWithSymbol:
         fake_sd.date = "2026-03-28"
         fake_sd.symbol = "TMFD6"
         fake_sd.volume = 30000
-        fake_sd.flow_5m = []
-        fake_sd.large_trades = []
-        with patch("hft_platform.bot.handlers._collect_core_for_latest") as mock_collect:
+        fake_fr = MagicMock()
+        fake_fr.flow.session_ud = 0.85
+        fake_fr.flow.session_net_flow = -2000
+        fake_fr.flow.strongest_buy_bar.ts = "2026-03-28 09:00:00"
+        fake_fr.flow.strongest_buy_bar.ud_ratio = 1.3
+        fake_fr.flow.strongest_sell_bar.ts = "2026-03-28 10:00:00"
+        fake_fr.flow.strongest_sell_bar.ud_ratio = 0.5
+        fake_fr.segments = []
+        with (
+            patch("hft_platform.bot.handlers._collect_core_for_latest") as mock_collect,
+            patch("hft_platform.reports.facts.extract_all", return_value=fake_fr),
+        ):
             mock_collect.return_value = fake_sd
             await cmd_flow(update, ctx)
         mock_collect.assert_called_once_with("TMFD6")
@@ -349,109 +377,30 @@ class TestReportIntegration:
     @pytest.mark.asyncio
     async def test_full_report_flow(self) -> None:
         from hft_platform.bot.handlers import cmd_report
-        from hft_platform.reports.models import (
-            Bar5m,
-            FlowBar,
-            LargeTrade,
-            SessionData,
-        )
 
-        SCALE = 10_000
-
-        fake_sd = SessionData(
-            session="day",
-            symbol="TXFD6",
-            date="2026-03-28",
-            open=20000 * SCALE,
-            high=20500 * SCALE,
-            low=19500 * SCALE,
-            close=20200 * SCALE,
-            volume=50000,
-            tick_count=1000,
-            bars_5m=[
-                Bar5m(
-                    ts="2026-03-28 09:00:00",
-                    open=20000 * SCALE,
-                    high=20200 * SCALE,
-                    low=19900 * SCALE,
-                    close=20100 * SCALE,
-                    volume=5000,
-                    ticks=100,
-                ),
-                Bar5m(
-                    ts="2026-03-28 09:05:00",
-                    open=20100 * SCALE,
-                    high=20500 * SCALE,
-                    low=20000 * SCALE,
-                    close=20300 * SCALE,
-                    volume=6000,
-                    ticks=120,
-                ),
-                Bar5m(
-                    ts="2026-03-28 09:10:00",
-                    open=20300 * SCALE,
-                    high=20400 * SCALE,
-                    low=20100 * SCALE,
-                    close=20200 * SCALE,
-                    volume=4000,
-                    ticks=80,
-                ),
-            ],
-            flow_5m=[
-                FlowBar(
-                    ts="2026-03-28 09:00:00",
-                    ticks=100,
-                    total_vol=5000,
-                    uptick_vol=3000,
-                    downtick_vol=2000,
-                    flat_vol=0,
-                    ud_ratio=1.5,
-                    net_flow=1000,
-                ),
-                FlowBar(
-                    ts="2026-03-28 09:05:00",
-                    ticks=120,
-                    total_vol=6000,
-                    uptick_vol=2000,
-                    downtick_vol=4000,
-                    flat_vol=0,
-                    ud_ratio=0.5,
-                    net_flow=-2000,
-                ),
-                FlowBar(
-                    ts="2026-03-28 09:10:00",
-                    ticks=80,
-                    total_vol=4000,
-                    uptick_vol=1500,
-                    downtick_vol=2500,
-                    flat_vol=0,
-                    ud_ratio=0.6,
-                    net_flow=-1000,
-                ),
-            ],
-            large_trades=[
-                LargeTrade(ts="2026-03-28 09:02:00", price=20100 * SCALE, volume=30, direction="buy"),
-            ],
-            spread_dist={1: 500, 2: 300},
-            depth_imbalance=[],
+        composed = ComposedReport(
+            messages=[
+                MessagePart(kind="text", content="Summary section with enough text to pass threshold check.", min_tier="free"),
+                MessagePart(kind="text", content="Flow analysis section with detailed breakdown data.", min_tier="paid"),
+                MessagePart(kind="text", content="Level analysis and scenario planning details.", min_tier="paid"),
+            ]
         )
 
         update = _make_update(chat_id=12345, text="/report day")
         ctx = _make_context()
         ctx.args = ["day"]
 
-        with patch("hft_platform.reports.collector.DataCollector.collect") as mock_collect:
-            mock_collect.return_value = fake_sd
-            with patch("hft_platform.reports.collector.DataCollector.__init__", return_value=None):
-                with patch("hft_platform.bot.handlers.asyncio") as mock_asyncio:
-                    mock_asyncio.sleep = AsyncMock()
-                    await cmd_report(update, ctx)
+        with (
+            patch("hft_platform.reports.pipeline.build_report", return_value=composed),
+            patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.sleep = AsyncMock()
+            await cmd_report(update, ctx)
 
-        # Should have sent placeholder + multiple paid messages
+        # Should have sent placeholder + 3 composed messages
         assert update.message.reply_text.call_count >= 1
         send_calls = ctx.bot.send_message.call_args_list
-        assert len(send_calls) >= 3  # At least summary + flow + levels
-        # Verify messages are strings with content (disclaimer may be short, so threshold = 20)
+        assert len(send_calls) == 3
         for call in send_calls:
             msg_text = call.kwargs["text"]
             assert isinstance(msg_text, str)

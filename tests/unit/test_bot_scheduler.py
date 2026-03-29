@@ -6,6 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from hft_platform.reports.models import ComposedReport, MessagePart
+
+
+def _make_composed(msgs: list[str] | None = None) -> ComposedReport:
+    if msgs is None:
+        msgs = ["msg1", "msg2"]
+    return ComposedReport(
+        messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs]
+    )
+
 
 @pytest.fixture(autouse=True)
 def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,9 +63,10 @@ class TestPushJob:
 
         ctx = MagicMock()
         ctx.bot.send_message = AsyncMock()
+        ctx.bot.send_photo = AsyncMock()
 
         with patch("hft_platform.reports.pipeline.build_report") as mock_build:
-            mock_build.return_value = {"paid": ["msg1", "msg2"], "free": ["fmsg"]}
+            mock_build.return_value = _make_composed(["msg1", "msg2"])
             with patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio:
                 mock_asyncio.sleep = AsyncMock()
                 await _push_report(ctx, "day")
@@ -96,12 +107,13 @@ class TestMultiSymbolPush:
 
         ctx = MagicMock()
         ctx.bot.send_message = AsyncMock()
+        ctx.bot.send_photo = AsyncMock()
 
         with (
             patch("hft_platform.reports.pipeline.build_report") as mock_build,
             patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
         ):
-            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_build.return_value = _make_composed(["msg1"])
             mock_asyncio.sleep = AsyncMock()
             await _push_report(ctx, "day")
 
@@ -117,11 +129,12 @@ class TestMultiSymbolPush:
 
         ctx = MagicMock()
         ctx.bot.send_message = AsyncMock()
+        ctx.bot.send_photo = AsyncMock()
 
-        def side_effect(session: str, date: object, symbol: str) -> dict | None:
+        def side_effect(session: str, date: object, symbol: str) -> ComposedReport | None:
             if symbol == "NOSYMBOL":
                 return None
-            return {"paid": ["msg1"], "free": ["fmsg"]}
+            return _make_composed(["msg1"])
 
         with (
             patch("hft_platform.reports.pipeline.build_report", side_effect=side_effect),
@@ -159,11 +172,12 @@ class TestPushTimestampTracking:
         bot_app.last_day_report = None
         ctx = MagicMock()
         ctx.bot.send_message = AsyncMock()
+        ctx.bot.send_photo = AsyncMock()
 
-        def side_effect(session: str, date: object, symbol: str) -> dict | None:
+        def side_effect(session: str, date: object, symbol: str) -> ComposedReport | None:
             if symbol == "NOSYMBOL":
                 return None
-            return {"paid": ["msg1"], "free": ["fmsg"]}
+            return _make_composed(["msg1"])
 
         with (
             patch("hft_platform.reports.pipeline.build_report", side_effect=side_effect),
