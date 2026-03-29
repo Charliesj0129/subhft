@@ -129,6 +129,16 @@ class _LobKernelState:
     mldm_deep_ema_fast: float = 0.0
     mldm_deep_ema_slow: float = 0.0
     mldm_output_ema: float = 0.0
+    # --- Toxicity tracking (trade-signed) ---
+    tox_signed_vol_ema: float = 0.0
+    tox_total_vol_ema: float = 0.0
+    tox_tick_count: int = 0
+    # --- v3 fields: multi-window EMA aggregation ---
+    agg_ofi_ema5s: float = 0.0
+    agg_ofi_ema30s: float = 0.0
+    agg_imb_ema5s: float = 0.0
+    agg_spread_ema30s: float = 0.0
+    agg_spread_ema300s: float = 0.0
 
 
 class FeatureEngine:
@@ -158,6 +168,9 @@ class FeatureEngine:
         "_feature_profile",
         "_ema_alpha",
         "_ofi_enabled",
+        "_alpha_5s",
+        "_alpha_30s",
+        "_alpha_300s",
     )
 
     def __init__(
@@ -190,6 +203,9 @@ class FeatureEngine:
         self._feature_profile = None
         self._ema_alpha = 2.0 / 9.0
         self._ofi_enabled = True
+        self._alpha_5s = 2.0 / 41.0
+        self._alpha_30s = 2.0 / 241.0
+        self._alpha_300s = 2.0 / 2401.0
         backend = str(kernel_backend or os.getenv("HFT_FEATURE_ENGINE_BACKEND", "python")).strip().lower()
         if backend == "rust" and _RUST_LOB_FEATURE_KERNEL_V1 is None:
             backend = "python"
@@ -443,6 +459,12 @@ class FeatureEngine:
             ks.imbalance_ema8_ppm = float(l1_imbalance_ppm)
             spread_ema8_scaled = int(round(ks.spread_ema8))
             depth_imbalance_ema8_ppm = int(round(ks.imbalance_ema8_ppm))
+            # v3 EMA seed values
+            ks.agg_ofi_ema5s = 0.0
+            ks.agg_ofi_ema30s = 0.0
+            ks.agg_imb_ema5s = float(l1_imbalance_ppm)
+            ks.agg_spread_ema30s = float(spread_scaled)
+            ks.agg_spread_ema300s = float(spread_scaled)
             ks.initialized = True
         else:
             if self._ofi_enabled:
@@ -521,7 +543,31 @@ class FeatureEngine:
 
         iss_val = self._compute_iss(ks, int(ofi_l1_raw), mid_price_x2, bid_depth, ask_depth)
         mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)  # type: ignore[possibly-undefined]
-        return v1_tuple + v2_base + (iss_val, mldm_val)  # type: ignore[possibly-undefined]
+        tox_val = self._compute_toxicity(ks)
+        v2_full = v2_base + (iss_val, mldm_val, tox_val)  # type: ignore[possibly-undefined]
+
+        if n_features <= 22:
+            return v1_tuple + v2_full
+
+        # --- v3 EMA aggregation features ---
+        a5 = self._alpha_5s
+        a30 = self._alpha_30s
+        a300 = self._alpha_300s
+
+        ks.agg_ofi_ema5s += a5 * (float(ofi_l1_raw) - ks.agg_ofi_ema5s)
+        ks.agg_ofi_ema30s += a30 * (float(ofi_l1_raw) - ks.agg_ofi_ema30s)
+        ks.agg_imb_ema5s += a5 * (float(l1_imbalance_ppm) - ks.agg_imb_ema5s)
+        ks.agg_spread_ema30s += a30 * (float(spread_scaled) - ks.agg_spread_ema30s)
+        ks.agg_spread_ema300s += a300 * (float(spread_scaled) - ks.agg_spread_ema300s)
+
+        v3_agg = (
+            int(round(ks.agg_ofi_ema5s)),
+            int(round(ks.agg_ofi_ema30s)),
+            int(round(ks.agg_imb_ema5s)),
+            int(round(ks.agg_spread_ema30s)),
+            int(round(ks.agg_spread_ema300s)),
+        )
+        return v1_tuple + v2_full + v3_agg
 
     def _compute_v2_features(
         self,
@@ -705,6 +751,45 @@ class FeatureEngine:
 
         clipped = max(-self._MLDM_CLIP, min(self._MLDM_CLIP, ks.mldm_output_ema))
         return int(round(clipped * 1000))
+
+    def _compute_toxicity(self, ks: "_LobKernelState") -> int:
+        """Compute toxicity_ema50_x1000: abs(signed_vol_ema / total_vol_ema) * 1000.
+
+        Range: 0 (balanced flow) to 1000 (fully one-sided).
+        """
+        if ks.tox_tick_count < 50 or ks.tox_total_vol_ema < 1.0:
+            return 0
+        raw = abs(ks.tox_signed_vol_ema) / ks.tox_total_vol_ema
+        return int(round(min(1.0, raw) * 1000))
+
+    def on_tick(
+        self,
+        symbol: str,
+        price: int,
+        volume: int,
+        trade_direction: int,
+        trade_confidence: int,
+    ) -> None:
+        """Update trade-signed feature state from classified tick data.
+
+        Called per-tick with EMO classification result.
+        trade_direction: +1=BUY, -1=SELL, 0=UNKNOWN
+        trade_confidence: 1000=at-quote, 800=inside, 500=tick-rule, 0=unknown
+        """
+        if trade_direction == 0 or volume <= 0:
+            return
+
+        ks = self._lob_kernel_states.get(symbol)
+        if ks is None:
+            return
+
+        # EMA alpha for ~50 tick window
+        alpha = 0.04  # 2/(50+1) ≈ 0.039
+
+        signed_vol = float(trade_direction * volume)
+        ks.tox_signed_vol_ema += alpha * (signed_vol - ks.tox_signed_vol_ema)
+        ks.tox_total_vol_ema += alpha * (float(volume) - ks.tox_total_vol_ema)
+        ks.tox_tick_count += 1
 
     def _compute_values_rust(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
