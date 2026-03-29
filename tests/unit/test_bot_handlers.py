@@ -34,6 +34,32 @@ def _make_context() -> MagicMock:
     return ctx
 
 
+class TestGetReportSymbols:
+    def test_default_when_env_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HFT_REPORT_SYMBOLS", raising=False)
+        from hft_platform.bot.app import get_report_symbols
+
+        assert get_report_symbols() == ["TXFD6"]
+
+    def test_parses_comma_separated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", "TXFD6,TMFD6,2330")
+        from hft_platform.bot.app import get_report_symbols
+
+        assert get_report_symbols() == ["TXFD6", "TMFD6", "2330"]
+
+    def test_strips_whitespace_and_uppercases(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", " txfd6 , tmfd6 ")
+        from hft_platform.bot.app import get_report_symbols
+
+        assert get_report_symbols() == ["TXFD6", "TMFD6"]
+
+    def test_empty_string_returns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HFT_REPORT_SYMBOLS", "")
+        from hft_platform.bot.app import get_report_symbols
+
+        assert get_report_symbols() == ["TXFD6"]
+
+
 class TestAccessControl:
     @pytest.mark.asyncio
     async def test_owner_allowed(self) -> None:

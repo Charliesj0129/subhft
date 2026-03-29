@@ -56,6 +56,24 @@ def owner_only(func: HandlerFunc) -> HandlerFunc:
 
 
 # ---------------------------------------------------------------------------
+# Symbol configuration
+# ---------------------------------------------------------------------------
+
+
+def get_report_symbols() -> list[str]:
+    """Return the list of symbols to include in reports.
+
+    Reads ``HFT_REPORT_SYMBOLS`` (comma-separated). Falls back to
+    ``["TXFD6"]`` when absent or empty.
+    """
+    raw = os.environ.get("HFT_REPORT_SYMBOLS", "TXFD6")
+    symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    if not symbols:
+        symbols = ["TXFD6"]
+    return symbols
+
+
+# ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
 
