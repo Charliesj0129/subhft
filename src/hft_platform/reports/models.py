@@ -23,6 +23,25 @@ __all__ = [
     "KeyLevel",
     "ScenarioReport",
     "ChannelConfig",
+    # Layer 1: Facts
+    "SegmentFact",
+    "ChipCluster",
+    "ChipFacts",
+    "FlowFacts",
+    "StructureFacts",
+    "VolatilityFacts",
+    "DaySnapshot",
+    "CrossDayFacts",
+    "FactReport",
+    # Layer 2: Reasoning
+    "Evidence",
+    "BiasJudgment",
+    "EnrichedLevel",
+    "NarrativeReport",
+    "ReasoningReport",
+    # Layer 3: Composition
+    "MessagePart",
+    "ComposedReport",
 ]
 
 
@@ -175,3 +194,206 @@ class ChannelConfig:
     chat_id: str
     tier: str
     enabled: bool
+
+
+# ---------------------------------------------------------------------------
+# Three-Layer Architecture Models (Layer 1: Facts)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class SegmentFact:
+    """Facts about a single time segment within a session."""
+
+    name: str  # "pre_open" / "opening" / "midday" / "closing"
+    time_range: str
+    ud_ratio: float
+    net_flow: int
+    volume: int
+    volume_pct: float
+    large_buy_count: int
+    large_sell_count: int
+    high: int
+    low: int
+    dominant_side: str  # "bull" / "bear" / "neutral"
+
+
+@dataclass(slots=True)
+class ChipCluster:
+    """A cluster of large trades near a price level."""
+
+    price_center: int
+    price_range: tuple[int, int]
+    buy_volume: int
+    sell_volume: int
+    trade_count: int
+    dominant_side: str
+    first_ts: str
+    last_ts: str
+    time_range: str
+
+
+@dataclass(slots=True)
+class ChipFacts:
+    """Aggregated chip structure from large trades + volume-at-price."""
+
+    clusters: list[ChipCluster]
+    vap_peaks: list[PriceLevel]
+    buy_zone: tuple[int, int] | None
+    sell_zone: tuple[int, int] | None
+    total_buy_volume: int
+    total_sell_volume: int
+    net_ratio: float
+
+
+@dataclass(slots=True)
+class FlowFacts:
+    """Session-level order flow facts."""
+
+    session_ud: float
+    session_net_flow: int
+    strongest_buy_bar: FlowBar
+    strongest_sell_bar: FlowBar
+    sustained_runs: list[tuple[str, int, str]]
+    volume_spikes: list[tuple[FlowBar, float]]
+    eod_ud: float
+    eod_drift: float
+
+
+@dataclass(slots=True)
+class StructureFacts:
+    """Price structure facts."""
+
+    double_bottoms: list[PriceLevel]
+    double_tops: list[PriceLevel]
+    failed_breakouts: list[PriceLevel]
+    round_numbers: list[PriceLevel]
+    session_high: PriceLevel
+    session_low: PriceLevel
+
+
+@dataclass(slots=True)
+class VolatilityFacts:
+    """Volatility metrics derived from 5m bars."""
+
+    atr_5m: int
+    session_range: int
+    range_atr_ratio: float
+    atr_session: int
+
+
+@dataclass(slots=True)
+class DaySnapshot:
+    """Summary of a single previous trading day/session."""
+
+    date: str
+    session: str
+    open: int
+    high: int
+    low: int
+    close: int
+    volume: int
+    ud_ratio: float
+    net_flow: int
+
+
+@dataclass(slots=True)
+class CrossDayFacts:
+    """Cross-day comparison facts."""
+
+    prev_days: list[DaySnapshot]
+    volume_change_pct: float
+    price_position: str
+    trend_direction: str
+    flow_reversal: bool
+
+
+@dataclass(slots=True)
+class FactReport:
+    """Complete Layer 1 output."""
+
+    session_data: SessionData
+    segments: list[SegmentFact]
+    chips: ChipFacts
+    flow: FlowFacts
+    structure: StructureFacts
+    volatility: VolatilityFacts
+    cross_day: CrossDayFacts
+
+
+# ---------------------------------------------------------------------------
+# Three-Layer Architecture Models (Layer 2: Reasoning)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class Evidence:
+    """A single piece of evidence for bias determination."""
+
+    source: str
+    fact_value: str
+    direction: str
+    weight: float
+
+
+@dataclass(slots=True)
+class BiasJudgment:
+    """Overall market bias with evidence chain."""
+
+    bias: str
+    confidence: float
+    evidences: list[Evidence]
+    summary: str
+
+
+@dataclass(slots=True)
+class EnrichedLevel:
+    """Support/resistance level with confluence information."""
+
+    price: int
+    side: str
+    strength: float
+    sources: list[str]
+    confluence_count: int
+
+
+@dataclass(slots=True)
+class NarrativeReport:
+    """Time-segment narrative output."""
+
+    storyline: list[str]
+    turning_points: list[tuple[str, str]]
+    conclusion: str
+
+
+@dataclass(slots=True)
+class ReasoningReport:
+    """Complete Layer 2 output."""
+
+    bias: BiasJudgment
+    levels: list[EnrichedLevel]
+    scenarios: list[Scenario]
+    narrative: NarrativeReport
+
+
+# ---------------------------------------------------------------------------
+# Three-Layer Architecture Models (Layer 3: Composition)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class MessagePart:
+    """A single part of the composed report."""
+
+    kind: str
+    content: str
+    image: bytes | None = None
+    caption: str = ""
+    min_tier: str = "free"
+
+
+@dataclass(slots=True)
+class ComposedReport:
+    """Complete Layer 3 output."""
+
+    messages: list[MessagePart]
