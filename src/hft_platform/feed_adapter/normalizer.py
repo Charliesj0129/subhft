@@ -143,6 +143,7 @@ class SymbolMetadata:
         self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
         from hft_platform.core.instrument_registry import InstrumentRegistry
+
         self.registry = InstrumentRegistry()
         self._load()
         self._populate_registry()

@@ -610,4 +610,3 @@ class TestNormalizeSnapshot:
         result = norm.normalize_snapshot(payload)
         assert isinstance(result, BidAskEvent)
         assert result.is_snapshot is True
-

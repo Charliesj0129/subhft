@@ -1,21 +1,38 @@
 """Verify SymbolMetadata backward-compat wrapper covers full public API."""
+
 from __future__ import annotations
+
 import pytest
 import yaml
+
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
+
 
 @pytest.fixture
 def symbols_yaml(tmp_path):
     data = {
         "symbols": [
-            {"code": "TXFC0", "exchange": "FUT", "tags": ["futures", "front_month", "txf"], "point_value": 200, "tick_size": 1.0},
+            {
+                "code": "TXFC0",
+                "exchange": "FUT",
+                "tags": ["futures", "front_month", "txf"],
+                "point_value": 200,
+                "tick_size": 1.0,
+            },
             {"code": "2330", "exchange": "TSE", "tags": ["stocks", "tw50"], "tick_size": 0.5},
-            {"code": "TXO22000C202604", "exchange": "OPT", "tags": ["options", "txo"], "product_type": "option", "point_value": 50},
+            {
+                "code": "TXO22000C202604",
+                "exchange": "OPT",
+                "tags": ["options", "txo"],
+                "product_type": "option",
+                "point_value": 50,
+            },
         ],
     }
     path = tmp_path / "symbols.yaml"
     path.write_text(yaml.dump(data))
     return str(path)
+
 
 class TestSymbolMetadataCompat:
     def test_price_scale(self, symbols_yaml):
@@ -77,6 +94,7 @@ class TestSymbolMetadataCompat:
         meta = SymbolMetadata(symbols_yaml)
         assert hasattr(meta, "registry")
         from hft_platform.core.instrument_registry import InstrumentRegistry
+
         assert isinstance(meta.registry, InstrumentRegistry)
 
     def test_registry_populated_from_yaml(self, symbols_yaml):
@@ -91,12 +109,20 @@ class TestSymbolMetadataCompat:
     def test_registry_reload_preserves_dynamic(self, symbols_yaml):
         meta = SymbolMetadata(symbols_yaml)
         from hft_platform.core.instrument_registry import (
-            InstrumentProfile, InstrumentType, FeeStructure, TradingHours,
+            FeeStructure,
+            InstrumentProfile,
+            InstrumentType,
+            TradingHours,
         )
+
         dynamic_profile = InstrumentProfile(
-            symbol="DYN1", instrument_type=InstrumentType.OPTION,
-            underlying="TX", exchange="TAIFEX", multiplier=50,
-            tick_size_scaled=10000, price_scale=10000,
+            symbol="DYN1",
+            instrument_type=InstrumentType.OPTION,
+            underlying="TX",
+            exchange="TAIFEX",
+            multiplier=50,
+            tick_size_scaled=10000,
+            price_scale=10000,
             fee_structure=FeeStructure(tax_rate_bps=20, commission_per_lot=130000),
             trading_hours=TradingHours(day_open="08:45", day_close="13:45", night_open=None, night_close=None),
         )

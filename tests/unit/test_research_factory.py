@@ -245,7 +245,7 @@ def test_alpha_manifest_feature_set_version_roundtrip() -> None:
 
 def test_feature_set_version_constant_matches_default_set() -> None:
     """FEATURE_SET_VERSION constant equals the default FeatureSet id."""
-    from hft_platform.feature.registry import FEATURE_SET_VERSION, build_default_lob_feature_set_v2
+    from hft_platform.feature.registry import FEATURE_SET_VERSION, build_default_lob_feature_set_v3
 
-    fs = build_default_lob_feature_set_v2()
+    fs = build_default_lob_feature_set_v3()
     assert fs.feature_set_id == FEATURE_SET_VERSION

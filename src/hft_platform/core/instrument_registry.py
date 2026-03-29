@@ -6,6 +6,7 @@ It replaces flat ``symbol: str`` + ad-hoc dict lookups throughout the platform.
 
 All monetary fields follow the Precision Law: scaled integers (x10000).
 """
+
 from __future__ import annotations
 
 import enum
@@ -188,11 +189,7 @@ class InstrumentRegistry:
         Returns the number of evicted profiles.  Each eviction is logged at
         WARNING level.
         """
-        to_evict = [
-            sym
-            for sym, prof in self._profiles.items()
-            if prof.expiry is not None and prof.expiry < as_of
-        ]
+        to_evict = [sym for sym, prof in self._profiles.items() if prof.expiry is not None and prof.expiry < as_of]
         for sym in to_evict:
             _log.warning(
                 "evicting_expired_instrument",
@@ -231,9 +228,7 @@ class InstrumentRegistry:
         symbols = self._by_underlying.get(underlying, [])
         return [self._profiles[s] for s in symbols if s in self._profiles]
 
-    def get_options_chain(
-        self, underlying: str, expiry: date
-    ) -> list[InstrumentProfile]:
+    def get_options_chain(self, underlying: str, expiry: date) -> list[InstrumentProfile]:
         """Return all OPTION profiles for *underlying* expiring on *expiry*."""
         return [
             p

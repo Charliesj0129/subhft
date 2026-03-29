@@ -7,9 +7,7 @@ Verifies:
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from hft_platform.contracts.strategy import (
     TIF,

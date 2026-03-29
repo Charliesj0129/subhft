@@ -10,7 +10,7 @@ from hft_platform.feature.rollout import FeatureRolloutController
 def test_feature_profile_registry_load_and_apply(tmp_path: Path):
     path = tmp_path / "feature_profiles.yaml"
     path.write_text(
-        "default_profile_id: p1\nprofiles:\n  - profile_id: p1\n    feature_set_id: lob_shared_v2\n    schema_version: 2\n    enabled: true\n    state: active\n    params:\n      ema_window: 5\n",
+        "default_profile_id: p1\nprofiles:\n  - profile_id: p1\n    feature_set_id: lob_shared_v3\n    schema_version: 3\n    enabled: true\n    state: active\n    params:\n      ema_window: 5\n",
         encoding="utf-8",
     )
     reg = FeatureProfileRegistry.from_file(path)

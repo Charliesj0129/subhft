@@ -222,10 +222,10 @@ def test_lob_feature_mode_feature_tuple_available_via_ctx(monkeypatch):
     adapter.run()
     # feature_tuple should be populated after one iteration
     assert strategy.recorded_tuple is not None
-    # tuple length matches default feature set (v2 = 19 features)
-    from hft_platform.feature.registry import build_default_lob_feature_set_v2
+    # tuple length matches default feature set (v3 = 27 features)
+    from hft_platform.feature.registry import build_default_lob_feature_set_v3
 
-    fs = build_default_lob_feature_set_v2()
+    fs = build_default_lob_feature_set_v3()
     assert len(strategy.recorded_tuple) == len(fs.features)
 
 
