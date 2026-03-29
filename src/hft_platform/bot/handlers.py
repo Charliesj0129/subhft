@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -19,8 +18,29 @@ _TZ = ZoneInfo("Asia/Taipei")
 PLATFORM_SCALE = 10_000
 
 
-def _get_symbol() -> str:
-    return os.environ.get("HFT_BOT_SYMBOL", "TXFD6")
+def _parse_report_args(args: list[str]) -> tuple[str, str | None]:
+    """Parse /report [symbol] [day|night] positional args.
+
+    Returns (symbol, session_or_none).
+    - No args: (default_symbol, None)
+    - One arg: if 'day'/'night' → (default_symbol, session); else → (arg, None)
+    - Two args: (symbol, session)
+    """
+    from hft_platform.bot.app import get_report_symbols
+
+    default_symbol = get_report_symbols()[0]
+    sessions = {"day", "night"}
+
+    if not args:
+        return default_symbol, None
+    if len(args) == 1:
+        if args[0].lower() in sessions:
+            return default_symbol, args[0].lower()
+        return args[0].upper(), None
+    # Two or more args: first = symbol, second = session
+    symbol = args[0].upper()
+    session = args[1].lower() if args[1].lower() in sessions else None
+    return symbol, session
 
 
 def _prev_trading_date(now: datetime) -> str:
@@ -39,10 +59,11 @@ def _collect_core_for_latest() -> Any:
 
     Tries up to 5 days back to find a session with data.
     """
+    from hft_platform.bot.app import get_report_symbols
     from hft_platform.reports.collector import DataCollector, _day_filter, _night_filter
 
     now = datetime.now(_TZ)
-    symbol = _get_symbol()
+    symbol = get_report_symbols()[0]
     collector = DataCollector()
     sd = None
 
@@ -75,22 +96,20 @@ async def cmd_start(update: Any, context: Any) -> None:
 
 @owner_only
 async def cmd_report(update: Any, context: Any) -> None:
-    """Handle /report [day|night] command."""
+    """Handle /report [symbol] [day|night] command."""
     import hft_platform.bot.app as bot_app
-    from hft_platform.reports.pipeline import build_report
+    from hft_platform.reports.pipeline import build_report, resolve_trading_date
 
-    args = context.args or []
-    if args and args[0] in ("day", "night"):
-        session = args[0]
-    else:
+    symbol, session = _parse_report_args(context.args or [])
+    if session is None:
         now = datetime.now(_TZ)
         session = "day" if 7 <= now.hour < 15 else "night"
 
-    date = _prev_trading_date(datetime.now(_TZ))
-    await update.message.reply_text(f"產生報告中... ({session} {date})")
+    date = resolve_trading_date(session)
+    await update.message.reply_text(f"產生報告中... ({symbol} {session} {date})")
 
     try:
-        rendered = build_report(session, date, _get_symbol())
+        rendered = build_report(session, date, symbol)
         bot_app.last_ch_ok = datetime.now(_TZ)
     except Exception as exc:
         _log.error("bot.report_error", exc=str(exc), exc_info=True)

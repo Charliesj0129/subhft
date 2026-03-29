@@ -201,6 +201,77 @@ class TestFlowHandler:
         assert "流向摘要" in reply_text
 
 
+class TestReportArgParsing:
+    """Test /report [symbol] [day|night] positional arg parsing."""
+
+    @pytest.mark.asyncio
+    async def test_no_args_uses_default_symbol_and_auto_session(self) -> None:
+        from hft_platform.bot.handlers import cmd_report
+
+        update = _make_update(chat_id=12345, text="/report")
+        ctx = _make_context()
+        ctx.args = []
+        with (
+            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
+            patch("hft_platform.bot.app.get_report_symbols", return_value=["TXFD6", "TMFD6"]),
+        ):
+            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_asyncio.sleep = AsyncMock()
+            await cmd_report(update, ctx)
+            # First positional arg to build_report is session, second is date, third is symbol
+            assert mock_build.call_args[0][2] == "TXFD6"
+
+    @pytest.mark.asyncio
+    async def test_symbol_only_arg(self) -> None:
+        from hft_platform.bot.handlers import cmd_report
+
+        update = _make_update(chat_id=12345, text="/report 2330")
+        ctx = _make_context()
+        ctx.args = ["2330"]
+        with (
+            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
+        ):
+            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_asyncio.sleep = AsyncMock()
+            await cmd_report(update, ctx)
+            assert mock_build.call_args[0][2] == "2330"
+
+    @pytest.mark.asyncio
+    async def test_session_only_arg(self) -> None:
+        from hft_platform.bot.handlers import cmd_report
+
+        update = _make_update(chat_id=12345, text="/report night")
+        ctx = _make_context()
+        ctx.args = ["night"]
+        with (
+            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
+        ):
+            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_asyncio.sleep = AsyncMock()
+            await cmd_report(update, ctx)
+            assert mock_build.call_args[0][0] == "night"
+
+    @pytest.mark.asyncio
+    async def test_symbol_and_session_args(self) -> None:
+        from hft_platform.bot.handlers import cmd_report
+
+        update = _make_update(chat_id=12345, text="/report TMFD6 night")
+        ctx = _make_context()
+        ctx.args = ["TMFD6", "night"]
+        with (
+            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
+        ):
+            mock_build.return_value = {"paid": ["msg1"], "free": ["fmsg"]}
+            mock_asyncio.sleep = AsyncMock()
+            await cmd_report(update, ctx)
+            assert mock_build.call_args[0][0] == "night"
+            assert mock_build.call_args[0][2] == "TMFD6"
+
+
 class TestReportIntegration:
     """Integration test: /report with real pipeline stages but mocked CH."""
 
