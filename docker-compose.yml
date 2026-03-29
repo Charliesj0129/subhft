@@ -348,6 +348,37 @@ services:
         max-size: "20m"
         max-file: "3"
 
+  hft-bot:
+    build: .
+    container_name: hft-bot
+    command: ["python", "-m", "hft_platform.bot"]
+    environment:
+      - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN:-}
+      - HFT_TELEGRAM_CHAT_ID=${HFT_TELEGRAM_CHAT_ID:-}
+      - HFT_CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - HFT_BOT_SYMBOL=${HFT_BOT_SYMBOL:-TXFD6}
+      - TZ=Asia/Taipei
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
 volumes:
   ch_data_hot:
   ch_data_cold:
