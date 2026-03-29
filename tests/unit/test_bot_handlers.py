@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -32,6 +34,27 @@ def _make_context() -> MagicMock:
     ctx.bot.send_message = AsyncMock()
     ctx.args = []
     return ctx
+
+
+class TestPrevTradingDate:
+    def test_weekday_unchanged(self) -> None:
+        from hft_platform.bot.handlers import _prev_trading_date
+
+        # Wednesday 2026-03-25
+        wed = datetime(2026, 3, 25, 10, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        assert _prev_trading_date(wed) == "2026-03-25"
+
+    def test_saturday_maps_to_friday(self) -> None:
+        from hft_platform.bot.handlers import _prev_trading_date
+
+        sat = datetime(2026, 3, 28, 10, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        assert _prev_trading_date(sat) == "2026-03-27"
+
+    def test_sunday_maps_to_friday(self) -> None:
+        from hft_platform.bot.handlers import _prev_trading_date
+
+        sun = datetime(2026, 3, 29, 10, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        assert _prev_trading_date(sun) == "2026-03-27"
 
 
 class TestGetReportSymbols:

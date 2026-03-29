@@ -58,6 +58,8 @@ def _collect_core_for_latest(symbol: str | None = None) -> Any:
     """Run collect_core() for the most recent session, skipping weekends.
 
     Tries up to 5 days back to find a session with data.
+    Deduplicates dates so that e.g. Saturday and Friday-offset both pointing
+    to the same Friday date do not trigger redundant ClickHouse queries.
     """
     from hft_platform.bot.app import get_report_symbols
     from hft_platform.reports.collector import DataCollector, _day_filter, _night_filter
@@ -67,10 +69,14 @@ def _collect_core_for_latest(symbol: str | None = None) -> Any:
         symbol = get_report_symbols()[0]
     collector = DataCollector()
     sd = None
+    seen_dates: set[str] = set()
 
     for days_back in range(5):
         check_time = now - timedelta(days=days_back)
         date = _prev_trading_date(check_time)
+        if date in seen_dates:
+            continue
+        seen_dates.add(date)
 
         for session in ("day", "night"):
             time_filter = _day_filter(date) if session == "day" else _night_filter(date)
