@@ -54,7 +54,7 @@ def _prev_trading_date(now: datetime) -> str:
     return d.strftime("%Y-%m-%d")
 
 
-def _collect_core_for_latest() -> Any:
+def _collect_core_for_latest(symbol: str | None = None) -> Any:
     """Run collect_core() for the most recent session, skipping weekends.
 
     Tries up to 5 days back to find a session with data.
@@ -63,7 +63,8 @@ def _collect_core_for_latest() -> Any:
     from hft_platform.reports.collector import DataCollector, _day_filter, _night_filter
 
     now = datetime.now(_TZ)
-    symbol = get_report_symbols()[0]
+    if symbol is None:
+        symbol = get_report_symbols()[0]
     collector = DataCollector()
     sd = None
 
@@ -137,8 +138,11 @@ async def cmd_levels(update: Any, context: Any) -> None:
     import hft_platform.bot.app as bot_app
     from hft_platform.reports.signals import SignalEngine
 
+    args = context.args or []
+    symbol = args[0].upper() if args else None
+
     try:
-        sd = _collect_core_for_latest()
+        sd = _collect_core_for_latest(symbol)
         bot_app.last_ch_ok = datetime.now(_TZ)
     except Exception as exc:
         _log.error("bot.levels_error", exc=str(exc), exc_info=True)
@@ -178,8 +182,11 @@ async def cmd_flow(update: Any, context: Any) -> None:
     """Handle /flow command."""
     import hft_platform.bot.app as bot_app
 
+    args = context.args or []
+    symbol = args[0].upper() if args else None
+
     try:
-        sd = _collect_core_for_latest()
+        sd = _collect_core_for_latest(symbol)
         bot_app.last_ch_ok = datetime.now(_TZ)
     except Exception as exc:
         _log.error("bot.flow_error", exc=str(exc), exc_info=True)

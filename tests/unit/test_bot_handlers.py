@@ -272,6 +272,54 @@ class TestReportArgParsing:
             assert mock_build.call_args[0][2] == "TMFD6"
 
 
+class TestLevelsWithSymbol:
+    @pytest.mark.asyncio
+    async def test_levels_with_explicit_symbol(self) -> None:
+        from hft_platform.bot.handlers import cmd_levels
+
+        update = _make_update(chat_id=12345, text="/levels 2330")
+        ctx = _make_context()
+        ctx.args = ["2330"]
+        fake_sd = MagicMock()
+        fake_sd.tick_count = 100
+        fake_sd.session = "day"
+        fake_sd.date = "2026-03-28"
+        fake_sd.symbol = "2330"
+        fake_signal = MagicMock()
+        fake_signal.supports = []
+        fake_signal.resistances = []
+        with (
+            patch("hft_platform.bot.handlers._collect_core_for_latest") as mock_collect,
+            patch("hft_platform.reports.signals.SignalEngine") as MockSignal,
+        ):
+            mock_collect.return_value = fake_sd
+            MockSignal.return_value.analyze.return_value = fake_signal
+            await cmd_levels(update, ctx)
+        mock_collect.assert_called_once_with("2330")
+
+
+class TestFlowWithSymbol:
+    @pytest.mark.asyncio
+    async def test_flow_with_explicit_symbol(self) -> None:
+        from hft_platform.bot.handlers import cmd_flow
+
+        update = _make_update(chat_id=12345, text="/flow TMFD6")
+        ctx = _make_context()
+        ctx.args = ["TMFD6"]
+        fake_sd = MagicMock()
+        fake_sd.tick_count = 100
+        fake_sd.session = "day"
+        fake_sd.date = "2026-03-28"
+        fake_sd.symbol = "TMFD6"
+        fake_sd.volume = 30000
+        fake_sd.flow_5m = []
+        fake_sd.large_trades = []
+        with patch("hft_platform.bot.handlers._collect_core_for_latest") as mock_collect:
+            mock_collect.return_value = fake_sd
+            await cmd_flow(update, ctx)
+        mock_collect.assert_called_once_with("TMFD6")
+
+
 class TestReportIntegration:
     """Integration test: /report with real pipeline stages but mocked CH."""
 
