@@ -1,4 +1,5 @@
 """Tests for FeatureEngine v3 multi-window EMA aggregation features."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -7,7 +8,9 @@ from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData
 from hft_platform.feature.engine import FeatureEngine
 
 
-def _make_stats(symbol: str, best_bid: int, best_ask: int, bid_depth: int, ask_depth: int, ts: int = 1_000_000_000) -> LOBStatsEvent:
+def _make_stats(
+    symbol: str, best_bid: int, best_ask: int, bid_depth: int, ask_depth: int, ts: int = 1_000_000_000
+) -> LOBStatsEvent:
     """Minimal LOBStatsEvent for testing."""
     mid_x2 = best_bid + best_ask
     spread = best_ask - best_bid
@@ -36,7 +39,6 @@ def _make_event(bids: list[list[int]], asks: list[list[int]]) -> BidAskEvent:
 
 
 class TestV3EmaFeatures:
-
     def _make_engine(self) -> FeatureEngine:
         return FeatureEngine(feature_set_id="lob_shared_v3", kernel_backend="python")
 

@@ -956,6 +956,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     ) -> FeatureUpdateEvent | None:
         if self.feature_engine is None or stats is None:
             return None
+        # Forward classified tick data to FeatureEngine for toxicity tracking
+        if isinstance(event, TickEvent) and event.trade_direction != 0:
+            self.feature_engine.on_tick(
+                event.symbol,
+                event.price,
+                event.volume,
+                event.trade_direction,
+                event.trade_confidence,
+            )
         if not hasattr(stats, "best_bid") or not hasattr(stats, "best_ask"):
             return None
         meta = getattr(event, "meta", None)

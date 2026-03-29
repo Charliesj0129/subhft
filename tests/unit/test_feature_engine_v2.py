@@ -268,6 +268,7 @@ def test_get_feature_by_id_mldm() -> None:
 
 def test_v3_registry_has_27_features() -> None:
     from hft_platform.feature.registry import build_default_lob_feature_set_v3
+
     v3 = build_default_lob_feature_set_v3()
     assert v3.feature_set_id == "lob_shared_v3"
     assert v3.schema_version == 3
@@ -282,7 +283,8 @@ def test_v3_registry_has_27_features() -> None:
 
 
 def test_v3_is_default_in_registry() -> None:
-    from hft_platform.feature.registry import default_feature_registry, FEATURE_SET_VERSION
+    from hft_platform.feature.registry import FEATURE_SET_VERSION, default_feature_registry
+
     reg = default_feature_registry()
     assert FEATURE_SET_VERSION == "lob_shared_v3"
     default = reg.get_default()
@@ -296,6 +298,7 @@ def test_v3_backward_compatible_with_v2_indices() -> None:
         build_default_lob_feature_set_v2,
         build_default_lob_feature_set_v3,
     )
+
     v2 = build_default_lob_feature_set_v2()
     v3 = build_default_lob_feature_set_v3()
     for i, spec in enumerate(v2.features):
