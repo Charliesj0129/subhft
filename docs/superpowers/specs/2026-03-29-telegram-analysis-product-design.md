@@ -51,23 +51,46 @@ two-phase product:
   commands.
 - Multi-symbol support is a loop at the scheduler/handler layer; pipeline internals are
   unchanged.
-- Phase 1 → Phase 2 requires only environment variable changes.
+- Phase 1 → Phase 2 requires env var changes **plus** migrating the send path in
+  `handlers.py` and `scheduler.py` from direct `context.bot.send_message()` to
+  `Distributor.send()`. See Section 5 for details.
 
 ## 3. Multi-Symbol Report Mechanism
 
 ### Configuration
 
 ```bash
+# Replaces the existing HFT_BOT_SYMBOL (single symbol) with a comma-separated list.
 HFT_REPORT_SYMBOLS=TXFD6,TMFD6,2330
 ```
 
+### Symbol List Parsing
+
+Responsibility lives in a single shared helper (e.g., `bot/_symbols.py` or top of
+`app.py`):
+
+```python
+def get_report_symbols() -> list[str]:
+    raw = os.environ.get("HFT_REPORT_SYMBOLS", "TXFD6")
+    symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    if not symbols:
+        symbols = ["TXFD6"]
+    return symbols
+```
+
+- **Default**: `["TXFD6"]` when env var is absent or empty.
+- **Ordering**: config order is push order (user controls priority).
+- **Validation**: invalid symbols produce `build_report() → None` (no tick data),
+  logged as warning, not fatal.
+- **Used by**: `scheduler.py` (push loop), `handlers.py` (default symbol for commands).
+
 ### Behaviour
 
-- Scheduler iterates over `HFT_REPORT_SYMBOLS`, calling `build_report(symbol, session)`
-  for each.
+- Scheduler iterates over `get_report_symbols()`, calling
+  `build_report(symbol, session)` for each.
 - Each symbol produces an independent report (no cross-symbol aggregation).
-- Push order: futures first (TXFD6, TMFD6), then equities (2330).
-- 1-second sleep between sends to respect Telegram rate limits.
+- 1.5-second sleep between sends to respect Telegram rate limits (matches existing
+  `ReportSender.send_batch()` default).
 
 ### Per-Symbol Adjustments
 
@@ -86,18 +109,23 @@ HFT_REPORT_SYMBOLS=TXFD6,TMFD6,2330
 
 ### 4.1 handlers.py — Command Handlers
 
-| Command            | Behaviour                                             | Data Source                       |
-| ------------------ | ----------------------------------------------------- | --------------------------------- |
-| `/start`           | Welcome message + command list                        | Static text                       |
-| `/report [symbol]` | Full analysis report (default: first in symbol list)  | `build_report()`                  |
-| `/levels [symbol]` | Support/resistance price levels                       | `collect_core()` → SR rules       |
-| `/flow [symbol]`   | Flow summary (large trades, uptick/downtick)          | `collect_core()` → IF rules       |
-| `/status`          | Bot health (uptime, last push time, CH connection)    | In-memory state from `app.py`     |
+| Command                          | Behaviour                                             | Data Source                       |
+| -------------------------------- | ----------------------------------------------------- | --------------------------------- |
+| `/start`                         | Welcome message + command list                        | Static text                       |
+| `/report [symbol] [day\|night]`  | Full analysis report                                  | `build_report()`                  |
+| `/levels [symbol]`               | Support/resistance price levels                       | `collect_core()` → SR rules       |
+| `/flow [symbol]`                 | Flow summary (large trades, uptick/downtick)          | `collect_core()` → IF rules       |
+| `/status`                        | Bot health (uptime, last push time, CH connection)    | In-memory state from `app.py`     |
 
 - All commands pass through `owner_only()` decorator (from `app.py`).
+- `/report` grammar: `/report [symbol] [day|night]`. Both args optional, positional.
+  - No args: first symbol in `HFT_REPORT_SYMBOLS`, session auto-detected by time of day.
+  - One arg: if it matches `day`/`night`, treat as session; otherwise treat as symbol.
+  - Two args: first = symbol, second = session.
+  - Examples: `/report`, `/report 2330`, `/report night`, `/report TMFD6 night`.
 - `/report` takes 3-5 seconds (ClickHouse query). Send a "generating..." placeholder
-  first, then edit with the full report.
-- Symbol argument is optional; defaults to first entry in `HFT_REPORT_SYMBOLS`.
+  first, then send the full report as 3 (free) or 5 (paid) sequential messages.
+  The placeholder is kept as-is (not edited), followed by the report messages.
 
 ### 4.2 scheduler.py — Scheduled Push
 
@@ -134,7 +162,16 @@ HFT_REPORT_PAID_CHANNEL_ID=<private_channel>
 HFT_REPORT_PAID_ENABLED=1
 ```
 
-- `Distributor` already has free/paid routing logic. Phase 2 is config-only.
+- `Distributor` already has free/paid routing logic (`load_channels()` + tier-based
+  dispatch). However, the current bot code (`handlers.py`, `scheduler.py`) bypasses
+  `Distributor` entirely — it sends `rendered["paid"]` directly via
+  `context.bot.send_message()` to the owner chat.
+- **Phase 2 migration required**: Refactor both `handlers.py` (on-demand) and
+  `scheduler.py` (scheduled push) to route through `Distributor.send(rendered)` instead
+  of direct sends. This ensures free/paid channel routing works automatically.
+  - Phase 1 can keep direct sends (owner-only, always "paid" tier).
+  - Phase 2 implementation MUST switch to Distributor before enabling free/paid channels.
+  - Estimated: ~20 LOC change per file (replace send loop with Distributor call).
 - Member management: manual invite/remove via Telegram.
 
 ### Free vs Paid Content
@@ -204,24 +241,31 @@ hft-bot:
 
 ### New Files
 
-| File                              | Purpose                              |
-| --------------------------------- | ------------------------------------ |
-| `src/hft_platform/bot/handlers.py`| 5 command handlers                   |
-| `src/hft_platform/bot/scheduler.py`| 2 scheduled push jobs              |
-| `tests/unit/test_bot_handlers.py` | Handler unit tests                   |
-| `tests/unit/test_bot_scheduler.py`| Scheduler unit tests                 |
+| File                              | Purpose                                          |
+| --------------------------------- | ------------------------------------------------ |
+| `tests/unit/test_bot_handlers.py` | Handler unit tests (expand existing if present)  |
+| `tests/unit/test_bot_scheduler.py`| Scheduler unit tests (expand existing if present)|
 
-### Modified Files
+### Modified Files (Phase 1)
 
-| File                                 | Change                                        |
-| ------------------------------------ | --------------------------------------------- |
-| `src/hft_platform/bot/app.py`        | Wire handlers + scheduler imports             |
-| `src/hft_platform/reports/pipeline.py`| Add `symbol` parameter to `build_report()`   |
-| `src/hft_platform/reports/collector.py`| Add equity large-trade thresholds            |
-| `docker-compose.yml`                 | Add `hft-bot` service (Phase 1)              |
+| File                                  | Change                                                        |
+| ------------------------------------- | ------------------------------------------------------------- |
+| `src/hft_platform/bot/handlers.py`    | Add symbol+session arg parsing, multi-symbol default, /report grammar |
+| `src/hft_platform/bot/scheduler.py`   | Replace single `_get_symbol()` with `get_report_symbols()` loop |
+| `src/hft_platform/bot/app.py`         | Add `get_report_symbols()` helper or shared symbol config     |
+| `src/hft_platform/reports/collector.py`| Add equity large-trade thresholds (e.g., 2330)               |
+| `docker-compose.yml`                  | Add `hft-bot` service                                        |
+
+### Modified Files (Phase 2 — future)
+
+| File                                  | Change                                                        |
+| ------------------------------------- | ------------------------------------------------------------- |
+| `src/hft_platform/bot/handlers.py`    | Replace direct `context.bot.send_message()` with `Distributor.send()` |
+| `src/hft_platform/bot/scheduler.py`   | Replace direct `context.bot.send_message()` with `Distributor.send()` |
 
 ### Unchanged
 
+- `reports/pipeline.py` — `build_report()` already accepts `symbol` parameter.
 - `reports/signals.py` — rules are symbol-agnostic.
 - `reports/scenarios.py` — derives from signal output, symbol-independent.
 - `reports/renderer.py` — free/paid tier logic already complete.
