@@ -75,7 +75,6 @@ try:
     _RUST_SCALE_BOOK_SEQ = _rust_core.scale_book_seq
     _RUST_SCALE_BOOK_PAIR = _rust_core.scale_book_pair
     _RUST_SCALE_BOOK_PAIR_STATS = getattr(_rust_core, "scale_book_pair_stats", None)
-    _RUST_GET_FIELD = _rust_core.get_field
     _RUST_NORMALIZE_TICK = getattr(_rust_core, "normalize_tick_tuple", None)
     _RUST_NORMALIZE_BIDASK = getattr(_rust_core, "normalize_bidask_tuple", None)
     _RUST_NORMALIZE_BIDASK_NP = getattr(_rust_core, "normalize_bidask_tuple_np", None)
@@ -91,7 +90,6 @@ except Exception as exc:
     _RUST_SCALE_BOOK_SEQ = None
     _RUST_SCALE_BOOK_PAIR = None
     _RUST_SCALE_BOOK_PAIR_STATS = None
-    _RUST_GET_FIELD = None
     _RUST_NORMALIZE_TICK = None
     _RUST_NORMALIZE_BIDASK = None
     _RUST_NORMALIZE_BIDASK_NP = None
@@ -144,7 +142,10 @@ class SymbolMetadata:
         self._exchange_cache: dict[str, str] = {}
         self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
+        from hft_platform.core.instrument_registry import InstrumentRegistry
+        self.registry = InstrumentRegistry()
         self._load()
+        self._populate_registry()
 
     def _load(self) -> None:
         import yaml
@@ -184,6 +185,7 @@ class SymbolMetadata:
 
     def reload(self) -> None:
         self._load()
+        self._populate_registry()
 
     def reload_if_changed(self) -> bool:
         try:
@@ -289,6 +291,81 @@ class SymbolMetadata:
             if key in entry and entry[key] is not None:
                 params[key] = entry[key]
         return params
+
+    def _populate_registry(self) -> None:
+        """Build InstrumentProfile entries from symbols.yaml metadata."""
+        from hft_platform.core.instrument_registry import (
+            FeeStructure,
+            InstrumentProfile,
+            InstrumentType,
+            OptionRight,
+            TradingHours,
+        )
+
+        profiles = []
+        for code, entry in self.meta.items():
+            ptype_str = self.product_type(code)
+            itype = {
+                "future": InstrumentType.FUTURE,
+                "option": InstrumentType.OPTION,
+                "stock": InstrumentType.EQUITY,
+                "equity": InstrumentType.EQUITY,
+                "index": InstrumentType.INDEX,
+            }.get(ptype_str, InstrumentType.EQUITY)
+
+            fee = FeeStructure(
+                tax_rate_bps=int(entry.get("tax_rate_bps", 20)),
+                commission_per_lot=int(entry.get("commission_per_lot", 130000)),
+            )
+            hours = TradingHours(
+                day_open=str(entry.get("day_open", "08:45")),
+                day_close=str(entry.get("day_close", "13:45")),
+                night_open=entry.get("night_open"),
+                night_close=entry.get("night_close"),
+            )
+
+            strike_scaled = None
+            option_right = None
+            expiry = None
+            if itype == InstrumentType.OPTION:
+                raw_strike = entry.get("strike") or entry.get("strike_price")
+                if raw_strike is not None:
+                    strike_scaled = int(float(raw_strike) * self.price_scale(code))
+                raw_right = str(entry.get("right") or entry.get("option_right", ""))
+                if raw_right.upper() in ("C", "CALL"):
+                    option_right = OptionRight.CALL
+                elif raw_right.upper() in ("P", "PUT"):
+                    option_right = OptionRight.PUT
+                raw_expiry = entry.get("expiry")
+                if raw_expiry is not None:
+                    from datetime import date as _d
+
+                    if isinstance(raw_expiry, _d):
+                        expiry = raw_expiry
+                    else:
+                        try:
+                            expiry = _d.fromisoformat(str(raw_expiry))
+                        except ValueError:
+                            pass
+
+            profile = InstrumentProfile(
+                symbol=code,
+                instrument_type=itype,
+                underlying=str(entry.get("underlying", "")),
+                exchange=self.exchange(code),
+                multiplier=self.contract_multiplier(code),
+                tick_size_scaled=int(float(entry.get("tick_size", 1.0)) * self.price_scale(code)),
+                price_scale=self.price_scale(code),
+                fee_structure=fee,
+                trading_hours=hours,
+                lot_size=int(entry.get("lot_size", 1)),
+                strike_scaled=strike_scaled,
+                option_right=option_right,
+                expiry=expiry,
+            )
+            profiles.append(profile)
+
+        self.registry.reload_static(profiles)
 
 
 def _extract_ts_ns(ts_val: Any) -> int:
@@ -415,30 +492,6 @@ class MarketDataNormalizer:
                 if delta >= 0:
                     self.metrics.feed_interarrival_ns.observe(delta)
             setattr(self, last_ts_attr, local_ts)
-
-    def _get_field(self, payload: Any, keys: list) -> Any:
-        """Helper to get value from dict or object using priority keys."""
-        if _RUST_ENABLED and _RUST_GET_FIELD is not None:
-            try:
-                value = _RUST_GET_FIELD(payload, keys)
-                if value is not None:
-                    return value
-            except Exception as exc:
-                logger.debug("rust_get_field_fallback", error=str(exc))
-
-        if isinstance(payload, dict):
-            get = payload.get
-            for key in keys:
-                val = get(key)
-                if val is not None:
-                    return val
-            return None
-
-        for key in keys:
-            val = getattr(payload, key, None)
-            if val is not None:
-                return val
-        return None
 
     def _get_scale(self, symbol: str) -> int:
         if symbol == self._last_symbol:
