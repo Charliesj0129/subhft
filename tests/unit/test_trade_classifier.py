@@ -230,6 +230,16 @@ class TestPrevDirectionPersistence:
         assert c == CONF_TICK_RULE
 
 
+class TestEnabledProperty:
+    def test_enabled_property_returns_true(self) -> None:
+        tc = TradeClassifier(enabled=True)
+        assert tc.enabled is True
+
+    def test_enabled_property_returns_false(self) -> None:
+        tc = TradeClassifier(enabled=False)
+        assert tc.enabled is False
+
+
 class TestCrossedMarketGuard:
     def test_crossed_market_returns_unknown(self) -> None:
         """When best_bid > best_ask (crossed market), return UNKNOWN."""

@@ -58,3 +58,22 @@ def test_serialize_dict_fallback_and_scalar():
     payload = serialize(PlainObject(3))
     assert payload["value"] == 3
     assert serialize(42) == 42
+
+
+class _SlottedMissing:
+    """Object with __slots__ where not all slots are set in __init__."""
+
+    __slots__ = ("present", "missing")
+
+    def __init__(self, value: int) -> None:
+        self.present = value
+        # 'missing' slot intentionally not set
+
+
+def test_serialize_slots_skips_unset_slot():
+    """When a slot exists in __slots__ but the attribute was never set,
+    hasattr(obj, k) returns False and that key is omitted from the result."""
+    obj = _SlottedMissing(42)
+    payload = serialize(obj)
+    assert payload == {"present": 42}
+    assert "missing" not in payload
