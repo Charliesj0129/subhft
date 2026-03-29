@@ -94,3 +94,159 @@ async def test_wal_batch_writer_add_columnar_replays_as_rows(tmp_path: Path):
         flat_rows.extend(payload)
     assert any(row.get("symbol") == "TEST" for row in flat_rows)
     assert any(row.get("symbol") == "TEST2" for row in flat_rows)
+
+
+# ---------------------------------------------------------------------------
+# WALWriter disk pressure: raise policy
+# ---------------------------------------------------------------------------
+
+
+def test_wal_writer_disk_pressure_raise_policy(tmp_path: Path):
+    """_handle_disk_pressure_skip raises RuntimeError when policy is 'raise'."""
+    writer = WALWriter(str(tmp_path))
+    writer._disk_full = True
+    writer._disk_pressure_policy = "raise"
+
+    with pytest.raises(RuntimeError, match="circuit breaker"):
+        writer._handle_disk_pressure_skip("hft.market_data", 10, writer="wal")
+
+
+def test_wal_writer_disk_pressure_halt_policy_returns_false(tmp_path: Path):
+    """_handle_disk_pressure_skip returns False (no raise) when policy is 'halt'."""
+    writer = WALWriter(str(tmp_path))
+    writer._disk_full = True
+    writer._disk_pressure_policy = "halt"
+
+    result = writer._handle_disk_pressure_skip("hft.market_data", 5, writer="wal")
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# WALBatchWriter disk pressure: raise policy
+# ---------------------------------------------------------------------------
+
+
+def test_wal_batch_writer_disk_pressure_raise_policy(tmp_path: Path, monkeypatch):
+    """WALBatchWriter._handle_disk_pressure_skip raises RuntimeError when policy is 'raise'."""
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
+    monkeypatch.setenv("HFT_WAL_DISK_PRESSURE_POLICY", "raise")
+    writer = WALBatchWriter(str(tmp_path))
+    try:
+        writer._disk_full = True
+        with pytest.raises(RuntimeError, match="circuit breaker"):
+            writer._handle_disk_pressure_skip("hft.market_data", 3)
+    finally:
+        writer.stop()
+
+
+def test_wal_batch_writer_disk_pressure_halt_returns_false(tmp_path: Path, monkeypatch):
+    """WALBatchWriter._handle_disk_pressure_skip returns False when policy is 'halt'."""
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
+    monkeypatch.setenv("HFT_WAL_DISK_PRESSURE_POLICY", "halt")
+    writer = WALBatchWriter(str(tmp_path))
+    try:
+        writer._disk_full = True
+        result = writer._handle_disk_pressure_skip("hft.market_data", 3)
+        assert result is False
+    finally:
+        writer.stop()
+
+
+# ---------------------------------------------------------------------------
+# WALBatchWriter: flush with empty buffer is a no-op
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wal_batch_writer_flush_empty_buffer_no_op(tmp_path: Path, monkeypatch):
+    """flush() returns True immediately when buffer is empty without writing any file."""
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
+    writer = WALBatchWriter(str(tmp_path))
+    try:
+        result = await writer.flush()
+        assert result is True
+        # No WAL files should have been written
+        assert list(tmp_path.glob("*.jsonl")) == []
+    finally:
+        writer.stop()
+
+
+# ---------------------------------------------------------------------------
+# WALBatchWriter: stop() flushes buffered rows synchronously
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wal_batch_writer_stop_flushes_buffered_rows(tmp_path: Path, monkeypatch):
+    """stop() writes buffered data to disk without needing an explicit flush()."""
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
+    writer = WALBatchWriter(str(tmp_path))
+    ok = await writer.add_columnar(
+        "hft.ticks",
+        ["symbol", "price"],
+        [["ABC"], [12345]],
+        1,
+    )
+    assert ok is True
+    # Intentionally do NOT call flush() — stop() must flush
+    writer.stop()
+
+    files = list(tmp_path.glob("*.jsonl"))
+    assert len(files) >= 1, "stop() must have written at least one WAL file"
+
+
+# ---------------------------------------------------------------------------
+# WALBatchWriter EC-3: file splitting on size limit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wal_batch_writer_ec3_file_splitting(tmp_path: Path, monkeypatch):
+    """_write_batch_sync splits into multiple files when data exceeds _file_max_bytes."""
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
+    writer = WALBatchWriter(str(tmp_path))
+    try:
+        # Set a tiny file size limit to force splitting (128 bytes)
+        writer._file_max_bytes = 128
+
+        # Write enough rows to exceed the limit
+        rows = [{"symbol": f"SYM{i:04d}", "price": i * 10000} for i in range(30)]
+        data = {"hft.market_data": rows}
+        writer._write_batch_sync(data, 0)
+
+        files = list(tmp_path.glob("batch_*.jsonl"))
+        assert len(files) > 1, "EC-3: multiple files must have been written"
+    finally:
+        writer.stop()
+
+
+# ---------------------------------------------------------------------------
+# WALReplayer: corrupt file is skipped without aborting replay
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wal_replayer_skips_corrupt_file(tmp_path: Path):
+    """A corrupt WAL file should not crash replay; subsequent files may still replay."""
+    # Write a valid WAL file
+    writer = WALWriter(str(tmp_path))
+    valid_fname = tmp_path / "hft.market_data_200.jsonl"
+    writer._write_sync(str(valid_fname), [{"symbol": "GOOD"}])
+
+    # Write a corrupt WAL file that sorts before the valid one
+    corrupt_fname = tmp_path / "hft.market_data_100.jsonl"
+    corrupt_fname.write_text("not valid json!!!\x00\x01\x02\n")
+
+    seen = []
+
+    async def sender(table, data):
+        seen.append((table, data))
+        return True
+
+    replayer = WALReplayer(str(tmp_path), sender)
+    # Must not raise
+    await replayer.replay()
+
+    # At minimum the valid file should have been replayed (corrupt is skipped)
+    symbols_seen = [row.get("symbol") for _, rows in seen for row in rows]
+    assert "GOOD" in symbols_seen

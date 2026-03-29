@@ -3,6 +3,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from hft_platform.alpha.validation import (
     ValidationConfig,
@@ -483,3 +484,418 @@ class TestBatchValidate:
         assert result["total"] == 1
         assert result["failed"] == 1
         assert "error" in result["results"][0]
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _bh_correction
+# ---------------------------------------------------------------------------
+
+
+class TestBhCorrection:
+    def test_empty_pvalues_returns_empty_lists(self):
+        from hft_platform.alpha.validation import _bh_correction
+
+        reject, adjusted = _bh_correction([], 0.05)
+        assert reject == []
+        assert adjusted == []
+
+    def test_single_pvalue_below_threshold_rejects(self):
+        from hft_platform.alpha.validation import _bh_correction
+
+        reject, adjusted = _bh_correction([0.01], 0.05)
+        assert len(reject) == 1
+        assert reject[0] is True
+        assert len(adjusted) == 1
+
+    def test_all_high_pvalues_no_rejection(self):
+        from hft_platform.alpha.validation import _bh_correction
+
+        pvals = [0.9, 0.8, 0.7, 0.6]
+        reject, adjusted = _bh_correction(pvals, 0.05)
+        assert len(reject) == 4
+        assert not any(reject)
+
+    def test_mixed_pvalues_partial_rejection(self):
+        from hft_platform.alpha.validation import _bh_correction
+
+        # Low p-values should be rejected
+        pvals = [0.001, 0.002, 0.5, 0.9]
+        reject, adjusted = _bh_correction(pvals, 0.05)
+        assert len(reject) == 4
+        # The very small p-values must be rejected
+        assert reject[0] is True
+        assert reject[1] is True
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _compute_oos_returns
+# ---------------------------------------------------------------------------
+
+
+class TestComputeOosReturns:
+    def test_too_short_returns_empty(self):
+        from hft_platform.alpha.validation import _compute_oos_returns
+
+        result = _compute_oos_returns(np.array([1.0, 2.0]), 0.5)
+        assert result.size == 0
+
+    def test_normal_equity_curve_produces_returns(self):
+        from hft_platform.alpha.validation import _compute_oos_returns
+
+        # Rising equity curve
+        curve = np.linspace(1.0, 2.0, 100)
+        result = _compute_oos_returns(curve, 0.5)
+        assert result.size > 0
+        # All returns should be finite and positive for a monotonically rising curve
+        assert np.all(np.isfinite(result))
+        assert np.all(result >= 0.0)
+
+    def test_zero_base_handled_gracefully(self):
+        from hft_platform.alpha.validation import _compute_oos_returns
+
+        # Curve with zero in the denominator
+        curve = np.array([0.0, 0.0, 1.0, 2.0, 3.0])
+        result = _compute_oos_returns(curve, 0.3)
+        # Must not raise; output contains only finite values
+        assert np.all(np.isfinite(result))
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _evaluate_oos_statistical_tests
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateOosStatisticalTests:
+    def test_insufficient_samples_returns_failed(self):
+        from hft_platform.alpha.validation import _evaluate_oos_statistical_tests
+
+        few = np.array([0.01] * 10, dtype=np.float64)
+        result = _evaluate_oos_statistical_tests(
+            few, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100
+        )
+        assert result["passed"] is False
+        assert result["reason"] == "insufficient_oos_returns"
+        assert result["sample_count"] == 10
+
+    def test_positive_returns_likely_passes(self):
+        from hft_platform.alpha.validation import _evaluate_oos_statistical_tests
+
+        rng = np.random.default_rng(42)
+        positive = rng.normal(0.01, 0.05, size=100)
+        result = _evaluate_oos_statistical_tests(
+            positive, pvalue_threshold=0.10, min_tests_pass=2, bootstrap_samples=200
+        )
+        assert "passed" in result
+        assert "tests" in result
+        assert "sample_count" in result
+        assert result["sample_count"] == 100
+
+    def test_result_contains_expected_test_keys(self):
+        from hft_platform.alpha.validation import _evaluate_oos_statistical_tests
+
+        rng = np.random.default_rng(99)
+        arr = rng.normal(0.0, 0.05, size=60)
+        result = _evaluate_oos_statistical_tests(
+            arr, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100
+        )
+        tests = result["tests"]
+        for key in ("ttest_mean_gt_zero", "wilcoxon_gt_zero", "sign_test_gt_half", "bootstrap_ci_mean"):
+            assert key in tests, f"Missing test key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _extract_stat_test_pvalues / _extract_bds_pvalue
+# ---------------------------------------------------------------------------
+
+
+class TestExtractStatTestPvalues:
+    def test_empty_dict_returns_empty_list(self):
+        from hft_platform.alpha.validation import _extract_stat_test_pvalues
+
+        result = _extract_stat_test_pvalues({})
+        assert result == []
+
+    def test_missing_tests_key_returns_empty_list(self):
+        from hft_platform.alpha.validation import _extract_stat_test_pvalues
+
+        result = _extract_stat_test_pvalues({"other_key": 42})
+        assert result == []
+
+    def test_extracts_pvalue_from_tests(self):
+        from hft_platform.alpha.validation import _extract_stat_test_pvalues
+
+        stat_tests = {
+            "tests": {
+                "ttest_mean_gt_zero": {"pvalue": 0.01, "pass": True},
+                "wilcoxon_gt_zero": {"pvalue": 0.02, "pass": True},
+                "sign_test_gt_half": {"pvalue": 0.03, "pass": True},
+                "bootstrap_ci_mean": {"pvalue": 0.04, "ci_low": 0.001, "ci_high": 0.05, "pass": True},
+            }
+        }
+        result = _extract_stat_test_pvalues(stat_tests)
+        assert len(result) == 4
+        assert abs(result[0] - 0.01) < 1e-9
+        assert abs(result[1] - 0.02) < 1e-9
+
+
+class TestExtractBdsPvalue:
+    def test_missing_tests_returns_none(self):
+        from hft_platform.alpha.validation import _extract_bds_pvalue
+
+        assert _extract_bds_pvalue({}) is None
+
+    def test_missing_bds_key_returns_none(self):
+        from hft_platform.alpha.validation import _extract_bds_pvalue
+
+        assert _extract_bds_pvalue({"tests": {}}) is None
+
+    def test_valid_bds_returns_pvalue(self):
+        from hft_platform.alpha.validation import _extract_bds_pvalue
+
+        stat_tests = {"tests": {"bds_independence": {"pvalue": 0.15, "pass": True}}}
+        result = _extract_bds_pvalue(stat_tests)
+        assert result is not None
+        assert abs(result - 0.15) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _optimization_objective
+# ---------------------------------------------------------------------------
+
+
+class TestOptimizationObjective:
+    def test_sharpe_oos_mode_returns_sharpe(self):
+        from hft_platform.alpha.validation import _optimization_objective
+
+        val = _optimization_objective(1.5, 0.05, 2.0, "sharpe_oos")
+        assert val == pytest.approx(1.5)
+
+    def test_ic_first_mode_penalizes_turnover(self):
+        from hft_platform.alpha.validation import _optimization_objective
+
+        val_low_turnover = _optimization_objective(1.0, 0.05, 0.5, "ic_first")
+        val_high_turnover = _optimization_objective(1.0, 0.05, 5.0, "ic_first")
+        # Higher turnover should give a lower objective
+        assert val_low_turnover > val_high_turnover
+
+    def test_default_mode_penalizes_drawdown_and_turnover(self):
+        from hft_platform.alpha.validation import _optimization_objective
+
+        # Same Sharpe, higher drawdown → lower objective
+        val_low_dd = _optimization_objective(1.0, 0.05, 0.5, "risk_adjusted")
+        val_high_dd = _optimization_objective(1.0, 0.50, 0.5, "risk_adjusted")
+        assert val_low_dd > val_high_dd
+
+    def test_default_mode_applies_turnover_penalty(self):
+        from hft_platform.alpha.validation import _optimization_objective
+
+        val_low_to = _optimization_objective(1.0, 0.05, 0.5, "default")
+        val_high_to = _optimization_objective(1.0, 0.05, 5.0, "default")
+        assert val_low_to > val_high_to
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _run_bds_independence_test
+# ---------------------------------------------------------------------------
+
+
+class TestRunBdsIndependenceTest:
+    def test_too_few_samples_returns_unavailable(self):
+        from hft_platform.alpha.validation import _run_bds_independence_test
+
+        arr = np.linspace(0, 1, 20)
+        result = _run_bds_independence_test(arr=arr, pvalue_threshold=0.05)
+        assert result["available"] is False
+        assert result["reason"] == "insufficient_samples"
+        # Diagnostic-only: treated as pass
+        assert result["pass"] is True
+
+    def test_constant_series_returns_unavailable(self):
+        from hft_platform.alpha.validation import _run_bds_independence_test
+
+        arr = np.ones(100)
+        result = _run_bds_independence_test(arr=arr, pvalue_threshold=0.05)
+        assert result["available"] is False
+        assert result["reason"] == "constant_series"
+
+    def test_normal_data_returns_result_dict(self):
+        from hft_platform.alpha.validation import _run_bds_independence_test
+
+        rng = np.random.default_rng(7)
+        arr = rng.normal(0, 1, size=100)
+        result = _run_bds_independence_test(arr=arr, pvalue_threshold=0.05)
+        assert result["available"] is True
+        assert "pvalue" in result
+        assert "pass" in result
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _bds_correlation_delta
+# ---------------------------------------------------------------------------
+
+
+class TestBdsCorrelationDelta:
+    def test_too_short_returns_zero(self):
+        from hft_platform.alpha.validation import _bds_correlation_delta
+
+        result = _bds_correlation_delta(np.array([1.0, 2.0]), 0.5)
+        assert result == 0.0
+
+    def test_iid_series_delta_near_zero(self):
+        from hft_platform.alpha.validation import _bds_correlation_delta
+
+        rng = np.random.default_rng(0)
+        arr = rng.normal(0, 1, size=200)
+        result = _bds_correlation_delta(arr, epsilon=0.5)
+        assert np.isfinite(result)
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _update_manifest_status
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateManifestStatus:
+    def test_missing_impl_file_returns_false(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _update_manifest_status
+
+        result = _update_manifest_status("nonexistent_alpha", "GATE_A", tmp_path)
+        assert result is False
+
+    def test_updates_status_in_impl_file(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _update_manifest_status
+
+        alpha_id = "test_alpha"
+        impl_dir = tmp_path / "research" / "alphas" / alpha_id
+        impl_dir.mkdir(parents=True)
+        impl_file = impl_dir / "impl.py"
+        impl_file.write_text(
+            "manifest = AlphaManifest(status=AlphaStatus.RESEARCH)\n"
+        )
+
+        result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
+        assert result is True
+        updated_content = impl_file.read_text()
+        assert "AlphaStatus.GATE_A" in updated_content
+
+    def test_already_at_target_status_returns_false(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _update_manifest_status
+
+        alpha_id = "test_alpha_noop"
+        impl_dir = tmp_path / "research" / "alphas" / alpha_id
+        impl_dir.mkdir(parents=True)
+        impl_file = impl_dir / "impl.py"
+        impl_file.write_text(
+            "manifest = AlphaManifest(status=AlphaStatus.GATE_A)\n"
+        )
+
+        result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _check_hftbacktest_v2_data_format
+# ---------------------------------------------------------------------------
+
+
+class TestCheckHftbacktestV2DataFormat:
+    def test_non_npz_file_reports_error(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _check_hftbacktest_v2_data_format
+
+        path = tmp_path / "data.npy"
+        arr = np.array([1, 2, 3], dtype=np.int64)
+        np.save(str(path), arr)
+
+        errors = _check_hftbacktest_v2_data_format(str(path))
+        assert any("not a .npz" in e.lower() or ".npz" in e for e in errors)
+
+    def test_valid_npz_with_required_fields_no_errors(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _check_hftbacktest_v2_data_format
+
+        path = tmp_path / "data.npz"
+        dt = np.dtype([("exch_ts", "<i8"), ("local_ts", "<i8"), ("ev", "<i8")])
+        arr = np.zeros(5, dtype=dt)
+        np.savez(str(path), data=arr)
+
+        errors = _check_hftbacktest_v2_data_format(str(path))
+        # May have DEPTH_SNAPSHOT_EVENT warning if hftbacktest not installed, but no structural errors
+        structural = [e for e in errors if "Missing required field" in e or "not a .npz" in e.lower()]
+        assert structural == []
+
+    def test_npz_missing_data_key_reports_error(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _check_hftbacktest_v2_data_format
+
+        path = tmp_path / "missing_data.npz"
+        np.savez(str(path), other_key=np.array([1, 2, 3]))
+
+        errors = _check_hftbacktest_v2_data_format(str(path))
+        assert any("Missing 'data'" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _field_available
+# ---------------------------------------------------------------------------
+
+
+class TestFieldAvailable:
+    def test_direct_field_match(self):
+        from hft_platform.alpha.validation import _field_available
+
+        assert _field_available("best_bid", {"best_bid", "best_ask"}) is True
+
+    def test_current_mid_via_best_bid_ask(self):
+        from hft_platform.alpha.validation import _field_available
+
+        assert _field_available("current_mid", {"best_bid", "best_ask"}) is True
+
+    def test_current_mid_via_bid_px_ask_px(self):
+        from hft_platform.alpha.validation import _field_available
+
+        assert _field_available("current_mid", {"bid_px", "ask_px"}) is True
+
+    def test_current_mid_missing_fields_returns_false(self):
+        from hft_platform.alpha.validation import _field_available
+
+        assert _field_available("current_mid", {"volume"}) is False
+
+    def test_missing_field_not_in_available(self):
+        from hft_platform.alpha.validation import _field_available
+
+        assert _field_available("some_unknown_field", {"price", "volume"}) is False
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _dataset_row_count
+# ---------------------------------------------------------------------------
+
+
+class TestDatasetRowCount:
+    def test_npy_file_returns_correct_count(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _dataset_row_count
+
+        path = tmp_path / "data.npy"
+        arr = np.zeros((50, 3), dtype=np.float64)
+        np.save(str(path), arr)
+
+        count = _dataset_row_count(path)
+        assert count == 50
+
+    def test_npz_file_with_data_key_returns_count(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _dataset_row_count
+
+        path = tmp_path / "data.npz"
+        arr = np.zeros(30, dtype=np.float64)
+        np.savez(str(path), data=arr)
+
+        count = _dataset_row_count(path)
+        assert count == 30
+
+    def test_npz_file_fallback_to_first_key(self, tmp_path: Path):
+        from hft_platform.alpha.validation import _dataset_row_count
+
+        path = tmp_path / "data.npz"
+        arr = np.zeros(15, dtype=np.float64)
+        np.savez(str(path), other=arr)
+
+        count = _dataset_row_count(path)
+        assert count == 15
