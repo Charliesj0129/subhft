@@ -43,6 +43,7 @@ _LARGE_TRADE_THRESHOLDS: dict[str, int] = {
     "TXFD6": 10,
     "TMFD6": 30,
     "MXFD6": 30,
+    "2330": 100,
 }
 _DEFAULT_LARGE_TRADE_THRESHOLD = 10
 
