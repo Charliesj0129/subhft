@@ -33,12 +33,13 @@ from hft_platform.strategies.simple_mm import SimpleMarketMaker
 
 logger = get_logger("strategy.opportunistic_mm")
 
-# Feature indices for lob_shared_v2
+# Feature indices for lob_shared_v2/v3 (v3 is superset; indices [0]-[21] unchanged)
 _IDX_OFI_DEPTH_NORM_PPM = 16
 _IDX_RET_AUTOCOV_5S_X1E6 = 17
 _IDX_TOB_SURVIVAL_MS = 18
 _IDX_L1_BID_QTY = 8
 _IDX_L1_ASK_QTY = 9
+_IDX_TOXICITY_EMA50_X1000 = 21
 
 # Log sampling: emit debug log every N events to avoid flooding
 _LOG_SAMPLE_INTERVAL = 500
@@ -82,6 +83,8 @@ class OpportunisticMM(SimpleMarketMaker):
         reversal_autocov_threshold: int = 0,
         reversal_tob_max_ms: int = 2000,
         reversal_min_depth_ratio: float = 0.3,
+        toxicity_filter_enabled: bool = False,
+        toxicity_max_threshold: int = 700,
         **kwargs: object,
     ) -> None:
         super().__init__(strategy_id=strategy_id, **kwargs)
@@ -92,6 +95,9 @@ class OpportunisticMM(SimpleMarketMaker):
         self._reversal_autocov_threshold: int = reversal_autocov_threshold
         self._reversal_tob_max_ms: int = reversal_tob_max_ms
         self._reversal_min_depth_ratio: float = reversal_min_depth_ratio
+        self._toxicity_filter_enabled: bool = toxicity_filter_enabled
+        self._toxicity_max_threshold: int = toxicity_max_threshold
+        self._toxicity_blocked_count: int = 0
         # Cache latest feature tuple per symbol
         self._feature_cache: dict[str, tuple[int | float, ...]] = {}
         # Observability counters (no hot-path allocation — plain int)
@@ -110,6 +116,7 @@ class OpportunisticMM(SimpleMarketMaker):
             spread_threshold_pts=self._spread_threshold_pts,
             spread_threshold_scaled=self._spread_threshold_scaled,
             reversal_filter_enabled=reversal_filter_enabled,
+            toxicity_filter_enabled=toxicity_filter_enabled,
         )
 
     def on_features(self, event: FeatureUpdateEvent) -> None:
@@ -152,6 +159,25 @@ class OpportunisticMM(SimpleMarketMaker):
             ratio = float(min_side) / float(total)
             if ratio < self._reversal_min_depth_ratio:
                 return False
+
+        return True
+
+    def _check_toxicity_condition(self, symbol: str) -> bool:
+        """Check if current flow toxicity is low enough to safely quote.
+
+        Returns True if conditions favor quoting, False to skip.
+        If toxicity filter is disabled or features unavailable, returns True (permissive).
+        """
+        if not self._toxicity_filter_enabled:
+            return True
+
+        features = self._feature_cache.get(symbol)
+        if features is None or len(features) <= _IDX_TOXICITY_EMA50_X1000:
+            return True
+
+        toxicity = int(features[_IDX_TOXICITY_EMA50_X1000])
+        if toxicity > self._toxicity_max_threshold:
+            return False
 
         return True
 
@@ -206,6 +232,7 @@ class OpportunisticMM(SimpleMarketMaker):
                 gate_blocked=self._gate_blocked_count,
                 invalid=self._invalid_data_count,
                 reversal_blocked=self._reversal_blocked_count,
+                toxicity_blocked=self._toxicity_blocked_count,
             )
 
         # Spread gate: only quote when spread >= threshold (integer comparison, no float)
@@ -223,6 +250,11 @@ class OpportunisticMM(SimpleMarketMaker):
         # Reversal filter gate: only quote when conditions favor maker
         if not self._check_reversal_condition(symbol):
             self._reversal_blocked_count += 1
+            return
+
+        # Toxicity filter gate: skip quoting when flow is too toxic (adverse selection)
+        if not self._check_toxicity_condition(symbol):
+            self._toxicity_blocked_count += 1
             return
 
         # Wide spread + reversal conditions met: delegate to SimpleMarketMaker

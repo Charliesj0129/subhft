@@ -6,8 +6,8 @@ from hft_platform.strategy.compat import check_strategy_feature_compat
 
 class DummyStrategy:
     strategy_id = "s1"
-    required_feature_set_id = "lob_shared_v2"
-    required_feature_schema_version = 2
+    required_feature_set_id = "lob_shared_v3"
+    required_feature_schema_version = 3
     required_feature_profile_id = None
     required_feature_ids = ["spread_scaled", "microprice_x2"]
     optional_feature_ids = ["nonexistent_optional"]
