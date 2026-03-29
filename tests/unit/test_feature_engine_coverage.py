@@ -50,8 +50,8 @@ def _stats(
 
 def _make_profile(
     *,
-    feature_set_id: str = "lob_shared_v2",
-    schema_version: int | None = 2,
+    feature_set_id: str = "lob_shared_v3",
+    schema_version: int | None = 3,
     params: dict | None = None,
 ) -> FeatureProfile:
     return FeatureProfile(
@@ -70,15 +70,15 @@ def _make_profile(
 class TestFeatureEngineInit:
     def test_default_init(self) -> None:
         eng = FeatureEngine()
-        assert eng.feature_set_id() == "lob_shared_v2"
-        assert eng.schema_version() == 2
+        assert eng.feature_set_id() == "lob_shared_v3"
+        assert eng.schema_version() == 3
         assert eng.kernel_backend() == "python"
         assert eng.active_profile_id() is None
 
     def test_init_with_explicit_registry(self) -> None:
         reg = default_feature_registry()
         eng = FeatureEngine(registry=reg)
-        assert eng.feature_set_id() == "lob_shared_v2"
+        assert eng.feature_set_id() == "lob_shared_v3"
 
     def test_init_with_feature_set_id(self) -> None:
         eng = FeatureEngine(feature_set_id="lob_shared_v2")
@@ -304,8 +304,8 @@ class TestGetFeatureView:
         view = eng.get_feature_view("TXFD6")
         assert view is not None
         assert view["symbol"] == "TXFD6"
-        assert view["feature_set_id"] == "lob_shared_v2"
-        assert view["schema_version"] == 2
+        assert view["feature_set_id"] == "lob_shared_v3"
+        assert view["schema_version"] == 3
         assert view["seq"] == 1
         assert "feature_ids" in view
         assert "values" in view
@@ -435,12 +435,16 @@ class TestFeatureRegistry:
     def test_to_dict_structure(self) -> None:
         reg = default_feature_registry()
         d = reg.to_dict()
-        assert d["default"] == "lob_shared_v2"
+        assert d["default"] == "lob_shared_v3"
         assert "lob_shared_v1" in d["feature_sets"]
         assert "lob_shared_v2" in d["feature_sets"]
+        assert "lob_shared_v3" in d["feature_sets"]
         fs_v2 = d["feature_sets"]["lob_shared_v2"]
         assert fs_v2["schema_version"] == 2
-        assert len(fs_v2["features"]) == 21
+        assert len(fs_v2["features"]) == 22
+        fs_v3 = d["feature_sets"]["lob_shared_v3"]
+        assert fs_v3["schema_version"] == 3
+        assert len(fs_v3["features"]) == 27
 
     def test_from_sets_factory(self) -> None:
         fs1 = FeatureSet("a", 1, ())

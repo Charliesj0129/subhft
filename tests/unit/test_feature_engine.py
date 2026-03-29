@@ -27,8 +27,8 @@ def test_feature_engine_emits_default_feature_update():
     eng = FeatureEngine()
     evt = eng.process_lob_stats(_stats(), local_ts_ns=2)
     assert evt is not None
-    assert evt.feature_set_id == "lob_shared_v2"
-    assert evt.schema_version == 2
+    assert evt.feature_set_id == "lob_shared_v3"
+    assert evt.schema_version == 3
     assert evt.seq == 1
     assert evt.symbol == "2330"
     assert evt.ts == 1
@@ -41,7 +41,7 @@ def test_feature_engine_emits_default_feature_update():
     assert eng.get_feature("2330", "spread_scaled") == 1000
     view = eng.get_feature_view("2330")
     assert view is not None
-    assert view["feature_set_id"] == "lob_shared_v2"
+    assert view["feature_set_id"] == "lob_shared_v3"
 
 
 def test_feature_engine_v1_explicit():
@@ -208,10 +208,10 @@ def test_get_feature_tuple_length():
     eng.process_lob_stats(_stats())
     tpl = eng.get_feature_tuple("2330")
     assert tpl is not None
-    # Default is v2 — verify count matches registry definition
-    from hft_platform.feature.registry import build_default_lob_feature_set_v2
+    # Default is v3 — verify count matches registry definition
+    from hft_platform.feature.registry import build_default_lob_feature_set_v3
 
-    fs = build_default_lob_feature_set_v2()
+    fs = build_default_lob_feature_set_v3()
     assert len(tpl) == len(fs.features)
 
     # v1 explicit: 16 features
@@ -528,9 +528,9 @@ def test_feature_engine_rust_backend_parity_when_available():
 # --- v2 features tests ---
 
 
-def test_v2_feature_set_has_21_features():
+def test_v2_feature_set_has_22_features():
     fs = build_default_lob_feature_set_v2()
-    assert len(fs.features) == 21
+    assert len(fs.features) == 22
     assert fs.feature_set_id == "lob_shared_v2"
     assert fs.schema_version == 2
     assert fs.features[16].feature_id == "ofi_depth_norm_ppm"
@@ -538,6 +538,7 @@ def test_v2_feature_set_has_21_features():
     assert fs.features[18].feature_id == "tob_survival_ms"
     assert fs.features[19].feature_id == "impact_surprise_x1000"
     assert fs.features[20].feature_id == "deep_depth_momentum_x1000"
+    assert fs.features[21].feature_id == "toxicity_ema50_x1000"
 
 
 def test_v2_ofi_depth_norm_basic():
