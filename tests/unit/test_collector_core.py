@@ -53,9 +53,9 @@ class TestCollectCore:
         """collect_core() returns a SessionData instance."""
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
-            _make_ohlcv_row(),   # Q1
-            _make_bar_row(),     # Q2
-            _make_flow_row(),    # Q3
+            _make_ohlcv_row(),  # Q1
+            _make_bar_row(),  # Q2
+            _make_flow_row(),  # Q3
             _make_large_trade_row(),  # Q4
         ]
         result = collector.collect_core("TXFD6", "exch_ts > 0")
@@ -118,9 +118,7 @@ class TestCollectCore:
             _make_flow_row(),
             _make_large_trade_row(),
         ]
-        result = collector.collect_core(
-            "TXFD6", "exch_ts > 0", session="night", date="2026-03-27"
-        )
+        result = collector.collect_core("TXFD6", "exch_ts > 0", session="night", date="2026-03-27")
         assert result.session == "night"
         assert result.date == "2026-03-27"
 
@@ -166,12 +164,12 @@ class TestCollectDelegation:
         """collect() runs Q1-Q6, i.e. exactly 6 _execute calls."""
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
-            _make_ohlcv_row(),       # Q1
-            _make_bar_row(),         # Q2
-            _make_flow_row(),        # Q3
-            _make_large_trade_row(), # Q4
-            [(1, 500)],              # Q5 spread
-            [(9, 10.0, 8.0)],        # Q6 depth
+            _make_ohlcv_row(),  # Q1
+            _make_bar_row(),  # Q2
+            _make_flow_row(),  # Q3
+            _make_large_trade_row(),  # Q4
+            [(1, 500)],  # Q5 spread
+            [(9, 10.0, 8.0)],  # Q6 depth
         ]
         result = collector.collect("day", "2026-03-28", "TXFD6")
         assert mock_execute.call_count == 6

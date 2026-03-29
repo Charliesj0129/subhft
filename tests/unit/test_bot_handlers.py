@@ -15,6 +15,7 @@ def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_TELEGRAM_CHAT_ID", OWNER_CHAT_ID)
     # Reset cached owner ID so monkeypatch takes effect
     import hft_platform.bot.app as bot_app
+
     bot_app._OWNER_CHAT_ID = 0
 
 
@@ -69,6 +70,7 @@ class TestStartHandler:
     @pytest.mark.asyncio
     async def test_start_replies_with_menu(self) -> None:
         from hft_platform.bot.handlers import cmd_start
+
         update = _make_update(chat_id=12345)
         ctx = _make_context()
         await cmd_start(update, ctx)
@@ -83,6 +85,7 @@ class TestReportHandler:
     @pytest.mark.asyncio
     async def test_report_sends_paid_messages(self) -> None:
         from hft_platform.bot.handlers import cmd_report
+
         update = _make_update(chat_id=12345, text="/report day")
         ctx = _make_context()
         ctx.args = ["day"]
@@ -101,6 +104,7 @@ class TestReportHandler:
     @pytest.mark.asyncio
     async def test_report_no_data_replies_message(self) -> None:
         from hft_platform.bot.handlers import cmd_report
+
         update = _make_update(chat_id=12345, text="/report day")
         ctx = _make_context()
         ctx.args = ["day"]
@@ -115,6 +119,7 @@ class TestStatusHandler:
     @pytest.mark.asyncio
     async def test_status_includes_uptime(self) -> None:
         from hft_platform.bot.handlers import cmd_status
+
         update = _make_update(chat_id=12345)
         ctx = _make_context()
         await cmd_status(update, ctx)
@@ -126,6 +131,7 @@ class TestLevelsHandler:
     @pytest.mark.asyncio
     async def test_levels_returns_sr_text(self) -> None:
         from hft_platform.bot.handlers import cmd_levels
+
         update = _make_update(chat_id=12345)
         ctx = _make_context()
         fake_sd = MagicMock()
@@ -151,6 +157,7 @@ class TestFlowHandler:
     @pytest.mark.asyncio
     async def test_flow_returns_summary(self) -> None:
         from hft_platform.bot.handlers import cmd_flow
+
         update = _make_update(chat_id=12345)
         ctx = _make_context()
         fake_sd = MagicMock()
@@ -194,20 +201,65 @@ class TestReportIntegration:
             volume=50000,
             tick_count=1000,
             bars_5m=[
-                Bar5m(ts="2026-03-28 09:00:00", open=20000 * SCALE, high=20200 * SCALE,
-                      low=19900 * SCALE, close=20100 * SCALE, volume=5000, ticks=100),
-                Bar5m(ts="2026-03-28 09:05:00", open=20100 * SCALE, high=20500 * SCALE,
-                      low=20000 * SCALE, close=20300 * SCALE, volume=6000, ticks=120),
-                Bar5m(ts="2026-03-28 09:10:00", open=20300 * SCALE, high=20400 * SCALE,
-                      low=20100 * SCALE, close=20200 * SCALE, volume=4000, ticks=80),
+                Bar5m(
+                    ts="2026-03-28 09:00:00",
+                    open=20000 * SCALE,
+                    high=20200 * SCALE,
+                    low=19900 * SCALE,
+                    close=20100 * SCALE,
+                    volume=5000,
+                    ticks=100,
+                ),
+                Bar5m(
+                    ts="2026-03-28 09:05:00",
+                    open=20100 * SCALE,
+                    high=20500 * SCALE,
+                    low=20000 * SCALE,
+                    close=20300 * SCALE,
+                    volume=6000,
+                    ticks=120,
+                ),
+                Bar5m(
+                    ts="2026-03-28 09:10:00",
+                    open=20300 * SCALE,
+                    high=20400 * SCALE,
+                    low=20100 * SCALE,
+                    close=20200 * SCALE,
+                    volume=4000,
+                    ticks=80,
+                ),
             ],
             flow_5m=[
-                FlowBar(ts="2026-03-28 09:00:00", ticks=100, total_vol=5000,
-                         uptick_vol=3000, downtick_vol=2000, flat_vol=0, ud_ratio=1.5, net_flow=1000),
-                FlowBar(ts="2026-03-28 09:05:00", ticks=120, total_vol=6000,
-                         uptick_vol=2000, downtick_vol=4000, flat_vol=0, ud_ratio=0.5, net_flow=-2000),
-                FlowBar(ts="2026-03-28 09:10:00", ticks=80, total_vol=4000,
-                         uptick_vol=1500, downtick_vol=2500, flat_vol=0, ud_ratio=0.6, net_flow=-1000),
+                FlowBar(
+                    ts="2026-03-28 09:00:00",
+                    ticks=100,
+                    total_vol=5000,
+                    uptick_vol=3000,
+                    downtick_vol=2000,
+                    flat_vol=0,
+                    ud_ratio=1.5,
+                    net_flow=1000,
+                ),
+                FlowBar(
+                    ts="2026-03-28 09:05:00",
+                    ticks=120,
+                    total_vol=6000,
+                    uptick_vol=2000,
+                    downtick_vol=4000,
+                    flat_vol=0,
+                    ud_ratio=0.5,
+                    net_flow=-2000,
+                ),
+                FlowBar(
+                    ts="2026-03-28 09:10:00",
+                    ticks=80,
+                    total_vol=4000,
+                    uptick_vol=1500,
+                    downtick_vol=2500,
+                    flat_vol=0,
+                    ud_ratio=0.6,
+                    net_flow=-1000,
+                ),
             ],
             large_trades=[
                 LargeTrade(ts="2026-03-28 09:02:00", price=20100 * SCALE, volume=30, direction="buy"),

@@ -61,9 +61,7 @@ def _make_stage_mocks(session_data, signal_report, scenario_report):
 
 
 class TestBuildReport:
-    def test_returns_rendered_dict_on_success(
-        self, mock_session_data, mock_signal_report, mock_scenario_report
-    ):
+    def test_returns_rendered_dict_on_success(self, mock_session_data, mock_signal_report, mock_scenario_report):
         """build_report returns dict with 'free' and 'paid' keys when data exists."""
         collector, engine, builder, renderer = _make_stage_mocks(
             mock_session_data, mock_signal_report, mock_scenario_report
@@ -111,9 +109,7 @@ class TestBuildReport:
         builder.build.assert_not_called()
         renderer.render.assert_not_called()
 
-    def test_default_symbol_is_txfd6(
-        self, mock_session_data, mock_signal_report, mock_scenario_report
-    ):
+    def test_default_symbol_is_txfd6(self, mock_session_data, mock_signal_report, mock_scenario_report):
         """build_report passes 'TXFD6' as the default symbol to collector.collect."""
         collector, engine, builder, renderer = _make_stage_mocks(
             mock_session_data, mock_signal_report, mock_scenario_report
@@ -131,9 +127,7 @@ class TestBuildReport:
 
         collector.collect.assert_called_once_with("day", "2026-03-28", "TXFD6")
 
-    def test_custom_symbol_is_forwarded(
-        self, mock_session_data, mock_signal_report, mock_scenario_report
-    ):
+    def test_custom_symbol_is_forwarded(self, mock_session_data, mock_signal_report, mock_scenario_report):
         """build_report forwards a custom symbol to collector.collect."""
         collector, engine, builder, renderer = _make_stage_mocks(
             mock_session_data, mock_signal_report, mock_scenario_report
