@@ -153,41 +153,42 @@ class DataCollector:
     # Public API
     # ------------------------------------------------------------------
 
-    def collect(
+    def collect_core(
         self,
-        session: str,
-        date: str,
-        symbol: str = "TXFD6",
+        symbol: str,
+        time_filter: str,
+        *,
+        session: str = "",
+        date: str = "",
     ) -> SessionData:
-        """Collect all data for *symbol* on *date* for the given *session*.
+        """Collect lightweight data for *symbol* using a pre-built *time_filter*.
+
+        Runs only Q1 (OHLCV), Q2 (5m bars), Q3 (flow), Q4 (large trades).
+        Q5 (spread distribution) and Q6 (depth imbalance) are skipped;
+        the returned :class:`SessionData` will have ``spread_dist={}`` and
+        ``depth_imbalance=[]``.
+
+        This is the preferred entry point for commands that do not require the
+        heavy Array-column queries (e.g. the Telegram bot ``/levels`` and
+        ``/flow`` commands).
 
         Parameters
         ----------
-        session:
-            ``"day"`` or ``"night"``.
-        date:
-            ISO date string, e.g. ``"2026-03-27"``.
         symbol:
             Instrument identifier, e.g. ``"TXFD6"``.
+        time_filter:
+            A SQL WHERE snippet for the desired time range (produced by
+            :func:`_day_filter` or :func:`_night_filter`).
+        session:
+            Optional session label (``"day"`` / ``"night"``) stored on the
+            result; defaults to ``""``.
+        date:
+            Optional ISO date string stored on the result; defaults to ``""``.
         """
-        time_filter = _day_filter(date) if session == "day" else _night_filter(date)
-
         ohlcv = self._query_ohlcv(symbol, time_filter)
         bars = self._query_5m_bars(symbol, time_filter)
         flow = self._query_flow(symbol, time_filter)
         large = self._query_large_trades(symbol, time_filter)
-        # Spread and depth queries touch Array columns and can OOM on large sessions.
-        # Gracefully degrade if they fail.
-        try:
-            spread = self._query_spread_dist(symbol, time_filter)
-        except Exception:  # noqa: BLE001
-            log.warning("Q5 spread query failed (likely OOM), skipping", symbol=symbol)
-            spread = {}
-        try:
-            depth = self._query_depth_imbalance(symbol, time_filter)
-        except Exception:  # noqa: BLE001
-            log.warning("Q6 depth query failed (likely OOM), skipping", symbol=symbol)
-            depth = []
 
         return SessionData(
             session=session,
@@ -202,6 +203,60 @@ class DataCollector:
             bars_5m=bars,
             flow_5m=flow,
             large_trades=large,
+            spread_dist={},
+            depth_imbalance=[],
+        )
+
+    def collect(
+        self,
+        session: str,
+        date: str,
+        symbol: str = "TXFD6",
+    ) -> SessionData:
+        """Collect all data for *symbol* on *date* for the given *session*.
+
+        Delegates Q1–Q4 to :meth:`collect_core`, then appends Q5 (spread
+        distribution) and Q6 (depth imbalance) with graceful OOM degradation.
+
+        Parameters
+        ----------
+        session:
+            ``"day"`` or ``"night"``.
+        date:
+            ISO date string, e.g. ``"2026-03-27"``.
+        symbol:
+            Instrument identifier, e.g. ``"TXFD6"``.
+        """
+        time_filter = _day_filter(date) if session == "day" else _night_filter(date)
+
+        sd = self.collect_core(symbol, time_filter, session=session, date=date)
+
+        # Q5 and Q6 — heavy Array-column queries; gracefully degrade on OOM.
+        try:
+            spread = self._query_spread_dist(symbol, time_filter)
+        except Exception:  # noqa: BLE001
+            log.warning("Q5 spread query failed (likely OOM), skipping", symbol=symbol)
+            spread = {}
+        try:
+            depth = self._query_depth_imbalance(symbol, time_filter)
+        except Exception:  # noqa: BLE001
+            log.warning("Q6 depth query failed (likely OOM), skipping", symbol=symbol)
+            depth = []
+
+        # SessionData uses slots=True — cannot mutate; create a new instance.
+        return SessionData(
+            session=sd.session,
+            symbol=sd.symbol,
+            date=sd.date,
+            open=sd.open,
+            high=sd.high,
+            low=sd.low,
+            close=sd.close,
+            volume=sd.volume,
+            tick_count=sd.tick_count,
+            bars_5m=sd.bars_5m,
+            flow_5m=sd.flow_5m,
+            large_trades=sd.large_trades,
             spread_dist=spread,
             depth_imbalance=depth,
         )
