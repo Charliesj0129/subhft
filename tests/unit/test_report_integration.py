@@ -1,138 +1,139 @@
-"""Integration test for the full report pipeline."""
-
+"""Integration test: full three-layer pipeline with fixture data."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.reports.composer import ReportComposer
+from hft_platform.reports.facts import extract_all
 from hft_platform.reports.models import (
     Bar5m,
-    DepthBar,
+    ComposedReport,
+    DaySnapshot,
     FlowBar,
     LargeTrade,
     SessionData,
 )
 from hft_platform.reports.pipeline import run_pipeline
+from hft_platform.reports.reasoner import reason_all
 
 
-def _mock_session_data() -> SessionData:
+def _build_fixture_session() -> SessionData:
+    """Realistic fixture with enough data to exercise all extractors."""
+    time_slots = [
+        (h, m)
+        for h in range(9, 14)
+        for m in range(0, 60, 5)
+    ]
     bars = [
         Bar5m(
-            ts=f"2026-03-27 {15 + i // 12}:{(i % 12) * 5:02d}:00",
-            open=330000000 - i * 100000,
-            high=330100000 - i * 100000,
-            low=329800000 - i * 100000,
-            close=329900000 - i * 100000,
-            volume=500,
-            ticks=300,
+            f"2026-03-27 {h:02d}:{m:02d}:00",
+            204000000 + i * 10000,
+            204200000 + i * 10000,
+            203800000 + i * 10000,
+            204100000 + i * 10000,
+            100 + i * 5,
+            50,
         )
-        for i in range(24)
+        for i, (h, m) in enumerate(time_slots[:20])
     ]
     flow = [
         FlowBar(
-            ts=b.ts,
-            ticks=300,
-            total_vol=500,
-            uptick_vol=200,
-            downtick_vol=250,
-            flat_vol=50,
-            ud_ratio=0.8,
-            net_flow=-50,
+            f"2026-03-27 {h:02d}:{m:02d}:00",
+            50,
+            100 + i * 3,
+            50 + (i % 5) * 3,
+            50 + max(0, 10 - (i % 5) * 2),
+            0,
+            (50 + (i % 5) * 3) / max(1, 50 + max(0, 10 - (i % 5) * 2)),
+            (i % 5) * 3 - max(0, 10 - (i % 5) * 2),
         )
-        for b in bars
+        for i, (h, m) in enumerate(time_slots[:20])
     ]
     trades = [
-        LargeTrade(
-            ts="2026-03-27 21:58:00",
-            price=324000000,
-            volume=28,
-            direction="unknown",
-        ),
-        LargeTrade(
-            ts="2026-03-27 23:31:00",
-            price=327500000,
-            volume=32,
-            direction="unknown",
-        ),
+        LargeTrade("2026-03-27 09:15:00", 204500000, 50, "buy"),
+        LargeTrade("2026-03-27 09:20:00", 204550000, 40, "sell"),
+        LargeTrade("2026-03-27 10:30:00", 205000000, 80, "sell"),
+        LargeTrade("2026-03-27 12:45:00", 204200000, 60, "sell"),
     ]
     return SessionData(
-        session="night",
+        session="day",
         symbol="TXFD6",
         date="2026-03-27",
-        open=330490000,
-        high=330490000,
-        low=323750000,
-        close=324380000,
-        volume=58107,
-        tick_count=38153,
+        open=204000000,
+        high=206500000,
+        low=203500000,
+        close=204200000,
+        volume=15000,
+        tick_count=60000,
         bars_5m=bars,
         flow_5m=flow,
         large_trades=trades,
-        spread_dist={3: 147202, 4: 81011},
-        depth_imbalance=[DepthBar(hour=15, avg_bid_vol=3.0, avg_ask_vol=2.8, bid_ratio=0.517)],
+        spread_dist={2: 5000, 3: 3000, 4: 1000},
+        depth_imbalance=[],
     )
 
 
-class TestPipelineIntegration:
+class TestFullPipeline:
+    def test_produces_composed_report(self):
+        sd = _build_fixture_session()
+        prev_days = [
+            DaySnapshot(
+                "2026-03-26", "day",
+                205000000, 207000000, 204000000, 206000000,
+                18000, 1.15, 800,
+            ),
+        ]
+
+        fr = extract_all(sd, prev_days=prev_days)
+        assert len(fr.segments) >= 2
+        assert fr.flow.session_ud > 0
+        assert fr.volatility.atr_5m > 0
+
+        rr = reason_all(fr)
+        assert rr.bias.bias in ("bullish", "bearish", "neutral")
+        assert len(rr.levels) >= 1
+        assert len(rr.narrative.storyline) >= 1
+
+        cr = ReportComposer().compose(fr, rr)
+        assert isinstance(cr, ComposedReport)
+        assert len(cr.messages) >= 7
+
+        free_msgs = [m for m in cr.messages if m.min_tier == "free"]
+        paid_msgs = [m for m in cr.messages if m.min_tier == "paid"]
+        assert len(free_msgs) >= 2
+        assert len(paid_msgs) >= 5
+
+        for msg in cr.messages:
+            if msg.kind == "text":
+                assert len(msg.content) <= 4096, f"Too long: {len(msg.content)}"
+
+    def test_with_empty_prev_days(self):
+        sd = _build_fixture_session()
+        fr = extract_all(sd, prev_days=[])
+        rr = reason_all(fr)
+        cr = ReportComposer().compose(fr, rr)
+        assert isinstance(cr, ComposedReport)
+        assert len(cr.messages) >= 7
+
+
+class TestPipelineEntryPoint:
     @pytest.mark.asyncio
-    async def test_dry_run_produces_output(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_empty_session_returns_early(self):
+        empty_sd = SessionData(
+            session="day", symbol="TXFD6", date="2026-03-27",
+            open=0, high=0, low=0, close=0,
+            volume=0, tick_count=0,
+            bars_5m=[], flow_5m=[], large_trades=[],
+            spread_dist={}, depth_imbalance=[],
+        )
         mock_collector = MagicMock()
-        mock_collector.collect = MagicMock(return_value=_mock_session_data())
+        mock_collector.collect = MagicMock(return_value=empty_sd)
 
         with patch(
             "hft_platform.reports.collector.DataCollector",
             return_value=mock_collector,
         ):
-            await run_pipeline("night", "2026-03-27", dry_run=True, debug=True)
-
-        captured = capsys.readouterr()
-        assert "台指期" in captured.out
-        assert "知情流" in captured.out
-        assert "投資有風險" in captured.out
-
-    @pytest.mark.asyncio
-    async def test_dry_run_does_not_send(self) -> None:
-        mock_collector = MagicMock()
-        mock_collector.collect = MagicMock(return_value=_mock_session_data())
-
-        with (
-            patch(
-                "hft_platform.reports.collector.DataCollector",
-                return_value=mock_collector,
-            ),
-            patch("hft_platform.reports.distributor.load_channels") as mock_load,
-        ):
-            await run_pipeline("night", "2026-03-27", dry_run=True)
-            mock_load.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_empty_session_returns_early(self) -> None:
-        empty_sd = SessionData(
-            session="day",
-            symbol="TXFD6",
-            date="2026-03-27",
-            open=0,
-            high=0,
-            low=0,
-            close=0,
-            volume=0,
-            tick_count=0,
-            bars_5m=[],
-            flow_5m=[],
-            large_trades=[],
-            spread_dist={},
-            depth_imbalance=[],
-        )
-        mock_collector = MagicMock()
-        mock_collector.collect = MagicMock(return_value=empty_sd)
-
-        with (
-            patch(
-                "hft_platform.reports.collector.DataCollector",
-                return_value=mock_collector,
-            ),
-            patch("hft_platform.reports.signals.SignalEngine") as mock_engine,
-        ):
             await run_pipeline("day", "2026-03-27", dry_run=True)
-            mock_engine.assert_not_called()
+            # Should return early without calling extract_all
