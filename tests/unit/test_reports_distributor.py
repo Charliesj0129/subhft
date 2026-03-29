@@ -97,8 +97,8 @@ class TestLoadChannels:
 
 
 def _run(coro):
-    """Run a coroutine synchronously in a new event loop."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run a coroutine synchronously in a fresh event loop."""
+    return asyncio.run(coro)
 
 
 class TestReportSenderSend:
