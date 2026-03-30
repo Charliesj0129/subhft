@@ -387,7 +387,8 @@ class ShioajiClient:
         )
         lock_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(lock_id_raw).strip())[:64] or "default"
         lock_dir = os.getenv("HFT_SHIOAJI_SESSION_LOCK_DIR", ".wal/.locks")
-        self._session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}.lock")
+        _lock_suffix = self.shioaji_config.get("session_lock_suffix", "")
+        self._session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}{_lock_suffix}.lock")
         self._session_lock_fd: Any | None = None
 
         # C2: Session policy interface — quote-side code must use this, not call
