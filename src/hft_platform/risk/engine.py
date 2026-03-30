@@ -135,6 +135,11 @@ class RiskEngine:
             ),
             DailyLossLimitValidator(self.config, price_scale_provider),
         ]
+        # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
+        self._rust_uncovered_validators = [
+            v for v in self.validators
+            if isinstance(v, (PositionLimitValidator, DailyLossLimitValidator))
+        ]
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
@@ -459,6 +464,17 @@ class RiskEngine:
                     reason = self._rust_validator_reason_map.get(int(code), "RUST_VALIDATOR_REJECT")
                     self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
                     return RiskDecision(False, intent, reason)
+                # Rust fast path passed — still run validators Rust doesn't cover
+                for v in self._rust_uncovered_validators:
+                    ok, reason = v.check(intent)
+                    if not ok:
+                        self._emit_trace(
+                            "risk_reject",
+                            intent,
+                            {"stage": "validator", "reason": reason, "validator": type(v).__name__},
+                        )
+                        self._check_daily_loss_halt()
+                        return RiskDecision(False, intent, reason)
             except (OSError, RuntimeError) as exc:
                 logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
                 # Fall through to Python validators on error

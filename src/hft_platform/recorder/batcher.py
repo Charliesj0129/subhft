@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import threading
 from typing import Any, Callable, Dict
@@ -7,6 +8,11 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.utils.serialization import serialize
+
+try:
+    import orjson as _orjson
+except ImportError:
+    _orjson = None  # type: ignore[assignment]
 
 logger = get_logger("recorder.batcher")
 
@@ -522,6 +528,55 @@ class Batcher:
             self._memory_guard.note_rows_removed(flush_buf.row_count)
         return flush_buf
 
+    def _wal_emergency_dump(self, flush_buf: ColumnarBuffer) -> None:
+        """Last-resort WAL dump when the normal write path fails entirely.
+
+        Writes buffer contents as JSONL to the WAL directory so data is not
+        silently lost on double-fault (writer failure + WAL fallback failure).
+        This method MUST NOT raise — any failure is logged and accepted.
+        """
+        try:
+            rows = flush_buf.to_row_dicts()
+        except Exception as e:
+            logger.error(
+                "emergency_wal_dump_failed_to_extract_rows",
+                table=self.table_name,
+                error=str(e),
+            )
+            return
+
+        if not rows:
+            return
+
+        try:
+            wal_dir = os.getenv("HFT_WAL_DIR", ".wal")
+            os.makedirs(wal_dir, exist_ok=True)
+            ts_ns = timebase.now_ns()
+            filename = f"emergency_{self.table_name}_{ts_ns}.jsonl"
+            filepath = os.path.join(wal_dir, filename)
+
+            with open(filepath, "wb") as f:
+                for row in rows:
+                    if _orjson is not None:
+                        line = _orjson.dumps(row) + b"\n"
+                    else:
+                        line = json.dumps(row, default=str).encode() + b"\n"
+                    f.write(line)
+
+            logger.warning(
+                "emergency_wal_dump_written",
+                table=self.table_name,
+                row_count=len(rows),
+                path=filepath,
+            )
+        except Exception as e:
+            logger.error(
+                "emergency_wal_dump_failed",
+                table=self.table_name,
+                row_count=len(rows),
+                error=str(e),
+            )
+
     async def _write_flush_buffer(self, flush_buf: ColumnarBuffer) -> None:
         if self.writer:
             try:
@@ -546,6 +601,7 @@ class Batcher:
                     table=self.table_name,
                     count=flush_buf.row_count,
                 )
+                self._wal_emergency_dump(flush_buf)
             except ConnectionError as e:
                 logger.error(
                     "Connection error during write",
@@ -553,6 +609,7 @@ class Batcher:
                     error=str(e),
                     count=flush_buf.row_count,
                 )
+                self._wal_emergency_dump(flush_buf)
             except Exception as e:
                 logger.error(
                     "Write failed",
@@ -561,4 +618,5 @@ class Batcher:
                     error_type=type(e).__name__,
                     count=flush_buf.row_count,
                 )
+                self._wal_emergency_dump(flush_buf)
         flush_buf.clear()

@@ -4,6 +4,7 @@ import os
 import tempfile
 import threading
 import time
+import warnings
 from glob import glob
 from typing import Any
 
@@ -637,7 +638,34 @@ class WALBatchWriter:
 
 
 class WALReplayer:
+    """DEPRECATED — use ``WALLoaderService`` (``recorder/loader.py``) instead.
+
+    Known bugs that make this class unsafe for production use:
+
+    **C3 — Filename parsing incompatibility**: The table name is extracted via
+    ``fname.rsplit("_", 1)[0]``, which yields ``"batch"`` for files written by
+    ``WALBatchWriter`` (format: ``batch_{ts}.jsonl``).  ``"batch"`` is not a
+    valid ClickHouse table name, so replay silently inserts into the wrong
+    target or errors out.
+
+    **C4 — Missing idempotency guard**: If ``os.remove()`` raises after a
+    successful ClickHouse insert, the same WAL file will be replayed again on
+    the next startup, causing duplicate rows.  ``WALLoaderService`` tracks
+    replayed files and is dedup-aware.
+
+    Migration: replace ``WALReplayer(wal_dir, sender)`` with
+    ``WALLoaderService`` from ``hft_platform.recorder.loader``.
+    """
+
     def __init__(self, wal_dir: str, sender_func):
+        warnings.warn(
+            "WALReplayer is deprecated and has known bugs (C3: broken filename "
+            "parsing for WALBatchWriter files; C4: no idempotency guard on "
+            "os.remove failure). Use WALLoaderService from "
+            "hft_platform.recorder.loader instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.wal_dir = wal_dir
         self.sender_func = sender_func  # Async function(table, data) -> bool
 

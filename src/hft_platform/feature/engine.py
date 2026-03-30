@@ -709,11 +709,9 @@ class FeatureEngine:
         prev_best_ask: int = 0,
     ) -> int:
         """Compute Multi-Level Depth Momentum. Returns scaled int x1000."""
-        import numpy as _np
-
-        # Extract L2-L5 quantities from event
-        cur_bq = [0.0, 0.0, 0.0, 0.0]  # L2,L3,L4,L5
-        cur_aq = [0.0, 0.0, 0.0, 0.0]
+        # Extract L2-L5 quantities directly from event as scalars (no list/array allocations)
+        cb2 = cb3 = cb4 = cb5 = 0.0
+        ca2 = ca3 = ca4 = ca5 = 0.0
         n_bid_levels = 0
         n_ask_levels = 0
 
@@ -722,18 +720,28 @@ class FeatureEngine:
             asks = getattr(event, "asks", None)
             if bids is not None:
                 try:
-                    b = _np.asarray(bids)
-                    n_bid_levels = min(b.shape[0], 5)
-                    for j in range(1, min(n_bid_levels, 5)):
-                        cur_bq[j - 1] = float(b[j][1]) if len(b[j]) > 1 else 0.0
+                    n_bid_levels = min(len(bids), 5)
+                    if n_bid_levels > 1:
+                        cb2 = float(bids[1][1]) if len(bids[1]) > 1 else 0.0
+                    if n_bid_levels > 2:
+                        cb3 = float(bids[2][1]) if len(bids[2]) > 1 else 0.0
+                    if n_bid_levels > 3:
+                        cb4 = float(bids[3][1]) if len(bids[3]) > 1 else 0.0
+                    if n_bid_levels > 4:
+                        cb5 = float(bids[4][1]) if len(bids[4]) > 1 else 0.0
                 except Exception:
                     pass
             if asks is not None:
                 try:
-                    a = _np.asarray(asks)
-                    n_ask_levels = min(a.shape[0], 5)
-                    for j in range(1, min(n_ask_levels, 5)):
-                        cur_aq[j - 1] = float(a[j][1]) if len(a[j]) > 1 else 0.0
+                    n_ask_levels = min(len(asks), 5)
+                    if n_ask_levels > 1:
+                        ca2 = float(asks[1][1]) if len(asks[1]) > 1 else 0.0
+                    if n_ask_levels > 2:
+                        ca3 = float(asks[2][1]) if len(asks[2]) > 1 else 0.0
+                    if n_ask_levels > 3:
+                        ca4 = float(asks[3][1]) if len(asks[3]) > 1 else 0.0
+                    if n_ask_levels > 4:
+                        ca5 = float(asks[4][1]) if len(asks[4]) > 1 else 0.0
                 except Exception:
                     pass
 
@@ -741,23 +749,31 @@ class FeatureEngine:
         bbo_shifted = ks.initialized and (best_bid != prev_best_bid or best_ask != prev_best_ask)
         thin_book = n_bid_levels < 2 or n_ask_levels < 2
 
-        prev_bq = [ks.mldm_prev_bid_qty_l2, ks.mldm_prev_bid_qty_l3, ks.mldm_prev_bid_qty_l4, ks.mldm_prev_bid_qty_l5]
-        prev_aq = [ks.mldm_prev_ask_qty_l2, ks.mldm_prev_ask_qty_l3, ks.mldm_prev_ask_qty_l4, ks.mldm_prev_ask_qty_l5]
-
-        # Update stored prev quantities
-        ks.mldm_prev_bid_qty_l2 = cur_bq[0]
-        ks.mldm_prev_bid_qty_l3 = cur_bq[1]
-        ks.mldm_prev_bid_qty_l4 = cur_bq[2]
-        ks.mldm_prev_bid_qty_l5 = cur_bq[3]
-        ks.mldm_prev_ask_qty_l2 = cur_aq[0]
-        ks.mldm_prev_ask_qty_l3 = cur_aq[1]
-        ks.mldm_prev_ask_qty_l4 = cur_aq[2]
-        ks.mldm_prev_ask_qty_l5 = cur_aq[3]
-
         if bbo_shifted or thin_book or event is None:
             deep_net = 0.0
         else:
-            deep_net = sum(cur_bq[i] - prev_bq[i] for i in range(4)) - sum(cur_aq[i] - prev_aq[i] for i in range(4))
+            # Read prev values directly from ks fields (no list allocation)
+            deep_net = (
+                (cb2 - ks.mldm_prev_bid_qty_l2)
+                + (cb3 - ks.mldm_prev_bid_qty_l3)
+                + (cb4 - ks.mldm_prev_bid_qty_l4)
+                + (cb5 - ks.mldm_prev_bid_qty_l5)
+            ) - (
+                (ca2 - ks.mldm_prev_ask_qty_l2)
+                + (ca3 - ks.mldm_prev_ask_qty_l3)
+                + (ca4 - ks.mldm_prev_ask_qty_l4)
+                + (ca5 - ks.mldm_prev_ask_qty_l5)
+            )
+
+        # Update stored prev quantities AFTER computing deep_net
+        ks.mldm_prev_bid_qty_l2 = cb2
+        ks.mldm_prev_bid_qty_l3 = cb3
+        ks.mldm_prev_bid_qty_l4 = cb4
+        ks.mldm_prev_bid_qty_l5 = cb5
+        ks.mldm_prev_ask_qty_l2 = ca2
+        ks.mldm_prev_ask_qty_l3 = ca3
+        ks.mldm_prev_ask_qty_l4 = ca4
+        ks.mldm_prev_ask_qty_l5 = ca5
 
         ks.mldm_deep_ema_fast += self._MLDM_EMA_FAST * (deep_net - ks.mldm_deep_ema_fast)
         ks.mldm_deep_ema_slow += self._MLDM_EMA_SLOW * (deep_net - ks.mldm_deep_ema_slow)
