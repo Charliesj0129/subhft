@@ -104,6 +104,15 @@ class ContractsRuntime:
                 )
 
         if prod in {"future", "futures"} or exch in {"FUT", "FUTURES", "TAIFEX"}:
+            # R1/R2 continuous contract alias (e.g. TXFR1 → Contracts.Futures.TXF.TXFR1)
+            if len(raw_code) >= 4 and raw_code[-2:] in ("R1", "R2"):
+                root = raw_code[:-2]
+                root_group = getattr(self._client.api.Contracts.Futures, root, None)
+                if root_group is not None:
+                    r_contract = getattr(root_group, raw_code, None)
+                    if r_contract is not None:
+                        return r_contract
+
             for candidate in self._expand_future_codes(raw_code):
                 contract = self._lookup_contract(
                     self._client.api.Contracts.Futures,
