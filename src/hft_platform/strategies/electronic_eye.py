@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import enum
+from dataclasses import dataclass
 
 from structlog import get_logger
 
@@ -102,3 +103,53 @@ class Guardian:
             if self.state == EyeState.QUOTING:
                 self.state = EyeState.NARROW
                 logger.info("guardian_narrow")
+
+
+@dataclass(slots=True)
+class EdgeResult:
+    has_bid_edge: bool
+    has_ask_edge: bool
+    bid_price: float
+    ask_price: float
+
+
+def _compute_edge(
+    theo_price: float,
+    market_bid: float,
+    market_ask: float,
+    min_edge_ticks: int,
+    tick_size: float,
+) -> EdgeResult:
+    edge = min_edge_ticks * tick_size
+    bid_price = theo_price - edge
+    ask_price = theo_price + edge
+    return EdgeResult(
+        has_bid_edge=bid_price > market_bid,
+        has_ask_edge=theo_price > market_ask,
+        bid_price=bid_price,
+        ask_price=ask_price,
+    )
+
+
+def _scale_to_int(price: float, price_scale: int) -> int:
+    return int(round(price * price_scale))
+
+
+class QuoterState:
+    __slots__ = ("_max_per_strike", "_qty")
+
+    def __init__(self, max_contracts_per_strike: int = 5) -> None:
+        self._max_per_strike = max_contracts_per_strike
+        self._qty: dict[str, int] = {}
+
+    def current_qty(self, symbol: str) -> int:
+        return self._qty.get(symbol, 0)
+
+    def can_quote(self, symbol: str, additional: int = 1) -> bool:
+        return self.current_qty(symbol) + additional <= self._max_per_strike
+
+    def record_quote(self, symbol: str, qty: int = 1) -> None:
+        self._qty[symbol] = self._qty.get(symbol, 0) + qty
+
+    def record_cancel(self, symbol: str, qty: int = 1) -> None:
+        self._qty[symbol] = max(0, self._qty.get(symbol, 0) - qty)
