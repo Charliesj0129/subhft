@@ -270,6 +270,11 @@ def parse_kv_tokens(tokens: list[str]) -> dict[str, Any]:
                 attrs["contract_size"] = float(value)
             except ValueError:
                 attrs.setdefault("_invalid", []).append(f"contract_size={value}")
+        elif key in {"group"}:
+            try:
+                attrs["group"] = int(value)
+            except ValueError:
+                attrs.setdefault("_invalid", []).append(f"group={value}")
     return attrs
 
 
