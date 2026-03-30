@@ -3,7 +3,7 @@
 **Date:** 2026-03-30
 **Scope:** Ops Automation, CI/CD Pipeline, Monitoring/Alerting, Config Management
 **Approach:** Tiered remediation roadmap (P0→P3), prioritized by severity
-**Total findings:** 57 items across 4 domains
+**Total findings:** 56 items across 4 domains
 
 ---
 
@@ -24,7 +24,7 @@ Four parallel deep scans across:
 | P0 | CRITICAL | 12 | Monitoring 6 / Ops 3 / Config 2 / CI 1 |
 | P1 | HIGH | 15 | Monitoring 8 / CI 4 / Config 2 / Ops 1 |
 | P2 | MEDIUM | 18 | CI 8 / Monitoring 4 / Config 4 / Ops 2 |
-| P3 | LOW | 12 | Ops 6 / CI 3 / Config 2 / Monitoring 1 |
+| P3 | LOW | 11 | Ops 6 / CI 3 / Config 2 |
 
 ---
 
@@ -38,7 +38,7 @@ Four parallel deep scans across:
 - **File:** `config/monitoring/dashboards/hft-production.json`
 - **Problem:** All 10 panels reference `hft_*`-prefixed metrics (`hft_storm_guard_state`, `hft_feed_ticks_total`, `hft_orders_submitted_total`, etc.) that do not exist in `metrics.py`. Actual names: `stormguard_mode`, `feed_events_total`, `order_actions_total`, etc.
 - **Impact:** Main production dashboard shows "No data" on every panel.
-- **Fix:** Rewrite all panel queries to use actual metric names from `metrics.py`. Also fix datasource uid from `"prometheus"` to `"Prometheus"` (see M-19).
+- **Fix:** Rewrite all panel queries to use actual metric names from `metrics.py`. Also fix datasource uid from `"prometheus"` to `"Prometheus"` (case mismatch with provisioned datasource name in `datasource.yml`). Standardize datasource uid across all 5 dashboard files.
 
 #### M-02: YAML indentation bug silences 3 alert rules
 - **File:** `config/monitoring/alerts/rules.yaml`, lines 509–536
@@ -82,8 +82,8 @@ Four parallel deep scans across:
 - **Fix:** Either (a) create a stub that delegates to `release_converge.py` with appropriate flags, or (b) remove the Makefile target until the script is implemented. Option (b) is safer — do not leave a broken target.
 
 #### O-02: ClickHouse backup not scheduled in cron
-- **Problem:** Two backup scripts exist (`clickhouse_backup.sh` at 14:30 per design spec, `daily-backup.sh` at 17:00 per P1 plan). Neither appears in `docs/operations/cron-setup-remote.md` canonical crontab. No backup is running.
-- **Impact:** ClickHouse data has no nightly backup. Complete data loss on disk failure.
+- **Problem:** Two backup scripts exist (`clickhouse_backup.sh` at 14:30 per design spec, `daily-backup.sh` at 17:00 per P1 plan). Neither appears in `docs/operations/cron-setup-remote.md` canonical crontab. No repository-backed evidence that either script is scheduled on the remote host.
+- **Impact:** If no cron entry exists on the remote host, ClickHouse data has no nightly backup. Verify on remote host before assuming worst case.
 - **Fix:** Add `clickhouse_backup.sh` to `cron-setup-remote.md` at the design-spec time (14:30 daily). Document `daily-backup.sh` as the local-dev alias or retire it (see P2 O-05).
 
 #### O-03: `verify_rust_deployment.py` imports non-existent module
@@ -280,7 +280,7 @@ Four parallel deep scans across:
 
 ### Ops
 
-#### O-07: 19 orphan scripts from 2026-02-04
+#### O-07: 17 orphan scripts from 2026-02-04
 - **Scripts:** `agent_session.sh`, `batch_create_snapshots.py`, `create_snapshot.py`, `debug_hbt_init.py`, `debug_lob_minimal.py`, `inspect_npz.py`, `inspect_snapshot_sig.py`, `latency_e2e_report.py` (root), `live_contract_cache_refresh.py`, `patch_trade_side.py`, `run_paper_trading.sh`, `shioaji_latency_probe.py` (root), `sim_full_pipeline.py`, `sim_futures_strategy_order.py`, `sim_shioaji_futures_smoke.py`, `sim_shioaji_order_smoke.py`, `sim_shioaji_stock_diag.py`
 - **Fix:** Delete all 17 confirmed orphans (O-03 already removes `verify_rust_deployment.py`; `latency_e2e_report.py` root copy superseded by `latency/` version). Create a single commit: `chore: remove 17 orphaned scripts from Feb 2026 bootstrap phase`.
 
@@ -318,11 +318,6 @@ Four parallel deep scans across:
 #### C-10: CLAUDE.md env var table coverage gap
 - **Fix:** Not blocking. Run `scripts/env_var_reference_guard.py` to generate a full inventory. Update CLAUDE.md with the top 20 most operationally important missing vars. The remaining ~200 are internal/derived.
 
-### Monitoring
-
-#### M-19: Grafana datasource name case mismatch
-- **Fix:** Resolved as part of M-01 (production dashboard rewrite). Standardize all dashboards to `"Prometheus"` (matching provisioned datasource name in `datasource.yml`).
-
 ---
 
 ## 6. Verification Plan
@@ -331,7 +326,7 @@ Four parallel deep scans across:
 
 | Phase | Verification Method |
 |-------|-------------------|
-| P0 | Manual: load Grafana dashboard → confirm panels show data. Trigger test alert → confirm Telegram delivery. Run `make release-readiness-check` → confirm no error. Verify cron entry on remote host. |
+| P0 | Manual: load Grafana dashboard → confirm panels show data. Trigger test alert → confirm Telegram delivery. O-01: if target removed, verify `make release-readiness-check` is absent from Makefile; if stubbed, verify it exits 0. Verify cron entry for backup on remote host. |
 | P1 | Deploy to staging → verify new alerts fire on synthetic conditions. Review new dashboards with real market data. Run `make ci` locally → confirm all gates pass. |
 | P2 | Measure CI run time before/after. Verify `concurrency` cancels stale PR runs. Run config loader with intentional typo → confirm rejection. |
 | P3 | `ls scripts/ | wc -l` should decrease by ~17. `ops.sh` usage text matches implemented subcommands. `config/` has no orphan files. |
@@ -341,7 +336,7 @@ Four parallel deep scans across:
 Each phase is independently committable. If a phase introduces regressions:
 1. Revert the phase's commits (`git revert`)
 2. The previous phase's state is stable
-3. No cross-phase dependencies except M-19 (bundled with M-01)
+3. No cross-phase dependencies
 
 ---
 
@@ -349,7 +344,7 @@ Each phase is independently committable. If a phase introduces regressions:
 
 ```
 P0 (no dependencies — all independent fixes)
-├── M-01 + M-19 (dashboard rewrite, bundled)
+├── M-01 (dashboard rewrite + datasource fix)
 ├── M-02..M-06 (alert fixes, independent)
 ├── O-01..O-03 (ops fixes, independent)
 ├── C-01..C-02 (config fixes, independent)
@@ -371,8 +366,7 @@ P2 (depends on P1 for CI/monitoring stability)
 P3 (depends on P2 for clean baseline)
 ├── O-07..O-12 (ops debt, independent)
 ├── CI-14..CI-16 (CI debt, after CI-06 composite actions exist)
-├── C-09..C-10 (config debt, independent)
-└── M-19 (resolved in P0 M-01)
+└── C-09..C-10 (config debt, independent)
 ```
 
 ---
