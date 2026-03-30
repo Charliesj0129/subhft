@@ -42,6 +42,7 @@ jobs:
   lint:
     name: 🔍 Lint & Format
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
@@ -202,6 +203,7 @@ jobs:
   rust:
     name: Rust Build & Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -237,6 +239,7 @@ jobs:
   typecheck:
     name: 🔬 Type Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -271,6 +274,7 @@ jobs:
   dependency-boundary:
     name: Dependency Boundary
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -376,6 +380,7 @@ jobs:
   benchmark:
     name: ⚡ Benchmark (Darwin Gate)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -455,6 +460,7 @@ jobs:
   latency-gate:
     name: Latency Regression Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: test
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -516,6 +522,7 @@ jobs:
   integration:
     name: 🔗 Integration Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
     services:
       clickhouse:
@@ -602,6 +609,7 @@ jobs:
   recorder-nightly-drills:
     name: 🧪 Recorder CK + WAL Drills
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
     if: >
       github.event_name == 'schedule' ||
@@ -837,6 +845,7 @@ jobs:
   security:
     name: 🔒 Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -884,6 +893,7 @@ jobs:
   pr-review-gate:
     name: PR Design Review Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
