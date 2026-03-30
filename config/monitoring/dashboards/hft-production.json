@@ -5,7 +5,7 @@
   "tags": ["hft", "production", "trading"],
   "timezone": "Asia/Taipei",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "time": {
     "from": "now-1h",
@@ -19,8 +19,8 @@
         "name": "strategy",
         "type": "query",
         "label": "Strategy",
-        "query": "label_values(hft_strategy_latency_ns_count, strategy)",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(strategy_latency_ns_count, strategy)",
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
         "refresh": 2,
         "includeAll": true,
         "allValue": ".*",
@@ -31,8 +31,8 @@
         "name": "symbol",
         "type": "query",
         "label": "Symbol",
-        "query": "label_values(hft_feed_ticks_total, symbol)",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(feed_events_total, symbol)",
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
         "refresh": 2,
         "includeAll": true,
         "allValue": ".*",
@@ -58,7 +58,7 @@
       "description": "FSM state transitions: NORMAL -> DEGRADED -> HALT",
       "type": "state-timeline",
       "gridPos": { "h": 5, "w": 24, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "mappings": [
@@ -71,7 +71,7 @@
       },
       "targets": [
         {
-          "expr": "hft_storm_guard_state{state=\"HALT\"} * 2 + hft_storm_guard_state{state=\"DEGRADED\"}",
+          "expr": "stormguard_mode",
           "legendFormat": "StormGuard",
           "refId": "A"
         }
@@ -88,7 +88,7 @@
       "description": "Orders submitted, filled, and rejected per interval",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -102,17 +102,17 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(hft_orders_submitted_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
+          "expr": "sum(rate(order_actions_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
           "legendFormat": "submitted ({{strategy}})",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(hft_orders_filled_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
+          "expr": "sum(rate(execution_events_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
           "legendFormat": "filled ({{strategy}})",
           "refId": "B"
         },
         {
-          "expr": "sum(rate(hft_orders_rejected_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
+          "expr": "sum(rate(order_reject_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
           "legendFormat": "rejected ({{strategy}})",
           "refId": "C"
         }
@@ -128,7 +128,7 @@
       "description": "Percentage of order intents rejected by risk engine",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
@@ -150,9 +150,14 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(hft_risk_rejections_total{strategy=~\"$strategy\"}[$interval])) by (strategy, reason) / clamp_min(sum(rate(hft_risk_evaluations_total{strategy=~\"$strategy\"}[$interval])) by (strategy), 1)",
-          "legendFormat": "{{strategy}} ({{reason}})",
+          "expr": "sum(rate(risk_reject_total{strategy=~\"$strategy\"}[$interval])) by (strategy) / clamp_min(sum(rate(strategy_intents_total{strategy=~\"$strategy\"}[$interval])) by (strategy), 1)",
+          "legendFormat": "{{strategy}}",
           "refId": "A"
+        },
+        {
+          "expr": "sum(rate(strategy_intents_total{strategy=~\"$strategy\"}[$interval])) by (strategy)",
+          "legendFormat": "intents ({{strategy}})",
+          "refId": "B"
         }
       ],
       "options": {
@@ -163,10 +168,10 @@
     {
       "id": 4,
       "title": "Market Data Feed Rate",
-      "description": "Ticks per second by symbol",
+      "description": "Events per second by symbol",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -180,7 +185,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(hft_feed_ticks_total{symbol=~\"$symbol\"}[$interval])) by (symbol)",
+          "expr": "sum(rate(feed_events_total{symbol=~\"$symbol\"}[$interval])) by (symbol)",
           "legendFormat": "{{symbol}}",
           "refId": "A"
         }
@@ -193,10 +198,10 @@
     {
       "id": 5,
       "title": "Gateway / Order Latency",
-      "description": "P50, P95, P99 latency from intent to broker submission",
+      "description": "P95 and P99 latency from intent to broker submission",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "unit": "ns",
@@ -214,19 +219,14 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(hft_gateway_latency_ns_bucket{strategy=~\"$strategy\"}[$interval])) by (le))",
-          "legendFormat": "P50",
+          "expr": "histogram_quantile(0.95, sum(rate(gateway_dispatch_latency_ns_bucket[$interval])) by (le))",
+          "legendFormat": "P95",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(hft_gateway_latency_ns_bucket{strategy=~\"$strategy\"}[$interval])) by (le))",
-          "legendFormat": "P95",
-          "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(hft_gateway_latency_ns_bucket{strategy=~\"$strategy\"}[$interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(gateway_dispatch_latency_ns_bucket[$interval])) by (le))",
           "legendFormat": "P99",
-          "refId": "C"
+          "refId": "B"
         }
       ],
       "options": {
@@ -240,7 +240,7 @@
       "description": "Bounded queue utilization across pipeline stages",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -261,22 +261,22 @@
       },
       "targets": [
         {
-          "expr": "hft_raw_queue_depth",
+          "expr": "raw_queue_depth",
           "legendFormat": "raw_queue",
           "refId": "A"
         },
         {
-          "expr": "hft_recorder_queue_depth",
+          "expr": "queue_depth{queue=\"recorder\"}",
           "legendFormat": "recorder_queue",
           "refId": "B"
         },
         {
-          "expr": "hft_risk_queue_depth",
+          "expr": "queue_depth{queue=\"risk\"}",
           "legendFormat": "risk_queue",
           "refId": "C"
         },
         {
-          "expr": "hft_gateway_intent_channel_depth",
+          "expr": "gateway_intent_channel_depth",
           "legendFormat": "gateway_intent",
           "refId": "D"
         }
@@ -292,7 +292,7 @@
       "description": "Per-symbol circuit breaker state (0=closed, 1=open)",
       "type": "stat",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "mappings": [
@@ -311,7 +311,7 @@
       },
       "targets": [
         {
-          "expr": "hft_circuit_breaker_state{symbol=~\"$symbol\"}",
+          "expr": "circuit_breaker_state{symbol=~\"$symbol\"}",
           "legendFormat": "{{symbol}}",
           "refId": "A"
         }
@@ -327,10 +327,10 @@
     {
       "id": 8,
       "title": "Position Reconciliation Delta",
-      "description": "Difference between internal and broker-reported positions",
+      "description": "Discrepancy count between internal and broker-reported positions",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 29 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -350,7 +350,7 @@
       },
       "targets": [
         {
-          "expr": "abs(hft_reconciliation_position_delta{symbol=~\"$symbol\"})",
+          "expr": "reconciliation_discrepancy_count{symbol=~\"$symbol\"}",
           "legendFormat": "{{symbol}}",
           "refId": "A"
         }
@@ -363,10 +363,10 @@
     {
       "id": 9,
       "title": "ClickHouse Insert Latency",
-      "description": "P50 and P95 latency for ClickHouse batch inserts",
+      "description": "P95 and P99 latency for ClickHouse batch inserts",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 29 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
@@ -388,13 +388,13 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(hft_clickhouse_insert_latency_ms_bucket[$interval])) by (le))",
-          "legendFormat": "P50",
+          "expr": "histogram_quantile(0.95, sum(rate(recorder_insert_latency_ms_bucket[$interval])) by (le))",
+          "legendFormat": "P95",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(hft_clickhouse_insert_latency_ms_bucket[$interval])) by (le))",
-          "legendFormat": "P95",
+          "expr": "histogram_quantile(0.99, sum(rate(recorder_insert_latency_ms_bucket[$interval])) by (le))",
+          "legendFormat": "P99",
           "refId": "B"
         }
       ],
@@ -409,7 +409,7 @@
       "description": "Number of pending WAL files awaiting replay into ClickHouse",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 29 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -431,12 +431,12 @@
       },
       "targets": [
         {
-          "expr": "hft_wal_pending_files",
+          "expr": "wal_backlog_files",
           "legendFormat": "pending WAL files",
           "refId": "A"
         },
         {
-          "expr": "rate(hft_wal_writes_total[$interval])",
+          "expr": "rate(recorder_wal_writes_total[$interval])",
           "legendFormat": "WAL write rate",
           "refId": "B"
         }
@@ -451,18 +451,18 @@
     "list": [
       {
         "name": "Deployments",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
         "enable": true,
-        "expr": "changes(hft_build_info[1m]) > 0",
+        "expr": "changes(up{job=\"hft-engine\"}[1m]) > 0",
         "titleFormat": "Deploy",
-        "textFormat": "Build: {{version}}",
+        "textFormat": "hft-engine restarted",
         "iconColor": "blue"
       },
       {
         "name": "HALT Events",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
         "enable": true,
-        "expr": "changes(hft_storm_guard_state{state=\"HALT\"}[1m]) > 0",
+        "expr": "changes(stormguard_mode[1m]) > 0 and stormguard_mode == 2",
         "titleFormat": "HALT",
         "textFormat": "StormGuard entered HALT state",
         "iconColor": "red"
