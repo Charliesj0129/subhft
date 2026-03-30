@@ -48,6 +48,18 @@ class ReplayConfig(msgspec.Struct, frozen=True):
     end_date: Optional[str] = None
 
 
+class IntraDayPnlConfig(msgspec.Struct, frozen=True):
+    """Intraday PnL limits."""
+
+    soft_limit_ntd: int = 500
+    hard_limit_ntd: int = 1000
+    peak_drawdown_pct: float = 0.40
+    soft_recovery_ntd: int = 300
+    drawdown_recovery_pct: float = 0.20
+    soft_limit_cooldown_s: int = 60
+    peak_drawdown_min_peak_ntd: int = 200
+
+
 class HftConfig(msgspec.Struct, frozen=True):
     """Top-level config schema.
 
@@ -62,6 +74,8 @@ class HftConfig(msgspec.Struct, frozen=True):
     paths: Optional[PathsConfig] = None
     replay: Optional[ReplayConfig] = None
     prometheus_port: int = 9090
+
+    intraday_pnl: Optional[IntraDayPnlConfig] = None
 
     # Allow extra keys that overlay YAMLs or settings.py may inject.
     # We capture them explicitly so msgspec doesn't reject unknown fields.
@@ -104,6 +118,23 @@ def _semantic_checks(cfg: HftConfig) -> List[str]:
             errors.append("strategy.id must be a non-empty string")
         if not cfg.strategy.module:
             errors.append("strategy.module must be a non-empty string")
+
+    # Intraday PnL sanity
+    if cfg.intraday_pnl is not None:
+        pnl = cfg.intraday_pnl
+        if pnl.soft_limit_ntd < 0:
+            errors.append(
+                f"intraday_pnl.soft_limit_ntd must be non-negative, got {pnl.soft_limit_ntd}"
+            )
+        if pnl.hard_limit_ntd < 0:
+            errors.append(
+                f"intraday_pnl.hard_limit_ntd must be non-negative, got {pnl.hard_limit_ntd}"
+            )
+        if pnl.soft_limit_ntd > pnl.hard_limit_ntd:
+            errors.append(
+                f"intraday_pnl.soft_limit_ntd ({pnl.soft_limit_ntd}) "
+                f"exceeds hard_limit_ntd ({pnl.hard_limit_ntd})"
+            )
 
     return errors
 
