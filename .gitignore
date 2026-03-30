@@ -111,6 +111,8 @@ research/knowledge/summaries/**/*.pdf
 research/data/*
 !research/data/raw/
 !research/data/raw/.gitkeep
+research/data/raw/**/*.npy
+research/data/raw/**/*.npz
 !research/data/interim/
 !research/data/interim/.gitkeep
 !research/data/processed/
