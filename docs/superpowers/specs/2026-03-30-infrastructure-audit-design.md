@@ -190,8 +190,8 @@ Four parallel deep scans across:
 
 ### Config
 
-#### C-03: Schema validates only 7 top-level keys
-- **Problem:** `risk`, `stormguard`, `circuit_breaker`, `rate_limit`, `canary`, `shadow`, `shioaji` sub-configs all pass through unvalidated. A typo like `stormgurad` is silently ignored.
+#### C-03: Schema validates only 8 top-level keys
+- **Problem:** `HftConfig` (schema.py line 51) validates 8 fields: `mode`, `symbols`, `broker`, `strategy`, `paths`, `replay`, `prometheus_port`, `env`. All sub-configs beyond these (`risk`, `stormguard`, `circuit_breaker`, `rate_limit`, `canary`, `shadow`, `shioaji`) pass through unvalidated. A typo like `stormgurad` is silently stripped with a `logger.debug`.
 - **Fix:** Extend `config/schema.py` to validate known sub-config schemas. Use `pydantic` or `msgspec.Struct` for nested validation. At minimum: risk limits (soft < hard), stormguard thresholds (positive numbers), rate limits (positive ints).
 
 #### C-04: Hot-reload lacks domain schema validation
@@ -242,8 +242,9 @@ Four parallel deep scans across:
 
 ### Monitoring
 
-#### M-15: 76 orphaned metrics
-- **Fix:** Triage into three buckets: (a) wire to new dashboards from M-14, (b) wire to new alert rules, (c) document as intentionally unmonitored (development/debug metrics). Target: reduce orphan count to < 20.
+#### M-15: ~76+ orphaned metrics (approximate — likely higher)
+- **Problem:** At least 76 exported metrics have no alert rule and no dashboard panel. The actual count may be higher pending a full cross-reference after M-01 dashboard rewrite and M-02 alert YAML fix.
+- **Fix:** After P0/P1 fixes land, run a fresh cross-reference of `metrics.py` exports vs. all alert rules + dashboard queries. Triage into three buckets: (a) wire to new dashboards from M-14, (b) wire to new alert rules, (c) document as intentionally unmonitored (development/debug metrics). Target: reduce orphan count to < 20.
 
 #### ~~M-16: SMARTmon exporter not scraped~~ — FALSE POSITIVE, REMOVED
 - **Note:** The SMART textfile collector is already wired. `docker-compose.yml` (line 243) mounts `/var/lib/node-exporter/textfile` into node-exporter with `--collector.textfile.directory` flag. `scripts/smart_check.sh` (line 8) writes to the same directory. The real issue is M-02's YAML indentation bug silencing the `SSDReallocatedSectorsHigh`/`SSDWearLevelLow` alerts — fixing M-02 restores SMART alerting.
@@ -260,11 +261,13 @@ Four parallel deep scans across:
 #### ~~C-05: Dead `config/base/fees/futures.yaml`~~ — FALSE POSITIVE, REMOVED
 - **Note:** This file IS actively used. `bootstrap.py` (line 914) constructs the path and loads it via `FeeCalculator.from_yaml()` (fee_calculator.py line 39). The loaded FeeCalculator is injected into `ExecutionRouter.normalizer` and used during live fill processing (`normalizer.py` lines 197-201). Deleting this file would break fee/TCA computation. The per-symbol fee data in `symbols.yaml` is a separate concern (symbol metadata vs. execution fee schedule).
 
-#### C-06: Root-level orphan config files
-- **Fix:** Delete `config/risk.yaml`, `config/execution.yaml`, `config/recorder.yaml`, `config/strategies.yaml`, `config/strategy_limits.yaml` (root-level copies). These are pre-migration leftovers; authoritative versions are in `config/base/`.
+#### C-06: Root-level config files with mixed ownership
+- **Problem:** Several root-level config files appear to duplicate `config/base/` equivalents, but some are actively written by `wizard.py` (line 192-211): `config/risk.yaml`, `config/strategies.yaml`, `config/system.json` are wizard outputs. `config/strategy_limits.yaml` is NOT written by the wizard. `config/execution.yaml` and `config/recorder.yaml` have no write or read path.
+- **Fix:** Delete only the confirmed orphans: `config/execution.yaml`, `config/recorder.yaml`, `config/strategy_limits.yaml`. For `config/risk.yaml`, `config/strategies.yaml`, and `config/system.json` — leave in place (wizard output) but add a header comment marking them as wizard-generated, not hand-edited. Consider whether the wizard should write to `config/base/` instead.
 
-#### C-07: `CLICKHOUSE_USERNAME` deprecated alias still active
-- **Fix:** In `recorder/writer.py`, `recorder/_loader_ch.py`, `monitor/_config_loader.py` — log a deprecation warning when `CLICKHOUSE_USERNAME` is used, advising migration to `HFT_CLICKHOUSE_USER`. Remove in next major version.
+#### C-07: `CLICKHOUSE_USERNAME` deprecation — partially complete
+- **Problem:** Deprecation warnings for `CLICKHOUSE_USERNAME` already exist in `writer.py` (line 62) and `_loader_ch.py` (line 42). `monitor/_config_loader.py` (line 72) handles `HFT_CLICKHOUSE_USERNAME` (with `HFT_` prefix) but does NOT reference bare `CLICKHOUSE_USERNAME`. The deprecation is already in place for the two recorder files; the monitor file uses a different (prefixed) variant.
+- **Fix:** The remaining action is setting a removal timeline: add a comment in the two deprecation blocks with a target removal date (e.g., `# TODO: remove CLICKHOUSE_USERNAME fallback by 2026-Q3`). No new deprecation warnings needed — they already exist.
 
 #### C-08: `dev/sim/staging` environments identical
 - **Fix:** Either (a) differentiate staging with meaningful overrides (e.g., `log_level: debug`, `recorder_mode: wal_first`), or (b) remove `dev/` and `staging/` directories and document that `sim/` is the default non-production environment.
@@ -294,14 +297,16 @@ Four parallel deep scans across:
 #### O-08: `ops.sh` `monitor-ch` stale
 - **Fix:** Remove subcommand and update header/usage text. `make recorder-status` is the replacement.
 
-#### O-09: `ops.sh` `test` redundant with `make test`
-- **Fix:** Remove subcommand and update header.
+#### O-09: `ops.sh` `test` scope differs from `make test`
+- **Problem:** `ops.sh test` (line 201) runs `pytest tests/` (entire suite), while `make test` (Makefile line 28) runs only `pytest tests/unit`. They are not duplicates — `ops.sh test` is closer to `make test-all`. However, `ops.sh test` uses a raw `source .venv/bin/activate` pattern instead of `uv run`, and is not referenced by any documentation or CI.
+- **Fix:** Remove subcommand and update header. Users should use `make test` (unit) or `make test-all` (full suite) instead. The `uv run` path is the standard invocation.
 
 #### O-10: `ops.sh` deprecated sysctl `tcp_low_latency`
 - **Fix:** Remove `net.ipv4.tcp_low_latency` from `cmd_tune()`. Also remove the corresponding check from `host_preflight.sh`.
 
-#### O-11: `deploy.sh` hardcoded paths
-- **Fix:** Parameterize `REMOTE_DIR` with a mandatory env var (no default fallback). Parameterize health check URL with `DEPLOY_HEALTH_URL`.
+#### O-11: `deploy.sh` health check URL hardcoded
+- **Problem:** `REMOTE_DIR` is already parameterized via `DEPLOY_ROOT` (line 26: `REMOTE_DIR="${DEPLOY_ROOT:-/home/charl/subhft}"`). The default fallback path is hardcoded but overridable. The real gap is the health check URL — it uses `localhost:9090` hardcoded, which fails when deploying to a remote host.
+- **Fix:** Parameterize the health check URL via `DEPLOY_HEALTH_URL` env var. Leave `REMOTE_DIR`/`DEPLOY_ROOT` as-is (the fallback default is acceptable for the single known deployment target).
 
 #### O-12: `daily-backup.sh` force-enables backup + async/sync mismatch
 - **Fix:** Resolved by O-05 (delete script). The two bugs (force-enable + await-on-sync) make this script unfixable as-is — better to delete and use `clickhouse_backup.sh` exclusively.
@@ -319,8 +324,9 @@ Four parallel deep scans across:
 
 ### Config
 
-#### C-09: Dead config files (`system.json`, `settings.json`, `exported_settings.json`)
-- **Fix:** Delete `config/system.json` and `config/settings.json`. Add `config/exported_settings.json` to `.gitignore`.
+#### C-09: Clarify config file ownership
+- **Problem:** `config/system.json` is written by `wizard.py` (line 208) — not dead. `config/exported_settings.json` is the output of `cli/_run.py --export json` (line 214) — not dead either. Only `config/settings.json` (containing `simple_mm` demo) has no read or write path in current code.
+- **Fix:** Delete `config/settings.json` only. Add `config/exported_settings.json` to `.gitignore` (runtime artifact, should not be committed). Leave `config/system.json` in place (wizard output, same as C-06).
 
 #### C-10: CLAUDE.md env var table coverage gap
 - **Fix:** Not blocking. Run `scripts/env_var_reference_guard.py` to generate a full inventory. Update CLAUDE.md with the top 20 most operationally important missing vars. The remaining ~200 are internal/derived.
