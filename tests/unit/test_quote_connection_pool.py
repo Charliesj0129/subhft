@@ -195,3 +195,73 @@ class TestQuoteConnectionPoolLifecycle:
         pool._clients = [facade0]
         pool.logout()
         facade0.close.assert_called_once_with(logout=True)
+
+
+class TestQuoteConnectionPoolProperties:
+    """Test duck-type properties."""
+
+    def _make_pool(self, tmp_path, num_conns=2):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+        symbols = [
+            {"code": "TXFC0", "exchange": "TAIFEX", "group": 0},
+            {"code": "2330", "exchange": "TSE", "group": 1},
+        ]
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
+        return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
+
+    def test_logged_in_all_true(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.logged_in, f1.logged_in = True, True
+        pool._clients = [f0, f1]
+        assert pool.logged_in is True
+
+    def test_logged_in_one_false(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.logged_in, f1.logged_in = True, False
+        pool._clients = [f0, f1]
+        assert pool.logged_in is False
+
+    def test_partial_login(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.logged_in, f1.logged_in = True, False
+        pool._clients = [f0, f1]
+        assert pool.partial_login is True
+
+    def test_subscribed_count_sum(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.subscribed_count, f1.subscribed_count = 20, 150
+        pool._clients = [f0, f1]
+        assert pool.subscribed_count == 170
+
+    def test_mode_from_first_client(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0 = mock.MagicMock()
+        f0._client.mode = "simulation"
+        pool._clients = [f0]
+        assert pool.mode == "simulation"
+
+    def test_symbols_concatenation(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0._client.symbols = [{"code": "TXFC0"}]
+        f1._client.symbols = [{"code": "2330"}]
+        pool._clients = [f0, f1]
+        codes = [s["code"] for s in pool.symbols]
+        assert codes == ["TXFC0", "2330"]
+
+    def test_health(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0 = mock.MagicMock()
+        f0.logged_in = True
+        f0.subscribed_count = 20
+        f0._client._last_quote_data_ts = 1000.0
+        pool._clients = [f0]
+        h = pool.health()
+        assert 0 in h
+        assert h[0]["logged_in"] is True
+        assert h[0]["subscribed_count"] == 20
