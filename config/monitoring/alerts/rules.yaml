@@ -505,31 +505,31 @@ groups:
         summary: ClickHouse backup is stale (>2 days since last success)
         description: "Last successful backup was {{ $value | humanizeTimestamp }}. Check cron and backup disk."
 
-    # Research Data Disk
-    - alert: ResearchDataTooLarge
-      expr: hft_research_data_bytes > 200e9
-      for: 1h
-      labels:
-        severity: warning
-      annotations:
-        summary: "Research data exceeds 200 GB"
-        description: "research/data/ is {{ $value | humanize1024 }}. Check rotation script."
+  # ── Research Data Disk ──────────────────────────────────────────
+  - alert: ResearchDataTooLarge
+    expr: hft_research_data_bytes > 200e9
+    for: 1h
+    labels:
+      severity: warning
+    annotations:
+      summary: "Research data exceeds 200 GB"
+      description: "research/data/ is {{ $value | humanize1024 }}. Check rotation script."
 
-    # SSD Health
-    - alert: SSDReallocatedSectorsHigh
-      expr: smartmon_reallocated_sectors > 100
-      for: 0s
-      labels:
-        severity: critical
-      annotations:
-        summary: "SSD has >100 reallocated sectors"
-        description: "Device {{ $labels.device }} has {{ $value }} reallocated sectors. Disk replacement recommended."
+  # ── SSD Health ──────────────────────────────────────────────────
+  - alert: SSDReallocatedSectorsHigh
+    expr: smartmon_reallocated_sectors > 100
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "SSD has >100 reallocated sectors"
+      description: "Device {{ $labels.device }} has {{ $value }} reallocated sectors. Disk replacement recommended."
 
-    - alert: SSDWearLevelLow
-      expr: smartmon_wear_leveling > 0 and smartmon_wear_leveling < 20
-      for: 0s
-      labels:
-        severity: warning
-      annotations:
-        summary: "SSD wear level below 20%"
-        description: "Device {{ $labels.device }} wear level at {{ $value }}%. Plan disk replacement."
+  - alert: SSDWearLevelLow
+    expr: smartmon_wear_leveling > 0 and smartmon_wear_leveling < 20
+    for: 0s
+    labels:
+      severity: warning
+    annotations:
+      summary: "SSD wear level below 20%"
+      description: "Device {{ $labels.device }} wear level at {{ $value }}%. Plan disk replacement."
