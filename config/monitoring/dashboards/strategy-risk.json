@@ -1,0 +1,101 @@
+{
+  "uid": "hft-strategy-risk",
+  "title": "Strategy & Risk",
+  "tags": ["hft", "strategy", "risk"],
+  "timezone": "Asia/Taipei",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Strategy Latency P95 (ns)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(strategy_latency_ns_bucket[1m])) by (le, strategy))",
+          "refId": "A",
+          "legendFormat": "{{strategy}} p95"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Strategy Intents Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(strategy_intents_total[1m])",
+          "refId": "A",
+          "legendFormat": "{{strategy}}"
+        },
+        {
+          "expr": "rate(risk_reject_total[1m])",
+          "refId": "B",
+          "legendFormat": "rejected {{strategy}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "StormGuard Mode",
+      "type": "state-timeline",
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "stormguard_mode",
+          "refId": "A",
+          "legendFormat": "StormGuard"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Autonomy Mode",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "autonomy_mode",
+          "refId": "A",
+          "legendFormat": "autonomy"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Strategy Quarantine",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "strategy_quarantine_active",
+          "refId": "A",
+          "legendFormat": "quarantine"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Alpha Last Signal Age (s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "time() - alpha_last_signal_ts",
+          "refId": "A",
+          "legendFormat": "signal age"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "uid": "hft-execution-order",
+  "title": "Execution & Order",
+  "tags": ["hft", "execution", "order"],
+  "timezone": "Asia/Taipei",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Execution Router Lag P95 (ns)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(execution_router_lag_ns_bucket[1m])) by (le))",
+          "refId": "A",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Order Throughput",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(order_actions_total[1m])",
+          "refId": "A",
+          "legendFormat": "{{action}}"
+        },
+        {
+          "expr": "rate(order_reject_total[1m])",
+          "refId": "B",
+          "legendFormat": "rejected"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Reconciliation Discrepancies",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "reconciliation_discrepancy_count",
+          "refId": "A",
+          "legendFormat": "discrepancy"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Portfolio PnL & Drawdown",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "position_pnl_realized",
+          "refId": "A",
+          "legendFormat": "realized PnL"
+        },
+        {
+          "expr": "portfolio_drawdown_pct",
+          "refId": "B",
+          "legendFormat": "drawdown %"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "uid": "hft-pipeline-health",
+  "title": "Pipeline Health",
+  "tags": ["hft", "pipeline"],
+  "timezone": "Asia/Taipei",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Bus Overflow Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(bus_overflow_total[1m])",
+          "refId": "A",
+          "legendFormat": "overflow/s"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Queue Depths",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "raw_queue_depth",
+          "refId": "A",
+          "legendFormat": "raw"
+        },
+        {
+          "expr": "queue_depth",
+          "refId": "B",
+          "legendFormat": "{{queue}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Event Loop Lag (ms)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "event_loop_lag_ms",
+          "refId": "A",
+          "legendFormat": "lag"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Normalization Errors",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(normalization_errors_total[1m])",
+          "refId": "A",
+          "legendFormat": "errors/s"
+        }
+      ]
+    }
+  ]
+}
