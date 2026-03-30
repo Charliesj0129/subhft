@@ -6,7 +6,22 @@ Each ``format_*`` function transforms a list of raw WAL dicts into
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
+
+_EPOCH = date(1970, 1, 1)
+
+
+def _to_date(value: object) -> date:
+    """Convert a string or date-like value to datetime.date for ClickHouse."""
+    if isinstance(value, date):
+        return value
+    if value and isinstance(value, str) and value != "1970-01-01":
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            pass
+    return _EPOCH
 
 from hft_platform.recorder._loader_common import (
     _TS_MAX_FUTURE_NS,
@@ -152,7 +167,7 @@ def format_market_data(
             r.get("underlying", ""),
             int(r.get("strike_scaled", 0)),
             r.get("option_right", ""),
-            str(r.get("expiry", "1970-01-01")),
+            _to_date(r.get("expiry", "1970-01-01")),
         ]
         data.append(row_data)
 

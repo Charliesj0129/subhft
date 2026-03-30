@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from hft_platform.contracts.execution import FillEvent, OrderEvent
@@ -10,8 +11,22 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 if TYPE_CHECKING:
     pass
 
+_EPOCH = date(1970, 1, 1)
+
 # ClickHouse scale factor for price_scaled columns (1_000_000 = 6 decimal places)
 CLICKHOUSE_PRICE_SCALE = 1_000_000
+
+
+def _parse_date(value: Any) -> date:
+    """Convert a string or date-like value to datetime.date for ClickHouse Date columns."""
+    if isinstance(value, date):
+        return value
+    if value and isinstance(value, str) and value != "1970-01-01":
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            pass
+    return _EPOCH
 
 
 def _instrument_fields(symbol: str, metadata: SymbolMetadata) -> dict[str, Any]:
@@ -23,7 +38,7 @@ def _instrument_fields(symbol: str, metadata: SymbolMetadata) -> dict[str, Any]:
             "underlying": profile.underlying,
             "strike_scaled": profile.strike_scaled or 0,
             "option_right": profile.option_right.value if profile.option_right else "",
-            "expiry": str(profile.expiry) if profile.expiry else "1970-01-01",
+            "expiry": profile.expiry if isinstance(profile.expiry, date) else _parse_date(profile.expiry),
         }
     except (KeyError, AttributeError):
         return {
@@ -31,7 +46,7 @@ def _instrument_fields(symbol: str, metadata: SymbolMetadata) -> dict[str, Any]:
             "underlying": "",
             "strike_scaled": 0,
             "option_right": "",
-            "expiry": "1970-01-01",
+            "expiry": _EPOCH,
         }
 
 

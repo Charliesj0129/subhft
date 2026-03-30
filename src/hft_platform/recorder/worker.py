@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import date
 
 from structlog import get_logger
 
@@ -9,6 +10,21 @@ from hft_platform.recorder.mode import RecorderMode, get_recorder_mode
 from hft_platform.recorder.writer import DataWriter
 
 logger = get_logger("recorder")
+
+
+_EPOCH = date(1970, 1, 1)
+
+
+def _to_date(value: object) -> date:
+    """Convert a string or date-like value to datetime.date for ClickHouse."""
+    if isinstance(value, date):
+        return value
+    if value and isinstance(value, str) and value != "1970-01-01":
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            pass
+    return _EPOCH
 
 
 # ── CC-5: Schema extractors ──────────────────────────────────────────────
@@ -98,7 +114,7 @@ def _extract_market_data_values(row) -> list | None:
                 get("underlying", ""),
                 int(get("strike_scaled", 0)),
                 get("option_right", ""),
-                str(get("expiry", "1970-01-01")),
+                _to_date(get("expiry", "1970-01-01")),
             ]
         return [
             getattr(row, "symbol", None),
@@ -118,7 +134,7 @@ def _extract_market_data_values(row) -> list | None:
             getattr(row, "underlying", ""),
             int(getattr(row, "strike_scaled", 0)),
             getattr(row, "option_right", ""),
-            str(getattr(row, "expiry", "1970-01-01")),
+            _to_date(getattr(row, "expiry", "1970-01-01")),
         ]
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
