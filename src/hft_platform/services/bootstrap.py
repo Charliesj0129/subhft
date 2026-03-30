@@ -585,6 +585,13 @@ class SystemBootstrapper:
             return FubonClientFacade(symbols_path, base_shioaji_cfg), FubonClientFacade(symbols_path, order_cfg)
 
         # Default: shioaji
+        num_conns = int(os.getenv("HFT_QUOTE_CONNECTIONS", "1"))
+        if num_conns > 1:
+            from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+            pool = QuoteConnectionPool(symbols_path, base_shioaji_cfg, num_conns)
+            pool.create_facades()
+            return pool, ShioajiClientFacade(symbols_path, order_cfg)
         return ShioajiClientFacade(symbols_path, base_shioaji_cfg), ShioajiClientFacade(symbols_path, order_cfg)
 
     def _build_feature_engine(self) -> tuple:
@@ -794,7 +801,7 @@ class SystemBootstrapper:
         from hft_platform.execution.startup_recon import StartupPositionVerifier
 
         startup_verifier = StartupPositionVerifier(
-            client=md_client,
+            client=order_client,
             position_store=position_store,
             checkpoint_path=os.getenv("HFT_POSITION_CHECKPOINT_PATH", ".runtime/position_checkpoint.json"),
         )
@@ -1115,7 +1122,7 @@ class SystemBootstrapper:
             broker_id=broker_id,
             md_client=md_client,
             order_client=order_client,
-            client=md_client,
+            client=order_client,
             md_service=md_service,
             feature_engine=feature_engine,
             feature_profile_registry=feature_profile_registry,
