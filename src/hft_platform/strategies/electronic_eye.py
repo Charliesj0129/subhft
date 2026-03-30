@@ -3,8 +3,15 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from typing import Any
 
 from structlog import get_logger
+
+from hft_platform.contracts.strategy import RiskFeedback, Side
+from hft_platform.contracts.execution import FillEvent, OrderEvent
+from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
+from hft_platform.core import timebase
+from hft_platform.strategy.base import BaseStrategy
 
 logger = get_logger("strategy.electronic_eye")
 
@@ -192,3 +199,67 @@ class HedgerState:
         if hedge_lots > 0:
             return Side.SELL, min(abs(hedge_lots), self._max_qty)
         return Side.BUY, min(abs(hedge_lots), self._max_qty)
+
+
+class ElectronicEye(BaseStrategy):
+    """Automated TXO options market-making with delta-neutral hedging."""
+
+    __slots__ = (
+        "_quoter_cfg", "_hedger_cfg", "_guardian_cfg", "_publish_cfg",
+        "guardian", "_hedger", "_quoter_state", "_last_publish_ns",
+    )
+
+    def __init__(self, strategy_id="electronic_eye", quoter=None, hedger=None, guardian=None, publish=None, **kwargs):
+        super().__init__(strategy_id=strategy_id, **kwargs)
+        self._quoter_cfg = quoter or {}
+        self._hedger_cfg = hedger or {}
+        self._guardian_cfg = guardian or {}
+        self._publish_cfg = publish or {}
+
+        self.guardian = Guardian(
+            warn_utilization_pct=self._guardian_cfg.get("warn_utilization_pct", 80),
+            stress_interval_s=self._guardian_cfg.get("stress_interval_s", 60),
+            max_worst_case_pnl_ntd=self._guardian_cfg.get("max_worst_case_pnl_ntd", -500000),
+        )
+        self._hedger = HedgerState(
+            delta_threshold_lots=self._hedger_cfg.get("delta_threshold_lots", 3),
+            cooldown_ms=self._hedger_cfg.get("hedge_cooldown_ms", 1000),
+            max_hedge_qty=self._hedger_cfg.get("max_hedge_qty_per_order", 10),
+        )
+        self._quoter_state = QuoterState(
+            max_contracts_per_strike=self._quoter_cfg.get("max_contracts_per_strike", 5),
+        )
+        self._last_publish_ns = 0
+
+    def on_risk_feedback(self, feedback: RiskFeedback) -> None:
+        if feedback.reason_code.startswith("GREEKS_"):
+            self.guardian.on_greeks_rejection(feedback.reason_code)
+            logger.warning("eye_greeks_rejection", reason=feedback.reason_code, symbol=feedback.symbol, state=self.guardian.state.name)
+
+    def on_book_update(self, event: BidAskEvent) -> None:
+        if not self.guardian.allows_new_quotes():
+            return
+        # Quoter logic stub — wired to VolSurface during shadow deployment
+
+    def on_fill(self, event: FillEvent) -> None:
+        # Hedger logic stub — wired to live_adapter during shadow deployment
+        pass
+
+    def on_stats(self, event: LOBStatsEvent) -> None:
+        now_ns = int(event.ts or timebase.now_ns())
+        publish_interval_ns = self._publish_cfg.get("interval_ms", 1000) * 1_000_000
+        if now_ns - self._last_publish_ns >= publish_interval_ns:
+            self._publish_state(now_ns)
+            self._last_publish_ns = now_ns
+
+    def _publish_state(self, now_ns: int) -> None:
+        if not self.ctx:
+            return
+        channel = self._publish_cfg.get("channel", "monitor:portfolio:greeks")
+        payload = {
+            "ts": now_ns,
+            "net_delta_lots": 0.0, "net_gamma_lots": 0.0,
+            "net_theta_ntd": 0.0, "net_vega_ntd": 0.0,
+            "worst_pnl_ntd": 0.0, "eye_state": self.guardian.state.name,
+        }
+        self.ctx.publish_state(channel, payload)
