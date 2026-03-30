@@ -119,6 +119,7 @@ class TestWriteToDlq:
         svc.metrics.dlq_size_total.labels.side_effect = RuntimeError("bad")
         # Should not propagate
         write_to_dlq(svc, "market_data", [{}], "err")
+        assert len(os.listdir(svc.dlq_dir)) == 1
 
     def test_write_error_is_logged_not_raised(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -127,6 +128,7 @@ class TestWriteToDlq:
         with patch("builtins.open", side_effect=OSError("disk full")):
             # write_to_dlq catches exceptions internally
             write_to_dlq(svc, "market_data", [{}], "err")  # should not raise
+        assert len(os.listdir(svc.dlq_dir)) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +317,7 @@ class TestCleanupOldDlqFiles:
         svc = _make_svc(tmp_path)
         # dlq_dir does not exist
         cleanup_old_dlq_files(svc)  # should not raise
+        assert not os.path.exists(svc.dlq_dir)
 
     def test_increments_metrics_after_cleanup(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -363,6 +366,7 @@ class TestCleanupOldCorruptFiles:
     def test_noop_when_corrupt_dir_missing(self, tmp_path):
         svc = _make_svc(tmp_path)
         cleanup_old_corrupt_files(svc)  # should not raise
+        assert not os.path.exists(svc.corrupt_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +396,7 @@ class TestCleanupOldArchiveFiles:
     def test_noop_when_archive_dir_missing(self, tmp_path):
         svc = _make_svc(tmp_path)
         cleanup_old_archive_files(svc)  # should not raise
+        assert not os.path.exists(svc.archive_dir)
 
     def test_skips_if_interval_not_elapsed(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -413,13 +418,16 @@ class TestCheckWalAccumulation:
     def test_noop_when_wal_dir_missing(self, tmp_path):
         svc = _make_svc(tmp_path)
         check_wal_accumulation(svc)  # should not raise
+        assert not os.path.exists(svc.wal_dir)
 
     def test_skips_if_interval_not_elapsed(self, tmp_path):
         svc = _make_svc(tmp_path)
         svc._wal_check_interval_s = 9999
-        svc._last_wal_check_ts = time.time()
+        last_ts = time.time()
+        svc._last_wal_check_ts = last_ts
         os.makedirs(svc.wal_dir)
         check_wal_accumulation(svc)  # should return early
+        assert svc._last_wal_check_ts == last_ts
 
     def test_sets_metrics_when_present(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -445,6 +453,7 @@ class TestCheckWalAccumulation:
         with open(os.path.join(svc.wal_dir, "market_data_1.jsonl"), "w") as f:
             f.write("{}\n")
         check_wal_accumulation(svc)  # should not raise
+        assert svc._last_wal_check_ts > 0
 
     def test_ignores_non_jsonl_files_in_wal_dir(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -507,4 +516,6 @@ class TestQuarantineCorruptFile:
         svc = _make_svc(tmp_path)
         # fpath does not exist → shutil.move will fail
         quarantine_corrupt_file(svc, "/nonexistent/path/bad.jsonl", "bad.jsonl", "reason")
-        # Should not raise
+        # Should not raise; corrupt_dir is created but file is not present
+        assert os.path.isdir(svc.corrupt_dir)
+        assert not os.path.exists(os.path.join(svc.corrupt_dir, "bad.jsonl"))

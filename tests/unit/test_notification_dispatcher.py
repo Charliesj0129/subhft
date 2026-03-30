@@ -57,6 +57,7 @@ async def test_notify_pre_market_pass(dispatcher, mock_sender) -> None:
     await dispatcher.notify_pre_market_pass()
 
     mock_sender.send.assert_awaited_once()
+    assert mock_sender.send.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -121,6 +122,7 @@ async def test_notify_daily_report(dispatcher, mock_sender) -> None:
     )
 
     mock_sender.send.assert_awaited_once()
+    assert mock_sender.send.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -142,6 +144,7 @@ async def test_notify_weekly_summary(dispatcher, mock_sender) -> None:
     )
 
     mock_sender.send.assert_awaited_once()
+    assert mock_sender.send.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -156,3 +159,4 @@ async def test_dispatcher_with_disabled_sender(mock_sender) -> None:
     # Should not raise, send still called
     await d.notify_halt(reason="test")
     mock_sender.send.assert_awaited_once()
+    assert mock_sender.send.await_count == 1

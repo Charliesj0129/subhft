@@ -284,5 +284,5 @@ class TestQuoteConnectionPoolMetrics:
         facade._client._last_quote_data_ts = 1000.0
         pool._clients = [facade]
 
-        # Should not raise
         pool.update_metrics()
+        assert pool._clients[0].subscribed_count == 15

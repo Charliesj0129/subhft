@@ -334,6 +334,8 @@ async def test_on_terminal_state_removes_live_order(tmp_config):
 async def test_on_terminal_state_missing_key_no_error(tmp_config):
     adapter = _make_adapter(tmp_config)
     await adapter.on_terminal_state("s1", "nonexistent")  # Must not raise
+    async with adapter._live_orders_lock:
+        assert "s1:nonexistent" not in adapter.live_orders
 
 
 # ── _register_broker_ids ───────────────────────────────────────────────────
@@ -404,6 +406,7 @@ async def test_add_to_dlq_type_error_logged(tmp_config):
 
     intent = _make_cmd().intent
     await adapter._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "test")  # Must not raise
+    assert adapter._dlq.add.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -414,6 +417,7 @@ async def test_add_to_dlq_os_error_logged(tmp_config):
 
     intent = _make_cmd().intent
     await adapter._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "test")  # Must not raise
+    assert adapter._dlq.add.call_count == 1
 
 
 # ── _validate_client ───────────────────────────────────────────────────────

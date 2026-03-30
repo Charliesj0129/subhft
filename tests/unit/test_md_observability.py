@@ -96,6 +96,7 @@ class TestEmitTrace:
         stub = _make_stub()
         # Should not raise
         stub._emit_trace("stage", "tid", {"key": "val"})
+        assert stub._trace_sampler is None
 
     def test_calls_sampler_emit(self):
         sampler = MagicMock()
@@ -109,6 +110,7 @@ class TestEmitTrace:
         stub = _make_stub(_trace_sampler=sampler)
         # Should not raise
         stub._emit_trace("stage", "id", {})
+        sampler.emit.assert_called_once()
 
     def test_handles_none_trace_id(self):
         sampler = MagicMock()
@@ -129,11 +131,13 @@ class TestRecordShioajiCrashSignature:
         stub = _make_stub()
         # Should not raise
         stub._record_shioaji_crash_signature("Connection reset by peer", context="reconnect")
+        assert stub.metrics_registry is None
 
     def test_no_op_when_registry_lacks_attribute(self):
         registry = MagicMock(spec=[])  # no attributes
         stub = _make_stub(metrics_registry=registry)
         stub._record_shioaji_crash_signature("some text", context="ctx")
+        assert registry.method_calls == []
 
     @patch("hft_platform.services._md_observability.detect_crash_signature", return_value=None)
     def test_no_op_when_no_signature_detected(self, mock_detect):
@@ -228,6 +232,8 @@ class TestRecordFeatureMetrics:
         stub._feature_metrics_sample_every = 1
         # Should not raise without a registry
         stub._record_feature_metrics(_make_tick_event(), _make_feature_update(), 0)
+        assert stub._feature_latency_counter == 1
+        assert stub._feature_metrics_counter == 1
 
     def test_observes_latency_at_sample_boundary(self):
         registry = MagicMock()
@@ -338,11 +344,13 @@ class TestEmitFeatureShadowCheckMetric:
     def test_no_op_when_no_registry(self):
         stub = _make_stub()
         stub._emit_feature_shadow_check_metric("checked")
+        assert stub.metrics_registry is None
 
     def test_no_op_when_registry_lacks_attribute(self):
         registry = MagicMock(spec=[])
         stub = _make_stub(metrics_registry=registry)
         stub._emit_feature_shadow_check_metric("checked")
+        assert registry.method_calls == []
 
     def test_increments_check_metric(self):
         registry = MagicMock()
@@ -375,11 +383,13 @@ class TestEmitFeatureShadowMismatchMetric:
     def test_no_op_when_no_registry(self):
         stub = _make_stub()
         stub._emit_feature_shadow_mismatch_metric("lob_shared_v3", "ofi_l1")
+        assert stub.metrics_registry is None
 
     def test_no_op_when_registry_lacks_attribute(self):
         registry = MagicMock(spec=[])
         stub = _make_stub(metrics_registry=registry)
         stub._emit_feature_shadow_mismatch_metric("lob_shared_v3", "ofi_l1")
+        assert registry.method_calls == []
 
     def test_increments_mismatch_metric(self):
         registry = MagicMock()
@@ -512,6 +522,7 @@ class TestMaybeRunFeatureShadowParity:
         primary_fu = _make_feature_update()
         # Should not raise
         stub._maybe_run_feature_shadow_parity(_make_tick_event(), _make_stats(), 0, primary_fu)
+        assert stub._feature_shadow_counter == 1
 
     def test_no_op_when_primary_values_none(self):
         shadow = MagicMock()

@@ -179,6 +179,7 @@ def test_check_disk_registered_passes_when_found() -> None:
 
     with _patch_client(mgr, client):
         mgr._check_disk_registered()  # should not raise
+    client.execute.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +204,7 @@ def test_abort_stale_backups_passes_when_clean() -> None:
 
     with _patch_client(mgr, client):
         mgr._abort_stale_backups()  # should not raise
+    client.execute.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +267,7 @@ def test_verify_backup_success(tmp_path: Path) -> None:
 
     with _patch_client(mgr, client):
         mgr._verify_backup("daily_20260329")  # should not raise
+    assert (tmp_path / "daily_20260329").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -304,8 +307,10 @@ def test_cleanup_old_backups_removes_stale(tmp_path: Path) -> None:
 
 def test_cleanup_old_backups_no_dir_is_noop(tmp_path: Path) -> None:
     """Non-existent backup root → _cleanup does nothing."""
-    mgr = BackupManager(backup_dir=str(tmp_path / "nonexistent"), retain_days=7, ch_host="localhost")
+    nonexistent = tmp_path / "nonexistent"
+    mgr = BackupManager(backup_dir=str(nonexistent), retain_days=7, ch_host="localhost")
     mgr._cleanup_old_backups()  # should not raise
+    assert not nonexistent.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +327,7 @@ def test_report_success_no_notifier_no_crash(tmp_path: Path) -> None:
     (backup_dir / "data.bin").write_bytes(b"x" * 512)
 
     mgr._report_success("daily_20260329", duration_s=1.5)  # should not raise
+    assert backup_dir.exists()
 
 
 def test_report_success_with_metrics(tmp_path: Path) -> None:
@@ -365,6 +371,7 @@ def test_report_success_with_notifier(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_report_failure_no_notifier_no_crash(tmp_path: Path) -> None:
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
     mgr._report_failure("daily_20260329", BackupError("disk full"), duration_s=0.5)
+    assert mgr._notifier is None
 
 
 def test_report_failure_finds_last_success(tmp_path: Path) -> None:
@@ -719,4 +726,5 @@ def test_execute_backup_sends_correct_sql() -> None:
 
 def test_run_archive_hook_is_noop() -> None:
     mgr = _make_manager()
-    mgr._run_archive_hook("daily_20260329")  # should not raise, return None
+    result = mgr._run_archive_hook("daily_20260329")  # should not raise, return None
+    assert result is None

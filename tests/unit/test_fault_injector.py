@@ -105,7 +105,9 @@ class TestLatencyInjection:
     async def test_zero_latency_is_noop(self) -> None:
         os.environ["HFT_MODE"] = "sim"
         os.environ["HFT_FAULT_LATENCY_MS"] = "0"
-        await FaultInjector().inject_latency()
+        fi = FaultInjector()
+        await fi.inject_latency()
+        assert fi.latency_ms == 0.0
 
     @pytest.mark.asyncio
     async def test_nonzero_latency_sleeps(self) -> None:
@@ -124,7 +126,9 @@ class TestFeedGap:
     async def test_zero_gap_is_noop(self) -> None:
         os.environ["HFT_MODE"] = "sim"
         os.environ["HFT_FAULT_FEED_GAP_S"] = "0"
-        await FaultInjector().inject_feed_gap()
+        fi = FaultInjector()
+        await fi.inject_feed_gap()
+        assert fi.feed_gap_s == 0.0
 
     @pytest.mark.asyncio
     async def test_nonzero_gap_sleeps(self) -> None:

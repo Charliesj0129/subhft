@@ -21,7 +21,8 @@ class TestLiveConfirmGuard:
         monkeypatch.setenv("HFT_LIVE_CONFIRM", "yes-i-know")
         from hft_platform.services.bootstrap import validate_order_mode_safety
 
-        validate_order_mode_safety()  # should not raise
+        result = validate_order_mode_safety()
+        assert result is None
 
     def test_sim_mode_no_confirm_needed(self, monkeypatch):
         """HFT_ORDER_MODE=sim -> no confirmation needed."""
@@ -30,4 +31,5 @@ class TestLiveConfirmGuard:
         monkeypatch.delenv("HFT_LIVE_CONFIRM", raising=False)
         from hft_platform.services.bootstrap import validate_order_mode_safety
 
-        validate_order_mode_safety()  # should not raise
+        result = validate_order_mode_safety()
+        assert result is None

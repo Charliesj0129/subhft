@@ -97,7 +97,9 @@ def test_validate_order_mode_safety_sim_mode_passes(monkeypatch):
 
     from hft_platform.services.bootstrap import validate_order_mode_safety
 
-    validate_order_mode_safety()  # should not raise
+    # Should not raise — sim mode requires no live confirmation
+    result = validate_order_mode_safety()
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -112,8 +114,9 @@ def test_log_shadow_config_summary_with_settings(monkeypatch):
 
     from hft_platform.services.bootstrap import log_shadow_config_summary
 
-    # Should not raise
-    log_shadow_config_summary(settings={"shadow": {"enabled": True}})
+    # Should not raise — shadow config is logged without errors
+    result = log_shadow_config_summary(settings={"shadow": {"enabled": True}})
+    assert result is None
 
 
 def test_log_shadow_config_summary_none_settings(monkeypatch):
@@ -123,7 +126,8 @@ def test_log_shadow_config_summary_none_settings(monkeypatch):
 
     from hft_platform.services.bootstrap import log_shadow_config_summary
 
-    log_shadow_config_summary(settings=None)
+    result = log_shadow_config_summary(settings=None)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------

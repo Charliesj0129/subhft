@@ -73,16 +73,12 @@ async def test_storm_guard():
     # 2. Run Sync Cycle manually
     await system.reconciler.sync_portfolio()
 
-    # 3. Assert Storm Guard logic
-    # Reconciliation logs error. If implemented, should trigger cancel_all or alert.
-    # Checking if it triggered some safety mechanism.
-    # Current implementation might just log critical error.
-    # Inspecting code: recon_service usually sets storm_guard_state or calls panic.
-
-    # For now, we assert it detected mismatch
-    # In a full impl, we'd assert system.storm_guard.triggered
-
-    print("Storm Guard Test Passed (Simulated Mismatch detection).")
+    # 3. Assert reconciliation detected the position mismatch (local=0, broker=50)
+    discrepancies = system.reconciler._last_discrepancies
+    assert len(discrepancies) > 0, "Expected reconciliation to detect position mismatch"
+    assert discrepancies[0].symbol == "2330"
+    assert discrepancies[0].local_qty == 0
+    assert discrepancies[0].broker_qty == 50
 
 
 if __name__ == "__main__":

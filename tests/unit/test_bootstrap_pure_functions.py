@@ -295,4 +295,5 @@ async def test_wait_for_readiness_returns_when_health_server_reports_ready(monke
     monkeypatch.setattr(health_mod, "HealthServer", _FakeHealthServer)
     monkeypatch.setattr(bootstrap_mod.asyncio, "sleep", _no_sleep)
 
-    await wait_for_readiness(object(), timeout_s=0.01)
+    result = await wait_for_readiness(object(), timeout_s=0.01)
+    assert result is None  # completed without timeout

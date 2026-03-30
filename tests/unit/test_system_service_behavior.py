@@ -361,6 +361,12 @@ async def test_recorder_bridge_cancelled():
     sys_obj.raw_queue.get = _fake_get
     sys_obj.recorder_queue.put_nowait = MagicMock()
 
+    async def _cancelling_gen():
+        raise asyncio.CancelledError
+        yield  # pragma: no cover
+
+    sys_obj.bus.consume.return_value = _cancelling_gen()
+
     from hft_platform.services.system import HFTSystem
 
     bridge_coro = HFTSystem._recorder_bridge(sys_obj)
@@ -368,6 +374,9 @@ async def test_recorder_bridge_cancelled():
         await asyncio.wait_for(bridge_coro, timeout=2.0)
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
+
+    # Bridge consumed the bus — cancellation was handled without propagating
+    sys_obj.bus.consume.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

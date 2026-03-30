@@ -200,6 +200,7 @@ async def test_terminal_async_handler_called(router: ExecutionRouter) -> None:
         pass
 
     handler.assert_awaited_once()
+    assert handler.await_count == 1
 
 
 @pytest.mark.asyncio

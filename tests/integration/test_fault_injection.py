@@ -463,8 +463,8 @@ class TestWALFaultInjection:
         try:
             data = [{"price": 100, "exch_ts": 1000}]
             result = await writer.write("test_table", data)
-            # Should handle gracefully (return False or True depending on implementation)
-            # The key assertion is no unhandled exception
+            # Write to read-only dir must fail gracefully (return False) without raising
+            assert result is False, f"Expected False for write to read-only dir, got {result!r}"
         finally:
             wal_dir.chmod(0o755)
 

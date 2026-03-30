@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 
 def test_market_data_columns_include_instrument_fields():
     from hft_platform.recorder.worker import MARKET_DATA_COLUMNS
@@ -74,7 +76,7 @@ def test_extract_defaults_for_missing_instrument_fields():
     assert values[-4] == ""  # underlying
     assert values[-3] == 0  # strike_scaled
     assert values[-2] == ""  # option_right
-    assert values[-1] == "1970-01-01"  # expiry
+    assert values[-1] == datetime.date(1970, 1, 1)  # expiry
 
 
 def test_format_market_data_length_matches_loader_cols():
@@ -133,4 +135,4 @@ def test_format_market_data_defaults_for_missing_instrument_fields():
     assert row_data[-4] == ""  # underlying
     assert row_data[-3] == 0  # strike_scaled
     assert row_data[-2] == ""  # option_right
-    assert row_data[-1] == "1970-01-01"  # expiry
+    assert row_data[-1] == datetime.date(1970, 1, 1)  # expiry

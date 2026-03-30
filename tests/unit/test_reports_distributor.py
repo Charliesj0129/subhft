@@ -288,7 +288,8 @@ class TestReportSenderClose:
 
     def test_close_noop_when_no_session(self):
         sender = ReportSender(bot_token="tok")
-        _run(sender.close())  # should not raise
+        _run(sender.close())  # should not raise when no session was opened
+        assert sender._session is None
 
 
 # ---------------------------------------------------------------------------

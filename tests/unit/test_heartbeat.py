@@ -38,9 +38,13 @@ def test_write_heartbeat_updates_mtime():
 
 
 def test_write_heartbeat_failure_does_not_raise():
+    import os
+
     from hft_platform.services.heartbeat import write_heartbeat
 
-    write_heartbeat("/nonexistent/dir/heartbeat.tmp")  # Should not raise
+    path = "/nonexistent/dir/heartbeat.tmp"
+    write_heartbeat(path)  # Should not raise when directory doesn't exist
+    assert not os.path.exists(path)  # File was not created (directory missing)
 
 
 def test_write_heartbeat_writes_pid():

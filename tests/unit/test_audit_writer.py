@@ -114,7 +114,8 @@ class TestAuditWriter:
         await audit.start()
         await asyncio.sleep(0.05)  # flush_interval=10ms, wait 5 cycles
         await audit.stop()
-        # No exception = success (structlog fallback worked)
+        # Structlog fallback drained all queues — all should be empty
+        assert all(q.qsize() == 0 for q in audit._queues.values())
 
     @pytest.mark.asyncio
     async def test_stop_drains_remaining(self) -> None:

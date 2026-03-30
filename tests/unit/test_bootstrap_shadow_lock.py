@@ -50,7 +50,8 @@ def test_shadow_mode_with_sim_orders_passes():
     with patch.dict(os.environ, env, clear=False):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        validate_shadow_lock()  # Should not raise
+        result = validate_shadow_lock()  # Should not raise
+    assert result is None
 
 
 def test_no_shadow_mode_skips_check():
@@ -58,7 +59,8 @@ def test_no_shadow_mode_skips_check():
     with patch.dict(os.environ, env, clear=False):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        validate_shadow_lock()  # Should not raise
+        result = validate_shadow_lock()  # Should not raise
+    assert result is None
 
 
 def test_shadow_mode_unset_skips_check():
@@ -70,7 +72,8 @@ def test_shadow_mode_unset_skips_check():
     with patch.dict(os.environ, patched_env, clear=True):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        validate_shadow_lock()  # Should not raise
+        result = validate_shadow_lock()  # Should not raise
+    assert result is None
 
 
 def test_yaml_shadow_enabled_with_live_orders_refuses_start():
@@ -91,7 +94,8 @@ def test_yaml_shadow_enabled_with_sim_orders_passes():
     with patch.dict(os.environ, env, clear=False):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        validate_shadow_lock(settings)  # Should not raise
+        result = validate_shadow_lock(settings)  # Should not raise
+    assert result is None
 
 
 def test_yaml_shadow_disabled_with_live_orders_passes():
@@ -101,4 +105,5 @@ def test_yaml_shadow_disabled_with_live_orders_passes():
     with patch.dict(os.environ, env, clear=False):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        validate_shadow_lock(settings)  # Should not raise
+        result = validate_shadow_lock(settings)  # Should not raise
+    assert result is None

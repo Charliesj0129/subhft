@@ -73,8 +73,10 @@ class TestNoopLock:
 
     def test_noop_lock_context_manager(self):
         lock = _NoopLock()
+        entered = False
         with lock:
-            pass  # Should not raise
+            entered = True
+        assert entered
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +490,8 @@ class TestLOBEngineMetrics:
         engine = LOBEngine()
         engine._metrics_enabled = False
         engine.metrics = None
-        engine._flush_metrics()  # Should not raise
+        engine._flush_metrics()  # Should not raise when metrics disabled
+        assert engine._metrics_enabled is False
 
     def test_start_metrics_worker_only_once(self):
         engine = LOBEngine()

@@ -944,8 +944,10 @@ class TestExpandSpec:
         result = _make_result()
         idx = self._make_futures_index()
         expand_spec("FUT@TX@front@oi>=100", {}, idx, result)
-        # Might produce metrics error, but no parse error
-        # The key thing: no exception raised
+        # Might produce metrics error, but no parse error — errors list contains
+        # only metrics-related errors, not parse errors
+        parse_errors = [e for e in result.errors if "parse" in e.lower() or "syntax" in e.lower()]
+        assert len(parse_errors) == 0
 
     def test_opt_with_atm_offset_selector(self):
         result = _make_result()

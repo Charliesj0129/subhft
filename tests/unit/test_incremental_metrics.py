@@ -101,6 +101,7 @@ class TestComputeICIncremental:
         )
         full_mean, _, _ = compute_ic(signals, fwd, buckets=5)
         np.testing.assert_allclose(inc_mean, full_mean, atol=1e-12)
+        assert state_b5 is not None
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +171,7 @@ class TestComputeMetricsIncremental:
         m2, _ = compute_metrics_incremental(state1, [103, 104], sig2)
         # Expected diffs: |2-1|=1, |3-2|=1, |5-3|=2, |5.5-5|=0.5 → mean=4.5/4=1.125
         np.testing.assert_allclose(m2["turnover"], 1.125, atol=1e-10)
+        assert "turnover" in m2
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +252,7 @@ class TestPoolCorrelationIncremental:
             prev_keys=prev_keys,
         )
         np.testing.assert_allclose(matrix, prev_matrix, atol=1e-12)
+        assert keys == prev_keys
 
     def test_incremental_multiple_new_alphas(self) -> None:
         rng = np.random.default_rng(77)
@@ -271,3 +274,4 @@ class TestPoolCorrelationIncremental:
         idx = [full_keys.index(k) for k in inc_keys]
         full_reordered = full_matrix[np.ix_(idx, idx)]
         np.testing.assert_allclose(inc_matrix, full_reordered, atol=1e-10)
+        assert inc_matrix.shape == (3, 3)

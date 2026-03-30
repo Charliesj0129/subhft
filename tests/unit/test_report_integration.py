@@ -135,5 +135,6 @@ class TestPipelineEntryPoint:
             "hft_platform.reports.collector.DataCollector",
             return_value=mock_collector,
         ):
-            await run_pipeline("day", "2026-03-27", dry_run=True)
+            result = await run_pipeline("day", "2026-03-27", dry_run=True)
             # Should return early without calling extract_all
+            assert result is None

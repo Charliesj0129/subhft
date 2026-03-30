@@ -61,6 +61,7 @@ async def test_writer_write_empty_is_noop(tmp_path):
     writer.wal.write = AsyncMock()
     await writer.write("hft.market_data", [])
     writer.wal.write.assert_not_awaited()
+    assert not writer.connected  # empty write leaves connection state unchanged
 
 
 @pytest.mark.asyncio
@@ -76,6 +77,7 @@ async def test_writer_write_drops_all_rows(tmp_path, monkeypatch):
     )
 
     writer.wal.write.assert_not_awaited()
+    assert not writer.connected  # all rows filtered means no CH insert attempted
 
 
 def test_ch_insert_noop_on_empty(tmp_path):

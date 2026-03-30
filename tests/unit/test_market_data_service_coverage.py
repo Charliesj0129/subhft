@@ -385,6 +385,7 @@ def test_record_direct_event_no_recorder_queue():
     event = _make_tick_event()
     # Should return immediately without error
     svc._record_direct_event(event)
+    assert svc.recorder_queue is None
 
 
 def test_record_direct_event_map_raises():
@@ -772,6 +773,7 @@ def test_publish_to_redis_no_publisher():
     stats = SimpleNamespace()
     # Should not raise
     svc._publish_to_redis(event, stats)
+    assert svc._redis_publisher is None
 
 
 def test_publish_to_redis_with_publisher_tick():
@@ -820,6 +822,7 @@ def test_publish_to_redis_publisher_raises_silently():
     event = SimpleNamespace(symbol="2330", meta=None, local_ts=0, price=None, bids=None, asks=None)
     # Should not raise — fire-and-forget
     svc._publish_to_redis(event, SimpleNamespace())
+    pub.publish_market_data.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -964,6 +967,7 @@ def test_on_shioaji_event_no_loop():
 
     # Should not raise
     svc._on_shioaji_event({"code": "2330", "close": 500.0, "volume": 100})
+    assert svc.raw_queue.qsize() == 0
 
 
 def test_on_shioaji_event_with_loop_enqueues():
@@ -981,6 +985,7 @@ def test_on_shioaji_event_exception_is_handled():
     with patch("hft_platform.services._md_ingestion.try_fast_extract_callback_payload", side_effect=RuntimeError("oops")):
         # Should not raise
         svc._on_shioaji_event({"code": "2330"})
+    assert svc.raw_queue.qsize() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1054,6 +1059,7 @@ def test_emit_trace_no_sampler():
     svc._trace_sampler = None
     # Should not raise
     svc._emit_trace("stage", "trace_id", {"key": "val"})
+    assert svc._trace_sampler is None
 
 
 def test_emit_trace_with_sampler():
@@ -1071,6 +1077,7 @@ def test_emit_trace_sampler_raises_silently():
     svc._trace_sampler = sampler
     # Should not raise
     svc._emit_trace("stage", "", {})
+    sampler.emit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1111,19 +1118,23 @@ def test_record_crash_signature_no_registry():
     svc.metrics_registry = None
     # Should not raise
     svc._record_shioaji_crash_signature("connection reset", context="md_callback")
+    assert svc.metrics_registry is None
 
 
 def test_record_crash_signature_no_metric_attr():
     svc, *_ = _make_service()
     svc.metrics_registry = MagicMock(spec=[])  # empty spec, no attributes
     svc._record_shioaji_crash_signature("connection reset", context="md_callback")
+    assert svc.metrics_registry.method_calls == []
 
 
 def test_record_crash_signature_no_match():
     svc, *_ = _make_service()
     svc.metrics_registry = MagicMock()
     # Text that doesn't match any known crash signature
-    svc._record_shioaji_crash_signature("just a regular log message", context="md_callback")
+    with patch("hft_platform.services._md_observability.detect_crash_signature", return_value=None):
+        svc._record_shioaji_crash_signature("just a regular log message", context="md_callback")
+    svc.metrics_registry.shioaji_crash_signature_total.labels.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -110,63 +110,77 @@ def _run_parity(fills):
         assert r_pnl == py.realized_pnl_scaled, f"pnl mismatch: rust={r_pnl} py={py.realized_pnl_scaled}"
         assert r_fees == py.fees_scaled, f"fees mismatch: rust={r_fees} py={py.fees_scaled}"
 
+    return py
+
 
 def test_open_long_close():
-    _run_parity(
+    py = _run_parity(
         [
             (BUY, 10, 10000, 5, 0),
             (SELL, 10, 10500, 5, 0),
         ]
     )
+    assert py.net_qty == 0
+    assert py.realized_pnl_scaled == 5000
 
 
 def test_open_short_close():
-    _run_parity(
+    py = _run_parity(
         [
             (SELL, 5, 20000, 0, 0),
             (BUY, 5, 19000, 0, 0),
         ]
     )
+    assert py.net_qty == 0
+    assert py.realized_pnl_scaled == 5000
 
 
 def test_increase_long_weighted_avg():
-    _run_parity(
+    py = _run_parity(
         [
             (BUY, 10, 10000, 0, 0),
             (BUY, 10, 12000, 0, 0),
         ]
     )
+    assert py.net_qty == 20
+    assert py.avg_price_scaled == 11000
 
 
 def test_partial_close():
-    _run_parity(
+    py = _run_parity(
         [
             (BUY, 10, 10000, 0, 0),
             (SELL, 3, 10500, 0, 0),
         ]
     )
+    assert py.net_qty == 7
+    assert py.realized_pnl_scaled == 1500
 
 
 def test_flip_long_to_short():
-    _run_parity(
+    py = _run_parity(
         [
             (BUY, 10, 10000, 0, 0),
             (SELL, 15, 11000, 0, 0),
         ]
     )
+    assert py.net_qty == -5
+    assert py.avg_price_scaled == 11000
 
 
 def test_flip_short_to_long():
-    _run_parity(
+    py = _run_parity(
         [
             (SELL, 10, 20000, 0, 0),
             (BUY, 15, 19000, 0, 0),
         ]
     )
+    assert py.net_qty == 5
+    assert py.avg_price_scaled == 19000
 
 
 def test_many_fills_round_trip():
-    _run_parity(
+    py = _run_parity(
         [
             (BUY, 10, 10000, 10, 5),
             (BUY, 5, 10200, 8, 4),
@@ -176,10 +190,11 @@ def test_many_fills_round_trip():
             (SELL, 20, 10400, 20, 10),
         ]
     )
+    assert py.net_qty == 0
 
 
 def test_close_to_flat_then_reopen():
-    _run_parity(
+    py = _run_parity(
         [
             (BUY, 10, 10000, 0, 0),
             (SELL, 10, 10500, 0, 0),
@@ -187,6 +202,8 @@ def test_close_to_flat_then_reopen():
             (BUY, 5, 10800, 0, 0),
         ]
     )
+    assert py.net_qty == 0
+    assert py.realized_pnl_scaled == 6000
 
 
 def test_rust_get_and_reset():

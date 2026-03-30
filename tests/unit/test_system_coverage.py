@@ -217,6 +217,7 @@ def test_on_exec_no_loop_skips():
 
     # Should not raise
     sys_obj._on_exec("fill", {"price": 100})
+    assert sys_obj.loop is None
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +244,7 @@ def test_close_broker_client_no_close_attr():
 
     # Should not raise
     sys_obj._close_broker_client("test_client")
+    assert not hasattr(client_no_close, "close")
 
 
 def test_close_broker_client_exception_is_swallowed():
@@ -263,6 +265,7 @@ def test_close_broker_client_none_client():
     sys_obj.missing_client = None
 
     sys_obj._close_broker_client("missing_client")
+    assert sys_obj.missing_client is None
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +374,7 @@ def test_update_platform_degrade_state_no_controller():
 
     # Should not raise
     sys_obj._update_platform_degrade_state()
+    assert sys_obj.platform_degrade_controller is None
 
 
 def test_update_platform_degrade_state_no_inputs():
@@ -380,6 +384,7 @@ def test_update_platform_degrade_state_no_inputs():
 
     # Should not raise
     sys_obj._update_platform_degrade_state()
+    assert sys_obj.platform_degrade_inputs is None
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +545,8 @@ async def test_pnl_snapshot_exporter_queue_full_silent(monkeypatch):
         with patch("asyncio.sleep", side_effect=_mock_sleep):
             # Should not raise even with full queue
             await sys_obj._pnl_snapshot_exporter()
+    # Queue remains at capacity with only the pre-filled item (pnl row was dropped)
+    assert sys_obj.recorder_queue.qsize() == 1
 
 
 # ---------------------------------------------------------------------------
@@ -585,5 +592,6 @@ async def test_stop_async_stops_optional_services():
 
     await sys_obj.stop_async()
 
+    assert sys_obj.running is False
     sys_obj.autonomy_monitor.stop.assert_awaited_once()
     sys_obj.session_governor.stop.assert_awaited_once()

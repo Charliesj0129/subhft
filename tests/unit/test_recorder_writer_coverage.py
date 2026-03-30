@@ -589,9 +589,9 @@ async def test_write_schedules_reconnect_when_timeout(connected_writer):
 
 @pytest.mark.asyncio
 async def test_write_columnar_empty_returns_early(writer):
-    # Should not raise with empty data
     await writer.write_columnar("t", [], [], 0)
     await writer.write_columnar("t", ["col"], [], 0)
+    assert not writer.connected  # no side-effect on empty data
 
 
 @pytest.mark.asyncio
@@ -719,13 +719,15 @@ async def test_shutdown_handles_wal_batch_stop_error(writer):
 
     # Should not raise
     await writer.shutdown()
+    mock_bw.flush.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_shutdown_without_wal_batch_writer(writer):
     writer._wal_batch_writer = None
-    # Should not raise
+    # Should not raise — writer state remains stable after shutdown
     await writer.shutdown()
+    assert writer._wal_batch_writer is None
 
 
 # ---------------------------------------------------------------------------

@@ -527,6 +527,8 @@ async def test_run_processes_finite_events(runner_factory):
     bus = _make_bus(events)
     runner, _, _ = runner_factory(bus=bus)
     await asyncio.wait_for(runner.run(), timeout=5.0)
+    # After processing all events the runner exits cleanly — bus was consumed
+    bus.consume.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -38,11 +38,14 @@ from hft_platform.alpha._validation_helpers import (
 
 
 def test_validate_alpha_id_valid():
-    _validate_alpha_id("ofi_mc")  # should not raise
+    # Should not raise — valid lowercase alpha_id with underscore
+    result = _validate_alpha_id("ofi_mc")
+    assert result is None
 
 
 def test_validate_alpha_id_valid_with_numbers():
-    _validate_alpha_id("a1b2c3")
+    result = _validate_alpha_id("a1b2c3")
+    assert result is None
 
 
 def test_validate_alpha_id_starts_with_digit_raises():
@@ -68,9 +71,10 @@ def test_validate_alpha_id_too_long_raises():
 
 
 def test_validate_alpha_id_max_length_allowed():
-    # Exactly 64 chars is valid
+    # Exactly 64 chars is valid — should not raise
     max_id = "a" + "b" * 63
-    _validate_alpha_id(max_id)
+    result = _validate_alpha_id(max_id)
+    assert result is None
 
 
 def test_validate_alpha_id_non_string_raises():

@@ -256,6 +256,7 @@ async def test_new_order_dispatch_not_running(adapter):
 
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
     adapter._dlq.add.assert_not_awaited()
+    assert adapter._dispatch_to_api.await_count == 1
 
 
 # --- 9. CANCEL order dispatched (not running) ---
@@ -271,6 +272,7 @@ async def test_cancel_order_dispatch_not_running(adapter):
     await adapter.execute(cmd)
 
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+    assert adapter._dispatch_to_api.await_count == 1
 
 
 # --- 10. AMEND order dispatched (not running) ---
@@ -286,6 +288,7 @@ async def test_amend_order_dispatch_not_running(adapter):
     await adapter.execute(cmd)
 
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+    assert adapter._dispatch_to_api.await_count == 1
 
 
 # --- 11. Per-symbol rate limit HARD DLQ fields ---
@@ -385,3 +388,58 @@ async def test_running_adapter_enqueues_to_api_queue(adapter):
     assert adapter._api_queue.qsize() == 1
     queued = adapter._api_queue.get_nowait()
     assert queued is cmd
+
+
+# --- 17. StormGuard HALT blocks order ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_rejects_to_dlq(adapter):
+    """Order with storm_guard_state=HALT is DLQ'd before any other check."""
+    cmd = make_cmd()
+    cmd.storm_guard_state = StormGuardState.HALT
+
+    await adapter.execute(cmd)
+
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert call_kwargs["reason"].value == "validation_error"
+    assert "StormGuard HALT" in call_kwargs["error_message"]
+    # Confirm no other checks ran (per-symbol rate limiter never called)
+    adapter.per_symbol_rate_limiter.check.assert_not_called()
+
+
+# --- 18. StormGuard HALT allows halt_flatten orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_allows_halt_flatten_order(adapter):
+    """halt_flatten orders bypass the StormGuard HALT check and proceed normally."""
+    from hft_platform.contracts.strategy import OrderIntent
+
+    intent = OrderIntent(
+        intent_id=2,
+        strategy_id="s1",
+        symbol="2330",
+        intent_type=IntentType.NEW,
+        side=Side.SELL,
+        price=5_000_000,
+        qty=10,
+        reason="halt_flatten",
+    )
+    now = timebase.now_ns()
+    cmd = OrderCommand(
+        cmd_id=2,
+        intent=intent,
+        deadline_ns=now + 10_000_000_000,
+        storm_guard_state=StormGuardState.HALT,
+        created_ns=now,
+    )
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    # Should NOT be DLQ'd — should be dispatched
+    adapter._dlq.add.assert_not_awaited()
+    adapter._dispatch_to_api.assert_awaited_once_with(cmd)

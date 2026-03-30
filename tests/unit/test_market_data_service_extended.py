@@ -63,7 +63,10 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
 
     async def test_publish_no_publish_fn(self):
         service = MarketDataService(object(), self.raw_queue, self.client)
+        initial_state = service.state
         await service._publish("evt")
+        # Publish with no publish_fn (bus is a plain object) must not change state
+        assert service.state == initial_state
 
     async def test_publish_awaits_coroutine(self):
         called = {"ok": False}

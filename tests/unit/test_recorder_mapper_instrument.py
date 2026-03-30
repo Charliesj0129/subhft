@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import numpy as np
 import pytest
 import yaml
@@ -45,7 +47,7 @@ class TestMapperInstrumentFields:
         assert record.get("underlying") == ""  # not set in yaml
         assert record.get("strike_scaled") == 0
         assert record.get("option_right") == ""
-        assert record.get("expiry") == "1970-01-01"
+        assert record.get("expiry") == datetime.date(1970, 1, 1)
 
     def test_bidask_event_has_instrument_type(self, metadata_with_registry):
         meta = MetaData(seq=2, topic="bidask", source_ts=1000000000, local_ts=1000000001)

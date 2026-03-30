@@ -82,6 +82,7 @@ class TestPythonBaseline:
         r1 = _py_apply_latency(desired, 2)
         r2 = _py_apply_latency(desired, 2)
         np.testing.assert_array_equal(r1, r2)
+        assert len(r1) == len(desired)
 
 
 # ---------------------------------------------------------------------------
@@ -95,12 +96,14 @@ class TestRustParity:
         py_result = py_signals_to_positions(signals, 0.3, 5)
         rust_result = np.asarray(rust_signals_to_positions(signals.tolist(), 0.3, 5))
         np.testing.assert_allclose(py_result, rust_result, atol=1e-10)
+        assert len(py_result) == len(signals)
 
     def test_apply_latency_parity(self):
         desired = np.array([0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, -1.0, -1.0, -1.0])
         py_result = _py_apply_latency(desired, 2)
         rust_result = np.asarray(rust_apply_latency(desired.tolist(), 2))
         np.testing.assert_allclose(py_result, rust_result, atol=1e-10)
+        assert len(py_result) == len(desired)
 
     def test_signals_to_positions_empty_rust(self):
         result = rust_signals_to_positions([], 0.5, 3)

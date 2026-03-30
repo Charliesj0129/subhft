@@ -454,6 +454,7 @@ class TestRequestReconnect:
         with patch.object(md, "_within_reconnect_window", return_value=True):
             await md._request_reconnect(30.0, reason="heartbeat_gap")
         md._trigger_reconnect.assert_awaited_once_with(30.0, reason="heartbeat_gap")
+        assert md._trigger_reconnect.await_count == 1
 
     @pytest.mark.asyncio
     async def test_marks_pending_when_outside_window(self, md: _FakeMD) -> None:
@@ -532,6 +533,7 @@ class TestRunMonitorReconnectChecks:
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._trigger_reconnect.assert_not_awaited()
+        assert md._trigger_reconnect.await_count == 0
 
     @pytest.mark.asyncio
     async def test_attempts_resubscribe_on_gap(self, md: _FakeMD) -> None:
@@ -545,6 +547,7 @@ class TestRunMonitorReconnectChecks:
             # gap > resubscribe_gap_s (15), < reconnect_gap_s (60)
             await md._run_monitor_reconnect_checks(20.0)
         md._attempt_resubscribe.assert_awaited_once()
+        assert md._attempt_resubscribe.await_count == 1
 
     @pytest.mark.asyncio
     async def test_requests_reconnect_on_large_gap(self, md: _FakeMD) -> None:
@@ -558,6 +561,7 @@ class TestRunMonitorReconnectChecks:
             # gap > force_reconnect_gap_s (300)
             await md._run_monitor_reconnect_checks(350.0)
         md._request_reconnect.assert_awaited()
+        assert md._request_reconnect.await_count >= 1
 
     @pytest.mark.asyncio
     async def test_requests_reconnect_when_disconnected(self, md: _FakeMD) -> None:
@@ -569,6 +573,7 @@ class TestRunMonitorReconnectChecks:
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._request_reconnect.assert_awaited()
+        assert md._request_reconnect.await_count >= 1
 
     @pytest.mark.asyncio
     async def test_requests_reconnect_when_recovering(self, md: _FakeMD) -> None:
@@ -580,6 +585,7 @@ class TestRunMonitorReconnectChecks:
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._request_reconnect.assert_awaited()
+        assert md._request_reconnect.await_count >= 1
 
     @pytest.mark.asyncio
     async def test_rollover_reconnect_triggered(self, md: _FakeMD) -> None:
@@ -592,3 +598,4 @@ class TestRunMonitorReconnectChecks:
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._request_reconnect.assert_awaited_with(0.0, reason="session_rollover")
+        assert md._request_reconnect.await_count >= 1

@@ -304,6 +304,8 @@ def test_apply_latency_deterministic():
     r1 = _apply_latency_to_positions(data, desired, cfg)
     r2 = _apply_latency_to_positions(data, desired, cfg)
     np.testing.assert_array_equal(r1, r2)
+    # Latency-applied positions must be same length as input
+    assert len(r1) == len(desired)
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +328,7 @@ def test_adapter_runner_equity_parity():
     eq1 = compute_equity_from_positions(prices, positions, fee_rate=0.001)
     eq2 = compute_equity_from_positions(prices, positions, fee_rate=0.001)
     np.testing.assert_array_equal(eq1, eq2)
+    assert len(eq1) == len(prices)
 
 
 # ---------------------------------------------------------------------------

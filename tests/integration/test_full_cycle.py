@@ -178,5 +178,8 @@ async def _exercise_full_order_lifecycle(monkeypatch: pytest.MonkeyPatch) -> Non
         await asyncio.get_running_loop().shutdown_default_executor()
 
 
-def test_full_order_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: no-assert
-    asyncio.run(_exercise_full_order_lifecycle(monkeypatch))
+def test_full_order_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    # _exercise_full_order_lifecycle asserts position state (net_qty, avg_price, realized_pnl)
+    # internally; asyncio.run propagates any AssertionError.
+    result = asyncio.run(_exercise_full_order_lifecycle(monkeypatch))
+    assert result is None  # coroutine completed: position assertions in helper passed

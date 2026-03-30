@@ -64,6 +64,7 @@ async def test_skips_wrong_hour():
     ):
         await runner._check_and_trigger()
     sync_mock.assert_not_awaited()
+    assert runner._eod_recon_status._value.get() == _STATUS_PENDING
 
 
 @pytest.mark.asyncio
@@ -137,6 +138,7 @@ async def test_configurable_hour():
     ):
         await runner._check_and_trigger()
     sync_mock.assert_awaited_once()
+    assert runner._eod_recon_status._value.get() == _STATUS_SUCCESS
 
 
 @pytest.mark.asyncio
