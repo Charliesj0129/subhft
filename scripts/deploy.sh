@@ -23,6 +23,7 @@ set -euo pipefail
 REGISTRY="${REGISTRY:-ghcr.io}"
 HEALTH_RETRIES=3
 HEALTH_INTERVAL=10
+HEALTH_URL="${DEPLOY_HEALTH_URL:-http://localhost:9090/metrics}"
 REMOTE_DIR="${DEPLOY_ROOT:-/home/charl/subhft}"
 
 # ── Argument parsing ──────────────────────────────────────────────────────
@@ -135,7 +136,7 @@ for i in $(seq 1 "${HEALTH_RETRIES}"); do
     sleep "${HEALTH_INTERVAL}"
     # shellcheck disable=SC2029
     if ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
-        "curl -sf http://localhost:9090/metrics | grep -q hft_"; then
+        "curl -sf ${HEALTH_URL} | grep -q hft_"; then
         echo "==> Health check PASSED (attempt ${i}/${HEALTH_RETRIES})"
         echo "==> Deploy complete: ${IMAGE_TAG}"
         exit 0

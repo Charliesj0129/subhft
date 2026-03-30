@@ -11,9 +11,7 @@ set -e
 #   isolate     : Isolate CPUs for Strategy (Soft-Realtime).
 #   install-rt  : Install Real-Time Kernel (Producton/Bare Metal).
 #   start-ptp   : Start PTP Time Sync (Production/Bare Metal).
-#   monitor-ch  : Check ClickHouse data flow stats.
 #   replay-wal  : Move archived WAL files back to active folder for re-ingestion.
-#   test        : Run system tests via pytest.
 # ==============================================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -82,7 +80,6 @@ net.core.netdev_max_backlog = 250000
 net.ipv4.tcp_rmem = 4096 87380 134217728
 net.ipv4.tcp_wmem = 4096 65536 134217728
 net.ipv4.tcp_congestion_control = bbr
-net.ipv4.tcp_low_latency = 1
 net.core.somaxconn = 4096
 EOF
     sysctl --system > /dev/null
@@ -176,14 +173,6 @@ EOF
     wait $PTP_PID $PHC_PID
 }
 
-# --- Function: Monitor ClickHouse ---
-cmd_monitor_ch() {
-    CH_CONTAINER="clickhouse"
-    CH_CLIENT="docker exec ${CH_CONTAINER} clickhouse-client --query"
-    echo ">> [Monitor] ClickHouse Stats:"
-    $CH_CLIENT "SELECT count(), min(toDateTime64(exch_ts/1e9,3)), max(toDateTime64(exch_ts/1e9,3)) FROM hft.market_data"
-}
-
 # --- Function: Replay WAL ---
 cmd_replay_wal() {
     ARCHIVE_DIR=".wal/archive"
@@ -195,18 +184,6 @@ cmd_replay_wal() {
     docker compose start wal-loader
     echo "   Done."
 }
-
-# --- Function: Test ---
-cmd_test() {
-    echo ">> [Test] Running pytest (requires venv)..."
-    if [ -f .venv/bin/activate ]; then
-        source .venv/bin/activate
-        PYTHONPATH=src pytest tests/
-    else
-        echo "Error: .venv not found. Please setup python environment first."
-    fi
-}
-
 
 # --- Main Dispatch ---
 case "$1" in
@@ -229,17 +206,11 @@ case "$1" in
     start-ptp)
         cmd_start_ptp "$2"
         ;;
-    monitor-ch)
-        cmd_monitor_ch
-        ;;
     replay-wal)
         cmd_replay_wal
         ;;
-    test)
-        cmd_test
-        ;;
     *)
-        echo "Usage: $0 {setup|tune|hugepages|isolate|install-rt|start-ptp|monitor-ch|replay-wal|test}"
+        echo "Usage: $0 {setup|tune|hugepages|isolate|install-rt|start-ptp|replay-wal}"
         exit 1
         ;;
 esac

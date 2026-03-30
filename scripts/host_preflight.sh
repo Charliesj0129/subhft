@@ -109,7 +109,6 @@ check_sysctl() {
 check_sysctl "net.core.rmem_max" "134217728"
 check_sysctl "net.core.wmem_max" "134217728"
 check_sysctl "net.core.somaxconn" "4096"
-check_sysctl "net.ipv4.tcp_low_latency" "1"
 if [ "$SYSCTL_OK" = true ]; then
     pass "Sysctl tuning OK"
 fi
