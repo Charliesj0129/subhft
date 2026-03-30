@@ -717,6 +717,9 @@ class SystemBootstrapper:
         elif role not in _FEED_ALLOWED_ROLES:
             logger.warning("Runtime role does not create feed client", role=role)
 
+        # Fail fast on unsafe live/sim combinations before wiring broker-facing services.
+        validate_order_mode_safety()
+
         # B-OPS-03: Non-blocking preflight — warn if another runtime owns the session.
         lease_owned = self._check_session_ownership(role)
         self._last_role = role

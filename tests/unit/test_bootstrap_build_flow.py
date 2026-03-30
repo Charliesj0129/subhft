@@ -85,6 +85,13 @@ class TestBuildServiceGraph:
         assert isinstance(registry, ServiceRegistry)
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_build_runs_order_mode_safety_guard(self) -> None:
+        with patch("hft_platform.services.bootstrap.validate_order_mode_safety") as guard:
+            _build_with_mocks()
+
+        guard.assert_called_once_with()
+
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
     def test_build_sim_has_all_required_services(self) -> None:
         registry = _build_with_mocks()
         required_attrs = [
