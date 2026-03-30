@@ -1,0 +1,6 @@
+greeks_limits:
+  enabled: false
+  net_delta_lots: 50
+  net_gamma_lots: 20
+  net_vega_ntd: 500000
+  net_theta_ntd: -200000

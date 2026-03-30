@@ -89,6 +89,7 @@ class RiskEngine:
         "_ORDER_DLQ_MAX",
         "_position_provider",
         "_rejection_sink",
+        "_greeks_validator",
         "__dict__",
     )
 
@@ -102,6 +103,7 @@ class RiskEngine:
         notification_dispatcher: Any | None = None,
         position_provider: Any | None = None,
         rejection_sink: asyncio.Queue | None = None,
+        greeks_provider: Any | None = None,
     ):
         self.config_path = config_path
         self.intent_queue = intent_queue  # Input
@@ -161,6 +163,13 @@ class RiskEngine:
         self._order_dlq: collections.deque = collections.deque()
         self._ORDER_DLQ_MAX: int = 256
         self._rejection_sink = rejection_sink
+        self._greeks_validator = None
+        if greeks_provider is not None:
+            try:
+                from hft_platform.risk.greeks_limit_validator import GreeksLimitValidator
+                self._greeks_validator = GreeksLimitValidator(self.config, greeks_provider)
+            except ImportError:
+                logger.warning("greeks_limit_validator_unavailable")
 
     def _current_strategy_symbol_net_position(self, symbol: str, strategy_id: str) -> int:
         provider = self._position_provider
@@ -477,6 +486,12 @@ class RiskEngine:
 
         # Check if DailyLossLimitValidator triggered HALT after the validator loop
         self._check_daily_loss_halt()
+
+        if self._greeks_validator is not None:
+            ok, reason = self._greeks_validator.check(intent)
+            if not ok:
+                self._emit_trace("risk_reject", intent, {"stage": "greeks_limit", "reason": reason})
+                return RiskDecision(False, intent, reason)
 
         self._emit_trace("risk_approve", intent, {"stage": "evaluate"})
         decision = RiskDecision(True, intent)
