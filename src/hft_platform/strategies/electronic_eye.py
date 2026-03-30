@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import RiskFeedback, Side
-from hft_platform.contracts.execution import FillEvent, OrderEvent
-from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
 from hft_platform.core import timebase
+from hft_platform.events import BidAskEvent, LOBStatsEvent
 from hft_platform.strategy.base import BaseStrategy
 
 logger = get_logger("strategy.electronic_eye")
@@ -132,6 +131,8 @@ def _compute_edge(
     ask_price = theo_price + edge
     return EdgeResult(
         has_bid_edge=bid_price > market_bid,
+        # Checks if market ask is cheap vs theory (profit opportunity to sell),
+        # not whether our ask_price beats the market — intentionally conservative.
         has_ask_edge=theo_price > market_ask,
         bid_price=bid_price,
         ask_price=ask_price,
@@ -193,9 +194,7 @@ class HedgerState:
             return -self._max_qty
         return lots
 
-    def hedge_direction(self, hedge_lots: int) -> tuple:
-        from hft_platform.contracts.strategy import Side  # noqa: PLC0415 — deferred to avoid circular import
-
+    def hedge_direction(self, hedge_lots: int) -> tuple[Side, int]:
         if hedge_lots > 0:
             return Side.SELL, min(abs(hedge_lots), self._max_qty)
         return Side.BUY, min(abs(hedge_lots), self._max_qty)
@@ -209,7 +208,15 @@ class ElectronicEye(BaseStrategy):
         "guardian", "_hedger", "_quoter_state", "_last_publish_ns",
     )
 
-    def __init__(self, strategy_id="electronic_eye", quoter=None, hedger=None, guardian=None, publish=None, **kwargs):
+    def __init__(
+        self,
+        strategy_id: str = "electronic_eye",
+        quoter: dict | None = None,
+        hedger: dict | None = None,
+        guardian: dict | None = None,
+        publish: dict | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(strategy_id=strategy_id, **kwargs)
         self._quoter_cfg = quoter or {}
         self._hedger_cfg = hedger or {}
@@ -234,7 +241,12 @@ class ElectronicEye(BaseStrategy):
     def on_risk_feedback(self, feedback: RiskFeedback) -> None:
         if feedback.reason_code.startswith("GREEKS_"):
             self.guardian.on_greeks_rejection(feedback.reason_code)
-            logger.warning("eye_greeks_rejection", reason=feedback.reason_code, symbol=feedback.symbol, state=self.guardian.state.name)
+            logger.warning(
+                "eye_greeks_rejection",
+                reason=feedback.reason_code,
+                symbol=feedback.symbol,
+                state=self.guardian.state.name,
+            )
 
     def on_book_update(self, event: BidAskEvent) -> None:
         if not self.guardian.allows_new_quotes():
