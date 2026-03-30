@@ -3,7 +3,7 @@
 **Date:** 2026-03-30
 **Scope:** Ops Automation, CI/CD Pipeline, Monitoring/Alerting, Config Management
 **Approach:** Tiered remediation roadmap (P0→P3), prioritized by severity
-**Total findings:** 56 items across 4 domains
+**Total findings:** 54 items across 4 domains (2 false positives removed: M-16, C-05)
 
 ---
 
@@ -14,7 +14,7 @@
 Four parallel deep scans across:
 1. **Ops Automation** — 70+ scripts in `scripts/`, `ops.sh`, Makefile ops targets, cron scheduling
 2. **CI/CD Pipeline** — 4 GitHub Actions workflows, `.pre-commit-config.yaml`, Makefile CI targets
-3. **Monitoring/Alerting** — ~110 exported metrics, 53 alert rules, 5 Grafana dashboards, Prometheus/Alertmanager/Loki configs
+3. **Monitoring/Alerting** — ~110 exported metrics, 52 alert rules, 5 Grafana dashboards, Prometheus/Alertmanager/Loki configs
 4. **Config Management** — `config/base/` + `config/env/` merge chain, `loader.py`, schema validation, hot-reload
 
 ### Severity Distribution
@@ -23,7 +23,7 @@ Four parallel deep scans across:
 |-------|----------|-------|---------|
 | P0 | CRITICAL | 12 | Monitoring 6 / Ops 3 / Config 2 / CI 1 |
 | P1 | HIGH | 15 | Monitoring 8 / CI 4 / Config 2 / Ops 1 |
-| P2 | MEDIUM | 18 | CI 8 / Monitoring 4 / Config 4 / Ops 2 |
+| P2 | MEDIUM | 16 | CI 8 / Monitoring 3 / Config 3 / Ops 2 |
 | P3 | LOW | 11 | Ops 6 / CI 3 / Config 2 |
 
 ---
@@ -34,11 +34,11 @@ Four parallel deep scans across:
 
 ### Monitoring
 
-#### M-01: Production dashboard uses non-existent metric namespace
+#### M-01: Production dashboard entirely broken (panels, templating, annotations, datasource)
 - **File:** `config/monitoring/dashboards/hft-production.json`
-- **Problem:** All 10 panels reference `hft_*`-prefixed metrics (`hft_storm_guard_state`, `hft_feed_ticks_total`, `hft_orders_submitted_total`, etc.) that do not exist in `metrics.py`. Actual names: `stormguard_mode`, `feed_events_total`, `order_actions_total`, etc.
-- **Impact:** Main production dashboard shows "No data" on every panel.
-- **Fix:** Rewrite all panel queries to use actual metric names from `metrics.py`. Also fix datasource uid from `"prometheus"` to `"Prometheus"` (case mismatch with provisioned datasource name in `datasource.yml`). Standardize datasource uid across all 5 dashboard files.
+- **Problem:** All 10 panels, 2 templating variables, and 2 annotations reference `hft_*`-prefixed metrics (`hft_storm_guard_state`, `hft_feed_ticks_total`, `hft_orders_submitted_total`, etc.) that do not exist in `metrics.py`. Actual names: `stormguard_mode`, `feed_events_total`, `order_actions_total`, etc. Additionally, the datasource uid is `"prometheus"` (lowercase) while the provisioned datasource name in `datasource.yml` is `"Prometheus"` (capital P). The other 4 dashboards already use the correct `"Prometheus"` string — only `hft-production.json` is broken.
+- **Impact:** Main production dashboard shows "No data" on every panel, templating variable, and annotation.
+- **Fix:** Rewrite all panel queries, templating variables, and annotation queries to use actual metric names from `metrics.py`. Fix datasource uid from `"prometheus"` to `"Prometheus"` throughout `hft-production.json` only (other dashboards are already correct).
 
 #### M-02: YAML indentation bug silences 3 alert rules
 - **File:** `config/monitoring/alerts/rules.yaml`, lines 509–536
@@ -86,9 +86,9 @@ Four parallel deep scans across:
 - **Impact:** If no cron entry exists on the remote host, ClickHouse data has no nightly backup. Verify on remote host before assuming worst case.
 - **Fix:** Add `clickhouse_backup.sh` to `cron-setup-remote.md` at the design-spec time (14:30 daily). Document `daily-backup.sh` as the local-dev alias or retire it (see P2 O-05).
 
-#### O-03: `verify_rust_deployment.py` imports non-existent module
-- **Problem:** Imports `research.tools.factor_registry` which does not exist. Script will crash on any invocation.
-- **Fix:** Delete the script (orphan, no Makefile/CI/doc references).
+#### O-03: `verify_rust_deployment.py` is an unreferenced orphan
+- **Problem:** The script imports `research.tools.factor_registry` (which does exist at `research/tools/factor_registry.py`) and works if invoked from the repo root. However, it has zero references in Makefile, CI, cron, or documentation — it is an orphan from the Feb 2026 bootstrap phase.
+- **Fix:** Delete the script (orphan, no Makefile/CI/doc references). If verification of Rust deployment is needed, it should be a proper Makefile target.
 
 ### Config
 
@@ -124,9 +124,9 @@ Four parallel deep scans across:
 #### M-07: No alert on fill loss (`exec_overflow_evicted_total`)
 - **Fix:** Add alert rule for `rate(exec_overflow_evicted_total[5m]) > 0` with severity `critical`. Any evicted fill is data loss and must page immediately.
 
-#### M-08: SLO-2 Order-to-Fill Latency unmeasured
-- **Problem:** `order_to_fill_latency_ms` referenced in SLO doc but not exported.
-- **Fix:** Implement the metric in the execution path (order timestamp → fill callback timestamp delta), export as Histogram, add recording rule for P95, add alert for SLO burn rate.
+#### M-08: SLO-2 Order-to-Fill Latency unmeasured + dashboard broken
+- **Problem:** `order_to_fill_latency_ms` referenced in SLO doc but not exported. Additionally, `gateway_wal_slo.json` (line 94) already queries `e2e_order_latency_ns_bucket` for p50/p95/p99 panels — this metric also does not exist, so those panels show "No data".
+- **Fix:** Implement the metric in the execution path (order timestamp → fill callback timestamp delta), export as Histogram named `e2e_order_latency_ns` (matching the existing dashboard queries), add recording rule for P95, add alert for SLO burn rate. Update `slo-definitions.md` to reference the actual metric name.
 
 #### M-09: Alpha signal silence unalerted
 - **Fix:** Add alert: `time() - alpha_last_signal_ts > 300` → `AlphaSignalSilent`. The metric and the intended alert logic already exist as a code comment in `metrics.py`.
@@ -168,9 +168,11 @@ Four parallel deep scans across:
 - **Fix:** Add step in `ci.yml` `rust` job: `cargo install cargo-audit && cargo audit`. Or use `actions-rs/audit-check` action.
 
 #### CI-04: Weak secret scanning
-- **Fix:** Replace inline regex with `gitleaks/gitleaks-action` in `ci.yml`. Scan entire repo (not just `src/`).
+- **Problem:** The inline secret regex is in `pr-review-checklist.yml` (line 88), not `ci.yml`. It only covers `src/` with a fragile pattern matching `(api_key|password|secret|token)\s*=\s*["\x27]`.
+- **Fix:** Replace inline regex with `gitleaks/gitleaks-action` in `ci.yml` (so it runs on all pushes, not just PRs). Scan entire repo (not just `src/`). Remove the fragile regex from `pr-review-checklist.yml`.
 
-#### CI-05: Missing `timeout-minutes` on 8 jobs
+#### CI-05: Missing `timeout-minutes` on 10 jobs
+- **Problem:** Only `test` (line 293) has `timeout-minutes: 30`. All other 10 jobs default to GitHub's 6-hour limit.
 - **Fix:** Add `timeout-minutes` to each job:
 
   | Job | Timeout |
@@ -182,7 +184,9 @@ Four parallel deep scans across:
   | `benchmark` | 30 |
   | `latency-gate` | 20 |
   | `integration` | 30 |
+  | `recorder-nightly-drills` | 30 |
   | `security` | 10 |
+  | `pr-review-gate` | 5 |
 
 ### Config
 
@@ -190,9 +194,9 @@ Four parallel deep scans across:
 - **Problem:** `risk`, `stormguard`, `circuit_breaker`, `rate_limit`, `canary`, `shadow`, `shioaji` sub-configs all pass through unvalidated. A typo like `stormgurad` is silently ignored.
 - **Fix:** Extend `config/schema.py` to validate known sub-config schemas. Use `pydantic` or `msgspec.Struct` for nested validation. At minimum: risk limits (soft < hard), stormguard thresholds (positive numbers), rate limits (positive ints).
 
-#### C-04: Hot-reload has no schema validation
-- **Problem:** `ConfigWatcher` calls `yaml.safe_load()` with no validation. Malformed YAML silently becomes `{}`.
-- **Fix:** Add the same schema validation used at startup to the hot-reload path. Reject invalid reloads with a structlog warning and keep the previous valid config.
+#### C-04: Hot-reload lacks domain schema validation
+- **Problem:** `ConfigWatcher._safe_load_yaml()` (line 191) already handles YAML parse errors and non-dict roots correctly — it logs an error and returns `None`, preserving the previous valid config. However, after successful YAML parsing, there is no domain-level schema validation. A syntactically valid YAML with wrong keys (e.g., `stormgurad` instead of `stormguard`) is silently accepted as a valid reload.
+- **Fix:** Add domain schema validation (same as C-03's startup validation) after `_safe_load_yaml()` succeeds. Reject reloads that fail domain validation with a structlog warning, keeping the previous config.
 
 ### Ops
 
@@ -241,19 +245,20 @@ Four parallel deep scans across:
 #### M-15: 76 orphaned metrics
 - **Fix:** Triage into three buckets: (a) wire to new dashboards from M-14, (b) wire to new alert rules, (c) document as intentionally unmonitored (development/debug metrics). Target: reduce orphan count to < 20.
 
-#### M-16: SMARTmon exporter not scraped
-- **Fix:** Add `smartmon` textfile collector to `node-exporter` (via `--collector.textfile.directory=/etc/node-exporter/`). The `scripts/smart_check.sh` already writes Prometheus textfile format — wire it to node-exporter's textfile directory.
+#### ~~M-16: SMARTmon exporter not scraped~~ — FALSE POSITIVE, REMOVED
+- **Note:** The SMART textfile collector is already wired. `docker-compose.yml` (line 243) mounts `/var/lib/node-exporter/textfile` into node-exporter with `--collector.textfile.directory` flag. `scripts/smart_check.sh` (line 8) writes to the same directory. The real issue is M-02's YAML indentation bug silencing the `SSDReallocatedSectorsHigh`/`SSDWearLevelLow` alerts — fixing M-02 restores SMART alerting.
 
-#### M-17: 43/53 alerts missing `runbook_url`
-- **Fix:** For the 9 existing runbooks, add `runbook_url: https://github.com/<repo>/blob/main/docs/runbooks/<AlertName>.md` annotation to their corresponding alert rules. For the remaining 34, create stub runbooks or link to the closest existing runbook.
+#### M-17: 51/52 alerts missing `runbook_url`
+- **Problem:** Of 52 alert rules, only 1 (`OrphanedFillDetected`) has a `runbook_url` annotation. 10 exact-name-matching runbook files exist in `docs/runbooks/` (`FeedGapCritical.md`, `HighRejectRate.md`, `HostDiskSpaceCritical.md`, `RecorderFailure.md`, `ShioajiCrashSignatureDetected.md`, `ShioajiWatchdogThreadDown.md`, `StormGuardHalt.md`, `WALDiskPressureCritical.md`, `ClickHouseConnectionDown.md`, `OrphanedFillDetected.md`) but 9 of them are not linked in their alert annotations.
+- **Fix:** For the 9 unlinked runbooks, add `runbook_url` annotations to their corresponding alert rules. For the remaining 42, create stub runbooks or link to the closest existing runbook.
 
 #### M-18: Production alertmanager config not loaded
 - **Fix:** Evaluate whether the Telegram-only routing is intentional. If PagerDuty/Slack differentiation is desired, switch `docker-compose.yml` alertmanager volume mount to use `alertmanager.production.yml`. If not, remove the unused production config to avoid confusion.
 
 ### Config
 
-#### C-05: Dead `config/base/fees/futures.yaml`
-- **Fix:** Verify no read path exists. If confirmed dead, delete. Fee data is already in `symbols.yaml` per-symbol.
+#### ~~C-05: Dead `config/base/fees/futures.yaml`~~ — FALSE POSITIVE, REMOVED
+- **Note:** This file IS actively used. `bootstrap.py` (line 914) constructs the path and loads it via `FeeCalculator.from_yaml()` (fee_calculator.py line 39). The loaded FeeCalculator is injected into `ExecutionRouter.normalizer` and used during live fill processing (`normalizer.py` lines 197-201). Deleting this file would break fee/TCA computation. The per-symbol fee data in `symbols.yaml` is a separate concern (symbol metadata vs. execution fee schedule).
 
 #### C-06: Root-level orphan config files
 - **Fix:** Delete `config/risk.yaml`, `config/execution.yaml`, `config/recorder.yaml`, `config/strategies.yaml`, `config/strategy_limits.yaml` (root-level copies). These are pre-migration leftovers; authoritative versions are in `config/base/`.
@@ -266,8 +271,9 @@ Four parallel deep scans across:
 
 ### Ops
 
-#### O-05: Duplicate backup scripts
-- **Fix:** Designate `clickhouse_backup.sh` as canonical (per design spec). Retire `daily-backup.sh` — either delete or rename to `daily-backup.sh.deprecated` with a comment pointing to canonical script.
+#### O-05: `daily-backup.sh` is a broken wrapper (not just a duplicate)
+- **Problem:** `daily-backup.sh` (line 21) force-sets `HFT_BACKUP_ENABLED=1` (overriding environment), then wraps `BackupManager.run_daily()` in an `async def` + `await` — but `run_daily()` is synchronous (returns `bool`, not a coroutine; see `backup.py` line 96). This will raise `TypeError: object bool can't be used in 'await' expression` at runtime. The script has never successfully run.
+- **Fix:** Delete `daily-backup.sh`. Designate `clickhouse_backup.sh` as the sole canonical backup entry point (per design spec). If a Python-invokable wrapper is needed, call `BackupManager().run_daily()` synchronously without async/await.
 
 #### O-06: `post_market_check.py` relative WAL path
 - **Fix:** Use `Path(__file__).resolve().parent.parent / ".wal"` (same pattern as `pre_market_check.py`) instead of relative `.wal`.
@@ -281,8 +287,9 @@ Four parallel deep scans across:
 ### Ops
 
 #### O-07: 17 orphan scripts from 2026-02-04
-- **Scripts:** `agent_session.sh`, `batch_create_snapshots.py`, `create_snapshot.py`, `debug_hbt_init.py`, `debug_lob_minimal.py`, `inspect_npz.py`, `inspect_snapshot_sig.py`, `latency_e2e_report.py` (root), `live_contract_cache_refresh.py`, `patch_trade_side.py`, `run_paper_trading.sh`, `shioaji_latency_probe.py` (root), `sim_full_pipeline.py`, `sim_futures_strategy_order.py`, `sim_shioaji_futures_smoke.py`, `sim_shioaji_order_smoke.py`, `sim_shioaji_stock_diag.py`
-- **Fix:** Delete all 17 confirmed orphans (O-03 already removes `verify_rust_deployment.py`; `latency_e2e_report.py` root copy superseded by `latency/` version). Create a single commit: `chore: remove 17 orphaned scripts from Feb 2026 bootstrap phase`.
+- **Scripts:** `agent_session.sh`, `batch_create_snapshots.py`, `create_snapshot.py`, `debug_hbt_init.py`, `debug_lob_minimal.py`, `inspect_npz.py`, `inspect_snapshot_sig.py`, `latency_e2e_report.py`, `live_contract_cache_refresh.py`, `patch_trade_side.py`, `run_paper_trading.sh`, `shioaji_latency_probe.py`, `sim_full_pipeline.py`, `sim_futures_strategy_order.py`, `sim_shioaji_futures_smoke.py`, `sim_shioaji_order_smoke.py`, `sim_shioaji_stock_diag.py`
+- **Note:** All are in `scripts/` (not in subdirectories). `latency_e2e_report.py` and `shioaji_latency_probe.py` are at `scripts/` root; `scripts/latency/` contains separately-named files (`e2e_clickhouse_report.py` and `shioaji_api_probe.py`) that are their successors but are NOT the same files.
+- **Fix:** Delete all 17 confirmed orphans (O-03 already handles `verify_rust_deployment.py` separately). Create a single commit: `chore: remove 17 orphaned scripts from Feb 2026 bootstrap phase`.
 
 #### O-08: `ops.sh` `monitor-ch` stale
 - **Fix:** Remove subcommand and update header/usage text. `make recorder-status` is the replacement.
@@ -296,8 +303,8 @@ Four parallel deep scans across:
 #### O-11: `deploy.sh` hardcoded paths
 - **Fix:** Parameterize `REMOTE_DIR` with a mandatory env var (no default fallback). Parameterize health check URL with `DEPLOY_HEALTH_URL`.
 
-#### O-12: `daily-backup.sh` force-enables backup
-- **Fix:** Resolved by O-05 (retire script). If kept, respect `HFT_BACKUP_ENABLED` from environment.
+#### O-12: `daily-backup.sh` force-enables backup + async/sync mismatch
+- **Fix:** Resolved by O-05 (delete script). The two bugs (force-enable + await-on-sync) make this script unfixable as-is — better to delete and use `clickhouse_backup.sh` exclusively.
 
 ### CI/CD
 
