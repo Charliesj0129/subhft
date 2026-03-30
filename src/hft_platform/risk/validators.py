@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, PriceScaleProvider, SymbolMetadataPriceScaleProvider
 
@@ -171,26 +171,52 @@ class MaxNotionalValidator(RiskValidator):
 class PositionLimitValidator(RiskValidator):
     """Stateless validator: rejects orders where abs(qty) exceeds max_position_lots."""
 
-    __slots__ = ("_default_max_position_lots", "_max_position_cache")
+    __slots__ = ("_default_max_position_lots", "_max_position_cache", "_position_provider")
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, position_provider: Any | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._default_max_position_lots: int = int(self.defaults.get("max_position_lots", 1_000))
         self._max_position_cache: Dict[str, int] = {}
+        self._position_provider = position_provider
+
+    def _current_position(self, symbol: str, strategy_id: str) -> int:
+        provider = self._position_provider
+        if provider is None:
+            return 0
+        if callable(provider):
+            return int(provider(symbol, strategy_id) or 0)
+
+        positions = getattr(provider, "positions", {})
+        net_qty = 0
+        for pos in positions.values():
+            if getattr(pos, "symbol", None) != symbol:
+                continue
+            if getattr(pos, "strategy_id", strategy_id) != strategy_id:
+                continue
+            net_qty += int(getattr(pos, "net_qty", 0) or 0)
+        return net_qty
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
-        if intent.intent_type == IntentType.CANCEL:
+        if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True, "OK"
 
         cache_key = intent.strategy_id
         max_lots = self._max_position_cache.get(cache_key)
         if max_lots is None:
             strat_cfg = self.strat_configs.get(intent.strategy_id, {})
-            max_lots = int(strat_cfg.get("max_position_lots", self._default_max_position_lots))
+            max_lots = int(
+                strat_cfg.get(
+                    "max_position_lots",
+                    strat_cfg.get("max_position", self._default_max_position_lots),
+                )
+            )
             self._max_position_cache[cache_key] = max_lots
 
-        if abs(intent.qty) > max_lots:
-            return False, f"POSITION_LIMIT_EXCEEDED: abs({intent.qty}) > {max_lots}"
+        current_qty = self._current_position(intent.symbol, intent.strategy_id)
+        signed_qty = int(intent.qty if intent.side == Side.BUY else -intent.qty)
+        resulting_qty = current_qty + signed_qty
+        if abs(resulting_qty) > max_lots:
+            return False, f"POSITION_LIMIT_EXCEEDED: abs({resulting_qty}) > {max_lots}"
 
         return True, "OK"
 

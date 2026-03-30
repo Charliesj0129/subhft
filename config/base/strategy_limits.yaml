@@ -17,21 +17,22 @@ global_defaults:
 
 strategies:
   MM_ALPHA_V1:
-    max_position: 1                  # Max 1 lot per symbol
+    max_position_lots: 1             # Max 1 lot per symbol
     max_order_qty: 1                 # 1 lot per order (conservative)
   OPPORTUNISTIC_MM_TXFD6:
-    max_position: 5                  # Max 5 lots (Challenger recommendation)
+    max_position_lots: 5             # Max 5 lots (Challenger recommendation)
     max_order_qty: 1                 # 1 lot per order
   OPPORTUNISTIC_MM_TMFD6:
-    max_position: 1                  # Conservative: 1 lot only (L1 depth = 1 contract)
+    max_position_lots: 1             # Conservative: 1 lot only (L1 depth = 1 contract)
     max_order_qty: 1                 # 1 lot per order
   CBS_TMFD6:
-    max_position: 1                  # Conservative single lot
+    max_position_lots: 1             # Conservative single lot
     max_order_qty: 1                 # 1 lot per order
 
 intraday_pnl:
+  scope: global
   soft_limit_ntd: 500
-  hard_limit_ntd: 1000
+  hard_limit_ntd: 8000
   peak_drawdown_pct: 0.40
   soft_recovery_ntd: 300
   drawdown_recovery_pct: 0.20

@@ -945,7 +945,13 @@ class SystemBootstrapper:
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator
-        risk_engine = RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider)
+        risk_engine = RiskEngine(
+            risk_path,
+            risk_queue,
+            order_queue,
+            price_scale_provider,
+            position_provider=position_store,
+        )
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
 
         # CE-M2: GatewayService wiring

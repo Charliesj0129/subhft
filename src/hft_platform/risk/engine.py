@@ -87,6 +87,7 @@ class RiskEngine:
         "_notification_dispatcher",
         "_order_dlq",
         "_ORDER_DLQ_MAX",
+        "_position_provider",
         "__dict__",
     )
 
@@ -98,6 +99,7 @@ class RiskEngine:
         price_scale_provider: PriceScaleProvider | None = None,
         storm_guard: StormGuard | None = None,
         notification_dispatcher: Any | None = None,
+        position_provider: Any | None = None,
     ):
         self.config_path = config_path
         self.intent_queue = intent_queue  # Input
@@ -115,13 +117,18 @@ class RiskEngine:
             "HFT_RISK_REJECT_METRICS_SAMPLE_EVERY",
             default=default_reject_every,
         )
+        self._position_provider = position_provider
 
         # Validators
         self.validators = [
             PriceBandValidator(self.config, price_scale_provider),
             MaxNotionalValidator(self.config, price_scale_provider),
             PerSymbolNotionalValidator(self.config, price_scale_provider),
-            PositionLimitValidator(self.config, price_scale_provider),
+            PositionLimitValidator(
+                self.config,
+                price_scale_provider,
+                position_provider=self._current_strategy_symbol_net_position,
+            ),
             DailyLossLimitValidator(self.config, price_scale_provider),
         ]
         shared_scale_cache: dict[str, int] = {}
@@ -151,6 +158,23 @@ class RiskEngine:
         self._trace_sampler = _get_trace_sampler()
         self._order_dlq: collections.deque = collections.deque()
         self._ORDER_DLQ_MAX: int = 256
+
+    def _current_strategy_symbol_net_position(self, symbol: str, strategy_id: str) -> int:
+        provider = self._position_provider
+        if provider is None:
+            return 0
+        if callable(provider):
+            return int(provider(symbol, strategy_id) or 0)
+
+        positions = getattr(provider, "positions", {})
+        net_qty = 0
+        for pos in positions.values():
+            if getattr(pos, "symbol", None) != symbol:
+                continue
+            if getattr(pos, "strategy_id", strategy_id) != strategy_id:
+                continue
+            net_qty += int(getattr(pos, "net_qty", 0) or 0)
+        return net_qty
 
     @staticmethod
     def _bool_env(value: Any, default: bool = False) -> bool:

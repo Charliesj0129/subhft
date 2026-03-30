@@ -9,7 +9,10 @@ Tests follow the pattern established in the risk validator codebase:
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
+import yaml
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.risk.validators import DailyLossLimitValidator, PositionLimitValidator
@@ -136,6 +139,45 @@ class TestPositionLimitValidator(unittest.TestCase):
         validator.check(intent)
         self.assertIn("strat_x", validator._max_position_cache)
         self.assertEqual(validator._max_position_cache["strat_x"], 100)
+
+    def test_rejects_when_resulting_position_exceeds_limit(self) -> None:
+        strategies = {"CBS_TMFD6": {"max_position_lots": 1}}
+        validator = PositionLimitValidator(
+            _make_config(max_position_lots=3, strategies=strategies),
+            position_provider=lambda symbol, strategy_id: 1,
+        )
+        intent = _make_intent(qty=1, strategy_id="CBS_TMFD6", symbol="TMFD6")
+        ok, reason = validator.check(intent)
+        self.assertFalse(ok)
+        self.assertIn("POSITION_LIMIT_EXCEEDED", reason)
+
+    def test_allows_reducing_position_within_limit(self) -> None:
+        strategies = {"CBS_TMFD6": {"max_position_lots": 1}}
+        validator = PositionLimitValidator(
+            _make_config(max_position_lots=3, strategies=strategies),
+            position_provider=lambda symbol, strategy_id: 1,
+        )
+        intent = OrderIntent(
+            intent_id=2,
+            strategy_id="CBS_TMFD6",
+            symbol="TMFD6",
+            intent_type=IntentType.NEW,
+            side=Side.SELL,
+            price=1_000_000,
+            qty=1,
+        )
+        ok, reason = validator.check(intent)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "OK")
+
+    def test_cbs_tmfd6_config_uses_max_position_lots(self) -> None:
+        cfg = yaml.safe_load(Path("config/base/strategy_limits.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["strategies"]["CBS_TMFD6"]["max_position_lots"], 1)
+
+    def test_intraday_pnl_rollout_scope_is_global(self) -> None:
+        cfg = yaml.safe_load(Path("config/base/strategy_limits.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["intraday_pnl"]["scope"], "global")
+        self.assertEqual(cfg["intraday_pnl"]["hard_limit_ntd"], 8000)
 
 
 # ---------------------------------------------------------------------------
