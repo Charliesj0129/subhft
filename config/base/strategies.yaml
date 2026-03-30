@@ -50,8 +50,8 @@ strategies:
       take_profit_pts: 8
       stop_loss_pts: 6
       min_vol_samples: 8
-      session_start_sec: 33300        # 09:15 TWN — CBS internal gate (fallback when SessionGovernor disabled)
-      session_end_sec: 48900          # 13:35 TWN — CBS internal gate (fallback when SessionGovernor disabled)
+      session_start_sec: 0            # 00:00 TWN — full-day fallback; SessionGovernor is authoritative in prod
+      session_end_sec: 86400          # 24:00 TWN — keeps day/night sessions eligible when governor is enabled
 
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
   # Phase 3: Automated options market-making with delta-neutral hedging.

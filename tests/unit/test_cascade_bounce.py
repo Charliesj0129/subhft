@@ -143,8 +143,8 @@ class TestCBSInitialization:
         assert params["trigger_sigma"] > 0
         assert params["take_profit_pts"] > 0
         assert params["stop_loss_pts"] > 0
-        assert params["session_start_sec"] == 33300  # 09:15 TWN fallback gate
-        assert params["session_end_sec"] == 48900    # 13:35 TWN fallback gate
+        assert params["session_start_sec"] == 0      # full-day fallback; SessionGovernor is authoritative in prod
+        assert params["session_end_sec"] == 86400
 
 
 class TestCBSSessionGate:
@@ -166,6 +166,13 @@ class TestCBSSessionGate:
         intents = cbs.handle_event(ctx, _make_stats(ts=start_ts + 30 * _ONE_SEC_NS, points=32_990))
 
         assert len(intents) == 1
+
+    def test_overnight_session_wraparound_is_supported(self) -> None:
+        cbs = _all_session_cbs(session_start_sec=15 * 3600, session_end_sec=5 * 3600)
+
+        assert cbs._in_session(0) is False                          # 08:00 TWN
+        assert cbs._in_session(8 * 3600 * _ONE_SEC_NS) is True     # 16:00 TWN
+        assert cbs._in_session(17 * 3600 * _ONE_SEC_NS) is True    # 01:00 TWN next day
 
 
 class TestCBSNormalizedEntry:
