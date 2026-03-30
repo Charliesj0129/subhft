@@ -419,8 +419,6 @@ canary-evaluate: ## Evaluate post-deploy metrics against canary baseline
 canary-auto: ## One-shot canary gate: snapshot + wait 5min + evaluate
 	$(PY) scripts/code_canary_gate.py auto --window-s 300
 
-release-readiness-check: ## Evaluate March 30 canary readiness from repo and runtime gate evidence
-	$(PY) scripts/release_readiness.py --project-root . --output-dir outputs/release_readiness --milestone-date 2026-03-30 --prod-date 2026-04-03
 
 reliability-monthly-pack: ## Generate monthly reliability review pack (soak/backlog/drift/disk/drill/query-guard/feature-canary/callback-latency)
 	$(PY) scripts/reliability_review_pack.py --project-root . --soak-dir outputs/soak_reports --deploy-dir outputs/deploy_guard --query-guard-dir outputs/query_guard --feature-canary-dir outputs/feature_canary --callback-latency-dir outputs/callback_latency --output-dir outputs/reliability/monthly --month "$${MONTH:-$(shell date +%Y-%m)}" --disk-path . --disk-path .wal --min-query-guard-runs "$${QUERY_GUARD_MIN_RUNS:-1}" --min-query-guard-suite-runs "$${QUERY_GUARD_MIN_SUITE_RUNS:-1}" --min-feature-canary-runs "$${FEATURE_CANARY_MIN_RUNS:-1}" --min-callback-latency-runs "$${CALLBACK_LATENCY_MIN_RUNS:-1}" $(if $(filter 1,$(RUN_DRILL)),--run-drill-suite,) --allow-warn-exit-zero
