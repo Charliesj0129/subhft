@@ -20,6 +20,7 @@ groups:
     annotations:
         summary: "Market Data Gap Detected"
         description: "No feed events for >5s during uptime."
+        runbook_url: "docs/runbooks/FeedGapCritical.md"
 
   - alert: FeedReconnectTimeoutDetected
     expr: increase(feed_reconnect_timeout_total[5m]) > 0
@@ -70,6 +71,7 @@ groups:
     annotations:
         summary: "Shioaji quote watchdog thread down"
         description: "quote_watchdog liveness gauge has been 0 for >1m."
+        runbook_url: "docs/runbooks/ShioajiWatchdogThreadDown.md"
 
   - alert: ShioajiPendingQuoteStall
     expr: shioaji_quote_pending_age_seconds > 300
@@ -97,6 +99,7 @@ groups:
     annotations:
         summary: "Shioaji crash precursor signature detected"
         description: "Detected known crash signature {{ $labels.signature }} in {{ $labels.context }} path in the last 10m."
+        runbook_url: "docs/runbooks/ShioajiCrashSignatureDetected.md"
 
   - alert: FeedSessionConflictDetected
     expr: increase(feed_session_conflict_total[10m]) > 0
@@ -134,6 +137,7 @@ groups:
     annotations:
         summary: "StormGuard HALT Triggered"
         description: "Strategy {{ $labels.strategy }} hit HALT threshold."
+        runbook_url: "docs/runbooks/StormGuardHalt.md"
 
   - alert: HighRejectRate
     expr: rate(order_reject_total[1m]) / (rate(order_actions_total[1m]) + 1) > 0.1
@@ -143,6 +147,7 @@ groups:
     annotations:
         summary: "High Order Reject Rate"
         description: "Reject rate > 10%."
+        runbook_url: "docs/runbooks/HighRejectRate.md"
 
   # Execution Health
   - alert: ExecutionLagHigh
@@ -217,6 +222,7 @@ groups:
     annotations:
         summary: "Recorder Write Failed"
         description: "ClickHouse ingestion failing."
+        runbook_url: "docs/runbooks/RecorderFailure.md"
 
   - alert: RecorderInsertFailedRatioHigh
     expr: |
@@ -325,6 +331,7 @@ groups:
     annotations:
         summary: "Root filesystem < 10% free"
         description: "Host {{ $labels.instance }} root partition has less than 10% disk space available."
+        runbook_url: "docs/runbooks/HostDiskSpaceCritical.md"
 
   - alert: HostDiskSpaceWarn
     expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.20
@@ -412,6 +419,7 @@ groups:
     annotations:
         summary: "ClickHouse connection down"
         description: "ClickHouse heartbeat failed for >2m. Engine may be falling back to WAL-only writes."
+        runbook_url: "docs/runbooks/ClickHouseConnectionDown.md"
 
   # WAL disk pressure
   - alert: WALDiskPressureCritical
@@ -422,6 +430,7 @@ groups:
     annotations:
         summary: "WAL disk pressure critical"
         description: "WAL disk pressure at CRITICAL or HALT level. Data may be dropped."
+        runbook_url: "docs/runbooks/WALDiskPressureCritical.md"
 
   # Event loop lag
   - alert: EventLoopLagHigh
