@@ -43,6 +43,21 @@ symbols:
     group: 2
 ```
 
+#### Config source of truth
+
+The repo uses `config/symbols.list` as the single source of truth. A generation step (`config/symbols.py` / `write_symbols_yaml`) produces `config/symbols.yaml`. The `group` field must be supported at both layers:
+
+1. **`config/symbols.list`** (canonical): Support `group=N` as a key-value attribute on each line, e.g.:
+   ```
+   TXFC0,TAIFEX,1,10000 group=0
+   TXO18000C202604W2,TAIFEX group=1
+   2330,TSE group=2
+   ```
+2. **`config/base/symbols.yaml`** (base config): Supports `group` field directly in YAML (as shown above).
+3. **Generation step**: `write_symbols_yaml` must preserve the `group` attribute when writing `config/symbols.yaml` from `symbols.list`.
+
+Runtime reads `config/symbols.yaml` (generated or hand-edited). The Pool reads `group` from there.
+
 #### Allocation rules
 
 - `group` value maps to connection index (0, 1, 2, ...).
@@ -95,14 +110,47 @@ class QuoteConnectionPool:
 | `get_client(group: int)` | Return specific connection instance (diagnostics). |
 | `health()` | Aggregated health status of all connections. |
 
-#### Symbol splitting at init
+#### Symbol splitting at init — per-group config shards
+
+`ShioajiClient.__init__` only accepts `config_path` and `shioaji_config`, then loads symbols from YAML via `_load_config()`. It has no mechanism to accept an in-memory symbol subset. Rather than modifying the existing client constructor (high blast radius), **the Pool generates per-group YAML shard files at startup**:
 
 ```python
+import tempfile, yaml
+
+self._shard_dir = tempfile.mkdtemp(prefix="hft_quote_pool_")
+
 for group_id in range(num_conns):
     group_symbols = [s for s in all_symbols if s.get("group", 0) == group_id]
-    client = ShioajiClient(symbols=group_symbols, config=shioaji_cfg)
-    self._clients.append(client)
+    shard_path = os.path.join(self._shard_dir, f"symbols_group_{group_id}.yaml")
+    with open(shard_path, "w") as f:
+        yaml.safe_dump({"symbols": group_symbols}, f)
+    facade = ShioajiClientFacade(config_path=shard_path, shioaji_config=shioaji_cfg)
+    self._clients.append(facade)
 ```
+
+- Shard files are written to a temp directory, cleaned up on `logout_all()` or `__del__`.
+- Each `ShioajiClientFacade` follows its normal init path with no constructor changes.
+- The Pool owns `ShioajiClientFacade` instances (not raw `ShioajiClient`), so each connection gets the full facade machinery (account gateway, order gateway, etc.).
+
+#### Session lock namespacing
+
+`ShioajiClient` derives a session lock path from `SHIOAJI_ACCOUNT`/`SHIOAJI_PERSON_ID`/`SHIOAJI_API_KEY` (`client.py:384`). With `HFT_SHIOAJI_SESSION_LOCK_ENABLED=1` (default), the second pooled client will contend on the same lock file.
+
+**Solution**: The Pool injects a per-connection `session_lock_suffix` into each client's `shioaji_config`:
+
+```python
+per_conn_cfg = dict(shioaji_cfg)
+per_conn_cfg["session_lock_suffix"] = f"_conn{group_id}"
+```
+
+`ShioajiClient.__init__` will be extended (small, targeted change) to append this suffix to the lock filename:
+
+```python
+suffix = self.shioaji_config.get("session_lock_suffix", "")
+self._session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}{suffix}.lock")
+```
+
+This is a 1-line change in `client.py` — each connection gets its own lock file (e.g., `shioaji_session_ABC_conn0.lock`, `shioaji_session_ABC_conn1.lock`).
 
 #### Login serialization
 
@@ -145,6 +193,30 @@ def _build_broker_clients(...) -> tuple[QuoteConnectionPool | ShioajiClientFacad
 | `subscribed_count` (property) | Sum of all clients' `subscribed_count` |
 | `mode` (property) | Proxy from `_clients[0].mode` |
 | `symbols` (property) | Concatenation of all clients' symbol lists |
+
+#### Broker/account method routing
+
+`bootstrap.py` also passes `md_client` to `StartupPositionVerifier` (line 793) and stores `client=md_client` in the service registry (line 1115). The facade exposes `get_positions()`, `get_account_balance()`, `get_margin()`, and other account methods.
+
+**The Pool does NOT proxy broker/account methods.** Instead, bootstrap is changed to route position/account calls to `order_client` (which is always a single `ShioajiClientFacade`):
+
+```python
+# bootstrap.py — position verifier uses order_client, not pool
+startup_verifier = StartupPositionVerifier(
+    client=order_client,  # was: md_client
+    position_store=position_store,
+    checkpoint_path=...,
+)
+
+# Service registry — expose order_client as the account/position interface
+registry.update(
+    md_client=pool,           # for quote subscription
+    order_client=order_client,
+    client=order_client,      # for position/account queries (was: md_client)
+)
+```
+
+This is cleaner than proxying account methods through the Pool — `order_client` is already a full `ShioajiClientFacade` with login, so it naturally supports all account/position queries. When `HFT_QUOTE_CONNECTIONS=1`, `md_client` is still a single `ShioajiClientFacade` and the routing is identical to today.
 
 ### §4: Reconnect, Watchdog, and Observability
 
@@ -237,8 +309,11 @@ conn[2].login() ✓
 | File | Change |
 |------|--------|
 | `feed_adapter/shioaji/quote_connection_pool.py` | **NEW** — QuoteConnectionPool class |
-| `services/bootstrap.py` | Branch on `HFT_QUOTE_CONNECTIONS` to create Pool or single Facade |
+| `feed_adapter/shioaji/client.py` | 1-line change: append `session_lock_suffix` to lock path |
+| `services/bootstrap.py` | Branch on `HFT_QUOTE_CONNECTIONS` to create Pool or single Facade; route `StartupPositionVerifier` and `client=` registry entry to `order_client` |
+| `config/symbols.list` | Add `group=N` attribute to symbol lines |
 | `config/base/symbols.yaml` | Add `group` field to symbol entries |
+| `config/_symbols_parsing.py` | Preserve `group` attribute in `symbols.list` → `symbols.yaml` generation |
 | `tests/unit/test_quote_connection_pool.py` | **NEW** — Pool unit tests |
 
 **Unchanged**: `MarketDataService`, `Normalizer`, `LOBEngine`, `FeatureEngine`, `StrategyRunner`, `RecorderService`, `RiskEngine`, `OrderAdapter`.
