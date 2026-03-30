@@ -54,6 +54,25 @@ def _obs_policy() -> str:
     return ""
 
 
+def _typed_intent_symbol(intent: Any) -> str:
+    if isinstance(intent, tuple) and len(intent) >= 4 and intent[0] == "typed_intent_v1":
+        return str(intent[3])
+    return str(getattr(intent, "symbol", ""))
+
+
+def _typed_intent_type(intent: Any) -> int | None:
+    if isinstance(intent, tuple) and len(intent) >= 5 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[4])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "intent_type", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 class StrategyRunner:
     __slots__ = (
         "bus",
@@ -690,11 +709,13 @@ class StrategyRunner:
                 _CLOSE_ONLY_TYPES = (IntentType.CANCEL, IntentType.FORCE_FLAT)
                 _filtered: list = []
                 for _intent in intents:
-                    _phase = self.track_gate.get_phase(_intent.symbol)
+                    _intent_symbol = _typed_intent_symbol(_intent)
+                    _intent_type = _typed_intent_type(_intent)
+                    _phase = self.track_gate.get_phase(_intent_symbol)
                     if _phase == SessionPhase.OPEN:
                         _filtered.append(_intent)
                     elif _phase == SessionPhase.CLOSE_ONLY:
-                        if _intent.intent_type in _CLOSE_ONLY_TYPES:
+                        if _intent_type in _CLOSE_ONLY_TYPES:
                             _filtered.append(_intent)
                 intents = _filtered
 

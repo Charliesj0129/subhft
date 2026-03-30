@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.ops.session_governor import SessionPhase, TrackGate
+
 # ---------------------------------------------------------------------------
 # Helpers / stubs
 # ---------------------------------------------------------------------------
@@ -358,6 +360,46 @@ async def test_process_event_typed_intent_fastpath(runner_factory):
     event = _make_event()
     await runner.process_event(event)
     runner._risk_submit_typed.assert_called_once_with(typed_intent)
+
+
+@pytest.mark.asyncio
+async def test_process_event_typed_intent_fastpath_survives_track_gate_open(runner_factory):
+    runner, _, _ = runner_factory()
+    strat = _make_strategy()
+    typed_intent = ("typed_intent_v1", 1, "s1", "TSMC", 1, 1, 1000000, 1, 0, "", 0, 0, "", "", "", 0)
+    strat._return_value = [typed_intent]
+    runner.register(strat)
+    runner._typed_intent_fastpath = True
+    runner._risk_submit_typed = MagicMock()
+    gate = TrackGate()
+    gate.register_symbol("TSMC", "stock")
+    gate.set_track_phase("stock", SessionPhase.OPEN)
+    runner.track_gate = gate
+
+    event = _make_event()
+    await runner.process_event(event)
+
+    runner._risk_submit_typed.assert_called_once_with(typed_intent)
+
+
+@pytest.mark.asyncio
+async def test_process_event_typed_new_intent_blocked_in_close_only_without_crashing(runner_factory):
+    runner, _, _ = runner_factory()
+    strat = _make_strategy()
+    typed_intent = ("typed_intent_v1", 1, "s1", "TSMC", 1, 1, 1000000, 1, 0, "", 0, 0, "", "", "", 0)
+    strat._return_value = [typed_intent]
+    runner.register(strat)
+    runner._typed_intent_fastpath = True
+    runner._risk_submit_typed = MagicMock()
+    gate = TrackGate()
+    gate.register_symbol("TSMC", "stock")
+    gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
+    runner.track_gate = gate
+
+    event = _make_event()
+    await runner.process_event(event)
+
+    runner._risk_submit_typed.assert_not_called()
 
 
 @pytest.mark.asyncio
