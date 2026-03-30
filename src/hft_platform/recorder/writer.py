@@ -59,6 +59,7 @@ class DataWriter:
             logger.warning("Deprecated env var HFT_CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
         if not ch_username and os.getenv("CLICKHOUSE_USER"):
             ch_username = os.getenv("CLICKHOUSE_USER")
+        # TODO(2026-Q3): remove CLICKHOUSE_USERNAME fallback — deprecated since 2026-03
         if not ch_username and os.getenv("CLICKHOUSE_USERNAME"):
             ch_username = os.getenv("CLICKHOUSE_USERNAME")
             warnings.warn(
