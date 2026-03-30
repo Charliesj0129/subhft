@@ -14,7 +14,6 @@ set -e
 #   monitor-ch  : Check ClickHouse data flow stats.
 #   replay-wal  : Move archived WAL files back to active folder for re-ingestion.
 #   test        : Run system tests via pytest.
-#   clean       : Remove temporary ops artifacts.
 # ==============================================================================
 
 if [ "$EUID" -ne 0 ]; then
