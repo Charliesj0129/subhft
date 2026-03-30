@@ -63,6 +63,10 @@ def build_entry(
 
     entry.update({k: v for k, v in attrs.items() if v is not None})
 
+    _product = str(entry.get("product_type") or "").lower()
+    if _product in {"option", "opt", "options"} and contract:
+        _enrich_option_entry(entry, contract, code, result)
+
     if "exchange" not in entry or not entry["exchange"]:
         entry["exchange"] = _default_exchange_for_code(code)
         result.warnings.append(f"Defaulted exchange for {code} to {entry['exchange']}")

@@ -5,7 +5,7 @@ import types
 import numpy as np
 import pytest
 
-from hft_platform.alpha.validation import (
+from hft_platform.alpha._param_opt import (
     _optimize_parameters,
     _run_grid_parallel,
     _run_single_grid_point,

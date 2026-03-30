@@ -1,0 +1,57 @@
+alpha_id: vr_momentum
+hypothesis: >
+  TMFD6 exhibits intraday momentum at 10-46 min horizons (push-response
+  analysis, Round 17). Momentum is strongest when the Variance Ratio
+  VR(q) > 1, indicating trending/persistent behavior. Combining VR as a
+  regime filter with push-magnitude threshold creates a momentum strategy:
+  enter WITH the trend when VR confirms trending regime AND push z-score
+  exceeds threshold. This is the OPPOSITE of CBS (contrarian) and is
+  supported by the finding that TMFD6 is a retail-dominated momentum market.
+
+formula: >
+  VR(q) = Var(r_q) / (q * Var(r_1)), where r_q = q-tick return;
+  push_L(t) = (mid(t) - mid(t-L)) / mid(t-L);
+  z_push = (push - EMA_push) / EMA_sigma_push;
+  Signal = sign(push) when VR > vr_threshold AND |z_push| > z_threshold.
+
+paper_refs:
+  - "2511.06177"  # Vlasiuk & Smirnov 2025 — Push-response anomalies
+  - "2501.16772"  # Safari & Schmidhuber 2025 — Trends/reversion intraday
+  - "2511.08571"  # Singha et al. 2025 — Forecast-to-Fill framework
+
+data_fields:
+  - mid_price_x2
+
+complexity: "O(1)"
+status: DRAFT
+latency_profile: sim_p95_v2026-02-26
+
+cost_model:
+  instrument: TMFD6
+  rt_cost_pts: 4
+  rt_cost_bps: 1.33
+
+base_params:
+  vr_threshold: 1.2
+  z_threshold: 2.0
+  push_lag_ticks: 1080   # ~10 min at 1.8 ticks/sec
+  hold_ticks: 3000       # ~28 min
+  stop_bps: 20
+  cooldown_ticks: 3000
+  warmup_ticks: 7000
+  vr_q: 540              # 5-min aggregation window for VR
+
+mutual_exclusion:
+  group: "TMFD6_directional"
+  conflict_with: "CBS_TMFD6"
+  arbitration: >
+    VR-based regime switch: VRRegimeSwitch uses real-time VR to select
+    active strategy. VR > 1.0 (trending) → VRM active, CBS stands down.
+    VR <= 1.0 (mean-reverting) → CBS active, VRM stands down.
+    This prevents opposing positions on TMFD6 that would create a
+    hedge-for-cost scenario (net zero position, 2x RT costs).
+  implementation: "VRRegimeSwitch class in impl.py"
+  risk_limit_note: >
+    max_position_lots bumped from 3 to 4 in strategy_limits.yaml.
+    Worst case: OpMM_TX(1) + OpMM_TMF(1) + max(CBS,VRM)(1) + reserve(1) = 4.
+    CBS and VRM are mutually exclusive via VRRegimeSwitch — never concurrent.

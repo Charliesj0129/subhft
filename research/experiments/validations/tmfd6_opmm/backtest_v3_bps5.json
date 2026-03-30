@@ -1,0 +1,82 @@
+{
+  "config": {
+    "data_path": "research/data/raw/tmfd6/TMFD6_all_l1.npy",
+    "spread_threshold_bps": 5.0,
+    "rt_cost_pts": 4.0,
+    "half_cost_pts": 2.0,
+    "submit_latency_ns": 36000000,
+    "cancel_latency_ns": 47000000,
+    "max_position": 1,
+    "stop_loss_pts": 20.0,
+    "queue_depth_fill_max": 8.0,
+    "output_dir": "research/experiments/validations/tmfd6_opmm"
+  },
+  "summary": {
+    "total_pnl_pts": -5763.83,
+    "total_pnl_ntd": -57638.32,
+    "n_fills": 1593,
+    "n_round_trips": 1035,
+    "n_days": 11,
+    "fills_per_day": 144.8,
+    "rts_per_day": 94.1,
+    "n_stop_losses": 473,
+    "stop_loss_pct": 45.7,
+    "n_queue_rejects": 2125
+  },
+  "pnl_stats": {
+    "mean_per_rt": -5.569,
+    "median_per_rt": 0.81,
+    "std_per_rt": 77.13,
+    "win_rate": 0.508,
+    "mean_stop_pnl": -48.55,
+    "mean_win_pnl": 31.17
+  },
+  "adverse_selection": {
+    "total_entries": 1035,
+    "as_1s_rate": 0.121,
+    "as_5s_rate": 0.272,
+    "as_30s_rate": 0.538,
+    "as_1s_mean_mag_pts": 9.13,
+    "as_5s_mean_mag_pts": 8.29
+  },
+  "statistical": {
+    "t_stat": -1.451,
+    "top2_pnl": 608.03,
+    "top2_conc_pct": 0.0,
+    "ex_top2": -6371.86
+  },
+  "daily_stats": {
+    "mean": -523.98,
+    "std": 1141.69,
+    "sharpe": -7.29,
+    "win_days": 3,
+    "lose_days": 7,
+    "max_dd": -4885.3
+  },
+  "daily_pnl": {
+    "2026-01-26": -1228.29,
+    "2026-02-03": -810.71,
+    "2026-02-06": -3857.43,
+    "2026-02-10": -217.16,
+    "2026-02-11": 80.69,
+    "2026-02-23": 396.0,
+    "2026-02-25": 0.0,
+    "2026-03-19": -224.76,
+    "2026-03-23": 212.03,
+    "2026-03-24": -55.19,
+    "2026-03-25": -59.0
+  },
+  "daily_trades": {
+    "2026-01-26": 470,
+    "2026-02-03": 253,
+    "2026-02-06": 159,
+    "2026-02-10": 37,
+    "2026-02-11": 3,
+    "2026-02-23": 57,
+    "2026-02-25": 0,
+    "2026-03-19": 14,
+    "2026-03-23": 34,
+    "2026-03-24": 7,
+    "2026-03-25": 1
+  }
+}

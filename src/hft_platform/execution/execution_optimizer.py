@@ -37,6 +37,8 @@ from enum import IntEnum
 
 import structlog
 
+from hft_platform.execution.regime_classifier import Regime
+
 logger = structlog.get_logger(__name__)
 
 
@@ -102,6 +104,7 @@ class ExecutionOptimizer:
         side: int,
         ts_ns: int,
         urgent: bool = False,
+        regime: Regime = Regime.NEUTRAL,
     ) -> OrderType:
         """Decide whether to use LIMIT or MARKET order.
 
@@ -121,6 +124,10 @@ class ExecutionOptimizer:
             Current timestamp in nanoseconds.
         urgent : bool
             If True, always return MARKET (risk exits, StormGuard HALT).
+        regime : Regime
+            Current execution regime from RegimeClassifier.
+            ADVERSE forces MARKET, FAVORABLE relaxes thresholds.
+            Default: NEUTRAL (existing heuristic unchanged).
 
         Returns
         -------
@@ -131,8 +138,17 @@ class ExecutionOptimizer:
         if not self._enabled or urgent:
             return OrderType.MARKET
 
+        # Regime gate: ADVERSE → force MARKET (don't waste time on limits)
+        if regime == Regime.ADVERSE:
+            return OrderType.MARKET
+
         # Spread too narrow -> limit saves nothing
-        if spread_pts < self._spread_threshold_pts:
+        # In FAVORABLE regime, relax spread threshold by 1 pt (more aggressive limit usage)
+        effective_spread_threshold = self._spread_threshold_pts
+        if regime == Regime.FAVORABLE and effective_spread_threshold > 1:
+            effective_spread_threshold -= 1
+
+        if spread_pts < effective_spread_threshold:
             return OrderType.MARKET
 
         # Compute fill score: Q_opp / max(Q_near, 1) adjusted by imbalance
@@ -148,7 +164,12 @@ class ExecutionOptimizer:
         if favorable_imb:
             fill_score += 0.5
 
-        if fill_score < self._fill_score_threshold:
+        # In FAVORABLE regime, relax fill score threshold
+        effective_fill_threshold = self._fill_score_threshold
+        if regime == Regime.FAVORABLE:
+            effective_fill_threshold = max(effective_fill_threshold - 0.5, 0.5)
+
+        if fill_score < effective_fill_threshold:
             return OrderType.MARKET
 
         # All conditions met -> LIMIT

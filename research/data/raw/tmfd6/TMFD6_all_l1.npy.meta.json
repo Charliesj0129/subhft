@@ -1,0 +1,45 @@
+{
+  "dataset_id": "TMFD6_all_l1",
+  "source_type": "real",
+  "generator": "ch_batch_export.concat_l1_files",
+  "rows": 7747814,
+  "fields": [
+    "bid_px",
+    "ask_px",
+    "bid_qty",
+    "ask_qty",
+    "mid_price",
+    "spread_bps",
+    "volume",
+    "local_ts"
+  ],
+  "symbols": [
+    "TMFD6"
+  ],
+  "source_files": [
+    "TMFD6_2026-01-26_l1.npy",
+    "TMFD6_2026-01-27_l1.npy",
+    "TMFD6_2026-01-28_l1.npy",
+    "TMFD6_2026-01-29_l1.npy",
+    "TMFD6_2026-01-30_l1.npy",
+    "TMFD6_2026-02-03_l1.npy",
+    "TMFD6_2026-02-04_l1.npy",
+    "TMFD6_2026-02-05_l1.npy",
+    "TMFD6_2026-02-06_l1.npy",
+    "TMFD6_2026-02-10_l1.npy",
+    "TMFD6_2026-02-11_l1.npy",
+    "TMFD6_2026-02-23_l1.npy",
+    "TMFD6_2026-02-24_l1.npy",
+    "TMFD6_2026-02-25_l1.npy",
+    "TMFD6_2026-03-19_l1.npy",
+    "TMFD6_2026-03-20_l1.npy",
+    "TMFD6_2026-03-23_l1.npy",
+    "TMFD6_2026-03-24_l1.npy",
+    "TMFD6_2026-03-25_l1.npy",
+    "TMFD6_2026-03-26_l1.npy"
+  ],
+  "date_range": "2026-01-26..2026-03-26",
+  "data_fingerprint": "d0fc45ec4a90d202547481b499907ecf308438d5ac89de277b24cf18cd322d65",
+  "data_ul": 5,
+  "created_at": "2026-03-26T06:06:22.204097+00:00"
+}

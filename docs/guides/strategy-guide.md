@@ -48,28 +48,34 @@ uv run hft strat test --symbol 2330
 uv run pytest tests/unit -k strategy
 ```
 
-## 8) FeatureEngine — 16 LOB 衍生特徵
+## 8) FeatureEngine — 27 LOB 衍生特徵 (v3)
 
-當 `HFT_FEATURE_ENGINE_ENABLED=1`（預設啟用）時，`FeatureEngine` 自動在 `LOBEngine` 後計算 16 個共享特徵，策略無需自行計算。
+當 `HFT_FEATURE_ENGINE_ENABLED=1`（預設啟用）時，`FeatureEngine` 自動在 `LOBEngine` 後計算共享特徵，策略無需自行計算。預設使用 `lob_shared_v3`（27 features）。
 
-**8 Stateless Features**（逐 tick，無狀態）：
-`best_bid`, `best_ask`, `mid_price_x2`, `spread_scaled`, `bid_depth`, `ask_depth`, `imbalance_ppm`, `microprice_x2`
+**Schema 版本**：`lob_shared_v1`(16) → `lob_shared_v2`(22) → `lob_shared_v3`(27, default)
 
-**8 Rolling Features**（滾動窗口）：
-`ofi_l1_raw`, `ofi_l1_cum`, `ofi_l1_ema8`, `spread_ema8`, `imbalance_ema8_ppm`, `depth_slope_bid`, `depth_slope_ask`, `[reserved]`
+**v1 — 8 Stateless + 8 Rolling**：
+`best_bid`, `best_ask`, `mid_price_x2`, `spread_scaled`, `bid_depth`, `ask_depth`, `imbalance_ppm`, `microprice_x2`, `ofi_l1_raw`, `ofi_l1_cum`, `ofi_l1_ema8`, `spread_ema8`, `imbalance_ema8_ppm`, `depth_slope_bid`, `depth_slope_ask`, `[reserved]`
+
+**v2 additions** [16-21]：
+`ofi_depth_norm_ppm`, `ret_autocov_5s_x1e6`, `tob_survival_ms`, `impact_surprise_x1000`, `deep_depth_momentum_x1000`, `toxicity_ema50_x1000`
+
+**v3 additions** [22-26]：
+Multi-window EMA aggregation (5s/30s/300s) for OFI, imbalance, spread
 
 **策略存取方式**：
 ```python
-features = self.ctx.get_feature_tuple(symbol)  # tuple[float, ...] 長度 16
+features = self.ctx.get_feature_tuple(symbol)  # tuple[float, ...] 長度依 schema 版本
+# v1 example (16 features):
 best_bid, best_ask, mid_price_x2, spread_scaled, \
     bid_depth, ask_depth, imbalance_ppm, microprice_x2, \
     ofi_l1_raw, ofi_l1_cum, ofi_l1_ema8, spread_ema8, \
-    imbalance_ema8_ppm, depth_slope_bid, depth_slope_ask, _ = features
+    imbalance_ema8_ppm, depth_slope_bid, depth_slope_ask, _ = features[:16]
 ```
 
 **策略 manifest 宣告**（`config/base/strategies.yaml`）：
 ```yaml
-required_feature_set_id: "lob_shared_v1"
+required_feature_set_id: "lob_shared_v3"  # or v1/v2
 required_feature_ids:
   - imbalance_ppm
   - ofi_l1_ema8

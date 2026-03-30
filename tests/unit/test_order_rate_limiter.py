@@ -13,7 +13,7 @@ import os
 from collections import deque
 from unittest.mock import patch
 
-from hft_platform.order.rate_limiter import (
+from hft_platform.core.rate_limiter import (
     PerSymbolRateLimiter,
     PerSymbolRateResult,
     RateLimiter,

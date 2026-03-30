@@ -1,0 +1,44 @@
+alpha_id: inventory_skew_opt
+hypothesis: |
+  The Avellaneda-Stoikov / Barzykin (2603.07752) Riccati-optimal inventory skew
+  provides a nonlinear improvement over the current linear skew in SimpleMarketMaker
+  at inventory levels > 3. The optimal skew is quadratic near zero inventory but
+  becomes sub-linear at large inventory, reducing excessive spread widening.
+
+  CLOB-compatible subset: after removing RFQ/rejection/reputation mechanics from
+  Barzykin, the surviving equations are the standard AS quadratic ansatz with
+  Riccati ODE for the inventory penalty coefficient A(t).
+
+  At 36ms latency (vs 125ms median inter-tick), the adiabatic approximation
+  holds (tau/T_tick ~ 0.29 < 1). The key question: at inventory=3 (typical OpMM),
+  does Riccati differ from linear by > 0.1 bps? If not, linear is sufficient.
+
+  Chavez-Casillas (2405.11444) adds state-dependent fill rates via recent MO history,
+  but their model requires fill probability estimation we lack. We focus on the
+  stationary Riccati solution.
+formula: |
+  V(t,q) = -A(t)*q^2 - C(t)  (quadratic value function ansatz)
+  A_stationary = sqrt(gamma * sigma^2 / (8*g*Sigma))  (Riccati steady state)
+  skew(q) = A * (z +/- 2q) * tick_size  (optimal inventory-dependent offset)
+  delta_optimal = 1/kappa + A*(z +/- 2q)  (optimal quote offset)
+paper_refs:
+  - "Barzykin 2603.07752 (adiabatic quadratic approx, Riccati ODE)"
+  - "Chavez-Casillas et al. 2405.11444 (adaptive MM with state-dependent fills)"
+  - "Avellaneda & Stoikov 2008 (original MM optimal control)"
+  - "Gueant et al. 2013 (inventory penalization, Riccati solution)"
+data_fields:
+  - mid_price_x2
+  - spread_scaled
+  - depth_imbalance_ppm
+complexity: medium  # Riccati ODE solver, parameter calibration
+status: DRAFT
+tier: null
+latency_profile: shioaji_sim_p95_v2026-03-04
+feature_set_version: lob_shared_v1
+roles_used:
+  - planner
+  - architect
+  - code-reviewer
+skills_used:
+  - iterative-retrieval
+  - validation-gate

@@ -1,0 +1,71 @@
+alpha_id: regime_adaptive_ofi
+hypothesis: >
+  OFI predictive power varies with market regime. In quiet regimes, OFI has
+  higher signal-to-noise and longer memory; in volatile regimes, OFI is noisy
+  and fast-decaying. By detecting the current regime via spread level, realized
+  volatility, and OFI autocorrelation, we adaptively select the OFI aggregation
+  window and only trade when a regime-conditional quasi-Sharpe ratio exceeds the
+  4-pt RT cost threshold. This regime filter should materially improve the
+  unconditional OFI IC that R16 found insufficient.
+
+formula: >
+  regime = classify(spread_ema, rvol_1min, ofi_acf_lag1);
+  ofi_agg = EMA(ofi_l1, window=f(regime));
+  quasi_sharpe = |ofi_agg| * ic_regime / cost;
+  signal = sign(ofi_agg) * min(1, quasi_sharpe) when quasi_sharpe > threshold
+
+paper_refs:
+  - "2505.17388"  # Hu & Zhang 2025 — OFI regime dynamics on CSI 300 futures
+  - "2307.02375"  # Tsaknaki et al. 2023 — BOCPD for order flow regimes
+  - "2603.20456"  # Hu 2026 — Neural HMM with adaptive granularity
+
+data_fields:
+  - bid_px
+  - ask_px
+  - bid_qty
+  - ask_qty
+  - mid_price
+  - spread_bps
+  - local_ts
+
+complexity: "O(1)"  # EMA updates + threshold checks per tick
+
+status: DRAFT
+tier: null
+
+latency_profile: null
+
+cost_model:
+  instrument: TMFD6
+  rt_cost_pts: 4
+  rt_cost_bps: 1.33
+  point_value_ntd: 10
+  contract_value_ntd: 300000
+  min_edge_bps: 2.66  # 2x cost for safety margin
+
+regime_definitions:
+  quiet:
+    spread_bps_max: 6.0
+    rvol_1min_pctile_max: 33
+    description: "Tight spread, low vol — OFI signal strongest"
+  normal:
+    spread_bps_range: [6.0, 15.0]
+    rvol_1min_pctile_range: [33, 67]
+    description: "Average conditions"
+  volatile:
+    spread_bps_min: 15.0
+    rvol_1min_pctile_min: 67
+    description: "Wide spread, high vol — adverse selection risk"
+
+ofi_windows_by_regime:
+  quiet: 60     # ~60 ticks EMA (longer memory)
+  normal: 20    # ~20 ticks EMA
+  volatile: 8   # ~8 ticks EMA (fast decay)
+
+prior_round_context:
+  r16_finding: >
+    Unconditional L1 OFI fails at 4pt cost. Signal-horizon mismatch:
+    signals work 5-15s, costs need 60s+ where signals are dead.
+  critical_question: >
+    Does regime conditioning materially change the signal-to-cost ratio?
+    Must show conditional IC in favorable regime vs unconditional IC.

@@ -1,0 +1,238 @@
+{
+  "alpha_id": "lob_kinetic_energy_price_keyed",
+  "formulation": {
+    "KE_bid": "\u03a3 bid_qty[i] \u00d7 (mid - bid_price[i])\u00b2",
+    "KE_ask": "\u03a3 ask_qty[i] \u00d7 (ask_price[i] - mid)\u00b2",
+    "LOB_momentum": "(KE_bid - KE_ask) / (KE_bid + KE_ask + \u03b5)",
+    "LOB_gravity_center": "bid_gc - ask_gc, where gc = \u03a3 qty*dist / \u03a3 qty",
+    "smoothing": "8-tick EMA",
+    "clip": "[-1, 1] for momentum"
+  },
+  "data": {
+    "source": "TXFD6 L5 hftbacktest .npz files",
+    "n_days": 4,
+    "total_snapshots": 1617338,
+    "snapshots_per_day": [
+      331385,
+      489153,
+      403450,
+      393350
+    ]
+  },
+  "dc3_pooled_ic": {
+    "h=10": {
+      "momentum_pooled_ic": -0.004862,
+      "gravity_pooled_ic": -0.024539,
+      "n_valid": 1617298,
+      "momentum_per_day_mean": -0.004873,
+      "momentum_per_day_std": 0.003416,
+      "gravity_per_day_mean": -0.024451,
+      "gravity_per_day_std": 0.00486
+    },
+    "h=50": {
+      "momentum_pooled_ic": -0.005299,
+      "gravity_pooled_ic": -0.013123,
+      "n_valid": 1617138,
+      "momentum_per_day_mean": -0.005244,
+      "momentum_per_day_std": 0.005043,
+      "gravity_per_day_mean": -0.012675,
+      "gravity_per_day_std": 0.010488
+    },
+    "h=200": {
+      "momentum_pooled_ic": -0.014483,
+      "gravity_pooled_ic": -0.012287,
+      "n_valid": 1616538,
+      "momentum_per_day_mean": -0.015235,
+      "momentum_per_day_std": 0.007237,
+      "gravity_per_day_mean": -0.01209,
+      "gravity_per_day_std": 0.009652
+    }
+  },
+  "dc2_collinearity": {
+    "momentum_vs_ofi_l1_raw": 0.0017,
+    "momentum_vs_depth_imbalance": 0.7026,
+    "momentum_vs_l1_imbalance": 0.1283,
+    "momentum_vs_cum_ofi": 0.0331,
+    "gravity_vs_ofi_l1_raw": -0.0208,
+    "gravity_vs_depth_imbalance": 0.0901,
+    "gravity_vs_l1_imbalance": -0.1988,
+    "n_samples": 1617338,
+    "dc2_threshold": 0.7,
+    "dc2_all_pass": false
+  },
+  "dc1_per_level": {
+    "L1_mean_ic": 0.017213,
+    "L1_std_ic": 0.015295,
+    "L1_per_day": [
+      0.042894,
+      0.007564,
+      0.003969,
+      0.014424
+    ],
+    "L2_mean_ic": 0.00324,
+    "L2_std_ic": 0.006471,
+    "L2_per_day": [
+      0.014008,
+      0.002191,
+      -0.000349,
+      -0.00289
+    ],
+    "L3_mean_ic": 0.001866,
+    "L3_std_ic": 0.002689,
+    "L3_per_day": [
+      0.004183,
+      -0.002575,
+      0.003815,
+      0.002042
+    ],
+    "L4_mean_ic": -0.000532,
+    "L4_std_ic": 0.003002,
+    "L4_per_day": [
+      0.003191,
+      -0.001696,
+      0.00115,
+      -0.004775
+    ],
+    "L5_mean_ic": 0.000116,
+    "L5_std_ic": 0.003053,
+    "L5_per_day": [
+      0.005324,
+      -0.000827,
+      -0.001718,
+      -0.002316
+    ]
+  },
+  "dc1_per_day": {
+    "day_0": {
+      "ticks_per_sec_estimate": 7,
+      "horizon_ticks": 7,
+      "L1_depth_delta_ic": 0.042894,
+      "L1_n_valid": 331378,
+      "L1_bid_delta_ic": 0.031894,
+      "L1_ask_delta_ic": 0.032342,
+      "L2_depth_delta_ic": 0.014008,
+      "L2_n_valid": 331378,
+      "L2_bid_delta_ic": 0.009578,
+      "L2_ask_delta_ic": 0.008579,
+      "L3_depth_delta_ic": 0.004183,
+      "L3_n_valid": 331378,
+      "L3_bid_delta_ic": -0.002874,
+      "L3_ask_delta_ic": 0.001361,
+      "L4_depth_delta_ic": 0.003191,
+      "L4_n_valid": 331378,
+      "L4_bid_delta_ic": -0.000778,
+      "L4_ask_delta_ic": 0.003668,
+      "L5_depth_delta_ic": 0.005324,
+      "L5_n_valid": 331378,
+      "L5_bid_delta_ic": 0.003225,
+      "L5_ask_delta_ic": 0.004953
+    },
+    "day_1": {
+      "ticks_per_sec_estimate": 141,
+      "horizon_ticks": 141,
+      "L1_depth_delta_ic": 0.007564,
+      "L1_n_valid": 489012,
+      "L1_bid_delta_ic": 0.001931,
+      "L1_ask_delta_ic": 0.003182,
+      "L2_depth_delta_ic": 0.002191,
+      "L2_n_valid": 489012,
+      "L2_bid_delta_ic": -0.005611,
+      "L2_ask_delta_ic": -0.005772,
+      "L3_depth_delta_ic": -0.002575,
+      "L3_n_valid": 489012,
+      "L3_bid_delta_ic": 0.001666,
+      "L3_ask_delta_ic": -0.008541,
+      "L4_depth_delta_ic": -0.001696,
+      "L4_n_valid": 489012,
+      "L4_bid_delta_ic": -0.007952,
+      "L4_ask_delta_ic": -0.007956,
+      "L5_depth_delta_ic": -0.000827,
+      "L5_n_valid": 489012,
+      "L5_bid_delta_ic": 0.001406,
+      "L5_ask_delta_ic": 0.007681
+    },
+    "day_2": {
+      "ticks_per_sec_estimate": 348,
+      "horizon_ticks": 348,
+      "L1_depth_delta_ic": 0.003969,
+      "L1_n_valid": 403102,
+      "L1_bid_delta_ic": -0.005545,
+      "L1_ask_delta_ic": 0.002586,
+      "L2_depth_delta_ic": -0.000349,
+      "L2_n_valid": 403102,
+      "L2_bid_delta_ic": 0.012891,
+      "L2_ask_delta_ic": 0.011684,
+      "L3_depth_delta_ic": 0.003815,
+      "L3_n_valid": 403102,
+      "L3_bid_delta_ic": 0.001862,
+      "L3_ask_delta_ic": 0.010358,
+      "L4_depth_delta_ic": 0.00115,
+      "L4_n_valid": 403102,
+      "L4_bid_delta_ic": -0.002408,
+      "L4_ask_delta_ic": 0.008036,
+      "L5_depth_delta_ic": -0.001718,
+      "L5_n_valid": 403102,
+      "L5_bid_delta_ic": -0.006154,
+      "L5_ask_delta_ic": -0.002715
+    },
+    "day_3": {
+      "ticks_per_sec_estimate": 205,
+      "horizon_ticks": 205,
+      "L1_depth_delta_ic": 0.014424,
+      "L1_n_valid": 393145,
+      "L1_bid_delta_ic": 0.011314,
+      "L1_ask_delta_ic": -0.004335,
+      "L2_depth_delta_ic": -0.00289,
+      "L2_n_valid": 393145,
+      "L2_bid_delta_ic": -0.011484,
+      "L2_ask_delta_ic": -0.008781,
+      "L3_depth_delta_ic": 0.002042,
+      "L3_n_valid": 393145,
+      "L3_bid_delta_ic": -0.013437,
+      "L3_ask_delta_ic": -0.010779,
+      "L4_depth_delta_ic": -0.004775,
+      "L4_n_valid": 393145,
+      "L4_bid_delta_ic": -0.012568,
+      "L4_ask_delta_ic": -0.004568,
+      "L5_depth_delta_ic": -0.002316,
+      "L5_n_valid": 393145,
+      "L5_bid_delta_ic": -0.014283,
+      "L5_ask_delta_ic": 0.003926
+    }
+  },
+  "signal_stats": {
+    "momentum": {
+      "mean": -0.012175,
+      "std": 0.207301,
+      "min": -0.974968,
+      "max": 0.9467,
+      "p5": -0.35304,
+      "p95": 0.327868
+    },
+    "gravity_center": {
+      "mean": 0.004996,
+      "std": 1.81879,
+      "min": -114.255203,
+      "max": 774.826106,
+      "p5": -0.880361,
+      "p95": 0.89716
+    }
+  },
+  "overflow_tests": {
+    "txfd6_raw_prices": "PASS",
+    "txfd6_raw_ke_bid": 688.0,
+    "txfd6_raw_ke_ask": 517.75,
+    "txfd6_x10000_prices": "PASS",
+    "txfd6_x10000_ke_bid": "6.88e+10",
+    "txfd6_x10000_ke_ask": "5.18e+10",
+    "extreme_qty_1e6": "PASS",
+    "zero_depth": "PASS",
+    "single_level": "PASS",
+    "max_value_analysis": "TXFD6 raw prices ~33000-34000, max qty ~50. Max dist from mid to L5 ~ 10 pts. Max KE per level = 50 * 10^2 = 5000. Max total KE = 5 * 5000 = 25000. Well within float64. With x10000 scaling: dist ~ 100_000, KE ~ 50 * 1e10 = 5e11. Still safe."
+  },
+  "compute_cost": {
+    "n_iters": 100000,
+    "us_per_tick": 14.74,
+    "verdict": "OK"
+  }
+}

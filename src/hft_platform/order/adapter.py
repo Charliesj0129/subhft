@@ -6,10 +6,11 @@ from typing import Any, Dict, TypeAlias, TypeGuard, cast
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, Side, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, Side, StormGuardState, TIF
 from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
+from hft_platform.core.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult, RateLimiter
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.protocol import BrokerOrderCodec
 from hft_platform.observability.latency import LatencyRecorder
@@ -17,7 +18,6 @@ from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
-from hft_platform.order.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult, RateLimiter
 from hft_platform.order.shadow import ShadowOrderSink
 
 logger = get_logger("order_adapter")
@@ -171,6 +171,24 @@ class OrderAdapter:
                 self.circuit_breaker.threshold = cb_cfg.get("threshold", self.circuit_breaker.threshold)
             if "timeout_seconds" in cb_cfg:
                 self.circuit_breaker.timeout_s = cb_cfg.get("timeout_seconds", self.circuit_breaker.timeout_s)
+
+    def _intent_to_command(self, intent: OrderIntent) -> OrderCommand:
+        now_ns = timebase.now_ns()
+        ttl_ns = int(intent.ttl_ns) if intent.ttl_ns > 0 else 5_000_000_000
+        storm_guard_state = StormGuardState.HALT if intent.reason == "halt_flatten" else StormGuardState.NORMAL
+        return OrderCommand(
+            cmd_id=int(intent.intent_id),
+            intent=intent,
+            deadline_ns=now_ns + ttl_ns,
+            storm_guard_state=storm_guard_state,
+            created_ns=now_ns,
+            decision_price=int(intent.decision_price),
+            arrival_price=int(intent.decision_price),
+        )
+
+    async def submit_intent(self, intent: OrderIntent) -> None:
+        """Public async submission API for platform-owned flatteners."""
+        await self.execute(self._intent_to_command(intent))
 
     async def run(self) -> None:
         self.running = True
@@ -414,7 +432,7 @@ class OrderAdapter:
             logger.error("Failed to add to DLQ", error=str(e))
 
     def _validate_client(self, intent: OrderIntent) -> bool:
-        if intent.intent_type == IntentType.NEW:
+        if intent.intent_type in (IntentType.NEW, IntentType.FORCE_FLAT):
             return hasattr(self.client, "place_order") and hasattr(self.client, "get_exchange")
         if intent.intent_type == IntentType.CANCEL:
             return hasattr(self.client, "cancel_order")
@@ -538,6 +556,31 @@ class OrderAdapter:
                 continue
             net_qty += int(getattr(pos, "net_qty", 0))
         return net_qty
+
+    def _platform_reference_price_for_symbol(self, symbol: str) -> int:
+        position_store = getattr(self, "position_store", None)
+        if position_store is None:
+            return 0
+        positions = getattr(position_store, "positions", {})
+        ref_price = 0
+        for pos in positions.values():
+            if getattr(pos, "symbol", None) != symbol:
+                continue
+            ref_price = max(ref_price, int(getattr(pos, "avg_price_scaled", 0) or 0))
+        return ref_price
+
+    def _force_flat_price(self, symbol: str, close_side: Side, requested_price: int) -> int:
+        if requested_price > 0:
+            return int(requested_price)
+
+        scale = int(self.metadata.price_scale(symbol))
+        ref_price = self._platform_reference_price_for_symbol(symbol)
+        if ref_price <= 0:
+            ref_price = scale * 1000
+
+        if close_side == Side.BUY:
+            return max(ref_price * 2, ref_price + scale)
+        return max(scale, ref_price // 2)
 
     async def _dispatch_to_api(self, cmd: OrderCommand) -> None:
         intent = cmd.intent
@@ -703,6 +746,104 @@ class OrderAdapter:
                 await self._register_broker_ids(order_key, trade)
                 await self._drain_deferred_terminals(order_key, trade)
 
+                self.rate_limiter.record()
+                self.circuit_breaker.record_success()
+
+            elif intent.intent_type == IntentType.FORCE_FLAT:
+                if self._broker_codec is None:
+                    logger.error("No broker codec configured — cannot dispatch force-flat order", symbol=intent.symbol)
+                    self.metrics.order_reject_total.inc()
+                    return
+
+                net_qty = self._platform_net_position_for_symbol(intent.symbol)
+                if net_qty == 0:
+                    logger.info("Force-flat no-op: already flat", symbol=intent.symbol, strategy_id=intent.strategy_id)
+                    return
+
+                meta = self.metadata
+                meta_exchange = ""
+                if hasattr(meta, "exchange"):
+                    try:
+                        meta_exchange = meta.exchange(intent.symbol)
+                    except (KeyError, TypeError, AttributeError) as ex_err:
+                        logger.warning("Metadata exchange lookup failed", symbol=intent.symbol, error=str(ex_err))
+
+                client_exchange = ""
+                if hasattr(self.client, "get_exchange"):
+                    client_exchange = self.client.get_exchange(intent.symbol) or ""
+                exchange = meta_exchange or client_exchange or "TSE"
+
+                product_type = None
+                if hasattr(meta, "product_type"):
+                    try:
+                        product_type = meta.product_type(intent.symbol) or None
+                    except (KeyError, TypeError, AttributeError) as pt_err:
+                        logger.warning("Product type lookup failed", symbol=intent.symbol, error=str(pt_err))
+
+                order_params: Dict[str, Any] = {}
+                if hasattr(meta, "order_params"):
+                    try:
+                        order_params = meta.order_params(intent.symbol) or {}
+                    except (KeyError, TypeError, AttributeError) as op_err:
+                        logger.warning("Order params lookup failed", symbol=intent.symbol, error=str(op_err))
+
+                close_side = Side.SELL if net_qty > 0 else Side.BUY
+                close_qty = abs(net_qty)
+                action_str = self._broker_codec.encode_side(close_side)
+                tif_str = self._broker_codec.encode_tif(TIF.IOC)
+                price_type = self._broker_codec.encode_price_type("LMT")
+                price_scaled = self._force_flat_price(intent.symbol, close_side, intent.price)
+                price_float = self.price_codec.descale(intent.symbol, price_scaled)
+
+                c_field = intent.strategy_id
+                if len(c_field) > 6:
+                    logger.warning("StrategyID too long for custom_field", id=c_field)
+                    c_field = ""
+
+                order_key = f"{intent.strategy_id}:{intent.intent_id}"
+                async with self._live_orders_lock:
+                    self.live_orders[order_key] = _PENDING_SENTINEL
+                    self._pending_order_keys.add(order_key)
+
+                trade = await self._call_api(
+                    "place_order",
+                    self.client.place_order,
+                    contract_code=intent.symbol,
+                    exchange=exchange,
+                    action=action_str,
+                    price=price_float,
+                    qty=close_qty,
+                    order_type=tif_str,
+                    tif=tif_str,
+                    custom_field=c_field,
+                    product_type=product_type,
+                    price_type=price_type,
+                    intent=intent,
+                    **order_params,
+                )
+                if trade is None:
+                    async with self._live_orders_lock:
+                        self.live_orders.pop(order_key, None)
+                        self._pending_order_keys.discard(order_key)
+                    return
+
+                trade_ts = timebase.now_s()
+                try:
+                    if isinstance(trade, dict):
+                        trade["timestamp"] = trade_ts
+                    else:
+                        trade.timestamp = trade_ts
+                except (AttributeError, TypeError):
+                    if isinstance(trade, dict):
+                        trade["_external_timestamp"] = trade_ts
+
+                async with self._live_orders_lock:
+                    self.live_orders[order_key] = trade
+                    self._pending_order_keys.discard(order_key)
+
+                await self._register_broker_ids(order_key, trade)
+                await self._drain_deferred_terminals(order_key, trade)
+                self.metrics.order_actions_total.labels(type="force_flat").inc()
                 self.rate_limiter.record()
                 self.circuit_breaker.record_success()
 

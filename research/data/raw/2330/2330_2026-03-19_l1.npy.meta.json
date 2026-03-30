@@ -1,0 +1,26 @@
+{
+  "dataset_id": "2330_2026-03-19_l1",
+  "source_type": "real",
+  "source": "clickhouse_hft.market_data",
+  "generator": "ch_batch_export",
+  "schema_version": 1,
+  "rows": 47684,
+  "fields": [
+    "bid_px",
+    "ask_px",
+    "bid_qty",
+    "ask_qty",
+    "mid_price",
+    "spread_bps",
+    "volume",
+    "local_ts"
+  ],
+  "symbols": [
+    "2330"
+  ],
+  "date": "2026-03-19",
+  "data_fingerprint": "886dcc337ff09c77892316f55ec1012626c6b85bb4501d3fae9837b7f9a64211",
+  "data_ul": 5,
+  "price_scale_applied": 1000000.0,
+  "created_at": "2026-03-25T02:21:28.288288+00:00"
+}

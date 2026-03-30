@@ -1,0 +1,75 @@
+alpha_id: multiscale_trend_reversion
+hypothesis: >
+  Intraday price trends revert at sub-hour horizons following a universal
+  cubic scaling law: E[R(t+1)] = a + b*phi(t) + c*phi(t)^3, where phi is
+  the standardized trend strength (t-statistic). The linear coefficient b
+  flips sign around T=30 min (reversion -> trending), while the cubic term c
+  always opposes the linear term, creating a critical threshold phi_c =
+  sqrt(-b/(3c)) beyond which strong trends reverse. Multi-horizon monitoring
+  (2-64 min) detects when any horizon's phi crosses its critical threshold,
+  generating a contrarian signal. This extends CBS's fixed 40bps/600s trigger
+  to an adaptive, horizon-dependent z-score framework grounded in empirical
+  universality across 14 years of tick data and 30 years of daily data.
+
+formula: >
+  phi_T(t) = EMA_T(R) / sqrt(EMA_T(R^2) - EMA_T(R)^2) * sqrt(N_eff);
+  E[R] = a + b*phi + c*phi^3;
+  signal = -sign(phi) when |phi| > phi_c = sqrt(-b/(3c)) for actionable horizons.
+  Forward IC computed as rank_correlation(phi_T, R_{t+k}) for k in {1,5,10,30} min.
+
+paper_refs:
+  - "2501.16772"  # Safari & Schmidhuber 2025 — Intraday to decades, minute-level
+  - "2006.07847"  # Schmidhuber 2020 — Universal trend reversion, cubic polynomial
+  - "2505.17388"  # Hu & Zhang 2025 — OFI regime dynamics on CSI 300 futures
+
+data_fields:
+  - mid_price  # from research L1 snapshots (float, pre-scaled)
+
+complexity: "O(1)"  # EMA updates + polynomial eval per tick
+
+status: DRAFT
+tier: null
+
+latency_profile: null  # Not latency-sensitive (5-60 min horizon)
+
+cost_model:
+  instrument: TMFD6
+  rt_cost_pts: 4
+  rt_cost_bps: 1.33
+  point_value_ntd: 10
+  contract_value_ntd: 300000
+
+horizons_minutes: [2, 4, 8, 16, 32, 64]
+
+forward_return_horizons_minutes: [1, 5, 10, 30]
+
+key_parameters:
+  b_tilde:
+    2: -0.0050
+    4: -0.0040
+    8: -0.0025
+    16: -0.0010
+    32: +0.0005
+    64: +0.0010
+  c_tilde:
+    2: +0.0015
+    4: +0.0012
+    8: +0.0008
+    16: +0.0003
+    32: -0.0002
+    64: -0.0003
+  regime_crossover_min: 30
+  session_skip_min: 30
+
+prior_round_context:
+  r14_findings:
+    - "IC grows with horizon: 0.033 (1s) -> 0.115 (600s)"
+    - "Opening = momentum, rest = mean-reversion"
+    - "CBS-40-300 approved for shadow on TMF"
+  r16_findings:
+    - "No L1 microstructure alpha at 4pts cost"
+    - "Signal-horizon mismatch is structural at tick level"
+    - "This alpha targets the sweet spot: 5-60 min horizons"
+
+references:
+  base_implementation: research/alphas/critical_trend_reversion/impl.py

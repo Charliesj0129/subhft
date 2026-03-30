@@ -1,0 +1,54 @@
+Codemap Diff Report — 2026-03-30
+Previous scan: 2026-03-29
+═══════════════════════════════════════
+
+Scan Summary
+────────────
+Python files scanned:  312
+Python LOC:            74,790
+Rust files scanned:    47
+Test files:            580
+Subpackages:           33
+
+Generated Files
+───────────────
+  UPD  docs/CODEMAPS/architecture.md  (~900 tokens)  — LOC refresh, L6 layer added
+  UPD  docs/CODEMAPS/backend.md       (~950 tokens)  — Module counts, reports pipeline, strategies
+  UPD  docs/CODEMAPS/data.md          (~950 tokens)  — New migration 20260330_001
+  UPD  docs/CODEMAPS/dependencies.md  (~650 tokens)  — Telegram bot, notifications module
+
+Changes Since Last Scan (2026-03-29 → 2026-03-30)
+──────────────────────────────────────────────────
+Files modified:  78
+Files deleted:   43  (dead code cleanup + architecture audit)
+Files added:     ~10
+
+Key Structural Changes
+──────────────────────
+1. [DELETED] broker/ package (6 files) — dead code; protocols live in feed_adapter/protocols.py
+2. [DELETED] features/ package (7 files) — superseded by feature/ (FeatureEngine v3)
+3. [DELETED] incident/ package (3 files) — auto_mitigation removed
+4. [DELETED] alpha/ dead gates (13 files): _fast_gate_c, _gate_d/e/f, batch_screen, dashboard, etc.
+5. [DELETED] strategies/alpha_driven_mm.py
+6. [NEW] reports/ three-layer architecture: models → facts → reasoner → composer → distributor
+7. [MOVED] order/rate_limiter.py → core/rate_limiter.py
+8. [NEW] core/instrument_registry.py — multi-instrument support
+9. [NEW] migration 20260330_001 — instrument columns (instrument_type, underlying, strike, option_right, expiry)
+10. [FIX] Architecture audit: SQL injection, hot-path alloc, boundary violations
+
+Module LOC Delta
+────────────────
+alpha/        10,767 → 7,912   (-2,855)
+reports/      ~2,500 → 4,121   (+1,621)
+core/         ~500   → 1,358   (+858)
+risk/         2,630  → 2,357   (-273)
+strategies/   2,869  → 2,653   (-216)
+
+Strategy Roster Change
+──────────────────────
+Removed:  AlphaDrivenMM
+Added:    MMHawkes (research)
+
+Staleness Warnings
+──────────────────
+(none — all codemaps refreshed this session)

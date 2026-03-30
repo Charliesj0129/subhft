@@ -1,0 +1,60 @@
+alpha_id: critical_trend_reversion
+hypothesis: >
+  Price trends at intraday horizons (5-60 min) revert when their z-score
+  (t-statistic) approaches a critical threshold. The expected next-period
+  return follows a cubic polynomial of the current trend strength:
+  E[R(t+1)] = a + b*phi(t) + c*phi(t)^3, where phi is the t-stat of the
+  trend. For sub-30-min horizons, b < 0 and c > 0 (weak trends revert,
+  strong trends persist). For 30-min+ horizons, b > 0 and c < 0 (weak
+  trends persist, strong trends revert). The critical threshold where
+  reversion dominates is phi_c = sqrt(-b/c) ~ 1.5-2.0. This generalizes
+  CBS's fixed 40bps threshold to an adaptive, horizon-dependent z-score
+  threshold grounded in Schmidhuber's universal scaling law.
+
+formula: >
+  phi_T(t) = sum_{n=0}^{T} w_T(n) * R_hat(t-n) / sigma,
+  where R_hat = R - mu (demeaned returns), sigma = rolling std,
+  w_T = exponentially decaying weights normalized so sum(w_T^2)=1.
+  Signal = -sign(phi_T) when |phi_T| > phi_c (contrarian at critical threshold).
+  phi_c = sqrt(-b/c) calibrated per horizon from data.
+
+paper_refs:
+  - "2006.07847"  # Schmidhuber 2020 — Trends, Reversion, Critical Phenomena
+  - "2501.16772"  # Safari & Schmidhuber 2025 — Minutes to Decades extension
+  - "1310.8169"   # Bury 2013 — Predicting trend reversals via instantaneous state
+
+data_fields:
+  - mid_price_x2  # LOBStatsEvent.mid_price_x2 (scaled int)
+
+complexity: "O(1)"  # Per-tick: constant time (EMA updates + polynomial eval)
+
+status: DRAFT
+tier: null
+
+latency_profile: sim_p95_v2026-02-26
+
+cost_model:
+  instrument: TMFD6
+  rt_cost_pts: 4       # 40 NTD RT
+  rt_cost_bps: 1.33
+  point_value_nwd: 10
+  contract_value_nwd: 300000
+
+horizons_minutes: [2, 4, 8, 16, 32, 64]
+
+key_findings_from_papers:
+  schmidhuber_2020:
+    - "E[R(t+1)] = a + b*phi + c*phi^3 models return predictability"
+    - "b = +1.29% (trend persistence), c = -0.62% (trend reversion) for daily data"
+    - "phi_c = sqrt(-b/c) <= 1.91 — trends revert before becoming significant"
+    - "b and c are universal across asset classes"
+    - "b peaks at T ~ 3-12 months, decays for shorter/longer"
+
+  safari_schmidhuber_2025:
+    - "Intraday (< 15 min): b < 0, c > 0 — weak trends revert (reversion regime)"
+    - "30 min to hours: b > 0, c < 0 — trending regime begins"
+    - "Tick-size reversion (e coefficient) is a separate artifact — must be subtracted"
+    - "Aggregated short-term: b = -0.912%, c = +0.259% (T <= 16 min)"
+    - "Aggregated long-term: b = +0.132%, c = -0.039% (T >= 1 hour)"
+    - "Scaling: b_tilde = b * sqrt(T/60), c_tilde = c * sqrt(T/60)"
+    - "Regime crossover at ~30 minutes"

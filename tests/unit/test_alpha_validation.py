@@ -665,13 +665,13 @@ class TestExtractBdsPvalue:
 
 class TestOptimizationObjective:
     def test_sharpe_oos_mode_returns_sharpe(self):
-        from hft_platform.alpha.validation import _optimization_objective
+        from hft_platform.alpha._param_opt import _optimization_objective
 
         val = _optimization_objective(1.5, 0.05, 2.0, "sharpe_oos")
         assert val == pytest.approx(1.5)
 
     def test_ic_first_mode_penalizes_turnover(self):
-        from hft_platform.alpha.validation import _optimization_objective
+        from hft_platform.alpha._param_opt import _optimization_objective
 
         val_low_turnover = _optimization_objective(1.0, 0.05, 0.5, "ic_first")
         val_high_turnover = _optimization_objective(1.0, 0.05, 5.0, "ic_first")
@@ -679,7 +679,7 @@ class TestOptimizationObjective:
         assert val_low_turnover > val_high_turnover
 
     def test_default_mode_penalizes_drawdown_and_turnover(self):
-        from hft_platform.alpha.validation import _optimization_objective
+        from hft_platform.alpha._param_opt import _optimization_objective
 
         # Same Sharpe, higher drawdown → lower objective
         val_low_dd = _optimization_objective(1.0, 0.05, 0.5, "risk_adjusted")
@@ -687,7 +687,7 @@ class TestOptimizationObjective:
         assert val_low_dd > val_high_dd
 
     def test_default_mode_applies_turnover_penalty(self):
-        from hft_platform.alpha.validation import _optimization_objective
+        from hft_platform.alpha._param_opt import _optimization_objective
 
         val_low_to = _optimization_objective(1.0, 0.05, 0.5, "default")
         val_high_to = _optimization_objective(1.0, 0.05, 5.0, "default")

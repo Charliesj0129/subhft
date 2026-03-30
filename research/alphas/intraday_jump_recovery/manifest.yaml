@@ -1,0 +1,45 @@
+alpha_id: intraday_jump_recovery
+hypothesis: >
+  Large intraday price moves (jumps) are followed by partial mean-reversion
+  (recovery). The recovery is ASYMMETRIC: negative pushes produce stronger
+  positive responses than equally-sized positive pushes produce negative
+  responses. This push-response relationship is lag-dependent: near-zero
+  at short lags (< 5000 ticks), significant at medium lags (5000-150000
+  ticks), and plateaus at very long lags. Formalizing CBS as a jump recovery
+  strategy with statistical jump detection and asymmetric sizing should
+  improve entry quality and P&L vs CBS's fixed-threshold approach.
+
+formula: >
+  push_L(t) = m(t) - m(t-L) (backward price increment over L ticks);
+  response_L(t) = m(t+L) - m(t) (forward price increment);
+  z_push = (push - mu_push) / sigma_push (standardized);
+  E[response | z_push] estimated nonparametrically on grid;
+  Signal: enter contrarian when |z_push| > threshold_z for optimal L.
+
+paper_refs:
+  - "2511.06177"  # Vlasiuk & Smirnov 2025 — Push-response anomalies
+  - "2403.00819"  # Bibinger, Hautsch & Ristig 2024 — Jump detection
+  - "1901.02691"  # Kanniainen & Yue 2019 — News and return jumps
+
+data_fields:
+  - mid_price_x2
+
+complexity: "O(1)"
+status: DRAFT
+latency_profile: sim_p95_v2026-02-26
+
+cost_model:
+  instrument: TMFD6
+  rt_cost_pts: 4
+  rt_cost_bps: 1.33
+
+key_findings_from_papers:
+  vlasiuk_2025:
+    - "Push = m(t) - m(t-L), Response = m(t+L) - m(t), standardized per-lag"
+    - "Short lags (1-5000 ticks): response near zero (efficient)"
+    - "Medium lags (5000-150000 ticks): pronounced tails, nonzero response"
+    - "Negative pushes → stronger positive responses (asymmetric)"
+    - "Market mill asymmetry at lags ~5000-150000"
+    - "Standardized push grid: z_p in [-4, +4], bins of 0.025 width"
+    - "Min 200 observations per bin for statistical validity"
+    - "SPY data: 2.6 billion ticks, ~1500 trading days"

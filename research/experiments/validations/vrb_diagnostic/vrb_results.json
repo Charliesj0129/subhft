@@ -1,0 +1,64 @@
+{
+  "n_sessions": 16,
+  "valid_dates": [
+    "2026-01-27",
+    "2026-01-28",
+    "2026-01-29",
+    "2026-01-30",
+    "2026-01-31",
+    "2026-02-04",
+    "2026-02-05",
+    "2026-02-06",
+    "2026-02-23",
+    "2026-02-24",
+    "2026-02-25",
+    "2026-03-20",
+    "2026-03-23",
+    "2026-03-24",
+    "2026-03-25",
+    "2026-03-26"
+  ],
+  "total_triggers": 2,
+  "avg_triggers_per_session": 0.125,
+  "triggers_per_session": [
+    2,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "n_breakout_events": 2,
+  "kg1_pass": false,
+  "kg2_pass": false,
+  "kg3_tod_disguise": "True",
+  "overall_pass": false,
+  "events": [
+    {
+      "date": "2026-01-27",
+      "trigger_minute": 655,
+      "expansion_ratio": 2.543975074816139,
+      "ema_4h_slope": 2.7178657316835597,
+      "first_5m_return": 0.5,
+      "next_1h_return": -17.5
+    },
+    {
+      "date": "2026-01-27",
+      "trigger_minute": 656,
+      "expansion_ratio": 3.098372341871962,
+      "ema_4h_slope": 2.6953108293455443,
+      "first_5m_return": 1.5,
+      "next_1h_return": -16.5
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import time
 
-from hft_platform.order.rate_limiter import RateLimiter
+from hft_platform.core.rate_limiter import RateLimiter
 
 
 def test_rate_limiter_soft_cap_and_purge(monkeypatch) -> None:

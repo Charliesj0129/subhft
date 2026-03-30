@@ -1,0 +1,20 @@
+alpha_id: imbalance_mr_speed
+hypothesis: >
+  The mean-reversion speed of LOB imbalance (fitted online via OU process with EW regression)
+  detects regime transitions. Fast MR = range-bound (CBS favorable). Slow MR = trending.
+  Second-order statistical property of L1 imbalance — never tested on TAIFEX.
+formula: "mr_speed_t = -ln(beta_ew) / dt, where imb_t = alpha + beta*imb_{t-1} + eps"
+paper_refs:
+  - "2303.02038v2"  # Ruan+2023 self-exciting spread dynamics
+  - "2407.17401v3"  # Brouty+2024 spread serial dependence OU
+  - "2501.16772v2"  # Safari+2025 trends and reversion
+data_fields:
+  - mid_price
+  - bid_qty
+  - ask_qty
+  - local_ts
+complexity: "O(1)"
+status: gate_zero
+tier: filter
+feature_set_version: "lob_shared_v2"
+latency_profile: "shioaji_sim_p95_v2026-03-04"

@@ -21,7 +21,7 @@ from hft_platform.order.deadletter import (
     DeadLetterQueue,
     RejectionReason,
 )
-from hft_platform.order.rate_limiter import (
+from hft_platform.core.rate_limiter import (
     PerSymbolRateLimiter,
     PerSymbolRateResult,
     RateLimiter,

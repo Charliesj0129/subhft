@@ -136,6 +136,7 @@ services:
       - ./config/clickhouse_memory.xml:/etc/clickhouse-server/config.d/memory.xml
       # Backup disk config + backup storage volume
       - ./config/clickhouse_backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
+      - ./config/clickhouse_prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
       - ${CH_BACKUP_PATH:-./backups/clickhouse}:/backups
       # Configurable Data Root (Tiered Storage)
       - ${CH_DATA_HOT:-ch_data_hot}:/var/lib/clickhouse/data/hot

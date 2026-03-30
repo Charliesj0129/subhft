@@ -13,7 +13,7 @@ from hft_platform.contracts.strategy import (
     StormGuardState,
 )
 from hft_platform.core import timebase
-from hft_platform.order.rate_limiter import PerSymbolRateResult
+from hft_platform.core.rate_limiter import PerSymbolRateResult
 
 
 def make_cmd(

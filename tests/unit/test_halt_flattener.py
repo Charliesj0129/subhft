@@ -109,7 +109,7 @@ class TestHaltFlattener:
         assert intent.side == Side.SELL
         assert intent.qty == 5
         assert intent.symbol == "2330"
-        assert intent.intent_type == IntentType.NEW
+        assert intent.intent_type == IntentType.FORCE_FLAT
         assert intent.reason == "halt_flatten"
 
     # ------------------------------------------------------------------

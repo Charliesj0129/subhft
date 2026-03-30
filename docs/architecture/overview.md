@@ -11,7 +11,7 @@ Market Data → Normalizer → LOB → FeatureEngine → EventBus → Strategy �
                                                        ↘ Recorder → WAL / ClickHouse
 ```
 
-> **Note:** FeatureEngine is feature-flagged (`HFT_FEATURE_ENGINE_ENABLED=1`, default off). When disabled, LOB events flow directly to EventBus.
+> **Note:** FeatureEngine is enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`). Set to `0` to disable, in which case LOB events flow directly to EventBus.
 
 Key goals:
 
@@ -26,7 +26,7 @@ Key goals:
 > **The single source of truth for detailed architecture is:**
 > [`docs/architecture/current-architecture.md`](architecture/current-architecture.md)
 >
-> It covers: Runtime Planes (6), Module Inventory, Rust Boundary, Persistence Surfaces, Architectural Invariants, Observed Drift, and Cluster Evolution status (CE-M2/M3).
+> It covers: Runtime Planes (7), Module Inventory, Rust Boundary, Persistence Surfaces, Architectural Invariants, Observed Drift, and Cluster Evolution status (CE-M2/M3).
 
 Companion documents:
 

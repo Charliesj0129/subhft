@@ -287,3 +287,389 @@ symbols:
       - futures
       - far_month
       - tmf
+  # --- TXO Options: ATM +/- 5 strikes (front-month, April 2026) ---
+  # Strike selection: TAIEX ~23000 as of 2026-03-30.
+  # Dynamic strike selection is NOT yet automated — update these manually
+  # when TAIEX moves significantly (+/- 500 pts) or on monthly rollover.
+  # Shioaji code format: TXO<strike><month_code><year_digit>
+  #   Call month codes: A=Jan, B=Feb, C=Mar, D=Apr, ...
+  #   Put month codes:  M=Jan, N=Feb, O=Mar, P=Apr, ...
+  # April 2026 = D6 (call) / P6 (put)
+  # TXO fee: tax 2 NTD/side, commission ~15 NTD/side (retail)
+  # TXO multiplier: 50 NTD per index point
+  # TXO tick_size: 1.0 pt for premium >= 10, 0.1 pt for premium < 10
+  #   (ATM strikes have premium >> 10, so tick_size=1.0 is correct)
+  - code: "TXO22500D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 22500
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO22500P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 22500
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO22600D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 22600
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO22600P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 22600
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO22700D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 22700
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO22700P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 22700
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO22800D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 22800
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO22800P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 22800
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO22900D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 22900
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO22900P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 22900
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO23000D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 23000
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO23000P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 23000
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO23100D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 23100
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO23100P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 23100
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO23200D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 23200
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO23200P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 23200
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO23300D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 23300
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO23300P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 23300
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO23400D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 23400
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO23400P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 23400
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]
+  - code: "TXO23500D6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: C
+    strike: 23500
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, call, r24_diagnostic]
+  - code: "TXO23500P6"
+    exchange: OPT
+    product_type: option
+    underlying: TX
+    point_value: 50
+    tick_size: 1.0
+    price_scale: 10000
+    right: P
+    strike: 23500
+    expiry: "2026-04-15"
+    tax_rate_bps: 10
+    commission_per_lot: 150000
+    day_open: "08:45"
+    day_close: "13:45"
+    night_open: "15:00"
+    night_close: "05:00"
+    tags: [options, txo, front_month, put, r24_diagnostic]

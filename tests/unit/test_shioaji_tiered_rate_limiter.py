@@ -15,7 +15,7 @@ def client() -> ShioajiClient:
     with patch("hft_platform.feed_adapter.shioaji_client.sj", create=True):
         c = ShioajiClient.__new__(ShioajiClient)
         # Minimal init for rate limiter attributes only
-        from hft_platform.order.rate_limiter import RateLimiter
+        from hft_platform.core.rate_limiter import RateLimiter
 
         c._api_rate_limiter = RateLimiter(soft_cap=20, hard_cap=25, window_s=5)
         c._order_rate_limiter = RateLimiter(soft_cap=200, hard_cap=250, window_s=10)

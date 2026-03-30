@@ -1,0 +1,79 @@
+{
+  "config": {
+    "spread_threshold_bps": 3.0,
+    "rt_cost_pts": 4.0,
+    "submit_latency_ms": 36,
+    "cancel_latency_ms": 47,
+    "stop_loss_pts": 20.0,
+    "fill_discount": 0.7,
+    "max_position": 1
+  },
+  "summary": {
+    "total_pnl_pts": 9879.0,
+    "total_pnl_ntd": 98790.0,
+    "n_fills": 4726,
+    "n_buys": 2364,
+    "n_sells": 2362,
+    "n_round_trips": 2768,
+    "n_days": 11,
+    "fills_per_day": 429.6,
+    "rts_per_day": 251.6,
+    "n_stop_losses": 806,
+    "stop_loss_pct": 29.1
+  },
+  "pnl_stats": {
+    "mean_pnl_per_rt_pts": 3.569,
+    "median_pnl_per_rt_pts": 6.0,
+    "std_pnl_per_rt_pts": 35.742,
+    "win_rate": 0.595
+  },
+  "adverse_selection": {
+    "total_measured": 2768,
+    "adverse_1s": 439,
+    "adverse_1s_rate": 0.159,
+    "adverse_5s": 791,
+    "adverse_5s_rate": 0.286,
+    "adverse_30s": 1369,
+    "adverse_30s_rate": 0.495
+  },
+  "statistical": {
+    "t_stat_daily": 1.853,
+    "top2_day_pnl_pts": 7500.5,
+    "top2_concentration_pct": 75.9,
+    "pnl_ex_top2_pts": 2378.5
+  },
+  "daily_stats": {
+    "mean_daily_pnl_pts": 898.09,
+    "std_daily_pnl_pts": 1532.61,
+    "sharpe_daily": 9.3,
+    "win_days": 7,
+    "lose_days": 4,
+    "max_dd_pts": -515.0
+  },
+  "daily_pnl": {
+    "2026-01-26": 5201.0,
+    "2026-02-03": 2299.5,
+    "2026-02-06": 611.5,
+    "2026-02-10": 1117.0,
+    "2026-02-11": 387.0,
+    "2026-02-23": 710.5,
+    "2026-02-25": -23.0,
+    "2026-03-19": -128.5,
+    "2026-03-23": -246.0,
+    "2026-03-24": -117.5,
+    "2026-03-25": 67.5
+  },
+  "daily_trades": {
+    "2026-01-26": 969,
+    "2026-02-03": 574,
+    "2026-02-06": 300,
+    "2026-02-10": 84,
+    "2026-02-11": 5,
+    "2026-02-23": 603,
+    "2026-02-25": 1,
+    "2026-03-19": 37,
+    "2026-03-23": 153,
+    "2026-03-24": 35,
+    "2026-03-25": 6
+  }
+}

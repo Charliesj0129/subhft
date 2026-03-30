@@ -1,0 +1,44 @@
+alpha_id: fill_prob_filter
+hypothesis: |
+  A logistic regression model using LOB-state features (spread, depth imbalance,
+  OFI EMA, L1 queue sizes) can predict adverse fills (5-second post-fill return
+  moving against maker by > 0.5 bps) with AUC > 0.55. Filtering out the worst
+  20% of predicted entries improves OpportunisticMM net PnL by reducing adverse
+  selection without excessively reducing fill rate.
+
+  Key insight from Albers (2502.18625): fill probability and post-fill returns
+  are negatively correlated. Reversals (contrarian fills with positive returns)
+  occur when imbalance falsely predicts price direction. LOB state features
+  (ret_autocov, depth imbalance, OFI) can identify these reversals.
+
+  Adaptation for TXFD6: no queue position data available, so we use LOB-state-only
+  features. Wide-spread regime (OpMM only quotes at spread > 2.5 bps) may have
+  different adverse selection dynamics than tight-spread continuous quoting.
+formula: |
+  P(adverse_fill) = sigmoid(alpha_0 + alpha_1*spread_scaled + alpha_2*depth_imbalance_ppm
+                    + alpha_3*ofi_l1_ema8 + alpha_4*l1_bid_qty + alpha_5*l1_ask_qty
+                    + alpha_6*spread_ema8_scaled + alpha_7*depth_imbalance_ema8_ppm)
+  Gate: reject entry if P(adverse_fill) > threshold (tuned on IS data)
+paper_refs:
+  - "Albers et al. 2502.18625 (fill probability vs post-fill returns trade-off)"
+  - "Lokin & Yu 2403.02572 (fill probability modeling in LOB)"
+data_fields:
+  - spread_scaled
+  - depth_imbalance_ppm
+  - ofi_l1_ema8
+  - l1_bid_qty
+  - l1_ask_qty
+  - spread_ema8_scaled
+  - depth_imbalance_ema8_ppm
+  - mid_price_x2
+complexity: low  # logistic regression, 7 features, low DoF
+status: DRAFT
+tier: null
+latency_profile: shioaji_sim_p95_v2026-03-04
+feature_set_version: lob_shared_v2
+roles_used:
+  - planner
+  - code-reviewer
+skills_used:
+  - iterative-retrieval
+  - validation-gate

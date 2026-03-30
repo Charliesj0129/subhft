@@ -1,0 +1,26 @@
+{
+  "dataset_id": "TXFD6_2026-01-29_l1",
+  "source_type": "real",
+  "source": "clickhouse_hft.market_data",
+  "generator": "ch_batch_export",
+  "schema_version": 1,
+  "rows": 338452,
+  "fields": [
+    "bid_px",
+    "ask_px",
+    "bid_qty",
+    "ask_qty",
+    "mid_price",
+    "spread_bps",
+    "volume",
+    "local_ts"
+  ],
+  "symbols": [
+    "TXFD6"
+  ],
+  "date": "2026-01-29",
+  "data_fingerprint": "77334f6000ba13f542174970477f0e9d2ee7d7a4aa244654ade5b6d7cbc3cc12",
+  "data_ul": 5,
+  "price_scale_applied": 1000000.0,
+  "created_at": "2026-03-25T05:21:27.277157+00:00"
+}

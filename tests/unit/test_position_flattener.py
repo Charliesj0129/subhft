@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from hft_platform.ops.position_flattener import FlattenResult, PositionFlattener
+
+
+@dataclass
+class FakePosition:
+    symbol: str
+    net_qty: int
 
 
 def _make_flattener(positions: dict[str, int] | None = None) -> PositionFlattener:
@@ -59,6 +66,22 @@ class TestFlattenIdempotent:
         result1 = await flattener.flatten_all()
         result2 = await flattener.flatten_all()
         assert result1.fully_closed == result2.fully_closed
+
+
+class TestFlattenPositionStoreCompatibility:
+    @pytest.mark.asyncio()
+    async def test_flatten_track_reads_position_objects_and_uses_submit_intent(self) -> None:
+        store = MagicMock()
+        store.positions = {"acct:test:TMFD6": FakePosition(symbol="TMFD6", net_qty=1)}
+        adapter = MagicMock()
+        adapter.submit_intent = AsyncMock()
+        adapter.cancel_all_for_symbols = AsyncMock()
+        flattener = PositionFlattener(position_store=store, order_adapter=adapter)
+
+        result = await flattener.flatten_track("futures_night", ["TMFD6"])
+
+        adapter.submit_intent.assert_awaited_once()
+        assert result.fully_closed == 1
 
 
 class TestFlattenResult:

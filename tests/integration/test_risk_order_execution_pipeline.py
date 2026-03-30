@@ -11,7 +11,7 @@ from hft_platform.execution.normalizer import RawExecEvent
 from hft_platform.execution.positions import PositionStore
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.risk.engine import RiskEngine
-from hft_platform.services.execution import ExecutionService
+from hft_platform.execution.router import ExecutionRouter as ExecutionService
 
 
 async def _wait_for(predicate, timeout=1.0, step=0.01):

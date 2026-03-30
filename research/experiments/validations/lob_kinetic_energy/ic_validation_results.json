@@ -1,0 +1,93 @@
+{
+  "alpha_id": "lob_kinetic_energy",
+  "data": {
+    "n_days": 13,
+    "total_rows": 4541019,
+    "data_source": "TXFD6 L1 npy files",
+    "note": "L1 only \u2014 L5 IC will differ when real multi-level data available"
+  },
+  "pooled_ic": {
+    "10": {
+      "pooled_ic": 0.006815,
+      "n_valid": 4428757,
+      "per_day_mean_ic": 0.013886,
+      "per_day_std_ic": 0.012729,
+      "per_day_median_ic": 0.011203
+    },
+    "50": {
+      "pooled_ic": 0.00406,
+      "n_valid": 4428277,
+      "per_day_mean_ic": 0.010573,
+      "per_day_std_ic": 0.012283,
+      "per_day_median_ic": 0.00774
+    },
+    "200": {
+      "pooled_ic": 0.002764,
+      "n_valid": 4426477,
+      "per_day_mean_ic": 0.009089,
+      "per_day_std_ic": 0.008108,
+      "per_day_median_ic": 0.006433
+    }
+  },
+  "collinearity_dc2": {
+    "ke_momentum_vs_ofi_l1": 0.2455,
+    "ke_momentum_vs_depth_imbalance": 0.1586,
+    "ke_momentum_vs_l1_imbalance": 0.1586,
+    "n_samples": 4428877,
+    "dc2_threshold": 0.7,
+    "dc2_pass_ofi": true,
+    "dc2_pass_depth_imb": true,
+    "dc2_pass_l1_imb": true,
+    "dc2_all_pass": true
+  },
+  "per_level_dc1": {
+    "active_depth_1": {
+      "ic_h50": 0.018061,
+      "n_valid": 509663
+    },
+    "active_depth_2": {
+      "ic_h50": 0.018061,
+      "n_valid": 509663
+    },
+    "active_depth_3": {
+      "ic_h50": 0.018061,
+      "n_valid": 509663
+    },
+    "active_depth_5": {
+      "ic_h50": 0.018061,
+      "n_valid": 509663
+    },
+    "skip_l1": {
+      "ic_h50": 0.018072,
+      "n_valid": 509663
+    }
+  },
+  "signal_stats": {
+    "n_total": 4541019,
+    "n_nonzero": 4428877,
+    "pct_nonzero": 97.53,
+    "mean": -0.0003,
+    "std": 0.176115,
+    "min": -1.47002,
+    "max": 1.550542,
+    "p5": -0.309595,
+    "p95": 0.307953
+  },
+  "overflow_tests": {
+    "max_realistic": "PASS",
+    "extreme_qty_1e15": "PASS",
+    "zero_qty": "PASS",
+    "alternating_extreme": "PASS",
+    "large_velocity_x_qty": "PASS"
+  },
+  "methodology": {
+    "ic_type": "Pearson (pooled across all days)",
+    "horizons_ticks": [
+      10,
+      50,
+      200
+    ],
+    "warmup_ticks": 16,
+    "note": "Per-day IC also computed but pooled IC is authoritative (lessons from Round 14)"
+  }
+}

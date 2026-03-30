@@ -62,10 +62,17 @@ class PositionFlattener:
         """Get all non-zero positions from the position store."""
         store = self._position_store
         if hasattr(store, "get_open_positions"):
-            return store.get_open_positions()
+            raw_positions = store.get_open_positions()
+            return {symbol: int(qty) for symbol, qty in raw_positions.items() if int(qty) != 0}
         # Fallback: iterate positions dict
         if hasattr(store, "positions"):
-            return {s: q for s, q in store.positions.items() if q != 0}
+            positions: dict[str, int] = {}
+            for pos in store.positions.values():
+                symbol = getattr(pos, "symbol", "")
+                net_qty = int(getattr(pos, "net_qty", pos) or 0)
+                if symbol and net_qty != 0:
+                    positions[symbol] = positions.get(symbol, 0) + net_qty
+            return positions
         return {}
 
     async def _flatten_symbols(
@@ -139,7 +146,5 @@ class PositionFlattener:
         adapter = self._order_adapter
         if hasattr(adapter, "submit_intent"):
             await adapter.submit_intent(intent)
-        elif hasattr(adapter, "put_nowait"):
-            adapter.put_nowait(intent)
         else:
-            raise RuntimeError("OrderAdapter has no submit_intent or put_nowait method")
+            raise RuntimeError("OrderAdapter has no submit_intent method")

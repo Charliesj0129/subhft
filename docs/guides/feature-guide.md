@@ -89,23 +89,37 @@ hft backtest run --data <npz> --symbol 2330 --report
 2. 補 `docs/cli_reference.md`
 3. 補對應測試
 
-## 10. Phase 18 FeatureEngine — 16 Features
+## 10. Phase 18 FeatureEngine — 27 Features (v3)
 
-`FeatureEngine` 位於 `LOBEngine` 與 `EventBus` 之間，計算 16 個 LOB 衍生微結構特徵。
+`FeatureEngine` 位於 `LOBEngine` 與 `EventBus` 之間，計算 27 個 LOB 衍生微結構特徵（v3 預設）。
 
 ### 啟用方式
 ```bash
-HFT_FEATURE_ENGINE_ENABLED=1    # 啟用 FeatureEngine
+HFT_FEATURE_ENGINE_ENABLED=1    # 啟用 FeatureEngine（預設啟用）
 HFT_FEATURE_ENGINE_BACKEND=python|rust  # 後端選擇（預設 python）
 ```
 
-### 特徵清單
+### Schema 版本
+
+| Schema            | Features | Description                                         |
+| ----------------- | -------- | --------------------------------------------------- |
+| `lob_shared_v1`   | 16       | 8 stateless + 8 rolling (OFI L1, EMA spread/imbalance) |
+| `lob_shared_v2`   | 22       | v1 + depth-normalized OFI, return autocovariance, TOB survival, impact surprise, deep depth momentum, trade-signed toxicity |
+| `lob_shared_v3`   | 27       | v2 + multi-window EMA aggregation (5s/30s/300s OFI, imbalance, spread) — **default** |
+
+### 特徵清單 (v1 base)
 
 **8 Stateless Features**（無狀態，逐 tick 計算）：
 - Spread, Microprice, Imbalance, Mid Price, OFI L1, Bid/Ask Volume Ratio, Trade Intensity, Book Depth
 
 **8 Rolling Features**（滾動窗口）：
 - EMA Spread, EMA Imbalance, EMA OFI, EMA Microprice, Rolling VWAP, Rolling Volatility, Rolling Trade Flow, Rolling Depth Pressure
+
+**v2 additions** [16-21]：
+- `ofi_depth_norm_ppm`, `ret_autocov_5s_x1e6`, `tob_survival_ms`, `impact_surprise_x1000`, `deep_depth_momentum_x1000`, `toxicity_ema50_x1000`
+
+**v3 additions** [22-26]：
+- Multi-window EMA aggregation: 5s/30s/300s windows for OFI, imbalance, spread
 
 ### 架構
 - Python 實作：`src/hft_platform/feature/engine.py`

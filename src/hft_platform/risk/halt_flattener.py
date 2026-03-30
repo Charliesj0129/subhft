@@ -99,7 +99,7 @@ class HaltFlattener:
                 intent_id=self._allocate_intent_id(),
                 strategy_id=strategy_id,
                 symbol=symbol,
-                intent_type=IntentType.NEW,
+                intent_type=IntentType.FORCE_FLAT,
                 side=close_side,
                 price=0,  # Market order — price=0 signals MKT
                 qty=close_qty,

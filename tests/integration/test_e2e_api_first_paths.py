@@ -21,7 +21,7 @@ from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.loader import WALLoaderService
 from hft_platform.recorder.writer import DataWriter
 from hft_platform.risk.engine import RiskEngine
-from hft_platform.services.execution import ExecutionService
+from hft_platform.execution.router import ExecutionRouter as ExecutionService
 
 ROOT = Path(__file__).resolve().parents[2]
 

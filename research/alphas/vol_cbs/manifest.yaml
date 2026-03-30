@@ -1,0 +1,45 @@
+alpha_id: vol_cbs
+hypothesis: >
+  CBS's fixed 40-bps threshold and 300s hold are suboptimal because they
+  ignore the current volatility regime. In high-vol periods, 40 bps is a
+  normal fluctuation (noise triggers); in low-vol periods, 40 bps is an
+  extreme event (strong signal). Normalizing the entry threshold by
+  realized volatility (ATR) and adapting hold/exit by vol regime should:
+  (1) reduce false triggers in high-vol, (2) capture more edge in low-vol,
+  (3) stabilize risk across regimes via vol-targeting position sizing.
+
+formula: >
+  ATR_N(t) = EMA of TrueRange over N ticks;
+  threshold(t) = k * ATR_N(t) (vol-adaptive, replaces fixed 40 bps);
+  hold_ns(t) = base_hold * (target_vol / realized_vol);
+  stop_loss(t) = s * ATR_N(t) (vol-adaptive, replaces fixed 15 bps);
+  position_size = base_size * min(max_leverage, target_vol / realized_vol).
+
+paper_refs:
+  - "2511.08571"  # Singha et al. 2025 — Forecast-to-Fill (ATR exits, Kelly sizing)
+  - "2212.07288"  # Bernardi et al. 2022 — Smoothing volatility targeting
+  - "2511.06177"  # Vlasiuk & Smirnov 2025 — Push-response anomalies (CBS foundation)
+
+data_fields:
+  - mid_price_x2  # LOBStatsEvent.mid_price_x2
+
+complexity: "O(1)"
+status: DRAFT
+tier: null
+latency_profile: sim_p95_v2026-02-26
+
+cost_model:
+  instrument: TMFD6
+  rt_cost_pts: 4
+  rt_cost_bps: 1.33
+  point_value_nwd: 10
+  contract_value_nwd: 300000
+
+key_findings_from_papers:
+  singha_2025:
+    - "Vol-targeting: sigma_target / sigma_forecast, capped at W_max=2.0"
+    - "EWMA variance: sigma^2_{t+1} = theta * sigma^2_t + (1-theta) * r^2_t"
+    - "ATR exits: hard stop at entry - 2*ATR14, trailing at peak - 1.5*ATR14"
+    - "ATR = 1/n * sum(TrueRange) over n=14 periods"
+    - "Kelly fraction: f* = (mu - nk) / sigma^2 (friction-adjusted)"
+    - "Sharpe 2.88 OOS on gold futures with this framework"

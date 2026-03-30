@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from hft_platform.order.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult
+from hft_platform.core.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult
 
 
 class TestPerSymbolRateResult:
