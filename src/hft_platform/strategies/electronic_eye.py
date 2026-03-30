@@ -153,3 +153,42 @@ class QuoterState:
 
     def record_cancel(self, symbol: str, qty: int = 1) -> None:
         self._qty[symbol] = max(0, self._qty.get(symbol, 0) - qty)
+
+
+class HedgerState:
+    __slots__ = ("_threshold", "_cooldown_ns", "_max_qty", "_last_hedge_ns")
+
+    def __init__(
+        self,
+        delta_threshold_lots: int = 3,
+        cooldown_ms: int = 1000,
+        max_hedge_qty: int = 10,
+    ) -> None:
+        self._threshold = delta_threshold_lots
+        self._cooldown_ns = cooldown_ms * 1_000_000
+        self._max_qty = max_hedge_qty
+        self._last_hedge_ns = 0
+
+    def should_hedge(self, hedge_lots: int, now_ns: int) -> bool:
+        if abs(hedge_lots) <= self._threshold:
+            return False
+        if now_ns - self._last_hedge_ns < self._cooldown_ns:
+            return False
+        return True
+
+    def record_hedge(self, now_ns: int) -> None:
+        self._last_hedge_ns = now_ns
+
+    def clamp_qty(self, lots: int) -> int:
+        if lots > self._max_qty:
+            return self._max_qty
+        if lots < -self._max_qty:
+            return -self._max_qty
+        return lots
+
+    def hedge_direction(self, hedge_lots: int) -> tuple:
+        from hft_platform.contracts.strategy import Side  # noqa: PLC0415 — deferred to avoid circular import
+
+        if hedge_lots > 0:
+            return Side.SELL, min(abs(hedge_lots), self._max_qty)
+        return Side.BUY, min(abs(hedge_lots), self._max_qty)
