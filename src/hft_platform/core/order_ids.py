@@ -51,6 +51,13 @@ class OrderIdResolver:
 
     def resolve_strategy_id(self, order_id: str) -> str:
         order_key = self.normalize_order_key(self.order_id_map.get(order_id))
+        if not order_key and order_id:
+            # Prefix-match fallback: Shioaji ordno grows from "vA0G6" (order)
+            # to "vA0G671S" (fill) — the fill ordno starts with the order ordno.
+            for registered_id, mapped_key in self.order_id_map.items():
+                if registered_id and order_id.startswith(registered_id):
+                    order_key = self.normalize_order_key(mapped_key)
+                    break
         if not order_key:
             return "UNKNOWN"
         if ":" in order_key:

@@ -135,7 +135,10 @@ class ExecutionNormalizer:
             strategy_id = self._resolve_strategy_id(raw)
 
             contract = d.get("contract", {}) if isinstance(d.get("contract"), dict) else {}
-            symbol = contract.get("code") or d.get("code") or "UNKNOWN"
+            symbol = (
+                contract.get("full_code") or contract.get("code")
+                or d.get("full_code") or d.get("code") or "UNKNOWN"
+            )
             price_val = order.get("price") or 0
             price = self.price_codec.scale(symbol, price_val)
 
@@ -177,15 +180,15 @@ class ExecutionNormalizer:
                 if "sell" in s or action == -1:  # Shioaji might use Int or String
                     side = Side.SELL
 
-            # Explicit symbol extraction to avoid one-liner precedence bugs
-            sym = str(get("code") or "")
+            # Prefer full_code (e.g. TMFD6) over base code (TMF) for futures/options
+            sym = str(get("full_code") or get("code") or "")
             if not sym:
                 c = get("contract")
                 if c:
                     if isinstance(c, dict):
-                        sym = c.get("code", "")
+                        sym = c.get("full_code", "") or c.get("code", "")
                     else:
-                        sym = getattr(c, "code", "")
+                        sym = getattr(c, "full_code", "") or getattr(c, "code", "")
 
             strategy_id = self._resolve_strategy_id(raw)
             # scale() handles float/int/Decimal inputs with precision
