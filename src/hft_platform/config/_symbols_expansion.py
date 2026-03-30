@@ -79,6 +79,81 @@ def build_entry(
 
 
 # ---------------------------------------------------------------------------
+# Option enrichment helpers
+# ---------------------------------------------------------------------------
+
+# Map option root prefix → underlying futures root
+_OPTION_UNDERLYING_MAP: dict[str, str] = {
+    "TXO": "TX",
+    "MXO": "MX",
+    "NQO": "NQ",
+    "XIO": "XI",
+    "GTX": "TX",
+}
+
+# Default point value per option root (NTD per index point)
+_OPTION_POINT_VALUE: dict[str, int] = {
+    "TXO": 50,
+    "MXO": 10,
+}
+
+
+def _enrich_option_entry(
+    entry: dict[str, Any],
+    contract: dict[str, Any],
+    code: str,
+    result: SymbolBuildResult,
+) -> None:
+    """Populate option-specific metadata fields into *entry* in-place.
+
+    Fields set (using setdefault where attrs may have already provided values):
+        right, strike, expiry, underlying, point_value, price_scale
+    """
+    # right
+    raw_right = contract.get("option_right") or contract.get("right")
+    if raw_right is not None:
+        entry["right"] = _normalize_option_right(raw_right)
+
+    # strike — raw int from exchange, no scaling
+    raw_strike = contract.get("strike_price")
+    if raw_strike is None:
+        raw_strike = contract.get("strike")
+    if raw_strike is not None:
+        entry["strike"] = raw_strike
+    else:
+        result.warnings.append(f"Missing strike for option {code}")
+
+    # expiry
+    raw_expiry = contract.get("delivery_date")
+    if raw_expiry is None:
+        raw_expiry = contract.get("expiry") or contract.get("expiry_date")
+    if raw_expiry is not None:
+        entry["expiry"] = raw_expiry
+    else:
+        result.warnings.append(f"Missing expiry for option {code}")
+
+    # underlying — derive root prefix from code, look up in map
+    matched_root: str | None = None
+    for prefix in _OPTION_UNDERLYING_MAP:
+        if code.upper().startswith(prefix):
+            matched_root = prefix
+            break
+    if matched_root is None:
+        # Try entry.get("root") if present (set by caller)
+        matched_root = str(entry.get("root") or "")
+
+    if matched_root:
+        entry.setdefault("underlying", _OPTION_UNDERLYING_MAP.get(matched_root, matched_root))
+
+    # point_value — attrs take precedence (already merged via entry.update(attrs)), use setdefault
+    if matched_root and matched_root in _OPTION_POINT_VALUE:
+        entry.setdefault("point_value", _OPTION_POINT_VALUE[matched_root])
+
+    # price_scale — platform default 10000; use setdefault so attrs/contract override works
+    entry.setdefault("price_scale", 10000)
+
+
+# ---------------------------------------------------------------------------
 # Grouping helpers
 # ---------------------------------------------------------------------------
 
