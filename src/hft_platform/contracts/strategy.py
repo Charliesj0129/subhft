@@ -62,6 +62,9 @@ class OrderIntent:
     # TCA: decision-time price capture (scaled int x10000)
     decision_price: int = 0  # LOB mid-price at signal time (x10000)
 
+    # Order type: "LMT" (default limit order) or "MKT" (market order)
+    price_type: str = "LMT"
+
 
 @dataclass(slots=True)
 class RiskDecision:
@@ -73,6 +76,17 @@ class RiskDecision:
     intent: OrderIntent
     reason_code: str = "OK"
     modified: bool = False  # If risk adjusted size/price
+
+
+@dataclass(slots=True, frozen=True)
+class RiskFeedback:
+    """Rejection feedback from RiskEngine to strategy. Immutable."""
+
+    intent_id: int
+    strategy_id: str
+    symbol: str
+    reason_code: str
+    timestamp_ns: int
 
 
 @dataclass(slots=True)
