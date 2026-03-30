@@ -16,7 +16,7 @@ The platform already has a production-facing `CascadeBounceStrategy` for contrar
 
 For the target use case, the strategy must satisfy the following human constraints:
 
-- instrument: `TMF` micro TAIEX futures
+- instrument family: `TMF` micro TAIEX futures, implemented at runtime against one concrete contract symbol (for example `TMFD6`)
 - live validation immediately, not sim/shadow first
 - max position: `1` lot, never pyramiding
 - no cross-session inventory
@@ -236,7 +236,9 @@ This must be enforced at two layers:
    - CBS ignores entry signals whenever current net position is non-zero or an exit order is active
 2. **Risk/config layer**
    - fix the current config/validator mismatch so the runtime-consumed key is actually `max_position_lots: 1` for the CBS strategy
-   - add a resulting-position check if needed, because the current `PositionLimitValidator` is stateless and only checks `abs(intent.qty)`
+   - add a resulting-position check, because the current `PositionLimitValidator` is stateless and only checks `abs(intent.qty)`
+
+This is a rollout blocker, not an optional hardening item. Until resulting net exposure is enforced below the strategy layer, `1` lot is only a strategy-level convention, not a platform-level guarantee.
 
 ### 6.2 Loss Controls
 
@@ -245,11 +247,18 @@ Two layers are required:
 1. **Per-trade stop**
    - enforced by `stop_loss_pts`
 2. **Session/global hard guard**
-   - if realized + unrealized loss approaches `8000 TWD` / `800 pts`, the strategy enters no-new-risk mode and is flattened immediately
+   - if realized + unrealized loss approaches `8000 TWD` / `800 pts`, the platform must stop new risk and transition toward flattening
 
 The hard guard overrides strategy logic.
 
 This should be implemented by extending the existing [`DailyLossLimitValidator`](/home/charlie/hft_platform/src/hft_platform/risk/validators.py) and existing halt path, not by introducing a second independent strategy-local loss authority. The actual daily hard-stop source of truth remains in risk.
+
+Important current limitation:
+
+- today's daily-loss path escalates to `HALT`, but `HALT` by itself does **not** guarantee immediate flattening
+- the current halt flattener emits `IntentType.NEW`, while `StormGuardState.HALT` only permits `CANCEL` and `FORCE_FLAT`
+
+Therefore, "hard-loss halt implies flatten" is currently a **design requirement**, not an already-working reuse path. Rollout requires fixing that flatten path first.
 
 The exact config source of truth is [`config/base/strategy_limits.yaml`](/home/charlie/hft_platform/config/base/strategy_limits.yaml), specifically the `intraday_pnl` block. For this rollout, the implementation must explicitly set:
 
@@ -267,6 +276,13 @@ Flatten and no-new-risk have different owners:
 - **Strategy stop-loss / max-hold exits during OPEN**: owned by CBS itself
 
 The strategy does not own broker-health detection. It only consumes the consequences of platform state by being filtered to `CLOSE_ONLY` or by having platform flatteners close positions.
+
+Important interaction with current `TrackGate`:
+
+- during `CLOSE_ONLY`, `StrategyRunner` only allows `CANCEL` and `FORCE_FLAT`
+- ordinary opposite-side `NEW` exits emitted by CBS will be dropped in that phase
+
+Therefore session-boundary liquidation cannot rely on the current CBS stop/timeout exit path. It requires a real `FORCE_FLAT` execution path or a deliberate TrackGate/session-control redesign.
 
 ### 6.4 Failure Handling
 
@@ -310,6 +326,7 @@ Required execution-gap fix before rollout:
 
 - `FORCE_FLAT` is currently allowed by guards but does not have a complete dispatch path in `OrderAdapter`
 - session-end / hard-halt flattening therefore requires an explicit adapter implementation for `FORCE_FLAT` or an equivalent guaranteed aggressive-close execution branch
+- the current halt flattener also needs alignment, because it presently emits `IntentType.NEW` and is not compatible with HALT semantics
 
 ### 7.3 Risk / Halt Wiring
 
@@ -363,9 +380,14 @@ Before live activation:
 
 ## 8.4 Symbol / Contract Model
 
-`TMF` in this design refers to the **strategy family and target instrument class**, not a magical alias resolved inside the strategy. Runtime trading must use the concrete configured symbol from the strategy registry, such as `TMFD6`.
+`TMF` in this design refers to the **strategy family and target instrument class**, not a magical alias resolved inside the strategy. Runtime trading must use one concrete configured symbol from the strategy registry, such as `TMFD6`.
 
 Contract roll is out of scope for this strategy design. The rollout process must update the configured concrete symbol at expiry/roll time rather than relying on hidden strategy-side front-month discovery.
+
+Immediate live rollout therefore requires an explicit pre-launch decision:
+
+- choose the exact active contract symbol (for example `TMFD6`)
+- confirm that the same symbol is wired consistently in `symbols.yaml`, strategy registry, session-governor track assignment, and broker contract resolution
 
 ## 9. Rollout Plan
 
