@@ -16,6 +16,11 @@ from typing import Any, Callable
 import yaml
 from structlog import get_logger
 
+try:
+    from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
+except ImportError:  # pragma: no cover
+    ShioajiClientFacade = None  # type: ignore[assignment,misc]
+
 logger = get_logger("feed_adapter.quote_connection_pool")
 
 _SHIOAJI_MAX_CONNECTIONS = 5
@@ -104,8 +109,6 @@ class QuoteConnectionPool:
 
     def create_facades(self) -> None:
         """Create a ShioajiClientFacade for each connection group."""
-        from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
-
         self._clients = []
         for group_id in range(self._num_conns):
             per_conn_cfg = dict(self._config)
