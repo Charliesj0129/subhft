@@ -17,6 +17,8 @@ from typing import Any, Callable, Dict, List
 import yaml
 from structlog import get_logger
 
+from hft_platform.config.schema import ConfigValidationError, validate_config
+
 logger = get_logger("config.hot_reload")
 
 # Default poll interval in seconds
@@ -173,6 +175,17 @@ class ConfigWatcher:
             )
             # Still update mtime to avoid spamming reload attempts
             self._last_mtime = mtime
+            return
+
+        # Domain schema validation (C-04)
+        try:
+            validate_config(new_config)
+        except (ConfigValidationError, Exception) as exc:
+            logger.warning(
+                "config_reload_domain_validation_failed",
+                path=self._config_path,
+                error=str(exc),
+            )
             return
 
         self._current_config = new_config
