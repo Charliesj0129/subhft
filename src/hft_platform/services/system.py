@@ -194,6 +194,16 @@ class HFTSystem:
             manual_rearm_required=False,
         )
 
+        # Login order_client (separate Shioaji session for execution).
+        # md_client logs in via MarketDataService._connect_sequence(), but
+        # order_client needs its own login for contract resolution + order callbacks.
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self.order_client.login)
+            logger.info("order_client logged in", contracts_ready=getattr(self.order_client, "contracts_ready", "N/A"))
+        except Exception as exc:
+            logger.error("order_client login failed — orders will be unavailable", error=str(exc))
+
         # Hooks for Shioaji
         self.order_client.set_execution_callbacks(
             on_order=lambda state, payload: self._on_exec("order", {"state": state, "payload": payload}),
