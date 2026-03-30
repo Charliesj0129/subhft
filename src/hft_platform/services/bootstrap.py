@@ -181,7 +181,12 @@ def validate_order_mode_safety() -> None:
     # Normalize "real" → "live" (legacy alias)
     if hft_mode == "real":
         hft_mode = "live"
+        os.environ["HFT_MODE"] = "live"
+        logger.warning("normalized_mode", original="real", normalized="live")
     order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
+    if order_mode == "real":
+        order_mode = "live"
+        os.environ["HFT_ORDER_MODE"] = "live"
 
     if order_mode in {"live", "real"}:
         if hft_mode not in {"real", "live"}:

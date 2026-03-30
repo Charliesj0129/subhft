@@ -37,3 +37,17 @@ def test_sim_order_mode_always_accepted():
         with patch.dict(os.environ, env, clear=False):
             result = validate_order_mode_safety()
         assert result is None
+
+
+def test_real_hft_mode_normalized_to_live_in_environ():
+    env = {"HFT_MODE": "real", "HFT_ORDER_MODE": "sim"}
+    with patch.dict(os.environ, env, clear=False):
+        validate_order_mode_safety()
+        assert os.environ["HFT_MODE"] == "live"
+
+
+def test_real_order_mode_normalized_to_live_in_environ():
+    env = {"HFT_MODE": "live", "HFT_ORDER_MODE": "real", "HFT_LIVE_CONFIRM": "yes-i-know"}
+    with patch.dict(os.environ, env, clear=False):
+        validate_order_mode_safety()
+        assert os.environ["HFT_ORDER_MODE"] == "live"
