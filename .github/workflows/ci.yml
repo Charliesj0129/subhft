@@ -49,27 +49,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${PYTHON_VERSION}
-
-      - name: Cache dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            .venv
-            ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Install dependencies
-        run: uv sync --dev
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Check formatting
         run: make format-check
@@ -250,27 +230,7 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${PYTHON_VERSION}
-
-      - name: Cache dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            .venv
-            ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Install dependencies
-        run: uv sync --dev
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Run mypy
         run: make typecheck
@@ -305,44 +265,8 @@ jobs:
     needs: [typecheck, rust, dependency-boundary]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${PYTHON_VERSION}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-
-      - name: Cache dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            .venv
-            ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust_core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust_core/Cargo.lock', 'rust_core/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Build Rust extension
-        run: make build-rust
+      - uses: ./.github/actions/setup-python-uv
+      - uses: ./.github/actions/setup-rust
 
       - name: Run unit tests with coverage
         run: make test-unit-ci
@@ -391,44 +315,8 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${PYTHON_VERSION}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-
-      - name: Cache dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            .venv
-            ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust_core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust_core/Cargo.lock', 'rust_core/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Build Rust extension
-        run: make build-rust
+      - uses: ./.github/actions/setup-python-uv
+      - uses: ./.github/actions/setup-rust
 
       - name: Run lightweight perf regression gate (strategy/risk/gateway/research/feed/recorder)
         run: make perf-gate-default
@@ -471,44 +359,8 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${PYTHON_VERSION}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-
-      - name: Cache dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            .venv
-            ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust_core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust_core/Cargo.lock', 'rust_core/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Build Rust extension
-        run: make build-rust
+      - uses: ./.github/actions/setup-python-uv
+      - uses: ./.github/actions/setup-rust
 
       - name: Run latency regression benchmarks
         run: make latency-gate-ci 2>&1 | tee latency_gate.log
@@ -553,44 +405,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${PYTHON_VERSION}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-
-      - name: Cache dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            .venv
-            ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust_core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust_core/Cargo.lock', 'rust_core/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Build Rust extension
-        run: make build-rust
+      - uses: ./.github/actions/setup-python-uv
+      - uses: ./.github/actions/setup-rust
 
       - name: Run integration tests
         env:
@@ -634,44 +450,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${PYTHON_VERSION}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-
-      - name: Cache dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            .venv
-            ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust_core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust_core/Cargo.lock', 'rust_core/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Build Rust extension
-        run: make build-rust
+      - uses: ./.github/actions/setup-python-uv
+      - uses: ./.github/actions/setup-rust
 
       - name: Run recorder perf gate (CK + WAL stress drills)
         run: make perf-gate-recorder-io
@@ -856,27 +636,7 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${PYTHON_VERSION}
-
-      - name: Cache dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: |
-            .venv
-            ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Install dependencies
-        run: uv sync --dev
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Run pip-audit
         run: make security-audit
