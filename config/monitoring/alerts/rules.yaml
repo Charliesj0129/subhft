@@ -1,6 +1,16 @@
 groups:
 - name: HFT_Critical
   rules:
+  # ── Target Health ───────────────────────────────────────────────
+  - alert: HFTEngineDown
+    expr: up{job="hft-engine"} == 0
+    for: 30s
+    labels:
+      severity: critical
+    annotations:
+      summary: "HFT Engine scrape target is down"
+      description: "hft-engine:9090 has been unreachable for >30s. The trading process may have crashed."
+
   # Feed Health
   - alert: FeedGapCritical
     expr: rate(feed_events_total[30s]) == 0
