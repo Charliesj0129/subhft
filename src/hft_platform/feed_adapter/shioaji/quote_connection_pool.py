@@ -17,11 +17,42 @@ import yaml
 from structlog import get_logger
 
 try:
+    from prometheus_client import Gauge
+except ImportError:
+    Gauge = None
+
+try:
     from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 except ImportError:  # pragma: no cover
     ShioajiClientFacade = None  # type: ignore[assignment,misc]
 
 logger = get_logger("feed_adapter.quote_connection_pool")
+
+_METRIC_SUBSCRIBED = None
+_METRIC_LOGGED_IN = None
+_METRIC_LAST_DATA_AGE = None
+
+
+def _ensure_metrics() -> None:
+    global _METRIC_SUBSCRIBED, _METRIC_LOGGED_IN, _METRIC_LAST_DATA_AGE
+    if Gauge is None or _METRIC_SUBSCRIBED is not None:
+        return
+    _METRIC_SUBSCRIBED = Gauge(
+        "hft_quote_conn_subscribed_count",
+        "Subscribed symbol count per quote connection",
+        ["conn_id"],
+    )
+    _METRIC_LOGGED_IN = Gauge(
+        "hft_quote_conn_logged_in",
+        "Login state per quote connection",
+        ["conn_id"],
+    )
+    _METRIC_LAST_DATA_AGE = Gauge(
+        "hft_quote_conn_last_data_age_s",
+        "Seconds since last quote data per connection",
+        ["conn_id"],
+    )
+
 
 _SHIOAJI_MAX_CONNECTIONS = 5
 _MAX_QUOTE_CONNECTIONS = _SHIOAJI_MAX_CONNECTIONS - 1
@@ -219,3 +250,19 @@ class QuoteConnectionPool:
             }
             for i, c in enumerate(self._clients)
         }
+
+    def update_metrics(self) -> None:
+        """Push per-connection metrics to Prometheus gauges."""
+        _ensure_metrics()
+        if _METRIC_SUBSCRIBED is None:
+            return
+        from hft_platform.core import timebase
+
+        now_s = timebase.now_s()
+        for i, c in enumerate(self._clients):
+            label = str(i)
+            _METRIC_SUBSCRIBED.labels(conn_id=label).set(getattr(c, "subscribed_count", 0))
+            _METRIC_LOGGED_IN.labels(conn_id=label).set(1 if c.logged_in else 0)
+            last_ts = getattr(c._client, "_last_quote_data_ts", 0.0)
+            age = now_s - last_ts if last_ts > 0 else -1
+            _METRIC_LAST_DATA_AGE.labels(conn_id=label).set(age)

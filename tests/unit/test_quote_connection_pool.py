@@ -265,3 +265,24 @@ class TestQuoteConnectionPoolProperties:
         assert 0 in h
         assert h[0]["logged_in"] is True
         assert h[0]["subscribed_count"] == 20
+
+
+class TestQuoteConnectionPoolMetrics:
+    """Test Prometheus metrics reporting."""
+
+    def test_update_metrics_sets_gauges(self, tmp_path):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
+        pool = QuoteConnectionPool(str(sym_path), {}, num_conns=1)
+
+        facade = mock.MagicMock()
+        facade.logged_in = True
+        facade.subscribed_count = 15
+        facade._client._last_quote_data_ts = 1000.0
+        pool._clients = [facade]
+
+        # Should not raise
+        pool.update_metrics()
