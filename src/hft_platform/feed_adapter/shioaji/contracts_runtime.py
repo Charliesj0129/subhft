@@ -39,6 +39,12 @@ class ContractsRuntime:
     ) -> Any | None:
         if not self._client.api:
             return None
+        if not hasattr(self._client.api, "Contracts"):
+            ensure_contracts = getattr(self._client, "_ensure_contracts", None)
+            if callable(ensure_contracts):
+                ensure_contracts()
+        if not hasattr(self._client.api, "Contracts"):
+            return None
 
         exch = str(exchange or "").upper()
         prod = str(product_type or "").strip().lower()

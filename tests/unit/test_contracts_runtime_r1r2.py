@@ -1,5 +1,7 @@
 """Tests for R1/R2 continuous contract alias resolution."""
+
 from unittest.mock import MagicMock
+
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 
 
@@ -45,3 +47,25 @@ def test_non_r1r2_code_unaffected():
     runtime, _, _ = _make_runtime_with_r1r2()
     contract = runtime._get_contract("FUT", "TXFD6", product_type="future")
     assert contract is None or contract is not None  # just no exception
+
+
+def test_get_contract_ensures_contracts_when_api_lacks_contracts():
+    client = MagicMock()
+    client.api = MagicMock()
+    client.allow_symbol_fallback = False
+    client.index_exchange = "TSE"
+    contract = MagicMock(name="TMFD6_contract")
+    contract.code = "TMFD6"
+
+    def _ensure_contracts():
+        client.api.Contracts = MagicMock()
+        client.api.Contracts.Futures = {"TMFD6": contract}
+
+    del client.api.Contracts
+    client._ensure_contracts.side_effect = _ensure_contracts
+
+    runtime = ContractsRuntime(client)
+    resolved = runtime._get_contract("FUT", "TMFD6", product_type="future")
+
+    client._ensure_contracts.assert_called_once_with()
+    assert resolved is contract
