@@ -1,0 +1,13 @@
+scenarios:
+  - name: "underlying_down_3pct"
+    underlying_shift_pct: -3.0
+    vol_shift_abs: 0.0
+  - name: "underlying_down_3pct_vol_up_5"
+    underlying_shift_pct: -3.0
+    vol_shift_abs: 0.05
+  - name: "vol_crush_10"
+    underlying_shift_pct: 0.0
+    vol_shift_abs: -0.10
+  - name: "worst_case"
+    underlying_shift_pct: -5.0
+    vol_shift_abs: 0.10
