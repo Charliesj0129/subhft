@@ -5,12 +5,18 @@ symbols:
   - "TMFD6"
 
 strategy:
-  id: OPPORTUNISTIC_MM_TMFD6
-  module: hft_platform.strategies.opportunistic_mm
-  class: OpportunisticMM
+  id: CBS_TMFD6
+  module: hft_platform.strategies.cascade_bounce
+  class: CascadeBounceStrategy
   params:
-    spread_threshold_pts: 5    # 5 pts > 4 pts breakeven (RT 40 NTD / 10 NTD per pt)
-    tick_size_ratio_pct: 50
+    lookback_ns: 60000000000
+    trigger_sigma: 3.0
+    max_hold_ns: 300000000000
+    take_profit_pts: 8
+    stop_loss_pts: 6
+    min_vol_samples: 8
+    session_start_sec: 0
+    session_end_sec: 86400
 
 paths:
   symbols: config/base/symbols.yaml

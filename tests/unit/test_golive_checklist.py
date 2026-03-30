@@ -6,7 +6,12 @@ from argparse import Namespace
 import pytest
 
 from hft_platform.cli._checks import check_kill_switch
-from hft_platform.cli._golive import _check_config_not_sim, cmd_golive_check
+from hft_platform.cli._golive import (
+    _check_alertmanager_config,
+    _check_config_not_sim,
+    _check_position_checkpoint,
+    cmd_golive_check,
+)
 
 
 class TestCheckKillSwitch:
@@ -29,6 +34,26 @@ class TestCheckConfigNotSim:
     def test_live_passes(self, monkeypatch):
         monkeypatch.setenv("HFT_MODE", "live")
         assert _check_config_not_sim()["ok"] is True
+
+
+class TestCheckPositionCheckpoint:
+    def test_prefers_runtime_checkpoint_env(self, tmp_path, monkeypatch):
+        old_path = tmp_path / "old.json"
+        new_path = tmp_path / "new.json"
+        new_path.write_text("{}")
+        monkeypatch.setenv("HFT_CHECKPOINT_PATH", str(old_path))
+        monkeypatch.setenv("HFT_POSITION_CHECKPOINT_PATH", str(new_path))
+        result = _check_position_checkpoint()
+        assert result["ok"] is True
+        assert str(new_path) in result["detail"]
+
+
+class TestCheckAlertmanagerConfig:
+    def test_default_path_matches_repo_layout(self, monkeypatch):
+        monkeypatch.delenv("HFT_ALERTMANAGER_CONFIG", raising=False)
+        result = _check_alertmanager_config()
+        assert result["ok"] is True
+        assert "config/monitoring/alerts/alertmanager.yml" in result["detail"]
 
 
 class TestCmdGoliveCheck:

@@ -10,8 +10,8 @@
 global_limits:
   max_position_lots: 1
   max_order_size: 1
-  # daily_loss_limit: 10,000 NTD = 100,000,000 in scaled int (x10000)
-  max_daily_loss: 100000000
+  # daily_loss_limit: 8,000 NTD = 80,000,000 in scaled int (x10000)
+  max_daily_loss: 80000000
   max_notional_per_symbol: 1000000000    # 100,000 NTD x10000
   max_total_notional: 1000000000         # 100,000 NTD x10000
 
@@ -20,7 +20,7 @@ global_defaults:
   max_notional: 1000000000              # 100,000 NTD x10000
   per_symbol_max_notional: 1000000000   # 100,000 NTD x10000
   max_position_lots: 1                  # Phase 3 Canary: 1 lot max
-  max_daily_loss: 100000000             # 10,000 NTD x10000 (triggers HALT)
+  max_daily_loss: 80000000              # 8,000 NTD x10000 (triggers HALT)
   max_price_cap: 5000.0                 # Stocks: max 5,000 NTD per share
   max_price_cap_futures: 50000.0        # Futures: max 50,000 NTD (covers TMFD6/TXFD6)
   max_price_cap_options: 10000.0        # TXO options: max 10,000 NTD
@@ -32,18 +32,19 @@ global_defaults:
 # Per-strategy limits (conservative first-launch values)
 strategies:
   CBS_TMFD6:
-    max_position: 1
+    max_position_lots: 1
     max_order_qty: 1
   OPPORTUNISTIC_MM_TMFD6:
-    max_position: 1
+    max_position_lots: 1
     max_order_qty: 1
 
 intraday_pnl:
-  # Hard limit: 10,000 NTD (matches daily_loss_limit above)
-  soft_limit_ntd: 6000
-  hard_limit_ntd: 10000
+  scope: global
+  # Hard limit: 8,000 NTD (matches daily_loss_limit above)
+  soft_limit_ntd: 500
+  hard_limit_ntd: 8000
   peak_drawdown_pct: 0.40
-  soft_recovery_ntd: 3000
+  soft_recovery_ntd: 300
   drawdown_recovery_pct: 0.20
   soft_limit_cooldown_s: 60
-  peak_drawdown_min_peak_ntd: 2000
+  peak_drawdown_min_peak_ntd: 200

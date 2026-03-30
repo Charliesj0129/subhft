@@ -1,5 +1,7 @@
 # Live Trading Activation SOP
 
+For the current `TMFD6` cascade-bounce rollout, use `docs/runbooks/tmfd6-cbs-supervised-live-runbook.md` instead of this generic SOP. This document remains a broader broker activation reference.
+
 ## Prerequisites
 
 - CA certificate file (`Sinopac.pfx`) in `./certs/`

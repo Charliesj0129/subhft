@@ -11,7 +11,10 @@ from hft_platform.cli._checks import check_disk_space, check_kill_switch, check_
 
 
 def _check_position_checkpoint() -> dict[str, Any]:
-    path = os.getenv("HFT_CHECKPOINT_PATH", ".runtime/position_checkpoint.json")
+    path = os.getenv("HFT_POSITION_CHECKPOINT_PATH") or os.getenv(
+        "HFT_CHECKPOINT_PATH",
+        ".runtime/position_checkpoint.json",
+    )
     exists = os.path.exists(path)
     return {"name": "position_checkpoint", "ok": exists, "detail": f"found: {path}" if exists else f"missing: {path}"}
 
@@ -23,7 +26,7 @@ def _check_config_not_sim() -> dict[str, Any]:
 
 
 def _check_alertmanager_config() -> dict[str, Any]:
-    path = os.getenv("HFT_ALERTMANAGER_CONFIG", "config/alertmanager.yml")
+    path = os.getenv("HFT_ALERTMANAGER_CONFIG", "config/monitoring/alerts/alertmanager.yml")
     exists = os.path.exists(path)
     return {"name": "alertmanager_config", "ok": exists, "detail": f"found: {path}" if exists else f"missing: {path}"}
 
