@@ -45,11 +45,11 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
         return None
 
     # -- Parse timestamps and extract data vectors --------------------------
-    times = [datetime.strptime(fb.ts, "%Y-%m-%d %H:%M:%S") for fb in sd.flow_5m]
+    times = [datetime.strptime(fb.ts.split(".")[0], "%Y-%m-%d %H:%M:%S") for fb in sd.flow_5m]
     ud_ratios = [fb.ud_ratio for fb in sd.flow_5m]
     volumes = [fb.total_vol for fb in sd.flow_5m]
 
-    bar_times = [datetime.strptime(b.ts, "%Y-%m-%d %H:%M:%S") for b in sd.bars_5m]
+    bar_times = [datetime.strptime(b.ts.split(".")[0], "%Y-%m-%d %H:%M:%S") for b in sd.bars_5m]
     mid_prices = [(b.high + b.low) / 2.0 / PLATFORM_SCALE for b in sd.bars_5m]
 
     max_vol = max(volumes) if volumes else 1
@@ -80,7 +80,7 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
 
     # Large trade markers
     for lt in sd.large_trades:
-        lt_time = datetime.strptime(lt.ts, "%Y-%m-%d %H:%M:%S")
+        lt_time = datetime.strptime(lt.ts.split(".")[0], "%Y-%m-%d %H:%M:%S")
         lt_price = lt.price / PLATFORM_SCALE
         marker = "^" if lt.direction == "buy" else ("v" if lt.direction == "sell" else "o")
         color = "green" if lt.direction == "buy" else ("red" if lt.direction == "sell" else "gray")
