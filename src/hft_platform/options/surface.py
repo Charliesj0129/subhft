@@ -4,7 +4,6 @@ Offline analytics module — float arithmetic is permitted (not a live trading p
 """
 from __future__ import annotations
 
-import math
 from datetime import date
 
 import numpy as np
@@ -116,5 +115,5 @@ class VolSurface:
         pairs.sort(key=lambda x: x[0])
         if not pairs:
             return [], []
-        strikes, ivs = zip(*pairs)
+        strikes, ivs = zip(*pairs, strict=True)
         return list(strikes), list(ivs)

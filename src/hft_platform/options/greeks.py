@@ -110,7 +110,7 @@ def compute_greeks(
     if cp == "C":
         rate_component = r * disc * (F * Nd1 - K * Nd2)
     else:
-        rate_component = r * disc * (F * (Nd1 - 1.0) - K * (N(d2) - 1.0))
+        rate_component = r * disc * (F * (Nd1 - 1.0) - K * (Nd2 - 1.0))
 
     # dV/dT = time_decay - rate_component (positive dT → smaller value)
     # theta = -dV/dT per day
