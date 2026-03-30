@@ -143,8 +143,8 @@ class TestCBSInitialization:
         assert params["trigger_sigma"] > 0
         assert params["take_profit_pts"] > 0
         assert params["stop_loss_pts"] > 0
-        assert params["session_start_sec"] == 0
-        assert params["session_end_sec"] == 86400
+        assert params["session_start_sec"] == 33300  # 09:15 TWN fallback gate
+        assert params["session_end_sec"] == 48900    # 13:35 TWN fallback gate
 
 
 class TestCBSSessionGate:

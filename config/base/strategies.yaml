@@ -50,5 +50,5 @@ strategies:
       take_profit_pts: 8
       stop_loss_pts: 6
       min_vol_samples: 8
-      session_start_sec: 0             # SessionGovernor owns day/night gating
-      session_end_sec: 86400
+      session_start_sec: 33300        # 09:15 TWN — CBS internal gate (fallback when SessionGovernor disabled)
+      session_end_sec: 48900          # 13:35 TWN — CBS internal gate (fallback when SessionGovernor disabled)
