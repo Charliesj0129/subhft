@@ -515,6 +515,10 @@ class StrategyRunner:
         self._positions_dirty = True
 
     async def process_event(self, event: Any):
+        # Defensive guard: skip unexpected tuple events (not typed_intent_v1)
+        if isinstance(event, tuple) and (not event or event[0] != "typed_intent_v1"):
+            logger.warning("Unexpected tuple event skipped", length=len(event), head=repr(event[0] if event else None))
+            return
         source_ts_ns, trace_id = self._extract_event_trace(event)
         self._current_source_ts_ns = source_ts_ns
         self._current_trace_id = trace_id

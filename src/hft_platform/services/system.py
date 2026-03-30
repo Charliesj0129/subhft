@@ -518,7 +518,7 @@ class HFTSystem:
                     continue
                 if exc is None and not self.running:
                     continue
-                if exc is None and name == "order" and self.storm_guard.state == StormGuardState.HALT:
+                if exc is None and name in ("order", "exec_gateway") and self.storm_guard.state == StormGuardState.HALT:
                     continue
                 logger.critical(
                     "Critical service task stopped",

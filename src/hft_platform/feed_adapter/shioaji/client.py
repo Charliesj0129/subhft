@@ -231,6 +231,7 @@ class ShioajiClient:
         self._callbacks_retrying = False
         self._callbacks_retry_thread: threading.Thread | None = None
         self.logged_in = False
+        self._contracts_ready = False
         self.mode = "simulation" if (is_sim or self.api is None) else "real"
         if self.mode == "simulation":
             self.activate_ca = False
@@ -697,16 +698,23 @@ class ShioajiClient:
         """Delegates to SubscriptionManager.set_execution_callbacks()."""
         self._subscriptions().set_execution_callbacks(on_order=on_order, on_deal=on_deal)
 
-    def _ensure_contracts(self) -> None:
+    @property
+    def contracts_ready(self) -> bool:
+        """True if the Shioaji API has Contracts loaded and available."""
+        return self.api is not None and hasattr(self.api, "Contracts")
+
+    def _ensure_contracts(self) -> bool:
+        """Fetch contracts explicitly. Returns True if contracts are available after the call."""
         if not self.api or not hasattr(self.api, "fetch_contracts"):
-            return
+            return self.contracts_ready
+        start_ns = time.perf_counter_ns()
         try:
-            start_ns = time.perf_counter_ns()
             self.api.fetch_contracts(contract_download=True)
             self._record_api_latency("fetch_contracts", start_ns, ok=True)
         except Exception as exc:
             self._record_api_latency("fetch_contracts", start_ns, ok=False)
             logger.warning("Contract fetch failed", error=str(exc))
+        return self.contracts_ready
 
     def _maybe_activate_ca(self) -> None:
         if not self.api or not self.activate_ca:

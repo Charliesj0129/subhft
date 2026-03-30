@@ -195,6 +195,17 @@ class SessionRuntime:
                     logger.info("Login successful (API Key)", attempt=attempt)
                     if not login_fetch_contract:
                         c._ensure_contracts()
+                    # Verify contracts regardless of which login path was used.
+                    contracts_ok = c.contracts_ready
+                    c._contracts_ready = contracts_ok
+                    if contracts_ok:
+                        logger.info("Contracts loaded", ready=True)
+                    else:
+                        logger.error(
+                            "Contracts not available after login — order placement will be blocked",
+                            fetch_contract_attempted=login_fetch_contract,
+                            ready=False,
+                        )
                     if c.activate_ca:
                         if not pid:
                             logger.warning("CA activation requested but missing SHIOAJI_PERSON_ID")

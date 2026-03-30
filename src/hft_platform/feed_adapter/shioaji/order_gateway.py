@@ -74,6 +74,8 @@ class OrderGateway:
             return {"seq_no": f"sim-{int(timebase.now_s() * 1000)}"}
         if sdk is None:
             raise RuntimeError("Shioaji SDK unavailable")
+        if not self._client.contracts_ready:
+            raise RuntimeError("Contracts not loaded — cannot place order")
 
         contract = self._client._get_contract(exchange, contract_code, product_type=product_type, allow_synthetic=False)
         if not contract:

@@ -671,9 +671,8 @@ class OrderAdapter:
                 # Shioaji custom_field limit is 6 chars
                 c_field = intent.strategy_id
                 if len(c_field) > 6:
-                    # If too long, do not pass it, rely on internal map
                     logger.warning("StrategyID too long for custom_field", id=c_field)
-                    c_field = ""
+                    c_field = c_field[:6]
 
                 # TIF Mapping via broker codec
                 tif_str = self._broker_codec.encode_tif(intent.tif)
