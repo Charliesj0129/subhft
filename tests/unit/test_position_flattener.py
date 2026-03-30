@@ -16,6 +16,11 @@ class FakePosition:
     net_qty: int
 
 
+class FakePositionStore:
+    def __init__(self, positions: dict[str, FakePosition]) -> None:
+        self.positions = positions
+
+
 def _make_flattener(positions: dict[str, int] | None = None) -> PositionFlattener:
     store = MagicMock()
     if positions is None:
@@ -71,8 +76,7 @@ class TestFlattenIdempotent:
 class TestFlattenPositionStoreCompatibility:
     @pytest.mark.asyncio()
     async def test_flatten_track_reads_position_objects_and_uses_submit_intent(self) -> None:
-        store = MagicMock()
-        store.positions = {"acct:test:TMFD6": FakePosition(symbol="TMFD6", net_qty=1)}
+        store = FakePositionStore({"acct:test:TMFD6": FakePosition(symbol="TMFD6", net_qty=1)})
         adapter = MagicMock()
         adapter.submit_intent = AsyncMock()
         adapter.cancel_all_for_symbols = AsyncMock()
