@@ -32,6 +32,7 @@ class StrategyContext:
         "_feature_set_source",
         "_feature_profile_source",
         "_feature_tuple_get",
+        "_publish_sink",
     )
 
     def __init__(
@@ -47,6 +48,7 @@ class StrategyContext:
         feature_set_source: Callable[[], str] | None = None,
         feature_profile_source: Callable[[], str | None] | None = None,
         feature_tuple_source: Callable[[str], Optional[tuple]] | None = None,
+        publish_sink: Callable[[str, dict], None] | None = None,
     ):
         self.positions = positions
         self.strategy_id = strategy_id
@@ -59,6 +61,7 @@ class StrategyContext:
         self._feature_set_source = feature_set_source
         self._feature_profile_source = feature_profile_source
         self._feature_tuple_get = feature_tuple_source
+        self._publish_sink = publish_sink
 
     def place_order(
         self,
@@ -70,6 +73,7 @@ class StrategyContext:
         tif: TIF = TIF.LIMIT,
         intent_type: IntentType = IntentType.NEW,
         target_order_id: Optional[str] = None,
+        price_type: str = "LMT",
     ) -> OrderIntent:
         # Auto-scaling convenience: int = already scaled, Decimal = needs scaling
         if isinstance(price, int):
@@ -99,6 +103,7 @@ class StrategyContext:
             tif=tif,
             intent_type=intent_type,
             target_order_id=target_order_id,
+            price_type=price_type,
         )
 
     def scale_price(self, symbol: str, price: int | Decimal) -> int:
@@ -148,6 +153,14 @@ class StrategyContext:
             logger.debug("operation_fallback", error=str(exc))
             return None
 
+    def publish_state(self, channel: str, payload: dict) -> None:
+        """Non-blocking publish to monitoring. Drops on backpressure."""
+        if self._publish_sink is not None:
+            try:
+                self._publish_sink(channel, payload)
+            except Exception:
+                pass
+
 
 class BaseStrategy(ABC):
     """
@@ -189,6 +202,10 @@ class BaseStrategy(ABC):
 
     def on_order(self, event: OrderEvent) -> None:
         """Handle Order Status Updates."""
+        pass
+
+    def on_risk_feedback(self, feedback: "RiskFeedback") -> None:
+        """Called when RiskEngine rejects an OrderIntent from this strategy."""
         pass
 
     # --- Internal Dispatch ---

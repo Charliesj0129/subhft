@@ -400,6 +400,7 @@ class StrategyRunner:
         target_order_id=None,
         source_ts_ns: int | None = None,
         trace_id: str | None = None,
+        price_type: str = "LMT",
     ) -> Any:
         self._intent_seq += 1
         if source_ts_ns is None:
@@ -438,6 +439,7 @@ class StrategyRunner:
             timestamp_ns=timebase.now_ns(),
             source_ts_ns=int(source_ts_ns or 0),
             trace_id=str(trace_id or ""),
+            price_type=price_type,
         )
 
     def _scale_price(self, symbol: str, price: int | Decimal) -> int:

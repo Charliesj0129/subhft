@@ -88,6 +88,7 @@ class RiskEngine:
         "_order_dlq",
         "_ORDER_DLQ_MAX",
         "_position_provider",
+        "_rejection_sink",
         "__dict__",
     )
 
@@ -100,6 +101,7 @@ class RiskEngine:
         storm_guard: StormGuard | None = None,
         notification_dispatcher: Any | None = None,
         position_provider: Any | None = None,
+        rejection_sink: asyncio.Queue | None = None,
     ):
         self.config_path = config_path
         self.intent_queue = intent_queue  # Input
@@ -158,6 +160,7 @@ class RiskEngine:
         self._trace_sampler = _get_trace_sampler()
         self._order_dlq: collections.deque = collections.deque()
         self._ORDER_DLQ_MAX: int = 256
+        self._rejection_sink = rejection_sink
 
     def _current_strategy_symbol_net_position(self, symbol: str, strategy_id: str) -> int:
         provider = self._position_provider
@@ -378,6 +381,19 @@ class RiskEngine:
                     logger.warning("Order Rejected by Risk", sid=intent.strategy_id, reason=decision.reason_code)
                     self._emit_reject_metric(intent.strategy_id, decision.reason_code)
                     # In real system: Feedback to strategy via side channel
+                    if self._rejection_sink is not None:
+                        try:
+                            from hft_platform.contracts.strategy import RiskFeedback
+                            from hft_platform.utils import timebase
+                            self._rejection_sink.put_nowait(RiskFeedback(
+                                intent_id=getattr(intent, "intent_id", 0),
+                                strategy_id=getattr(intent, "strategy_id", ""),
+                                symbol=getattr(intent, "symbol", ""),
+                                reason_code=decision.reason_code,
+                                timestamp_ns=timebase.now_ns(),
+                            ))
+                        except asyncio.QueueFull:
+                            pass
 
                 self.intent_queue.task_done()
             except asyncio.CancelledError:
