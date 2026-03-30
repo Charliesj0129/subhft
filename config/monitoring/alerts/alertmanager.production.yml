@@ -109,7 +109,7 @@ inhibit_rules:
   # If HALT is active (critical), suppress related warnings
   - source_matchers:
       - severity = critical
-      - alertname = HFTStormGuardHalt
+      - alertname = StormGuardHalt
     target_matchers:
       - severity = warning
     equal: ["strategy"]
@@ -117,7 +117,7 @@ inhibit_rules:
   # If ClickHouse is down (critical), suppress CH insert latency warnings
   - source_matchers:
       - severity = critical
-      - alertname = ClickHouseDown
+      - alertname = ClickHouseConnectionDown
     target_matchers:
       - severity = warning
       - alertname =~ "ClickHouse.*"
@@ -125,7 +125,7 @@ inhibit_rules:
   # If feed is dead (critical), suppress feed rate warnings
   - source_matchers:
       - severity = critical
-      - alertname = FeedDead
+      - alertname = FeedGapCritical
     target_matchers:
       - severity = warning
       - alertname =~ "Feed.*"
