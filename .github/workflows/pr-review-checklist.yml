@@ -37,49 +37,7 @@ jobs:
             fi
           done
 
-      - name: Detect print() in production code
-        if: github.event_name == 'pull_request'
-        run: |
-          echo "Checking for print() statements in src/..."
-          FOUND=$(grep -rn 'print(' src/ --include='*.py' \
-            | grep -v '# noqa' \
-            | grep -v 'structlog' \
-            | grep -v '__main__' \
-            | grep -v 'cli.py' || true)
-          if [ -n "$FOUND" ]; then
-            echo "::warning::print() statements found in production code:"
-            echo "$FOUND"
-            echo ""
-            echo "Use structlog instead of print() in production code."
-          fi
-
-      - name: Detect float in financial paths
-        if: github.event_name == 'pull_request'
-        run: |
-          echo "Checking for float usage in financial code paths..."
-          FOUND=$(grep -rnE ':\s*float\b|float\(' \
-            src/hft_platform/order/ \
-            src/hft_platform/risk/ \
-            src/hft_platform/execution/ \
-            --include='*.py' \
-            | grep -v '# noqa' \
-            | grep -v 'timestamp' \
-            | grep -v 'latency' \
-            | grep -v '_seconds' \
-            | grep -v '_ratio' \
-            | grep -v 'precision-' \
-            | grep -v '_interval' \
-            | grep -v 'interval_s' \
-            | grep -v 'concentration' \
-            | grep -v 'last_sync_ts' \
-            | grep -v 'checkpoint' || true)
-          if [ -n "$FOUND" ]; then
-            echo "::error::float usage detected in financial code paths:"
-            echo "$FOUND"
-            echo ""
-            echo "Use Decimal or integer micros for prices/balances (see CLAUDE.md Precision Law)."
-            exit 1
-          fi
+      # print() and float detection consolidated into ci.yml
 
       # Secret scanning moved to ci.yml security job (gitleaks)
 
