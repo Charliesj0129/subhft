@@ -298,6 +298,13 @@ jobs:
             exit 1
           fi
 
+      - name: Upload Rust extension
+        uses: actions/upload-artifact@ea165f8d65b6db9a6b7c67862cd61e8cbe7b0dbc  # v4
+        with:
+          name: rust-extension
+          path: src/hft_platform/rust_core*.so
+          retention-days: 1
+
       - name: Upload coverage artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
@@ -316,7 +323,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: ./.github/actions/setup-python-uv
-      - uses: ./.github/actions/setup-rust
+      - name: Download Rust extension
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: rust-extension
+          path: src/hft_platform/
 
       - name: Run lightweight perf regression gate (strategy/risk/gateway/research/feed/recorder)
         run: make perf-gate-default
@@ -360,7 +371,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: ./.github/actions/setup-python-uv
-      - uses: ./.github/actions/setup-rust
+      - name: Download Rust extension
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: rust-extension
+          path: src/hft_platform/
 
       - name: Run latency regression benchmarks
         run: make latency-gate-ci 2>&1 | tee latency_gate.log
@@ -406,7 +421,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: ./.github/actions/setup-python-uv
-      - uses: ./.github/actions/setup-rust
+      - name: Download Rust extension
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: rust-extension
+          path: src/hft_platform/
 
       - name: Run integration tests
         env:
@@ -451,7 +470,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: ./.github/actions/setup-python-uv
-      - uses: ./.github/actions/setup-rust
+      - name: Download Rust extension
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: rust-extension
+          path: src/hft_platform/
 
       - name: Run recorder perf gate (CK + WAL stress drills)
         run: make perf-gate-recorder-io
