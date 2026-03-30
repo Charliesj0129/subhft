@@ -102,8 +102,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '${HFT_CPU_LIMIT:-0.50}'
-          memory: ${HFT_MEM_LIMIT:-1500M}
+          cpus: '${HFT_CPU_LIMIT:-4.0}'
+          memory: ${HFT_MEM_LIMIT:-4G}
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -145,8 +145,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 6G
+          cpus: '4.0'
+          memory: 8G
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
       interval: 30s
@@ -185,6 +185,11 @@ services:
     <<: *hft-common
     container_name: wal-loader
     command: ["sh", "-lc", "HFT_RUNTIME_ROLE=wal_loader python -m hft_platform.recorder.loader"]
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import os; os.kill(1, 0)' || exit 1"]
       interval: 30s
@@ -198,6 +203,11 @@ services:
     <<: *hft-common
     container_name: hft-monitor
     command: ["sh", "-lc", "HFT_RUNTIME_ROLE=monitor python scripts/monitor_runtime_health.py"]
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import os; os.kill(1, 0)' || exit 1"]
       interval: 30s
@@ -267,8 +277,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 1G
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9090/-/healthy || exit 1"]
       interval: 30s
@@ -292,8 +302,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.25'
-          memory: 256M
+          cpus: '0.2'
+          memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9093/-/healthy || exit 1"]
       interval: 30s
