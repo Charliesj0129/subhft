@@ -178,6 +178,9 @@ class _RoleGuardedNoopClient:
 def validate_order_mode_safety() -> None:
     """Reject dangerous mode combinations and log warnings for live trading."""
     hft_mode = os.getenv("HFT_MODE", "sim").strip().lower()
+    # Normalize "real" → "live" (legacy alias)
+    if hft_mode == "real":
+        hft_mode = "live"
     order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
 
     if order_mode in {"live", "real"}:
