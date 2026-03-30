@@ -1,2 +1,0 @@
-# Staging environment overlay (HFT_ENV=staging, HFT_MODE=sim by default)
-mode: sim
