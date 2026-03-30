@@ -13,6 +13,8 @@ STATUS_PASS = "pass"
 STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 
+_DEFAULT_WAL_DIR = str(Path(__file__).resolve().parent.parent / ".wal")
+
 
 def _ch_query(clickhouse_url: str, query: str, password: str = "") -> tuple[str | None, str | None]:
     """Execute a ClickHouse HTTP query. Returns (result_text, error_text)."""
@@ -114,7 +116,7 @@ def _check_wal_backlog(wal_dir: str) -> tuple[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Post-market daily check for HFT platform")
-    parser.add_argument("--wal-dir", default=".wal", help="WAL directory path (default: .wal)")
+    parser.add_argument("--wal-dir", default=_DEFAULT_WAL_DIR, help=f"WAL directory path (default: {_DEFAULT_WAL_DIR})")
     parser.add_argument(
         "--clickhouse-url",
         default="http://localhost:8123",
