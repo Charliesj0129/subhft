@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-30
 **Status**: Draft
-**Scope**: Promote TMF CBS from session-specific research strategy to a full-day live-validatable strategy using one shared parameter set, one-lot max exposure, market entry, and limit exit.
+**Scope**: Promote TMF CBS from session-specific research strategy to a full-day live-validatable strategy using one shared parameter set, one-lot max exposure, aggressive `IOC` entry-at-touch, and limit exit.
 
 ## 1. Problem Statement
 
@@ -32,7 +32,7 @@ The design goal is therefore not to invent a new alpha family. It is to convert 
 Three approaches were considered:
 
 1. Absolute-threshold CBS with one shared fixed point threshold across all sessions
-2. Volatility-normalized CBS with market entry and limit exit
+2. Volatility-normalized CBS with aggressive `IOC` entry-at-touch and limit exit
 3. CBS plus additional gating from toxicity/regime features
 
 We choose **Approach 2**.
@@ -41,7 +41,7 @@ We choose **Approach 2**.
 
 - It preserves the core CBS mean-reversion thesis already present in [`cascade_bounce.py`](/home/charlie/hft_platform/src/hft_platform/strategies/cascade_bounce.py).
 - It allows one shared parameter set across day and night by normalizing move magnitude to local volatility instead of relying on one fixed absolute point threshold.
-- It keeps entry simple and execution-realistic: market entry avoids adding another research degree of freedom.
+- It keeps entry simple and execution-realistic: aggressive `IOC` entry-at-touch avoids adding another research degree of freedom while staying representable in the current `OrderIntent` contract.
 - It keeps the only execution sophistication on exit, where existing research showed the most plausible benefit.
 - It avoids prematurely coupling CBS to newer `toxicity` / `regime` filters that are still tuning-heavy and would materially increase overfitting risk.
 
@@ -52,7 +52,7 @@ We choose **Approach 2**.
 The strategy remains contrarian:
 
 - observe rolling price movement over `lookback_sec`
-- compute local realized volatility / ATR-like scale over the same rolling context
+- compute local volatility in **points** over the same rolling context
 - when the signed move exceeds `trigger_sigma * local_vol`, enter in the opposite direction
 
 This replaces the current fixed `move_threshold_bps` trigger with a normalized trigger:
@@ -62,51 +62,85 @@ z_move = signed_move_points / local_vol_points
 enter contrarian when |z_move| >= trigger_sigma
 ```
 
+For implementation clarity, `local_vol_points` in v1 is defined as:
+
+- input stream: consecutive `LOBStatsEvent.mid_price_x2` observations
+- transform: convert consecutive mid-price changes into absolute point changes
+- estimator: rolling RMS of point changes over the active `lookback_sec` buffer
+- warmup: no entry until at least `min_vol_samples` observations are present
+- floor: clamp volatility to at least one tick/point-equivalent to avoid divide-by-zero and tiny-denominator explosions
+
+This is intentionally narrower than "ATR-like". The backtest and live implementation must use the same estimator.
+
 ### 3.2 Entry Rules
 
 - order entry is always **aggressive**, implemented on this platform as `IOC` crossing the current best bid/ask rather than as a broker-native market-without-price primitive
 - only one open position per symbol at a time
 - if a position already exists, all new entry signals are ignored
 - no overlapping entries during the existing CBS cooldown / hold window
-- entry is disabled during flatten-only windows before each session boundary
+- entry is disabled outside `SessionPhase.OPEN`
 
-This means the v1 design must bypass or disable the current limit-vs-market branching in [`ExecutionOptimizer`](/home/charlie/hft_platform/src/hft_platform/execution/execution_optimizer.py) for CBS entry decisions. The optimizer may still be reused later for exit handling, but it is not part of the entry decision surface in this design.
+This means the v1 design must bypass or remove the current limit-vs-market branching in [`ExecutionOptimizer`](/home/charlie/hft_platform/src/hft_platform/execution/execution_optimizer.py) for CBS entry decisions. `ExecutionOptimizer` is **out of scope** for v1 CBS entry.
+
+The current `OrderIntent`/`BaseStrategy` contract cannot express broker-native `MKT`/`MKP` `price_type`, so the v1 design deliberately uses the already-supported pattern that current CBS uses today: aggressive `IOC` at the current touch price. No contract extension is required for entry if we keep that semantics.
 
 ### 3.3 Exit Rules
 
-After a fill:
+After the **entry fill is confirmed**:
 
-- immediately place a `LIMIT` take-profit order at `take_profit_pts`
+- place a `LIMIT` take-profit order at `entry_fill_price +/- take_profit_pts`
 - track a hard stop at `stop_loss_pts`
-- force flat when `max_hold_sec` elapses
-- force flat when session-end flatten buffer is reached
-- force flat when global/session loss guard triggers
+- force exit when `max_hold_sec` elapses
+- force exit when platform session control enters `CLOSE_ONLY` / `FORCE_FLAT`
+- force exit when global/session loss guard triggers
 
 Limit exit is therefore the only place where passive execution is used in v1.
 
 Because the current strategy skeleton does not yet maintain a dedicated exit-order state machine, the implementation must add explicit tracking for:
 
 - active exit order intent / broker order id
+- entry fill price basis (actual fill, not decision mid)
+- remaining open quantity under partial fill
 - cancel-before-replace behavior when switching from passive exit to forced aggressive flat
 - terminal-state reset on `FillEvent` / `OrderEvent`
 
 This is required to avoid duplicate close orders when stop-loss, timeout, and session-flatten paths race with an outstanding passive take-profit.
 
+### 3.3a Exit State Machine Ownership
+
+The passive-exit state machine is owned by the strategy plus normalized execution events:
+
+- strategy emits the initial passive take-profit `NEW`
+- `on_order` and `on_fill` maintain exit-order broker ids, remaining quantity, and terminal transitions
+- stop-loss / timeout inside `SessionPhase.OPEN` follow `CANCEL -> aggressive close NEW`
+- session-end and hard-halt flattening are **not** owned by the strategy; they are owned by platform-level flatteners and require a working `FORCE_FLAT` execution path
+
+This split keeps strategy-owned logic limited to alpha exits and prevents duplicate session-control implementations.
+
 ### 3.4 Session Model
 
 The strategy must run across the full Taiwan futures trading day, but may not carry inventory across session boundaries.
 
-The design uses two session windows:
+Session boundary ownership belongs to [`SessionGovernor` / `TrackGate`](/home/charlie/hft_platform/src/hft_platform/ops/session_governor.py), not to a duplicate wall-clock state machine inside CBS.
 
-- day session
-- night session
+The required tracks are:
 
-Both sessions share the same CBS parameter set. However, session boundaries remain execution boundaries:
+- `futures_day`
+- `futures_night`
 
-- new entry disabled during `flatten_buffer_sec` before a session end
-- if still long/short inside the buffer, cancel passive exits and flatten at market
+The same CBS parameter set applies to both tracks. Session behavior is:
 
-This preserves the user's "same parameter set" constraint without allowing cross-session inventory risk.
+- `OPEN`: strategy may open and close risk
+- `CLOSE_ONLY`: strategy may only cancel / flatten existing exposure
+- `FORCE_FLAT`: platform flattener force-closes any remaining exposure
+- `CLOSED`: no intents
+
+For v1, the implementation must provide or update the session-governor config so that TMF's concrete symbol is assigned to day and night tracks with explicit `close_only` and `force_flat` windows. Suggested defaults are:
+
+- day session: `CLOSE_ONLY` at `13:40`, `FORCE_FLAT` at `13:44`
+- night session: `CLOSE_ONLY` at `04:55`, `FORCE_FLAT` at `04:59`
+
+This preserves the user's "same parameter set" constraint without duplicating session ownership in strategy code.
 
 ## 4. Parameter Surface
 
@@ -120,7 +154,7 @@ To reduce overfitting, the v1 strategy is limited to five tunable parameters:
 
 Everything else is fixed policy, not optimized:
 
-- market entry only
+- aggressive `IOC` entry-at-touch only
 - limit exit allowed
 - one lot only
 - no pyramiding
@@ -196,6 +230,14 @@ Hard live constraints:
 - no simultaneous opposing orders
 - no re-entry until the prior trade is terminal
 
+This must be enforced at two layers:
+
+1. **Strategy layer**
+   - CBS ignores entry signals whenever current net position is non-zero or an exit order is active
+2. **Risk/config layer**
+   - fix the current config/validator mismatch so the runtime-consumed key is actually `max_position_lots: 1` for the CBS strategy
+   - add a resulting-position check if needed, because the current `PositionLimitValidator` is stateless and only checks `abs(intent.qty)`
+
 ### 6.2 Loss Controls
 
 Two layers are required:
@@ -207,38 +249,30 @@ Two layers are required:
 
 The hard guard overrides strategy logic.
 
-This should be implemented by extending the existing [`DailyLossLimitValidator`](/home/charlie/hft_platform/src/hft_platform/risk/validators.py) and existing halt path, not by introducing a second independent strategy-local loss authority. Strategy-local behavior may still react by entering flatten-only mode, but the actual daily hard-stop source of truth should remain in risk.
+This should be implemented by extending the existing [`DailyLossLimitValidator`](/home/charlie/hft_platform/src/hft_platform/risk/validators.py) and existing halt path, not by introducing a second independent strategy-local loss authority. The actual daily hard-stop source of truth remains in risk.
 
-### 6.3 Flatten-Only Mode
+The exact config source of truth is [`config/base/strategy_limits.yaml`](/home/charlie/hft_platform/config/base/strategy_limits.yaml), specifically the `intraday_pnl` block. For this rollout, the implementation must explicitly set:
 
-Flatten-only mode is entered when:
+- `intraday_pnl.hard_limit_ntd = 8000`
 
-- session end buffer begins
-- broker state is degraded
-- quote feed is stale
-- reconnect is in progress
-- hard loss guard is triggered
+and treat it as platform-wide for the live TMF rollout window. If other live strategies remain enabled, this becomes a deployment conflict and must be resolved before rollout.
 
-In flatten-only mode:
+### 6.3 Flatten / No-New-Risk Ownership
 
-- no new entries
-- existing limit exits may remain only if they do not violate session boundary
-- stop / timeout / force-flat logic stays active
+Flatten and no-new-risk have different owners:
+
+- **Session transitions**: owned by `SessionGovernor` + `TrackGate` + platform flattener
+- **Broker/runtime degradation**: owned by platform degrade / watchdog / reconnect logic, not by strategy
+- **Daily hard-loss halt**: owned by `DailyLossLimitValidator` + halt path
+- **Strategy stop-loss / max-hold exits during OPEN**: owned by CBS itself
+
+The strategy does not own broker-health detection. It only consumes the consequences of platform state by being filtered to `CLOSE_ONLY` or by having platform flatteners close positions.
 
 ### 6.4 Failure Handling
 
 The strategy must degrade safely when the broker/runtime is unhealthy.
 
-If any of the following occurs:
-
-- quote callback stall
-- reconnect loop
-- order status uncertainty
-- callback mismatch / missing fill updates
-
-then the strategy must switch to `no-new-risk` and only reduce inventory.
-
-This is intentionally aligned with the current Shioaji runtime hardening path in the feed/order stack rather than introducing a parallel failure controller.
+If quote/runtime degradation occurs, the design does **not** create a new strategy-side controller. Instead, rollout depends on the existing Shioaji runtime hardening path and platform degrade gates to block new risk. CBS must remain compatible with that platform-level behavior.
 
 ## 7. Integration Plan
 
@@ -253,8 +287,9 @@ Conceptual changes:
 - replace fixed absolute move trigger with volatility-normalized trigger
 - enforce aggressive `IOC` entry only
 - add explicit limit-exit management as first-class state
-- add dual-session flatten buffer logic
+- remove entry-time dependency on `ExecutionOptimizer`
 - maintain one shared parameter set for both sessions
+- consume real `FillEvent` / `OrderEvent` updates for exit state
 
 ### 7.2 Execution / Order Flow
 
@@ -265,11 +300,16 @@ Existing components remain the main path:
 - order adapter places/cancels orders
 - execution callbacks normalize fills
 
-No new execution subsystem is introduced. The design relies on the current stack:
+No new execution subsystem is introduced. The design relies on the current stack, with one explicit gap to close:
 
 - [`order/adapter.py`](/home/charlie/hft_platform/src/hft_platform/order/adapter.py)
-- [`execution/execution_optimizer.py`](/home/charlie/hft_platform/src/hft_platform/execution/execution_optimizer.py)
 - [`feed_adapter/shioaji/order_gateway.py`](/home/charlie/hft_platform/src/hft_platform/feed_adapter/shioaji/order_gateway.py)
+- [`ops/position_flattener.py`](/home/charlie/hft_platform/src/hft_platform/ops/position_flattener.py)
+
+Required execution-gap fix before rollout:
+
+- `FORCE_FLAT` is currently allowed by guards but does not have a complete dispatch path in `OrderAdapter`
+- session-end / hard-halt flattening therefore requires an explicit adapter implementation for `FORCE_FLAT` or an equivalent guaranteed aggressive-close execution branch
 
 ### 7.3 Risk / Halt Wiring
 
@@ -280,6 +320,8 @@ Expected reuse:
 - existing position tracking and order terminal-state handling
 - existing broker watchdog / reconnect protections
 - existing autonomy / halt mechanisms where available
+- existing `SessionGovernor` / `TrackGate` session ownership
+- existing `PositionFlattener` / halt flattener patterns
 
 ## 8. Testing Design
 
@@ -291,10 +333,12 @@ Required unit coverage:
 - one-lot cap behavior
 - no re-entry while positioned
 - limit-exit placement after fill
+- partial-fill exit bookkeeping
+- cancel-before-replace on timeout/stop during OPEN
 - stop-loss exit
 - max-hold exit
-- session flatten buffer
-- no-new-risk behavior under degraded runtime
+- compatibility with `CLOSE_ONLY` / `FORCE_FLAT`
+- FORCE_FLAT dispatch path
 
 ### 8.2 Validation Artifacts
 
@@ -310,18 +354,25 @@ Required research/backtest artifacts:
 
 Before live activation:
 
-- confirm session boundary flatten behavior
+- confirm session-governor ownership of session boundary flatten behavior
 - confirm strategy ignores new signals while one-lot exposure exists
 - confirm hard-loss guard blocks new orders
 - confirm broker degradation path stops new risk
+- confirm TMF runtime symbol is a concrete configured contract (for example `TMFD6`), not a symbolic alias with hidden auto-roll behavior
 - confirm TMF symbol metadata (`tick_size`, `point_value`, `price_scale`) matches live contract configuration
+
+## 8.4 Symbol / Contract Model
+
+`TMF` in this design refers to the **strategy family and target instrument class**, not a magical alias resolved inside the strategy. Runtime trading must use the concrete configured symbol from the strategy registry, such as `TMFD6`.
+
+Contract roll is out of scope for this strategy design. The rollout process must update the configured concrete symbol at expiry/roll time rather than relying on hidden strategy-side front-month discovery.
 
 ## 9. Rollout Plan
 
 ### Phase 1
 
 - implement normalized CBS logic
-- keep execution simple: market entry + limit exit
+- keep execution simple: aggressive `IOC` entry-at-touch + limit exit
 - freeze a single validated parameter set
 
 ### Phase 2
