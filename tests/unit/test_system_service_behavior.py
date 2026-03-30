@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -293,6 +293,23 @@ def test_teardown_bootstrap_teardown_raises():
     sys_obj.bootstrapper.teardown.side_effect = RuntimeError("fail")
     sys_obj._teardown_bootstrap()  # Should not raise
     assert sys_obj._bootstrap_torn_down is True
+
+
+@pytest.mark.asyncio
+async def test_run_early_exception_does_not_trip_gc_cleanup():
+    sys_obj = _make_system()
+    sys_obj.session_governor = SimpleNamespace(start=AsyncMock(side_effect=RuntimeError("boom")))
+    sys_obj.autonomy_monitor = None
+    sys_obj.startup_verifier = None
+    sys_obj.checkpoint_writer = None
+    sys_obj.stop = MagicMock()
+
+    from hft_platform.services.system import HFTSystem
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await HFTSystem.run(sys_obj)
+
+    sys_obj.stop.assert_called_once_with()
 
 
 def test_iter_supervised_services_no_gateway():

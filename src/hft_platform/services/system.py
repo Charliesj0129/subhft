@@ -177,6 +177,7 @@ class HFTSystem:
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
+        _gc_disabled = False
 
         import signal
 
@@ -262,7 +263,6 @@ class HFTSystem:
             self._start_service("health_server", self.health_server.run())
 
             # Disable GC during active trading (HFT Core Law 1: Allocator Law)
-            _gc_disabled = False
             if os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {"1", "true", "yes", "on"}:
                 gc.disable()
                 _gc_disabled = True
