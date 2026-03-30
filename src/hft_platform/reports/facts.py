@@ -72,8 +72,10 @@ _TS_FMT = "%Y-%m-%d %H:%M:%S"
 
 
 def _parse_ts(ts_str: str) -> datetime:
-    """Parse a timestamp string in YYYY-MM-DD HH:MM:SS format."""
-    return datetime.strptime(ts_str, _TS_FMT)
+    """Parse a timestamp string, tolerating optional fractional seconds."""
+    # ClickHouse may return '.000' milliseconds; strip before parsing
+    clean = ts_str.split(".")[0] if "." in ts_str else ts_str
+    return datetime.strptime(clean, _TS_FMT)
 
 
 def _time_of(ts_str: str) -> time:
