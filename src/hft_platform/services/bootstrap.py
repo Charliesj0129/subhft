@@ -1000,10 +1000,13 @@ class SystemBootstrapper:
         if os.environ.get("HFT_SESSION_GOVERNOR_ENABLED", "0") == "1":
             try:
                 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
+                from hft_platform.ops.position_flattener import PositionFlattener
                 from hft_platform.ops.session_governor import SessionGovernor
 
+                position_flattener = PositionFlattener(position_store=position_store, order_adapter=order_adapter)
                 session_governor = SessionGovernor(
                     evidence_writer=get_shared_autonomy_evidence_writer(),
+                    position_flattener=position_flattener,
                 )
                 # Wire TrackGate into StrategyRunner for per-symbol session filtering
                 strategy_runner.track_gate = session_governor.track_gate

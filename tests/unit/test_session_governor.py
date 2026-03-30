@@ -2,11 +2,43 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
+import pytest
 import yaml
 
 from hft_platform.ops.session_governor import SessionGovernor, SessionPhase, TrackGate
+
+
+def _write_config(tmp_path: Path) -> Path:
+    config = {
+        "tracks": {
+            "futures_day": {
+                "symbols": ["TMFD6"],
+                "schedule": [
+                    {"phase": "open", "time": "08:45"},
+                    {"phase": "close_only", "time": "13:40"},
+                    {"phase": "force_flat", "time": "13:44"},
+                    {"phase": "closed", "time": "13:45"},
+                ],
+            },
+            "futures_night": {
+                "symbols": ["TMFD6"],
+                "schedule": [
+                    {"phase": "open", "time": "15:00"},
+                    {"phase": "close_only", "time": "04:55"},
+                    {"phase": "force_flat", "time": "04:59"},
+                    {"phase": "closed", "time": "05:00"},
+                ],
+            },
+        }
+    }
+    cfg_path = tmp_path / "session_governor.yaml"
+    cfg_path.write_text(yaml.dump(config), encoding="utf-8")
+    return cfg_path
 
 
 class TestSessionPhaseOrdering:
@@ -91,3 +123,46 @@ class TestSessionGovernorConfigLoading:
         gov.transition_track("stock", SessionPhase.OPEN)
         assert len(captured) == 1
         assert captured[0] == ("stock", SessionPhase.INIT, SessionPhase.OPEN)
+
+    def test_phase_for_dt_uses_day_schedule(self, tmp_path: Path) -> None:
+        gov = SessionGovernor(config_path=_write_config(tmp_path))
+
+        close_only = gov._phase_for_dt("futures_day", datetime(2026, 3, 30, 13, 40, tzinfo=gov._tz))
+        forced = gov._phase_for_dt("futures_day", datetime(2026, 3, 30, 13, 44, tzinfo=gov._tz))
+
+        assert close_only == SessionPhase.CLOSE_ONLY
+        assert forced == SessionPhase.FORCE_FLAT
+
+    def test_phase_for_dt_handles_overnight_wraparound(self, tmp_path: Path) -> None:
+        gov = SessionGovernor(config_path=_write_config(tmp_path))
+
+        late_evening = gov._phase_for_dt("futures_night", datetime(2026, 3, 30, 23, 0, tzinfo=gov._tz))
+        pre_close = gov._phase_for_dt("futures_night", datetime(2026, 3, 31, 4, 56, tzinfo=gov._tz))
+        closed = gov._phase_for_dt("futures_night", datetime(2026, 3, 31, 5, 0, tzinfo=gov._tz))
+
+        assert late_evening == SessionPhase.OPEN
+        assert pre_close == SessionPhase.CLOSE_ONLY
+        assert closed == SessionPhase.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_force_flat_phase_invokes_position_flattener(self, tmp_path: Path) -> None:
+        flattener = AsyncMock()
+        gov = SessionGovernor(config_path=_write_config(tmp_path), position_flattener=flattener)
+
+        gov.transition_track("futures_day", SessionPhase.FORCE_FLAT)
+        await asyncio.sleep(0)
+
+        flattener.flatten_track.assert_awaited_once_with("futures_day", ["TMFD6"])
+
+    @pytest.mark.asyncio
+    async def test_start_and_stop_manage_background_task(self, tmp_path: Path) -> None:
+        gov = SessionGovernor(config_path=_write_config(tmp_path))
+        gov._poll_interval_s = 0.01
+
+        await gov.start()
+        assert gov._task is not None
+        assert gov._running is True
+
+        await gov.stop()
+        assert gov._task is None
+        assert gov._running is False
