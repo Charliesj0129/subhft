@@ -507,7 +507,7 @@ jobs:
         run: make build-rust
 
       - name: Run latency regression benchmarks
-        run: uv run pytest tests/bench/ -m bench -v --tb=short 2>&1 | tee latency_gate.log
+        run: make latency-gate-ci 2>&1 | tee latency_gate.log
 
       - name: Latency Gate Summary
         if: always()
