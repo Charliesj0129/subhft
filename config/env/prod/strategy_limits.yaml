@@ -1,0 +1,49 @@
+# Production Risk Limits
+# Loaded by RiskEngine when HFT_ENV=prod (via paths.strategy_limits override in prod/main.yaml).
+#
+# Source-of-truth for risk limit values: this file supersedes config/base/strategy_limits.yaml
+# in production. Keep in sync with config/env/prod/risk.yaml (human-readable annotations).
+#
+# Mini-TAIEX: 1 point = 10 NTD. Prices use scaled int (x10000).
+
+# global_limits mirrors global_defaults for human readability; RiskEngine reads global_defaults.
+global_limits:
+  max_position_lots: 1
+  max_order_size: 1
+  # daily_loss_limit: 10,000 NTD = 100,000,000 in scaled int (x10000)
+  max_daily_loss: 100000000
+  max_notional_per_symbol: 1000000000    # 100,000 NTD x10000
+  max_total_notional: 1000000000         # 100,000 NTD x10000
+
+# global_defaults is the key consumed by RiskEngine validators at runtime.
+global_defaults:
+  max_notional: 1000000000              # 100,000 NTD x10000
+  per_symbol_max_notional: 1000000000   # 100,000 NTD x10000
+  max_position_lots: 1                  # Phase 3 Canary: 1 lot max
+  max_daily_loss: 100000000             # 10,000 NTD x10000 (triggers HALT)
+  max_price_cap: 5000.0                 # Stocks: max 5,000 NTD per share
+  max_price_cap_futures: 50000.0        # Futures: max 50,000 NTD (covers TMFD6/TXFD6)
+  max_price_cap_options: 10000.0        # TXO options: max 10,000 NTD
+  max_order_per_min: 10
+  order_size_limit: 1
+  daily_pnl_reset_hour: 5              # 05:00 local time (Taiwan)
+  halt_requires_manual_recovery: true
+
+# Per-strategy limits (conservative first-launch values)
+strategies:
+  CBS_TMFD6:
+    max_position: 1
+    max_order_qty: 1
+  OPPORTUNISTIC_MM_TMFD6:
+    max_position: 1
+    max_order_qty: 1
+
+intraday_pnl:
+  # Hard limit: 10,000 NTD (matches daily_loss_limit above)
+  soft_limit_ntd: 6000
+  hard_limit_ntd: 10000
+  peak_drawdown_pct: 0.40
+  soft_recovery_ntd: 3000
+  drawdown_recovery_pct: 0.20
+  soft_limit_cooldown_s: 60
+  peak_drawdown_min_peak_ntd: 2000

@@ -1,2 +1,23 @@
 # Prod environment overlay (HFT_ENV=prod, HFT_MODE=live)
+#
+# Loading chain (config/loader.py):
+#   1. config/base/main.yaml         (base defaults)
+#   2. config/env/live/main.yaml     (HFT_MODE=live — enables CA, shioaji live settings)
+#   3. THIS FILE                     (HFT_ENV=prod — tightens paths and risk limits)
+#   4. config/settings.py            (local machine overrides, not committed)
+#   5. Environment variables / CLI   (final overrides)
+#
+# Files in this directory that are NOT part of the loader chain:
+#   - risk.yaml      : Human-readable annotations. Values are translated into
+#                      strategy_limits.yaml (below) which IS loaded by RiskEngine.
+#   - canary.yaml    : Phase 3 canary parameters. Read directly by ops personnel;
+#                      not consumed by any automated code path via config loader.
+#   - strategies.yaml: Placeholder (strategies: []). StrategyRunner reads from
+#                      config/base/strategies.yaml or HFT_STRATEGY_CONFIG env var.
+
 mode: live
+
+# Override the risk limits file to use prod-specific conservative limits.
+# RiskEngine resolves this path via settings["paths"]["strategy_limits"] in bootstrap.py.
+paths:
+  strategy_limits: config/env/prod/strategy_limits.yaml
