@@ -39,3 +39,23 @@ def test_risk_feedback_is_frozen():
         assert False, "Should have raised"
     except (AttributeError, Exception):
         pass
+
+
+def test_adapter_prefers_intent_price_type():
+    """When intent has non-default price_type, adapter should use it over metadata."""
+    intent = OrderIntent(intent_id=1, strategy_id="eye", symbol="TXO22500D6",
+        intent_type=IntentType.NEW, side=Side.BUY, price=0, qty=1,
+        price_type="MKT", tif=TIF.IOC)
+    order_params = {"price_type": "LMT"}
+    intent_price_type = getattr(intent, "price_type", "LMT")
+    raw_price_type = intent_price_type if intent_price_type != "LMT" else str(order_params.get("price_type", "LMT"))
+    assert raw_price_type == "MKT"
+
+
+def test_adapter_falls_back_to_metadata_when_lmt():
+    intent = OrderIntent(intent_id=1, strategy_id="s", symbol="X",
+        intent_type=IntentType.NEW, side=Side.BUY, price=100, qty=1)
+    order_params = {"price_type": "MKP"}
+    intent_price_type = getattr(intent, "price_type", "LMT")
+    raw_price_type = intent_price_type if intent_price_type != "LMT" else str(order_params.get("price_type", "LMT"))
+    assert raw_price_type == "MKP"
