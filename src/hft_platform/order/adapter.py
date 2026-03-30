@@ -6,7 +6,7 @@ from typing import Any, Dict, TypeAlias, TypeGuard, cast
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, Side, StormGuardState, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.core.order_ids import OrderIdResolver
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
@@ -359,6 +359,11 @@ class OrderAdapter:
 
     async def execute(self, cmd: OrderCommand) -> None:
         intent = cmd.intent
+
+        # StormGuard HALT check (highest priority — closes TOCTOU gap between RiskEngine approval and dispatch)
+        if cmd.storm_guard_state == StormGuardState.HALT and intent.reason != "halt_flatten":
+            await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "StormGuard HALT")
+            return
 
         # Per-symbol rate limit check (WU-06)
         ps_result = self.per_symbol_rate_limiter.check(intent.symbol)

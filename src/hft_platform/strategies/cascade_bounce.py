@@ -1,59 +1,35 @@
-"""Cascade Bounce Strategy (CBS) — contrarian entry after large price moves.
-
-Detects large intraday price moves (>= threshold bps within a detection window)
-and enters contrarian, betting on mean-reversion. Holds for a fixed period with
-a tight stop-loss.
-
-Research: Round 14, Alpha Research Team (2026-03-26)
-Paper basis: Vlasiuk & Smirnov (2511.06177) — push-response anomalies
-Validated: OOS +3.00 bps/trade on TXFD6 L1 data (13 days, 7/10 days profitable)
-
-Economics (TMF / 微台指):
-    Contract value: 30,000 × 10 = 300,000 NTD
-    RT cost: ~1.33 bps (40 NTD commission)
-    Move threshold: 40 bps → contrarian entry
-    Hold: 300s, stop-loss: 15 bps
-    Rest-of-day only (opening 30 min excluded — directional gap effects)
-    Net OOS capture: +3.00 bps/trade (rest-of-day: +3.95 bps/trade)
-
-Key constraints:
-    - Non-overlapping: next entry only after entry_ts + hold_period
-    - Session gate: 09:15-13:45 (exclude opening 30 min)
-    - Single position at a time
-"""
+"""Cascade Bounce Strategy with normalized triggers and passive exits."""
 
 from __future__ import annotations
 
+import math
 from collections import deque
-from typing import Optional
 
 from structlog import get_logger
 
+from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
 from hft_platform.contracts.strategy import TIF, Side
 from hft_platform.core import timebase
 from hft_platform.events import LOBStatsEvent
-from hft_platform.execution.execution_optimizer import ExecutionOptimizer, OrderType
 from hft_platform.strategy.base import BaseStrategy
 
 logger = get_logger("strategy.cbs")
 
-# Default parameter values (CBS-40-300, validated OOS)
-_DEFAULT_MOVE_THRESHOLD_BPS: int = 40
-_DEFAULT_DETECT_WINDOW_NS: int = 600_000_000_000  # 600s
-_DEFAULT_HOLD_NS: int = 300_000_000_000  # 300s
-_DEFAULT_STOP_LOSS_BPS: int = 15
-_DEFAULT_COOLDOWN_NS: int = 5_000_000_000  # 5s after detection before entry
-
-# Wall-clock session boundaries (seconds since midnight, local time)
-# TMFD6 regular session: 08:45-13:45 TST. Active window: 09:15-13:35.
-_DEFAULT_SESSION_START_SEC: int = 9 * 3600 + 15 * 60  # 09:15 = 33300
-_DEFAULT_SESSION_END_SEC: int = 13 * 3600 + 35 * 60  # 13:35 = 48900
-_UTC_OFFSET_SEC: int = 8 * 3600  # UTC+8 for Asia/Taipei (TAIFEX)
+_DEFAULT_LOOKBACK_NS = 300_000_000_000
+_DEFAULT_TRIGGER_SIGMA = 3.0
+_DEFAULT_MAX_HOLD_NS = 300_000_000_000
+_DEFAULT_TAKE_PROFIT_PTS = 8
+_DEFAULT_STOP_LOSS_PTS = 6
+_DEFAULT_MIN_VOL_SAMPLES = 8
+_DEFAULT_SESSION_START_SEC = 9 * 3600 + 15 * 60
+_DEFAULT_SESSION_END_SEC = 13 * 3600 + 35 * 60
+_UTC_OFFSET_SEC = 8 * 3600
+_PTS_SCALE = 10_000
+_MID_X2_POINT_SCALE = 20_000
+_TERMINAL_ORDER_STATUSES = {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.FAILED}
 
 
 class _PriceEntry:
-    """Lightweight price+timestamp for the detection window deque."""
-
     __slots__ = ("ts_ns", "mid_x2")
 
     def __init__(self, ts_ns: int, mid_x2: int) -> None:
@@ -62,356 +38,329 @@ class _PriceEntry:
 
 
 class CascadeBounceStrategy(BaseStrategy):
-    """Contrarian strategy that enters after large intraday price moves.
-
-    Parameters
-    ----------
-    strategy_id : str
-        Strategy identifier.
-    move_threshold_bps : int
-        Minimum move size (bps) within detection window to trigger entry.
-    detect_window_ns : int
-        Lookback window (ns) for move detection.
-    hold_ns : int
-        Hold period (ns) after entry.
-    stop_loss_bps : int
-        Maximum adverse move (bps) before stop-loss exit.
-    cooldown_ns : int
-        Cooldown (ns) after move detection before entry.
-    session_start_sec : int
-        Earliest wall-clock second-of-day (local) for new entries.
-    session_end_sec : int
-        Latest wall-clock second-of-day (local) for new entries.
-    utc_offset_sec : int
-        UTC offset in seconds for exchange timestamps (default: +28800 for Asia/Taipei).
-    **kwargs
-        Passed through to BaseStrategy.
-    """
+    """Contrarian strategy using vol-normalized entry and passive take-profit exits."""
 
     __slots__ = (
-        "_move_threshold_bps",
-        "_detect_window_ns",
-        "_hold_ns",
-        "_stop_loss_bps",
-        "_cooldown_ns",
+        "_lookback_ns",
+        "_trigger_sigma",
+        "_max_hold_ns",
+        "_take_profit_pts",
+        "_stop_loss_pts",
+        "_min_vol_samples",
         "_session_start_sec",
         "_session_end_sec",
         "_utc_offset_sec",
         "_price_buf",
         "_state",
         "_entry_ts_ns",
-        "_entry_mid_x2",
+        "_entry_price",
         "_direction",
         "_next_allowed_ts",
-        "_exec_optimizer",
-        "_pending_entry_symbol",
-        "_pending_entry_price",
+        "_awaiting_exit_order",
+        "_exit_order_id",
+        "_pending_force_close",
+        "_aggressive_exit_inflight",
     )
 
     def __init__(
         self,
         strategy_id: str = "cascade_bounce",
-        move_threshold_bps: int = _DEFAULT_MOVE_THRESHOLD_BPS,
-        detect_window_ns: int = _DEFAULT_DETECT_WINDOW_NS,
-        hold_ns: int = _DEFAULT_HOLD_NS,
-        stop_loss_bps: int = _DEFAULT_STOP_LOSS_BPS,
-        cooldown_ns: int = _DEFAULT_COOLDOWN_NS,
+        lookback_ns: int = _DEFAULT_LOOKBACK_NS,
+        trigger_sigma: float = _DEFAULT_TRIGGER_SIGMA,
+        max_hold_ns: int = _DEFAULT_MAX_HOLD_NS,
+        take_profit_pts: int = _DEFAULT_TAKE_PROFIT_PTS,
+        stop_loss_pts: int = _DEFAULT_STOP_LOSS_PTS,
+        min_vol_samples: int = _DEFAULT_MIN_VOL_SAMPLES,
         session_start_sec: int = _DEFAULT_SESSION_START_SEC,
         session_end_sec: int = _DEFAULT_SESSION_END_SEC,
         utc_offset_sec: int = _UTC_OFFSET_SEC,
-        exec_optimizer_enabled: bool = False,
-        exec_spread_threshold_pts: int = 2,
-        exec_fill_score_threshold: float = 1.5,
-        exec_limit_timeout_ns: int = 3_000_000_000,
+        detect_window_ns: int | None = None,
+        hold_ns: int | None = None,
+        move_threshold_bps: int | None = None,
+        stop_loss_bps: int | None = None,
+        cooldown_ns: int | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(strategy_id=strategy_id, **kwargs)
-        self._move_threshold_bps: int = move_threshold_bps
-        self._detect_window_ns: int = detect_window_ns
-        self._hold_ns: int = hold_ns
-        self._stop_loss_bps: int = stop_loss_bps
-        self._cooldown_ns: int = cooldown_ns
-        self._session_start_sec: int = session_start_sec
-        self._session_end_sec: int = session_end_sec
-        self._utc_offset_sec: int = utc_offset_sec
+        self._lookback_ns = int(detect_window_ns or lookback_ns)
+        self._trigger_sigma = float(trigger_sigma if move_threshold_bps is None else trigger_sigma)
+        self._max_hold_ns = int(hold_ns or max_hold_ns)
+        self._take_profit_pts = int(take_profit_pts)
+        self._stop_loss_pts = int(stop_loss_bps or stop_loss_pts)
+        self._min_vol_samples = int(min_vol_samples)
+        self._session_start_sec = int(session_start_sec)
+        self._session_end_sec = int(session_end_sec)
+        self._utc_offset_sec = int(utc_offset_sec)
 
-        # Execution optimizer (limit vs market order decision)
-        self._exec_optimizer = ExecutionOptimizer(
-            spread_threshold_pts=exec_spread_threshold_pts,
-            fill_score_threshold=exec_fill_score_threshold,
-            limit_timeout_ns=exec_limit_timeout_ns,
-            enabled=exec_optimizer_enabled,
-        )
-        self._pending_entry_symbol: str = ""
-        self._pending_entry_price: int = 0
-
-        # Per-symbol state
         self._price_buf: dict[str, deque[_PriceEntry]] = {}
-        self._state: dict[str, str] = {}  # "idle" | "pending_limit" | "positioned"
+        self._state: dict[str, str] = {}
         self._entry_ts_ns: dict[str, int] = {}
-        self._entry_mid_x2: dict[str, int] = {}
-        self._direction: dict[str, int] = {}  # +1 = long, -1 = short
+        self._entry_price: dict[str, int] = {}
+        self._direction: dict[str, int] = {}
         self._next_allowed_ts: dict[str, int] = {}
+        self._awaiting_exit_order: dict[str, bool] = {}
+        self._exit_order_id: dict[str, str] = {}
+        self._pending_force_close: dict[str, bool] = {}
+        self._aggressive_exit_inflight: dict[str, bool] = {}
 
     def _init_symbol(self, symbol: str) -> None:
-        """Lazily initialize per-symbol state."""
-        if symbol not in self._state:
-            self._price_buf[symbol] = deque(maxlen=8192)
-            self._state[symbol] = "idle"
-            self._entry_ts_ns[symbol] = 0
-            self._entry_mid_x2[symbol] = 0
-            self._direction[symbol] = 0
-            self._next_allowed_ts[symbol] = 0
+        if symbol in self._state:
+            return
+        self._price_buf[symbol] = deque(maxlen=4096)
+        self._state[symbol] = "idle"
+        self._entry_ts_ns[symbol] = 0
+        self._entry_price[symbol] = 0
+        self._direction[symbol] = 0
+        self._next_allowed_ts[symbol] = 0
+        self._awaiting_exit_order[symbol] = False
+        self._exit_order_id[symbol] = ""
+        self._pending_force_close[symbol] = False
+        self._aggressive_exit_inflight[symbol] = False
+
+    def _in_session(self, now_ns: int) -> bool:
+        sec_of_day = ((now_ns // 1_000_000_000) + self._utc_offset_sec) % 86400
+        return self._session_start_sec <= sec_of_day <= self._session_end_sec
+
+    def _entry_side(self, symbol: str) -> Side:
+        return Side.BUY if self._direction[symbol] > 0 else Side.SELL
+
+    def _exit_side(self, symbol: str) -> Side:
+        return Side.SELL if self._direction[symbol] > 0 else Side.BUY
+
+    @staticmethod
+    def _mid_to_points(mid_x2: int) -> float:
+        return mid_x2 / _MID_X2_POINT_SCALE
+
+    def _rolling_rms_point_change(self, buf: deque[_PriceEntry]) -> float:
+        if len(buf) < 2:
+            return 0.0
+        entries = list(buf)
+        sum_sq = 0.0
+        count = 0
+        for prev, cur in zip(entries, entries[1:], strict=False):
+            delta_pts = abs(cur.mid_x2 - prev.mid_x2) / _MID_X2_POINT_SCALE
+            sum_sq += delta_pts * delta_pts
+            count += 1
+        if count == 0:
+            return 0.0
+        return math.sqrt(sum_sq / count)
 
     def on_stats(self, event: LOBStatsEvent) -> None:
-        """Process LOB stats: maintain price window, detect moves, manage position."""
         symbol = event.symbol
         self._init_symbol(symbol)
 
-        mid_x2 = event.mid_price_x2
-        if mid_x2 is None or mid_x2 <= 0:
+        mid_x2 = int(event.mid_price_x2 or 0)
+        if mid_x2 <= 0:
             return
 
-        now_ns = event.ts
-        if now_ns <= 0:
-            now_ns = timebase.now_ns()
-
-        # Update price buffer (expire old entries)
+        now_ns = int(event.ts or timebase.now_ns())
         buf = self._price_buf[symbol]
-        cutoff = now_ns - self._detect_window_ns
+        cutoff = now_ns - self._lookback_ns
         while buf and buf[0].ts_ns < cutoff:
             buf.popleft()
         buf.append(_PriceEntry(now_ns, mid_x2))
 
+        if self._pending_force_close[symbol] and not self._exit_order_id[symbol]:
+            self._emit_aggressive_exit(symbol, event.best_bid, event.best_ask)
+            return
+
         state = self._state[symbol]
+        if state == "idle":
+            self._check_entry(symbol, now_ns, event)
+            return
+        if state in {"positioned", "exit_live"}:
+            self._check_exit(symbol, now_ns, event)
 
-        if state == "positioned":
-            self._check_exit(symbol, now_ns, mid_x2)
-        elif state == "pending_limit":
-            self._check_pending_limit(symbol, now_ns, event)
-        elif state == "idle":
-            self._check_entry(symbol, now_ns, mid_x2, event)
-
-    def _in_session(self, now_ns: int) -> bool:
-        """Check if wall-clock time is within active trading window.
-
-        Converts the UTC epoch timestamp to local second-of-day using
-        the configured UTC offset (default: +8h for Asia/Taipei).
-        """
-        sec_of_day = ((now_ns // 1_000_000_000) + self._utc_offset_sec) % 86400
-        return self._session_start_sec <= sec_of_day <= self._session_end_sec
-
-    def _check_entry(
-        self,
-        symbol: str,
-        now_ns: int,
-        mid_x2: int,
-        event: LOBStatsEvent,
-    ) -> None:
-        """Detect large moves and enter contrarian."""
-        # Enforce non-overlapping cooldown
+    def _check_entry(self, symbol: str, now_ns: int, event: LOBStatsEvent) -> None:
         if now_ns < self._next_allowed_ts[symbol]:
             return
-
-        # Session gate (wall-clock time)
         if not self._in_session(now_ns):
             return
+        if self.position(symbol) != 0:
+            return
 
-        # Need sufficient price history
         buf = self._price_buf[symbol]
-        if len(buf) < 2:
+        if len(buf) < self._min_vol_samples + 1:
             return
 
-        # Compute move from window start to current price
         oldest = buf[0]
-        if oldest.mid_x2 <= 0:
+        diff_x2 = int(event.mid_price_x2 or 0) - oldest.mid_x2
+        move_pts = abs(diff_x2) / _MID_X2_POINT_SCALE
+        local_vol_pts = max(self._rolling_rms_point_change(buf), 1.0)
+        if move_pts < self._trigger_sigma * local_vol_pts:
             return
 
-        # Move in bps (using mid_x2: multiply by 20000 then divide by mid_x2 for bps)
-        # move_bps = (mid_x2 - oldest.mid_x2) / oldest.mid_x2 * 10000
-        # Using integer math to avoid float: move_bps_x100 for precision
-        diff = mid_x2 - oldest.mid_x2
-        move_bps_x100 = diff * 1_000_000 // oldest.mid_x2
-        move_bps = move_bps_x100 // 100
-        abs_move = abs(move_bps)
-
-        if abs_move < self._move_threshold_bps:
-            return
-
-        # Large move detected! Enter contrarian
-        direction = -1 if diff > 0 else 1  # contrarian: sell if up, buy if down
-
-        # Check we're not already positioned
-        pos = self.position(symbol)
-        if pos != 0:
-            return
-
-        # Determine entry side and prices
-        if direction == 1:
+        direction = -1 if diff_x2 > 0 else 1
+        if direction > 0:
             side = Side.BUY
-            aggressive_price = event.best_ask  # cross the spread
-            passive_price = event.best_bid  # join the bid
+            aggressive_price = int(event.best_ask or 0)
         else:
             side = Side.SELL
-            aggressive_price = event.best_bid  # cross the spread
-            passive_price = event.best_ask  # join the ask
-
+            aggressive_price = int(event.best_bid or 0)
         if aggressive_price <= 0:
             return
 
-        # Execution optimizer: limit vs market decision
-        spread_pts = event.spread_scaled // 10000 if event.spread_scaled else 0
-        bid_depth = int(event.bid_depth or 0)
-        ask_depth = int(event.ask_depth or 0)
-        near_depth = bid_depth if direction == 1 else ask_depth
-        opp_depth = ask_depth if direction == 1 else bid_depth
-        imbalance_ppm = int(
-            ((bid_depth - ask_depth) * 1_000_000 // max(bid_depth + ask_depth, 1)) if (bid_depth + ask_depth) > 0 else 0
-        )
-
-        order_type = self._exec_optimizer.decide(
-            spread_pts=spread_pts,
-            near_depth=near_depth,
-            opp_depth=opp_depth,
-            imbalance_ppm=imbalance_ppm,
-            side=direction,
-            ts_ns=now_ns,
-        )
-
-        if order_type == OrderType.LIMIT and passive_price > 0:
-            # Passive limit order — join the queue
-            self._place_entry(symbol, side, passive_price, TIF.LIMIT)
-            self._state[symbol] = "pending_limit"
-            self._pending_entry_symbol = symbol
-            self._pending_entry_price = passive_price
-        else:
-            # Aggressive market order — cross the spread
-            self._place_entry(symbol, side, aggressive_price, TIF.IOC)
-            self._state[symbol] = "positioned"
-
-        self._entry_ts_ns[symbol] = now_ns
-        self._entry_mid_x2[symbol] = mid_x2
+        self._place_entry(symbol, side, aggressive_price)
+        self._state[symbol] = "awaiting_entry_fill"
         self._direction[symbol] = direction
+        self._entry_ts_ns[symbol] = now_ns
+        self._entry_price[symbol] = 0
+        self._awaiting_exit_order[symbol] = False
+        self._exit_order_id[symbol] = ""
+        self._pending_force_close[symbol] = False
+        self._aggressive_exit_inflight[symbol] = False
 
         logger.info(
-            "cbs_entry",
+            "cbs_entry_signal",
             symbol=symbol,
-            direction="long" if direction == 1 else "short",
-            order_type="LIMIT" if order_type == OrderType.LIMIT else "MARKET",
-            move_bps=move_bps,
-            mid_x2=mid_x2,
-            spread_pts=spread_pts,
+            direction="long" if direction > 0 else "short",
+            move_pts=move_pts,
+            local_vol_pts=local_vol_pts,
+            trigger_sigma=self._trigger_sigma,
         )
 
-    def _place_entry(self, symbol: str, side: Side, price: int, tif: TIF) -> None:
-        """Place an entry order with the specified TIF."""
+    def _place_entry(self, symbol: str, side: Side, price: int) -> None:
         if side == Side.BUY:
-            self.buy(symbol, price, 1, tif=tif)
+            self.buy(symbol, price, 1, tif=TIF.IOC)
         else:
-            self.sell(symbol, price, 1, tif=tif)
+            self.sell(symbol, price, 1, tif=TIF.IOC)
 
-    def _check_pending_limit(self, symbol: str, now_ns: int, event: LOBStatsEvent) -> None:
-        """Check if pending limit entry has timed out."""
-        # Check if we got filled (position changed)
-        pos = self.position(symbol)
-        expected_pos = self._direction[symbol]  # +1 or -1
-        if (expected_pos > 0 and pos > 0) or (expected_pos < 0 and pos < 0):
-            # Filled — transition to positioned
-            self._state[symbol] = "positioned"
-            self._exec_optimizer.on_fill()
-            logger.info("cbs_limit_filled", symbol=symbol)
-            return
+    def on_fill(self, event: FillEvent) -> None:
+        symbol = event.symbol
+        self._init_symbol(symbol)
 
-        # Check timeout
-        if self._exec_optimizer.check_timeout(now_ns):
-            # Timeout — cancel limit and switch to aggressive market order
-            self._exec_optimizer.on_cancel()
-            direction = self._direction[symbol]
-            if direction == 1:
-                price = int(event.best_ask or 0)
-                side = Side.BUY
-            else:
-                price = int(event.best_bid or 0)
-                side = Side.SELL
-
-            if price > 0:
-                self._place_entry(symbol, side, price, TIF.IOC)
-                self._state[symbol] = "positioned"
-                logger.info(
-                    "cbs_limit_timeout_market_fallback",
-                    symbol=symbol,
-                    fallback_price=price,
-                )
-            else:
-                # No valid price — abort entry
-                self._state[symbol] = "idle"
-                self._direction[symbol] = 0
-                logger.warning("cbs_limit_timeout_no_price", symbol=symbol)
-
-    def _check_exit(self, symbol: str, now_ns: int, mid_x2: int) -> None:
-        """Check stop-loss and time-based exit conditions."""
-        entry_mid = self._entry_mid_x2[symbol]
-        entry_ts = self._entry_ts_ns[symbol]
         direction = self._direction[symbol]
-
-        if entry_mid <= 0:
+        if direction == 0:
             return
 
-        # Unrealized PnL in bps (integer math)
-        pnl_diff = direction * (mid_x2 - entry_mid)
-        pnl_bps_x100 = pnl_diff * 1_000_000 // entry_mid
-        pnl_bps = pnl_bps_x100 // 100
+        entry_side = self._entry_side(symbol)
+        exit_side = self._exit_side(symbol)
 
-        elapsed_ns = now_ns - entry_ts
-        exit_reason: Optional[str] = None
-
-        # Stop-loss check
-        if pnl_bps < -self._stop_loss_bps:
-            exit_reason = "stop_loss"
-
-        # Time-based exit
-        if elapsed_ns >= self._hold_ns:
-            exit_reason = "time_exit"
-
-        if exit_reason is None:
+        if self._state[symbol] == "awaiting_entry_fill" and event.side == entry_side:
+            self._entry_price[symbol] = int(event.price)
+            if int(event.match_ts_ns or 0) > 0:
+                self._entry_ts_ns[symbol] = int(event.match_ts_ns)
+            self._aggressive_exit_inflight[symbol] = False
+            self._pending_force_close[symbol] = False
+            self._awaiting_exit_order[symbol] = True
+            self._state[symbol] = "exit_live"
+            self._place_take_profit(symbol)
             return
 
-        # Exit: close the position
-        if not self.ctx:
-            return
+        if event.side == exit_side:
+            self._complete_round_trip(symbol)
 
-        l1 = self.ctx.get_l1_scaled(symbol)
-        if l1 is not None:
-            # l1 = (ts, bid, ask, mid_x2, spread, bid_depth, ask_depth)
-            if direction == 1:
-                # Long → sell at best bid
-                exit_price = l1[1]  # best_bid
-            else:
-                # Short → buy at best ask
-                exit_price = l1[2]  # best_ask
+    def _place_take_profit(self, symbol: str) -> None:
+        entry_price = self._entry_price[symbol]
+        if entry_price <= 0:
+            return
+        if self._direction[symbol] > 0:
+            exit_price = entry_price + (self._take_profit_pts * _PTS_SCALE)
+            self.sell(symbol, exit_price, 1, tif=TIF.LIMIT)
         else:
-            # Fallback: use aggressive exit
-            exit_price = mid_x2 // 2  # approximate mid
+            exit_price = max(_PTS_SCALE, entry_price - (self._take_profit_pts * _PTS_SCALE))
+            self.buy(symbol, exit_price, 1, tif=TIF.LIMIT)
 
-        if exit_price <= 0:
+    def on_order(self, event: OrderEvent) -> None:
+        symbol = event.symbol
+        self._init_symbol(symbol)
+        if self._direction[symbol] == 0:
             return
 
-        exit_side = Side.SELL if direction == 1 else Side.BUY
-        if exit_side == Side.BUY:
-            self.buy(symbol, exit_price, 1)
+        if self._state[symbol] == "awaiting_entry_fill":
+            if (
+                event.side == self._entry_side(symbol)
+                and event.status in _TERMINAL_ORDER_STATUSES
+                and event.filled_qty == 0
+            ):
+                self._reset_entry(symbol)
+            return
+
+        if self._awaiting_exit_order[symbol] and event.side == self._exit_side(symbol):
+            if event.status in {OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED, OrderStatus.PENDING_SUBMIT}:
+                self._exit_order_id[symbol] = event.order_id
+                self._awaiting_exit_order[symbol] = False
+                self._state[symbol] = "exit_live"
+                return
+
+        if event.order_id != self._exit_order_id[symbol]:
+            return
+
+        if event.status == OrderStatus.FILLED:
+            self._complete_round_trip(symbol)
+            return
+
+        if event.status in _TERMINAL_ORDER_STATUSES:
+            self._exit_order_id[symbol] = ""
+            self._awaiting_exit_order[symbol] = False
+            self._state[symbol] = "positioned"
+
+    def _check_exit(self, symbol: str, now_ns: int, event: LOBStatsEvent) -> None:
+        entry_price = self._entry_price[symbol]
+        if entry_price <= 0:
+            return
+
+        if self._direction[symbol] > 0:
+            mark_price = int(event.best_bid or 0)
         else:
-            self.sell(symbol, exit_price, 1)
+            mark_price = int(event.best_ask or 0)
+        if mark_price <= 0:
+            mark_price = int((event.mid_price_x2 or 0) // 2)
+        if mark_price <= 0:
+            return
 
-        logger.info(
-            "cbs_exit",
-            symbol=symbol,
-            reason=exit_reason,
-            pnl_bps=pnl_bps,
-            elapsed_ms=elapsed_ns // 1_000_000,
-            direction="long" if direction == 1 else "short",
-        )
+        pnl_points = self._direction[symbol] * ((mark_price - entry_price) / _PTS_SCALE)
+        elapsed_ns = now_ns - self._entry_ts_ns[symbol]
+        should_exit = pnl_points <= -self._stop_loss_pts or elapsed_ns >= self._max_hold_ns
+        if not should_exit:
+            return
 
-        # Reset state — non-overlapping: cooldown from ENTRY time
+        if self._exit_order_id[symbol]:
+            self.cancel(symbol, self._exit_order_id[symbol])
+            self._pending_force_close[symbol] = True
+            self._exit_order_id[symbol] = ""
+            self._awaiting_exit_order[symbol] = False
+            self._state[symbol] = "positioned"
+            return
+
+        if self._awaiting_exit_order[symbol]:
+            return
+
+        self._emit_aggressive_exit(symbol, int(event.best_bid or 0), int(event.best_ask or 0))
+
+    def _emit_aggressive_exit(self, symbol: str, best_bid: int, best_ask: int) -> None:
+        if self._aggressive_exit_inflight[symbol]:
+            return
+        exit_side = self._exit_side(symbol)
+        if exit_side == Side.SELL:
+            price = best_bid
+            if price > 0:
+                self.sell(symbol, price, 1, tif=TIF.IOC)
+        else:
+            price = best_ask
+            if price > 0:
+                self.buy(symbol, price, 1, tif=TIF.IOC)
+        if price > 0:
+            self._aggressive_exit_inflight[symbol] = True
+            self._pending_force_close[symbol] = False
+
+    def _reset_entry(self, symbol: str) -> None:
         self._state[symbol] = "idle"
-        self._next_allowed_ts[symbol] = entry_ts + self._hold_ns
+        self._entry_ts_ns[symbol] = 0
+        self._entry_price[symbol] = 0
         self._direction[symbol] = 0
+        self._awaiting_exit_order[symbol] = False
+        self._exit_order_id[symbol] = ""
+        self._pending_force_close[symbol] = False
+        self._aggressive_exit_inflight[symbol] = False
+
+    def _complete_round_trip(self, symbol: str) -> None:
+        self._state[symbol] = "idle"
+        self._next_allowed_ts[symbol] = self._entry_ts_ns[symbol] + self._max_hold_ns
+        self._entry_price[symbol] = 0
+        self._entry_ts_ns[symbol] = 0
+        self._direction[symbol] = 0
+        self._awaiting_exit_order[symbol] = False
+        self._exit_order_id[symbol] = ""
+        self._pending_force_close[symbol] = False
+        self._aggressive_exit_inflight[symbol] = False

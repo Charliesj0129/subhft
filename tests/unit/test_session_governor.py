@@ -166,3 +166,12 @@ class TestSessionGovernorConfigLoading:
         await gov.stop()
         assert gov._task is None
         assert gov._running is False
+
+    def test_tmfd6_is_consistent_across_strategy_and_session_config(self) -> None:
+        strategies = yaml.safe_load(Path("config/base/strategies.yaml").read_text(encoding="utf-8"))
+        sessions = yaml.safe_load(Path("config/base/session_governor.yaml").read_text(encoding="utf-8"))
+
+        cbs = next(item for item in strategies["strategies"] if item["id"] == "CBS_TMFD6")
+        assert cbs["symbols"] == ["TMFD6"]
+        assert sessions["tracks"]["futures_day"]["symbols"] == ["TMFD6"]
+        assert sessions["tracks"]["futures_night"]["symbols"] == ["TMFD6"]
