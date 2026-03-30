@@ -32,6 +32,11 @@ Then paste the entries below (adjust paths as needed for your deployment root).
 # Conservative: change to 14 if long replay windows are needed for debugging.
 0 2 * * 0 cd /home/charl/subhft && find .wal/archive -name "*.wal" -mtime +7 -delete >> /tmp/wal_cleanup.log 2>&1
 
+# --- ClickHouse Daily Backup ---
+# Backup ClickHouse database daily at 14:30 TST (after market close).
+# Design spec: docs/superpowers/specs/2026-03-25-clickhouse-backup-safety-design.md
+30 14 * * * cd /home/charl/subhft && bash scripts/clickhouse_backup.sh >> /tmp/ch_backup.log 2>&1
+
 # --- Docker Build Cache ---
 # Docker layer cache can accumulate >10 GB/month during active development.
 0 3 1 * * docker builder prune -f >> /tmp/docker_cleanup.log 2>&1
