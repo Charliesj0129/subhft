@@ -86,6 +86,7 @@ class OrderAdapter:
         "shadow_sink",
         "_pending_order_keys",
         "_deferred_terminals",
+        "_cmd_created_ns_map",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -96,6 +97,7 @@ class OrderAdapter:
         broker_client: Any,
         order_id_map: Dict[str, str] | None = None,
         broker_codec: BrokerOrderCodec | None = None,
+        cmd_created_ns_map: Dict[str, int] | None = None,
     ) -> None:
         self.config_path = config_path
         self.order_queue = order_queue
@@ -105,6 +107,9 @@ class OrderAdapter:
         # Protected by _order_id_map_lock for concurrent access
         self.order_id_map = order_id_map if order_id_map is not None else {}
         self._order_id_map_lock = asyncio.Lock()
+        # Map order_key -> cmd.created_ns for e2e latency tracking (SLO-2)
+        # Shared with ExecutionRouter for fill-side lookup
+        self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self.running = False
         self.metrics = MetricsRegistry.get()
@@ -266,6 +271,8 @@ class OrderAdapter:
                 # Normal path — order is registered, clean up
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
+                # Clean up e2e latency tracking entry (SLO-2)
+                self._cmd_created_ns_map.pop(order_key, None)
                 return
 
             # Check if any order for this strategy is in-flight
@@ -594,6 +601,10 @@ class OrderAdapter:
         )
         try:
             order_key = f"{intent.strategy_id}:{intent.intent_id}"
+
+            # Record dispatch timestamp for e2e latency tracking (SLO-2)
+            if cmd.created_ns > 0:
+                self._cmd_created_ns_map[order_key] = cmd.created_ns
 
             if intent.intent_type == IntentType.NEW:
                 if self._broker_codec is None:

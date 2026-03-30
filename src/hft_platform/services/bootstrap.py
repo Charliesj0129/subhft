@@ -756,6 +756,8 @@ class SystemBootstrapper:
         # 2. Shared State
         position_store = PositionStore()
         order_id_map: Dict[str, str] = {}
+        # Shared map for e2e order-to-fill latency tracking (SLO-2): order_key -> created_ns
+        cmd_created_ns_map: Dict[str, int] = {}
         # DriftBurst detector for StormGuard (opt-in via env var)
         drift_burst_detector = None
         if os.getenv("HFT_STORMGUARD_DRIFT_BURST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
@@ -906,7 +908,10 @@ class SystemBootstrapper:
 
             _broker_codec = ShioajiOrderCodec()
 
-        order_adapter = OrderAdapter(adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec)
+        order_adapter = OrderAdapter(
+            adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec,
+            cmd_created_ns_map=cmd_created_ns_map,
+        )
 
         # Wire shadow mode from YAML config (shadow.enabled: true) into ShadowOrderSink.
         # Previously only HFT_ORDER_SHADOW_MODE env var was checked, causing a config disconnect
@@ -942,6 +947,7 @@ class SystemBootstrapper:
             order_id_map,
             position_store,
             execution_gateway.on_terminal_state,
+            cmd_created_ns_map=cmd_created_ns_map,
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator

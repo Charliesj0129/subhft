@@ -10,3 +10,5 @@ groups:
     expr: 1 - ((sum(rate(recorder_failures_total[5m])) or vector(0)) / clamp_min((sum(rate(recorder_batches_flushed_total[5m])) or vector(0)), 0.001))
   - record: slo:normalize_latency_p99_us
     expr: histogram_quantile(0.99, sum(rate(pipeline_latency_ns_bucket{stage="normalize"}[5m])) by (le)) / 1000
+  - record: slo:e2e_order_latency:p95_ms_rate5m
+    expr: histogram_quantile(0.95, sum(rate(e2e_order_latency_ns_bucket[5m])) by (le)) / 1e6

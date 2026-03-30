@@ -61,14 +61,17 @@ class ExecutionRouter:
         terminal_handler: Union[Callable[[str, str], None], object],
         risk_engine: Optional[object] = None,
         overflow_buf: Optional[collections.deque] = None,
+        cmd_created_ns_map: Optional[Dict[str, int]] = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
+        self._order_id_map = order_id_map
         self.normalizer = ExecutionNormalizer(raw_queue, order_id_map)
         self.position_store = position_store
         self.terminal_handler = terminal_handler
         self._risk_engine = risk_engine
         self._overflow_buf = overflow_buf
+        self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
         self.running = False
         self.metrics = MetricsRegistry.get()
 
@@ -131,6 +134,15 @@ class ExecutionRouter:
                                 order_id=fill_event.order_id,
                             )
                             continue
+
+                        # Observe e2e order-to-fill latency (SLO-2)
+                        _order_key = self._order_id_map.get(fill_event.order_id)
+                        if _order_key is not None:
+                            _cmd_created_ns = self._cmd_created_ns_map.get(_order_key, 0)
+                            if _cmd_created_ns > 0:
+                                _latency_ns = fill_event.ingest_ts_ns - _cmd_created_ns
+                                if _latency_ns > 0:
+                                    self.metrics.e2e_order_latency_ns.observe(_latency_ns)
 
                         _pre_realized = 0
                         if self._risk_engine is not None:

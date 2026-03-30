@@ -194,6 +194,8 @@ class MetricsRegistry:
                 "risk_halt_blocked_total",
                 "order_queue_full_total",
                 "intent_queue_full_total",
+                # SLO-2: E2E order-to-fill latency
+                "e2e_order_latency_ns",
             ]
         )
         # Market Data
@@ -334,6 +336,12 @@ class MetricsRegistry:
         )
         self.execution_gateway_heartbeat_ts = Gauge(
             "execution_gateway_heartbeat_ts", "Execution gateway heartbeat (unix seconds)"
+        )
+        # E2E order-to-fill latency (SLO-2)
+        self.e2e_order_latency_ns = Histogram(
+            "e2e_order_latency_ns",
+            "End-to-end order-to-fill latency in nanoseconds",
+            buckets=[1e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 500e6, 1e9],
         )
         self.position_pnl_realized = Gauge("position_pnl_realized", "Realized PnL", ["strategy", "symbol"])
         self.portfolio_total_pnl = Gauge("portfolio_total_pnl", "Total realized PnL across all positions (scaled int)")

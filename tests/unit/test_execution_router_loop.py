@@ -26,6 +26,7 @@ def _stub_metrics() -> MagicMock:
     m.execution_events_total = MagicMock()
     m.orphaned_fill_total = MagicMock()
     m.position_pnl_realized = MagicMock()
+    m.e2e_order_latency_ns = MagicMock()
     return m
 
 
@@ -542,3 +543,87 @@ async def test_create_task_with_error_handling_success() -> None:
     task = _create_task_with_error_handling(ok(), name="test-ok")
     result = await task
     assert result == 42
+
+
+# ---------------------------------------------------------------------------
+# E2E order-to-fill latency metric (SLO-2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e2e_latency_observed_when_cmd_created_ns_known(
+    bus: MagicMock, position_store: MagicMock
+) -> None:
+    """When cmd_created_ns_map contains the order_key for a fill, latency is observed."""
+    q: asyncio.Queue = asyncio.Queue()
+    order_id_map: dict[str, str] = {"ORD001": "strat1:42"}
+    cmd_created_ns_map: dict[str, int] = {"strat1:42": 1_000_000_000}
+    handler = MagicMock()
+    r = ExecutionRouter(bus, q, order_id_map, position_store, handler, cmd_created_ns_map=cmd_created_ns_map)
+
+    # fill arrives 5ms after the command was dispatched
+    raw = _make_deal_raw(order_id="ORD001", strategy_id="strat1", ingest_ts_ns=1_005_000_000)
+    await r.raw_queue.put(raw)
+
+    task = asyncio.create_task(r.run())
+    await r.raw_queue.join()
+    r.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    r.metrics.e2e_order_latency_ns.observe.assert_called_once_with(5_000_000)
+
+
+@pytest.mark.asyncio
+async def test_e2e_latency_not_observed_when_order_key_missing(
+    bus: MagicMock, position_store: MagicMock
+) -> None:
+    """When order_id_map has no entry for fill.order_id, no latency is observed."""
+    q: asyncio.Queue = asyncio.Queue()
+    order_id_map: dict[str, str] = {}  # no mapping
+    cmd_created_ns_map: dict[str, int] = {}
+    handler = MagicMock()
+    r = ExecutionRouter(bus, q, order_id_map, position_store, handler, cmd_created_ns_map=cmd_created_ns_map)
+
+    raw = _make_deal_raw(order_id="ORD001", strategy_id="strat1", ingest_ts_ns=1_005_000_000)
+    await r.raw_queue.put(raw)
+
+    task = asyncio.create_task(r.run())
+    await r.raw_queue.join()
+    r.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    r.metrics.e2e_order_latency_ns.observe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_e2e_latency_not_observed_when_created_ns_zero(
+    bus: MagicMock, position_store: MagicMock
+) -> None:
+    """When cmd_created_ns is 0 (unset), no latency is observed."""
+    q: asyncio.Queue = asyncio.Queue()
+    order_id_map: dict[str, str] = {"ORD001": "strat1:42"}
+    cmd_created_ns_map: dict[str, int] = {"strat1:42": 0}
+    handler = MagicMock()
+    r = ExecutionRouter(bus, q, order_id_map, position_store, handler, cmd_created_ns_map=cmd_created_ns_map)
+
+    raw = _make_deal_raw(order_id="ORD001", strategy_id="strat1", ingest_ts_ns=1_005_000_000)
+    await r.raw_queue.put(raw)
+
+    task = asyncio.create_task(r.run())
+    await r.raw_queue.join()
+    r.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    r.metrics.e2e_order_latency_ns.observe.assert_not_called()
