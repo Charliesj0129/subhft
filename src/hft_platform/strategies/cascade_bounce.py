@@ -127,23 +127,18 @@ class CascadeBounceStrategy(BaseStrategy):
     def _exit_side(self, symbol: str) -> Side:
         return Side.SELL if self._direction[symbol] > 0 else Side.BUY
 
-    @staticmethod
-    def _mid_to_points(mid_x2: int) -> float:
-        return mid_x2 / _MID_X2_POINT_SCALE
-
     def _rolling_rms_point_change(self, buf: deque[_PriceEntry]) -> float:
-        if len(buf) < 2:
+        n = len(buf)
+        if n < 2:
             return 0.0
-        entries = list(buf)
-        sum_sq = 0.0
-        count = 0
-        for prev, cur in zip(entries, entries[1:], strict=False):
-            delta_pts = abs(cur.mid_x2 - prev.mid_x2) / _MID_X2_POINT_SCALE
-            sum_sq += delta_pts * delta_pts
-            count += 1
-        if count == 0:
-            return 0.0
-        return math.sqrt(sum_sq / count)
+        sum_sq_scaled = 0
+        for i in range(1, n):
+            delta = abs(buf[i].mid_x2 - buf[i - 1].mid_x2)
+            sum_sq_scaled += delta * delta
+        # Convert from (mid_x2 units)^2 to (points)^2: divide by _MID_X2_POINT_SCALE^2
+        # Then take sqrt and divide by (n-1) for RMS
+        # = sqrt(sum_sq_scaled / (n-1)) / _MID_X2_POINT_SCALE
+        return math.sqrt(sum_sq_scaled / (n - 1)) / _MID_X2_POINT_SCALE
 
     def on_stats(self, event: LOBStatsEvent) -> None:
         symbol = event.symbol
@@ -185,9 +180,9 @@ class CascadeBounceStrategy(BaseStrategy):
 
         oldest = buf[0]
         diff_x2 = int(event.mid_price_x2 or 0) - oldest.mid_x2
-        move_pts = abs(diff_x2) / _MID_X2_POINT_SCALE
         local_vol_pts = max(self._rolling_rms_point_change(buf), 1.0)
-        if move_pts < self._trigger_sigma * local_vol_pts:
+        # Compare in mid_x2 units: abs(diff_x2) < trigger_sigma * local_vol_pts * _MID_X2_POINT_SCALE
+        if abs(diff_x2) < self._trigger_sigma * local_vol_pts * _MID_X2_POINT_SCALE:
             return
 
         direction = -1 if diff_x2 > 0 else 1
@@ -214,7 +209,7 @@ class CascadeBounceStrategy(BaseStrategy):
             "cbs_entry_signal",
             symbol=symbol,
             direction="long" if direction > 0 else "short",
-            move_pts=move_pts,
+            move_pts=abs(diff_x2) / _MID_X2_POINT_SCALE,
             local_vol_pts=local_vol_pts,
             trigger_sigma=self._trigger_sigma,
         )
@@ -282,6 +277,11 @@ class CascadeBounceStrategy(BaseStrategy):
                 self._awaiting_exit_order[symbol] = False
                 self._state[symbol] = "exit_live"
                 return
+            if event.status in _TERMINAL_ORDER_STATUSES and event.filled_qty == 0:
+                self._aggressive_exit_inflight[symbol] = False
+                self._awaiting_exit_order[symbol] = False
+                self._pending_force_close[symbol] = True
+                return
 
         if event.order_id != self._exit_order_id[symbol]:
             return
@@ -309,9 +309,10 @@ class CascadeBounceStrategy(BaseStrategy):
         if mark_price <= 0:
             return
 
-        pnl_points = self._direction[symbol] * ((mark_price - entry_price) / _PTS_SCALE)
+        # pnl in scaled units (x10000): positive = profit, negative = loss
+        pnl_scaled = self._direction[symbol] * (mark_price - entry_price)
         elapsed_ns = now_ns - self._entry_ts_ns[symbol]
-        should_exit = pnl_points <= -self._stop_loss_pts or elapsed_ns >= self._max_hold_ns
+        should_exit = pnl_scaled <= -(self._stop_loss_pts * _PTS_SCALE) or elapsed_ns >= self._max_hold_ns
         if not should_exit:
             return
 
@@ -342,6 +343,7 @@ class CascadeBounceStrategy(BaseStrategy):
                 self.buy(symbol, price, 1, tif=TIF.IOC)
         if price > 0:
             self._aggressive_exit_inflight[symbol] = True
+            self._awaiting_exit_order[symbol] = True
             self._pending_force_close[symbol] = False
 
     def _reset_entry(self, symbol: str) -> None:

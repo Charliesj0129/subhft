@@ -254,6 +254,59 @@ class TestCBSExitStateMachine:
         assert close_intents[0].tif == TIF.IOC
         assert close_intents[0].side == Side.SELL
 
+    def test_aggressive_exit_ioc_rejection_allows_retry(self) -> None:
+        # Simulate: position entered, stop-loss triggers, aggressive IOC fired, IOC comes back CANCELLED
+        cbs = _all_session_cbs(stop_loss_pts=4)
+        ctx = _make_ctx()
+        _seed_low_vol_history(cbs, ctx)
+        cbs.handle_event(ctx, _make_stats(ts=_TS_0930_UTC_NS + 30 * _ONE_SEC_NS, points=32_990))
+        ctx.positions["TMFD6"] = 1
+        cbs.handle_event(ctx, _make_fill(Side.BUY, 32_991))
+        # Skip resting limit so no exit_order_id to cancel
+        cbs._awaiting_exit_order["TMFD6"] = False
+        cbs._exit_order_id["TMFD6"] = ""
+        cbs._state["TMFD6"] = "positioned"
+
+        # Stop-loss triggers aggressive exit
+        close_intents = cbs.handle_event(ctx, _make_stats(ts=_TS_0930_UTC_NS + 40 * _ONE_SEC_NS, points=32_986))
+        assert len(close_intents) == 1
+        assert close_intents[0].tif == TIF.IOC
+        assert cbs._aggressive_exit_inflight["TMFD6"] is True
+        assert cbs._awaiting_exit_order["TMFD6"] is True
+
+        # IOC comes back CANCELLED with no fill
+        cancel_event = _make_order(OrderStatus.CANCELLED, Side.SELL, order_id="ioc-exit-1", price_points=32_986)
+        cbs.handle_event(ctx, cancel_event)
+
+        # Flag must be reset so retry is possible on next tick
+        assert cbs._aggressive_exit_inflight["TMFD6"] is False
+        assert cbs._awaiting_exit_order["TMFD6"] is False
+        assert cbs._pending_force_close["TMFD6"] is True
+
+    def test_aggressive_exit_ioc_filled_completes_trip(self) -> None:
+        # Simulate: aggressive IOC fired, fill arrives — round trip completes normally
+        cbs = _all_session_cbs(stop_loss_pts=4)
+        ctx = _make_ctx()
+        _seed_low_vol_history(cbs, ctx)
+        cbs.handle_event(ctx, _make_stats(ts=_TS_0930_UTC_NS + 30 * _ONE_SEC_NS, points=32_990))
+        ctx.positions["TMFD6"] = 1
+        cbs.handle_event(ctx, _make_fill(Side.BUY, 32_991))
+        cbs._awaiting_exit_order["TMFD6"] = False
+        cbs._exit_order_id["TMFD6"] = ""
+        cbs._state["TMFD6"] = "positioned"
+
+        # Stop-loss triggers aggressive exit
+        cbs.handle_event(ctx, _make_stats(ts=_TS_0930_UTC_NS + 40 * _ONE_SEC_NS, points=32_986))
+        assert cbs._aggressive_exit_inflight["TMFD6"] is True
+
+        # IOC fills → on_fill exits with exit_side → _complete_round_trip
+        ctx.positions["TMFD6"] = 0
+        cbs.handle_event(ctx, _make_fill(Side.SELL, 32_986, order_id="ioc-exit-fill"))
+
+        assert cbs._state["TMFD6"] == "idle"
+        assert cbs._direction["TMFD6"] == 0
+        assert cbs._aggressive_exit_inflight["TMFD6"] is False
+
     def test_close_fill_resets_state_and_cooldown(self) -> None:
         cbs = _all_session_cbs(max_hold_ns=120 * _ONE_SEC_NS)
         ctx = _make_ctx()
