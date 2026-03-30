@@ -1,0 +1,32 @@
+name: "SSH Deploy Command"
+description: "Execute a command on remote host via SSH with key management"
+inputs:
+  ssh-key:
+    description: "SSH private key"
+    required: true
+  remote-host:
+    description: "Remote host (user@host)"
+    required: true
+  command:
+    description: "Command to execute on remote host"
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Setup SSH key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh-key }}" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        ssh-keyscan -H $(echo "${{ inputs.remote-host }}" | cut -d@ -f2) >> ~/.ssh/known_hosts 2>/dev/null
+      shell: bash
+
+    - name: Execute remote command
+      run: |
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ inputs.remote-host }} "${{ inputs.command }}"
+      shell: bash
+
+    - name: Cleanup SSH key
+      if: always()
+      run: rm -f ~/.ssh/deploy_key
+      shell: bash

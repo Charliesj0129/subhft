@@ -191,15 +191,13 @@ jobs:
           exit-code: "1"
           severity: "HIGH,CRITICAL"
 
-      - name: Deploy to production host
+      - name: Guard — check deploy secrets
         if: inputs.dry_run != 'true'
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
           DEPLOY_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}
-          DEPLOY_MODE: ${{ steps.sha.outputs.mode }}
         run: |
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_KEY" ]; then
             echo "::warning::Deploy secrets not configured. Skipping SSH deploy."
@@ -207,83 +205,44 @@ jobs:
             exit 0
           fi
 
-          # Write SSH key
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-
-          # Execute remote deploy
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cd /opt/hft-platform && \
-             docker pull ${DEPLOY_IMAGE} && \
-             docker compose -f docker-compose.yml up -d --no-deps hft-engine && \
-             sleep 5 && \
-             curl -sf http://localhost:9090/metrics > /dev/null"
-
-          # Cleanup
-          rm -f ~/.ssh/deploy_key
+      - name: Deploy to production host
+        if: inputs.dry_run != 'true' && secrets.DEPLOY_HOST != ''
+        uses: ./.github/actions/ssh-deploy
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          remote-host: "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          command: >-
+            cd /opt/hft-platform &&
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }} &&
+            docker compose -f docker-compose.yml up -d --no-deps hft-engine &&
+            sleep 5 &&
+            curl -sf http://localhost:9090/metrics > /dev/null
 
       - name: Health check
-        if: inputs.dry_run != 'true'
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-        run: |
-          if [ -z "$DEPLOY_HOST" ]; then
-            echo "::warning::Deploy secrets not configured. Skipping health check."
-            exit 0
-          fi
-
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-          # Retry health check 3 times with 10s intervals
-          for i in 1 2 3; do
-            if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-              "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              "curl -sf http://localhost:9090/metrics | grep -q hft_"; then
-              echo "Health check passed (attempt $i)"
-              rm -f ~/.ssh/deploy_key
-              exit 0
-            fi
-            echo "Health check attempt $i failed, retrying in 10s..."
-            sleep 10
-          done
-
-          echo "::error::Health check failed after 3 attempts"
-          rm -f ~/.ssh/deploy_key
-          exit 1
+        if: inputs.dry_run != 'true' && secrets.DEPLOY_HOST != ''
+        uses: ./.github/actions/ssh-deploy
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          remote-host: "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          command: >-
+            for i in 1 2 3; do
+            curl -sf http://localhost:9090/metrics | grep -q hft_ && echo "Health check passed (attempt $i)" && exit 0;
+            echo "Health check attempt $i failed, retrying in 10s...";
+            sleep 10;
+            done;
+            echo "::error::Health check failed after 3 attempts" && exit 1
 
       - name: Rollback on failure
-        if: failure() && inputs.dry_run != 'true'
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-        run: |
-          if [ -z "$DEPLOY_HOST" ]; then
-            echo "::warning::Cannot rollback — deploy secrets not configured."
-            exit 1
-          fi
-
-          echo "::warning::Deployment failed. Attempting rollback to previous image..."
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cd /opt/hft-platform && \
-             docker compose -f docker-compose.yml up -d --no-deps hft-engine && \
-             sleep 5 && \
-             curl -sf http://localhost:9090/metrics > /dev/null" || true
-
-          rm -f ~/.ssh/deploy_key
-          echo "::error::Rollback attempted. Verify system state manually."
+        if: failure() && inputs.dry_run != 'true' && secrets.DEPLOY_HOST != ''
+        uses: ./.github/actions/ssh-deploy
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          remote-host: "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          command: >-
+            cd /opt/hft-platform &&
+            docker compose -f docker-compose.yml up -d --no-deps hft-engine &&
+            sleep 5 &&
+            curl -sf http://localhost:9090/metrics > /dev/null || true
 
       - name: Deploy Summary
         if: always()
