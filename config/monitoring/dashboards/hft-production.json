@@ -71,7 +71,7 @@
       },
       "targets": [
         {
-          "expr": "stormguard_mode",
+          "expr": "stormguard_mode{strategy=~\"$strategy\"}",
           "legendFormat": "StormGuard",
           "refId": "A"
         }
@@ -388,12 +388,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(recorder_insert_latency_ms_bucket[$interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(recorder_wal_write_latency_ms_bucket[$interval])) by (le))",
           "legendFormat": "P95",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(recorder_insert_latency_ms_bucket[$interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(recorder_wal_write_latency_ms_bucket[$interval])) by (le))",
           "legendFormat": "P99",
           "refId": "B"
         }
@@ -462,7 +462,7 @@
         "name": "HALT Events",
         "datasource": { "type": "prometheus", "uid": "Prometheus" },
         "enable": true,
-        "expr": "changes(stormguard_mode[1m]) > 0 and stormguard_mode == 2",
+        "expr": "changes(stormguard_mode{strategy=~\"$strategy\"}[1m]) > 0 and stormguard_mode{strategy=~\"$strategy\"} == 2",
         "titleFormat": "HALT",
         "textFormat": "StormGuard entered HALT state",
         "iconColor": "red"

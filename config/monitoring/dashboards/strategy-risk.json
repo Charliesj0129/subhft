@@ -49,9 +49,9 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "stormguard_mode",
+          "expr": "sum by (strategy) (stormguard_mode)",
           "refId": "A",
-          "legendFormat": "StormGuard"
+          "legendFormat": "{{strategy}}"
         }
       ]
     },
