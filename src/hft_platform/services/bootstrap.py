@@ -1004,6 +1004,21 @@ class SystemBootstrapper:
             position_store=position_store,
             symbol_metadata=symbol_metadata,
         )
+        # Phase 3: rejection feedback + strategy publish queues
+        _rejection_queue: asyncio.Queue | None = None
+        _publish_queue: asyncio.Queue | None = None
+        try:
+            _rejection_queue = asyncio.Queue(maxsize=256)
+            _publish_queue = asyncio.Queue(maxsize=64)
+        except Exception as exc:
+            logger.warning("phase3_queue_init_failed", error=str(exc))
+
+        if _rejection_queue is not None and hasattr(risk_engine, '_rejection_sink'):
+            risk_engine._rejection_sink = _rejection_queue
+
+        if _publish_queue is not None and hasattr(strategy_runner, '_publish_sink'):
+            strategy_runner._publish_sink = lambda ch, payload: _publish_queue.put_nowait((ch, payload))
+
         recorder = RecorderService(recorder_queue)
         platform_degrade_inputs = self.build_platform_degrade_inputs(
             md_service=md_service,

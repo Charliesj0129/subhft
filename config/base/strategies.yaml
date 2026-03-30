@@ -52,3 +52,37 @@ strategies:
       min_vol_samples: 8
       session_start_sec: 33300        # 09:15 TWN — CBS internal gate (fallback when SessionGovernor disabled)
       session_end_sec: 48900          # 13:35 TWN — CBS internal gate (fallback when SessionGovernor disabled)
+
+  # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
+  # Phase 3: Automated options market-making with delta-neutral hedging.
+  # Enable for shadow: set enabled=true, run with HFT_ORDER_MODE=sim
+  # TXO multiplier: 50 NTD/pt, tick_size: 1.0 pt (premium >= 10)
+  - id: "electronic_eye"
+    module: "hft_platform.strategies.electronic_eye"
+    class: "ElectronicEye"
+    enabled: false
+    product_type: "OPT"
+    symbol_tags: ["options", "txo"]
+    budget_us: 500
+    params:
+      quoter:
+        min_edge_ticks: 2
+        max_contracts_per_strike: 5
+        quote_strikes: "atm_pm3"
+        quote_types: ["C", "P"]
+        refresh_interval_ms: 500
+        cancel_on_stale_ms: 2000
+      hedger:
+        hedge_instrument: "TXFR1"
+        delta_threshold_lots: 3
+        hedge_order_type: "MKT"
+        hedge_tif: "IOC"
+        hedge_cooldown_ms: 1000
+        max_hedge_qty_per_order: 10
+      guardian:
+        warn_utilization_pct: 80
+        stress_interval_s: 60
+        max_worst_case_pnl_ntd: -500000
+      publish:
+        channel: "monitor:portfolio:greeks"
+        interval_ms: 1000
