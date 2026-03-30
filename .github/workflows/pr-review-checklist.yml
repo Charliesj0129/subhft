@@ -81,25 +81,7 @@ jobs:
             exit 1
           fi
 
-      - name: Detect hardcoded secrets
-        if: github.event_name == 'pull_request'
-        run: |
-          echo "Checking for hardcoded secrets..."
-          FOUND=$(grep -rnEi '(api_key|password|secret|token)\s*=\s*["\x27][^"\x27]{8,}' \
-            src/ --include='*.py' \
-            | grep -v '# noqa' \
-            | grep -v 'os.environ' \
-            | grep -v 'os.getenv' \
-            | grep -v 'settings\.' \
-            | grep -v '_HEADER' \
-            | grep -v 'typing' || true)
-          if [ -n "$FOUND" ]; then
-            echo "::error::Potential hardcoded secrets detected:"
-            echo "$FOUND"
-            echo ""
-            echo "Use environment variables or config files for secrets."
-            exit 1
-          fi
+      # Secret scanning moved to ci.yml security job (gitleaks)
 
       - name: Check TODO/FIXME without ticket reference
         if: github.event_name == 'pull_request'

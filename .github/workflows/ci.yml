@@ -233,6 +233,9 @@ jobs:
       - name: Run tests
         run: cargo test --manifest-path rust_core/Cargo.toml --no-default-features
 
+      - name: Security audit (cargo audit)
+        run: cargo install cargo-audit --locked && cargo audit --file rust_core/Cargo.lock
+
   # ============================================================================
   # Stage 2b: Type Check
   # ============================================================================
@@ -876,6 +879,11 @@ jobs:
 
       - name: Code security scan (bandit)
         run: uv run bandit -r src/hft_platform/ -c pyproject.toml -ll -q
+
+      - name: Secret scanning (gitleaks)
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc  # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Security Summary
         if: always()

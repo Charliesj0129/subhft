@@ -182,6 +182,15 @@ jobs:
           push: false
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}
 
+      - name: Scan Docker image for vulnerabilities
+        if: inputs.dry_run != 'true'
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2  # v0.28.0
+        with:
+          image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}"
+          format: "table"
+          exit-code: "1"
+          severity: "HIGH,CRITICAL"
+
       - name: Deploy to production host
         if: inputs.dry_run != 'true'
         env:
