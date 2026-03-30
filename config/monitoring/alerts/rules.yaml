@@ -515,6 +515,102 @@ groups:
         summary: ClickHouse backup is stale (>2 days since last success)
         description: "Last successful backup was {{ $value | humanizeTimestamp }}. Check cron and backup disk."
 
+  # ── Fill Loss (M-07) ─────────────────────────────────────────
+  - alert: FillEvictionDetected
+    expr: rate(exec_overflow_evicted_total[5m]) > 0
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Fill events are being evicted (data loss)"
+      description: "exec_overflow_evicted_total is increasing. Fill events are being silently dropped."
+
+  # ── Alpha Signal Silence (M-09) ──────────────────────────────
+  - alert: AlphaSignalSilent
+    expr: (time() - alpha_last_signal_ts) > 300
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: "No alpha signal for >5 minutes"
+      description: "alpha_last_signal_ts is {{ $value | humanizeDuration }} old. Alpha pipeline may be stalled."
+
+  # ── Autonomy Control-Plane (M-10) ────────────────────────────
+  - alert: StrategyQuarantineActive
+    expr: strategy_quarantine_active == 1
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Strategy quarantine is active"
+      description: "A strategy has been quarantined. Manual review required."
+
+  - alert: PlatformReduceOnlyActive
+    expr: platform_reduce_only_active == 1
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Platform is in reduce-only mode"
+      description: "New positions are blocked. Only position reduction is allowed."
+
+  - alert: ManualRearmRequired
+    expr: manual_rearm_required == 1
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Manual rearm required"
+      description: "Platform requires manual intervention to resume normal operations."
+
+  - alert: AutonomyStateTransition
+    expr: increase(autonomy_transitions_total[5m]) > 0
+    for: 0s
+    labels:
+      severity: warning
+    annotations:
+      summary: "Autonomy state transition detected"
+      description: "The autonomy control-plane changed state. Check current mode."
+
+  # ── Gateway Heartbeat (M-11) ─────────────────────────────────
+  - alert: ExecutionGatewayHeartbeatStale
+    expr: (time() - execution_gateway_heartbeat_ts) > 60
+    for: 30s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Execution Gateway heartbeat is stale (>60s)"
+      description: "execution_gateway_heartbeat_ts has not been updated in >60 seconds."
+
+  # ── WAL Integrity (M-12) ─────────────────────────────────────
+  - alert: WALCorruptionDetected
+    expr: increase(wal_corrupt_files_total[1h]) > 0
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Corrupt WAL files detected"
+      description: "{{ $value }} corrupt WAL file(s) quarantined in the last hour."
+
+  - alert: WALReplayErrorsDetected
+    expr: increase(wal_replay_errors_total[1h]) > 0
+    for: 0s
+    labels:
+      severity: warning
+    annotations:
+      summary: "WAL replay errors detected"
+      description: "{{ $value }} WAL replay error(s) in the last hour."
+
+  # ── ClickHouse Pool (M-13) ───────────────────────────────────
+  - alert: ClickHousePoolExhausted
+    expr: increase(clickhouse_pool_timeout_total[5m]) > 0
+    for: 0s
+    labels:
+      severity: critical
+    annotations:
+      summary: "ClickHouse connection pool timeouts detected"
+      description: "{{ $value }} pool timeout(s) in 5 minutes. Writes may be stalling."
+
   # ── Research Data Disk ──────────────────────────────────────────
   - alert: ResearchDataTooLarge
     expr: hft_research_data_bytes > 200e9
