@@ -889,6 +889,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: License compliance check
+        run: uv run pip-licenses --format=markdown --fail-on-licenses="GPL-2.0-only;GPL-2.0-or-later;GPL-3.0-only;GPL-3.0-or-later" || true
+        continue-on-error: true
+
       - name: Security Summary
         if: always()
         run: |
