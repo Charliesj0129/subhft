@@ -21,6 +21,8 @@ from hft_platform.strategy.registry import StrategyRegistry
 
 logger = get_logger("strategy_runner")
 
+_KNOWN_TUPLE_TAGS: frozenset[str] = frozenset({"tick", "bidask", "lobstats", "typed_intent_v1"})
+
 _RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not in {
     "0",
     "false",
@@ -525,8 +527,8 @@ class StrategyRunner:
         self._positions_dirty = True
 
     async def process_event(self, event: Any):
-        # Defensive guard: skip unexpected tuple events (not typed_intent_v1)
-        if isinstance(event, tuple) and (not event or event[0] != "typed_intent_v1"):
+        # Defensive guard: skip unexpected tuple events (allow known typed ring tags)
+        if isinstance(event, tuple) and (not event or event[0] not in _KNOWN_TUPLE_TAGS):
             logger.warning("Unexpected tuple event skipped", length=len(event), head=repr(event[0] if event else None))
             return
         source_ts_ns, trace_id = self._extract_event_trace(event)

@@ -632,3 +632,44 @@ def test_flush_pending_no_metrics(runner_factory):
     runner._strategy_pending_intents["s"] = 5
     runner._flush_pending_strategy_metrics()
     assert runner._strategy_pending_intents.get("s", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: tuple guard allows known typed ring events
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tuple_guard_allows_known_tags(runner_factory):
+    """Tuples starting with known typed ring tags should NOT be rejected."""
+    runner, _, _ = runner_factory()
+    runner.running = True
+
+    for tag in ("tick", "bidask", "lobstats", "typed_intent_v1"):
+        event = (tag, "TSMC", 100)
+        with patch.object(runner, "_extract_event_trace", return_value=(0, "")) as mock_ext:
+            await runner.process_event(event)
+            assert mock_ext.call_count == 1, f"tag={tag!r} was rejected by guard"
+
+
+@pytest.mark.asyncio
+async def test_tuple_guard_rejects_unknown_tags(runner_factory):
+    """Tuples with unknown first elements should be silently dropped."""
+    runner, _, _ = runner_factory()
+    runner.running = True
+
+    event = ("unknown_tag", "TSMC", 100)
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")) as mock_ext:
+        await runner.process_event(event)
+        assert mock_ext.call_count == 0, "unknown tag should be rejected by guard"
+
+
+@pytest.mark.asyncio
+async def test_tuple_guard_rejects_empty_tuple(runner_factory):
+    """Empty tuples should be silently dropped."""
+    runner, _, _ = runner_factory()
+    runner.running = True
+
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")) as mock_ext:
+        await runner.process_event(())
+        assert mock_ext.call_count == 0, "empty tuple should be rejected by guard"
