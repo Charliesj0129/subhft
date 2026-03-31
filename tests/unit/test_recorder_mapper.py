@@ -103,6 +103,14 @@ def test_map_order_and_fill(tmp_path):
     assert row["price_scaled"] == 1_200_000
     assert row["fee_scaled"] == 100  # raw int, not price-scaled (fee is NTD, not instrument price)
     assert row["tax_scaled"] == 0
+    # Verify new hft.fills field names
+    assert row["ts_exchange"] == 110  # from match_ts_ns
+    assert row["ts_local"] == 100  # from ingest_ts_ns
+    assert row["broker_order_id"] == "O1"  # from order_id
+    assert row["client_order_id"] == ""
+    assert row["source"] == "shioaji"
+    assert "order_id" not in row  # old field removed
+    assert "match_ts" not in row  # old field removed
 
 
 def test_map_unknown_event_returns_none(tmp_path):

@@ -180,9 +180,9 @@ def _extract_fill_values(row) -> list | None:
         if isinstance(row, dict):
             get = row.get
             return [
-                get("fill_id", get("trade_id")),
-                get("order_id"),
-                get("strategy_id"),
+                get("fill_id", get("trade_id", "")),
+                get("order_id", ""),
+                get("strategy_id", ""),
                 get("symbol"),
                 get("side", get("action", "")),
                 get("price_scaled"),
@@ -191,15 +191,23 @@ def _extract_fill_values(row) -> list | None:
                 get("match_ts", get("exch_ts", get("ts"))),
             ]
         return [
-            getattr(row, "fill_id", None) or getattr(row, "trade_id", None),
-            getattr(row, "order_id", None),
-            getattr(row, "strategy_id", None),
+            getattr(row, "fill_id", None)
+            or getattr(row, "trade_id", None)
+            or "",
+            getattr(row, "order_id", "") or "",
+            getattr(row, "strategy_id", "") or "",
             getattr(row, "symbol", None),
-            getattr(row, "side", None) or getattr(row, "action", None) or "",
+            getattr(row, "side", None)
+            or getattr(row, "action", None)
+            or "",
             getattr(row, "price_scaled", None),
-            getattr(row, "qty", None) or getattr(row, "quantity", None) or 0,
+            getattr(row, "qty", None)
+            or getattr(row, "quantity", None)
+            or 0,
             getattr(row, "fee_scaled", 0),
-            getattr(row, "match_ts", None) or getattr(row, "exch_ts", None) or getattr(row, "ts", None),
+            getattr(row, "match_ts", None)
+            or getattr(row, "exch_ts", None)
+            or getattr(row, "ts", None),
         ]
     except Exception as _exc:  # noqa: BLE001
         return None

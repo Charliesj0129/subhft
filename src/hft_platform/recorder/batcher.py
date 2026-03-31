@@ -137,7 +137,7 @@ class GlobalMemoryGuard:
     DEFAULT_PRIORITIES: dict[str, int] = {
         "hft.market_data": 100,
         "hft.orders": 90,
-        "hft.trades": 80,
+        "hft.fills": 80,
         "hft.risk_log": 50,  # Also matches hft.logs
         "hft.logs": 50,
         "hft.backtest_runs": 30,

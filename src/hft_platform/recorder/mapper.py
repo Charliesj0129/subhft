@@ -190,16 +190,19 @@ def map_event_to_record(
         return (
             "fills",
             {
+                "ts_exchange": int(event.match_ts_ns),
+                "ts_local": int(event.ingest_ts_ns),
+                "client_order_id": "",
+                "broker_order_id": event.order_id,
                 "fill_id": event.fill_id,
-                "order_id": event.order_id,
                 "strategy_id": event.strategy_id,
                 "symbol": symbol,
                 "side": str(event.side.name if hasattr(event.side, "name") else event.side),
-                "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
                 "qty": int(event.qty),
+                "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
                 "fee_scaled": int(event.fee),  # NTD x10000 (flat amount, not instrument price)
                 "tax_scaled": int(event.tax),  # NTD x10000 (tax portion of fee)
-                "match_ts": int(event.match_ts_ns),
+                "source": "shioaji",
             },
         )
 
