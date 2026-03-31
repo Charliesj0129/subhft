@@ -1,5 +1,8 @@
 import json
+import threading
+import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -258,53 +261,44 @@ async def test_wal_replayer_skips_corrupt_file(tmp_path: Path):
 
 
 def test_wal_batch_writer_timer_flush_retains_data_on_failure(tmp_path: Path, monkeypatch):
-    """When _write_batch_sync fails in timer loop, data is merged back for retry."""
-    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
+    """When _write_batch_sync fails in timer loop, production code merges data back."""
+    # Use very short interval so the timer fires quickly
+    monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "10")
     writer = WALBatchWriter(str(tmp_path))
     try:
-        # Manually populate buffer (bypass add_rows to avoid async)
+        # Populate buffer
         with writer._lock:
             writer._buffer = {"hft.ticks": [{"sym": "A", "price": 100}]}
             writer._buffer_rows = 1
             writer._buffer_bytes = 50
+            # Force the timer to think enough time has elapsed
+            writer._last_flush_ts = 0
 
-        # Simulate _write_batch_sync raising
-        original_write = writer._write_batch_sync
-        writer._write_batch_sync = lambda *a, **kw: (_ for _ in ()).throw(OSError("disk fail"))
+        # Make _write_batch_sync always fail
+        writer._write_batch_sync = MagicMock(side_effect=OSError("disk fail"))
 
-        # Manually trigger the flush path (not the timer thread)
+        # Start the actual timer thread (production code path)
+        writer._timer_running = True
+        timer_thread = threading.Thread(target=writer._flush_timer_loop, daemon=True)
+        timer_thread.start()
 
+        # Wait for timer to fire and merge back
+        time.sleep(0.1)
+
+        # Stop the timer
+        writer._timer_running = False
+        timer_thread.join(timeout=1.0)
+
+        # Verify: _write_batch_sync was called (flush attempted)
+        assert writer._write_batch_sync.call_count >= 1
+
+        # Verify: data was merged back into the buffer by production code
         with writer._lock:
-            flush_data = writer._buffer
-            flush_columnar = writer._columnar_buffer
-            writer._buffer = {}
-            writer._columnar_buffer = {}
-            flush_rows = writer._buffer_rows
-            flush_bytes = writer._buffer_bytes
-            writer._buffer_rows = 0
-            writer._buffer_bytes = 0
-
-        if flush_data or flush_columnar:
-            try:
-                writer._write_batch_sync(flush_data, 0, flush_columnar)
-            except Exception:
-                # This is the new merge-back logic
-                with writer._lock:
-                    for table, rows_list in flush_data.items():
-                        writer._buffer.setdefault(table, []).extend(rows_list)
-                    for table, cols_list in flush_columnar.items():
-                        writer._columnar_buffer.setdefault(table, []).extend(cols_list)
-                    writer._buffer_rows += flush_rows
-                    writer._buffer_bytes += flush_bytes
-
-        # Verify data was merged back
-        with writer._lock:
-            assert writer._buffer_rows == 1
+            assert writer._buffer_rows >= 1
             assert "hft.ticks" in writer._buffer
             assert writer._buffer["hft.ticks"] == [{"sym": "A", "price": 100}]
     finally:
         writer._timer_running = False
-        writer.stop()
 
 
 def test_wal_batch_writer_stop_retains_data_on_failure(tmp_path: Path, monkeypatch):

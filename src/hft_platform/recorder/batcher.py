@@ -338,6 +338,10 @@ class Batcher:
         self.dropped_count = 0
         self.total_count = 0
 
+        # Reinject circuit breaker: stop re-injecting after N consecutive failures
+        self._reinject_consecutive_failures = 0
+        self._reinject_max_failures = int(os.getenv("HFT_BATCHER_REINJECT_MAX", "3"))
+
         # Legacy compat: buffer property
         # (tests may access batcher.buffer directly)
 
@@ -635,6 +639,8 @@ class Batcher:
                 if not wal_ok:
                     await self._reinject_failed_buffer(flush_buf)
                     return
+        # Successful write (or WAL fallback succeeded) — reset reinject counter
+        self._reinject_consecutive_failures = 0
         flush_buf.clear()
 
     async def _reinject_failed_buffer(self, flush_buf: ColumnarBuffer) -> None:
@@ -643,7 +649,22 @@ class Batcher:
         Called when BOTH the primary CH write and the emergency WAL dump fail
         (double-fault). Rows are merged back into the active buffer so they
         can be retried on the next flush cycle instead of being lost.
+
+        A circuit breaker stops re-injection after ``_reinject_max_failures``
+        consecutive double-faults to prevent infinite retry loops when both
+        CH and disk are permanently down.
         """
+        self._reinject_consecutive_failures += 1
+        if self._reinject_consecutive_failures > self._reinject_max_failures:
+            logger.critical(
+                "reinject_circuit_breaker_open",
+                table=self.table_name,
+                consecutive_failures=self._reinject_consecutive_failures,
+                row_count=flush_buf.row_count,
+                msg="PERMANENT DATA LOSS — reinject limit exceeded, dropping rows",
+            )
+            return
+
         try:
             rows = flush_buf.to_row_dicts()
             if not rows:
@@ -657,6 +678,8 @@ class Batcher:
                 "reinject_failed_buffer",
                 table=self.table_name,
                 row_count=len(rows),
+                attempt=self._reinject_consecutive_failures,
+                max_attempts=self._reinject_max_failures,
                 msg="Both CH and WAL failed — rows re-injected for retry",
             )
         except Exception as e:
