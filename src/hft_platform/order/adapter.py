@@ -297,29 +297,42 @@ class OrderAdapter:
     async def _register_broker_ids(self, order_key: str, trade: Any) -> None:
         """Register broker IDs to order_key mapping with lock protection."""
         ids = set()
+        id_keys = ("seq_no", "seqno", "ord_no", "ordno", "order_id", "id")
 
         if isinstance(trade, dict):
-            for key in ("seq_no", "ord_no", "order_id", "id"):
+            for key in id_keys:
                 val = trade.get(key)
                 if val:
                     ids.add(val)
 
             order = trade.get("order")
             if isinstance(order, dict):
-                for key in ("seq_no", "ord_no", "order_id", "id"):
+                for key in id_keys:
                     val = order.get(key)
                     if val:
                         ids.add(val)
+            status = trade.get("status")
+            if isinstance(status, dict):
+                for key in ("id", "seq_no", "seqno", "ord_no", "ordno"):
+                    val = status.get(key)
+                    if val:
+                        ids.add(val)
         else:
-            for attr in ("seq_no", "ord_no", "order_id", "id"):
+            for attr in id_keys:
                 val = getattr(trade, attr, None)
                 if val:
                     ids.add(val)
 
             order = getattr(trade, "order", None)
             if order:
-                for attr in ("seq_no", "ord_no", "order_id", "id"):
+                for attr in id_keys:
                     val = getattr(order, attr, None)
+                    if val:
+                        ids.add(val)
+            status = getattr(trade, "status", None)
+            if status:
+                for attr in ("id", "seq_no", "seqno", "ord_no", "ordno"):
+                    val = getattr(status, attr, None)
                     if val:
                         ids.add(val)
 

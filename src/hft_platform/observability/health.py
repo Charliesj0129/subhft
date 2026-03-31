@@ -140,10 +140,11 @@ class HealthServer:
 
         # 4. Critical tasks alive
         tasks: dict[str, Any] = getattr(self._system, "tasks", {})
-        critical_tasks = ["md", "strat", "order", "recorder", "risk"]
-        # Conditionally add gateway if enabled
+        critical_tasks = ["md", "strat", "order", "recorder"]
         if os.getenv("HFT_GATEWAY_ENABLED", "0") == "1":
             critical_tasks.append("gateway")
+        else:
+            critical_tasks.append("risk")
         tasks_alive: dict[str, bool] = {}
         for name in critical_tasks:
             task = tasks.get(name)

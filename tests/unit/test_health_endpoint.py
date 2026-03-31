@@ -157,11 +157,16 @@ class TestHealthServerReadiness:
     def test_gateway_checked_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_GATEWAY_ENABLED", "1")
         system = _make_mock_system()
-        # Gateway task not present → unavailable
+        # Gateway-mode should not require standalone risk task.
+        gateway_task = MagicMock()
+        gateway_task.done.return_value = False
+        system.tasks["gateway"] = gateway_task
+        del system.tasks["risk"]
         server = HealthServer(system=system)
         status, checks = server._check_readiness()
-        assert status == "unavailable"
-        assert checks["tasks"].get("gateway") is False
+        assert status == "ready"
+        assert checks["tasks"].get("gateway") is True
+        assert "risk" not in checks["tasks"]
 
     def test_gateway_not_checked_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_GATEWAY_ENABLED", "0")

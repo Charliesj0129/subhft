@@ -27,6 +27,7 @@ class TestDeferredTerminal:
         a._live_orders_lock = asyncio.Lock()
         a._pending_order_keys = set()
         a._deferred_terminals = []
+        a._cmd_created_ns_map = {}
         a.order_id_resolver = MagicMock()
         a.metrics = MagicMock()
         return a

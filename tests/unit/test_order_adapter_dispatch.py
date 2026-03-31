@@ -242,6 +242,29 @@ async def test_register_broker_ids_with_dict_trade(tmp_config):
 
 
 @pytest.mark.asyncio
+async def test_register_broker_ids_with_shioaji_live_field_names(tmp_config):
+    """Shioaji live futures uses ordno/seqno rather than ord_no/seq_no."""
+    adapter = _make_adapter(tmp_config)
+
+    order = MagicMock()
+    order.seqno = "LIVE_SEQ"
+    order.ordno = "LIVE_ORD"
+    order.id = "LIVE_ID"
+
+    trade = MagicMock()
+    trade.seqno = "LIVE_SEQ"
+    trade.ordno = "LIVE_ORD"
+    trade.id = "LIVE_ID"
+    trade.order = order
+
+    await adapter._register_broker_ids("s1:live", trade)
+
+    assert adapter.order_id_map["LIVE_SEQ"] == "s1:live"
+    assert adapter.order_id_map["LIVE_ORD"] == "s1:live"
+    assert adapter.order_id_map["LIVE_ID"] == "s1:live"
+
+
+@pytest.mark.asyncio
 async def test_drain_and_cancel_drains_queue_and_cancels(tmp_config):
     """drain_and_cancel drains order_queue and cancels all live orders."""
     client = _make_client()
