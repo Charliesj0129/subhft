@@ -388,12 +388,7 @@ class GatewayService:
                 else:
                     cmd = self._risk_engine.create_command(decision.intent)
                 cmd_id_for_commit = int(cmd.cmd_id)
-            # Step 6: Commit dedup
-            if is_typed_view and hasattr(self._dedup, "commit_typed"):
-                self._dedup.commit_typed(key, True, "OK", cmd_id_for_commit)
-            else:
-                self._dedup.commit(key, True, "OK", cmd_id_for_commit)
-            # Step 7: Dispatch to order adapter
+            # Step 6: Dispatch to order adapter (dedup committed AFTER outcome is known)
             try:
                 if typed_cmd_frame is not None and callable(typed_submit):
                     typed_submit(typed_cmd_frame)
@@ -402,6 +397,7 @@ class GatewayService:
                 self._dispatched += 1
             except asyncio.QueueFull:
                 self._rejected += 1
+                # Commit dedup as rejected — must happen after the failed dispatch attempt
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):
                     self._dedup.commit_typed(key, False, "ORDER_QUEUE_FULL", 0)
                 else:
@@ -413,7 +409,23 @@ class GatewayService:
                     {"reason": "ORDER_QUEUE_FULL", "stage": "dispatch", "ack_token": envelope.ack_token},
                 )
                 logger.warning("Order queue full — intent dropped", ack_token=envelope.ack_token)
+                # Release exposure reserved in step 3 (mirrors the risk-rejection path)
+                if intent_type_value != int(IntentType.CANCEL):
+                    if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
+                        self._exposure.release_exposure_typed(
+                            exp_key,
+                            intent_type=intent_type_value,
+                            price=int(intent.price),
+                            qty=int(intent.qty),
+                        )
+                    else:
+                        self._exposure.release_exposure(exp_key, intent)
             else:
+                # Step 7: Commit dedup as approved only after successful dispatch
+                if is_typed_view and hasattr(self._dedup, "commit_typed"):
+                    self._dedup.commit_typed(key, True, "OK", cmd_id_for_commit)
+                else:
+                    self._dedup.commit(key, True, "OK", cmd_id_for_commit)
                 self._emit_trace(
                     "gateway_dispatch",
                     getattr(intent, "trace_id", ""),
