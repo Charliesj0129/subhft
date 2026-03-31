@@ -609,6 +609,11 @@ class HFTSystem:
                 if self.gateway_service is not None:
                     self.gateway_service.set_halt()
                     logger.warning("Gateway policy set to HALT by StormGuard supervisor")
+                # H6: Cancel in-flight orders already dispatched to broker
+                try:
+                    asyncio.create_task(self.order_adapter.drain_and_cancel())
+                except Exception as exc:
+                    logger.warning("In-flight order cancellation failed during HALT", error=str(exc))
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""
@@ -626,6 +631,21 @@ class HFTSystem:
         # finally block (dedup.persist()) runs while the event loop is live.
         if getattr(self, "gateway_service", None) is not None:
             self.gateway_service.running = False
+
+        # H1: Drain in-flight orders and checkpoint positions before shutdown
+        try:
+            await asyncio.wait_for(self.order_adapter.drain_and_cancel(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("Order drain timeout during shutdown")
+        except Exception as exc:
+            logger.warning("Order drain failed during shutdown", error=str(exc))
+
+        if self.checkpoint_writer is not None:
+            try:
+                self.checkpoint_writer.write_checkpoint()
+                logger.info("Final position checkpoint written")
+            except Exception as exc:
+                logger.warning("Final checkpoint failed", error=str(exc))
 
         # WU-01: Broker logout before task cancellation
         for cn in ("md_client", "order_client"):
