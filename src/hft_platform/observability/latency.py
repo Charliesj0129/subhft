@@ -2,8 +2,12 @@ import os
 from collections import deque
 from typing import Any
 
+import structlog
+
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
+
+logger = structlog.get_logger("observability.latency")
 
 
 def _bool_env(value: Any, default: bool = False) -> bool:
@@ -115,7 +119,7 @@ class LatencyRecorder:
                         self._stage_metric_cache[stage] = stage_metric
                     stage_metric.observe(latency_ns)
             except Exception as _exc:  # noqa: BLE001
-                pass
+                logger.warning("latency_metric_observe_failed", error=str(_exc), stage=stage)
 
         if not self._should_sample():
             return
@@ -150,7 +154,7 @@ class LatencyRecorder:
                         if hasattr(self.metrics, "latency_spans_dropped_total"):
                             self.metrics.latency_spans_dropped_total.inc(100)
                     except Exception as _exc:  # noqa: BLE001
-                        pass
+                        logger.warning("latency_drop_counter_failed", error=str(_exc))
             else:
                 self._retry_buffer.append({"topic": "latency_spans", "data": payload})
 
@@ -164,5 +168,6 @@ class LatencyRecorder:
                 self._queue.put_nowait(item)
                 self._retry_buffer.popleft()
             except Exception as _exc:  # noqa: BLE001
+                logger.debug("latency_retry_drain_queue_full")
                 # Queue still full, stop draining
                 break
