@@ -61,6 +61,8 @@ ORDER_COLUMNS = [
     "status",
     "ingest_ts",
     "latency_us",
+    "instrument_type",
+    "oc_type",
 ]
 
 FILL_COLUMNS = [
@@ -79,6 +81,8 @@ FILL_COLUMNS = [
     "decision_price",
     "arrival_price",
     "source",
+    "instrument_type",
+    "oc_type",
 ]
 
 PNL_SNAPSHOT_COLUMNS = [
@@ -163,6 +167,8 @@ def _extract_order_values(row) -> list | None:
                 get("status", ""),
                 get("ingest_ts", get("recv_ts")),
                 get("latency_us", 0),
+                get("instrument_type", ""),
+                get("oc_type", ""),
             ]
         return [
             getattr(row, "order_id", None),
@@ -174,6 +180,8 @@ def _extract_order_values(row) -> list | None:
             getattr(row, "status", None) or "",
             getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
             getattr(row, "latency_us", 0),
+            getattr(row, "instrument_type", ""),
+            getattr(row, "oc_type", ""),
         ]
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
@@ -201,6 +209,8 @@ def _extract_fill_values(row) -> list | None:
                 get("decision_price", 0),
                 get("arrival_price", 0),
                 get("source", ""),
+                get("instrument_type", ""),
+                get("oc_type", ""),
             ]
         return [
             getattr(row, "ts_exchange", None)
@@ -221,6 +231,8 @@ def _extract_fill_values(row) -> list | None:
             getattr(row, "decision_price", 0),
             getattr(row, "arrival_price", 0),
             getattr(row, "source", ""),
+            getattr(row, "instrument_type", ""),
+            getattr(row, "oc_type", ""),
         ]
     except Exception as _exc:  # noqa: BLE001
         return None

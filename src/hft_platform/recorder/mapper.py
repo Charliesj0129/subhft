@@ -171,42 +171,42 @@ def map_event_to_record(
         latency_us = 0
         if event.broker_ts_ns and event.ingest_ts_ns:
             latency_us = max(0, int((event.ingest_ts_ns - event.broker_ts_ns) / 1000))
-        return (
-            "orders",
-            {
-                "order_id": event.order_id,
-                "strategy_id": event.strategy_id,
-                "symbol": symbol,
-                "side": str(event.side.name if hasattr(event.side, "name") else event.side),
-                "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
-                "qty": int(event.submitted_qty),
-                "status": str(event.status.name if hasattr(event.status, "name") else event.status),
-                "ingest_ts": int(event.ingest_ts_ns),
-                "latency_us": latency_us,
-            },
-        )
+        record: Dict[str, Any] = {
+            "order_id": event.order_id,
+            "strategy_id": event.strategy_id,
+            "symbol": symbol,
+            "side": str(event.side.name if hasattr(event.side, "name") else event.side),
+            "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
+            "qty": int(event.submitted_qty),
+            "status": str(event.status.name if hasattr(event.status, "name") else event.status),
+            "ingest_ts": int(event.ingest_ts_ns),
+            "latency_us": latency_us,
+            "instrument_type": _instrument_fields(symbol, metadata).get("instrument_type", ""),
+            "oc_type": "",
+        }
+        return ("orders", record)
 
     if isinstance(event, FillEvent):
         symbol = event.symbol
-        return (
-            "fills",
-            {
-                "ts_exchange": int(event.match_ts_ns),
-                "ts_local": int(event.ingest_ts_ns),
-                "client_order_id": "",
-                "broker_order_id": event.order_id,
-                "fill_id": event.fill_id,
-                "strategy_id": event.strategy_id,
-                "symbol": symbol,
-                "side": str(event.side.name if hasattr(event.side, "name") else event.side),
-                "qty": int(event.qty),
-                "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
-                "fee_scaled": int(event.fee),  # NTD x10000 (flat amount, not instrument price)
-                "tax_scaled": int(event.tax),  # NTD x10000 (tax portion of fee)
-                "decision_price": int(event.decision_price),
-                "arrival_price": int(event.arrival_price),
-                "source": os.getenv("HFT_BROKER", "shioaji"),
-            },
-        )
+        fill_record: Dict[str, Any] = {
+            "ts_exchange": int(event.match_ts_ns),
+            "ts_local": int(event.ingest_ts_ns),
+            "client_order_id": "",
+            "broker_order_id": event.order_id,
+            "fill_id": event.fill_id,
+            "strategy_id": event.strategy_id,
+            "symbol": symbol,
+            "side": str(event.side.name if hasattr(event.side, "name") else event.side),
+            "qty": int(event.qty),
+            "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
+            "fee_scaled": int(event.fee),  # NTD x10000 (flat amount, not instrument price)
+            "tax_scaled": int(event.tax),  # NTD x10000 (tax portion of fee)
+            "decision_price": int(event.decision_price),
+            "arrival_price": int(event.arrival_price),
+            "source": os.getenv("HFT_BROKER", "shioaji"),
+            "instrument_type": _instrument_fields(symbol, metadata).get("instrument_type", ""),
+            "oc_type": "",
+        }
+        return ("fills", fill_record)
 
     return None

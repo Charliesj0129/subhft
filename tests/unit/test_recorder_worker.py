@@ -317,6 +317,8 @@ class TestExtractOrderValues(unittest.TestCase):
             "status": "open",
             "ingest_ts": 1001,
             "latency_us": 42,
+            "instrument_type": "stock",
+            "oc_type": "",
         }
         result = _extract_order_values(row)
         assert result is not None
@@ -324,6 +326,8 @@ class TestExtractOrderValues(unittest.TestCase):
         assert result[0] == "ORD1"
         assert result[3] == "buy"
         assert result[8] == 42  # latency_us
+        assert result[9] == "stock"  # instrument_type
+        assert result[10] == ""  # oc_type
 
     def test_extract_dict_fallback_keys(self):
         row = {"order_id": "X", "action": "sell", "quantity": 3, "recv_ts": 51}
@@ -333,6 +337,14 @@ class TestExtractOrderValues(unittest.TestCase):
         assert result[5] == 3  # qty fallback to quantity
         assert result[7] == 51  # ingest_ts fallback to recv_ts
         assert result[8] == 0  # latency_us default
+
+    def test_extract_dict_instrument_type_defaults_to_empty(self):
+        """instrument_type and oc_type default to empty string when absent."""
+        row = {"order_id": "X", "symbol": "2330"}
+        result = _extract_order_values(row)
+        assert result is not None
+        assert result[9] == ""  # instrument_type default
+        assert result[10] == ""  # oc_type default
 
     def test_extract_object_path(self):
         row = SimpleNamespace(
@@ -345,12 +357,24 @@ class TestExtractOrderValues(unittest.TestCase):
             status="filled",
             ingest_ts=3001,
             latency_us=100,
+            instrument_type="futures",
+            oc_type="",
         )
         result = _extract_order_values(row)
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD2"
         assert result[8] == 100  # latency_us
+        assert result[9] == "futures"  # instrument_type
+        assert result[10] == ""  # oc_type
+
+    def test_extract_object_instrument_type_defaults_to_empty(self):
+        """Object without instrument_type defaults to empty string."""
+        row = SimpleNamespace(order_id="X", symbol="2330")
+        result = _extract_order_values(row)
+        assert result is not None
+        assert result[9] == ""  # instrument_type default
+        assert result[10] == ""  # oc_type default
 
     def test_compat_wrapper_returns_dict(self):
         row = {"order_id": "X", "symbol": "2330"}
@@ -378,6 +402,8 @@ class TestExtractFillValues(unittest.TestCase):
             "fee_scaled": 200,
             "tax_scaled": 50,
             "source": "shioaji",
+            "instrument_type": "stock",
+            "oc_type": "",
         }
         result = _extract_fill_values(row)
         assert result is not None
@@ -397,6 +423,8 @@ class TestExtractFillValues(unittest.TestCase):
         assert result[12] == 0  # decision_price (default)
         assert result[13] == 0  # arrival_price (default)
         assert result[14] == "shioaji"  # source
+        assert result[15] == "stock"  # instrument_type
+        assert result[16] == ""  # oc_type
 
     def test_extract_dict_backward_compat_old_field_names(self):
         """Dict with old field names (match_ts, order_id) still works via fallbacks."""
@@ -438,6 +466,14 @@ class TestExtractFillValues(unittest.TestCase):
         assert result is not None
         assert result[0] == 5000  # ts_exchange from exch_ts fallback
 
+    def test_extract_dict_instrument_type_defaults_to_empty(self):
+        """instrument_type and oc_type default to empty string when absent."""
+        row = {"fill_id": "F1", "symbol": "2330"}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[15] == ""  # instrument_type default
+        assert result[16] == ""  # oc_type default
+
     def test_extract_object_new_schema(self):
         row = SimpleNamespace(
             ts_exchange=4000,
@@ -453,6 +489,8 @@ class TestExtractFillValues(unittest.TestCase):
             fee_scaled=150,
             tax_scaled=30,
             source="shioaji",
+            instrument_type="futures",
+            oc_type="",
         )
         result = _extract_fill_values(row)
         assert result is not None
@@ -464,6 +502,16 @@ class TestExtractFillValues(unittest.TestCase):
         assert result[12] == 0  # decision_price (default)
         assert result[13] == 0  # arrival_price (default)
         assert result[14] == "shioaji"  # source
+        assert result[15] == "futures"  # instrument_type
+        assert result[16] == ""  # oc_type
+
+    def test_extract_object_instrument_type_defaults_to_empty(self):
+        """Object without instrument_type defaults to empty string."""
+        row = SimpleNamespace(fill_id="F1", order_id="X", symbol="2330")
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[15] == ""  # instrument_type default
+        assert result[16] == ""  # oc_type default
 
     def test_extract_object_old_field_fallback(self):
         """Object with old field names (match_ts, order_id) uses fallbacks."""
@@ -516,6 +564,8 @@ class TestExtractFillValues(unittest.TestCase):
             "decision_price",
             "arrival_price",
             "source",
+            "instrument_type",
+            "oc_type",
         }
         assert set(FILL_COLUMNS) == required
 

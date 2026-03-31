@@ -83,6 +83,10 @@ def test_map_order_and_fill(tmp_path):
     assert topic == "orders"
     assert row["price_scaled"] == 1_000_000
     assert row["status"] == "SUBMITTED"
+    # RC-1: instrument_type and oc_type added to orders
+    assert "instrument_type" in row
+    assert "oc_type" in row
+    assert row["oc_type"] == ""
 
     fill = FillEvent(
         fill_id="F1",
@@ -111,6 +115,10 @@ def test_map_order_and_fill(tmp_path):
     assert row["source"] == "shioaji"
     assert "order_id" not in row  # old field removed
     assert "match_ts" not in row  # old field removed
+    # RC-1: instrument_type and oc_type added to fills
+    assert "instrument_type" in row
+    assert "oc_type" in row
+    assert row["oc_type"] == ""
 
 
 def test_map_unknown_event_returns_none(tmp_path):
