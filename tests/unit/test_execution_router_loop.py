@@ -603,6 +603,50 @@ async def test_e2e_latency_not_observed_when_order_key_missing(
     r.metrics.e2e_order_latency_ns.observe.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# DLQ retry uses on_fill_async (H2 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dlq_retry_uses_on_fill_async(
+    router: ExecutionRouter, position_store: MagicMock, bus: MagicMock
+) -> None:
+    """_retry_orphaned_fills must use on_fill_async, not blocking on_fill."""
+    from unittest.mock import patch
+
+    from hft_platform.contracts.execution import FillEvent
+
+    fake_fill = FillEvent(
+        fill_id="F001",
+        account_id="acct1",
+        order_id="ORD001",
+        strategy_id="strat1",
+        symbol="2330",
+        side=1,
+        qty=1,
+        price=1_000_000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=1_000_000_000,
+        match_ts_ns=1_000_000_000,
+    )
+
+    # Mock the DLQ to return one resolved fill
+    mock_dlq = MagicMock()
+    mock_dlq.count = 1
+    mock_dlq.retry = MagicMock(return_value=([fake_fill], []))
+
+    with patch(
+        "hft_platform.execution.fill_dlq.get_orphaned_fill_dlq",
+        return_value=mock_dlq,
+    ):
+        await router._retry_orphaned_fills()
+
+    # on_fill_async should be called, NOT on_fill
+    position_store.on_fill_async.assert_awaited_once_with(fake_fill)
+    position_store.on_fill.assert_not_called()
+
 @pytest.mark.asyncio
 async def test_e2e_latency_not_observed_when_created_ns_zero(
     bus: MagicMock, position_store: MagicMock

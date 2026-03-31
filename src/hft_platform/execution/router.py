@@ -208,7 +208,7 @@ class ExecutionRouter:
                 self._events_since_dlq_retry += 1
                 if self._events_since_dlq_retry >= self._dlq_retry_interval:
                     self._events_since_dlq_retry = 0
-                    self._retry_orphaned_fills()
+                    await self._retry_orphaned_fills()
 
             except asyncio.CancelledError:
                 break
@@ -222,7 +222,7 @@ class ExecutionRouter:
                     pass  # task_done called too many times
         self.metrics.execution_router_alive.set(0)
 
-    def _retry_orphaned_fills(self) -> None:
+    async def _retry_orphaned_fills(self) -> None:
         from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
         dlq = get_orphaned_fill_dlq()
@@ -240,24 +240,28 @@ class ExecutionRouter:
                 remaining=len(still_orphaned),
             )
             for fill in resolved:
-                if hasattr(self.position_store, "on_fill"):
+                if hasattr(self.position_store, "on_fill_async"):
+                    delta = await self.position_store.on_fill_async(fill)
+                elif hasattr(self.position_store, "on_fill"):
                     delta = self.position_store.on_fill(fill)
-                    publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
-                    if publish_many_nowait:
-                        publish_many_nowait([delta, fill])
-                    else:
-                        self._publish_nowait(delta)
-                        self._publish_nowait(fill)
-                    if self._recorder_queue is not None and self._symbol_metadata is not None:
-                        from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+                else:
+                    continue
+                publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
+                if publish_many_nowait:
+                    publish_many_nowait([delta, fill])
+                else:
+                    self._publish_nowait(delta)
+                    self._publish_nowait(fill)
+                if self._recorder_queue is not None and self._symbol_metadata is not None:
+                    from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
 
-                        _mapped = map_event_to_record(fill, self._symbol_metadata, self._price_codec)
-                        if _mapped:
-                            _topic, _payload = _mapped
-                            try:
-                                self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
-                            except asyncio.QueueFull:
-                                pass
+                    _mapped = map_event_to_record(fill, self._symbol_metadata, self._price_codec)
+                    if _mapped:
+                        _topic, _payload = _mapped
+                        try:
+                            self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
+                        except asyncio.QueueFull:
+                            pass
             _dlq_metric = getattr(self.metrics, "dlq_retry_resolved_total", None)
             if _dlq_metric is not None:
                 _dlq_metric.inc(len(resolved))
