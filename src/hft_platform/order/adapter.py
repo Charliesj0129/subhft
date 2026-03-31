@@ -532,10 +532,14 @@ class OrderAdapter:
         return 0
 
     def _pending_close_qty(self, symbol: str, side: Side) -> int:
+        """Count pending close qty for symbol/side.
+
+        Safe to iterate live_orders directly: asyncio is single-threaded and
+        this method contains no await points, so no other coroutine can mutate
+        live_orders during execution.
+        """
         pending_qty = 0
-        # Note: live_orders snapshot for thread safety — full lock in async callers
-        orders_snapshot = dict(self.live_orders)
-        for trade in orders_snapshot.values():
+        for trade in self.live_orders.values():
             if trade is _PENDING_SENTINEL or trade is _TERMINAL_BEFORE_REGISTERED:
                 continue
             if self._live_order_symbol(trade) != symbol:
