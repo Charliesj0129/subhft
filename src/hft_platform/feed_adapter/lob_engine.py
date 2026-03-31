@@ -86,6 +86,7 @@ class BookState:
         "bid_depth_total",
         "ask_depth_total",
         "_rust_state",
+        "_cached_stats",
     )
 
     def __init__(self, symbol: str):
@@ -108,6 +109,9 @@ class BookState:
         self.last_volume: int = 0
         self.bid_depth_total: int = 0
         self.ask_depth_total: int = 0
+
+        # Cached LOBStatsEvent to avoid per-tick allocation (DATA-01)
+        self._cached_stats: Any = None
 
         # Rust-accelerated book state (opt-in)
         self._rust_state: Any = None
@@ -277,17 +281,35 @@ class BookState:
             else:
                 best_ask = int(self.asks[0][0]) if self.asks else 0
 
-            return LOBStatsEvent(
-                symbol=self.symbol,
-                ts=self.exch_ts,
-                mid_price_x2=self.mid_price_x2,
-                spread_scaled=self.spread,
-                imbalance=self.imbalance,
-                best_bid=best_bid,
-                best_ask=best_ask,
-                bid_depth=int(self.bid_depth_total),
-                ask_depth=int(self.ask_depth_total),
-            )
+            cached = self._cached_stats
+            if cached is None:
+                cached = LOBStatsEvent(
+                    symbol=self.symbol,
+                    ts=self.exch_ts,
+                    mid_price_x2=self.mid_price_x2,
+                    spread_scaled=self.spread,
+                    imbalance=self.imbalance,
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                    bid_depth=int(self.bid_depth_total),
+                    ask_depth=int(self.ask_depth_total),
+                )
+                self._cached_stats = cached
+                return cached
+
+            # Hot path: mutate in-place to avoid per-tick allocation
+            cached.ts = self.exch_ts
+            cached.mid_price_x2 = self.mid_price_x2
+            cached.spread_scaled = self.spread
+            cached.imbalance = self.imbalance
+            cached.best_bid = best_bid
+            cached.best_ask = best_ask
+            cached.bid_depth = int(self.bid_depth_total)
+            cached.ask_depth = int(self.ask_depth_total)
+            # Update derived fields (mirrors __post_init__ fast path)
+            cached.mid_price = self.mid_price_x2 / 2.0
+            cached.spread = float(self.spread)
+            return cached
 
     def get_stats_tuple(self) -> tuple:
         with self.lock:
