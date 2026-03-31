@@ -42,6 +42,7 @@ MARKET_DATA_COLUMNS = [
     "asks_price",
     "asks_vol",
     "seq_no",
+    "trade_direction",
     # Multi-instrument fields (added 2026-03-30)
     "instrument_type",
     "underlying",
@@ -109,6 +110,7 @@ def _extract_market_data_values(row) -> list | None:
                 get("asks_price"),
                 get("asks_vol"),
                 get("seq_no", get("seq", 0)),
+                get("trade_direction", 0),
                 # Multi-instrument fields (added 2026-03-30)
                 get("instrument_type", ""),
                 get("underlying", ""),
@@ -129,6 +131,7 @@ def _extract_market_data_values(row) -> list | None:
             getattr(row, "asks_price", None),
             getattr(row, "asks_vol", None),
             getattr(row, "seq_no", None) or getattr(row, "seq", None) or 0,
+            getattr(row, "trade_direction", 0),
             # Multi-instrument fields (added 2026-03-30)
             getattr(row, "instrument_type", ""),
             getattr(row, "underlying", ""),

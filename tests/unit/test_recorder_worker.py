@@ -227,6 +227,82 @@ class TestExtractMarketDataValues(unittest.TestCase):
         for i, col in enumerate(MARKET_DATA_COLUMNS):
             assert result[col] == i
 
+    def test_trade_direction_in_market_data_columns(self):
+        """trade_direction must be present in MARKET_DATA_COLUMNS."""
+        assert "trade_direction" in MARKET_DATA_COLUMNS
+
+    def test_extract_dict_trade_direction_present(self):
+        """trade_direction is extracted from a tick dict with trade_direction set."""
+        row = {
+            "symbol": "2330",
+            "exchange": "TSE",
+            "type": "tick",
+            "exch_ts": 1000,
+            "ingest_ts": 1001,
+            "price_scaled": 5950000,
+            "volume": 100,
+            "bids_price": [594],
+            "bids_vol": [10],
+            "asks_price": [595],
+            "asks_vol": [5],
+            "seq_no": 42,
+            "trade_direction": 1,
+            "instrument_type": "stock",
+            "underlying": "",
+            "strike_scaled": 0,
+            "option_right": "",
+            "expiry": "2026-06-20",
+        }
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert len(result) == len(MARKET_DATA_COLUMNS)
+        td_idx = MARKET_DATA_COLUMNS.index("trade_direction")
+        assert result[td_idx] == 1
+
+    def test_extract_dict_trade_direction_defaults_to_zero_when_absent(self):
+        """BidAsk dicts without trade_direction default to 0."""
+        row = {"symbol": "TXFD6", "exchange": "TAIFEX", "type": "bidask"}
+        result = _extract_market_data_values(row)
+        assert result is not None
+        td_idx = MARKET_DATA_COLUMNS.index("trade_direction")
+        assert result[td_idx] == 0
+
+    def test_extract_object_trade_direction_present(self):
+        """trade_direction is extracted from an object with trade_direction attribute."""
+        row = SimpleNamespace(
+            symbol="TXFD6",
+            exchange="TAIFEX",
+            type="tick",
+            exch_ts=2000,
+            ingest_ts=2001,
+            price_scaled=200000000,
+            volume=5,
+            bids_price=[19999],
+            bids_vol=[2],
+            asks_price=[20001],
+            asks_vol=[3],
+            seq_no=1,
+            trade_direction=-1,
+            instrument_type="futures",
+            underlying="TX",
+            strike_scaled=0,
+            option_right="",
+            expiry="2026-06-20",
+        )
+        result = _extract_market_data_values(row)
+        assert result is not None
+        assert len(result) == len(MARKET_DATA_COLUMNS)
+        td_idx = MARKET_DATA_COLUMNS.index("trade_direction")
+        assert result[td_idx] == -1
+
+    def test_extract_object_trade_direction_defaults_to_zero_when_absent(self):
+        """Object without trade_direction attribute defaults to 0."""
+        row = SimpleNamespace(symbol="2330", exch="TSE")
+        result = _extract_market_data_values(row)
+        assert result is not None
+        td_idx = MARKET_DATA_COLUMNS.index("trade_direction")
+        assert result[td_idx] == 0
+
 
 class TestExtractOrderValues(unittest.TestCase):
     def test_extract_dict_path(self):
