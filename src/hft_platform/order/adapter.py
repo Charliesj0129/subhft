@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+from collections.abc import Callable
 from typing import Any, Dict, TypeAlias, TypeGuard, cast
 
 import yaml
@@ -87,6 +88,8 @@ class OrderAdapter:
         "_pending_order_keys",
         "_deferred_terminals",
         "_cmd_created_ns_map",
+        "_cmd_tca_map",
+        "_mid_price_fn",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -98,6 +101,8 @@ class OrderAdapter:
         order_id_map: Dict[str, str] | None = None,
         broker_codec: BrokerOrderCodec | None = None,
         cmd_created_ns_map: Dict[str, int] | None = None,
+        cmd_tca_map: Dict[str, tuple[int, int]] | None = None,
+        mid_price_fn: Callable[[str], int] | None = None,
     ) -> None:
         self.config_path = config_path
         self.order_queue = order_queue
@@ -110,6 +115,9 @@ class OrderAdapter:
         # Map order_key -> cmd.created_ns for e2e latency tracking (SLO-2)
         # Shared with ExecutionRouter for fill-side lookup
         self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
+        # TCA price map: order_key -> (decision_price, arrival_price) for fill enrichment
+        self._cmd_tca_map: Dict[str, tuple[int, int]] = cmd_tca_map if cmd_tca_map is not None else {}
+        self._mid_price_fn: Callable[[str], int] | None = mid_price_fn
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self.running = False
         self.metrics = MetricsRegistry.get()
@@ -181,6 +189,14 @@ class OrderAdapter:
         now_ns = timebase.now_ns()
         ttl_ns = int(intent.ttl_ns) if intent.ttl_ns > 0 else 5_000_000_000
         storm_guard_state = StormGuardState.HALT if intent.reason == "halt_flatten" else StormGuardState.NORMAL
+        # TCA: arrival_price = current LOB mid-price (not decision_price)
+        if self._mid_price_fn is not None:
+            try:
+                arrival = self._mid_price_fn(intent.symbol)
+            except Exception:  # noqa: BLE001
+                arrival = int(intent.decision_price)
+        else:
+            arrival = int(intent.decision_price)
         return OrderCommand(
             cmd_id=int(intent.intent_id),
             intent=intent,
@@ -188,7 +204,7 @@ class OrderAdapter:
             storm_guard_state=storm_guard_state,
             created_ns=now_ns,
             decision_price=int(intent.decision_price),
-            arrival_price=int(intent.decision_price),
+            arrival_price=arrival,
         )
 
     async def submit_intent(self, intent: OrderIntent) -> None:
@@ -273,6 +289,8 @@ class OrderAdapter:
                 del self.live_orders[order_key]
                 # Clean up e2e latency tracking entry (SLO-2)
                 self._cmd_created_ns_map.pop(order_key, None)
+                # Clean up TCA price tracking entry
+                self._cmd_tca_map.pop(order_key, None)
                 return
 
             # Check if any order for this strategy is in-flight
@@ -622,6 +640,8 @@ class OrderAdapter:
             # Record dispatch timestamp for e2e latency tracking (SLO-2)
             if cmd.created_ns > 0:
                 self._cmd_created_ns_map[order_key] = cmd.created_ns
+            # TCA: store decision/arrival prices for fill enrichment
+            self._cmd_tca_map[order_key] = (int(cmd.decision_price), int(cmd.arrival_price))
 
             if intent.intent_type == IntentType.NEW:
                 if self._broker_codec is None:

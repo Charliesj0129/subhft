@@ -76,6 +76,8 @@ FILL_COLUMNS = [
     "price_scaled",
     "fee_scaled",
     "tax_scaled",
+    "decision_price",
+    "arrival_price",
     "source",
 ]
 
@@ -179,7 +181,7 @@ def _extract_order_values(row) -> list | None:
 
 
 def _extract_fill_values(row) -> list | None:
-    """Fast extractor for fill/trade events — aligned with mapper.py and CH hft.trades schema."""
+    """Fast extractor for fill events — aligned with mapper.py and CH hft.fills schema."""
     try:
         if isinstance(row, dict):
             get = row.get
@@ -196,6 +198,8 @@ def _extract_fill_values(row) -> list | None:
                 get("price_scaled"),
                 get("fee_scaled", 0),
                 get("tax_scaled", 0),
+                get("decision_price", 0),
+                get("arrival_price", 0),
                 get("source", ""),
             ]
         return [
@@ -214,6 +218,8 @@ def _extract_fill_values(row) -> list | None:
             getattr(row, "price_scaled", None),
             getattr(row, "fee_scaled", 0),
             getattr(row, "tax_scaled", 0),
+            getattr(row, "decision_price", 0),
+            getattr(row, "arrival_price", 0),
             getattr(row, "source", ""),
         ]
     except Exception as _exc:  # noqa: BLE001

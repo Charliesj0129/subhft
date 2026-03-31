@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import date
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
@@ -202,7 +203,9 @@ def map_event_to_record(
                 "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
                 "fee_scaled": int(event.fee),  # NTD x10000 (flat amount, not instrument price)
                 "tax_scaled": int(event.tax),  # NTD x10000 (tax portion of fee)
-                "source": "shioaji",
+                "decision_price": int(event.decision_price),
+                "arrival_price": int(event.arrival_price),
+                "source": os.getenv("HFT_BROKER", "shioaji"),
             },
         )
 

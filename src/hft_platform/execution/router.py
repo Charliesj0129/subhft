@@ -63,6 +63,7 @@ class ExecutionRouter:
         risk_engine: Optional[object] = None,
         overflow_buf: Optional[collections.deque] = None,
         cmd_created_ns_map: Optional[Dict[str, int]] = None,
+        cmd_tca_map: Optional[Dict[str, tuple[int, int]]] = None,
         recorder_queue: Optional[asyncio.Queue] = None,
         symbol_metadata: Optional[Any] = None,
         price_scale_provider: Optional[Any] = None,
@@ -76,6 +77,7 @@ class ExecutionRouter:
         self._risk_engine = risk_engine
         self._overflow_buf = overflow_buf
         self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
+        self._cmd_tca_map: Dict[str, tuple[int, int]] = cmd_tca_map if cmd_tca_map is not None else {}
         self.running = False
         self.metrics = MetricsRegistry.get()
         self._dlq_retry_interval = 100  # Retry DLQ every 100 events processed
@@ -154,6 +156,13 @@ class ExecutionRouter:
                                 _latency_ns = fill_event.ingest_ts_ns - _cmd_created_ns
                                 if _latency_ns > 0:
                                     self.metrics.e2e_order_latency_ns.observe(_latency_ns)
+
+                        # TCA: enrich FillEvent with decision/arrival prices
+                        if _order_key is not None:
+                            _tca = self._cmd_tca_map.get(_order_key)
+                            if _tca is not None:
+                                fill_event.decision_price = _tca[0]
+                                fill_event.arrival_price = _tca[1]
 
                         _pre_realized = 0
                         if self._risk_engine is not None:

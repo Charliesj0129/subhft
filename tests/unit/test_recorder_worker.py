@@ -394,7 +394,9 @@ class TestExtractFillValues(unittest.TestCase):
         assert result[9] == 5950000  # price_scaled
         assert result[10] == 200  # fee_scaled
         assert result[11] == 50  # tax_scaled
-        assert result[12] == "shioaji"  # source
+        assert result[12] == 0  # decision_price (default)
+        assert result[13] == 0  # arrival_price (default)
+        assert result[14] == "shioaji"  # source
 
     def test_extract_dict_backward_compat_old_field_names(self):
         """Dict with old field names (match_ts, order_id) still works via fallbacks."""
@@ -459,7 +461,9 @@ class TestExtractFillValues(unittest.TestCase):
         assert result[4] == "F2"  # fill_id
         assert result[10] == 150  # fee_scaled
         assert result[11] == 30  # tax_scaled
-        assert result[12] == "shioaji"  # source
+        assert result[12] == 0  # decision_price (default)
+        assert result[13] == 0  # arrival_price (default)
+        assert result[14] == "shioaji"  # source
 
     def test_extract_object_old_field_fallback(self):
         """Object with old field names (match_ts, order_id) uses fallbacks."""
@@ -509,6 +513,8 @@ class TestExtractFillValues(unittest.TestCase):
             "price_scaled",
             "fee_scaled",
             "tax_scaled",
+            "decision_price",
+            "arrival_price",
             "source",
         }
         assert set(FILL_COLUMNS) == required

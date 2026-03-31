@@ -767,6 +767,8 @@ class SystemBootstrapper:
         order_id_map: Dict[str, str] = {}
         # Shared map for e2e order-to-fill latency tracking (SLO-2): order_key -> created_ns
         cmd_created_ns_map: Dict[str, int] = {}
+        # TCA: shared map for decision/arrival price enrichment: order_key -> (decision_price, arrival_price)
+        cmd_tca_map: Dict[str, tuple[int, int]] = {}
         # DriftBurst detector for StormGuard (opt-in via env var)
         drift_burst_detector = None
         if os.getenv("HFT_STORMGUARD_DRIFT_BURST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
@@ -917,9 +919,18 @@ class SystemBootstrapper:
 
             _broker_codec = ShioajiOrderCodec()
 
+        # TCA: mid-price lookup function for arrival_price stamping
+        def _get_mid_price(symbol: str) -> int:
+            book = md_service.lob.books.get(symbol)
+            if book is not None and book.mid_price_x2 > 0:
+                return book.mid_price_x2 // 2
+            return 0
+
         order_adapter = OrderAdapter(
             adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec,
             cmd_created_ns_map=cmd_created_ns_map,
+            cmd_tca_map=cmd_tca_map,
+            mid_price_fn=_get_mid_price,
         )
 
         # Wire shadow mode from YAML config (shadow.enabled: true) into ShadowOrderSink.
@@ -957,6 +968,7 @@ class SystemBootstrapper:
             position_store,
             execution_gateway.on_terminal_state,
             cmd_created_ns_map=cmd_created_ns_map,
+            cmd_tca_map=cmd_tca_map,
             recorder_queue=recorder_queue,
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
