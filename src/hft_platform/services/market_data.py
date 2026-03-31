@@ -355,6 +355,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._raw_queue_high_watermark = float(os.getenv("HFT_RAW_QUEUE_HIGH_WATERMARK", "0.8"))
         self._raw_dropped_count = 0
         self._recorder_dropped_count = 0
+        self._record_pending_puts = 0
+        self._record_pending_puts_max = int(os.getenv("HFT_RECORD_PENDING_PUTS_MAX", "100"))
         self._high_watermark_warned = False
 
         # Market open grace period (C4)
@@ -1261,7 +1263,18 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                         threshold=self._record_degrade_threshold,
                     )
         else:
-            asyncio.create_task(self.recorder_queue.put({"topic": topic, "data": payload}))
+            if self._record_pending_puts >= self._record_pending_puts_max:
+                self._recorder_dropped_count += 1
+                return
+            self._record_pending_puts += 1
+            asyncio.create_task(self._record_put_with_tracking(topic, payload))
+
+    async def _record_put_with_tracking(self, topic: str, payload: Any) -> None:
+        """Await recorder queue put with pending counter tracking."""
+        try:
+            await self.recorder_queue.put({"topic": topic, "data": payload})
+        finally:
+            self._record_pending_puts -= 1
 
     def _enqueue_raw(self, exchange: Any, msg: Any) -> None:
         """Enqueue raw quote messages with backpressure handling."""

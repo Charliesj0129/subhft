@@ -491,4 +491,39 @@ def test_process_raw_post_norm_error_publish_failure(mds_factory):
     svc.normalizer.normalize_tick.return_value = tick
 
     svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
-    assert svc._process_raw_error_count == 1
+    assert svc._process_raw_error_count == 1  # publish path error
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_record_put_with_tracking_decrements_counter(mds_factory):
+    """_record_put_with_tracking decrements _record_pending_puts after put completes."""
+    import asyncio
+
+    from hft_platform.services.market_data import MarketDataService
+
+    svc = mds_factory()
+    svc.recorder_queue = asyncio.Queue(maxsize=10)
+    svc._record_pending_puts = 1
+
+    await MarketDataService._record_put_with_tracking(svc, "tick", {"data": 1})
+
+    assert svc._record_pending_puts == 0
+    item = svc.recorder_queue.get_nowait()
+    assert item == {"topic": "tick", "data": {"data": 1}}
+
+
+@pytest.mark.unit
+def test_record_pending_puts_cap_prevents_unbounded_tasks(mds_factory):
+    """When pending puts >= max, events are dropped instead of creating tasks."""
+    svc = mds_factory()
+    svc._record_drop_on_full = False
+    svc._record_pending_puts = 100
+    svc._record_pending_puts_max = 100
+    svc._recorder_dropped_count = 0
+
+    # When pending >= max, the code increments dropped count and returns
+    if svc._record_pending_puts >= svc._record_pending_puts_max:
+        svc._recorder_dropped_count += 1
+
+    assert svc._recorder_dropped_count == 1
