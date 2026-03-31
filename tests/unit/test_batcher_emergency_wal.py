@@ -48,8 +48,10 @@ class TestWalEmergencyDump:
         files = list(tmp_path.iterdir())
         assert len(files) == 1
         fname = files[0].name
-        assert fname.startswith("emergency_hft.test_table_")
+        assert fname.startswith("emergency_")
         assert fname.endswith(".jsonl")
+        # Table name must NOT appear in filename (batch format uses __wal_table__ header)
+        assert "hft.test_table" not in fname
 
     def test_file_contains_correct_row_count(self, tmp_path) -> None:
         writer = MagicMock()
@@ -63,7 +65,11 @@ class TestWalEmergencyDump:
         files = list(tmp_path.iterdir())
         assert len(files) == 1
         lines = [ln for ln in files[0].read_text().splitlines() if ln.strip()]
-        assert len(lines) == 5
+        # 1 header line + 5 data rows
+        assert len(lines) == 6
+        header = json.loads(lines[0])
+        assert header["__wal_table__"] == "hft.test_table"
+        assert header["__row_count__"] == 5
 
     def test_file_is_valid_jsonl(self, tmp_path) -> None:
         writer = MagicMock()
@@ -75,8 +81,10 @@ class TestWalEmergencyDump:
             batcher._wal_emergency_dump(batcher._active)
 
         files = list(tmp_path.iterdir())
-        parsed = [json.loads(ln) for ln in files[0].read_text().splitlines() if ln.strip()]
-        assert parsed == rows
+        all_lines = [json.loads(ln) for ln in files[0].read_text().splitlines() if ln.strip()]
+        # First line is the __wal_table__ header; remainder are the data rows
+        assert "__wal_table__" in all_lines[0]
+        assert all_lines[1:] == rows
 
     def test_empty_buffer_writes_no_file(self, tmp_path) -> None:
         writer = MagicMock()
@@ -181,7 +189,8 @@ class TestWriteFlushBufferEmergencyFallback:
         files = list(tmp_path.iterdir())
         assert len(files) == 1
         lines = [ln for ln in files[0].read_text().splitlines() if ln.strip()]
-        assert len(lines) == 3
+        # 1 header line + 3 data rows
+        assert len(lines) == 4
 
     def test_emergency_dump_file_contains_correct_data(self, tmp_path) -> None:
         writer = MagicMock()
@@ -195,8 +204,11 @@ class TestWriteFlushBufferEmergencyFallback:
             self._run(batcher._write_flush_buffer(flush_buf))
 
         files = list(tmp_path.iterdir())
-        parsed = [json.loads(ln) for ln in files[0].read_text().splitlines() if ln.strip()]
-        assert parsed == rows
+        all_lines = [json.loads(ln) for ln in files[0].read_text().splitlines() if ln.strip()]
+        # First line is the __wal_table__ header; remainder are the data rows
+        assert "__wal_table__" in all_lines[0]
+        assert all_lines[0]["__wal_table__"] == "hft.test_table"
+        assert all_lines[1:] == rows
 
     def test_buffer_cleared_even_after_emergency_dump(self, tmp_path) -> None:
         """flush_buf.clear() must run regardless of exception path."""

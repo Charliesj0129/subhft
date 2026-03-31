@@ -552,16 +552,19 @@ class Batcher:
             wal_dir = os.getenv("HFT_WAL_DIR", ".wal")
             os.makedirs(wal_dir, exist_ok=True)
             ts_ns = timebase.now_ns()
-            filename = f"emergency_{self.table_name}_{ts_ns}.jsonl"
+            filename = f"emergency_{ts_ns}.jsonl"
             filepath = os.path.join(wal_dir, filename)
 
+            header = {"__wal_table__": self.table_name, "__row_count__": len(rows)}
             with open(filepath, "wb") as f:
-                for row in rows:
-                    if _orjson is not None:
-                        line = _orjson.dumps(row) + b"\n"
-                    else:
-                        line = json.dumps(row, default=str).encode() + b"\n"
-                    f.write(line)
+                if _orjson is not None:
+                    f.write(_orjson.dumps(header) + b"\n")
+                    for row in rows:
+                        f.write(_orjson.dumps(row) + b"\n")
+                else:
+                    f.write(json.dumps(header, default=str).encode() + b"\n")
+                    for row in rows:
+                        f.write(json.dumps(row, default=str).encode() + b"\n")
 
             logger.warning(
                 "emergency_wal_dump_written",

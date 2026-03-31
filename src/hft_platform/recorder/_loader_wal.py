@@ -141,6 +141,10 @@ def mark_processed(svc: Any, filename: str) -> None:
 def parse_table_from_filename(fname: str) -> str:
     """Extract target table name from WAL filename."""
     base = fname
+    # Emergency dump files use batch format with __wal_table__ header;
+    # filename-based parsing is not needed and would produce wrong results.
+    if base.startswith("emergency"):
+        return "unknown"
     if "_" in fname:
         base = "_".join(fname.split("_")[:-1])
     if base.startswith("hft."):
