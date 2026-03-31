@@ -1,3 +1,5 @@
+import threading
+
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
 
@@ -35,6 +37,7 @@ def _unregister_all_custom_metrics() -> None:
 
 class MetricsRegistry:
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __init__(self):
         _unregister_all_custom_metrics()
@@ -849,7 +852,9 @@ class MetricsRegistry:
     @classmethod
     def get(cls):
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def update_system_metrics(self):
