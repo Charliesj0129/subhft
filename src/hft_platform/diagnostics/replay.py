@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from structlog import get_logger
+
+logger = get_logger(__name__)
+
 
 def load_traces(path: str | Path) -> list[dict[str, Any]]:
     p = Path(path)
@@ -17,6 +21,7 @@ def load_traces(path: str | Path) -> list[dict[str, Any]]:
         try:
             obj = json.loads(line)
         except Exception as _exc:  # noqa: BLE001
+            logger.debug("skipping_malformed_trace_line", error=str(_exc))
             continue
         if isinstance(obj, dict):
             out.append(obj)

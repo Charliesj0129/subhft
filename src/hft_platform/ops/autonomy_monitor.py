@@ -344,8 +344,8 @@ class AutonomyMonitor:
                         reason=decision.reason,
                         manual_rearm_required=(decision.rearm == "manual"),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("evidence_write_failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # Cooldown helpers
@@ -384,8 +384,8 @@ class AutonomyMonitor:
                 strategies_active=0,  # placeholder
                 feed_status="ok" if self._broker_was_connected else "disconnected",
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("heartbeat_notification_failed", error=str(exc))
 
 
 async def _handle_flatten_request(gate: FlattenGate, flattener: Any) -> None:
