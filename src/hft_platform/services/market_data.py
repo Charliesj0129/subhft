@@ -273,6 +273,12 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._trace_sampler = get_trace_sampler()
         self._feed_last_event_metric_child = None
         self._feed_reconnect_gap_metric_child = None
+        self._feed_events_tick_child = (
+            self.metrics_registry.feed_events_total.labels(type="tick") if self.metrics_registry else None
+        )
+        self._feed_events_bidask_child = (
+            self.metrics_registry.feed_events_total.labels(type="bidask") if self.metrics_registry else None
+        )
         self._md_callback_parse_metric_children: dict[str, Any] = {}
         self._feature_update_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_quality_flag_metric_children: dict[str, Any] = {}
@@ -636,6 +642,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 normalized = self.normalizer.normalize_tick(raw)
             if isinstance(normalized, (TickEvent, BidAskEvent)):
                 event = normalized
+                if isinstance(event, TickEvent):
+                    if self._feed_events_tick_child is not None:
+                        self._feed_events_tick_child.inc()
+                elif self._feed_events_bidask_child is not None:
+                    self._feed_events_bidask_child.inc()
             norm_duration = time.perf_counter_ns() - norm_start_ns
         except Exception as ne:
             logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))

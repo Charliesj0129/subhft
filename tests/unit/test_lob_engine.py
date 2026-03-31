@@ -3,7 +3,7 @@ import time
 import numpy as np
 import pytest
 
-from hft_platform.events import BidAskEvent, MetaData, TickEvent
+from hft_platform.events import BidAskEvent, BookStats, FusedBookStats, MetaData, TickEvent
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 
 
@@ -336,3 +336,72 @@ def test_no_fused_bypass_when_flag_off(engine):
     # Should still produce valid stats (via standard apply_update path)
     assert stats is not None
     assert stats.best_bid == 1000000
+
+
+# --- NamedTuple contract tests ---
+
+
+def test_bookstats_named_field_access():
+    """BookStats supports both named-field and integer-index access (NamedTuple contract)."""
+    bs = BookStats(
+        best_bid=1000000,
+        best_ask=1005000,
+        bid_depth=10,
+        ask_depth=20,
+        mid_price=1002500.0,
+        spread=5000.0,
+        imbalance=-0.333,
+    )
+    # Named access
+    assert bs.best_bid == 1000000
+    assert bs.best_ask == 1005000
+    assert bs.bid_depth == 10
+    assert bs.ask_depth == 20
+    assert bs.mid_price == pytest.approx(1002500.0)
+    assert bs.spread == pytest.approx(5000.0)
+    assert bs.imbalance == pytest.approx(-0.333)
+    # Backward-compat index access
+    assert bs[0] == 1000000
+    assert bs[4] == pytest.approx(1002500.0)
+    # Unpacking still works
+    bb, ba, bd, ad, mp, sp, imb = bs
+    assert bb == 1000000 and ba == 1005000
+
+
+def test_fusedbookstats_named_field_access():
+    """FusedBookStats supports both named-field and integer-index access (NamedTuple contract)."""
+    fs = FusedBookStats(
+        best_bid=1000000,
+        best_ask=1005000,
+        bid_depth=10,
+        ask_depth=20,
+        mid_price_x2=2005000,
+        spread_scaled=5000,
+        imbalance=-0.333,
+    )
+    # Named access
+    assert fs.best_bid == 1000000
+    assert fs.mid_price_x2 == 2005000
+    assert fs.spread_scaled == 5000
+    assert fs.imbalance == pytest.approx(-0.333)
+    # Backward-compat index access
+    assert fs[2] == 10   # bid_depth
+    assert fs[4] == 2005000  # mid_price_x2
+    assert fs[5] == 5000  # spread_scaled
+    # Unpacking still works
+    bb, ba, bd, ad, mx2, ss, imb = fs
+    assert mx2 == 2005000 and ss == 5000
+
+
+def test_bidaskevent_stats_are_named_tuples():
+    """BidAskEvent.stats and .fused_stats are NamedTuple instances, not plain tuples."""
+    meta = make_meta(0)
+    bids = np.array([[1000000, 10]], dtype=np.int64)
+    asks = np.array([[1005000, 20]], dtype=np.int64)
+    bs = BookStats(1000000, 1005000, 10, 20, 1002500.0, 5000.0, -0.333)
+    fs = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, -0.333)
+    event = BidAskEvent(meta=meta, symbol="2330", bids=bids, asks=asks, stats=bs, fused_stats=fs)
+    assert isinstance(event.stats, BookStats)
+    assert isinstance(event.fused_stats, FusedBookStats)
+    assert event.stats.best_bid == 1000000
+    assert event.fused_stats.mid_price_x2 == 2005000

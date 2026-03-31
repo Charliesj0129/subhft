@@ -9,7 +9,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
-from hft_platform.events import BidAskEvent, MetaData, TickEvent
+from hft_platform.events import BidAskEvent, BookStats, FusedBookStats, MetaData, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.trade_classifier import TradeClassifier
 
@@ -754,10 +754,10 @@ class MarketDataNormalizer:
                         mx2 = int(mid_x2)
                         ss = int(spread_scaled)
                         timb = float(top_imbalance)
-                        # Standard stats tuple (backward-compat: mid_price as float, spread as float)
-                        compat_stats = (bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)
+                        # Standard stats (backward-compat: mid_price as float, spread as float)
+                        compat_stats = BookStats(bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)
                         # Fused stats: integer mid_x2 + spread_scaled for LOBEngine bypass
-                        fused_stats = (bb, ba, bd, ad, mx2, ss, timb)
+                        fused_stats = FusedBookStats(bb, ba, bd, ad, mx2, ss, timb)
 
                         self._trade_classifier.update_quotes(symbol, bb, ba)
 
@@ -872,7 +872,7 @@ class MarketDataNormalizer:
                             imbalance,
                             synthesized,
                         ) = rust_tuple
-                        stats = (
+                        stats = BookStats(
                             int(best_bid),
                             int(best_ask),
                             int(bid_depth),
@@ -898,7 +898,8 @@ class MarketDataNormalizer:
                 and _RUST_STATS_TUPLE
             ):
                 try:
-                    bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                    bids_final, asks_final, _raw_stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                    stats = BookStats(*_raw_stats) if _raw_stats is not None else None
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats", error=str(exc))
                     bids_final = None
@@ -965,7 +966,7 @@ class MarketDataNormalizer:
                             spread,
                             imbalance,
                         ) = rust_tuple
-                        stats = (
+                        stats = BookStats(
                             int(best_bid),
                             int(best_ask),
                             int(bid_depth),
@@ -1002,7 +1003,7 @@ class MarketDataNormalizer:
                         exch_ts_py = _extract_ts_ns(ts_val)
                         if exch_ts_py:
                             exch_ts = exch_ts_py
-                        stats = (
+                        stats = BookStats(
                             int(best_bid),
                             int(best_ask),
                             int(bid_depth),
@@ -1021,7 +1022,8 @@ class MarketDataNormalizer:
             # the same work again via scale_book_pair_stats.
             if stats is None and use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
                 try:
-                    bids_final, asks_final, stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                    bids_final, asks_final, _raw_stats2 = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
+                    stats = BookStats(*_raw_stats2) if _raw_stats2 is not None else None
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats_retry", error=str(exc))
                     bids_final = None
