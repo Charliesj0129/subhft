@@ -123,6 +123,8 @@ class StrategyRunner:
         "_strat_index",
         "_feature_compat_fail_fast",
         "track_gate",
+        "_strategies_version",
+        "_executors_version",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -226,6 +228,9 @@ class StrategyRunner:
         self._position_key_cache: dict[str, tuple[str, str]] = {}
         # Unit 10: Strategy-by-id index for O(1) targeted dispatch
         self._strat_index: dict[str, list[int]] = {}
+        # M-2: Version counters for O(1) executor staleness check (replaces O(n) list scan)
+        self._strategies_version: int = 0
+        self._executors_version: int = 0
         self._feature_compat_fail_fast = os.getenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "1").lower() not in {
             "0",
             "false",
@@ -285,8 +290,10 @@ class StrategyRunner:
                 + "; ".join(i.code for i in compat_issues if i.level == "error")
             )
         self.strategies.append(strategy)
+        self._strategies_version += 1
         self._resolve_strategy_symbols(strategy)
         self._strat_executors.append(self._build_executor_entry(strategy))
+        self._executors_version = self._strategies_version
         idx = len(self._strat_executors) - 1
         sid = strategy.strategy_id
         self._strat_index.setdefault(sid, []).append(idx)
@@ -330,6 +337,9 @@ class StrategyRunner:
         self._strat_index = {}
         for idx, strategy in enumerate(self.strategies):
             self._strat_index.setdefault(strategy.strategy_id, []).append(idx)
+        # M-2: Sync executor version to current strategy version after rebuild
+        self._strategies_version += 1
+        self._executors_version = self._strategies_version
 
     def _flush_pending_strategy_metrics(self) -> None:
         if not self.metrics:
@@ -534,8 +544,9 @@ class StrategyRunner:
         target_strat_id = getattr(event, "strategy_id", None)
         event_symbol = getattr(event, "symbol", "")
 
-        # Keep executors in sync with strategy list (tests may replace list)
-        if not self._executors_match_strategy_list():
+        # M-2: O(1) version-counter check replaces O(n) element-wise scan.
+        # Length guard handles external monkey-patching (e.g. tests replacing .strategies list).
+        if self._executors_version != self._strategies_version or len(self._strat_executors) != len(self.strategies):
             self._rebuild_executors()
 
         # Unit 10: Use index for O(1) targeted dispatch when target_strat_id is set
@@ -574,7 +585,7 @@ class StrategyRunner:
             if target_strat_id and strategy.strategy_id != target_strat_id:
                 continue
 
-            _governor = getattr(self, "strategy_governor", None)
+            _governor = self.strategy_governor
             if _governor is not None and _governor.is_quarantined(strategy.strategy_id):
                 self._emit_trace(
                     "strategy_quarantine_skip",
@@ -634,7 +645,7 @@ class StrategyRunner:
                     },
                 )
                 intents = []
-                _gov = getattr(self, "strategy_governor", None)
+                _gov = self.strategy_governor
                 if _gov is not None:
                     transition = _gov.quarantine(strategy.strategy_id, reason="strategy_exception")
                     self._emit_trace(
