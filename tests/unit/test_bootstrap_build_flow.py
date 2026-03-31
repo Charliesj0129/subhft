@@ -28,7 +28,7 @@ def _sim_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def _mock_services():
     """Patch heavy service constructors so build() never touches real infra."""
     patches = [
-        patch("hft_platform.services.bootstrap.ShioajiClientFacade"),
+        patch("hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade"),
         patch("hft_platform.services.bootstrap.MarketDataService"),
         patch("hft_platform.services.bootstrap.OrderAdapter"),
         patch("hft_platform.services.bootstrap.ExecutionGateway"),

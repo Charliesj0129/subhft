@@ -207,7 +207,7 @@ def test_build_broker_clients_engine_shioaji(monkeypatch):
     bs = SystemBootstrapper(settings={})
     mock_facade = MagicMock()
 
-    with patch("hft_platform.services.bootstrap.ShioajiClientFacade", return_value=mock_facade):
+    with patch("hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade", return_value=mock_facade):
         md, order = bs._build_broker_clients("engine", "/fake/path", {}, "shioaji")
 
     assert md is mock_facade
