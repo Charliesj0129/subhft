@@ -55,10 +55,25 @@ def test_policy_degrade_blocks_new():
     assert reason == "DEGRADE"
 
 
+def test_policy_degrade_blocks_amend():
+    policy = GatewayPolicy()
+    policy._mode = GatewayPolicyMode.DEGRADE
+    ok, reason = policy.gate(_make_intent(IntentType.AMEND), StormGuardState.STORM)
+    assert ok is False
+    assert reason == "DEGRADE"
+
+
 def test_policy_degrade_allows_cancel():
     policy = GatewayPolicy()
     policy._mode = GatewayPolicyMode.DEGRADE
     ok, _ = policy.gate(_make_intent(IntentType.CANCEL), StormGuardState.STORM)
+    assert ok is True
+
+
+def test_policy_degrade_allows_force_flat():
+    policy = GatewayPolicy()
+    policy._mode = GatewayPolicyMode.DEGRADE
+    ok, _ = policy.gate(_make_intent(IntentType.FORCE_FLAT), StormGuardState.STORM)
     assert ok is True
 
 

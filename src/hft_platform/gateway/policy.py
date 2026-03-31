@@ -2,7 +2,7 @@
 
 Rules:
 - HALT:    blocks NEW intents; allows CANCEL if HFT_GATEWAY_HALT_CANCEL=1.
-- DEGRADE: blocks NEW intents only (triggered automatically on StormGuard STORM).
+- DEGRADE: blocks NEW and AMEND; allows only CANCEL and FORCE_FLAT (triggered automatically on StormGuard STORM).
 - NORMAL:  allows all intents.
 
 Mode is readable as a Prometheus gauge (gateway_policy_mode).
@@ -87,7 +87,8 @@ class GatewayPolicy:
             return False, "HALT"
 
         if self._mode == GatewayPolicyMode.DEGRADE:
-            if intent_type == int(IntentType.NEW):
+            # In DEGRADE, only allow risk-reducing operations (CANCEL, FORCE_FLAT)
+            if intent_type not in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
                 return False, "DEGRADE"
 
         return True, "OK"
