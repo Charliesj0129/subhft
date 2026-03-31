@@ -184,7 +184,7 @@ class TestWriteFlushBufferEmergencyFallback:
     """Verify emergency dump is triggered on write failures."""
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def test_timeout_error_triggers_emergency_dump(self, tmp_path) -> None:
         writer = MagicMock()
@@ -326,7 +326,7 @@ class TestWriteFlushBufferEmergencyFallback:
 
 class TestReinjectFailedBuffer:
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def test_reinjects_rows_into_active_buffer(self) -> None:
         writer = MagicMock()

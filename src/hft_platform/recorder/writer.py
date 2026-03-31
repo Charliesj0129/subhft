@@ -385,7 +385,7 @@ class DataWriter:
 
         def _heartbeat_loop() -> None:
             try:
-                while self._heartbeat_running and self.connected and self.ch_client:
+                while self._heartbeat_running and self.connected:
                     time.sleep(self._heartbeat_interval_s)
                     if not self._heartbeat_running:
                         break
@@ -413,10 +413,10 @@ class DataWriter:
 
     def _do_heartbeat_check(self) -> bool:
         """Execute SELECT 1 to verify connection health."""
-        if not self.ch_client:
-            return False
         try:
             with self._ch_heartbeat_lock:
+                if not self.ch_client:
+                    return False
                 self.ch_client.command("SELECT 1")
             return True
         except Exception as e:
@@ -583,7 +583,19 @@ class DataWriter:
                             column_names=column_names,
                             column_oriented=True,
                         )
-                    except TypeError:
+                    except TypeError as te:
+                        # Distinguish "client doesn't support column_oriented" from
+                        # actual data-type errors in the payload.  The column_oriented
+                        # kwarg is passed *only* in the try-block above; a TypeError
+                        # from malformed column_data would also occur in the fallback
+                        # row-oriented path.  Retry once without column_oriented — if
+                        # the same TypeError recurs, it is a real data error.
+                        self._ch_column_oriented = False
+                        logger.debug(
+                            "column_oriented_fallback",
+                            table=table,
+                            error=str(te),
+                        )
                         values = self._transpose_columnar_rows(column_data, row_count)
                         self.ch_client.insert(table, values, column_names=column_names)
                 else:

@@ -48,6 +48,7 @@ _MARKET_DATA_COLS: list[str] = [
     "asks_price",
     "asks_vol",
     "seq_no",
+    "trade_direction",
     # Multi-instrument fields (added 2026-03-30)
     "instrument_type",
     "underlying",
@@ -162,6 +163,7 @@ def format_market_data(
             asks_price or [],
             asks_vol or [],
             int(r.get("seq_no", r.get("seq") or 0)),
+            int(r.get("trade_direction", 0)),
             # Multi-instrument fields (added 2026-03-30)
             r.get("instrument_type", ""),
             r.get("underlying", ""),
