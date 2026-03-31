@@ -227,6 +227,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
             pass
+        # Cache feature engine method ref to avoid per-tick getattr (DATA-09)
+        self._fe_process_lob_update = getattr(self.feature_engine, "process_lob_update", None) if self.feature_engine else None
         self._feature_shadow_engine: FeatureEngine | None = None
         self._shm_publisher: ShmSnapshotWriter | None = None
         self._shm_symbol_index: dict[str, int] = {}
@@ -982,15 +984,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 event.trade_direction,
                 event.trade_confidence,
             )
-        if not hasattr(stats, "best_bid") or not hasattr(stats, "best_ask"):
+        if not isinstance(stats, (LOBStatsEvent, tuple)):
             return None
-        meta = getattr(event, "meta", None)
+        meta = event.meta
         local_ts_ns = int(getattr(meta, "local_ts", 0) or 0) if meta is not None else 0
         start_ns = time.perf_counter_ns()
         try:
-            process_lob_update = getattr(self.feature_engine, "process_lob_update", None)
-            if callable(process_lob_update):
-                feature_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
+            process_fn = self._fe_process_lob_update
+            if process_fn is not None:
+                feature_update = process_fn(event, stats, local_ts_ns=local_ts_ns)
             else:
                 feature_update = self.feature_engine.process_lob_stats(
                     cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns
