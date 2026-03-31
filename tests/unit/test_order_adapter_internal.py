@@ -257,3 +257,28 @@ def test_intent_to_command_created_ns_uses_epoch_domain(tmp_path):
     assert cmd.created_ns > EPOCH_THRESHOLD_NS, (
         f"created_ns={cmd.created_ns} looks like monotonic time, not epoch wall-clock"
     )
+
+
+# ---------------------------------------------------------------------------
+# _deferred_terminals bounded deque (H4 fix)
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_terminals_bounded_at_256(tmp_path):
+    """_deferred_terminals should be a bounded deque(maxlen=256)."""
+    import collections
+
+    adapter = _make_adapter(tmp_path)
+    assert isinstance(adapter._deferred_terminals, collections.deque)
+    assert adapter._deferred_terminals.maxlen == 256
+
+
+def test_deferred_terminals_evicts_oldest_on_overflow(tmp_path):
+    """When deferred_terminals exceeds maxlen, oldest entries are evicted."""
+    adapter = _make_adapter(tmp_path)
+    for i in range(300):
+        adapter._deferred_terminals.append((f"s{i}", f"o{i}", float(i)))
+    assert len(adapter._deferred_terminals) == 256
+    # Oldest entries (0-43) should have been evicted
+    first = adapter._deferred_terminals[0]
+    assert first[0] == "s44", f"Expected s44 as oldest, got {first[0]}"

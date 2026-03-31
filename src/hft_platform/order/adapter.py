@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import os
 import time
 from collections.abc import Callable
@@ -129,7 +130,8 @@ class OrderAdapter:
         self.live_orders: Dict[str, Any] = {}  # Map "strategy_id:intent_id" -> Trade Object or Status dict
         self._live_orders_lock = asyncio.Lock()
         self._pending_order_keys: set[str] = set()
-        self._deferred_terminals: list[tuple[str, str, float]] = []
+        # Bounded deque: auto-evicts oldest entries when full (OOM protection)
+        self._deferred_terminals: collections.deque[tuple[str, str, float]] = collections.deque(maxlen=256)
 
         # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
@@ -374,7 +376,7 @@ class OrderAdapter:
     async def _drain_deferred_terminals(self, order_key: str, trade: Any) -> None:
         """Re-process deferred terminal callbacks now that broker IDs are registered."""
         now = time.monotonic()
-        remaining: list[tuple[str, str, float]] = []
+        remaining: collections.deque[tuple[str, str, float]] = collections.deque(maxlen=256)
         async with self._live_orders_lock:
             for sid, oid, ts in self._deferred_terminals:
                 if now - ts >= 30.0:
