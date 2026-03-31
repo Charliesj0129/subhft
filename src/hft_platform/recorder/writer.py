@@ -829,6 +829,11 @@ class DataWriter:
 
     async def shutdown(self) -> None:
         """Graceful shutdown: flush WAL batch writer and shutdown thread pool."""
+        shutdown_timeout = int(os.getenv("HFT_CH_SHUTDOWN_TIMEOUT_S", "30"))
+
+        # Stop heartbeat FIRST to prevent client invalidation during drain
+        self._heartbeat_running = False
+
         # Flush WAL batch writer if active
         if self._wal_batch_writer is not None:
             try:
@@ -840,8 +845,23 @@ class DataWriter:
             except Exception as e:
                 logger.error("WAL batch writer stop failed on shutdown", error=str(e))
 
-        # Shutdown thread pool
-        self._executor.shutdown(wait=False)
+        # Wait for in-flight inserts to complete (semaphore drain)
+        deadline = time.monotonic() + shutdown_timeout
+        drained = True
+        while self._insert_semaphore._value < self._max_concurrent_inserts:
+            if time.monotonic() > deadline:
+                remaining = self._max_concurrent_inserts - self._insert_semaphore._value
+                logger.warning(
+                    "Shutdown timeout — in-flight inserts may be lost",
+                    remaining_inserts=remaining,
+                    timeout_s=shutdown_timeout,
+                )
+                drained = False
+                break
+            await asyncio.sleep(0.1)
 
-        # Stop heartbeat
-        self._heartbeat_running = False
+        if drained:
+            logger.info("All in-flight inserts drained before shutdown")
+
+        # Shutdown thread pool — wait=True only if we successfully drained
+        self._executor.shutdown(wait=drained)
