@@ -350,7 +350,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             raw_queue_maxsize if raw_queue_maxsize > 0 else int(os.getenv("HFT_RAW_QUEUE_SIZE", "10000"))
         )
         self._raw_queue_high_watermark = float(os.getenv("HFT_RAW_QUEUE_HIGH_WATERMARK", "0.8"))
-        self._dropped_count = 0
+        self._raw_dropped_count = 0
+        self._recorder_dropped_count = 0
         self._high_watermark_warned = False
 
         # Market open grace period (C4)
@@ -1212,6 +1213,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     )
                     self._record_degraded = False
                     self._record_degraded_drops = 0
+                    self._recorder_dropped_count = 0
                 else:
                     self._record_degraded_drops += 1
                     return
@@ -1233,15 +1235,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             try:
                 self.recorder_queue.put_nowait({"topic": topic, "data": payload})
             except asyncio.QueueFull:
-                self._dropped_count += 1
-                if self._dropped_count >= self._record_degrade_threshold and not self._record_degraded:
+                self._recorder_dropped_count += 1
+                if self._recorder_dropped_count >= self._record_degrade_threshold and not self._record_degraded:
                     self._record_degraded = True
                     self._record_degraded_since = time.monotonic()
                     self._record_degrade_last_check = self._record_degraded_since
                     self._record_degraded_drops = 0
                     logger.warning(
                         "Recorder queue overflow: entering degraded mode",
-                        consecutive_drops=self._dropped_count,
+                        consecutive_drops=self._recorder_dropped_count,
                         threshold=self._record_degrade_threshold,
                     )
         else:
@@ -1252,13 +1254,13 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         try:
             self.raw_queue.put_nowait((exchange, msg))
         except asyncio.QueueFull:
-            self._dropped_count += 1
+            self._raw_dropped_count += 1
             if self.metrics_registry:
                 self.metrics_registry.raw_queue_dropped_total.inc()
-            if self._dropped_count % 100 == 1:
+            if self._raw_dropped_count % 100 == 1:
                 logger.warning(
                     "raw_queue full, dropping tick",
-                    dropped=self._dropped_count,
+                    dropped=self._raw_dropped_count,
                     queue_size=self._raw_queue_size,
                 )
 

@@ -229,9 +229,9 @@ def test_enqueue_raw_queue_full_increments_drop_counter():
     # Fill the queue
     svc.raw_queue.put_nowait(("exchange", "first"))
 
-    initial_dropped = svc._dropped_count
+    initial_dropped = svc._raw_dropped_count
     svc._enqueue_raw("TSE", {"code": "2330"})
-    assert svc._dropped_count == initial_dropped + 1
+    assert svc._raw_dropped_count == initial_dropped + 1
 
 
 def test_enqueue_raw_queue_full_metrics_registry_inc():
@@ -252,7 +252,7 @@ def test_enqueue_raw_no_metrics_registry():
 
     # Should not raise
     svc._enqueue_raw("TSE", {"code": "2330"})
-    assert svc._dropped_count == 1
+    assert svc._raw_dropped_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +318,7 @@ def test_record_direct_event_queue_full_enters_degraded_mode():
         mock_map.return_value = ("tick", {"symbol": "2330"})
         svc._record_direct_event(event)
 
-    assert svc._dropped_count >= 1
+    assert svc._recorder_dropped_count >= 1
     assert svc._record_degraded is True
 
 

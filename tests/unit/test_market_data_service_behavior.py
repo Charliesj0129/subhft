@@ -400,9 +400,9 @@ def test_enqueue_raw_queue_full(mds_factory):
     svc = mds_factory()
     svc.raw_queue = asyncio.Queue(maxsize=1)
     svc.raw_queue.put_nowait("item1")
-    dropped_before = svc._dropped_count
+    dropped_before = svc._raw_dropped_count
     svc._enqueue_raw("TSE", {"code": "TSMC"})  # Should not raise
-    assert svc._dropped_count == dropped_before + 1
+    assert svc._raw_dropped_count == dropped_before + 1
 
 
 # ---------------------------------------------------------------------------
@@ -429,9 +429,9 @@ def test_record_direct_event_recorder_queue_full(mds_factory):
     svc.recorder_queue.put_nowait("old")
     event = MagicMock(spec=TickEvent)
     event.symbol = "TSMC"
-    dropped_before = svc._dropped_count
+    dropped_before = svc._recorder_dropped_count
     svc._record_direct_event(event)  # Should not raise
-    assert svc._dropped_count >= dropped_before  # drop silently or increment
+    assert svc._recorder_dropped_count >= dropped_before  # drop silently or increment
     assert svc.recorder_queue.full()  # queue remains full (event was dropped)
 
 
