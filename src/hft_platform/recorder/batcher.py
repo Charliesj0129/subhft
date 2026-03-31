@@ -528,12 +528,14 @@ class Batcher:
             self._memory_guard.note_rows_removed(flush_buf.row_count)
         return flush_buf
 
-    def _wal_emergency_dump(self, flush_buf: ColumnarBuffer) -> None:
+    def _wal_emergency_dump(self, flush_buf: ColumnarBuffer) -> bool:
         """Last-resort WAL dump when the normal write path fails entirely.
 
         Writes buffer contents as JSONL to the WAL directory so data is not
         silently lost on double-fault (writer failure + WAL fallback failure).
         This method MUST NOT raise — any failure is logged and accepted.
+
+        Returns True if WAL dump succeeded, False otherwise.
         """
         try:
             rows = flush_buf.to_row_dicts()
@@ -543,10 +545,10 @@ class Batcher:
                 table=self.table_name,
                 error=str(e),
             )
-            return
+            return False
 
         if not rows:
-            return
+            return True
 
         try:
             wal_dir = os.getenv("HFT_WAL_DIR", ".wal")
@@ -572,6 +574,7 @@ class Batcher:
                 row_count=len(rows),
                 path=filepath,
             )
+            return True
         except Exception as e:
             logger.error(
                 "emergency_wal_dump_failed",
@@ -579,6 +582,7 @@ class Batcher:
                 row_count=len(rows),
                 error=str(e),
             )
+            return False
 
     async def _write_flush_buffer(self, flush_buf: ColumnarBuffer) -> None:
         if self.writer:
@@ -604,7 +608,10 @@ class Batcher:
                     table=self.table_name,
                     count=flush_buf.row_count,
                 )
-                self._wal_emergency_dump(flush_buf)
+                wal_ok = self._wal_emergency_dump(flush_buf)
+                if not wal_ok:
+                    await self._reinject_failed_buffer(flush_buf)
+                    return
             except ConnectionError as e:
                 logger.error(
                     "Connection error during write",
@@ -612,7 +619,10 @@ class Batcher:
                     error=str(e),
                     count=flush_buf.row_count,
                 )
-                self._wal_emergency_dump(flush_buf)
+                wal_ok = self._wal_emergency_dump(flush_buf)
+                if not wal_ok:
+                    await self._reinject_failed_buffer(flush_buf)
+                    return
             except Exception as e:
                 logger.error(
                     "Write failed",
@@ -621,5 +631,38 @@ class Batcher:
                     error_type=type(e).__name__,
                     count=flush_buf.row_count,
                 )
-                self._wal_emergency_dump(flush_buf)
+                wal_ok = self._wal_emergency_dump(flush_buf)
+                if not wal_ok:
+                    await self._reinject_failed_buffer(flush_buf)
+                    return
         flush_buf.clear()
+
+    async def _reinject_failed_buffer(self, flush_buf: ColumnarBuffer) -> None:
+        """Re-inject failed flush buffer rows back into active for retry.
+
+        Called when BOTH the primary CH write and the emergency WAL dump fail
+        (double-fault). Rows are merged back into the active buffer so they
+        can be retried on the next flush cycle instead of being lost.
+        """
+        try:
+            rows = flush_buf.to_row_dicts()
+            if not rows:
+                return
+            async with self.lock:
+                for row in rows:
+                    self._active.append_row(row)
+                if self._memory_guard is not None:
+                    self._memory_guard.note_rows_added(len(rows))
+            logger.critical(
+                "reinject_failed_buffer",
+                table=self.table_name,
+                row_count=len(rows),
+                msg="Both CH and WAL failed — rows re-injected for retry",
+            )
+        except Exception as e:
+            logger.critical(
+                "reinject_failed_buffer_failed",
+                table=self.table_name,
+                error=str(e),
+                msg="PERMANENT DATA LOSS — could not re-inject rows",
+            )

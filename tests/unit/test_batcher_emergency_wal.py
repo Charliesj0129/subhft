@@ -10,10 +10,7 @@ import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from hft_platform.recorder.batcher import Batcher, ColumnarBuffer, GlobalMemoryGuard
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -134,6 +131,49 @@ class TestWalEmergencyDump:
             with patch("builtins.open", side_effect=OSError("disk full")):
                 batcher._wal_emergency_dump(batcher._active)  # must not raise
 
+    def test_returns_true_on_success(self, tmp_path) -> None:
+        writer = MagicMock()
+        batcher = _make_batcher(writer)
+        rows = [{"ts": 1}]
+        _fill_buffer(batcher, rows)
+
+        with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
+            result = batcher._wal_emergency_dump(batcher._active)
+
+        assert result is True
+
+    def test_returns_true_on_empty_buffer(self, tmp_path) -> None:
+        writer = MagicMock()
+        batcher = _make_batcher(writer)
+
+        with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
+            result = batcher._wal_emergency_dump(batcher._active)
+
+        assert result is True
+
+    def test_returns_false_on_file_write_failure(self, tmp_path) -> None:
+        writer = MagicMock()
+        batcher = _make_batcher(writer)
+        rows = [{"k": "v"}]
+        _fill_buffer(batcher, rows)
+
+        with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
+            with patch("builtins.open", side_effect=OSError("disk full")):
+                result = batcher._wal_emergency_dump(batcher._active)
+
+        assert result is False
+
+    def test_returns_false_on_row_extract_failure(self, tmp_path) -> None:
+        writer = MagicMock()
+        batcher = _make_batcher(writer)
+        buf = MagicMock(spec=ColumnarBuffer)
+        buf.to_row_dicts.side_effect = RuntimeError("boom")
+
+        with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
+            result = batcher._wal_emergency_dump(buf)
+
+        assert result is False
+
 
 # ---------------------------------------------------------------------------
 # _write_flush_buffer: exception handlers call emergency dump
@@ -210,8 +250,8 @@ class TestWriteFlushBufferEmergencyFallback:
         assert all_lines[0]["__wal_table__"] == "hft.test_table"
         assert all_lines[1:] == rows
 
-    def test_buffer_cleared_even_after_emergency_dump(self, tmp_path) -> None:
-        """flush_buf.clear() must run regardless of exception path."""
+    def test_buffer_cleared_after_successful_emergency_dump(self, tmp_path) -> None:
+        """flush_buf.clear() runs when emergency WAL dump succeeds."""
         writer = MagicMock()
         writer.write_columnar = AsyncMock(side_effect=ConnectionError("down"))
         batcher = _make_batcher(writer)
@@ -238,19 +278,104 @@ class TestWriteFlushBufferEmergencyFallback:
 
         assert list(tmp_path.iterdir()) == []
 
-    def test_emergency_dump_double_fault_does_not_crash_recorder(self, tmp_path) -> None:
-        """Even if emergency dump itself fails, recorder keeps running."""
+    def test_double_fault_reinjects_rows_into_active_buffer(self, tmp_path) -> None:
+        """When both CH write and WAL dump fail, rows are re-injected for retry."""
         writer = MagicMock()
         writer.write_columnar = AsyncMock(side_effect=RuntimeError("primary fail"))
         batcher = _make_batcher(writer)
-        rows = [{"ts": 1}]
+        rows = [{"ts": 1, "price": 100}, {"ts": 2, "price": 200}]
         _fill_buffer(batcher, rows)
         flush_buf = batcher._active
+
+        # Ensure active buffer is empty before re-injection
+        batcher._active = batcher._new_buffer()
 
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             with patch("builtins.open", side_effect=OSError("disk full")):
                 # Must not raise despite double fault
                 self._run(batcher._write_flush_buffer(flush_buf))
 
-        # Buffer still cleared
-        assert flush_buf.row_count == 0
+        # Rows re-injected into active buffer, NOT cleared from flush_buf
+        assert batcher._active.row_count == 2
+        reinjected = batcher._active.to_row_dicts()
+        assert reinjected == rows
+
+    def test_double_fault_does_not_crash_recorder(self, tmp_path) -> None:
+        """Even if emergency dump and reinject both fail, recorder keeps running."""
+        writer = MagicMock()
+        writer.write_columnar = AsyncMock(side_effect=RuntimeError("primary fail"))
+        batcher = _make_batcher(writer)
+        rows = [{"ts": 1}]
+        _fill_buffer(batcher, rows)
+
+        # Use a MagicMock buffer that fails on second to_row_dicts call (reinject)
+        flush_buf = MagicMock(spec=ColumnarBuffer)
+        flush_buf.row_count = 1
+        flush_buf.to_row_dicts = MagicMock(side_effect=[rows, RuntimeError("extract fail")])
+
+        with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
+            with patch("builtins.open", side_effect=OSError("disk full")):
+                # Must not raise despite triple fault
+                self._run(batcher._write_flush_buffer(flush_buf))
+
+
+# ---------------------------------------------------------------------------
+# _reinject_failed_buffer
+# ---------------------------------------------------------------------------
+
+
+class TestReinjectFailedBuffer:
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def test_reinjects_rows_into_active_buffer(self) -> None:
+        writer = MagicMock()
+        batcher = _make_batcher(writer)
+        rows = [{"ts": 1, "price": 100}, {"ts": 2, "price": 200}]
+        _fill_buffer(batcher, rows)
+        flush_buf = batcher._active
+
+        # Reset active to empty
+        batcher._active = batcher._new_buffer()
+        assert batcher._active.row_count == 0
+
+        self._run(batcher._reinject_failed_buffer(flush_buf))
+
+        assert batcher._active.row_count == 2
+        assert batcher._active.to_row_dicts() == rows
+
+    def test_reinject_updates_memory_guard(self) -> None:
+        guard = GlobalMemoryGuard(max_rows=100000)
+        writer = MagicMock()
+        batcher = Batcher(
+            table_name="hft.test",
+            flush_limit=100,
+            writer=writer,
+            memory_guard=guard,
+        )
+        rows = [{"a": 1}, {"a": 2}, {"a": 3}]
+        flush_buf = batcher._new_buffer()
+        for r in rows:
+            flush_buf.append_row(r)
+
+        before = guard.total_rows
+        self._run(batcher._reinject_failed_buffer(flush_buf))
+
+        assert guard.total_rows == before + 3
+
+    def test_reinject_empty_buffer_is_noop(self) -> None:
+        writer = MagicMock()
+        batcher = _make_batcher(writer)
+        empty_buf = batcher._new_buffer()
+
+        self._run(batcher._reinject_failed_buffer(empty_buf))
+        assert batcher._active.row_count == 0
+
+    def test_reinject_does_not_raise_on_failure(self) -> None:
+        writer = MagicMock()
+        batcher = _make_batcher(writer)
+        buf = MagicMock(spec=ColumnarBuffer)
+        buf.to_row_dicts.side_effect = RuntimeError("extract fail")
+
+        # Must not raise
+        self._run(batcher._reinject_failed_buffer(buf))

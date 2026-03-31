@@ -578,12 +578,13 @@ class WALBatchWriter:
                 elapsed_ms = (time.monotonic() - self._last_flush_ts) * 1000
                 if self._buffer_rows == 0 or elapsed_ms < self._batch_interval_ms:
                     continue
-                # Need flush
+                # Swap to new empty dicts — new writers go to fresh buffers
                 flush_data = self._buffer
                 flush_columnar = self._columnar_buffer
                 self._buffer = {}
                 self._columnar_buffer = {}
                 flush_rows = self._buffer_rows
+                flush_bytes = self._buffer_bytes
                 self._buffer_rows = 0
                 self._buffer_bytes = 0
                 self._last_flush_ts = time.monotonic()
@@ -605,7 +606,19 @@ class WALBatchWriter:
                             logger.debug("operation_fallback", error=str(exc))
                             pass
                 except Exception as e:
-                    logger.error("WAL batch timer flush failed", error=str(e))
+                    logger.error(
+                        "WAL batch timer flush failed — merging data back for retry",
+                        error=str(e),
+                        rows=flush_rows,
+                    )
+                    # Merge failed data back into active buffer for retry
+                    with self._lock:
+                        for table, rows_list in flush_data.items():
+                            self._buffer.setdefault(table, []).extend(rows_list)
+                        for table, cols_list in flush_columnar.items():
+                            self._columnar_buffer.setdefault(table, []).extend(cols_list)
+                        self._buffer_rows += flush_rows
+                        self._buffer_bytes += flush_bytes
                     if self._metrics:
                         try:
                             self._metrics.wal_batch_flush_total.labels(result="error").inc()
@@ -621,6 +634,8 @@ class WALBatchWriter:
             if (self._buffer or self._columnar_buffer) and self._buffer_rows > 0:
                 flush_data = self._buffer
                 flush_columnar = self._columnar_buffer
+                flush_rows = self._buffer_rows
+                flush_bytes = self._buffer_bytes
                 self._buffer = {}
                 self._columnar_buffer = {}
                 self._buffer_rows = 0
@@ -628,13 +643,27 @@ class WALBatchWriter:
             else:
                 flush_data = {}
                 flush_columnar = {}
+                flush_rows = 0
+                flush_bytes = 0
         if flush_data or flush_columnar:
             try:
                 t0 = time.monotonic()
                 self._write_batch_sync(flush_data, 0, flush_columnar)
                 self._record_wal_write_latency("batch_stop_flush", (time.monotonic() - t0) * 1000.0)
             except Exception as e:
-                logger.error("WAL batch final flush failed", error=str(e))
+                logger.error(
+                    "WAL batch final flush failed — merging data back",
+                    error=str(e),
+                    rows=flush_rows,
+                )
+                # Merge failed data back so caller can inspect/retry
+                with self._lock:
+                    for table, rows_list in flush_data.items():
+                        self._buffer.setdefault(table, []).extend(rows_list)
+                    for table, cols_list in flush_columnar.items():
+                        self._columnar_buffer.setdefault(table, []).extend(cols_list)
+                    self._buffer_rows += flush_rows
+                    self._buffer_bytes += flush_bytes
 
 
 class WALReplayer:
