@@ -573,6 +573,10 @@ class MetricsRegistry:
             "gateway_intent_channel_depth",
             "Current depth of LocalIntentChannel queue",
         )
+        self.gateway_dlq_size = Gauge(
+            "gateway_dlq_size",
+            "Gateway DLQ expired-intent count",
+        )
         # 0=NORMAL, 1=DEGRADE, 2=HALT
         self.gateway_policy_mode = Gauge(
             "gateway_policy_mode",
@@ -582,6 +586,10 @@ class MetricsRegistry:
             "gateway_exposure_notional_scaled",
             "Current per-strategy/symbol exposure (scaled integer)",
             ["strategy", "symbol"],
+        )
+        self.gateway_exposure_global_notional_scaled = Gauge(
+            "gateway_exposure_global_notional_scaled",
+            "Current global exposure notional (scaled integer, sum across all strategies/symbols)",
         )
 
         # CE-M3 WAL SLO (CE3-06)

@@ -508,3 +508,36 @@ def test_exposure_env_var_max_symbols(monkeypatch):
     monkeypatch.setenv("HFT_EXPOSURE_MAX_SYMBOLS", "7")
     store = ExposureStore()
     assert store._max_symbols == 7
+
+
+# ── H10: global_notional property ──────────────────────────────────────────
+
+
+def test_global_notional_property_returns_zero_on_init():
+    """global_notional property returns 0 on a freshly constructed store."""
+    store = ExposureStore(global_max_notional=0)
+    assert store.global_notional == 0
+
+
+def test_global_notional_property_reflects_approved_intent():
+    """global_notional property increases after an approved check_and_update."""
+    store = ExposureStore(global_max_notional=0)
+    store.check_and_update(_key(), _make_intent(price=2_000_000, qty=3))
+    # notional = 2_000_000 * 3
+    assert store.global_notional == 6_000_000
+
+
+def test_global_notional_property_decreases_after_release():
+    """global_notional property decreases after release_exposure."""
+    store = ExposureStore(global_max_notional=0)
+    intent = _make_intent(price=1_000_000, qty=2)
+    store.check_and_update(_key(), intent)
+    store.release_exposure(_key(), intent)
+    assert store.global_notional == 0
+
+
+def test_global_notional_property_matches_get_global_notional():
+    """global_notional property is consistent with get_global_notional()."""
+    store = ExposureStore(global_max_notional=0)
+    store.check_and_update(_key(), _make_intent(price=500_000, qty=5))
+    assert store.global_notional == store.get_global_notional()

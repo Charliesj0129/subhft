@@ -374,3 +374,91 @@ def test_set_halt_is_idempotent():
     svc.set_halt()
     svc.set_halt()  # second call must be no-op
     assert svc._policy.mode == GatewayPolicyMode.HALT
+
+
+# ── H6: DLQ size metric + H10: exposure notional metric ────────────────────
+
+
+def _make_mock_metrics():
+    """Return a mock MetricsRegistry with the two new gauges."""
+    metrics = MagicMock()
+    metrics.gateway_intent_channel_depth = MagicMock()
+    metrics.gateway_dlq_size = MagicMock()
+    metrics.gateway_exposure_global_notional_scaled = MagicMock()
+    return metrics
+
+
+def _inject_metrics(svc, mock_metrics) -> None:
+    """Inject a mock MetricsRegistry into a GatewayService instance, updating owner_id."""
+    svc._metrics = mock_metrics
+    svc._metrics_owner_id = id(mock_metrics)
+    svc._metrics_enabled = True
+    svc._gateway_depth_counter = 0
+    svc._gateway_depth_sample_every = 1  # emit on every call
+    svc._gateway_depth_metric = mock_metrics.gateway_intent_channel_depth
+    svc._gateway_dlq_metric = mock_metrics.gateway_dlq_size
+    svc._gateway_exposure_metric = mock_metrics.gateway_exposure_global_notional_scaled
+
+
+def test_update_channel_depth_emits_dlq_size():
+    """_update_channel_depth_metric must call .set() on gateway_dlq_size gauge."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=50)
+    exposure_store = ExposureStore()
+    svc, _ = _make_service(channel=ch, exposure_store=exposure_store)
+
+    mock_metrics = _make_mock_metrics()
+    _inject_metrics(svc, mock_metrics)
+
+    svc._update_channel_depth_metric()
+
+    mock_metrics.gateway_dlq_size.set.assert_called_once()
+    dlq_value = mock_metrics.gateway_dlq_size.set.call_args[0][0]
+    assert dlq_value == ch.dlq_size()
+
+
+def test_update_channel_depth_emits_exposure_notional():
+    """_update_channel_depth_metric must call .set() on gateway_exposure_global_notional_scaled gauge."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    exposure_store = ExposureStore()
+    svc, _ = _make_service(channel=ch, exposure_store=exposure_store)
+
+    mock_metrics = _make_mock_metrics()
+    _inject_metrics(svc, mock_metrics)
+
+    svc._update_channel_depth_metric()
+
+    mock_metrics.gateway_exposure_global_notional_scaled.set.assert_called_once()
+    notional_value = mock_metrics.gateway_exposure_global_notional_scaled.set.call_args[0][0]
+    assert notional_value == exposure_store.global_notional
+
+
+def test_refresh_metrics_registry_caches_dlq_and_exposure_metrics(monkeypatch):
+    """_refresh_metrics_registry must populate _gateway_dlq_metric and _gateway_exposure_metric."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, _ = _make_service(channel=ch)
+
+    mock_metrics = _make_mock_metrics()
+
+    import hft_platform.observability.metrics as metrics_module
+
+    monkeypatch.setattr(metrics_module.MetricsRegistry, "get", staticmethod(lambda: mock_metrics))
+
+    svc._refresh_metrics_registry()
+
+    assert svc._gateway_dlq_metric is mock_metrics.gateway_dlq_size
+    assert svc._gateway_exposure_metric is mock_metrics.gateway_exposure_global_notional_scaled
+
+
+def test_update_channel_depth_skips_when_metrics_disabled():
+    """_update_channel_depth_metric must be a no-op when metrics are disabled."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, _ = _make_service(channel=ch)
+
+    mock_metrics = _make_mock_metrics()
+    _inject_metrics(svc, mock_metrics)
+    svc._metrics_enabled = False  # override back to disabled after inject
+
+    svc._update_channel_depth_metric()
+
+    mock_metrics.gateway_dlq_size.set.assert_not_called()
+    mock_metrics.gateway_exposure_global_notional_scaled.set.assert_not_called()

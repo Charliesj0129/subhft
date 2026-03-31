@@ -109,6 +109,8 @@ class GatewayService:
         self._gateway_reject_metric_cache: dict[str, Any] = {}
         self._gateway_dispatch_latency_metric = None
         self._gateway_depth_metric = None
+        self._gateway_dlq_metric = None
+        self._gateway_exposure_metric = None
         self._gateway_dedup_hits_metric = None
         self._gateway_reject_counter = 0
         self._gateway_latency_counter = 0
@@ -540,6 +542,12 @@ class GatewayService:
             metric = self._gateway_depth_metric or metrics.gateway_intent_channel_depth
             self._gateway_depth_metric = metric
             metric.set(self._channel.qsize())
+            dlq_metric = self._gateway_dlq_metric or metrics.gateway_dlq_size
+            self._gateway_dlq_metric = dlq_metric
+            dlq_metric.set(self._channel.dlq_size())
+            exposure_metric = self._gateway_exposure_metric or metrics.gateway_exposure_global_notional_scaled
+            self._gateway_exposure_metric = exposure_metric
+            exposure_metric.set(self._exposure.global_notional)
         except Exception as exc:  # noqa: BLE001
             logger.debug("metrics_emit_failed", stage="channel_depth", error=str(exc))
 
@@ -553,10 +561,14 @@ class GatewayService:
             if self._metrics is not None:
                 self._gateway_dispatch_latency_metric = self._metrics.gateway_dispatch_latency_ns
                 self._gateway_depth_metric = self._metrics.gateway_intent_channel_depth
+                self._gateway_dlq_metric = self._metrics.gateway_dlq_size
+                self._gateway_exposure_metric = self._metrics.gateway_exposure_global_notional_scaled
                 self._gateway_dedup_hits_metric = self._metrics.gateway_dedup_hits_total
             else:
                 self._gateway_dispatch_latency_metric = None
                 self._gateway_depth_metric = None
+                self._gateway_dlq_metric = None
+                self._gateway_exposure_metric = None
                 self._gateway_dedup_hits_metric = None
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
@@ -565,6 +577,8 @@ class GatewayService:
             self._gateway_reject_metric_cache.clear()
             self._gateway_dispatch_latency_metric = None
             self._gateway_depth_metric = None
+            self._gateway_dlq_metric = None
+            self._gateway_exposure_metric = None
             self._gateway_dedup_hits_metric = None
 
     def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:

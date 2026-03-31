@@ -300,6 +300,12 @@ class ExposureStore:
         with self._lock:
             return self._exposure.get(account, {}).get(strategy_id, {}).get(symbol, 0)
 
+    @property
+    def global_notional(self) -> int:
+        """Current global exposure notional (thread-safe snapshot)."""
+        with self._lock:
+            return self._global_notional
+
     def get_global_notional(self) -> int:
         with self._lock:
             return self._global_notional
