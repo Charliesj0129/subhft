@@ -198,6 +198,9 @@ class OrderAdapter:
                 arrival = int(intent.decision_price)
         else:
             arrival = int(intent.decision_price)
+        # Fall back to decision_price if LOB returned 0 (book not ready)
+        if arrival <= 0:
+            arrival = int(intent.decision_price)
         return OrderCommand(
             cmd_id=int(intent.intent_id),
             intent=intent,
@@ -641,8 +644,10 @@ class OrderAdapter:
             # Record dispatch timestamp for e2e latency tracking (SLO-2)
             if cmd.created_ns > 0:
                 self._cmd_created_ns_map[order_key] = cmd.created_ns
-            # TCA: store decision/arrival prices for fill enrichment
-            self._cmd_tca_map[order_key] = (int(cmd.decision_price), int(cmd.arrival_price))
+            # TCA: store decision/arrival prices for fill enrichment (NEW only —
+            # AMEND/CANCEL should not overwrite the original arrival reference point)
+            if intent.intent_type == IntentType.NEW:
+                self._cmd_tca_map[order_key] = (int(cmd.decision_price), int(cmd.arrival_price))
 
             if intent.intent_type == IntentType.NEW:
                 if self._broker_codec is None:
@@ -1017,21 +1022,25 @@ class OrderAdapter:
                 self._record_queue_latency(cmd)
             self._store_pending(cmd)
 
-            start = time.monotonic()
-            while True:
-                remaining = self._api_coalesce_window_s - (time.monotonic() - start)
-                if remaining <= 0:
-                    break
-                try:
-                    item = await asyncio.wait_for(self._api_queue.get(), timeout=remaining)
-                    cmd = (
-                        self._materialize_typed_command(item)
-                        if _is_typed_order_cmd_frame(item)
-                        else cast(OrderCommand, item)
-                    )
-                    self._store_pending(cmd)
-                except asyncio.TimeoutError:
-                    break
+            # Fast-path: skip coalesce window for urgent intent types (CANCEL,
+            # FORCE_FLAT) to minimise latency on safety-critical orders.
+            _urgent = cmd.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+            if not _urgent and self._api_coalesce_window_s > 0:
+                start = time.monotonic()
+                while True:
+                    remaining = self._api_coalesce_window_s - (time.monotonic() - start)
+                    if remaining <= 0:
+                        break
+                    try:
+                        item = await asyncio.wait_for(self._api_queue.get(), timeout=remaining)
+                        cmd = (
+                            self._materialize_typed_command(item)
+                            if _is_typed_order_cmd_frame(item)
+                            else cast(OrderCommand, item)
+                        )
+                        self._store_pending(cmd)
+                    except asyncio.TimeoutError:
+                        break
 
             pending = list(self._api_pending.values())
             self._api_pending.clear()

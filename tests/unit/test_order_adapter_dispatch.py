@@ -335,3 +335,85 @@ async def test_order_id_map_eviction_removes_oldest_10_percent(tmp_config):
     for i in range(10):
         assert f"id_{i:04d}" not in adapter.order_id_map
     assert "id_0010" in adapter.order_id_map
+
+
+# ---------------------------------------------------------------------------
+# Coalesce window bypass for urgent intents (H3 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_skips_coalesce_window(tmp_config):
+    """CANCEL intents should bypass the coalesce window for minimal latency."""
+    import time
+
+    client = _make_client()
+    adapter = _make_adapter(tmp_config, client)
+    adapter._api_coalesce_window_s = 0.5  # 500ms window — would be very noticeable
+
+    # Seed a live order so cancel dispatch finds its target
+    adapter.live_orders["strat1:ORD-TARGET"] = MagicMock()
+
+    cancel_intent = _make_intent(
+        intent_type=IntentType.CANCEL,
+        target_order_id="ORD-TARGET",
+    )
+    cancel_cmd = _make_cmd(intent=cancel_intent)
+
+    await adapter._api_queue.put(cancel_cmd)
+
+    # Run worker briefly — it should dispatch without waiting 500ms
+    adapter.running = True
+    t0 = time.monotonic()
+    worker = asyncio.create_task(adapter._api_worker())
+    # Give enough time for one iteration but NOT 500ms
+    await asyncio.sleep(0.05)
+    adapter.running = False
+    worker.cancel()
+    try:
+        await worker
+    except asyncio.CancelledError:
+        pass
+    elapsed = time.monotonic() - t0
+
+    # Should have dispatched within 50ms, not waited 500ms coalesce
+    assert elapsed < 0.2, f"Took {elapsed:.3f}s — coalesce window was NOT bypassed"
+    client.cancel_order.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_force_flat_skips_coalesce_window(tmp_config):
+    """FORCE_FLAT intents should bypass the coalesce window (timing check)."""
+    import time
+
+    client = _make_client()
+    adapter = _make_adapter(tmp_config, client)
+    adapter._api_coalesce_window_s = 0.5
+
+    flat_intent = _make_intent(intent_type=IntentType.FORCE_FLAT)
+    flat_cmd = _make_cmd(intent=flat_intent)
+
+    dispatched = []
+    original_dispatch = adapter._dispatch_to_api
+
+    async def _track_dispatch(cmd):
+        dispatched.append(time.monotonic())
+        return await original_dispatch(cmd)
+
+    adapter._dispatch_to_api = _track_dispatch
+    await adapter._api_queue.put(flat_cmd)
+
+    adapter.running = True
+    t0 = time.monotonic()
+    worker = asyncio.create_task(adapter._api_worker())
+    await asyncio.sleep(0.05)
+    adapter.running = False
+    worker.cancel()
+    try:
+        await worker
+    except asyncio.CancelledError:
+        pass
+
+    # Dispatch should have been reached within 50ms, not after 500ms coalesce
+    assert len(dispatched) == 1, "Expected exactly one dispatch call"
+    assert dispatched[0] - t0 < 0.2, f"Dispatch took {dispatched[0] - t0:.3f}s — coalesce NOT bypassed"
