@@ -142,6 +142,8 @@ class BackupManager:
 
     def _execute_backup(self, backup_name: str) -> None:
         """Execute BACKUP DATABASE hft TO Disk('backup_local', ...)."""
+        if not _BACKUP_NAME_RE.match(backup_name):
+            raise ValueError(f"Invalid backup_name: {backup_name!r}")
         client = self._client()
         sql = f"BACKUP DATABASE hft TO Disk('backup_local', '{backup_name}/')"
         logger.info("Executing backup", backup_name=backup_name, sql=sql)
@@ -327,10 +329,16 @@ class BackupManager:
 
             tables = [row[0] for row in client.execute("SELECT name FROM system.tables WHERE database = 'hft'")]
 
+            if not _IDENTIFIER_RE.match(temp_db):
+                raise ValueError(f"Invalid temp_db: {temp_db!r}")
+
             results: dict[str, tuple[int, int]] = {}
             mismatches: list[str] = []
 
             for table in tables:
+                if not _IDENTIFIER_RE.match(table):
+                    logger.warning("Skipping table with invalid identifier", table=table)
+                    continue
                 orig = client.execute(f"SELECT count() FROM hft.{table}")[0][0]
                 restored = client.execute(f"SELECT count() FROM {temp_db}.{table}")[0][0]
                 results[table] = (orig, restored)
