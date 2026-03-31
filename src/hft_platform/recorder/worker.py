@@ -55,26 +55,24 @@ ORDER_COLUMNS = [
     "order_id",
     "strategy_id",
     "symbol",
-    "exchange",
     "side",
     "price_scaled",
     "qty",
-    "order_type",
     "status",
-    "exch_ts",
     "ingest_ts",
+    "latency_us",
 ]
 
 FILL_COLUMNS = [
-    "trade_id",
+    "fill_id",
     "order_id",
+    "strategy_id",
     "symbol",
-    "exchange",
     "side",
     "price_scaled",
     "qty",
-    "exch_ts",
-    "ingest_ts",
+    "fee_scaled",
+    "match_ts",
 ]
 
 PNL_SNAPSHOT_COLUMNS = [
@@ -145,7 +143,7 @@ def _extract_market_data_values(row) -> list | None:
 
 
 def _extract_order_values(row) -> list | None:
-    """Fast extractor for order events."""
+    """Fast extractor for order events — aligned with mapper.py and CH hft.orders schema."""
     try:
         if isinstance(row, dict):
             get = row.get
@@ -153,27 +151,23 @@ def _extract_order_values(row) -> list | None:
                 get("order_id"),
                 get("strategy_id"),
                 get("symbol"),
-                get("exchange", get("exch", "")),
                 get("side", get("action", "")),
                 get("price_scaled"),
                 get("qty", get("quantity", 0)),
-                get("order_type", get("type", "")),
                 get("status", ""),
-                get("exch_ts", get("ts")),
                 get("ingest_ts", get("recv_ts")),
+                get("latency_us", 0),
             ]
         return [
             getattr(row, "order_id", None),
             getattr(row, "strategy_id", None),
             getattr(row, "symbol", None),
-            getattr(row, "exchange", None) or "",
             getattr(row, "side", None) or getattr(row, "action", None) or "",
             getattr(row, "price_scaled", None),
             getattr(row, "qty", None) or getattr(row, "quantity", None) or 0,
-            getattr(row, "order_type", None) or getattr(row, "type", None) or "",
             getattr(row, "status", None) or "",
-            getattr(row, "exch_ts", None) or getattr(row, "ts", None),
             getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
+            getattr(row, "latency_us", 0),
         ]
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
@@ -181,31 +175,31 @@ def _extract_order_values(row) -> list | None:
 
 
 def _extract_fill_values(row) -> list | None:
-    """Fast extractor for fill/trade events."""
+    """Fast extractor for fill/trade events — aligned with mapper.py and CH hft.trades schema."""
     try:
         if isinstance(row, dict):
             get = row.get
             return [
-                get("trade_id", get("fill_id")),
+                get("fill_id", get("trade_id")),
                 get("order_id"),
+                get("strategy_id"),
                 get("symbol"),
-                get("exchange", get("exch", "")),
                 get("side", get("action", "")),
                 get("price_scaled"),
                 get("qty", get("quantity", 0)),
-                get("exch_ts", get("ts")),
-                get("ingest_ts", get("recv_ts")),
+                get("fee_scaled", 0),
+                get("match_ts", get("exch_ts", get("ts"))),
             ]
         return [
-            getattr(row, "trade_id", None) or getattr(row, "fill_id", None),
+            getattr(row, "fill_id", None) or getattr(row, "trade_id", None),
             getattr(row, "order_id", None),
+            getattr(row, "strategy_id", None),
             getattr(row, "symbol", None),
-            getattr(row, "exchange", None) or "",
             getattr(row, "side", None) or getattr(row, "action", None) or "",
             getattr(row, "price_scaled", None),
             getattr(row, "qty", None) or getattr(row, "quantity", None) or 0,
-            getattr(row, "exch_ts", None) or getattr(row, "ts", None),
-            getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
+            getattr(row, "fee_scaled", 0),
+            getattr(row, "match_ts", None) or getattr(row, "exch_ts", None) or getattr(row, "ts", None),
         ]
     except Exception as _exc:  # noqa: BLE001
         return None
@@ -323,7 +317,7 @@ class RecorderService:
                 health_tracker=self.health_tracker,
             ),
             "fills": Batcher(
-                "hft.trades",
+                "hft.fills",
                 writer=self.writer,
                 extractor=_EXTRACTORS.get("fills") if extract_enabled else None,
                 extractor_columns=_EXTRACTOR_COLUMNS.get("fills") if extract_enabled else None,

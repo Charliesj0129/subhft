@@ -310,48 +310,46 @@ class TestExtractOrderValues(unittest.TestCase):
             "order_id": "ORD1",
             "strategy_id": "S1",
             "symbol": "2330",
-            "exchange": "TSE",
             "side": "buy",
             "price_scaled": 5950000,
             "qty": 1,
-            "order_type": "limit",
             "status": "open",
-            "exch_ts": 1000,
             "ingest_ts": 1001,
+            "latency_us": 42,
         }
         result = _extract_order_values(row)
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD1"
-        assert result[4] == "buy"
+        assert result[3] == "buy"
+        assert result[8] == 42  # latency_us
 
     def test_extract_dict_fallback_keys(self):
-        row = {"order_id": "X", "exch": "OTC", "action": "sell", "quantity": 3, "ts": 50, "recv_ts": 51}
+        row = {"order_id": "X", "action": "sell", "quantity": 3, "recv_ts": 51}
         result = _extract_order_values(row)
         assert result is not None
-        assert result[3] == "OTC"   # exchange fallback
-        assert result[4] == "sell"  # side fallback to action
-        assert result[6] == 3       # qty fallback to quantity
-        assert result[9] == 50      # exch_ts fallback to ts
+        assert result[3] == "sell"  # side fallback to action
+        assert result[5] == 3       # qty fallback to quantity
+        assert result[7] == 51      # ingest_ts fallback to recv_ts
+        assert result[8] == 0       # latency_us default
 
     def test_extract_object_path(self):
         row = SimpleNamespace(
             order_id="ORD2",
             strategy_id="S2",
             symbol="TXFD6",
-            exchange="TAIFEX",
             side="sell",
             price_scaled=200000000,
             qty=2,
-            order_type="market",
             status="filled",
-            exch_ts=3000,
             ingest_ts=3001,
+            latency_us=100,
         )
         result = _extract_order_values(row)
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD2"
+        assert result[8] == 100  # latency_us
 
     def test_compat_wrapper_returns_dict(self):
         row = {"order_id": "X", "symbol": "2330"}
@@ -363,55 +361,65 @@ class TestExtractOrderValues(unittest.TestCase):
 class TestExtractFillValues(unittest.TestCase):
     def test_extract_dict_path(self):
         row = {
-            "trade_id": "T1",
+            "fill_id": "F1",
             "order_id": "ORD1",
+            "strategy_id": "S1",
             "symbol": "2330",
-            "exchange": "TSE",
             "side": "buy",
             "price_scaled": 5950000,
             "qty": 1,
-            "exch_ts": 1000,
-            "ingest_ts": 1001,
+            "fee_scaled": 200,
+            "match_ts": 1000,
         }
         result = _extract_fill_values(row)
         assert result is not None
         assert len(result) == len(FILL_COLUMNS)
-        assert result[0] == "T1"
+        assert result[0] == "F1"
+        assert result[7] == 200  # fee_scaled
+        assert result[8] == 1000  # match_ts
 
-    def test_extract_dict_fill_id_fallback(self):
-        row = {"fill_id": "F999", "order_id": "ORD1", "symbol": "2330"}
+    def test_extract_dict_trade_id_fallback(self):
+        """fill_id falls back to trade_id for backward compatibility."""
+        row = {"trade_id": "T999", "order_id": "ORD1", "symbol": "2330"}
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[0] == "F999"  # trade_id fallback to fill_id
+        assert result[0] == "T999"  # fill_id fallback to trade_id
+
+    def test_extract_dict_fill_id_preferred(self):
+        row = {"fill_id": "F999", "trade_id": "T999", "order_id": "ORD1", "symbol": "2330"}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[0] == "F999"  # fill_id preferred over trade_id
 
     def test_extract_object_path(self):
         row = SimpleNamespace(
-            trade_id="T2",
+            fill_id="F2",
             order_id="ORD2",
+            strategy_id="S2",
             symbol="TMFD6",
-            exchange="TAIFEX",
             side="sell",
             price_scaled=20000000,
             qty=1,
-            exch_ts=4000,
-            ingest_ts=4001,
+            fee_scaled=150,
+            match_ts=4000,
         )
         result = _extract_fill_values(row)
         assert result is not None
         assert len(result) == len(FILL_COLUMNS)
-        assert result[0] == "T2"
+        assert result[0] == "F2"
+        assert result[7] == 150  # fee_scaled
 
-    def test_extract_object_fill_id_fallback(self):
-        row = SimpleNamespace(fill_id="F888", order_id="X", symbol="2330")
+    def test_extract_object_trade_id_fallback(self):
+        row = SimpleNamespace(trade_id="T888", order_id="X", symbol="2330")
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[0] == "F888"
+        assert result[0] == "T888"
 
     def test_compat_wrapper_returns_dict(self):
-        row = {"trade_id": "T1", "symbol": "2330"}
+        row = {"fill_id": "F1", "symbol": "2330"}
         result = _extract_fill(row)
         assert isinstance(result, dict)
-        assert "trade_id" in result
+        assert "fill_id" in result
 
 
 class TestExtractPnlSnapshotValues(unittest.TestCase):
