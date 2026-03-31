@@ -868,7 +868,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
         except Exception as e:
             self._record_shioaji_crash_signature(str(e), context="md_callback")
-            logger.error(f"Error in Shioaji callback: {e}")
+            logger.error("shioaji_callback_error", error=str(e))
 
     # -- monitor loop -------------------------------------------------------
 
