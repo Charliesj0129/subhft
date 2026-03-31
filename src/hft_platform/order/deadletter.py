@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("order.deadletter")
 
@@ -94,6 +95,9 @@ class DeadLetterQueue:
         self.total_entries = 0
         self.total_flushed = 0
 
+        # Metrics
+        self._metrics = MetricsRegistry.get()
+
         logger.info("DeadLetterQueue initialized", dir=str(self.dlq_dir), max_buffer=max_buffer_size)
 
     async def add(
@@ -129,6 +133,10 @@ class DeadLetterQueue:
         async with self._lock:
             self._buffer.append(entry)
             self.total_entries += 1
+            try:
+                self._metrics.dlq_size_total.labels(source="order").inc()
+            except Exception:
+                pass  # Metrics must never block DLQ operation
 
             # Flush to disk if buffer is full
             if len(self._buffer) >= self.max_buffer_size:
