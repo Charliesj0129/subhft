@@ -7,14 +7,15 @@ volume bars, large-trade markers, and a price overlay for a single session.
 from __future__ import annotations
 
 import io
-import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
+
+import structlog
 
 if TYPE_CHECKING:
     from hft_platform.reports.models import SessionData
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 PLATFORM_SCALE = 10_000
 

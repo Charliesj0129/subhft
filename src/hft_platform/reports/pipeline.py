@@ -147,14 +147,18 @@ async def run_pipeline(
         return
 
     if debug:
-        print(f"\n{'=' * 40} REPORT {'=' * 40}")
+        _log.debug("report_debug_start", parts=len(composed.messages))
         for i, part in enumerate(composed.messages, 1):
             if part.kind == "text":
-                print(f"\n--- Part {i} [{part.min_tier}] ({len(part.content)} chars) ---")
-                print(part.content)
+                _log.debug("report_part", part=i, tier=part.min_tier, chars=len(part.content))
             elif part.kind == "image":
-                print(f"\n--- Part {i} [{part.min_tier}] IMAGE ({len(part.image or b'')} bytes) ---")
-                print(f"  caption: {part.caption}")
+                _log.debug(
+                    "report_image_part",
+                    part=i,
+                    tier=part.min_tier,
+                    bytes=len(part.image or b""),
+                    caption=part.caption,
+                )
 
     if dry_run:
         _log.info("report_pipeline_dry_run_complete")
