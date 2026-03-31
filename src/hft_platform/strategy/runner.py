@@ -805,10 +805,12 @@ class StrategyRunner:
                 _d7_submitted = 0
                 _d7_dropped = 0
                 for intent in intents:
-                    # Populate decision_mid from LOB engine's last stats
+                    # Populate decision prices from LOB engine's last stats
                     if hasattr(self.lob_engine, "last_stats") and self.lob_engine.last_stats is not None:
                         if isinstance(intent, OrderIntent):
-                            intent.decision_mid = self.lob_engine.last_stats.mid_price_x2 // 2
+                            _mid = self.lob_engine.last_stats.mid_price_x2 // 2
+                            intent.decision_mid = _mid  # deprecated: use decision_price
+                            intent.decision_price = _mid
 
                     self._emit_trace(
                         "strategy_intent_submit",

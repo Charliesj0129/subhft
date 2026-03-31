@@ -56,11 +56,11 @@ class OrderIntent:
     idempotency_key: str = ""  # Caller-supplied dedup key; empty = no dedup
     ttl_ns: int = 0  # Expiry in nanoseconds from enqueue; 0 = no expiry
 
-    # Module 2: Slippage tracking — decision-time mid-price (scaled int x10000)
+    # DEPRECATED: use decision_price instead. Kept for slippage_records compat.
     decision_mid: int = 0
 
-    # TCA: decision-time price capture (scaled int x10000)
-    decision_price: int = 0  # LOB mid-price at signal time (x10000)
+    # TCA: decision-time LOB mid-price (scaled int x10000). Canonical field.
+    decision_price: int = 0
 
     # Order type: "LMT" (default limit order) or "MKT" (market order)
     price_type: str = "LMT"
