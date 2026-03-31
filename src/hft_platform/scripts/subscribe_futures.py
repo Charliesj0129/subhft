@@ -2,6 +2,7 @@
 import logging
 import os
 import sys
+import threading
 import time
 
 from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
@@ -36,7 +37,7 @@ def main():
             logger.error("No API initialized (Sim mode without lib?). Exiting.")
             return
     except Exception as e:
-        logger.error(f"Login failed: {e}")
+        logger.error("Login failed", error=str(e))
         return
 
     # Give it a moment to sync contracts
@@ -205,9 +206,14 @@ def main():
 
     logger.info("Config generated successfully.")
 
-    # Force exit to kill any lingering Shioaji threads
-    logger.info("Script complete. Forcing exit.")
-    os._exit(0)
+    # Shioaji may spawn non-daemon threads that would otherwise prevent clean exit.
+    # Log any lingering threads for visibility, then exit normally via sys.exit.
+    # If sys.exit hangs due to non-daemon threads, press Ctrl+C to terminate.
+    active = [t for t in threading.enumerate() if t != threading.main_thread() and t.is_alive()]
+    if active:
+        logger.warning("Lingering threads at exit", threads=[t.name for t in active])
+    logger.info("Script complete.")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
