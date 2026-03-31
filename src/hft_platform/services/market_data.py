@@ -706,6 +706,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 symbol=event.symbol,
                 error=str(exc),
                 event_type=type(event).__name__,
+                exc_info=True,
             )
             return
 
