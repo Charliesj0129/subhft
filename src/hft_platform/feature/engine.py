@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from hft_platform.events import FeatureUpdateEvent, LOBStatsEvent
@@ -103,7 +104,7 @@ class _LobKernelState:
     initialized: bool = False
     # --- v2 fields: ofi_depth_norm, ret_autocov, tob_survival ---
     # Ring buffer for mid_price_x2 returns (for autocovariance)
-    ret_buf: list[int] | None = None  # circular buffer of mid_price_x2 deltas
+    ret_buf: list[int] = field(default_factory=lambda: [0] * _RET_AUTOCOV_WINDOW)  # pre-allocated ring buffer
     ret_buf_pos: int = 0  # write position in ring buffer
     ret_buf_count: int = 0  # number of valid entries
     prev_mid_price_x2: int = 0  # previous mid_price_x2 for delta
@@ -606,8 +607,6 @@ class FeatureEngine:
             ofi_depth_norm_ppm = 0
 
         # [17] ret_autocov_5s_x1e6: lag-1 autocovariance of mid_price_x2 returns
-        if ks.ret_buf is None:
-            ks.ret_buf = [0] * _RET_AUTOCOV_WINDOW
         ret = mid_price_x2 - ks.prev_mid_price_x2 if ks.prev_mid_price_x2 != 0 else 0
         buf = ks.ret_buf
         pos = ks.ret_buf_pos
@@ -658,7 +657,6 @@ class FeatureEngine:
 
     def _compute_iss(self, ks: "_LobKernelState", ofi_raw: int, mid_x2: int, bid_depth: int, ask_depth: int) -> int:
         """Compute Impact Surprise Signal. Returns scaled int x1000 (milli-units)."""
-        import math as _math
 
         total_depth = float(max(bid_depth + ask_depth, 1))
         depth_b_eq = 1.0 / (2.0 * total_depth + 1.0)
@@ -696,7 +694,7 @@ class FeatureEngine:
         if abs(deviation) < self._ISS_THRESHOLD:
             return 0
 
-        raw = _math.copysign(min(abs(deviation), self._ISS_CLIP), deviation)
+        raw = math.copysign(min(abs(deviation), self._ISS_CLIP), deviation)
         return int(round(max(-self._ISS_CLIP, min(self._ISS_CLIP, raw)) * 1000))
 
     def _compute_mldm(
