@@ -2,10 +2,27 @@ import sys
 
 import numpy as np
 
-# Path setup
-sys.path.append("/home/charlie/hft_platform/external_repos/hftbacktest_fresh/py-hftbacktest")
-from hftbacktest import DEPTH_EVENT, TRADE_EVENT
-from hftbacktest.types import event_dtype
+try:
+    from hftbacktest import DEPTH_EVENT, TRADE_EVENT
+    from hftbacktest.types import event_dtype
+except ImportError:
+    from pathlib import Path
+
+    _ext = (
+        Path(__file__).resolve().parents[3]
+        / "external_repos"
+        / "hftbacktest_fresh"
+        / "py-hftbacktest"
+    )
+    if _ext.exists():
+        sys.path.insert(0, str(_ext))
+        from hftbacktest import DEPTH_EVENT, TRADE_EVENT
+        from hftbacktest.types import event_dtype
+    else:
+        raise ImportError(
+            "hftbacktest not found. Install it or place it in"
+            " external_repos/hftbacktest_fresh/py-hftbacktest"
+        ) from None
 
 
 def generate():
