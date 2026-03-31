@@ -9,6 +9,19 @@ from hft_platform.observability.metrics import MetricsRegistry
 
 logger = structlog.get_logger("observability.latency")
 
+_VALID_STAGES: frozenset[str] = frozenset({
+    "normalize",
+    "lob",
+    "feature",
+    "strategy",
+    "risk",
+    "order",
+    "execution",
+    "gateway",
+    "record",
+    "bus_publish",
+})
+
 
 def _bool_env(value: Any, default: bool = False) -> bool:
     if value is None:
@@ -104,6 +117,8 @@ class LatencyRecorder:
         ts_ns: int | None = None,
     ) -> None:
         if latency_ns < 0:
+            return
+        if stage not in _VALID_STAGES:
             return
         if self.metrics_enabled and self.metrics:
             try:
