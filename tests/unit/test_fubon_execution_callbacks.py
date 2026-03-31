@@ -161,7 +161,8 @@ class TestOnSdkOrder:
         assert msg["order_id"] == "ORD123"
         assert msg["symbol"] == "2330"
         assert msg["side"] == "Buy"
-        assert msg["price"] == 595_0000
+        # Raw (unscaled) price — normalizer is the single scaling point.
+        assert msg["price"] == "595.0"
         assert msg["qty"] == 1000
         assert msg["status"] == "Filled"
         assert msg["strategy_id"] == "strat_alpha"
@@ -198,7 +199,8 @@ class TestOnSdkOrder:
 
         assert received[0]["order_id"] == "OBJ1"
         assert received[0]["symbol"] == "2454"
-        assert received[0]["price"] == 800_0000
+        # Raw (unscaled) price passed through — normalizer handles scaling.
+        assert received[0]["price"] == 800.0
 
     def test_handles_missing_fields(self, adapter: FubonExecutionCallbackAdapter) -> None:
         received: list[dict[str, Any]] = []
@@ -208,7 +210,8 @@ class TestOnSdkOrder:
         msg = received[0]
         assert msg["order_id"] == ""
         assert msg["symbol"] == ""
-        assert msg["price"] == 0
+        # Missing price key → _get returns None (raw passthrough, no scaling).
+        assert msg["price"] is None
         assert msg["qty"] == 0
 
 
@@ -237,8 +240,10 @@ class TestOnSdkDeal:
         assert msg["order_id"] == "ORD456"
         assert msg["symbol"] == "2330"
         assert msg["side"] == "Sell"
-        assert msg["deal_price"] == 590_5000
-        assert msg["deal_qty"] == 500
+        # Canonical keys: price/qty (not deal_price/deal_qty).
+        # Raw (unscaled) price — normalizer is the single scaling point.
+        assert msg["price"] == "590.5"
+        assert msg["qty"] == 500
         assert msg["strategy_id"] == "strat_beta"
         assert msg["ts_ns"] > 0
 
@@ -254,8 +259,78 @@ class TestOnSdkDeal:
         adapter._on_sdk_deal({})
         msg = received[0]
         assert msg["order_id"] == ""
-        assert msg["deal_price"] == 0
-        assert msg["deal_qty"] == 0
+        # Canonical keys: price/qty (not deal_price/deal_qty).
+        # Missing mat_price → None (raw passthrough).
+        assert msg["price"] is None
+        assert msg["qty"] == 0
+
+
+# ------------------------------------------------------------------ #
+# Bug-fix regression: field names, no pre-scaling, epoch timestamps
+# ------------------------------------------------------------------ #
+
+
+class TestBugFixRegressions:
+    def test_deal_callback_uses_canonical_price_key(
+        self, adapter: FubonExecutionCallbackAdapter
+    ) -> None:
+        """_on_sdk_deal output must have 'price' key, not 'deal_price'."""
+        received: list[dict[str, Any]] = []
+        adapter.register(on_order=MagicMock(), on_deal=lambda d: received.append(dict(d)))
+
+        adapter._on_sdk_deal({"ord_no": "D1", "mat_price": "100.5", "mat_qty": 10})
+        msg = received[0]
+
+        assert "price" in msg, "canonical 'price' key must be present"
+        assert "deal_price" not in msg, "'deal_price' key must NOT be present"
+        # Raw unscaled value (normalizer does the scaling)
+        assert msg["price"] == "100.5"
+
+    def test_deal_callback_uses_canonical_qty_key(
+        self, adapter: FubonExecutionCallbackAdapter
+    ) -> None:
+        """_on_sdk_deal output must have 'qty' key, not 'deal_qty'."""
+        received: list[dict[str, Any]] = []
+        adapter.register(on_order=MagicMock(), on_deal=lambda d: received.append(dict(d)))
+
+        adapter._on_sdk_deal({"ord_no": "D1", "mat_price": "100.5", "mat_qty": 10})
+        msg = received[0]
+
+        assert "qty" in msg, "canonical 'qty' key must be present"
+        assert "deal_qty" not in msg, "'deal_qty' key must NOT be present"
+        assert msg["qty"] == 10
+
+    def test_deal_callback_timestamp_uses_epoch_ns(
+        self, adapter: FubonExecutionCallbackAdapter
+    ) -> None:
+        """ts_ns must be in epoch nanoseconds domain (>1e15), not perf_counter domain (~1e12)."""
+        received: list[dict[str, Any]] = []
+        adapter.register(on_order=MagicMock(), on_deal=lambda d: received.append(dict(d)))
+
+        adapter._on_sdk_deal({"ord_no": "D1", "mat_price": "100.5", "mat_qty": 1})
+        ts = received[0]["ts_ns"]
+
+        # Epoch nanoseconds are ~1.7e18. perf_counter_ns values are ~1e12.
+        # A value > 1e15 unambiguously identifies the epoch domain.
+        assert ts > 1_000_000_000_000_000, (
+            f"ts_ns={ts} looks like perf_counter_ns (not epoch ns); "
+            "use timebase.now_ns() not time.perf_counter_ns()"
+        )
+
+    def test_order_callback_price_not_prescaled(
+        self, adapter: FubonExecutionCallbackAdapter
+    ) -> None:
+        """_on_sdk_order must pass raw price, not pre-scaled (x10000) value."""
+        received: list[dict[str, Any]] = []
+        adapter.register(on_order=lambda d: received.append(dict(d)), on_deal=MagicMock())
+
+        adapter._on_sdk_order({"ord_no": "O1", "price": 595.0, "qty": 1, "status": "New"})
+        msg = received[0]
+
+        # If price were pre-scaled it would be 5_950_000; raw value is 595.0.
+        assert msg["price"] == 595.0, (
+            f"price={msg['price']} looks pre-scaled; adapter must not call _scale_price"
+        )
 
 
 # ------------------------------------------------------------------ #

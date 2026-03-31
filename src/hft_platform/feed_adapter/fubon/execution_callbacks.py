@@ -9,8 +9,9 @@ Design notes
 - **Allocator Law**: Translation buffers (``_order_buffer``, ``_deal_buffer``)
   are pre-allocated once in ``__init__`` and reused by overwriting values in
   each callback invocation.  No per-event heap allocation.
-- **Precision Law**: Float prices from Fubon are converted to scaled integers
-  (x10000) at this boundary so downstream consumers never see floats.
+- **Precision Law**: Raw prices from Fubon are passed through unscaled.
+  ``ExecutionNormalizer`` is the single scaling point (via ``PriceCodec``).
+  Pre-scaling here would cause double-scaling (x10000 * x10000 = x10^8).
 - **Boundary Law**: All Fubon-specific field names are translated to canonical
   keys (``order_id``, ``symbol``, ``side``, ``price``, ``qty``, etc.) at this
   boundary.
@@ -18,10 +19,11 @@ Design notes
 
 from __future__ import annotations
 
-import time
 from typing import Any, Callable
 
 from structlog import get_logger
+
+from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.fubon.execution_callbacks")
 
@@ -59,6 +61,11 @@ def _scale_price(raw: Any) -> int:
     """Convert a raw price value to scaled int (x10000).
 
     Returns 0 for ``None`` or non-numeric values.
+
+    NOTE: This function is NOT called in the callback paths (_on_sdk_order,
+    _on_sdk_deal).  Scaling is delegated to ExecutionNormalizer (PriceCodec)
+    to avoid double-scaling.  Kept here for any utility callers outside the
+    hot path.
     """
     if raw is None:
         return 0
@@ -109,8 +116,8 @@ class FubonExecutionCallbackAdapter:
             "order_id": "",
             "symbol": "",
             "side": "",
-            "deal_price": 0,
-            "deal_qty": 0,
+            "price": 0,
+            "qty": 0,
             "strategy_id": "",
             "ts_ns": 0,
         }
@@ -157,11 +164,11 @@ class FubonExecutionCallbackAdapter:
             buf["order_id"] = _resolve_order_id(raw)
             buf["symbol"] = str(_get(raw, "stock_no", ""))
             buf["side"] = _resolve_side(raw)
-            buf["price"] = _scale_price(_get(raw, "price"))
+            buf["price"] = _get(raw, "price")
             buf["qty"] = int(_get(raw, "qty", 0) or 0)
             buf["status"] = str(_get(raw, "status", ""))
             buf["strategy_id"] = str(_get(raw, "user_def", ""))
-            buf["ts_ns"] = time.perf_counter_ns()
+            buf["ts_ns"] = timebase.now_ns()
 
             # Pass shallow copy to avoid buffer reuse race: downstream handler
             # may schedule async work, and _order_buffer can be overwritten by
@@ -182,10 +189,10 @@ class FubonExecutionCallbackAdapter:
             buf["order_id"] = _resolve_order_id(raw)
             buf["symbol"] = str(_get(raw, "stock_no", ""))
             buf["side"] = _resolve_side(raw)
-            buf["deal_price"] = _scale_price(_get(raw, "mat_price"))
-            buf["deal_qty"] = int(_get(raw, "mat_qty", 0) or 0)
+            buf["price"] = _get(raw, "mat_price")
+            buf["qty"] = int(_get(raw, "mat_qty", 0) or 0)
             buf["strategy_id"] = str(_get(raw, "user_def", ""))
-            buf["ts_ns"] = time.perf_counter_ns()
+            buf["ts_ns"] = timebase.now_ns()
 
             # Pass shallow copy to avoid buffer reuse race: downstream handler
             # may schedule async work, and _deal_buffer can be overwritten by
