@@ -645,6 +645,11 @@ class RingBufferBus:
                 # yield to loop to allow other tasks to run if batch is huge
                 # if local_seq % 100 == 0: await asyncio.sleep(0)
 
+            # Successful catch-up with no overflow — reset counter so only
+            # sustained (consecutive) overflows trigger StormGuard HALT.
+            if self._overflow_count > 0:
+                self._overflow_count = 0
+
     async def consume_batch(self, batch_size: int, start_cursor: int | None = None):
         """Async generator yielding lists of events."""
         batch_size = max(1, batch_size)
@@ -708,3 +713,8 @@ class RingBufferBus:
 
             if batch:
                 yield batch
+
+            # Successful catch-up with no overflow — reset counter so only
+            # sustained (consecutive) overflows trigger StormGuard HALT.
+            if self._overflow_count > 0:
+                self._overflow_count = 0

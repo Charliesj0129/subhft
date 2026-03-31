@@ -164,3 +164,123 @@ def test_typed_book_ring_packed_bidask_roundtrip_with_stats(monkeypatch):
 
     result = asyncio.run(_run())
     assert result == bidask
+
+
+# ---------------------------------------------------------------------------
+# Overflow counter windowed-reset tests
+# ---------------------------------------------------------------------------
+
+
+def test_overflow_count_resets_after_successful_consume():
+    """After a successful consume cycle (no overflow), _overflow_count resets to 0."""
+    bus = RingBufferBus(size=2)
+
+    # Publish 5 events into size-2 buffer → overflow when consuming from start.
+    bus.publish_many_nowait(["e1", "e2", "e3", "e4", "e5"])
+
+    async def _run():
+        gen = bus.consume(start_cursor=-1)
+        # Drain all available events from the inner while loop so it completes,
+        # which triggers the reset code. With size=2 and 5 published, after
+        # overflow skip local_seq = cursor - size = 5 - 2 = 3. Inner loop
+        # yields events at seq 4 and 5 (2 events).
+        evt1 = await gen.__anext__()
+        evt2 = await gen.__anext__()
+        # After evt2, the inner while loop condition (local_seq < current_cursor)
+        # is False, so the reset runs, then outer loop waits for new data.
+        # Publish one more to unblock the wait so we can check the counter.
+        bus.publish_nowait("probe")
+        evt3 = await gen.__anext__()
+        return (evt1, evt2, evt3)
+
+    result = asyncio.run(_run())
+    assert result[2] == "probe"
+    # Counter was reset after the first catch-up completed.
+    assert bus._overflow_count == 0
+
+
+def test_overflow_count_resets_after_successful_consume_batch():
+    """consume_batch also resets _overflow_count after successful catch-up."""
+    bus = RingBufferBus(size=2)
+    bus.publish_many_nowait(["e1", "e2", "e3", "e4", "e5"])
+
+    async def _run():
+        gen = bus.consume_batch(batch_size=10, start_cursor=-1)
+        # First batch drains all available events (inner loop completes → reset).
+        batch1 = await gen.__anext__()
+        # Publish a probe to unblock the outer wait loop.
+        bus.publish_nowait("probe")
+        batch2 = await gen.__anext__()
+        return (batch1, batch2)
+
+    result = asyncio.run(_run())
+    assert "probe" in result[1]
+    assert bus._overflow_count == 0
+
+
+def test_consecutive_overflows_trigger_halt(monkeypatch):
+    """3 consecutive overflows (no successful catch-up between them) trigger HALT."""
+
+    class DummyStormGuard:
+        def __init__(self):
+            self.halt_messages = []
+
+        def trigger_halt(self, msg: str) -> None:
+            self.halt_messages.append(msg)
+
+    monkeypatch.setenv("HFT_BUS_OVERFLOW_HALT_THRESHOLD", "3")
+    storm_guard = DummyStormGuard()
+    bus = RingBufferBus(size=2, storm_guard=storm_guard)
+
+    # Each call: publish enough to overflow, consume one event, break.
+    # We monkey-patch the reset away to simulate 3 consecutive overflows
+    # without a successful full catch-up resetting the counter.
+    # Actually: just set _overflow_count directly to simulate accumulated overflows.
+    bus._overflow_count = 2  # already had 2 overflows
+
+    # Now cause one more overflow (3rd)
+    bus.publish_many_nowait(["e1", "e2", "e3", "e4", "e5"])
+
+    async def _run():
+        async for evt in bus.consume(start_cursor=-1):
+            return evt
+
+    asyncio.run(_run())
+    assert len(storm_guard.halt_messages) == 1
+    assert "overflow" in storm_guard.halt_messages[0].lower()
+
+
+def test_non_consecutive_overflows_do_not_trigger_halt(monkeypatch):
+    """Overflows separated by successful consumes do NOT accumulate toward HALT."""
+
+    class DummyStormGuard:
+        def __init__(self):
+            self.halt_messages = []
+
+        def trigger_halt(self, msg: str) -> None:
+            self.halt_messages.append(msg)
+
+    monkeypatch.setenv("HFT_BUS_OVERFLOW_HALT_THRESHOLD", "3")
+    storm_guard = DummyStormGuard()
+
+    async def _overflow_then_catchup():
+        """Create a fresh bus, overflow it, fully drain → reset counter."""
+        bus = RingBufferBus(size=2, storm_guard=storm_guard)
+        bus.publish_many_nowait(["x1", "x2", "x3", "x4", "x5"])
+        gen = bus.consume(start_cursor=-1)
+        # Drain all available events so the inner while loop completes.
+        evt1 = await gen.__anext__()
+        evt2 = await gen.__anext__()
+        # Inner loop done → reset fires. Publish probe to verify.
+        bus.publish_nowait("probe")
+        evt3 = await gen.__anext__()
+        assert evt3 == "probe"
+        return bus
+
+    # Do 4 overflow cycles, each separated by a successful catch-up.
+    for _ in range(4):
+        bus = asyncio.run(_overflow_then_catchup())
+        assert bus._overflow_count == 0
+
+    # No HALT should have been triggered despite 4 total overflows.
+    assert len(storm_guard.halt_messages) == 0
