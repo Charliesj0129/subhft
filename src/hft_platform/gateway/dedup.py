@@ -194,16 +194,25 @@ class IdempotencyStore:
         self.commit(key, approved, reason_code, cmd_id)
 
     def persist(self) -> None:
-        """Write current window to disk atomically (temp+fsync+rename)."""
+        """Write current window to disk atomically (temp+fsync+rename).
+
+        Called from asyncio.to_thread() — runs in a thread pool while the
+        event loop continues mutating _records. We snapshot _records.values()
+        into a list first; list() is atomic under CPython's GIL so the
+        snapshot is consistent without needing a lock on the hot-path methods.
+        """
         if not self._persist_enabled:
             return
+        # Snapshot to avoid RuntimeError if event loop mutates _records
+        # during thread-pool execution. list() is atomic under CPython GIL.
+        records_snapshot = list(self._records.values())
         try:
             persist_dir = os.path.dirname(self._persist_path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
             try:
                 with os.fdopen(fd, "wb") as f:
-                    for rec in self._records.values():
+                    for rec in records_snapshot:
                         row = {
                             "key": rec.key,
                             "approved": rec.approved,
@@ -249,6 +258,10 @@ class IdempotencyStore:
                     except Exception as exc:
                         logger.debug("operation_fallback", error=str(exc))
                         continue
+            # Enforce window size: evict oldest entries if file had more than
+            # window_size records (e.g. window was shrunk between restarts).
+            while len(self._records) > self._window_size:
+                self._records.popitem(last=False)
             logger.info("IdempotencyStore loaded", count=loaded)
         except Exception as exc:
             logger.warning("IdempotencyStore load failed", error=str(exc))
