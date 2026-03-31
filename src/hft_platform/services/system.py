@@ -622,6 +622,11 @@ class HFTSystem:
         self.session_hook_manager.stop()
         self.health_server.stop()
 
+        # Stop gateway service gracefully before task cancellation so its
+        # finally block (dedup.persist()) runs while the event loop is live.
+        if getattr(self, "gateway_service", None) is not None:
+            self.gateway_service.running = False
+
         # WU-01: Broker logout before task cancellation
         for cn in ("md_client", "order_client"):
             self._close_broker_client(cn)
@@ -675,6 +680,12 @@ class HFTSystem:
         self.execution_gateway.stop()  # Clean shutdown
         self.session_hook_manager.stop()
         self.health_server.stop()
+
+        # Stop gateway service gracefully before broker logout/task cancellation
+        # so its finally block (dedup.persist()) can complete.
+        if getattr(self, "gateway_service", None) is not None:
+            self.gateway_service.running = False
+
         for cn in ("md_client", "order_client"):
             self._close_broker_client(cn)
         self._teardown_bootstrap()
