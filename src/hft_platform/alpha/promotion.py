@@ -70,6 +70,7 @@ class PromotionConfig:
     max_live_drawdown_contribution: float = 0.02
     max_execution_error_rate: float = 0.01
     force: bool = False
+    force_reason: str = ""
     write_promotion_config: bool = True
     config_version: str = "v1"
     parent_config_version: str | None = None
@@ -158,9 +159,16 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:
     if not approved:
         reasons.append("One or more promotion gates failed")
         if config.force:
+            if not config.force_reason.strip():
+                raise ValueError("force=True requires a non-empty force_reason")
             approved = True
             forced = True
-            reasons.append("force=true override")
+            _log.warning(
+                "promotion_force_override",
+                alpha_id=config.alpha_id,
+                force_reason=config.force_reason,
+            )
+            reasons.append(f"force=true override: {config.force_reason}")
 
     weight = _suggest_canary_weight(scorecard, override=config.canary_weight) if approved else 0.0
     now = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
