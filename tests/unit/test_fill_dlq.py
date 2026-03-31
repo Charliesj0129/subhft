@@ -48,3 +48,50 @@ class TestOrphanedFillDLQ:
         dlq = OrphanedFillDLQ()
 
         assert dlq.count == 0
+
+    def test_retry_resolves_matching_fills(self):
+        dlq = OrphanedFillDLQ(max_size=100)
+        fill1 = MagicMock(symbol="2330", order_id="ORD1", strategy_id="UNKNOWN")
+        fill2 = MagicMock(symbol="2317", order_id="ORD2", strategy_id="UNKNOWN")
+        dlq.add(fill1)
+        dlq.add(fill2)
+
+        def resolver(fill):
+            return "strat_a" if fill.order_id == "ORD1" else "UNKNOWN"
+
+        resolved, still_orphaned = dlq.retry(resolver)
+
+        assert len(resolved) == 1
+        assert resolved[0].strategy_id == "strat_a"
+        assert len(still_orphaned) == 1
+        assert dlq.count == 1  # Only unresolved remain
+
+    def test_retry_all_resolved(self):
+        dlq = OrphanedFillDLQ(max_size=100)
+        fill = MagicMock(symbol="2330", order_id="ORD1", strategy_id="UNKNOWN")
+        dlq.add(fill)
+
+        resolved, still_orphaned = dlq.retry(lambda f: "my_strat")
+
+        assert len(resolved) == 1
+        assert len(still_orphaned) == 0
+        assert dlq.count == 0
+
+    def test_retry_none_resolved(self):
+        dlq = OrphanedFillDLQ(max_size=100)
+        fill = MagicMock(symbol="2330", order_id="ORD1", strategy_id="UNKNOWN")
+        dlq.add(fill)
+
+        resolved, still_orphaned = dlq.retry(lambda f: "UNKNOWN")
+
+        assert len(resolved) == 0
+        assert len(still_orphaned) == 1
+        assert dlq.count == 1
+
+    def test_retry_empty_dlq(self):
+        dlq = OrphanedFillDLQ()
+
+        resolved, still_orphaned = dlq.retry(lambda f: "strat")
+
+        assert resolved == []
+        assert still_orphaned == []

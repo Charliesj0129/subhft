@@ -264,24 +264,28 @@ class TestOnSdkDeal:
 
 
 class TestBufferReuse:
-    def test_order_buffer_same_object(self, adapter: FubonExecutionCallbackAdapter) -> None:
-        """The same dict object must be passed to the callback each time."""
-        buffers: list[int] = []
-        adapter.register(on_order=lambda d: buffers.append(id(d)), on_deal=MagicMock())
+    def test_order_callback_receives_independent_copies(self, adapter: FubonExecutionCallbackAdapter) -> None:
+        """Each callback invocation must receive an independent dict (not the shared buffer)."""
+        received: list[dict[str, Any]] = []
+        adapter.register(on_order=lambda d: received.append(d), on_deal=MagicMock())
 
         adapter._on_sdk_order({"ord_no": "A", "stock_no": "1", "buy_sell": "B", "price": 10, "qty": 1, "status": "New"})
         adapter._on_sdk_order({"ord_no": "B", "stock_no": "2", "buy_sell": "S", "price": 20, "qty": 2, "status": "New"})
 
-        assert len(buffers) == 2
-        assert buffers[0] == buffers[1], "Order buffer must be reused (Allocator Law)"
+        assert len(received) == 2
+        assert id(received[0]) != id(received[1]), "Each callback must get an independent dict copy"
+        assert received[0]["order_id"] == "A"
+        assert received[1]["order_id"] == "B"
 
-    def test_deal_buffer_same_object(self, adapter: FubonExecutionCallbackAdapter) -> None:
-        """The same dict object must be passed to the callback each time."""
-        buffers: list[int] = []
-        adapter.register(on_order=MagicMock(), on_deal=lambda d: buffers.append(id(d)))
+    def test_deal_callback_receives_independent_copies(self, adapter: FubonExecutionCallbackAdapter) -> None:
+        """Each callback invocation must receive an independent dict (not the shared buffer)."""
+        received: list[dict[str, Any]] = []
+        adapter.register(on_order=MagicMock(), on_deal=lambda d: received.append(d))
 
         adapter._on_sdk_deal({"ord_no": "A", "stock_no": "1", "buy_sell": "B", "mat_price": 10, "mat_qty": 1})
         adapter._on_sdk_deal({"ord_no": "B", "stock_no": "2", "buy_sell": "S", "mat_price": 20, "mat_qty": 2})
 
-        assert len(buffers) == 2
-        assert buffers[0] == buffers[1], "Deal buffer must be reused (Allocator Law)"
+        assert len(received) == 2
+        assert id(received[0]) != id(received[1]), "Each callback must get an independent dict copy"
+        assert received[0]["order_id"] == "A"
+        assert received[1]["order_id"] == "B"

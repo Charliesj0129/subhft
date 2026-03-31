@@ -218,7 +218,7 @@ class ExecutionNormalizer:
                 match_ts_ns=self._normalize_ts_ns(get("ts")),
             )
         except Exception as _exc:  # noqa: BLE001
-            logger.error("Fill normalization failed")
+            logger.error("Fill normalization failed", error=str(_exc), data=d)
             return None
 
     def _map_status(

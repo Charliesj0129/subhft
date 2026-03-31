@@ -163,7 +163,13 @@ class FubonExecutionCallbackAdapter:
             buf["strategy_id"] = str(_get(raw, "user_def", ""))
             buf["ts_ns"] = time.perf_counter_ns()
 
-            self._on_order(buf)
+            # Pass shallow copy to avoid buffer reuse race: downstream handler
+            # may schedule async work, and _order_buffer can be overwritten by
+            # the next callback before async processing completes. Execution
+            # callbacks are low-frequency (~100 fills/day), so copy cost is
+            # negligible. The pre-allocated buffer itself avoids allocation in
+            # the population phase (lines 157-164).
+            self._on_order(dict(buf))
         except Exception as exc:
             self.log.error("fubon_exec_cb.order_error", error=str(exc))
 
@@ -181,6 +187,12 @@ class FubonExecutionCallbackAdapter:
             buf["strategy_id"] = str(_get(raw, "user_def", ""))
             buf["ts_ns"] = time.perf_counter_ns()
 
-            self._on_deal(buf)
+            # Pass shallow copy to avoid buffer reuse race: downstream handler
+            # may schedule async work, and _deal_buffer can be overwritten by
+            # the next callback before async processing completes. Execution
+            # callbacks are low-frequency (~100 fills/day), so copy cost is
+            # negligible. The pre-allocated buffer itself avoids allocation in
+            # the population phase (lines 176-182).
+            self._on_deal(dict(buf))
         except Exception as exc:
             self.log.error("fubon_exec_cb.deal_error", error=str(exc))

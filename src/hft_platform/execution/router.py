@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional, Union
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.core.pricing import PriceCodec
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
@@ -62,6 +63,9 @@ class ExecutionRouter:
         risk_engine: Optional[object] = None,
         overflow_buf: Optional[collections.deque] = None,
         cmd_created_ns_map: Optional[Dict[str, int]] = None,
+        recorder_queue: Optional[asyncio.Queue] = None,
+        symbol_metadata: Optional[Any] = None,
+        price_scale_provider: Optional[Any] = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
@@ -74,6 +78,13 @@ class ExecutionRouter:
         self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
         self.running = False
         self.metrics = MetricsRegistry.get()
+        self._dlq_retry_interval = 100  # Retry DLQ every 100 events processed
+        self._events_since_dlq_retry = 0
+        self._recorder_queue: Optional[asyncio.Queue] = recorder_queue
+        self._symbol_metadata = symbol_metadata
+        self._price_codec: Optional[PriceCodec] = (
+            PriceCodec(price_scale_provider) if price_scale_provider is not None else None
+        )
 
     async def run(self) -> None:
         self.running = True
@@ -170,6 +181,26 @@ class ExecutionRouter:
                             self._publish_nowait(delta)
                             self._publish_nowait(fill_event)
 
+                        # Direct fill recording safety net: bypass RingBufferBus to prevent
+                        # fills from being overwritten by tick flood before _recorder_bridge
+                        # consumes them. Recording must never block the execution path.
+                        if self._recorder_queue is not None and self._symbol_metadata is not None:
+                            from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+
+                            _mapped = map_event_to_record(fill_event, self._symbol_metadata, self._price_codec)
+                            if _mapped:
+                                _topic, _payload = _mapped
+                                try:
+                                    self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
+                                except asyncio.QueueFull:
+                                    pass  # Recorder bridge is the backup path; never block execution
+
+                # Periodically retry orphaned fills from DLQ
+                self._events_since_dlq_retry += 1
+                if self._events_since_dlq_retry >= self._dlq_retry_interval:
+                    self._events_since_dlq_retry = 0
+                    self._retry_orphaned_fills()
+
             except asyncio.CancelledError:
                 break
             except Exception as e:  # noqa: BLE001 — supervisor catch-all
@@ -181,6 +212,46 @@ class ExecutionRouter:
                 except ValueError:
                     pass  # task_done called too many times
         self.metrics.execution_router_alive.set(0)
+
+    def _retry_orphaned_fills(self) -> None:
+        from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
+
+        dlq = get_orphaned_fill_dlq()
+        if dlq.count == 0:
+            return
+
+        def _resolve(fill: Any) -> str:
+            return self.normalizer.order_id_resolver.resolve_strategy_id(fill.order_id)
+
+        resolved, still_orphaned = dlq.retry(_resolve)
+        if resolved:
+            logger.info(
+                "DLQ retry resolved fills",
+                count=len(resolved),
+                remaining=len(still_orphaned),
+            )
+            for fill in resolved:
+                if hasattr(self.position_store, "on_fill"):
+                    delta = self.position_store.on_fill(fill)
+                    publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
+                    if publish_many_nowait:
+                        publish_many_nowait([delta, fill])
+                    else:
+                        self._publish_nowait(delta)
+                        self._publish_nowait(fill)
+                    if self._recorder_queue is not None and self._symbol_metadata is not None:
+                        from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+
+                        _mapped = map_event_to_record(fill, self._symbol_metadata, self._price_codec)
+                        if _mapped:
+                            _topic, _payload = _mapped
+                            try:
+                                self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
+                            except asyncio.QueueFull:
+                                pass
+            _dlq_metric = getattr(self.metrics, "dlq_retry_resolved_total", None)
+            if _dlq_metric is not None:
+                _dlq_metric.inc(len(resolved))
 
     def _publish_nowait(self, event: Any) -> None:
         publish_nowait = getattr(self.bus, "publish_nowait", None)

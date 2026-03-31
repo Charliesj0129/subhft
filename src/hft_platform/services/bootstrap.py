@@ -23,7 +23,6 @@ from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feature.profile import load_feature_profile_registry
 from hft_platform.feature.rollout import load_feature_rollout_controller
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
-from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.ops.platform_inputs import PlatformDegradeInputs
 from hft_platform.order.adapter import OrderAdapter
@@ -590,6 +589,8 @@ class SystemBootstrapper:
             return FubonClientFacade(symbols_path, base_shioaji_cfg), FubonClientFacade(symbols_path, order_cfg)
 
         # Default: shioaji
+        from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade  # lazy import
+
         num_conns = int(os.getenv("HFT_QUOTE_CONNECTIONS", "1"))
         if num_conns > 1:
             from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
@@ -956,6 +957,9 @@ class SystemBootstrapper:
             position_store,
             execution_gateway.on_terminal_state,
             cmd_created_ns_map=cmd_created_ns_map,
+            recorder_queue=recorder_queue,
+            symbol_metadata=symbol_metadata,
+            price_scale_provider=price_scale_provider,
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator

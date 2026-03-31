@@ -168,6 +168,8 @@ class HFTSystem:
         self._task_restart_max_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_MAX_S", 30.0, min_value=0.1)
         self._queue_log_every_s = self._env_float("HFT_SUPERVISOR_QUEUE_LOG_EVERY_S", 30.0, min_value=1.0)
         self._last_queue_log_s = 0.0
+        self._recorder_bridge_drops: int = 0
+        self._pnl_snapshot_drops: int = 0
 
         # WU-11: Session hooks (disabled by default)
         self.session_hook_manager = SessionHookManager()
@@ -371,7 +373,12 @@ class HFTSystem:
                     try:
                         self.recorder_queue.put_nowait({"topic": "pnl_snapshots", "data": row})
                     except asyncio.QueueFull:
-                        pass
+                        self._pnl_snapshot_drops += 1
+                        if self._pnl_snapshot_drops % 10 == 1:
+                            logger.warning(
+                                "pnl_snapshot_queue_full",
+                                drops=self._pnl_snapshot_drops,
+                            )
             except Exception:
                 logger.warning("PnL snapshot export failed", exc_info=True)
 
@@ -772,7 +779,13 @@ class HFTSystem:
                         try:
                             self.recorder_queue.put_nowait({"topic": topic, "data": payload})
                         except asyncio.QueueFull:
-                            pass
+                            self._recorder_bridge_drops += 1
+                            if self._recorder_bridge_drops % 100 == 1:
+                                logger.warning(
+                                    "recorder_bridge_queue_full",
+                                    topic=topic,
+                                    drops=self._recorder_bridge_drops,
+                                )
                     else:
                         await self.recorder_queue.put({"topic": topic, "data": payload})
         except asyncio.CancelledError:

@@ -30,6 +30,30 @@ class OrphanedFillDLQ:
         self._queue.clear()
         return items
 
+    def retry(self, resolver_fn: Any) -> tuple[list[Any], list[Any]]:
+        """Attempt to re-resolve orphaned fills.
+
+        Args:
+            resolver_fn: Callable that takes a fill event and returns a strategy_id str.
+
+        Returns:
+            (resolved, still_orphaned) — resolved fills have strategy_id set.
+        """
+        items = list(self._queue)
+        self._queue.clear()
+        resolved = []
+        still_orphaned = []
+        for fill in items:
+            new_strategy_id = resolver_fn(fill)
+            if new_strategy_id and new_strategy_id != "UNKNOWN":
+                fill.strategy_id = new_strategy_id
+                resolved.append(fill)
+            else:
+                still_orphaned.append(fill)
+        for f in still_orphaned:
+            self._queue.append(f)
+        return resolved, still_orphaned
+
 
 _dlq: OrphanedFillDLQ | None = None
 
