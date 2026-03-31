@@ -5,8 +5,11 @@ from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from hft_platform.core import timebase
+
+_TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 
 DEFAULT_AUTONOMY_EVIDENCE_DIR = Path("outputs/production_rollout/autonomy")
 
@@ -32,7 +35,7 @@ class AutonomyEvidenceWriter:
     def session_dir(self) -> Path:
         if self._trading_date is not None:
             return self.base_dir / self._trading_date.strftime("%Y%m%d")
-        return self.base_dir / datetime.now().strftime("%Y%m%d")
+        return self.base_dir / datetime.now(tz=_TZ_TAIPEI).strftime("%Y%m%d")
 
     def record_transition(
         self,
