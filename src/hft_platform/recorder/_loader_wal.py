@@ -157,6 +157,8 @@ def parse_table_from_filename(fname: str) -> str:
         return "backtest_runs"
     if base.startswith("latency_spans"):
         return "latency_spans"
+    if base.startswith("pnl_snapshots"):
+        return "pnl_snapshots"
     return base or "unknown"
 
 
@@ -173,6 +175,7 @@ def parse_batch_table_name(table_name: str) -> str:
         "logs": "risk_log",
         "backtest_runs": "backtest_runs",
         "latency_spans": "latency_spans",
+        "pnl_snapshots": "pnl_snapshots",
     }
     result = mapping.get(table_name)
     if result is None:
