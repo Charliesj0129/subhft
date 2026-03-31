@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -202,3 +203,57 @@ async def test_submit_typed_command_nowait_materialized_by_worker(tmp_path, monk
 def test_is_transient_error(tmp_path, exc, expected):
     adapter = _make_adapter(tmp_path)
     assert adapter._is_transient_error(exc) is expected
+
+
+def _make_intent(ttl_ns: int = 5_000_000_000) -> OrderIntent:
+    return OrderIntent(
+        intent_id=42,
+        strategy_id="strat",
+        symbol="TXF",
+        intent_type=IntentType.NEW,
+        side=Side.BUY,
+        price=1000000,
+        qty=1,
+        tif=TIF.LIMIT,
+        target_order_id=None,
+        ttl_ns=ttl_ns,
+    )
+
+
+def test_intent_to_command_deadline_uses_monotonic_domain(tmp_path):
+    """deadline_ns must be in monotonic clock domain (reachable by time.monotonic_ns)."""
+    adapter = _make_adapter(tmp_path)
+    intent = _make_intent()
+
+    before_mono = time.monotonic_ns()
+    cmd = adapter._intent_to_command(intent)
+    after_mono = time.monotonic_ns()
+
+    # Deadline must be reachable from the monotonic clock (not epoch ~1.7e18)
+    # Epoch wall-clock is ~1.7e18 ns; monotonic is ~1e12 ns on a typical system
+    EPOCH_THRESHOLD_NS = 10**15  # 1e15 ns = ~11.5 days since boot vs ~54 years since epoch
+    assert cmd.deadline_ns < EPOCH_THRESHOLD_NS, (
+        f"deadline_ns={cmd.deadline_ns} looks like epoch time, not monotonic"
+    )
+
+    # Deadline must be after the current monotonic time (not yet expired)
+    assert time.monotonic_ns() <= cmd.deadline_ns, (
+        "deadline_ns is already in the past — order would expire immediately"
+    )
+
+    # deadline_ns must be at least mono_before + ttl (minus small tolerance for execution time)
+    assert cmd.deadline_ns >= before_mono + intent.ttl_ns - 1_000_000  # 1ms tolerance
+
+
+def test_intent_to_command_created_ns_uses_epoch_domain(tmp_path):
+    """created_ns must be in epoch (wall-clock) domain for TCA and recording consumers."""
+    adapter = _make_adapter(tmp_path)
+    intent = _make_intent()
+
+    cmd = adapter._intent_to_command(intent)
+
+    # Epoch wall-clock is ~1.7e18 ns; monotonic is ~1e12 ns
+    EPOCH_THRESHOLD_NS = 10**15
+    assert cmd.created_ns > EPOCH_THRESHOLD_NS, (
+        f"created_ns={cmd.created_ns} looks like monotonic time, not epoch wall-clock"
+    )

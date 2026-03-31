@@ -186,7 +186,8 @@ class OrderAdapter:
                 self.circuit_breaker.timeout_s = cb_cfg.get("timeout_seconds", self.circuit_breaker.timeout_s)
 
     def _intent_to_command(self, intent: OrderIntent) -> OrderCommand:
-        now_ns = timebase.now_ns()
+        mono_ns = time.monotonic_ns()  # monotonic clock for deadline comparison
+        created_ns = timebase.now_ns()  # epoch wall-clock for TCA / recording
         ttl_ns = int(intent.ttl_ns) if intent.ttl_ns > 0 else 5_000_000_000
         storm_guard_state = StormGuardState.HALT if intent.reason == "halt_flatten" else StormGuardState.NORMAL
         # TCA: arrival_price = current LOB mid-price (not decision_price)
@@ -200,9 +201,9 @@ class OrderAdapter:
         return OrderCommand(
             cmd_id=int(intent.intent_id),
             intent=intent,
-            deadline_ns=now_ns + ttl_ns,
+            deadline_ns=mono_ns + ttl_ns,
             storm_guard_state=storm_guard_state,
-            created_ns=now_ns,
+            created_ns=created_ns,
             decision_price=int(intent.decision_price),
             arrival_price=arrival,
         )
