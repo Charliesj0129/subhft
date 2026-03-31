@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from unittest.mock import MagicMock, patch
 
-from hft_platform.reports.collector import DataCollector
+from hft_platform.reports.collector import DataCollector, _day_filter, _validate_time_filter
 from hft_platform.reports.models import SessionData
 
 # ---------------------------------------------------------------------------
@@ -153,6 +154,28 @@ class TestCollectCore:
         assert result.volume == 0
         assert result.tick_count == 0
 
+    def test_query_ohlcv_uses_ohlcv_1m_view(self) -> None:
+        """Q1 should read from the pre-aggregated 1-minute OHLCV view."""
+        collector, mock_execute = _make_collector()
+        mock_execute.return_value = _make_ohlcv_row()
+
+        collector._query_ohlcv("TXFD6", "bucket >= 0")
+
+        sql = mock_execute.call_args.args[0]
+        assert "FROM hft.ohlcv_1m" in sql
+        assert "argMin(price_scaled, exch_ts)" not in sql
+
+    def test_query_5m_bars_uses_ohlcv_1m_view(self) -> None:
+        """Q2 should roll 5-minute bars from the 1-minute OHLCV view."""
+        collector, mock_execute = _make_collector()
+        mock_execute.return_value = _make_bar_row()
+
+        collector._query_5m_bars("TXFD6", "bucket >= 0")
+
+        sql = mock_execute.call_args.args[0]
+        assert "FROM hft.ohlcv_1m" in sql
+        assert "FROM hft.market_data" not in sql
+
 
 # ---------------------------------------------------------------------------
 # collect() — delegation tests
@@ -287,3 +310,42 @@ class TestCollectDelegation:
         assert len(core.bars_5m) == len(full.bars_5m)
         assert len(core.flow_5m) == len(full.flow_5m)
         assert len(core.large_trades) == len(full.large_trades)
+
+
+# ---------------------------------------------------------------------------
+# _validate_time_filter() — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestValidateTimeFilter:
+    def test_valid_day_filter_accepted(self) -> None:
+        """A realistic day-session filter produced by _day_filter() is accepted."""
+        tf = _day_filter("2026-03-28")
+        result = _validate_time_filter(tf)
+        assert result == tf
+
+    def test_simple_valid_filter_accepted(self) -> None:
+        """A minimal valid time_filter string passes validation."""
+        result = _validate_time_filter("exch_ts > 0")
+        assert result == "exch_ts > 0"
+
+    def test_sql_injection_semicolon_rejected(self) -> None:
+        """time_filter containing a semicolon raises ValueError."""
+        with pytest.raises(ValueError, match="Unsafe time_filter"):
+            _validate_time_filter("exch_ts > 0; DROP TABLE hft.market_data")
+
+    def test_sql_injection_comment_rejected(self) -> None:
+        """time_filter containing SQL comment marker raises ValueError."""
+        with pytest.raises(ValueError, match="Unsafe time_filter"):
+            _validate_time_filter("exch_ts > 0 -- ignore the rest")
+
+    def test_sql_injection_drop_keyword_rejected(self) -> None:
+        """time_filter containing DROP keyword raises ValueError."""
+        with pytest.raises(ValueError, match="Unsafe time_filter"):
+            _validate_time_filter("exch_ts > 0 AND DROP TABLE hft.market_data")
+
+    def test_collect_core_rejects_injected_time_filter(self) -> None:
+        """collect_core() raises ValueError when time_filter contains injection."""
+        collector, _mock_execute = _make_collector()
+        with pytest.raises(ValueError, match="Unsafe time_filter"):
+            collector.collect_core("TXFD6", "exch_ts > 0; DELETE FROM hft.market_data")

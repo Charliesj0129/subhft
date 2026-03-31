@@ -52,6 +52,10 @@ _DEFAULT_LARGE_TRADE_THRESHOLD = 10
 # Input validation patterns
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9]{1,20}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DANGEROUS_SQL_RE = re.compile(
+    r"(;|--|\b(DROP|DELETE|INSERT|UPDATE|ALTER|GRANT|UNION|EXEC|CREATE|TRUNCATE)\b)",
+    re.IGNORECASE,
+)
 
 # Memory cap for every CH query
 _SETTINGS = "SETTINGS max_memory_usage = 2000000000"
@@ -69,6 +73,17 @@ def _validate_date(date: str) -> str:
     if not _DATE_RE.match(date):
         raise ValueError(f"Invalid date: {date!r}")
     return date
+
+
+def _validate_time_filter(time_filter: str) -> str:
+    """Validate a SQL WHERE snippet, raising ValueError on suspicious input.
+
+    Uses a blocklist to reject tokens that could indicate SQL injection:
+    semicolons, SQL comments (--), and dangerous DDL/DML keywords.
+    """
+    if _DANGEROUS_SQL_RE.search(time_filter):
+        raise ValueError(f"Unsafe time_filter rejected: {time_filter!r}")
+    return time_filter
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +222,7 @@ class DataCollector:
             Optional ISO date string stored on the result; defaults to ``""``.
         """
         _validate_symbol(symbol)
+        _validate_time_filter(time_filter)
         ohlcv = self._query_ohlcv(symbol, time_filter)
         bars = self._query_5m_bars(symbol, time_filter)
         flow = self._query_flow(symbol, time_filter)
@@ -293,33 +309,33 @@ class DataCollector:
         """Q1: Session OHLCV."""
         sql = f"""
             SELECT
-                _ch_to_platform(argMin(price_scaled, exch_ts)) AS open,
-                _ch_to_platform(argMax(price_scaled, exch_ts)) AS close,
-                _ch_to_platform(min(price_scaled))             AS low,
-                _ch_to_platform(max(price_scaled))             AS high,
-                sum(volume)                                     AS volume,
-                count()                                         AS tick_count
-            FROM hft.market_data
-            WHERE symbol = '{symbol}'
-              AND type = 'Tick'
-              AND {time_filter}
-            {_SETTINGS}
-        """
-        # We perform the conversion in Python to avoid UDF dependency.
-        sql = f"""
-            SELECT
-                argMin(price_scaled, exch_ts) AS open_ch,
-                argMax(price_scaled, exch_ts) AS close_ch,
-                min(price_scaled)             AS low_ch,
-                max(price_scaled)             AS high_ch,
+                argMin(open_scaled, bucket)   AS open_ch,
+                argMax(close_scaled, bucket)  AS close_ch,
+                min(low_scaled)               AS low_ch,
+                max(high_scaled)              AS high_ch,
                 sum(volume)                   AS volume,
-                count()                       AS tick_count
-            FROM hft.market_data
+                sum(tick_count)               AS tick_count
+            FROM hft.ohlcv_1m
             WHERE symbol = '{symbol}'
-              AND type = 'Tick'
               AND {time_filter}
             {_SETTINGS}
         """
+        sql = sql.replace(
+            "FROM hft.ohlcv_1m",
+            """FROM (
+                SELECT
+                    symbol,
+                    bucket,
+                    open_scaled,
+                    high_scaled,
+                    low_scaled,
+                    close_scaled,
+                    volume,
+                    tick_count,
+                    toUnixTimestamp64Nano(toDateTime64(bucket, 3, 'Asia/Taipei')) AS exch_ts
+                FROM hft.ohlcv_1m
+            ) AS ohlcv_1m""",
+        )
         rows = self._execute(sql)
         if not rows or not rows[0][0]:
             log.warning("Q1 OHLCV returned no data", symbol=symbol)
@@ -339,22 +355,37 @@ class DataCollector:
         sql = f"""
             SELECT
                 toString(toStartOfFiveMinutes(
-                    toDateTime64(exch_ts / 1e9, 3, 'Asia/Taipei')
+                    bucket
                 ))                                   AS ts,
-                argMin(price_scaled, exch_ts)        AS open_ch,
-                max(price_scaled)                    AS high_ch,
-                min(price_scaled)                    AS low_ch,
-                argMax(price_scaled, exch_ts)        AS close_ch,
+                argMin(open_scaled, bucket)          AS open_ch,
+                max(high_scaled)                     AS high_ch,
+                min(low_scaled)                      AS low_ch,
+                argMax(close_scaled, bucket)         AS close_ch,
                 sum(volume)                          AS volume,
-                count()                              AS ticks
-            FROM hft.market_data
+                sum(tick_count)                      AS ticks
+            FROM hft.ohlcv_1m
             WHERE symbol = '{symbol}'
-              AND type = 'Tick'
               AND {time_filter}
             GROUP BY ts
             ORDER BY ts
             {_SETTINGS}
         """
+        sql = sql.replace(
+            "FROM hft.ohlcv_1m",
+            """FROM (
+                SELECT
+                    symbol,
+                    bucket,
+                    open_scaled,
+                    high_scaled,
+                    low_scaled,
+                    close_scaled,
+                    volume,
+                    tick_count,
+                    toUnixTimestamp64Nano(toDateTime64(bucket, 3, 'Asia/Taipei')) AS exch_ts
+                FROM hft.ohlcv_1m
+            ) AS ohlcv_1m""",
+        )
         rows = self._execute(sql)
         return [
             Bar5m(
