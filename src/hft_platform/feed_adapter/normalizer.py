@@ -408,6 +408,8 @@ class MarketDataNormalizer:
         "_fixed5_ask_vols_np",
         "_fused",
         "_trade_classifier",
+        "_latency_metrics_counter",
+        "_latency_metrics_sample_every",
     )
 
     def __init__(self, config_path: str | None = None, metadata: SymbolMetadata | None = None):
@@ -423,6 +425,10 @@ class MarketDataNormalizer:
         self._last_local_ts_tick: int = 0
         self._last_local_ts_bidask: int = 0
         self._last_local_ts_snapshot: int = 0
+        self._latency_metrics_counter: int = 0
+        self._latency_metrics_sample_every: int = max(
+            1, int(os.getenv("HFT_NORMALIZER_METRICS_SAMPLE_EVERY", "4"))
+        )
         self._last_skew_log_ns = 0
         self._trade_classifier = TradeClassifier()
         self._fused: Any = None
@@ -481,14 +487,21 @@ class MarketDataNormalizer:
 
     def _record_latency_metrics(self, exch_ts: int, local_ts: int, last_ts_attr: str) -> None:
         """Record feed_latency_ns and feed_interarrival_ns metrics and update the
-        named ``_last_local_ts_*`` attribute."""
+        named ``_last_local_ts_*`` attribute.
+
+        Metrics are sampled every ``_latency_metrics_sample_every`` calls to reduce
+        per-tick Prometheus overhead.  The ``last_ts_attr`` timestamp is always
+        updated so that interarrival deltas remain accurate on sampled events.
+        """
         if self.metrics:
-            if exch_ts:
+            self._latency_metrics_counter += 1
+            sample = self._latency_metrics_counter % self._latency_metrics_sample_every == 0
+            if exch_ts and sample:
                 lag_ns = local_ts - exch_ts
                 if lag_ns >= 0:
                     self.metrics.feed_latency_ns.observe(lag_ns)
             last = getattr(self, last_ts_attr)
-            if last:
+            if last and sample:
                 delta = local_ts - last
                 if delta >= 0:
                     self.metrics.feed_interarrival_ns.observe(delta)
