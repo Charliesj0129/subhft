@@ -99,6 +99,7 @@ class MetricsRegistry:
                 "circuit_breaker_state",
                 "dlq_size_total",
                 "orphaned_fill",
+                "fills_total",
                 "portfolio_total_pnl",
                 "reconciliation_discrepancy_count",
                 "recorder_insert_retry_total",
@@ -327,6 +328,7 @@ class MetricsRegistry:
         self.execution_router_errors_total = Counter("execution_router_errors_total", "Execution router errors")
         self.execution_gateway_errors_total = Counter("execution_gateway_errors_total", "Execution gateway errors")
         self.orphaned_fill_total = Counter("orphaned_fill_total", "Orphaned fills routed to DLQ")
+        self.fills_total = Counter("fills_total", "Total successful fills processed")
         self.execution_router_lag_ns = Histogram(
             "execution_router_lag_ns",
             "Execution report lag (ns)",
