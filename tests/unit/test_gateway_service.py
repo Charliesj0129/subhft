@@ -341,3 +341,36 @@ async def test_service_typed_intent_path_uses_typed_adapter_submit_when_availabl
     assert api_queue.qsize() == 0
     svc._order_adapter.submit_typed_command_nowait.assert_called_once()
     svc._risk_engine.create_typed_command_frame_from_typed_frame.assert_called_once()
+
+
+# ── P1-A: set_halt / set_normal delegation ───────────────────────────────────
+
+def test_set_halt_transitions_policy_to_halt():
+    """GatewayService.set_halt() must delegate to policy and set mode to HALT."""
+    svc, _ = _make_service()
+    from hft_platform.gateway.policy import GatewayPolicyMode
+
+    assert svc._policy.mode == GatewayPolicyMode.NORMAL
+    svc.set_halt()
+    assert svc._policy.mode == GatewayPolicyMode.HALT
+
+
+def test_set_normal_resets_policy_from_halt():
+    """GatewayService.set_normal() must reset policy mode to NORMAL after HALT."""
+    svc, _ = _make_service()
+    from hft_platform.gateway.policy import GatewayPolicyMode
+
+    svc.set_halt()
+    assert svc._policy.mode == GatewayPolicyMode.HALT
+    svc.set_normal()
+    assert svc._policy.mode == GatewayPolicyMode.NORMAL
+
+
+def test_set_halt_is_idempotent():
+    """Calling set_halt() multiple times must not raise and policy stays in HALT."""
+    svc, _ = _make_service()
+    from hft_platform.gateway.policy import GatewayPolicyMode
+
+    svc.set_halt()
+    svc.set_halt()  # second call must be no-op
+    assert svc._policy.mode == GatewayPolicyMode.HALT

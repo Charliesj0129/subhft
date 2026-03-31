@@ -77,6 +77,7 @@ class HFTSystem:
         self._recorder_seen_tick = False
         self._recorder_seen_bidask = False
         self._md_record_direct = os.getenv("HFT_MD_RECORD_DIRECT", "1").lower() not in {"0", "false", "no", "off"}
+        self._fill_record_direct = True  # Always use direct fill recording when recorder_queue is wired
 
         self.bootstrapper = SystemBootstrapper(self.settings)
         self.registry = self.bootstrapper.build()
@@ -595,6 +596,12 @@ class HFTSystem:
                     logger.warning("Drained blocked orders during HALT", count=drained_count)
                 # Signal order adapter to stop processing
                 self._set_service_running(self.order_adapter, False)
+                # Defense-in-depth: propagate HALT to gateway policy so the gateway
+                # rejects new intents independently of the risk engine path.
+                # GatewayPolicy._set_mode() is idempotent, so repeated calls are safe.
+                if self.gateway_service is not None:
+                    self.gateway_service.set_halt()
+                    logger.warning("Gateway policy set to HALT by StormGuard supervisor")
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""
@@ -736,6 +743,7 @@ class HFTSystem:
         consumer = (
             self.bus.consume_batch(batch_size, start_cursor=-1) if batch_size > 1 else self.bus.consume(start_cursor=-1)
         )
+        from hft_platform.contracts.execution import FillEvent
         from hft_platform.events import BidAskEvent, TickEvent
         from hft_platform.recorder.mapper import map_event_to_record
 
@@ -746,6 +754,9 @@ class HFTSystem:
                 batch = item if isinstance(item, list) else [item]
                 for event in batch:
                     if self._md_record_direct and isinstance(event, (TickEvent, BidAskEvent)):
+                        continue
+                    # Skip FillEvent if direct fill recording is enabled (avoid duplicates)
+                    if self._fill_record_direct and isinstance(event, FillEvent):
                         continue
                     if isinstance(event, TickEvent) and not self._recorder_seen_tick:
                         self._recorder_seen_tick = True

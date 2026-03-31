@@ -10,8 +10,8 @@ Architecture (D2):
     3. exposure.check_and_update(key, intent)   → reject if overshoot
     4. risk_engine.evaluate(intent)             → synchronous
     5. risk_engine.create_command(intent)       → synchronous
-    6. dedup.commit(key, approved, reason, cmd_id)
-    7. order_adapter._api_queue.put_nowait(cmd)
+    6. order_adapter._api_queue.put_nowait(cmd)
+    7. dedup.commit(key, approved, reason, cmd_id) [after dispatch outcome]
 - Latency histogram CE2-07 wraps steps 1-7.
 """
 
@@ -466,6 +466,16 @@ class GatewayService:
 
         self._record_latency(t0)
         self._update_channel_depth_metric()
+
+    # ── Policy control ───────────────────────────────────────────────────
+
+    def set_halt(self) -> None:
+        """Propagate HALT from supervisor to gateway policy."""
+        self._policy.set_halt()
+
+    def set_normal(self) -> None:
+        """Reset gateway policy to NORMAL (manual recovery after HALT)."""
+        self._policy.set_normal()
 
     # ── Health ────────────────────────────────────────────────────────────
 
