@@ -350,6 +350,7 @@ class RiskEngine:
             v.config = new_config
             v.defaults = new_config.get("global_defaults", {})
             v.strat_configs = new_config.get("strategies", {})
+        self._validator0 = self.validators[0] if self.validators else None
         logger.info("RiskEngine config reloaded", strategies=list(new_config.get("strategies", {}).keys()))
 
     async def run(self) -> None:
@@ -668,8 +669,6 @@ class RiskEngine:
         Non-blocking: Telegram notification is scheduled via asyncio.create_task so it
         never delays the evaluate() hot path.
         """
-        from hft_platform.contracts.strategy import StormGuardState
-
         if self.storm_guard.state == StormGuardState.HALT:
             return  # Already in HALT — nothing to do
 
