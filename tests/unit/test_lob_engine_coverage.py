@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 import hft_platform.feed_adapter.lob_engine as lob_mod
-from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
+from hft_platform.events import BidAskEvent, FusedBookStats, LOBStatsEvent, MetaData, TickEvent
 from hft_platform.feed_adapter.lob_engine import BookState, LOBEngine, _NoopLock
 
 
@@ -357,7 +357,7 @@ class TestLOBEngineEventDispatch:
             symbol="2330",
             bids=bids,
             asks=asks,
-            fused_stats=(1000000, 1001000, 10, 8, 2001000, 1000, 0.111),
+            fused_stats=FusedBookStats(1000000, 1001000, 10, 8, 2001000, 1000, 0.111),
         )
         result = engine.process_event(event)
         book = engine.get_book("2330")
@@ -370,7 +370,7 @@ class TestLOBEngineEventDispatch:
         meta1 = MetaData(seq=1, topic="bidask", source_ts=2_000_000_000, local_ts=2_000_000_000)
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1001000, 8]], dtype=np.int64)
-        fused = (1000000, 1001000, 10, 8, 2001000, 1000, 0.1)
+        fused = FusedBookStats(1000000, 1001000, 10, 8, 2001000, 1000, 0.1)
         engine.process_event(BidAskEvent(meta=meta1, symbol="2330", bids=bids, asks=asks, fused_stats=fused))
         book = engine.get_book("2330")
         v_before = book.version

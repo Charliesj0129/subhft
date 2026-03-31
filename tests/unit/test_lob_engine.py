@@ -218,7 +218,7 @@ def test_fused_bypass_sets_book_stats(engine, monkeypatch):
     bids = np.array([[1000000, 10]], dtype=np.int64)
     asks = np.array([[1005000, 20]], dtype=np.int64)
     # fused_stats: (best_bid, best_ask, bid_depth, ask_depth, mid_x2, spread_scaled, imbalance)
-    fused_stats = (1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
+    fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
 
     event = BidAskEvent(
         meta=make_meta(1000),
@@ -252,7 +252,7 @@ def test_fused_bypass_respects_late_packet(engine, monkeypatch):
 
     monkeypatch.setattr(lob_mod, "_FUSED_BYPASS", True)
 
-    fused_stats = (1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
+    fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
 
     # First event at ts=2000
     event1 = BidAskEvent(
@@ -297,7 +297,7 @@ def test_fused_bypass_produces_same_stats_as_standard(engine):
     original_val = lob_mod._FUSED_BYPASS
     try:
         lob_mod._FUSED_BYPASS = True
-        fused_stats = (1000000, 1005000, 10, 20, 2005000, 5000, stats_std.imbalance)
+        fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, stats_std.imbalance)
         event_fused = BidAskEvent(
             meta=make_meta(1000),
             symbol="FUSED",
@@ -320,7 +320,7 @@ def test_fused_bypass_produces_same_stats_as_standard(engine):
 
 def test_no_fused_bypass_when_flag_off(engine):
     """Without _FUSED_BYPASS, fused_stats on event should be ignored."""
-    fused_stats = (1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
+    fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
     bids = np.array([[1000000, 10]], dtype=np.int64)
     asks = np.array([[1005000, 20]], dtype=np.int64)
 

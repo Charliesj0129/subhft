@@ -8,7 +8,7 @@ import numpy as np
 from structlog import get_logger
 
 from hft_platform.core import timebase
-from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
+from hft_platform.events import BidAskEvent, BookStats, LOBStatsEvent, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("feed_adapter.lob")
@@ -344,7 +344,7 @@ class BookState:
         bids: Union[np.ndarray, list],
         asks: Union[np.ndarray, list],
         exch_ts: int,
-        stats: tuple[int, int, int, int, float, float, float],
+        stats: BookStats,
     ) -> None:
         self.apply_update_with_stats_fields(bids, asks, exch_ts, *stats)
 
@@ -552,11 +552,11 @@ class LOBEngine:
                         book.exch_ts = exch_ts
                         book.bids = event.bids
                         book.asks = event.asks
-                        book.bid_depth_total = int(fs[2])
-                        book.ask_depth_total = int(fs[3])
-                        book.mid_price_x2 = int(fs[4])
-                        book.spread = int(fs[5])
-                        book.imbalance = float(fs[6])
+                        book.bid_depth_total = int(fs.bid_depth)
+                        book.ask_depth_total = int(fs.ask_depth)
+                        book.mid_price_x2 = int(fs.mid_price_x2)
+                        book.spread = int(fs.spread_scaled)
+                        book.imbalance = float(fs.imbalance)
                         book.version += 1
                 if metrics_enabled:
                     self._record_lob_metrics(event.symbol, event.is_snapshot)
