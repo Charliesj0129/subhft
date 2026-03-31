@@ -394,8 +394,9 @@ class DataWriter:
                     self._last_heartbeat_ok = ok
                     if not ok:
                         logger.error("ClickHouse heartbeat failed, marking connection as stale")
-                        self.connected = False
-                        self.ch_client = None
+                        with self._ch_heartbeat_lock:
+                            self.connected = False
+                            self.ch_client = None
                         if self.metrics:
                             self.metrics.clickhouse_connection_health.set(0)
                         self._schedule_reconnect("heartbeat_failed")
@@ -571,6 +572,8 @@ class DataWriter:
             logger.info("ClickHouse columnar insert start", table=table, rows=row_count)
         start_ms = time.monotonic() * 1000
         with self._ch_heartbeat_lock:
+            if self.ch_client is None:
+                raise ConnectionError("ClickHouse client disconnected during insert")
             with self._get_table_lock(table):
                 if self._ch_column_oriented:
                     try:
@@ -696,6 +699,8 @@ class DataWriter:
         # clickhouse_connect client session is not thread-safe across command/insert.
         # Serialize heartbeat and inserts to avoid concurrent query errors.
         with self._ch_heartbeat_lock:
+            if self.ch_client is None:
+                raise ConnectionError("ClickHouse client disconnected during insert")
             with self._get_table_lock(table):
                 self.ch_client.insert(table, values, column_names=keys)
 
