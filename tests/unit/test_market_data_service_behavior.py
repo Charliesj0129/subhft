@@ -443,3 +443,52 @@ def test_record_direct_event_no_recorder(mds_factory):
     event = MagicMock(spec=TickEvent)
     svc._record_direct_event(event)  # Should not raise
     assert svc.recorder_queue is None  # no recorder attached; state unchanged
+
+
+def test_process_raw_post_norm_error_does_not_propagate(mds_factory):
+    """LOBEngine exception in _process_raw is caught; service continues processing."""
+    from hft_platform.events import MetaData, TickEvent
+
+    svc = mds_factory()
+    # Inject a LOB that raises on process_event
+    svc.lob = MagicMock()
+    svc.lob.process_event.side_effect = RuntimeError("LOB kaboom")
+    svc._record_direct = False
+
+    meta = MetaData(seq=1, source_ts=0, local_ts=0)
+    tick = TickEvent(meta=meta, symbol="2330", price=1000000, volume=1)
+
+    # Ensure normalizer returns the tick directly
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.return_value = tick
+
+    assert svc._process_raw_error_count == 0
+
+    # First call: LOB raises, but _process_raw should NOT propagate
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    assert svc._process_raw_error_count == 1
+
+    # Second call: still works, counter increments again
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    assert svc._process_raw_error_count == 2
+
+
+def test_process_raw_post_norm_error_publish_failure(mds_factory):
+    """Publish failure in _process_raw is caught; error counter increments."""
+    from hft_platform.events import MetaData, TickEvent
+
+    svc = mds_factory()
+    # LOB succeeds, but publish raises
+    svc.lob = MagicMock()
+    svc.lob.process_event.return_value = None
+    svc._maybe_update_features = MagicMock(return_value=None)
+    svc._publish_events = MagicMock(side_effect=ValueError("publish fail"))
+    svc._record_direct = False
+
+    meta = MetaData(seq=1, source_ts=0, local_ts=0)
+    tick = TickEvent(meta=meta, symbol="2330", price=1000000, volume=1)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.return_value = tick
+
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    assert svc._process_raw_error_count == 1

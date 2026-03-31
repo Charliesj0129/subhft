@@ -344,6 +344,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             "off",
         }
 
+        # Per-message error counter for post-normalization processing
+        self._process_raw_error_count = 0
+
         # P0-1: raw_queue backpressure tracking
         raw_queue_maxsize = getattr(self.raw_queue, "maxsize", 0) or 0
         self._raw_queue_size = (
@@ -655,46 +658,56 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             if self._normalized_log_counter % self.log_normalized_every == 0:
                 logger.info("MD Normalized", type=str(type(event)), symbol=event.symbol)
 
-        lob_start_ns = time.perf_counter_ns()
-        stats = self.lob.process_event(event)
-        feature_update = self._maybe_update_features(event, stats)
-        lob_duration = time.perf_counter_ns() - lob_start_ns
-        if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
-            self.latency.record(
-                "lob_process",
-                lob_duration,
-                trace_id=trace_id,
-                symbol=getattr(event, "symbol", ""),
-            )
-        if getattr(self, "_trace_sampler", None) is not None:
-            self._emit_trace(
-                "md_event",
-                trace_id,
-                {
-                    "symbol": getattr(event, "symbol", ""),
-                    "event_type": type(event).__name__,
-                    "norm_ns": int(norm_duration or 0),
-                    "lob_ns": int(lob_duration or 0),
-                    "has_stats": bool(stats is not None),
-                    "has_feature_update": bool(feature_update is not None),
-                },
-            )
-            if feature_update is not None:
+        try:
+            lob_start_ns = time.perf_counter_ns()
+            stats = self.lob.process_event(event)
+            feature_update = self._maybe_update_features(event, stats)
+            lob_duration = time.perf_counter_ns() - lob_start_ns
+            if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
+                self.latency.record(
+                    "lob_process",
+                    lob_duration,
+                    trace_id=trace_id,
+                    symbol=getattr(event, "symbol", ""),
+                )
+            if getattr(self, "_trace_sampler", None) is not None:
                 self._emit_trace(
-                    "feature_update",
+                    "md_event",
                     trace_id,
                     {
-                        "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
-                        "feature_set_id": getattr(feature_update, "feature_set_id", self._feature_set_id_cached),
-                        "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
-                        "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
+                        "symbol": getattr(event, "symbol", ""),
+                        "event_type": type(event).__name__,
+                        "norm_ns": int(norm_duration or 0),
+                        "lob_ns": int(lob_duration or 0),
+                        "has_stats": bool(stats is not None),
+                        "has_feature_update": bool(feature_update is not None),
                     },
                 )
-        if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
-            self._record_direct_event(event)
+                if feature_update is not None:
+                    self._emit_trace(
+                        "feature_update",
+                        trace_id,
+                        {
+                            "symbol": getattr(feature_update, "symbol", getattr(event, "symbol", "")),
+                            "feature_set_id": getattr(feature_update, "feature_set_id", self._feature_set_id_cached),
+                            "quality_flags": int(getattr(feature_update, "quality_flags", 0) or 0),
+                            "changed_mask": int(getattr(feature_update, "changed_mask", 0) or 0),
+                        },
+                    )
+            if self._record_direct and isinstance(event, (TickEvent, BidAskEvent)):
+                self._record_direct_event(event)
 
-        self._publish_events(event, stats, feature_update)
-        self._publish_to_redis(event, stats)
+            self._publish_events(event, stats, feature_update)
+            self._publish_to_redis(event, stats)
+        except Exception as exc:
+            self._process_raw_error_count += 1
+            logger.error(
+                "process_raw_post_norm_error",
+                symbol=event.symbol,
+                error=str(exc),
+                event_type=type(event).__name__,
+            )
+            return
 
     # -- helpers for _process_raw -------------------------------------------
 
