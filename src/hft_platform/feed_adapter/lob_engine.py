@@ -298,6 +298,7 @@ class BookState:
                 return cached
 
             # Hot path: mutate in-place to avoid per-tick allocation
+            # mid_price/spread are read-only @property derived from mid_price_x2/spread_scaled
             cached.ts = self.exch_ts
             cached.mid_price_x2 = self.mid_price_x2
             cached.spread_scaled = self.spread
@@ -306,9 +307,6 @@ class BookState:
             cached.best_ask = best_ask
             cached.bid_depth = int(self.bid_depth_total)
             cached.ask_depth = int(self.ask_depth_total)
-            # Update derived fields (mirrors __post_init__ fast path)
-            cached.mid_price = self.mid_price_x2 / 2.0
-            cached.spread = float(self.spread)
             return cached
 
     def get_stats_tuple(self) -> tuple:
