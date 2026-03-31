@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, RiskDecision, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, RiskDecision, RiskFeedback, StormGuardState
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
@@ -90,6 +90,7 @@ class RiskEngine:
         "_position_provider",
         "_rejection_sink",
         "_greeks_validator",
+        "_validator0",
         "__dict__",
     )
 
@@ -144,6 +145,8 @@ class RiskEngine:
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
                 validator._shared_scale_cache = shared_scale_cache
+        # Cache validator[0] reference to avoid list index on hot path
+        self._validator0 = self.validators[0] if self.validators else None
         self.storm_guard = storm_guard if storm_guard is not None else StormGuard()
         self._notification_dispatcher = notification_dispatcher
         self._rust_validator = self._init_rust_validator(price_scale_provider)
@@ -397,8 +400,6 @@ class RiskEngine:
                     # In real system: Feedback to strategy via side channel
                     if self._rejection_sink is not None:
                         try:
-                            from hft_platform.contracts.strategy import RiskFeedback
-                            from hft_platform.utils import timebase
                             self._rejection_sink.put_nowait(RiskFeedback(
                                 intent_id=getattr(intent, "intent_id", 0),
                                 strategy_id=getattr(intent, "strategy_id", ""),
@@ -446,12 +447,9 @@ class RiskEngine:
         rv = self._rust_validator
         if rv is not None:
             try:
-                mid_price = 0
-                lob = getattr(self.validators[0], "lob", None) if self.validators else None
-                if lob is not None:
-                    _get_mid = getattr(self.validators[0], "_get_mid_price", None)
-                    if callable(_get_mid):
-                        mid_price = int(_get_mid(getattr(intent, "symbol", "")) or 0)
+                v0 = self._validator0
+                _get_mid = getattr(v0, "_get_mid_price", None) if v0 is not None else None
+                mid_price = int(_get_mid(getattr(intent, "symbol", "")) or 0) if callable(_get_mid) else 0
                 ok, code = rv.check(
                     int(getattr(intent, "intent_type", 0)),
                     int(getattr(intent, "price", 0)),
