@@ -64,15 +64,19 @@ ORDER_COLUMNS = [
 ]
 
 FILL_COLUMNS = [
+    "ts_exchange",
+    "ts_local",
+    "client_order_id",
+    "broker_order_id",
     "fill_id",
-    "order_id",
     "strategy_id",
     "symbol",
     "side",
-    "price_scaled",
     "qty",
+    "price_scaled",
     "fee_scaled",
-    "match_ts",
+    "tax_scaled",
+    "source",
 ]
 
 PNL_SNAPSHOT_COLUMNS = [
@@ -180,34 +184,37 @@ def _extract_fill_values(row) -> list | None:
         if isinstance(row, dict):
             get = row.get
             return [
+                get("ts_exchange", get("match_ts", get("exch_ts", get("ts")))),
+                get("ts_local", get("ingest_ts", get("recv_ts"))),
+                get("client_order_id", ""),
+                get("broker_order_id", get("order_id", "")),
                 get("fill_id", get("trade_id", "")),
-                get("order_id", ""),
                 get("strategy_id", ""),
                 get("symbol"),
                 get("side", get("action", "")),
-                get("price_scaled"),
                 get("qty", get("quantity", 0)),
+                get("price_scaled"),
                 get("fee_scaled", 0),
-                get("match_ts", get("exch_ts", get("ts"))),
+                get("tax_scaled", 0),
+                get("source", ""),
             ]
         return [
-            getattr(row, "fill_id", None)
-            or getattr(row, "trade_id", None)
-            or "",
-            getattr(row, "order_id", "") or "",
-            getattr(row, "strategy_id", "") or "",
-            getattr(row, "symbol", None),
-            getattr(row, "side", None)
-            or getattr(row, "action", None)
-            or "",
-            getattr(row, "price_scaled", None),
-            getattr(row, "qty", None)
-            or getattr(row, "quantity", None)
-            or 0,
-            getattr(row, "fee_scaled", 0),
-            getattr(row, "match_ts", None)
+            getattr(row, "ts_exchange", None)
+            or getattr(row, "match_ts", None)
             or getattr(row, "exch_ts", None)
             or getattr(row, "ts", None),
+            getattr(row, "ts_local", None) or getattr(row, "ingest_ts", None) or getattr(row, "recv_ts", None),
+            getattr(row, "client_order_id", ""),
+            getattr(row, "broker_order_id", None) or getattr(row, "order_id", None) or "",
+            getattr(row, "fill_id", None) or getattr(row, "trade_id", None) or "",
+            getattr(row, "strategy_id", "") or "",
+            getattr(row, "symbol", None),
+            getattr(row, "side", None) or getattr(row, "action", None) or "",
+            getattr(row, "qty", None) or getattr(row, "quantity", None) or 0,
+            getattr(row, "price_scaled", None),
+            getattr(row, "fee_scaled", 0),
+            getattr(row, "tax_scaled", 0),
+            getattr(row, "source", ""),
         ]
     except Exception as _exc:  # noqa: BLE001
         return None

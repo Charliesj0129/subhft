@@ -135,6 +135,7 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
 # Pure-function extractor tests (no async, high coverage gain)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestExtractMarketDataValues(unittest.TestCase):
     def test_extract_dict_returns_correct_length(self):
         row = {
@@ -166,9 +167,9 @@ class TestExtractMarketDataValues(unittest.TestCase):
         row = {"symbol": "2330", "exch": "OTC", "ts": 999, "recv_ts": 1000, "seq": 7}
         result = _extract_market_data_values(row)
         assert result is not None
-        assert result[1] == "OTC"   # exchange fallback to exch
-        assert result[3] == 999     # exch_ts fallback to ts
-        assert result[11] == 7      # seq_no fallback to seq
+        assert result[1] == "OTC"  # exchange fallback to exch
+        assert result[3] == 999  # exch_ts fallback to ts
+        assert result[11] == 7  # seq_no fallback to seq
 
     def test_extract_dict_defaults_exchange_to_tse(self):
         row = {"symbol": "2330"}
@@ -329,9 +330,9 @@ class TestExtractOrderValues(unittest.TestCase):
         result = _extract_order_values(row)
         assert result is not None
         assert result[3] == "sell"  # side fallback to action
-        assert result[5] == 3       # qty fallback to quantity
-        assert result[7] == 51      # ingest_ts fallback to recv_ts
-        assert result[8] == 0       # latency_us default
+        assert result[5] == 3  # qty fallback to quantity
+        assert result[7] == 51  # ingest_ts fallback to recv_ts
+        assert result[8] == 0  # latency_us default
 
     def test_extract_object_path(self):
         row = SimpleNamespace(
@@ -359,16 +360,50 @@ class TestExtractOrderValues(unittest.TestCase):
 
 
 class TestExtractFillValues(unittest.TestCase):
-    """Tests for fill extractor aligned with hft.trades schema."""
+    """Tests for fill extractor aligned with hft.fills schema."""
 
-    def test_extract_dict_mapper_output(self):
-        """Dict matching mapper.py FillEvent output extracts correctly."""
+    def test_extract_dict_new_schema(self):
+        """Dict with new hft.fills field names extracts correctly."""
+        row = {
+            "ts_exchange": 1000,
+            "ts_local": 1001,
+            "client_order_id": "",
+            "broker_order_id": "ORD1",
+            "fill_id": "F1",
+            "strategy_id": "S1",
+            "symbol": "2330",
+            "side": "BUY",
+            "qty": 1,
+            "price_scaled": 5950000,
+            "fee_scaled": 200,
+            "tax_scaled": 50,
+            "source": "shioaji",
+        }
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert len(result) == len(FILL_COLUMNS)
+        assert result[0] == 1000  # ts_exchange
+        assert result[1] == 1001  # ts_local
+        assert result[2] == ""  # client_order_id
+        assert result[3] == "ORD1"  # broker_order_id
+        assert result[4] == "F1"  # fill_id
+        assert result[5] == "S1"  # strategy_id
+        assert result[6] == "2330"  # symbol
+        assert result[7] == "BUY"  # side
+        assert result[8] == 1  # qty
+        assert result[9] == 5950000  # price_scaled
+        assert result[10] == 200  # fee_scaled
+        assert result[11] == 50  # tax_scaled
+        assert result[12] == "shioaji"  # source
+
+    def test_extract_dict_backward_compat_old_field_names(self):
+        """Dict with old field names (match_ts, order_id) still works via fallbacks."""
         row = {
             "fill_id": "F1",
             "order_id": "ORD1",
             "strategy_id": "S1",
             "symbol": "2330",
-            "side": "BUY",
+            "side": "buy",
             "price_scaled": 5950000,
             "qty": 1,
             "fee_scaled": 200,
@@ -377,29 +412,16 @@ class TestExtractFillValues(unittest.TestCase):
         result = _extract_fill_values(row)
         assert result is not None
         assert len(result) == len(FILL_COLUMNS)
-        assert result[0] == "F1"  # fill_id
-        assert result[1] == "ORD1"  # order_id
-        assert result[2] == "S1"  # strategy_id
-        assert result[3] == "2330"  # symbol
-        assert result[4] == "BUY"  # side
-        assert result[5] == 5950000  # price_scaled
-        assert result[6] == 1  # qty
-        assert result[7] == 200  # fee_scaled
-        assert result[8] == 1000  # match_ts
+        assert result[0] == 1000  # ts_exchange from match_ts fallback
+        assert result[3] == "ORD1"  # broker_order_id from order_id fallback
+        assert result[4] == "F1"  # fill_id
 
     def test_extract_dict_trade_id_fallback(self):
         """fill_id falls back to trade_id for backward compatibility."""
         row = {"trade_id": "T999", "order_id": "ORD1", "symbol": "2330"}
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[0] == "T999"  # fill_id fallback to trade_id
-
-    def test_extract_dict_exch_ts_fallback(self):
-        """match_ts falls back to exch_ts then ts."""
-        row = {"fill_id": "F1", "symbol": "2330", "exch_ts": 5000}
-        result = _extract_fill_values(row)
-        assert result is not None
-        assert result[8] == 5000  # match_ts from exch_ts fallback
+        assert result[4] == "T999"  # fill_id index 4 falls back to trade_id
 
     def test_extract_dict_fill_id_preferred(self):
         row = {"fill_id": "F999", "trade_id": "T999", "order_id": "ORD1", "symbol": "2330"}
@@ -407,7 +429,14 @@ class TestExtractFillValues(unittest.TestCase):
         assert result is not None
         assert result[4] == "F999"  # fill_id preferred over trade_id
 
-    def test_extract_object_path(self):
+    def test_extract_dict_exch_ts_fallback(self):
+        """ts_exchange falls back to exch_ts then ts."""
+        row = {"fill_id": "F1", "symbol": "2330", "exch_ts": 5000}
+        result = _extract_fill_values(row)
+        assert result is not None
+        assert result[0] == 5000  # ts_exchange from exch_ts fallback
+
+    def test_extract_object_new_schema(self):
         row = SimpleNamespace(
             ts_exchange=4000,
             ts_local=4001,
@@ -430,6 +459,7 @@ class TestExtractFillValues(unittest.TestCase):
         assert result[4] == "F2"  # fill_id
         assert result[10] == 150  # fee_scaled
         assert result[11] == 30  # tax_scaled
+        assert result[12] == "shioaji"  # source
 
     def test_extract_object_old_field_fallback(self):
         """Object with old field names (match_ts, order_id) uses fallbacks."""
@@ -456,7 +486,7 @@ class TestExtractFillValues(unittest.TestCase):
         row = SimpleNamespace(trade_id="T888", order_id="X", symbol="2330")
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[4] == "T888"
+        assert result[4] == "T888"  # fill_id at index 4
 
     def test_compat_wrapper_returns_dict(self):
         row = {"fill_id": "F1", "symbol": "2330"}
@@ -467,9 +497,19 @@ class TestExtractFillValues(unittest.TestCase):
     def test_fill_columns_match_hft_fills_schema(self):
         """FILL_COLUMNS must contain all required hft.fills columns."""
         required = {
-            "ts_exchange", "ts_local", "client_order_id", "broker_order_id",
-            "fill_id", "strategy_id", "symbol", "side", "qty",
-            "price_scaled", "fee_scaled", "tax_scaled", "source",
+            "ts_exchange",
+            "ts_local",
+            "client_order_id",
+            "broker_order_id",
+            "fill_id",
+            "strategy_id",
+            "symbol",
+            "side",
+            "qty",
+            "price_scaled",
+            "fee_scaled",
+            "tax_scaled",
+            "source",
         }
         assert set(FILL_COLUMNS) == required
 
@@ -511,6 +551,7 @@ class TestExtractPnlSnapshotValues(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 # RecorderService additional coverage
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
     def _make_worker(self, env_override=None):
