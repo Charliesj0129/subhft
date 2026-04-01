@@ -506,9 +506,11 @@ def test_maybe_update_features_happy_path_process_lob_update():
     feature_update.quality_flags = 0
     feature_engine.process_lob_update = MagicMock(return_value=feature_update)
     svc.feature_engine = feature_engine
+    svc._fe_process_lob_update = feature_engine.process_lob_update
 
     event = SimpleNamespace(symbol="2330", trade_direction=0, meta=None)
-    stats = SimpleNamespace(best_bid=1000, best_ask=1001)
+    # stats must be LOBStatsEvent or tuple to pass isinstance check in _maybe_update_features
+    stats = ("lobstats", "2330", 0, 200000, 100, 0.5, 100000, 100100, 500, 500)
     svc.metrics_registry = None
 
     result = svc._maybe_update_features(event, stats)
@@ -529,7 +531,8 @@ def test_maybe_update_features_happy_path_fallback_process_lob_stats():
     svc.feature_engine = feature_engine
 
     event = SimpleNamespace(symbol="2330", trade_direction=0, meta=None)
-    stats = SimpleNamespace(best_bid=1000, best_ask=1001)
+    # stats must be LOBStatsEvent or tuple to pass isinstance check
+    stats = ("lobstats", "2330", 0, 200000, 100, 0.5, 100000, 100100, 500, 500)
     svc.metrics_registry = None
 
     result = svc._maybe_update_features(event, stats)
