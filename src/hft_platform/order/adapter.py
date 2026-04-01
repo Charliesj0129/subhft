@@ -427,24 +427,29 @@ class OrderAdapter:
             await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "StormGuard HALT")
             return
 
+        # Safety-critical intents (CANCEL/FORCE_FLAT) bypass rate limiters and
+        # circuit breakers — they must never be blocked during HALT evacuation.
+        _safety_exempt = intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+
         # Per-symbol rate limit check (WU-06)
-        ps_result = self.per_symbol_rate_limiter.check(intent.symbol)
-        if ps_result == PerSymbolRateResult.HARD:
-            await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Per-symbol hard rate limit")
-            return
+        if not _safety_exempt:
+            ps_result = self.per_symbol_rate_limiter.check(intent.symbol)
+            if ps_result == PerSymbolRateResult.HARD:
+                await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Per-symbol hard rate limit")
+                return
 
         # Per-strategy circuit breaker check (WU-09)
-        if self.strategy_cb_mgr.is_open(intent.strategy_id):
+        if not _safety_exempt and self.strategy_cb_mgr.is_open(intent.strategy_id):
             await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Per-strategy circuit breaker open")
             return
 
         # Circuit Breaker Check
-        if self.circuit_breaker.is_open():
+        if not _safety_exempt and self.circuit_breaker.is_open():
             logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
             await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Circuit breaker open")
             return
 
-        if not self.check_rate_limit():
+        if not _safety_exempt and not self.check_rate_limit():
             # Rate limit exceeded
             await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Rate limit exceeded")
             return
@@ -1094,11 +1099,27 @@ class OrderAdapter:
                 pending = list(self._api_pending.values())
                 self._api_pending.clear()
                 for item in pending:
+                    _exempt = item.intent.intent_type in (
+                        IntentType.CANCEL, IntentType.FORCE_FLAT,
+                    )
+                    _sg_halt = (
+                        self._storm_guard is not None
+                        and getattr(self._storm_guard, "state", None) == StormGuardState.HALT
+                    )
+                    if not _exempt and _sg_halt:
+                        logger.warning(
+                            "api_worker_halt_skip",
+                            cmd_id=item.cmd_id,
+                            symbol=item.intent.symbol,
+                        )
+                        self.metrics.order_reject_total.inc()
+                        continue
                     await self._dispatch_to_api(item)
             except Exception:
                 logger.error("_api_worker: unexpected exception in dispatch loop", exc_info=True)
                 self.metrics.order_reject_total.inc()
                 self.circuit_breaker.record_failure()
+                self._api_pending.clear()
 
     def _record_queue_latency(self, cmd: OrderCommand) -> None:
         if not self.latency:

@@ -325,3 +325,220 @@ async def test_live_stormguard_halt_allows_halt_flatten(tmp_path):
     # Should NOT be DLQ'd
     dlq_size_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
     assert dlq_size_after == dlq_size_before, "halt_flatten should NOT be DLQ'd"
+
+
+# ---------------------------------------------------------------------------
+# E-6: CANCEL/FORCE_FLAT bypass per-symbol rate limiter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_bypasses_per_symbol_rate_limiter(tmp_path):
+    """CANCEL intents must not be blocked by per-symbol rate limiter (E-6 fix)."""
+    from unittest.mock import AsyncMock
+
+    adapter = _make_adapter(tmp_path)
+
+    # Force per-symbol rate limiter to reject everything
+    from hft_platform.core.rate_limiter import PerSymbolRateResult
+
+    mock_ps_limiter = MagicMock()
+    mock_ps_limiter.check = MagicMock(return_value=PerSymbolRateResult.HARD)
+    adapter.per_symbol_rate_limiter = mock_ps_limiter
+    adapter._enqueue_api = AsyncMock()
+
+    intent = _make_intent(intent_type=IntentType.CANCEL, symbol="")
+    cmd = _make_cmd(intent)
+
+    dlq_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    await adapter.execute(cmd)
+    dlq_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+
+    assert dlq_after == dlq_before, "CANCEL must not be rate-limited to DLQ"
+    # per_symbol check should not even be called for CANCEL
+    mock_ps_limiter.check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_force_flat_bypasses_per_symbol_rate_limiter(tmp_path):
+    """FORCE_FLAT intents must not be blocked by per-symbol rate limiter (E-6 fix)."""
+    from unittest.mock import AsyncMock
+
+    adapter = _make_adapter(tmp_path)
+
+    from hft_platform.core.rate_limiter import PerSymbolRateResult
+
+    mock_ps_limiter = MagicMock()
+    mock_ps_limiter.check = MagicMock(return_value=PerSymbolRateResult.HARD)
+    adapter.per_symbol_rate_limiter = mock_ps_limiter
+    adapter._enqueue_api = AsyncMock()
+
+    intent = _make_intent(intent_type=IntentType.FORCE_FLAT)
+    cmd = _make_cmd(intent)
+
+    dlq_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    await adapter.execute(cmd)
+    dlq_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+
+    assert dlq_after == dlq_before, "FORCE_FLAT must not be rate-limited to DLQ"
+    mock_ps_limiter.check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_bypasses_circuit_breaker(tmp_path):
+    """CANCEL intents must not be blocked by circuit breaker (E-6 fix)."""
+    from unittest.mock import AsyncMock
+
+    adapter = _make_adapter(tmp_path)
+    adapter._enqueue_api = AsyncMock()
+
+    # Force circuit breaker open
+    for _ in range(adapter.circuit_breaker.threshold):
+        adapter.circuit_breaker.record_failure()
+    assert adapter.circuit_breaker.is_open()
+
+    intent = _make_intent(intent_type=IntentType.CANCEL)
+    cmd = _make_cmd(intent)
+
+    dlq_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    await adapter.execute(cmd)
+    dlq_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+
+    assert dlq_after == dlq_before, "CANCEL must bypass circuit breaker"
+
+
+@pytest.mark.asyncio
+async def test_cancel_bypasses_global_rate_limiter(tmp_path):
+    """CANCEL intents must not be blocked by global rate limiter (E-6 fix)."""
+    from unittest.mock import AsyncMock
+
+    adapter = _make_adapter(tmp_path)
+    adapter._enqueue_api = AsyncMock()
+
+    # Fill global rate limiter past hard cap
+    for _ in range(260):
+        adapter.rate_limiter.record()
+    assert not adapter.check_rate_limit()
+
+    intent = _make_intent(intent_type=IntentType.CANCEL)
+    cmd = _make_cmd(intent)
+
+    dlq_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    await adapter.execute(cmd)
+    dlq_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+
+    assert dlq_after == dlq_before, "CANCEL must bypass global rate limiter"
+
+
+@pytest.mark.asyncio
+async def test_new_order_still_rejected_by_rate_limiter(tmp_path):
+    """NEW intents must still be blocked by rate limiter (regression guard)."""
+    adapter = _make_adapter(tmp_path)
+    dlq = DeadLetterQueue(dlq_dir=str(tmp_path / "dlq"), max_buffer_size=100)
+    adapter._dlq = dlq
+
+    for _ in range(260):
+        adapter.rate_limiter.record()
+
+    intent = _make_intent(intent_type=IntentType.NEW)
+    cmd = _make_cmd(intent)
+    await adapter.execute(cmd)
+
+    stats = await dlq.get_stats()
+    assert stats["total_entries"] >= 1, "NEW orders must still be rate-limited"
+
+
+# ---------------------------------------------------------------------------
+# I-4: _api_worker HALT gate — skip non-exempt orders in HALT
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_api_worker_skips_new_orders_during_halt(tmp_path):
+    """_api_worker must skip NEW orders when StormGuard is HALT (I-4 fix)."""
+    adapter = _make_adapter(tmp_path)
+    adapter.running = True
+
+    mock_sg = MagicMock()
+    mock_sg.state = StormGuardState.HALT
+    adapter._storm_guard = mock_sg
+
+    dispatched = []
+
+    async def mock_dispatch(cmd):
+        dispatched.append(cmd)
+
+    adapter._dispatch_to_api = mock_dispatch
+
+    intent = _make_intent(intent_type=IntentType.NEW)
+    cmd = _make_cmd(intent)
+    await adapter._api_queue.put(cmd)
+
+    # Run worker as a task and cancel after processing
+    task = asyncio.create_task(adapter._api_worker())
+    await asyncio.sleep(0.1)
+    adapter.running = False
+    task.cancel()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert len(dispatched) == 0, "NEW orders must be skipped during HALT in _api_worker"
+
+
+@pytest.mark.asyncio
+async def test_api_worker_allows_cancel_during_halt(tmp_path):
+    """_api_worker must still dispatch CANCEL orders during HALT (I-4 fix)."""
+    adapter = _make_adapter(tmp_path)
+    adapter.running = True
+
+    mock_sg = MagicMock()
+    mock_sg.state = StormGuardState.HALT
+    adapter._storm_guard = mock_sg
+
+    dispatched = []
+
+    async def mock_dispatch(cmd):
+        dispatched.append(cmd)
+
+    adapter._dispatch_to_api = mock_dispatch
+
+    intent = _make_intent(intent_type=IntentType.CANCEL)
+    cmd = _make_cmd(intent)
+    await adapter._api_queue.put(cmd)
+
+    task = asyncio.create_task(adapter._api_worker())
+    await asyncio.sleep(0.1)
+    adapter.running = False
+    task.cancel()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert len(dispatched) == 1, "CANCEL orders must be dispatched even during HALT"
+
+
+@pytest.mark.asyncio
+async def test_api_worker_allows_force_flat_during_halt(tmp_path):
+    """_api_worker must still dispatch FORCE_FLAT orders during HALT (I-4 fix)."""
+    adapter = _make_adapter(tmp_path)
+    adapter.running = True
+
+    mock_sg = MagicMock()
+    mock_sg.state = StormGuardState.HALT
+    adapter._storm_guard = mock_sg
+
+    dispatched = []
+
+    async def mock_dispatch(cmd):
+        dispatched.append(cmd)
+
+    adapter._dispatch_to_api = mock_dispatch
+
+    intent = _make_intent(intent_type=IntentType.FORCE_FLAT)
+    cmd = _make_cmd(intent)
+    await adapter._api_queue.put(cmd)
+
+    task = asyncio.create_task(adapter._api_worker())
+    await asyncio.sleep(0.1)
+    adapter.running = False
+    task.cancel()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert len(dispatched) == 1, "FORCE_FLAT orders must be dispatched even during HALT"
