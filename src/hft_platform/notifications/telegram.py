@@ -149,7 +149,7 @@ class TelegramCommandPoller:
         url = _TELEGRAM_API_BASE.format(token=self._token, method="sendMessage")
         payload = {"chat_id": self._chat_id, "text": text, "parse_mode": "HTML"}
         try:
-            async with session.post(url, json=payload):
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)):
                 pass
         except Exception as exc:  # noqa: BLE001
             logger.warning("telegram.reply_exception", exc=str(exc))
@@ -166,7 +166,7 @@ class TelegramCommandPoller:
             if self._session is None or self._session.closed:
                 self._session = aiohttp.ClientSession()
             session = self._session
-            async with session.get(url, params=params) as resp:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status != 200:
                     logger.warning("telegram.poll_bad_status", status=resp.status)
                     return
@@ -212,6 +212,9 @@ class TelegramCommandPoller:
         import asyncio  # noqa: PLC0415
 
         logger.info("telegram.poller.started", poll_interval=self._poll_interval)
-        while True:
-            await self.poll_once()
-            await asyncio.sleep(self._poll_interval)
+        try:
+            while True:
+                await self.poll_once()
+                await asyncio.sleep(self._poll_interval)
+        finally:
+            await self.close()

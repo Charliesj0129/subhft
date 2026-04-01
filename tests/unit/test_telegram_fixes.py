@@ -37,6 +37,13 @@ def _build_aiohttp_stub() -> types.ModuleType:
 
 if "aiohttp" not in sys.modules:
     sys.modules["aiohttp"] = _build_aiohttp_stub()
+elif not hasattr(sys.modules["aiohttp"], "ClientTimeout"):
+    # Another test's stub may lack ClientTimeout — patch it in
+    class _FakeClientTimeout:
+        def __init__(self, *args, **kwargs):
+            self.total = kwargs.get("total")
+
+    sys.modules["aiohttp"].ClientTimeout = _FakeClientTimeout  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
