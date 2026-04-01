@@ -140,11 +140,12 @@ class Position:
                 self.avg_price_scaled = fill_price_scaled
                 self.net_qty += signed_fill_qty
             else:
-                # Integer arithmetic: multiply first, divide last
+                # Integer arithmetic: multiply first, divide last.
+                # Use round() to prevent systematic truncation drift from //.
                 total_val = (self.net_qty * self.avg_price_scaled) + (signed_fill_qty * fill_price_scaled)
                 self.net_qty += signed_fill_qty
                 if self.net_qty != 0:
-                    self.avg_price_scaled = total_val // self.net_qty
+                    self.avg_price_scaled = int(round(total_val / self.net_qty))
 
         self.last_update_ts = fill.match_ts_ns
 
@@ -203,13 +204,17 @@ class PositionStore:
             return 0.0
         return (self._peak_equity_scaled - current) / self._peak_equity_scaled
 
-    def _update_portfolio_aggregates(self) -> None:
-        """Recompute portfolio-level PnL totals and update high-watermark.
+    def _update_portfolio_aggregates(self, pnl_delta: int = 0) -> None:
+        """Update portfolio-level PnL totals and high-watermark.
 
-        O(n) over active positions — acceptable since fills are infrequent
-        relative to tick frequency.
+        Uses O(1) running delta when *pnl_delta* is provided (normal fill path).
+        Falls back to O(n) full recompute when called without delta (e.g., manual
+        reconciliation) or when pnl_delta is 0.
         """
-        self._total_realized_pnl_scaled = sum(p.realized_pnl_scaled for p in self.positions.values())
+        if pnl_delta != 0:
+            self._total_realized_pnl_scaled += pnl_delta
+        else:
+            self._total_realized_pnl_scaled = sum(p.realized_pnl_scaled for p in self.positions.values())
         if self._total_realized_pnl_scaled > self._peak_equity_scaled:
             self._peak_equity_scaled = self._total_realized_pnl_scaled
 
@@ -256,6 +261,7 @@ class PositionStore:
         # Keep Python-visible cache in sync for tests/debugging/metrics parity.
         # All values stored as scaled integers (no float conversion).
         pos = self.positions.get(key)
+        _prev_pnl = pos.realized_pnl_scaled if pos is not None else 0
         if pos is None:
             pos = Position(fill.account_id, fill.strategy_id, fill.symbol)
             self.positions[key] = pos
@@ -274,8 +280,9 @@ class PositionStore:
                 rust=True,
             )
 
-        # Update portfolio-level aggregates (must happen after position cache is updated)
-        self._update_portfolio_aggregates()
+        # Update portfolio-level aggregates with O(1) delta
+        _pnl_delta = int(realized_pnl_scaled) - _prev_pnl
+        self._update_portfolio_aggregates(_pnl_delta)
 
         if self.metrics:
             self.metrics.position_pnl_realized.labels(strategy=fill.strategy_id, symbol=fill.symbol).set(
@@ -305,14 +312,15 @@ class PositionStore:
             self.positions[key] = Position(fill.account_id, fill.strategy_id, fill.symbol)
 
         pos = self.positions[key]
+        _prev_pnl = pos.realized_pnl_scaled
         # Pass contract_multiplier for futures PnL: stocks=1, futures=point_value
         multiplier = self.metadata.contract_multiplier(fill.symbol)
         pos.update(fill, contract_multiplier=multiplier)
         if self._log_fills:
             logger.info("Fill processed", key=key, net_qty=pos.net_qty, pnl=pos.realized_pnl_scaled)
 
-        # Update portfolio-level aggregates (must happen after position update)
-        self._update_portfolio_aggregates()
+        # Update portfolio-level aggregates with O(1) delta
+        self._update_portfolio_aggregates(pos.realized_pnl_scaled - _prev_pnl)
 
         # Emit delta / Update PnL Gauge (all values are already scaled integers)
         if self.metrics:

@@ -86,7 +86,7 @@ class HFTSystem:
         self.bus = self.registry.bus
         self.raw_queue = self.registry.raw_queue
         self.raw_exec_queue = self.registry.raw_exec_queue
-        self._exec_overflow_buf: collections.deque = collections.deque()
+        self._exec_overflow_buf: collections.deque = collections.deque(maxlen=4096)
         self._EXEC_OVERFLOW_MAX: int = 4096
         self._exec_overflow_counter: int = 0
         self._exec_overflow_evicted: int = 0
