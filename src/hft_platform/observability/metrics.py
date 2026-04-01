@@ -198,6 +198,8 @@ class MetricsRegistry:
                 "deferred_terminal_expired_total",
                 "risk_halt_blocked_total",
                 "order_queue_full_total",
+                "risk_dlq_drained_total",
+                "risk_dlq_expired_total",
                 "intent_queue_full_total",
                 # SLO-2: E2E order-to-fill latency
                 "e2e_order_latency_ns",
@@ -855,6 +857,14 @@ class MetricsRegistry:
         self.order_queue_full_total = Counter(
             "order_queue_full_total",
             "Approved commands dropped due to order_queue full in RiskEngine",
+        )
+        self.risk_dlq_drained_total = Counter(
+            "risk_dlq_drained_total",
+            "DLQ entries successfully drained back to order_queue",
+        )
+        self.risk_dlq_expired_total = Counter(
+            "risk_dlq_expired_total",
+            "DLQ entries expired due to TTL staleness",
         )
         self.intent_queue_full_total = Counter(
             "intent_queue_full_total",

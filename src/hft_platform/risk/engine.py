@@ -87,6 +87,9 @@ class RiskEngine:
         "_notification_dispatcher",
         "_order_dlq",
         "_ORDER_DLQ_MAX",
+        "_dlq_ttl_ns",
+        "_dlq_drain_interval",
+        "_dlq_drain_counter",
         "_position_provider",
         "_rejection_sink",
         "_greeks_validator",
@@ -170,6 +173,9 @@ class RiskEngine:
         self._trace_sampler = _get_trace_sampler()
         self._order_dlq: collections.deque = collections.deque()
         self._ORDER_DLQ_MAX: int = 256
+        self._dlq_ttl_ns: int = int(float(os.getenv("HFT_RISK_DLQ_TTL_S", "30")) * 1_000_000_000)
+        self._dlq_drain_interval: int = int(os.getenv("HFT_RISK_DLQ_DRAIN_INTERVAL", "50"))
+        self._dlq_drain_counter: int = 0
         self._rejection_sink = rejection_sink
         self._greeks_validator = None
         if greeks_provider is not None:
@@ -413,12 +419,50 @@ class RiskEngine:
                             pass
 
                 self.intent_queue.task_done()
+
+                # Periodic DLQ drain
+                self._dlq_drain_counter += 1
+                if self._dlq_drain_counter >= self._dlq_drain_interval:
+                    self._dlq_drain_counter = 0
+                    self._drain_order_dlq()
             except asyncio.CancelledError:
                 logger.info("RiskEngine stopped")
                 break
             except Exception as e:  # noqa: BLE001 — wraps external risk validators
                 logger.exception("RiskEngine error", error=str(e), error_type=type(e).__name__)
                 self.intent_queue.task_done()
+
+    def _drain_order_dlq(self) -> None:
+        """Drain stale-filtered DLQ entries back into order_queue."""
+        if not self._order_dlq:
+            return
+        now_ns = time.monotonic_ns()
+        ttl_ns = self._dlq_ttl_ns
+        drained = 0
+        expired = 0
+        while self._order_dlq:
+            cmd, enqueued_ns = self._order_dlq[0]
+            # Expire stale entries
+            if now_ns - enqueued_ns > ttl_ns:
+                self._order_dlq.popleft()
+                expired += 1
+                continue
+            # Try to push back to order_queue
+            try:
+                self.order_queue.put_nowait(cmd)
+                self._order_dlq.popleft()
+                drained += 1
+            except asyncio.QueueFull:
+                break  # Queue still full — stop draining
+        if expired > 0:
+            logger.warning(
+                "risk_dlq_entries_expired",
+                expired=expired,
+                remaining=len(self._order_dlq),
+            )
+            self.metrics.risk_dlq_expired_total.inc(expired)
+        if drained > 0:
+            self.metrics.risk_dlq_drained_total.inc(drained)
 
     def evaluate(self, intent: Any) -> RiskDecision:  # noqa: C901
         price = getattr(intent, "price", None)
