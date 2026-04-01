@@ -331,7 +331,7 @@ class SymbolMetadata:
             if itype == InstrumentType.OPTION:
                 raw_strike = entry.get("strike") or entry.get("strike_price")
                 if raw_strike is not None:
-                    strike_scaled = int(float(raw_strike) * self.price_scale(code))
+                    strike_scaled = int(round(float(raw_strike) * self.price_scale(code)))
                 raw_right = str(entry.get("right") or entry.get("option_right", ""))
                 if raw_right.upper() in ("C", "CALL"):
                     option_right = OptionRight.CALL
@@ -355,7 +355,7 @@ class SymbolMetadata:
                 underlying=str(entry.get("underlying", "")),
                 exchange=self.exchange(code),
                 multiplier=self.contract_multiplier(code),
-                tick_size_scaled=int(float(entry.get("tick_size", 1.0)) * self.price_scale(code)),
+                tick_size_scaled=int(round(float(entry.get("tick_size", 1.0)) * self.price_scale(code))),
                 price_scale=self.price_scale(code),
                 fee_structure=fee,
                 trading_hours=hours,
@@ -659,7 +659,7 @@ class MarketDataNormalizer:
                         logger.debug("rust_tick_fallback", error=str(exc))
                         if self._rust_fallback_tick:
                             self._rust_fallback_tick.inc()
-                price = int(float(close_val) * scale)
+                price = int(round(float(close_val) * scale))
             else:
                 price = 0
 
@@ -1072,7 +1072,7 @@ class MarketDataNormalizer:
                         bids_final = None
                 if bids_final is None:
                     bids_final = [
-                        [int(float(price) * scale), int(volume)] for price, volume in zip(bp, bv) if price and volume
+                        [int(round(float(price) * scale)), int(volume)] for price, volume in zip(bp, bv) if price and volume
                     ]
 
             if asks_final is None:
@@ -1086,7 +1086,7 @@ class MarketDataNormalizer:
                         asks_final = None
                 if asks_final is None:
                     asks_final = [
-                        [int(float(price) * scale), int(volume)] for price, volume in zip(ap, av) if price and volume
+                        [int(round(float(price) * scale)), int(volume)] for price, volume in zip(ap, av) if price and volume
                     ]
 
             if not synthesized:
@@ -1159,9 +1159,9 @@ class MarketDataNormalizer:
             bids = []
             asks = []
             if buy_price:
-                bids.append([int(float(buy_price) * scale), int(buy_volume or 0)])
+                bids.append([int(round(float(buy_price) * scale)), int(buy_volume or 0)])
             if sell_price:
-                asks.append([int(float(sell_price) * scale), int(sell_volume or 0)])
+                asks.append([int(round(float(sell_price) * scale)), int(sell_volume or 0)])
             bids, asks, _ = self._maybe_synthesize_side(symbol, bids, asks, scale)
 
             if _RETURN_TUPLE:

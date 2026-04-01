@@ -61,6 +61,27 @@ def test_normalize_tick_string_values(normalizer):
     assert event.volume == 10
 
 
+@pytest.mark.parametrize(
+    "price_float,expected_scaled",
+    [
+        (100.15, 1001500),   # IEEE 754: float(100.15)*10000 = 1001499.999...
+        (100.05, 1000500),   # float(100.05)*10000 = 1000499.999...
+        (99.95, 999500),     # float(99.95)*10000  = 999499.999...
+        (0.1, 1000),         # float(0.1)*10000 = 999.999...
+        (100.0, 1000000),    # exact
+        (500.5, 5005000),    # exact
+    ],
+)
+def test_normalize_tick_ieee754_precision(normalizer, price_float, expected_scaled):
+    """Verify round() prevents IEEE 754 truncation in Python fallback path."""
+    payload = {"code": "2330", "close": price_float, "volume": 1}
+    event = normalizer.normalize_tick(payload)
+    assert event.price == expected_scaled, (
+        f"float({price_float})*10000 = {float(price_float) * 10000}, "
+        f"expected scaled {expected_scaled}, got {event.price}"
+    )
+
+
 def test_normalize_bidask_success(normalizer):
     payload = {
         "code": "2330",
