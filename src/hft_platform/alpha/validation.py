@@ -5,7 +5,6 @@ import datetime as _dt
 import json
 import os
 import re
-import subprocess
 import sys
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
@@ -241,7 +240,7 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
         for gate_report in (gate_a, gate_b, gate_c):
             log_gate_result(config.alpha_id, run_id, gate_report, cfg_hash)
     except Exception as _exc:  # noqa: BLE001
-        pass  # audit must never break the research pipeline
+        _log.debug("audit_log_failed", alpha_id=config.alpha_id, exc_info=True)
 
     return ValidationResult(
         alpha_id=config.alpha_id,
@@ -511,45 +510,10 @@ def run_gate_a(
 
 
 def run_gate_b(alpha_id: str, project_root: Path, skip_tests: bool = False, timeout_s: int = 300) -> GateReport:
-    if skip_tests:
-        return GateReport(
-            gate="Gate B",
-            passed=True,
-            details={"skipped": True, "reason": "skip_gate_b_tests=true"},
-        )
+    """Delegate to _gate_b.run_gate_b which includes alpha_id validation."""
+    from hft_platform.alpha._gate_b import run_gate_b as _run_gate_b  # noqa: PLC0415
 
-    test_path = project_root / "research" / "alphas" / alpha_id / "tests"
-    cmd = ["uv", "run", "python", "-m", "pytest", "-q", "--no-cov", str(test_path)]
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(project_root),
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-        )
-        passed = proc.returncode == 0
-        return GateReport(
-            gate="Gate B",
-            passed=passed,
-            details={
-                "command": " ".join(cmd),
-                "returncode": proc.returncode,
-                "stdout_tail": proc.stdout[-4000:],
-                "stderr_tail": proc.stderr[-2000:],
-            },
-        )
-    except subprocess.TimeoutExpired as exc:
-        return GateReport(
-            gate="Gate B",
-            passed=False,
-            details={
-                "command": " ".join(cmd),
-                "error": f"timeout after {timeout_s}s",
-                "stdout_tail": (exc.stdout or "")[-4000:],
-            },
-        )
+    return _run_gate_b(alpha_id, project_root, skip_tests=skip_tests, timeout_s=timeout_s)
 
 
 def run_gate_c(
