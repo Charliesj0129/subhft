@@ -383,6 +383,9 @@ class RecorderService:
         for batcher in self.batchers.values():
             self.memory_guard.register(batcher)
 
+        # Counter for events routed to an unknown topic (P-03)
+        self._unknown_topic_drops: int = 0
+
     async def recover_wal(self):
         """Replay any unprocesed WAL files to ClickHouse on startup."""
         import os
@@ -475,6 +478,13 @@ class RecorderService:
                             logger.debug("operation_failed", error=str(exc))
                 elif topic in self.batchers:
                     await self.batchers[topic].add(data)
+                else:
+                    self._unknown_topic_drops += 1
+                    logger.warning(
+                        "recorder_unknown_topic_dropped",
+                        topic=topic,
+                        total_drops=self._unknown_topic_drops,
+                    )
 
                 self.queue.task_done()
         except asyncio.CancelledError:
