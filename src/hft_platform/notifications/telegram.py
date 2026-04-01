@@ -90,7 +90,7 @@ class TelegramSender:
                 "text": text,
                 "parse_mode": "HTML",
             }
-            async with self._session.post(url, json=payload) as resp:
+            async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status == 200:
                     self._last_send_ts = time.monotonic()
                     logger.debug("telegram.sent", chat_id=self._chat_id, critical=critical)
@@ -127,6 +127,7 @@ class TelegramCommandPoller:
         "_redis",
         "_poll_interval",
         "_offset",
+        "_session",
     )
 
     def __init__(
@@ -141,6 +142,7 @@ class TelegramCommandPoller:
         self._redis: Any = redis_client
         self._poll_interval: float = poll_interval
         self._offset: int = 0
+        self._session: _AiohttpClientSession | None = None
 
     async def _reply(self, session: _AiohttpClientSession, text: str) -> None:
         """Send a reply back to the operator chat (best-effort)."""
@@ -161,39 +163,49 @@ class TelegramCommandPoller:
         url = _TELEGRAM_API_BASE.format(token=self._token, method="getUpdates")
         params = {"offset": self._offset, "timeout": 1}
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params) as resp:
-                    if resp.status != 200:
-                        logger.warning("telegram.poll_bad_status", status=resp.status)
-                        return
-                    data = await resp.json()
+            if self._session is None or self._session.closed:
+                self._session = aiohttp.ClientSession()
+            session = self._session
+            async with session.get(url, params=params) as resp:
+                if resp.status != 200:
+                    logger.warning("telegram.poll_bad_status", status=resp.status)
+                    return
+                data = await resp.json()
 
-                updates = data.get("result", [])
-                for update in updates:
-                    update_id: int = update["update_id"]
-                    self._offset = update_id + 1
+            updates = data.get("result", [])
+            for update in updates:
+                update_id: int = update["update_id"]
+                self._offset = update_id + 1
 
-                    message = update.get("message", {})
-                    from_id = str(message.get("from", {}).get("id", ""))
-                    text = message.get("text", "").strip()
+                message = update.get("message", {})
+                from_id = str(message.get("from", {}).get("id", ""))
+                text = message.get("text", "").strip()
 
-                    if from_id != self._chat_id:
-                        logger.debug(
-                            "telegram.poller.ignored_unknown_sender",
-                            from_id=from_id,
-                        )
-                        continue
+                if from_id != self._chat_id:
+                    logger.debug(
+                        "telegram.poller.ignored_unknown_sender",
+                        from_id=from_id,
+                    )
+                    continue
 
-                    if text == "/stop":
-                        self._redis.set("hft:emergency_halt", "1")
-                        logger.warning("telegram.poller.emergency_halt_activated")
-                        await self._reply(session, "🔴 Emergency HALT activated")
+                if text == "/stop":
+                    await self._redis.set("hft:emergency_halt", "1")
+                    logger.warning("telegram.poller.emergency_halt_activated")
+                    await self._reply(session, "🔴 Emergency HALT activated")
 
-                    elif text == "/status":
-                        await self._reply(session, "Status: running")
+                elif text == "/status":
+                    await self._reply(session, "Status: running")
 
         except Exception as exc:  # noqa: BLE001
             logger.warning("telegram.poller.poll_exception", exc=str(exc))
+
+    async def close(self) -> None:
+        """Close the underlying aiohttp session."""
+        if self._session is not None:
+            session = self._session
+            if not session.closed:
+                await session.close()
+        self._session = None
 
     async def run(self) -> None:
         """Run the polling loop indefinitely."""
