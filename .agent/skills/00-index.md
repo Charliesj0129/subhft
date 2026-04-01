@@ -7,19 +7,25 @@
 
 | Skill | Description |
 | --- | --- |
-| `clickhouse-io` | ClickHouse patterns and query optimization _(ECC)_ |
-| `hft-alpha-research` | Use when creating, validating, or promoting alpha factors; navigating Gate A→E governance; scaffolding research artifacts; or working with the research factory CLI, VM-UL data tiers, latency profiles, or synthetic LOB generation. |
-| `hft-architect` | Use when designing new platform features, reviewing architecture decisions, or understanding the 6-plane runtime, Rust/PyO3 boundary, or Shioaji client decomposition (SessionRuntime/QuoteRuntime/ContractsRuntime). |
-| `hft-backtest` | Use when writing, debugging, or running backtests and strategies based on the hftbacktest framework. |
-| `hft-backtester` | Use when writing or debugging hftbacktest-based backtests via HftBacktestAdapter; modeling Shioaji broker latency (P95 ~36ms, submit_steps=28 base/61 stress); or validating alpha signals under realistic TWSE execution conditions. |
-| `hft-helper` | HFT Platform task assistance |
-| `hft-strategy-dev` | Use when implementing or modifying trading strategies, handling market data events, emitting orders, integrating the FeatureEngine for LOB-derived signals (HFT_FEATURE_ENGINE_ENABLED=1), or navigating the alpha lifecycle from research to production canary. |
+| `hft-helper` | Router skill: directs to the right HFT skill based on task domain |
+| `hft-market-data` | **NEW** Market data plane: normalizer (51KB), LOB (27KB), Shioaji/Fubon adapters, Rust accel, FeatureEngine v3 (47+8 files) |
+| `hft-architect` | Architecture design: 7 runtime planes, module boundaries, Python-Rust split, design review checklist |
+| `hft-strategy-dev` | Strategy implementation: BaseStrategy, FeatureEngine v3 (27 features), 12 strategies, hot-path rules |
+| `hft-execution` | Execution plane: fills, positions, reconciliation, optimizer, imbalance timer, TCA (27 files) |
+| `hft-recorder` | **NEW** Persistence pipeline: batcher, CH writer, WAL, WAL-first (CE-M3), loader, disk monitor (22 files) |
+| `hft-ops` | Operations: session governor, autonomy degradation, position flattener, pre/post market (14 files) |
+| `hft-alpha-research` | Alpha research: scaffold, governed datasets, factory workflow, Gate A-E governance |
+| `hft-backtest` | Raw hftbacktest V2 engine semantics: status codes, event arrays, model selection |
+| `hft-backtester` | HftBacktestAdapter: latency modeling (P95 ~36ms), parity, Gate C lane |
+| `validation-gate` | Alpha validation: Gate A-E interpretation, promotion blockers, UL6 thresholds |
+| `troubleshoot-metrics` | Runtime diagnostics: Prometheus, Docker, StormGuard, WAL, execution, ops health |
+| `clickhouse-io` | ClickHouse schema (15 migrations, 13+ tables), queries, TTL, recorder IO, WAL replay |
 | `shioaji-contracts` | Shioaji API contract handling |
-| `symbols-sync` | Symbol universe sync |
-| `troubleshoot-metrics` | Active diagnostics for HFT platform |
-| `validation-gate` | Alpha validation gates |
-| `fubon-tradeapi` | Fubon TradeAPI reference: auth, SDK, endpoints, order types, env vars, failure modes |
-| `multi-broker-ops` | Multi-broker operational procedures: broker switching, failover, dual-broker routing |
+| `fubon-tradeapi` | Fubon TradeAPI reference: auth, SDK, endpoints, order types, env vars |
+| `multi-broker-ops` | Multi-broker operations: broker switching, failover, credentials, latency profiles |
+| `symbols-sync` | Symbol universe sync: symbols.list -> symbols.yaml |
+| `research-factory` | End-to-end alpha pipeline: paper -> prototype -> backtest -> promote -> live (8 stages) |
+| `research-data-governance` | Dataset governance: metadata sidecars, synthetic LOB, UL6 provenance |
 
 ## Python & Rust
 
