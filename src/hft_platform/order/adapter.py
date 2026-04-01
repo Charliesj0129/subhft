@@ -91,6 +91,7 @@ class OrderAdapter:
         "_cmd_created_ns_map",
         "_cmd_tca_map",
         "_mid_price_fn",
+        "_storm_guard",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -119,6 +120,7 @@ class OrderAdapter:
         # TCA price map: order_key -> (decision_price, arrival_price) for fill enrichment
         self._cmd_tca_map: Dict[str, tuple[int, int]] = cmd_tca_map if cmd_tca_map is not None else {}
         self._mid_price_fn: Callable[[str], int] | None = mid_price_fn
+        self._storm_guard: Any = None  # Set post-init to close TOCTOU gap (M1)
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self.running = False
         self.metrics = MetricsRegistry.get()
@@ -404,8 +406,11 @@ class OrderAdapter:
     async def execute(self, cmd: OrderCommand) -> None:
         intent = cmd.intent
 
-        # StormGuard HALT check (highest priority — closes TOCTOU gap between RiskEngine approval and dispatch)
-        if cmd.storm_guard_state == StormGuardState.HALT and intent.reason != "halt_flatten":
+        # StormGuard HALT check — both stamped and live state (closes TOCTOU gap)
+        _is_halt = cmd.storm_guard_state == StormGuardState.HALT
+        if not _is_halt and self._storm_guard is not None:
+            _is_halt = getattr(self._storm_guard, "state", None) == StormGuardState.HALT
+        if _is_halt and intent.reason != "halt_flatten":
             await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "StormGuard HALT")
             return
 

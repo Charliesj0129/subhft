@@ -274,3 +274,54 @@ async def test_valid_deadline_command_dispatched(tmp_path):
     )
 
     assert execute_called, "Valid command should trigger execute()"
+
+
+# ---------------------------------------------------------------------------
+# M1: Live StormGuard HALT check in execute()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_live_stormguard_halt_rejects_even_if_cmd_stamped_normal(tmp_path):
+    """execute() should reject orders when live StormGuard is HALT, even if
+    cmd.storm_guard_state was stamped NORMAL at RiskEngine time (TOCTOU fix)."""
+    adapter = _make_adapter(tmp_path)
+
+    # Simulate live StormGuard in HALT state
+    mock_sg = MagicMock()
+    mock_sg.state = StormGuardState.HALT
+    adapter._storm_guard = mock_sg
+
+    intent = _make_intent()
+    cmd = _make_cmd(intent)  # storm_guard_state = NORMAL (stamped at creation)
+    assert cmd.storm_guard_state == StormGuardState.NORMAL
+
+    dlq_size_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    await adapter.execute(cmd)
+
+    # Should have been DLQ'd, not dispatched
+    dlq_size_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    assert dlq_size_after > dlq_size_before, "Order should have been added to DLQ"
+
+
+@pytest.mark.asyncio
+async def test_live_stormguard_halt_allows_halt_flatten(tmp_path):
+    """halt_flatten orders should pass even when live StormGuard is HALT."""
+    adapter = _make_adapter(tmp_path)
+
+    mock_sg = MagicMock()
+    mock_sg.state = StormGuardState.HALT
+    adapter._storm_guard = mock_sg
+
+    intent = _make_intent(reason="halt_flatten")
+    cmd = _make_cmd(intent)
+
+    dlq_size_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    # Mock the dispatch path to prevent actual broker call
+    from unittest.mock import AsyncMock
+    adapter._enqueue_api = AsyncMock()
+    await adapter.execute(cmd)
+
+    # Should NOT be DLQ'd
+    dlq_size_after = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
+    assert dlq_size_after == dlq_size_before, "halt_flatten should NOT be DLQ'd"

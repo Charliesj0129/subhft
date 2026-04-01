@@ -141,6 +141,7 @@ class HFTSystem:
         self.platform_degrade_controller.evidence_writer = self.evidence_writer
         self.order_adapter.platform_degrade_controller = self.platform_degrade_controller
         self.order_adapter.position_store = self.position_store
+        self.order_adapter._storm_guard = self.storm_guard  # M1: live HALT check
         self.recon_service.platform_degrade_controller = self.platform_degrade_controller
 
         self._mtm_calculator = None
