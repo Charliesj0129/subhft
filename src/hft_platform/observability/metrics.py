@@ -208,6 +208,8 @@ class MetricsRegistry:
                 "recorder_exec_drops_total",
                 # Recorder reinject circuit breaker drops (P-21)
                 "recorder_reinject_circuit_breaker_drops_total",
+                # Recorder bridge queue-full drops
+                "recorder_bridge_drops_total",
                 # Rust-to-Python normalizer fallbacks
                 "rust_fallback_total",
             ]
@@ -380,6 +382,11 @@ class MetricsRegistry:
         self.portfolio_trade_count = Counter("portfolio_trade_count", "Total trade count", ["strategy", "side"])
 
         # Infra
+        self.recorder_bridge_drops_total = Counter(
+            "recorder_bridge_drops_total",
+            "Events dropped by recorder bridge due to full recorder queue",
+            ["topic"],
+        )
         self.recorder_failures_total = Counter("recorder_failures_total", "Recorder write failures")
         self.recorder_batches_flushed_total = Counter("recorder_batches_flushed_total", "Flushed batches", ["table"])
         self.recorder_rows_flushed_total = Counter("recorder_rows_flushed_total", "Flushed rows", ["table"])
@@ -873,6 +880,13 @@ class MetricsRegistry:
         self.intent_queue_full_total = Counter(
             "intent_queue_full_total",
             "Intents dropped due to QueueFull in StrategyRunner submit loop",
+        )
+
+        # Recorder reinject circuit breaker drops (P-21)
+        self.recorder_reinject_circuit_breaker_drops_total = Counter(
+            "recorder_reinject_circuit_breaker_drops_total",
+            "Rows dropped by reinject circuit breaker after consecutive double-faults",
+            ["table"],
         )
 
         # System (v2)

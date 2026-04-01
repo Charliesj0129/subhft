@@ -4,7 +4,6 @@ import os
 import threading
 from typing import Any, Callable, Dict
 
-from prometheus_client import Counter
 from structlog import get_logger
 
 from hft_platform.core import timebase
@@ -14,12 +13,6 @@ try:
     import orjson as _orjson
 except ImportError:
     _orjson = None  # type: ignore[assignment]
-
-_REINJECT_CIRCUIT_BREAKER_DROPS = Counter(
-    "recorder_reinject_circuit_breaker_drops_total",
-    "Rows dropped by reinject circuit breaker after consecutive double-faults",
-    ["table"],
-)
 
 logger = get_logger("recorder.batcher")
 
@@ -670,7 +663,11 @@ class Batcher:
                 row_count=flush_buf.row_count,
                 msg="PERMANENT DATA LOSS — reinject limit exceeded, dropping rows",
             )
-            _REINJECT_CIRCUIT_BREAKER_DROPS.labels(table=self.table_name).inc(flush_buf.row_count)
+            from hft_platform.observability.metrics import MetricsRegistry  # lazy import to avoid circular deps
+
+            MetricsRegistry.get().recorder_reinject_circuit_breaker_drops_total.labels(
+                table=self.table_name
+            ).inc(flush_buf.row_count)
             return
 
         try:
