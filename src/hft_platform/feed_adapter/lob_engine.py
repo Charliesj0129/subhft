@@ -58,6 +58,8 @@ except Exception as exc:
 
 
 class _NoopLock:
+    __slots__ = ()
+
     def __enter__(self):
         return self
 
@@ -404,8 +406,24 @@ class BookState:
 
 
 class LOBEngine:
+    __slots__ = (
+        "books",
+        "metrics",
+        "_metrics_enabled",
+        "_metrics_batch",
+        "_metrics_pending_updates",
+        "_metrics_pending_snapshots",
+        "_metrics_pending_total",
+        "_metrics_flush_requested",
+        "_metrics_task",
+        "_last_symbol",
+        "_last_book",
+        "feature_engine",
+    )
+
     def __init__(self):
         self.books: Dict[str, BookState] = {}
+        self.feature_engine: Any = None
         # Global lock removed!
         self.metrics = MetricsRegistry.get()
         self._metrics_enabled = _METRICS_ENABLED and self.metrics is not None
