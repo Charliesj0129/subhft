@@ -721,3 +721,49 @@ def test_v2_backward_compat_v1_engine():
     assert len(tpl) == 16
     # No v2 features accessible
     assert eng.get_feature("2330", "ofi_depth_norm_ppm") is None
+
+
+class TestSymbolCardinalityGuard:
+    """Rule 12: symbol cardinality guard prevents unbounded dict growth in FeatureEngine."""
+
+    def test_process_returns_none_when_limit_exceeded(self):
+        eng = FeatureEngine()
+        eng._max_symbols = 2
+        # Fill to limit
+        eng.process_lob_stats(_stats(symbol="SYM_A", ts=1))
+        eng.process_lob_stats(_stats(symbol="SYM_B", ts=2))
+        assert len(eng._states) == 2
+        # Third symbol should be rejected
+        result = eng.process_lob_stats(_stats(symbol="SYM_C", ts=3))
+        assert result is None
+        assert len(eng._states) == 2
+
+    def test_existing_symbol_still_processed_at_limit(self):
+        eng = FeatureEngine()
+        eng._max_symbols = 2
+        eng.process_lob_stats(_stats(symbol="SYM_A", ts=1))
+        eng.process_lob_stats(_stats(symbol="SYM_B", ts=2))
+        # Existing symbol should still update
+        result = eng.process_lob_stats(_stats(symbol="SYM_A", ts=3))
+        assert result is not None
+        assert result.symbol == "SYM_A"
+        assert result.seq == 3
+
+    def test_cardinality_warning_logged(self, caplog):
+        import structlog
+        import logging
+
+        structlog.configure(
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+        eng = FeatureEngine()
+        eng._max_symbols = 0  # reject all new symbols
+        with caplog.at_level(logging.WARNING):
+            result = eng.process_lob_stats(_stats(symbol="SYM_X", ts=1))
+        assert result is None
+        assert any("feature_symbol_cardinality_exceeded" in r.message for r in caplog.records)
+
+    def test_default_max_symbols_is_10000(self):
+        eng = FeatureEngine()
+        assert eng._max_symbols == 10000

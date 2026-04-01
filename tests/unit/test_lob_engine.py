@@ -405,3 +405,65 @@ def test_bidaskevent_stats_are_named_tuples():
     assert isinstance(event.fused_stats, FusedBookStats)
     assert event.stats.best_bid == 1000000
     assert event.fused_stats.mid_price_x2 == 2005000
+
+
+class TestSymbolCardinalityGuard:
+    """Rule 12: symbol cardinality guard prevents unbounded dict growth."""
+
+    def test_get_book_returns_none_when_limit_exceeded(self):
+        engine = LOBEngine()
+        engine._max_symbols = 2
+        # Fill up to limit
+        assert engine.get_book("SYM_A") is not None
+        assert engine.get_book("SYM_B") is not None
+        # Third symbol should be rejected
+        assert engine.get_book("SYM_C") is None
+        assert len(engine.books) == 2
+
+    def test_get_book_allows_existing_symbol_at_limit(self):
+        engine = LOBEngine()
+        engine._max_symbols = 2
+        engine.get_book("SYM_A")
+        engine.get_book("SYM_B")
+        # Existing symbol still accessible
+        book = engine.get_book("SYM_A")
+        assert book is not None
+        assert book.symbol == "SYM_A"
+
+    def test_process_event_returns_none_for_rejected_symbol(self):
+        engine = LOBEngine()
+        engine._max_symbols = 1
+        # Fill the single slot
+        bids = np.array([[5000000, 10]], dtype=np.int64)
+        asks = np.array([[5010000, 20]], dtype=np.int64)
+        event1 = BidAskEvent(
+            meta=make_meta(1000), symbol="SYM_A", bids=bids, asks=asks, is_snapshot=True
+        )
+        result = engine.process_event(event1)
+        assert result is not None
+        # Second symbol should be silently skipped
+        event2 = BidAskEvent(
+            meta=make_meta(2000), symbol="SYM_B", bids=bids, asks=asks, is_snapshot=True
+        )
+        result = engine.process_event(event2)
+        assert result is None
+
+    def test_cardinality_warning_logged(self, caplog):
+        import structlog
+        import logging
+
+        # Configure structlog to use stdlib so caplog captures it
+        structlog.configure(
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+        engine = LOBEngine()
+        engine._max_symbols = 0  # reject all new symbols
+        with caplog.at_level(logging.WARNING):
+            result = engine.get_book("SYM_X")
+        assert result is None
+        assert any("lob_symbol_cardinality_exceeded" in r.message for r in caplog.records)
+
+    def test_default_max_symbols_is_10000(self):
+        engine = LOBEngine()
+        assert engine._max_symbols == 10000

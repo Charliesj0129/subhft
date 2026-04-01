@@ -419,11 +419,13 @@ class LOBEngine:
         "_last_symbol",
         "_last_book",
         "feature_engine",
+        "_max_symbols",
     )
 
     def __init__(self):
         self.books: Dict[str, BookState] = {}
         self.feature_engine: Any = None
+        self._max_symbols: int = int(os.getenv("HFT_EXPOSURE_MAX_SYMBOLS", "10000"))
         # Global lock removed!
         self.metrics = MetricsRegistry.get()
         self._metrics_enabled = _METRICS_ENABLED and self.metrics is not None
@@ -496,14 +498,18 @@ class LOBEngine:
             return book.get_stats_tuple()
         return book.get_stats()
 
-    def get_book(self, symbol: str) -> BookState:
+    def get_book(self, symbol: str) -> Optional[BookState]:
         if symbol == self._last_symbol and self._last_book is not None:
             return self._last_book
         if symbol not in self.books:
-            # First time might race if multithreaded init, but usually symbols known.
-            # Lazy init needing global lock?
-            # Or assume pre-warmed.
-            # Let's put a small lock for dict mutation only.
+            if len(self.books) >= self._max_symbols:
+                logger.warning(
+                    "lob_symbol_cardinality_exceeded",
+                    current=len(self.books),
+                    limit=self._max_symbols,
+                    symbol=symbol,
+                )
+                return None
             self.books[symbol] = BookState(symbol)
         book = self.books[symbol]
         self._last_symbol = symbol
@@ -532,6 +538,8 @@ class LOBEngine:
                         imbalance,
                     ) = event[:13]
                     book = self.get_book(symbol)
+                    if book is None:
+                        return None
                     book.apply_update_with_stats_fields(
                         bids,
                         asks,
@@ -547,6 +555,8 @@ class LOBEngine:
                 else:
                     _, symbol, bids, asks, exch_ts, is_snapshot = event
                     book = self.get_book(symbol)
+                    if book is None:
+                        return None
                     book.apply_update(bids, asks, exch_ts)
                 if metrics_enabled:
                     self._record_lob_metrics(symbol, bool(is_snapshot))
@@ -554,12 +564,16 @@ class LOBEngine:
             if event[0] == "tick":
                 _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts = event
                 book = self.get_book(symbol)
+                if book is None:
+                    return None
                 book.update_tick(price, volume, exch_ts)
                 return None
 
         # Typed dispatch
         if isinstance(event, BidAskEvent):
             book = self.get_book(event.symbol)
+            if book is None:
+                return None
             # Fused bypass: normalizer already computed stats in a single Rust call;
             # skip redundant apply_update + _recompute and directly set book fields.
             if _FUSED_BYPASS and event.fused_stats is not None:
@@ -589,6 +603,8 @@ class LOBEngine:
 
         elif isinstance(event, TickEvent):
             book = self.get_book(event.symbol)
+            if book is None:
+                return None
             book.update_tick(event.price, event.volume, event.meta.source_ts)
             # return book.get_stats() # Optional: emit stats on tick?
             return None

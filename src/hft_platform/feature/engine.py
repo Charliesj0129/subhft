@@ -6,9 +6,13 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from structlog import get_logger
+
 from hft_platform.events import FeatureUpdateEvent, LOBStatsEvent
 from hft_platform.feature.profile import FeatureProfile
 from hft_platform.feature.registry import FeatureRegistry, default_feature_registry
+
+logger = get_logger("feature.engine")
 
 try:
     try:
@@ -173,6 +177,7 @@ class FeatureEngine:
         "_alpha_30s",
         "_alpha_300s",
         "_event_cache",
+        "_max_symbols",
     )
 
     def __init__(
@@ -192,6 +197,7 @@ class FeatureEngine:
         self._lob_kernel_states: dict[str, _LobKernelState] = {}
         self._rust_kernels: dict[str, Any] = {}
         self._rust_pipelines: dict[str, Any] = {}
+        self._max_symbols: int = int(os.getenv("HFT_EXPOSURE_MAX_SYMBOLS", "10000"))
         self._seq = 0
         if emit_events is None:
             emit_events = os.getenv("HFT_FEATURE_ENGINE_EMIT_EVENTS", "1").strip().lower() not in {
@@ -369,6 +375,14 @@ class FeatureEngine:
         local_ts_ns = int(source_ts_ns if local_ts_ns is None else local_ts_ns)
 
         prev = self._states.get(symbol)
+        if prev is None and len(self._states) >= self._max_symbols:
+            logger.warning(
+                "feature_symbol_cardinality_exceeded",
+                current=len(self._states),
+                limit=self._max_symbols,
+                symbol=symbol,
+            )
+            return None
         warm_count = (prev.warm_count + 1) if prev else 1
 
         # Fused Rust pipeline: compute values + changed_mask + warmup_mask in one call
