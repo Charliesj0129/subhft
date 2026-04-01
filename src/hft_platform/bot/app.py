@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import os
+import threading
 from datetime import datetime
 from typing import Any, Callable, Coroutine
 from zoneinfo import ZoneInfo
@@ -73,6 +75,19 @@ def get_report_symbols() -> list[str]:
     return symbols
 
 
+def _start_health_server_background() -> None:
+    """Expose a lightweight /healthz endpoint for container liveness probes."""
+    from hft_platform.observability.health import HealthServer
+
+    health = HealthServer(system=None)
+    thread = threading.Thread(
+        target=lambda: asyncio.run(health.run()),
+        name="bot-health-server",
+        daemon=True,
+    )
+    thread.start()
+
+
 # ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
@@ -108,6 +123,7 @@ def main() -> None:
     global start_time  # noqa: PLW0603
     start_time = datetime.now(_TZ)
 
+    _start_health_server_background()
     app = create_app()
     _log.info("bot.started")
     app.run_polling(drop_pending_updates=True)
