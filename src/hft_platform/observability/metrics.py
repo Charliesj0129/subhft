@@ -200,6 +200,8 @@ class MetricsRegistry:
                 "intent_queue_full_total",
                 # SLO-2: E2E order-to-fill latency
                 "e2e_order_latency_ns",
+                # Rust-to-Python normalizer fallbacks
+                "rust_fallback_total",
             ]
         )
         # Market Data
@@ -214,6 +216,9 @@ class MetricsRegistry:
         )  # 1ms to 500ms
         self.bus_overflow_total = Counter("bus_overflow_total", "Event bus overflows")
         self.normalization_errors_total = Counter("normalization_errors_total", "Normalization failures", ["type"])
+        self.rust_fallback_total = Counter(
+            "rust_fallback_total", "Rust-to-Python normalizer fallback count", ["type"]
+        )
         self.lob_updates_total = Counter("lob_updates_total", "LOB updates applied", ["symbol", "type"])
         self.lob_snapshots_total = Counter("lob_snapshots_total", "LOB snapshots applied", ["symbol"])
         self.feed_reconnect_total = Counter("feed_reconnect_total", "Feed reconnect attempts", ["result"])

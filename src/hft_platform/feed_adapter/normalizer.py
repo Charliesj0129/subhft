@@ -410,6 +410,8 @@ class MarketDataNormalizer:
         "_trade_classifier",
         "_latency_metrics_counter",
         "_latency_metrics_sample_every",
+        "_rust_fallback_tick",
+        "_rust_fallback_bidask",
     )
 
     def __init__(self, config_path: str | None = None, metadata: SymbolMetadata | None = None):
@@ -420,6 +422,12 @@ class MarketDataNormalizer:
         self.metadata = metadata or SymbolMetadata(config_path)
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
+        self._rust_fallback_tick = (
+            self.metrics.rust_fallback_total.labels(type="tick") if self.metrics else None
+        )
+        self._rust_fallback_bidask = (
+            self.metrics.rust_fallback_total.labels(type="bidask") if self.metrics else None
+        )
         self._last_symbol: str | None = None
         self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
         self._last_local_ts_tick: int = 0
@@ -649,6 +657,8 @@ class MarketDataNormalizer:
                             )
                     except Exception as exc:
                         logger.debug("rust_tick_fallback", error=str(exc))
+                        if self._rust_fallback_tick:
+                            self._rust_fallback_tick.inc()
                 price = int(float(close_val) * scale)
             else:
                 price = 0
@@ -793,6 +803,8 @@ class MarketDataNormalizer:
                 except Exception as exc:
                     # Fall through to standard path
                     logger.debug("rust_bidask_fallback", stage="fused_path", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
 
             # Convert to numpy
             # We need to scale prices. Using numpy vectorization for scaling is faster.
@@ -883,6 +895,8 @@ class MarketDataNormalizer:
                         )
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="synth_bidask", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -902,6 +916,8 @@ class MarketDataNormalizer:
                     stats = BookStats(*_raw_stats) if _raw_stats is not None else None
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -977,6 +993,8 @@ class MarketDataNormalizer:
                         )
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="normalize_bidask_np", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -1014,6 +1032,8 @@ class MarketDataNormalizer:
                         )
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="normalize_bidask", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -1026,6 +1046,8 @@ class MarketDataNormalizer:
                     stats = BookStats(*_raw_stats2) if _raw_stats2 is not None else None
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats_retry", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
                     stats = None
@@ -1034,6 +1056,8 @@ class MarketDataNormalizer:
                     bids_final, asks_final = _RUST_SCALE_BOOK_PAIR(bp, bv, ap, av, scale)
                 except Exception as exc:
                     logger.debug("rust_bidask_fallback", stage="scale_book_pair", error=str(exc))
+                    if self._rust_fallback_bidask:
+                        self._rust_fallback_bidask.inc()
                     bids_final = None
                     asks_final = None
 
@@ -1043,6 +1067,8 @@ class MarketDataNormalizer:
                         bids_final = _RUST_SCALE_BOOK_SEQ(bp, bv, scale)
                     except Exception as exc:
                         logger.debug("rust_bidask_fallback", stage="scale_book_seq_bid", error=str(exc))
+                        if self._rust_fallback_bidask:
+                            self._rust_fallback_bidask.inc()
                         bids_final = None
                 if bids_final is None:
                     bids_final = [
@@ -1055,6 +1081,8 @@ class MarketDataNormalizer:
                         asks_final = _RUST_SCALE_BOOK_SEQ(ap, av, scale)
                     except Exception as exc:
                         logger.debug("rust_bidask_fallback", stage="scale_book_seq_ask", error=str(exc))
+                        if self._rust_fallback_bidask:
+                            self._rust_fallback_bidask.inc()
                         asks_final = None
                 if asks_final is None:
                     asks_final = [
