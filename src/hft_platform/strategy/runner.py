@@ -606,7 +606,7 @@ class StrategyRunner:
                 continue
 
             positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
-            ctx.positions = positions
+            ctx.positions = dict(positions)  # Shallow copy to prevent strategy mutation corrupting cache
 
             start = time.perf_counter_ns()
             if getattr(self, "_trace_sampler", None) is not None:
