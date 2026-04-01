@@ -134,6 +134,7 @@ class _LobKernelState:
     mldm_deep_ema_fast: float = 0.0
     mldm_deep_ema_slow: float = 0.0
     mldm_output_ema: float = 0.0
+    mldm_tick_count: int = 0
     # --- Toxicity tracking (trade-signed) ---
     tox_signed_vol_ema: float = 0.0
     tox_total_vol_ema: float = 0.0
@@ -628,9 +629,11 @@ class FeatureEngine:
         if count >= 3:
             autocov_sum = 0
             n_pairs = 0
+            # oldest valid entry is at (pos - count + 1) % W
+            oldest = pos - count + 1
             for i in range(1, count):
-                idx_curr = (pos - count + i) % _RET_AUTOCOV_WINDOW
-                idx_prev = (pos - count + i - 1) % _RET_AUTOCOV_WINDOW
+                idx_curr = (oldest + i) % _RET_AUTOCOV_WINDOW
+                idx_prev = (oldest + i - 1) % _RET_AUTOCOV_WINDOW
                 autocov_sum += buf[idx_curr] * buf[idx_prev]
                 n_pairs += 1
             if n_pairs > 0:
@@ -787,7 +790,8 @@ class FeatureEngine:
         raw_momentum = ks.mldm_deep_ema_fast - ks.mldm_deep_ema_slow
         ks.mldm_output_ema += self._MLDM_EMA_OUT * (raw_momentum - ks.mldm_output_ema)
 
-        if ks.iss_tick_count < self._MLDM_WARMUP:
+        ks.mldm_tick_count += 1
+        if ks.mldm_tick_count < self._MLDM_WARMUP:
             return 0
 
         clipped = max(-self._MLDM_CLIP, min(self._MLDM_CLIP, ks.mldm_output_ema))
