@@ -78,6 +78,15 @@ def save_manifest(svc: Any) -> None:
                 f.flush()
                 os.fsync(f.fileno())
             os.rename(tmp_path, svc._manifest_path)
+            # Directory fsync to ensure rename is durable on crash
+            try:
+                dir_fd = os.open(manifest_dir, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass  # Best-effort; rename itself is atomic
         except Exception as _exc:  # noqa: BLE001
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
