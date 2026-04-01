@@ -392,6 +392,12 @@ class DailyLossLimitValidator(RiskValidator):
         self._maybe_reset()
 
         # c. Compute total PnL (realized + unrealized)
+        # NOTE: accumulated is per-strategy realized, _unrealized_pnl is platform-wide.
+        # When _intraday_pnl_enabled=True, global limits are used — consistent.
+        # When False (legacy), per-strategy limits apply to this mixed total, meaning
+        # strategy A can be blocked by strategy B's unrealized losses. This is an
+        # intentionally conservative design — see docstring. Per-strategy unrealized
+        # tracking would require a per-strategy feed from ExecutionRouter.
         accumulated = self._accumulated_loss.get(intent.strategy_id, 0)
         total_pnl = accumulated + self._unrealized_pnl
 
