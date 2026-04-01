@@ -509,6 +509,21 @@ class RecorderService:
         finally:
             self.running = False
             flush_task.cancel()
+            # Drain remaining queue items before flushing batchers
+            drained = 0
+            while not self.queue.empty():
+                try:
+                    item = self.queue.get_nowait()
+                    topic = item.get("topic")
+                    data = item.get("data")
+                    if topic in self.batchers:
+                        await self.batchers[topic].add(data)
+                        drained += 1
+                    self.queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+            if drained:
+                logger.info("recorder_shutdown_drained", items=drained)
             for batcher in self.batchers.values():
                 await batcher.force_flush()
             # Graceful shutdown of writer (flush WAL batch, stop pool)
