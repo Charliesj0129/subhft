@@ -234,6 +234,8 @@ class BaseStrategy(ABC):
             self.on_book_update(event)
         elif isinstance(event, LOBStatsEvent):
             self.on_stats(event)
+        elif isinstance(event, tuple) and event and event[0] == "lobstats":
+            self.on_stats(event)  # type: ignore[arg-type]
         elif isinstance(event, FeatureUpdateEvent):
             self.on_features(event)
         elif isinstance(event, FillEvent):

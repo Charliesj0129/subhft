@@ -167,10 +167,11 @@ class TestBookStateStats:
     def test_get_stats_tuple_returns_tuple(self, book):
         t = book.get_stats_tuple()
         assert isinstance(t, tuple)
-        assert len(t) == 9
-        assert t[0] == "2330"
-        assert t[5] == 1000000  # best_bid
-        assert t[6] == 1001000  # best_ask
+        assert len(t) == 10
+        assert t[0] == "lobstats"
+        assert t[1] == "2330"
+        assert t[6] == 1000000  # best_bid
+        assert t[7] == 1001000  # best_ask
 
     def test_get_stats_empty_book(self, monkeypatch):
         monkeypatch.setattr(lob_mod, "_RustBookState", None)
@@ -188,8 +189,9 @@ class TestBookStateStats:
         b = BookState("LIST")
         b.apply_update([[1000000, 10]], [[1001000, 8]], 1_000_000_000)
         t = b.get_stats_tuple()
-        assert t[5] == 1000000
-        assert t[6] == 1001000
+        assert t[0] == "lobstats"
+        assert t[6] == 1000000
+        assert t[7] == 1001000
 
 
 # ---------------------------------------------------------------------------

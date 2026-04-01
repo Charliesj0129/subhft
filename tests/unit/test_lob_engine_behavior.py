@@ -324,7 +324,7 @@ class TestGetStatsTuple:
         mock_rs.get_stats_tuple.return_value = (1, 2, 3, 4, 5, 6)
         bs._rust_state = mock_rs
         result = bs.get_stats_tuple()
-        assert result == (1, 2, 3, 4, 5, 6)
+        assert result == ("lobstats", 1, 2, 3, 4, 5, 6)
 
     def test_rust_exception_fallback(self):
         bs = BookState("2330")

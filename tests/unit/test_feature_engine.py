@@ -403,12 +403,12 @@ def _stats_tuple(
     bq: int = 10,
     aq: int = 20,
 ) -> tuple:
-    """Build a stats tuple matching BookState.get_stats_tuple() layout."""
+    """Build a stats tuple matching BookState.get_stats_tuple() layout (tagged)."""
     mid_x2 = bid + ask
     spread = ask - bid
     total = bq + aq
     imbalance = (bq - aq) / total if total > 0 else 0.0
-    return (symbol, ts, mid_x2, spread, imbalance, bid, ask, bq, aq)
+    return ("lobstats", symbol, ts, mid_x2, spread, imbalance, bid, ask, bq, aq)
 
 
 def test_feature_engine_accepts_stats_tuple():

@@ -142,18 +142,19 @@ def test_stats_tuple_mode_equivalent_to_event_mode(engine):
     book = engine.get_book("2330")
     stats_tuple = book.get_stats_tuple()
     assert isinstance(stats_tuple, tuple)
-    assert len(stats_tuple) == 9
+    assert len(stats_tuple) == 10
 
-    # Verify fields match: (symbol, ts, mid_price_x2, spread, imbalance, best_bid, best_ask, bid_depth, ask_depth)
-    assert stats_tuple[0] == stats_event.symbol
-    assert stats_tuple[1] == stats_event.ts
-    assert stats_tuple[2] == stats_event.mid_price_x2
-    assert stats_tuple[3] == stats_event.spread_scaled
-    assert stats_tuple[4] == pytest.approx(stats_event.imbalance)
-    assert stats_tuple[5] == stats_event.best_bid
-    assert stats_tuple[6] == stats_event.best_ask
-    assert stats_tuple[7] == stats_event.bid_depth
-    assert stats_tuple[8] == stats_event.ask_depth
+    # Verify fields match: ("lobstats", symbol, ts, mid_price_x2, spread, imbalance, best_bid, best_ask, bid_depth, ask_depth)
+    assert stats_tuple[0] == "lobstats"
+    assert stats_tuple[1] == stats_event.symbol
+    assert stats_tuple[2] == stats_event.ts
+    assert stats_tuple[3] == stats_event.mid_price_x2
+    assert stats_tuple[4] == stats_event.spread_scaled
+    assert stats_tuple[5] == pytest.approx(stats_event.imbalance)
+    assert stats_tuple[6] == stats_event.best_bid
+    assert stats_tuple[7] == stats_event.best_ask
+    assert stats_tuple[8] == stats_event.bid_depth
+    assert stats_tuple[9] == stats_event.ask_depth
 
 
 def test_stats_tuple_mode_via_emit_stats(engine):
@@ -168,7 +169,8 @@ def test_stats_tuple_mode_via_emit_stats(engine):
         event = BidAskEvent(meta=make_meta(1000), symbol="2330", bids=bids, asks=asks, is_snapshot=True)
         result = engine.process_event(event)
         assert isinstance(result, tuple)
-        assert result[0] == "2330"
+        assert result[0] == "lobstats"
+        assert result[1] == "2330"
     finally:
         _mod._STATS_TUPLE = orig
 

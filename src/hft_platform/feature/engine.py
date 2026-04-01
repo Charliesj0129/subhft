@@ -29,8 +29,8 @@ except Exception as _exc:  # noqa: BLE001
 class _StatsTupleProxy:
     """Zero-allocation proxy: provides LOBStatsEvent-compatible attribute access over a raw tuple.
 
-    Tuple layout from BookState.get_stats_tuple():
-        (symbol, ts, mid_price_x2, spread_scaled, imbalance, best_bid, best_ask, bid_depth, ask_depth)
+    Tuple layout from BookState.get_stats_tuple() (tagged):
+        ("lobstats", symbol, ts, mid_price_x2, spread_scaled, imbalance, best_bid, best_ask, bid_depth, ask_depth)
     """
 
     __slots__ = ("_t",)
@@ -40,39 +40,39 @@ class _StatsTupleProxy:
 
     @property
     def symbol(self) -> str:
-        return self._t[0]
-
-    @property
-    def ts(self) -> int:
         return self._t[1]
 
     @property
-    def mid_price_x2(self) -> int:
+    def ts(self) -> int:
         return self._t[2]
 
     @property
-    def spread_scaled(self) -> int:
+    def mid_price_x2(self) -> int:
         return self._t[3]
 
     @property
-    def imbalance(self) -> float:
+    def spread_scaled(self) -> int:
         return self._t[4]
 
     @property
-    def best_bid(self) -> int:
+    def imbalance(self) -> float:
         return self._t[5]
 
     @property
-    def best_ask(self) -> int:
+    def best_bid(self) -> int:
         return self._t[6]
 
     @property
-    def bid_depth(self) -> int:
+    def best_ask(self) -> int:
         return self._t[7]
 
     @property
-    def ask_depth(self) -> int:
+    def bid_depth(self) -> int:
         return self._t[8]
+
+    @property
+    def ask_depth(self) -> int:
+        return self._t[9]
 
 
 QUALITY_FLAG_GAP = 1 << 0
@@ -363,8 +363,8 @@ class FeatureEngine:
         # See _StatsTupleProxy for tuple layout definition.
         stats_resolved: LOBStatsEvent | _StatsTupleProxy
         if isinstance(stats, tuple):
-            symbol = str(stats[0])
-            source_ts_ns = int(stats[1])
+            symbol = str(stats[1])
+            source_ts_ns = int(stats[2])
             stats_resolved = _StatsTupleProxy(stats)
         else:
             symbol = str(stats.symbol)
