@@ -599,25 +599,10 @@ class StrategyRunner:
                         "symbol": getattr(event, "symbol", ""),
                     },
                 )
-                # Still update circuit breaker state when quarantine-skipping
-                _qsid = strategy.strategy_id
-                _rc = getattr(self, "_rust_circuit", None)
-                if _rc is not None:
-                    _new_state, _should_disable = _rc.record_failure(_qsid, timebase.now_ns())
-                    if _should_disable:
-                        strategy.enabled = False
-                else:
-                    _q_failures = self._failure_counts.get(_qsid, 0) + 1
-                    self._failure_counts[_qsid] = _q_failures
-                    _q_state = self._circuit_states.get(_qsid, "normal")
-                    _q_half = max(1, self._circuit_threshold // 2)
-                    if _q_state == "normal" and _q_failures >= _q_half:
-                        self._circuit_states[_qsid] = "degraded"
-                    if _q_failures >= self._circuit_threshold and _q_state != "halted":
-                        self._circuit_states[_qsid] = "halted"
-                        strategy.enabled = False
-                    elif _qsid not in self._circuit_states:
-                        self._circuit_states[_qsid] = "normal"
+                # DECISION-08: Do NOT record circuit breaker failures during
+                # quarantine. Quarantine is the containment mechanism; recording
+                # failures for skipped events causes the circuit breaker to
+                # permanently disable the strategy before quarantine expires.
                 continue
 
             positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
