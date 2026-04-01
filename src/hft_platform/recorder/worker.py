@@ -188,6 +188,19 @@ def _extract_order_values(row) -> list | None:
         return None
 
 
+def _getattr_scaled(obj: object, field: str) -> int | None:
+    """Return the plain field value from obj, falling back to <field>_scaled.
+
+    FillEvent uses plain names (price, fee, tax); dict/legacy rows may use
+    price_scaled, fee_scaled, tax_scaled.  Try plain name first so that live
+    FillEvent objects are read correctly, then try the _scaled variant.
+    """
+    val = getattr(obj, field, None)
+    if val is not None:
+        return val
+    return getattr(obj, f"{field}_scaled", None)
+
+
 def _extract_fill_values(row) -> list | None:
     """Fast extractor for fill events — aligned with mapper.py and CH hft.fills schema."""
     try:
@@ -225,9 +238,9 @@ def _extract_fill_values(row) -> list | None:
             getattr(row, "symbol", None),
             getattr(row, "side", None) or getattr(row, "action", None) or "",
             getattr(row, "qty", None) or getattr(row, "quantity", None) or 0,
-            getattr(row, "price_scaled", None),
-            getattr(row, "fee_scaled", 0),
-            getattr(row, "tax_scaled", 0),
+            _getattr_scaled(row, "price"),
+            _getattr_scaled(row, "fee"),
+            _getattr_scaled(row, "tax"),
             getattr(row, "decision_price", 0),
             getattr(row, "arrival_price", 0),
             getattr(row, "source", ""),
