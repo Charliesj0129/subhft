@@ -772,7 +772,7 @@ class StrategyRunner:
                                 self._strategy_pending_alpha_intent.get(sid, 0) + 1
                             )
                     if alpha_last_ts_g:
-                        alpha_last_ts_g.set(time.monotonic())
+                        alpha_last_ts_g.set(timebase.now_s())
                 else:
                     if alpha_flat_m:
                         if self._strategy_metrics_batch <= 1:
