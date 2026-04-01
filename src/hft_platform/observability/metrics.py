@@ -201,6 +201,8 @@ class MetricsRegistry:
                 "intent_queue_full_total",
                 # SLO-2: E2E order-to-fill latency
                 "e2e_order_latency_ns",
+                # Recorder exec drop counter (P-01)
+                "recorder_exec_drops_total",
                 # Rust-to-Python normalizer fallbacks
                 "rust_fallback_total",
             ]
@@ -359,6 +361,11 @@ class MetricsRegistry:
             "End-to-end order-to-fill latency in nanoseconds",
             buckets=[1e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 500e6, 1e9],
         )
+        self.recorder_exec_drops_total = Counter(
+            "recorder_exec_drops_total",
+            "Execution events dropped due to full recorder queue",
+            ["topic"],
+        )
         self.position_pnl_realized = Gauge("position_pnl_realized", "Realized PnL", ["strategy", "symbol"])
         self.portfolio_total_pnl = Gauge("portfolio_total_pnl", "Total realized PnL across all positions (scaled int)")
         self.portfolio_drawdown_pct = Gauge(
@@ -437,6 +444,11 @@ class MetricsRegistry:
         self.reconciliation_consecutive_failures = Gauge(
             "reconciliation_consecutive_failures",
             "Current number of consecutive reconciliation failures",
+        )
+        self.position_drift_qty = Gauge(
+            "position_drift_qty",
+            "Absolute qty drift between local and broker positions",
+            ["strategy", "symbol"],
         )
         self.reconciliation_last_success_ts = Gauge(
             "reconciliation_last_success_ts",
