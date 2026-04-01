@@ -6,7 +6,7 @@
 
 ```
 SystemBootstrapper.build()
-  ├─ Queues: raw(8192), raw_exec(4096), risk(4096), order(2048), recorder(16384)
+  ├─ Queues: raw(65536), raw_exec(8192), risk(4096), order(2048), recorder(16384)
   ├─ RingBufferBus (Rust lock-free)
   ├─ MarketDataService ← raw_queue consumer, bus+recorder publisher
   ├─ FeatureEngine (v3, 27 features) ← LOBEngine output, FeatureUpdateEvent publisher
@@ -26,14 +26,14 @@ SystemBootstrapper.build()
 | Module | Files | LOC | Key Classes | Responsibility |
 |--------|-------|-----|-------------|----------------|
 | feed_adapter/ | 46 | 11,915 | BrokerFacade, Normalizer, LOBEngine | Multi-broker ingestion, normalize, LOB |
-| feed_adapter/shioaji/ | 14 | ~5,800 | ShioajiFacade, QuoteRuntime | Shioaji broker integration |
-| feed_adapter/fubon/ | 10 | ~2,000 | FubonFacade, QuoteRuntime | Fubon broker integration |
+| feed_adapter/shioaji/ | 20 | ~5,800 | ShioajiFacade, QuoteRuntime, TickDispatcher, ReconnectOrch | Shioaji broker integration |
+| feed_adapter/fubon/ | 14 | ~2,000 | FubonFacade, QuoteRuntime | Fubon broker integration |
 | engine/ | 1 | 710 | RingBufferBus | Lock-free event routing |
 | feature/ | 9 | 2,355 | FeatureEngine, FeatureRegistry, BurstDetector | 27 LOB-derived features (v3) |
 | strategy/ | 4 | 1,368 | StrategyRunner, BaseStrategy, StrategyContext | Strategy SDK + dispatch |
 | risk/ | 8 | 2,357 | RiskEngine, StormGuardFSM | Risk validation + HALT FSM |
 | order/ | 6 | 1,643 | OrderAdapter, CircuitBreaker | Broker dispatch + rate limits |
-| execution/ | 13 | 2,735 | ExecutionRouter, PositionStore, ExecutionOptimizer, ImbalanceTimer | Fill routing, position O(1), smart execution |
+| execution/ | 15 | 2,735 | ExecutionRouter, PositionStore, ExecutionOptimizer, ImbalanceTimer, RegimeClassifier | Fill routing, position O(1), smart execution, regime detection |
 
 ### Infrastructure
 
@@ -67,8 +67,9 @@ SystemBootstrapper.build()
 | SimpleMM | simple_mm.py | Basic market-making | Active |
 | OpportunisticMM | opportunistic_mm.py | Reactive MM with spread gate + toxicity filter | Shadow |
 | CascadeBounce | cascade_bounce.py | Contrarian bounce after cascade move | Shadow (TMF) |
+| ElectronicEye | electronic_eye.py | TXO options MM (Guardian/Quoter/Hedger) | Scaffold |
 | RustAlpha | rust_alpha.py | Rust-accelerated alpha executor | Active |
-| VPINRegimeSwitch | vpin_regime_switch.py (814L) | VPIN-based regime detection | Research |
+| VPINRegimeSwitch | vpin_regime_switch.py | VPIN-based regime detection | Research |
 | MMHawkes | mm_hawkes.py | Hawkes-process market-making | Research |
 
 ## Feature Engine v3 (27 features)
@@ -107,8 +108,8 @@ OrderIntent
 
 | Queue | Size | Overflow Action |
 |-------|------|-----------------|
-| raw_queue | 8192 | Drop + degrade mode |
-| raw_exec_queue | 4096 | Overflow ring buffer (4096) → 3+ overflows = HALT |
+| raw_queue | 65536 | Drop + degrade mode |
+| raw_exec_queue | 8192 | Overflow ring buffer (4096) → 3+ overflows = HALT |
 | risk_queue | 4096 | Backpressure |
 | order_queue | 2048 | Backpressure |
 | recorder_queue | 16384 | Drop + degraded mode (never block hot path) |

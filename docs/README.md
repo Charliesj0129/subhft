@@ -56,7 +56,8 @@
 | [Shioaji Resilience](architecture/shioaji-client-resilience-decoupling-plan.md) | Shioaji 韌性補強與解耦 |
 | [Naming Conventions](guides/naming-conventions.md) | File/code/metric naming rules |
 | [Performance Report](reports/performance-report.md) | Latency benchmarks |
-| [Modules Reference](MODULES_REFERENCE.md) | Consolidated codebase map |
+| [Modules Reference](MODULES_REFERENCE.md) | Consolidated codebase map (37 packages, ~210 files) |
+| [CODEMAPS/](CODEMAPS/) | Quick-reference codemaps (architecture, backend, data, dependencies) |
 | [ADRs](adr/) | Architecture decision records |
 
 ## Project TODOs & Tech Debt
