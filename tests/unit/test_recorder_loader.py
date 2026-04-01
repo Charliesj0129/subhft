@@ -100,12 +100,12 @@ def test_wal_loader_non_market_tables(tmp_path):
 
     assert (archive_dir / orders.name).exists()
     assert (archive_dir / fills.name).exists()
-    # Phase 12: Now inserts are called for orders and trades tables
+    # Phase 12: Now inserts are called for orders and fills tables
     assert loader.ch_client.insert.call_count == 2
     # Verify the table names
     call_args = [call[0][0] for call in loader.ch_client.insert.call_args_list]
     assert "hft.orders" in call_args
-    assert "hft.trades" in call_args
+    assert "hft.fills" in call_args
 
 
 def test_wal_loader_force_skips_mtime_check(tmp_path):
@@ -262,7 +262,7 @@ def test_parse_table_from_filename_handles_prefixes():
     assert WALLoaderService._parse_table_from_filename("hft.market_data_123.jsonl") == "market_data"
     assert WALLoaderService._parse_table_from_filename("market_data_123.jsonl") == "market_data"
     assert WALLoaderService._parse_table_from_filename("hft.orders_1.jsonl") == "orders"
-    assert WALLoaderService._parse_table_from_filename("fills_2.jsonl") == "trades"
+    assert WALLoaderService._parse_table_from_filename("fills_2.jsonl") == "fills"
     assert WALLoaderService._parse_table_from_filename("latency_spans_9.jsonl") == "latency_spans"
     assert WALLoaderService._parse_table_from_filename("unknown_9.jsonl") == "unknown"
 

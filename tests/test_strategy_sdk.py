@@ -26,7 +26,7 @@ class TestStrategySDK(unittest.TestCase):
         # But constructing intents requires the factory.
 
         # Real Intent Factory logic for testing
-        def mock_intent_factory(strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None):
+        def mock_intent_factory(strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None, **_kw):
             return OrderIntent(
                 intent_id=1,
                 strategy_id=strategy_id,

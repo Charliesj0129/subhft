@@ -35,10 +35,9 @@ def _patch_externals():
     with (
         patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=mock_metrics),
         patch("hft_platform.recorder.audit.get_audit_writer", return_value=mock_audit),
-        patch("hft_platform.risk.storm_guard.timebase") as mock_tb,
+        patch("hft_platform.risk.storm_guard.time") as mock_time,
     ):
-        mock_tb.now_s = _now_s
-        mock_tb.now_ns = lambda: int(time_val[0] * 1e9)
+        mock_time.monotonic = _now_s
         # Expose helpers via the fixture indirectly through closure
         _patch_externals.advance = _advance  # type: ignore[attr-defined]
         _patch_externals.time_val = time_val  # type: ignore[attr-defined]

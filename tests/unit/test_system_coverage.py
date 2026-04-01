@@ -95,6 +95,8 @@ def _make_system():
             sys_obj.health_server = MagicMock()
             sys_obj.autonomy_monitor = None
             sys_obj.session_governor = None
+            sys_obj.checkpoint_writer = None
+            sys_obj.daily_report_service = None
             sys_obj._exec_overflow_buf = []
             sys_obj._exec_overflow_counter = 0
             sys_obj._exec_overflow_evicted = 0

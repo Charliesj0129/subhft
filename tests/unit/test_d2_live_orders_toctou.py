@@ -28,6 +28,7 @@ class TestDeferredTerminal:
         a._pending_order_keys = set()
         a._deferred_terminals = []
         a._cmd_created_ns_map = {}
+        a._cmd_tca_map = {}
         a.order_id_resolver = MagicMock()
         a.metrics = MagicMock()
         return a

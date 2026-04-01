@@ -359,7 +359,7 @@ class HftBacktestAdapter:
             if intent.target_order_id is not None:
                 self.hbt.cancel(0, int(intent.target_order_id), False)
 
-    def _intent_factory(self, strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None):
+    def _intent_factory(self, strategy_id, symbol, side, price, qty, tif, intent_type, target_order_id=None, **_kw):
         self._intent_seq += 1
         return OrderIntent(
             intent_id=self._intent_seq,

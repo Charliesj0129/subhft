@@ -88,6 +88,9 @@ def _make_system():
             sys_obj.session_hook_manager = MagicMock()
             sys_obj.session_hook_manager.enabled = False
             sys_obj.health_server = MagicMock()
+            sys_obj.autonomy_monitor = None
+            sys_obj.checkpoint_writer = None
+            sys_obj.daily_report_service = None
 
             return sys_obj
 

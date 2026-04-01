@@ -472,7 +472,7 @@ class TestSchemaExtractors:
         row = {"trade_id": "T1", "order_id": "O1", "symbol": "TSE001"}
         result = _extract_fill(row)
         assert result is not None
-        assert result["trade_id"] == "T1"
+        assert result["fill_id"] == "T1"
 
     def test_extractor_returns_none_on_error(self):
         from hft_platform.recorder.worker import _extract_market_data

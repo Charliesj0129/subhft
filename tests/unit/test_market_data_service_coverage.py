@@ -1104,8 +1104,8 @@ def test_publish_many_nowait_uses_publish_many_nowait():
 
 def test_publish_many_nowait_fallback_to_individual():
     svc, bus, *_ = _make_service()
-    # Remove publish_many_nowait so it falls back
-    del bus.publish_many_nowait
+    # _bus_publish_many_nowait is cached at init; set to None to trigger fallback
+    svc._bus_publish_many_nowait = None
     events = [SimpleNamespace(symbol="A"), SimpleNamespace(symbol="B")]
     svc._publish_many_nowait(events)
     assert bus.publish_nowait.call_count == 2

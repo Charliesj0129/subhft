@@ -373,8 +373,8 @@ class OrderAdapter:
                 for k in list(self.order_id_map.keys()):
                     if evicted >= evict_target:
                         break
-                    order_key = self.order_id_map[k]
-                    if order_key not in self.live_orders:
+                    mapped_key = self.order_id_map[k]
+                    if mapped_key not in self.live_orders:
                         del self.order_id_map[k]
                         evicted += 1
                 logger.info("Evicted stale order IDs", count=evicted, remaining=len(self.order_id_map))

@@ -203,6 +203,9 @@ symbols:
   name: "\u81FA\u80A1\u671F\u8CA804"
   exchange: FUT
   product_type: future
+  point_value: 200
+  tick_size: 1
+  price_scale: 10000
   tags:
   - futures
   - front_month
@@ -211,6 +214,9 @@ symbols:
   name: "\u81FA\u80A1\u671F\u8CA806"
   exchange: FUT
   product_type: future
+  point_value: 200
+  tick_size: 1
+  price_scale: 10000
   tags:
   - futures
   - far_month
@@ -219,6 +225,9 @@ symbols:
   name: "\u5C0F\u578B\u81FA\u630704"
   exchange: FUT
   product_type: future
+  point_value: 50
+  tick_size: 1
+  price_scale: 10000
   tags:
   - futures
   - front_month
@@ -227,6 +236,9 @@ symbols:
   name: "\u5C0F\u578B\u81FA\u630706"
   exchange: FUT
   product_type: future
+  point_value: 50
+  tick_size: 1
+  price_scale: 10000
   tags:
   - futures
   - far_month
@@ -235,6 +247,9 @@ symbols:
   name: "\u5FAE\u578B\u81FA\u6307\u671F\u8CA804"
   exchange: FUT
   product_type: future
+  point_value: 10
+  tick_size: 1
+  price_scale: 10000
   tags:
   - futures
   - front_month
@@ -243,6 +258,9 @@ symbols:
   name: "\u5FAE\u578B\u81FA\u6307\u671F\u8CA806"
   exchange: FUT
   product_type: future
+  point_value: 10
+  tick_size: 1
+  price_scale: 10000
   tags:
   - futures
   - far_month

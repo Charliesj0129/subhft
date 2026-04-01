@@ -23,6 +23,7 @@ class _Counter:
 class _Metrics:
     def __init__(self):
         self.normalization_errors_total = _Counter()
+        self.rust_fallback_total = _Counter()
 
 
 def test_normalize_tick_error_increments_metrics(tmp_path):

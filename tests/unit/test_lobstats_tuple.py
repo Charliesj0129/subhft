@@ -135,4 +135,8 @@ class TestStrategyOnStatsDispatch:
         spy.handle_event(ctx, stats_tuple)
 
         assert len(spy.stats_received) == 1
-        assert spy.stats_received[0] is stats_tuple
+        # handle_event wraps lobstats tuples in _StatsTupleProxy before on_stats
+        received = spy.stats_received[0]
+        assert isinstance(received, _StatsTupleProxy)
+        assert received.symbol == "TXFD6"
+        assert received.ts == 1

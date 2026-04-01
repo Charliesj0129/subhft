@@ -266,6 +266,21 @@ def test_wal_batch_writer_timer_flush_retains_data_on_failure(tmp_path: Path, mo
     monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "10")
     writer = WALBatchWriter(str(tmp_path))
     try:
+        # Stop the auto-started timer first to prevent races
+        writer._timer_running = False
+        writer._timer_thread.join(timeout=1.0)
+
+        # Make _write_batch_sync always fail; raise circuit breaker limit
+        # so data is always merged back (not dropped)
+        writer._merge_back_max_failures = 999
+        flush_event = threading.Event()
+
+        def _always_fail(*args, **kwargs):
+            flush_event.set()
+            raise OSError("disk fail")
+
+        writer._write_batch_sync = MagicMock(side_effect=_always_fail)
+
         # Populate buffer
         with writer._lock:
             writer._buffer = {"hft.ticks": [{"sym": "A", "price": 100}]}
@@ -274,16 +289,15 @@ def test_wal_batch_writer_timer_flush_retains_data_on_failure(tmp_path: Path, mo
             # Force the timer to think enough time has elapsed
             writer._last_flush_ts = 0
 
-        # Make _write_batch_sync always fail
-        writer._write_batch_sync = MagicMock(side_effect=OSError("disk fail"))
-
-        # Start the actual timer thread (production code path)
+        # Start a new timer thread (production code path)
         writer._timer_running = True
         timer_thread = threading.Thread(target=writer._flush_timer_loop, daemon=True)
         timer_thread.start()
 
-        # Wait for timer to fire and merge back
-        time.sleep(0.1)
+        # Wait for at least one flush attempt
+        flush_event.wait(timeout=1.0)
+        # Brief additional wait for merge-back to complete
+        time.sleep(0.05)
 
         # Stop the timer
         writer._timer_running = False

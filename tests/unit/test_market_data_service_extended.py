@@ -44,9 +44,12 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         bus.publish.assert_called_once_with("evt")
 
         bus.publish.reset_mock()
-        bus.publish_many_nowait = MagicMock()
+        many_mock = MagicMock()
+        bus.publish_many_nowait = many_mock
+        # Update the cached ref (DEC-10 caches bus methods at init)
+        service._bus_publish_many_nowait = many_mock
         service._publish_many_nowait(["a", "b"])
-        bus.publish_many_nowait.assert_called_once_with(["a", "b"])
+        many_mock.assert_called_once_with(["a", "b"])
 
     async def test_connect_sequence_success(self):
         self.client.fetch_snapshots.return_value = []
@@ -286,8 +289,9 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         service = MarketDataService(self.bus, self.raw_queue, self.client, recorder_queue=queue)
         meta = MetaData(seq=4, source_ts=4_000, local_ts=5_000)
         event = TickEvent(meta=meta, symbol="2330", price=10000, volume=1)
-        with patch("hft_platform.recorder.mapper.map_event_to_record", side_effect=RuntimeError("boom")):
-            service._record_direct_event(event)
+        # Patch the cached mapper ref directly (service caches _map_event_to_record at init)
+        service._map_event_to_record = MagicMock(side_effect=RuntimeError("boom"))
+        service._record_direct_event(event)
         self.assertTrue(queue.empty())
 
     def test_should_rollover_reconnect_once(self):

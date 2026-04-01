@@ -749,20 +749,18 @@ class TestSymbolCardinalityGuard:
         assert result.symbol == "SYM_A"
         assert result.seq == 3
 
-    def test_cardinality_warning_logged(self, caplog):
-        import structlog
-        import logging
+    def test_cardinality_warning_logged(self):
+        from unittest.mock import patch, MagicMock
 
-        structlog.configure(
-            wrapper_class=structlog.stdlib.BoundLogger,
-            logger_factory=structlog.stdlib.LoggerFactory(),
-        )
         eng = FeatureEngine()
         eng._max_symbols = 0  # reject all new symbols
-        with caplog.at_level(logging.WARNING):
+        mock_logger = MagicMock()
+        with patch("hft_platform.feature.engine.logger", mock_logger):
             result = eng.process_lob_stats(_stats(symbol="SYM_X", ts=1))
         assert result is None
-        assert any("feature_symbol_cardinality_exceeded" in r.message for r in caplog.records)
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args
+        assert call_args[0][0] == "feature_symbol_cardinality_exceeded"
 
     def test_default_max_symbols_is_10000(self):
         eng = FeatureEngine()

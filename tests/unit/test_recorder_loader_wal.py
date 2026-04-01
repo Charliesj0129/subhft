@@ -102,8 +102,8 @@ class TestParseTableFromFilename:
     def test_orders(self):
         assert parse_table_from_filename("orders_456.jsonl") == "orders"
 
-    def test_fills_maps_to_trades(self):
-        assert parse_table_from_filename("fills_789.jsonl") == "trades"
+    def test_fills_maps_to_fills(self):
+        assert parse_table_from_filename("fills_789.jsonl") == "fills"
 
     def test_risk_log(self):
         assert parse_table_from_filename("risk_log_111.jsonl") == "risk_log"
@@ -136,8 +136,8 @@ class TestParseBatchTableName:
     def test_orders(self):
         assert parse_batch_table_name("orders") == "orders"
 
-    def test_fills_to_trades(self):
-        assert parse_batch_table_name("fills") == "trades"
+    def test_fills_to_fills(self):
+        assert parse_batch_table_name("fills") == "fills"
 
     def test_trades_to_trades(self):
         assert parse_batch_table_name("trades") == "trades"

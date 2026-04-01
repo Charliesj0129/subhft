@@ -172,6 +172,8 @@ async def test_circuit_breaker_normal_to_degraded():
     runner = _make_runner()
     runner._circuit_threshold = 6
     runner._circuit_recovery_threshold = 3
+    # Disable quarantine governor so failures are not masked by DECISION-08
+    runner.strategy_governor = None
     strat = _BadStrategy("bad", symbols=["2330"])
     runner.register(strat)
 
@@ -220,6 +222,8 @@ async def test_circuit_breaker_degraded_to_halted():
     runner = _make_runner()
     runner._circuit_threshold = 4
     runner._circuit_recovery_threshold = max(1, 4 // 2)
+    # Disable quarantine governor so failures are not masked by DECISION-08
+    runner.strategy_governor = None
     # Reconfigure Rust circuit breaker with updated thresholds
     if runner._rust_circuit is not None:
         try:

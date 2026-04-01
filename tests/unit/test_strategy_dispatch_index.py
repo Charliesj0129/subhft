@@ -60,6 +60,10 @@ class TestStrategyDispatchIndex:
         runner._rust_circuit = None
         runner._position_key_cache = {}
         runner._feature_compat_fail_fast = False
+        runner._strategies_version = 0
+        runner._executors_version = 0
+        runner.track_gate = None
+        runner.strategy_governor = None
         runner.running = False
         runner.registry = MagicMock()
         runner.registry.instantiate.return_value = []

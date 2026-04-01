@@ -293,6 +293,17 @@ class SymbolMetadata:
                 params[key] = entry[key]
         return params
 
+    def _safe_tick_size_scaled(self, entry: dict[str, Any], code: str) -> int:
+        """Compute tick_size_scaled with fallback for invalid tick_size values."""
+        raw = entry.get("tick_size", 1.0)
+        try:
+            val = float(raw)
+            if val <= 0:
+                val = 1.0
+        except (TypeError, ValueError):
+            val = 1.0
+        return int(round(val * self.price_scale(code)))
+
     def _populate_registry(self) -> None:
         """Build InstrumentProfile entries from symbols.yaml metadata."""
         from hft_platform.core.instrument_registry import (
@@ -355,7 +366,7 @@ class SymbolMetadata:
                 underlying=str(entry.get("underlying", "")),
                 exchange=self.exchange(code),
                 multiplier=self.contract_multiplier(code),
-                tick_size_scaled=int(round(float(entry.get("tick_size", 1.0)) * self.price_scale(code))),
+                tick_size_scaled=self._safe_tick_size_scaled(entry, code),
                 price_scale=self.price_scale(code),
                 fee_structure=fee,
                 trading_hours=hours,

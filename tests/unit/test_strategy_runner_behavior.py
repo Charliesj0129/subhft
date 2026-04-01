@@ -474,9 +474,14 @@ async def test_process_event_circuit_degraded_transition(runner_factory):
     runner.register(strat)
     runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_threshold = 4
+    # After quarantine governor (DECISION-08), the first exception quarantines the
+    # strategy and subsequent events are skipped (no circuit-breaker recording).
+    # So only 1 failure is registered — not enough for degraded (half_threshold=2).
+    # Disable quarantine to exercise the pure circuit-breaker path.
+    runner.strategy_governor = None
     for _ in range(2):
         await runner.process_event(_make_event())
-    assert runner._circuit_states.get("strat_a") in ("degraded", "normal", "halted")
+    assert runner._circuit_states.get("strat_a") == "degraded"
 
 
 @pytest.mark.asyncio

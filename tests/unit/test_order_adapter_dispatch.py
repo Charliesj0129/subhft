@@ -211,10 +211,13 @@ async def test_register_broker_ids_eviction_at_max_size(tmp_config):
         adapter.order_id_map[f"old_{i}"] = f"key_{i}"
     trade = MagicMock()
     trade.seq_no = "NEW_SEQ"
+    trade.seqno = None
     trade.ord_no = None
+    trade.ordno = None
     trade.order_id = None
     trade.id = None
     trade.order = None
+    trade.status = None
     await adapter._register_broker_ids("s1:new", trade)
     assert len(adapter.order_id_map) == 19
     assert "NEW_SEQ" in adapter.order_id_map
@@ -325,10 +328,13 @@ async def test_order_id_map_eviction_removes_oldest_10_percent(tmp_config):
         adapter.order_id_map[f"id_{i:04d}"] = f"key_{i}"
     trade = MagicMock()
     trade.seq_no = "TRIGGER"
+    trade.seqno = None
     trade.ord_no = None
+    trade.ordno = None
     trade.order_id = None
     trade.id = None
     trade.order = None
+    trade.status = None
     await adapter._register_broker_ids("s1:trigger", trade)
     # Should evict 10 oldest non-live entries + add 1 new = 91
     assert len(adapter.order_id_map) == 91
@@ -352,10 +358,13 @@ async def test_order_id_map_eviction_skips_live_orders(tmp_config):
 
     trade = MagicMock()
     trade.seq_no = "NEW"
+    trade.seqno = None
     trade.ord_no = None
+    trade.ordno = None
     trade.order_id = None
     trade.id = None
     trade.order = None
+    trade.status = None
     await adapter._register_broker_ids("s1:new", trade)
 
     # Live entries (key_0..key_4) must survive eviction

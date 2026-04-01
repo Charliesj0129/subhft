@@ -286,14 +286,13 @@ def test_alertmanager_bridge_returns_413_on_oversized_content_length() -> None:
         f"\r\n"
     ).encode("utf-8")
 
-    reader = asyncio.StreamReader()
-    reader.feed_data(request)
-    reader.feed_eof()
-
     async def run() -> None:
+        reader = asyncio.StreamReader()
+        reader.feed_data(request)
+        reader.feed_eof()
         await bridge._handle_connection(reader, FakeWriter())  # type: ignore[arg-type]
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
     combined = b"".join(written_data)
     assert b"413" in combined, f"Expected 413 response for oversized payload, got: {combined!r}"
