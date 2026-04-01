@@ -269,6 +269,13 @@ class StormGuard:
         # Update Metric
         self.metrics.stormguard_mode.labels(strategy="system").set(int(new_state))
 
+        # Count transition direction
+        direction = "escalation" if int(new_state) > int(old_state) else "de_escalation"
+        try:
+            self.metrics.stormguard_transitions_total.labels(direction=direction).inc()
+        except Exception:
+            pass
+
         # Audit guardrail transition
         try:
             from hft_platform.recorder.audit import get_audit_writer

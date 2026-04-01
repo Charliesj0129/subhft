@@ -56,6 +56,7 @@ class MetricsRegistry:
                 "strategy_intents_total",
                 "risk_reject_total",
                 "stormguard_mode",
+                "stormguard_transitions_total",
                 "strategy_position",
                 "strategy_skew",
                 "strategy_micro_price",
@@ -283,6 +284,11 @@ class MetricsRegistry:
         self.risk_reject_total = Counter("risk_reject_total", "Risk rejections", ["reason", "strategy"])
         self.stormguard_mode = Gauge(
             "stormguard_mode", "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
+        )
+        self.stormguard_transitions_total = Counter(
+            "stormguard_transitions_total",
+            "StormGuard state transitions",
+            ["direction"],  # "escalation" or "de_escalation"
         )
         self.autonomy_mode = Gauge(
             "autonomy_mode",
