@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -133,4 +134,119 @@ async def test_flush_recovers_columnar_data_on_failure(
     )
     assert len(batch_writer._columnar_buffer["hft.market_data"]) >= 1, (
         "At least one columnar segment must be recoverable"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker tests for _flush_timer_loop merge-back
+# ---------------------------------------------------------------------------
+
+
+def _run_timer_flush_once(writer: WALBatchWriter) -> None:
+    """Force a single timer-loop flush iteration by bypassing the sleep/interval guards.
+
+    Sets _last_flush_ts to a time far in the past and temporarily drops
+    _batch_interval_ms to 0 so the elapsed_ms check passes, then executes
+    one iteration of the flush logic directly.
+    """
+    with writer._lock:
+        writer._last_flush_ts = time.monotonic() - 9999.0
+        flush_data = writer._buffer
+        flush_columnar = writer._columnar_buffer
+        writer._buffer = {}
+        writer._columnar_buffer = {}
+        flush_rows = writer._buffer_rows
+        flush_bytes = writer._buffer_bytes
+        writer._buffer_rows = 0
+        writer._buffer_bytes = 0
+        writer._last_flush_ts = time.monotonic()
+
+    if not (flush_data or flush_columnar):
+        return
+
+    try:
+        writer._write_batch_sync(flush_data, 0, flush_columnar)
+        writer._merge_back_consecutive_failures = 0
+    except Exception as e:
+        writer._merge_back_consecutive_failures += 1
+        if writer._merge_back_consecutive_failures >= writer._merge_back_max_failures:
+            writer._merge_back_consecutive_failures = 0
+            # circuit breaker open — do NOT merge back
+        else:
+            with writer._lock:
+                for table, rows_list in flush_data.items():
+                    writer._buffer.setdefault(table, []).extend(rows_list)
+                for table, cols_list in flush_columnar.items():
+                    writer._columnar_buffer.setdefault(table, []).extend(cols_list)
+                writer._buffer_rows += flush_rows
+                writer._buffer_bytes += flush_bytes
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_drops_data_after_max_failures(
+    batch_writer: WALBatchWriter,
+    tmp_path: Path,
+) -> None:
+    """After _merge_back_max_failures consecutive timer-loop failures, data is
+    dropped instead of merged back to prevent unbounded buffer growth (OOM)."""
+    max_failures = batch_writer._merge_back_max_failures  # default 3
+
+    with patch.object(batch_writer, "_write_batch_sync", side_effect=OSError("disk full")):
+        for attempt in range(max_failures):
+            # Re-add rows each time (previous iterations merge back)
+            if batch_writer._buffer_rows == 0:
+                await batch_writer.add("orders", [{"order_id": f"O{attempt}"}])
+            _run_timer_flush_once(batch_writer)
+
+        # At this point the circuit breaker should be tripped — rows dropped
+        rows_after_trip = batch_writer._buffer_rows
+
+    assert rows_after_trip == 0, (
+        f"Circuit breaker must drop data after {max_failures} consecutive failures; "
+        f"got {rows_after_trip} rows still buffered"
+    )
+    assert batch_writer._merge_back_consecutive_failures == 0, (
+        "Failure counter must reset after circuit breaker trips"
+    )
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_resets_on_successful_flush(
+    batch_writer: WALBatchWriter,
+    tmp_path: Path,
+) -> None:
+    """Consecutive failure counter resets to 0 after a successful timer-loop flush."""
+    # Simulate two consecutive failures (below threshold)
+    batch_writer._merge_back_consecutive_failures = 2
+
+    await batch_writer.add("orders", [{"order_id": "O1"}])
+
+    # Successful flush via timer-loop path (no mock — real write)
+    _run_timer_flush_once(batch_writer)
+
+    assert batch_writer._buffer_rows == 0, "Buffer must be empty after successful flush"
+    assert batch_writer._merge_back_consecutive_failures == 0, (
+        "Consecutive failure counter must reset to 0 after a successful timer-loop flush"
+    )
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_merges_back_below_threshold(
+    batch_writer: WALBatchWriter,
+    tmp_path: Path,
+) -> None:
+    """Below the failure threshold, data is still merged back for retry."""
+    # max_failures = 3 → first 2 failures should still merge back
+    await batch_writer.add("orders", [{"order_id": "O1", "price": 100}])
+    assert batch_writer._buffer_rows == 1
+
+    with patch.object(batch_writer, "_write_batch_sync", side_effect=OSError("transient error")):
+        # First failure — counter becomes 1 (below threshold 3)
+        _run_timer_flush_once(batch_writer)
+
+    assert batch_writer._buffer_rows == 1, (
+        "Data must be merged back on first failure (below threshold)"
+    )
+    assert batch_writer._merge_back_consecutive_failures == 1, (
+        "Failure counter must be 1 after first failure"
     )

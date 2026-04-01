@@ -265,6 +265,10 @@ class WALBatchWriter:
             logger.debug("operation_fallback", error=str(exc))
             self._metrics = None
 
+        # Circuit breaker for merge-back retry in _flush_timer_loop
+        self._merge_back_consecutive_failures: int = 0
+        self._merge_back_max_failures: int = 3
+
         # Background flush timer
         self._timer_running = True
         self._timer_thread = threading.Thread(
@@ -618,26 +622,43 @@ class WALBatchWriter:
                         except Exception as exc:
                             logger.debug("operation_fallback", error=str(exc))
                             pass
+                    self._merge_back_consecutive_failures = 0
                 except Exception as e:
-                    logger.error(
-                        "WAL batch timer flush failed — merging data back for retry",
-                        error=str(e),
-                        rows=flush_rows,
-                    )
-                    # Merge failed data back into active buffer for retry
-                    with self._lock:
-                        for table, rows_list in flush_data.items():
-                            self._buffer.setdefault(table, []).extend(rows_list)
-                        for table, cols_list in flush_columnar.items():
-                            self._columnar_buffer.setdefault(table, []).extend(cols_list)
-                        self._buffer_rows += flush_rows
-                        self._buffer_bytes += flush_bytes
-                    if self._metrics:
-                        try:
-                            self._metrics.wal_batch_flush_total.labels(result="error").inc()
-                        except Exception as exc:
-                            logger.debug("operation_fallback", error=str(exc))
-                            pass
+                    self._merge_back_consecutive_failures += 1
+                    if self._merge_back_consecutive_failures >= self._merge_back_max_failures:
+                        logger.warning(
+                            "WAL merge-back circuit breaker tripped — dropping data",
+                            rows=flush_rows,
+                            consecutive_failures=self._merge_back_consecutive_failures,
+                            error=str(e),
+                        )
+                        self._merge_back_consecutive_failures = 0
+                        if self._metrics:
+                            try:
+                                self._metrics.wal_batch_flush_total.labels(result="dropped").inc()
+                            except Exception as exc:
+                                logger.debug("operation_fallback", error=str(exc))
+                    else:
+                        logger.error(
+                            "WAL batch timer flush failed — merging data back for retry",
+                            error=str(e),
+                            rows=flush_rows,
+                            consecutive_failures=self._merge_back_consecutive_failures,
+                        )
+                        # Merge failed data back into active buffer for retry
+                        with self._lock:
+                            for table, rows_list in flush_data.items():
+                                self._buffer.setdefault(table, []).extend(rows_list)
+                            for table, cols_list in flush_columnar.items():
+                                self._columnar_buffer.setdefault(table, []).extend(cols_list)
+                            self._buffer_rows += flush_rows
+                            self._buffer_bytes += flush_bytes
+                        if self._metrics:
+                            try:
+                                self._metrics.wal_batch_flush_total.labels(result="error").inc()
+                            except Exception as exc:
+                                logger.debug("operation_fallback", error=str(exc))
+                                pass
 
     def stop(self) -> None:
         """Stop the background timer and flush remaining data."""
