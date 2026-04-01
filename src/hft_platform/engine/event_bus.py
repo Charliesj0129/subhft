@@ -79,14 +79,10 @@ class _PyFastTickRingBuffer:
         is_odd_lot: bool,
         exch_ts: int,
     ) -> None:
+        # Skip redundant coercions — normalizer already guarantees correct types
         self.buffer[int(idx) % self.size] = (
-            str(symbol),
-            int(price),
-            int(volume),
-            int(total_volume),
-            bool(is_simtrade),
-            bool(is_odd_lot),
-            int(exch_ts),
+            symbol, price, volume, total_volume,
+            is_simtrade, is_odd_lot, exch_ts,
         )
 
     def get(self, idx: int) -> Any | None:
