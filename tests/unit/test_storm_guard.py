@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 from typing import NamedTuple
 from unittest.mock import MagicMock, patch
@@ -293,37 +292,6 @@ def test_halt_callback_coroutine_no_running_loop(guard):
     guard._on_halt_callback = async_cb
     guard.trigger_halt("async no loop")
     assert guard.state == StormGuardState.HALT
-
-
-# ── _halt_callback_done ─────────────────────────────────────────────────────
-
-
-def test_halt_callback_done_cancelled_task_is_silent(guard):
-    """Cancelled tasks produce no error log."""
-    task = MagicMock(spec=asyncio.Task)
-    task.cancelled.return_value = True
-    # Should not raise and should not call task.exception()
-    guard._halt_callback_done(task)
-    task.exception.assert_not_called()
-
-
-def test_halt_callback_done_task_with_exception_logs_error(guard):
-    """Tasks that raised an exception are logged."""
-    task = MagicMock(spec=asyncio.Task)
-    task.cancelled.return_value = False
-    task.exception.return_value = RuntimeError("task failed")
-    # Should not raise
-    guard._halt_callback_done(task)
-    task.exception.assert_called_once()
-
-
-def test_halt_callback_done_successful_task_is_silent(guard):
-    """Tasks that completed successfully produce no error log."""
-    task = MagicMock(spec=asyncio.Task)
-    task.cancelled.return_value = False
-    task.exception.return_value = None
-    guard._halt_callback_done(task)
-    task.exception.assert_called_once()
 
 
 # ── transition audit failure ────────────────────────────────────────────────

@@ -150,6 +150,7 @@ class StormGuard:
         new_state, reason = self._evaluate_target_state(drawdown_bps, latency_us, feed_gap_s)
 
         # Transition Logic (with hysteresis protection for de-escalation)
+        fire_callback = False
         with self._state_lock:
             now = time.monotonic()
             if new_state > self.state:
@@ -159,7 +160,7 @@ class StormGuard:
                     self._storm_entry_ts = now
                 if new_state == StormGuardState.HALT:
                     self._halt_entry_ts = now
-                self.transition(new_state, reason)
+                _, fire_callback = self.transition(new_state, reason)
             elif new_state < self.state:
                 # De-escalation from any elevated state requires cooldown + N consecutive clears
                 if self.state == StormGuardState.HALT:
@@ -174,7 +175,7 @@ class StormGuard:
                     if self._de_escalate_count >= self._de_escalate_threshold:
                         old_for_log = self.state
                         self._de_escalate_count = 0
-                        self.transition(new_state, "Recovery")
+                        _, fire_callback = self.transition(new_state, "Recovery")
                         logger.info(
                             "StormGuard de-escalated after hysteresis",
                             from_state=old_for_log.name,
@@ -190,7 +191,12 @@ class StormGuard:
                 if new_state >= StormGuardState.STORM:
                     self._de_escalate_count = 0
 
-            return self.state
+            current_state = self.state
+
+        if fire_callback:
+            self._fire_halt_callback()
+
+        return current_state
 
     def update_with_lob(
         self,
@@ -235,6 +241,7 @@ class StormGuard:
             return self.state
 
         # Only escalate — never de-escalate from drift burst
+        fire_callback = False
         with self._state_lock:
             if target > self.state:
                 now = time.monotonic()
@@ -243,7 +250,7 @@ class StormGuard:
                     self._storm_entry_ts = now
                 if target == StormGuardState.HALT:
                     self._halt_entry_ts = now
-                self.transition(target, reason)
+                _, fire_callback = self.transition(target, reason)
                 logger.info(
                     "StormGuard drift_burst escalation",
                     new_state=target.name,
@@ -251,9 +258,19 @@ class StormGuard:
                     burst_detected=result.burst_detected,
                 )
 
-            return self.state
+            current_state = self.state
 
-    def transition(self, new_state: StormGuardState, reason: str) -> None:
+        if fire_callback:
+            self._fire_halt_callback()
+
+        return current_state
+
+    def transition(self, new_state: StormGuardState, reason: str) -> tuple[StormGuardState, bool]:
+        """Transition state machine. Returns (old_state, should_fire_halt_callback).
+
+        IMPORTANT: Caller must invoke _fire_halt_callback() AFTER releasing
+        _state_lock when the second element is True.
+        """
         old_state = self.state
         self.state = new_state
         now_mono = time.monotonic()
@@ -291,31 +308,38 @@ class StormGuard:
         except Exception as exc:
             logger.debug("audit_guardrail_transition_failed", error=str(exc))
 
-        # Fire on_halt_callback when entering HALT
-        if new_state == StormGuardState.HALT and self._on_halt_callback is not None:
-            try:
-                result = self._on_halt_callback()
-                # If callback is a coroutine, schedule it
-                if asyncio.iscoroutine(result):
-                    try:
-                        loop = asyncio.get_running_loop()
-                        task = loop.create_task(result)
-                        task.add_done_callback(self._halt_callback_done)
-                    except RuntimeError:
-                        # No running event loop; log and discard
-                        logger.warning("halt_callback_coroutine_no_loop")
-            except Exception as exc:
-                logger.error(
-                    "on_halt_callback_error",
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                )
+        # Signal caller to fire callback OUTSIDE the lock
+        should_fire = new_state == StormGuardState.HALT and self._on_halt_callback is not None
+        return old_state, should_fire
 
-    def _halt_callback_done(self, task: asyncio.Task) -> None:
-        """Log errors from fire-and-forget halt callback tasks."""
-        if task.cancelled():
+    def _fire_halt_callback(self) -> None:
+        """Invoke the on_halt_callback. Must be called OUTSIDE _state_lock."""
+        if self._on_halt_callback is None:
             return
-        exc = task.exception()
+        try:
+            result = self._on_halt_callback()
+            # If callback is a coroutine, schedule it thread-safely
+            if asyncio.iscoroutine(result):
+                try:
+                    loop = asyncio.get_running_loop()
+                    future = asyncio.run_coroutine_threadsafe(result, loop)
+                    future.add_done_callback(self._halt_callback_done)
+                except RuntimeError:
+                    # No running event loop; log and discard
+                    logger.warning("halt_callback_coroutine_no_loop")
+        except Exception as exc:
+            logger.error(
+                "on_halt_callback_error",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    @staticmethod
+    def _halt_callback_done(future: "asyncio.Future[None]") -> None:
+        """Log errors from fire-and-forget halt callback futures."""
+        if future.cancelled():
+            return
+        exc = future.exception()
         if exc is not None:
             logger.error(
                 "halt_callback_failed",
@@ -325,8 +349,12 @@ class StormGuard:
 
     def trigger_halt(self, reason: str) -> None:
         """Manual or Supervisor override to force HALT."""
+        fire_callback = False
         with self._state_lock:
-            self.transition(StormGuardState.HALT, reason)
+            _, fire_callback = self.transition(StormGuardState.HALT, reason)
+
+        if fire_callback:
+            self._fire_halt_callback()
 
     def validate(self, intent: OrderIntent) -> tuple[bool, str]:
         with self._state_lock:

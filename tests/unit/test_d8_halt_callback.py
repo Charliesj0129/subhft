@@ -31,7 +31,7 @@ def test_halt_callback_exception_is_logged(storm_guard_with_failing_callback, ca
     sg = storm_guard_with_failing_callback
 
     async def _run():
-        sg.transition(StormGuardState.HALT, "test")
+        sg.trigger_halt("test")
         # Give the scheduled task a chance to run and fail
         await asyncio.sleep(0.05)
 
@@ -53,7 +53,7 @@ def test_halt_callback_success_no_error_log(capsys):
     sg.metrics = MagicMock()
 
     async def _run():
-        sg.transition(StormGuardState.HALT, "test")
+        sg.trigger_halt("test")
         await asyncio.sleep(0.05)
 
     asyncio.run(_run())

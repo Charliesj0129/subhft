@@ -1,4 +1,5 @@
 """Tests for threading.Lock protection in StormGuard FSM."""
+import asyncio
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -132,3 +133,97 @@ def test_concurrent_validate_during_transition(guard):
     ok, msg = guard.validate(cancel_intent)
     assert ok
     assert msg == "OK"
+
+
+# ---------------------------------------------------------------------------
+# Test 4: Halt callback that re-enters validate() does not deadlock
+# ---------------------------------------------------------------------------
+
+
+def test_halt_callback_no_deadlock_on_reentrant():
+    """A halt callback that calls guard.validate() must not deadlock."""
+    callback_completed = threading.Event()
+    validate_result: list[tuple[bool, str]] = []
+
+    def reentrant_callback(g: "StormGuard") -> None:
+        # This would deadlock if callback fires inside _state_lock
+        intent = _make_intent(IntentType.CANCEL)
+        result = g.validate(intent)
+        validate_result.append(result)
+        callback_completed.set()
+
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        guard = StormGuard(on_halt_callback=lambda: reentrant_callback(guard))
+
+    # Run trigger_halt in a thread with a timeout to detect deadlock
+    t = threading.Thread(target=guard.trigger_halt, args=("deadlock-test",))
+    t.start()
+    t.join(timeout=3.0)
+
+    assert not t.is_alive(), "trigger_halt deadlocked — thread still alive after 3s"
+    assert callback_completed.is_set(), "halt callback did not complete"
+    assert guard.state == StormGuardState.HALT
+    assert len(validate_result) == 1
+    ok, msg = validate_result[0]
+    assert ok is True  # CANCEL allowed in HALT
+    assert msg == "OK"
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Halt callback that re-enters trigger_halt() does not deadlock
+# ---------------------------------------------------------------------------
+
+
+def test_halt_callback_fires_after_lock_released():
+    """A halt callback calling trigger_halt() must not deadlock."""
+    callback_calls: list[str] = []
+
+    def reentrant_halt_callback(g: "StormGuard") -> None:
+        callback_calls.append("entered")
+        # Re-entering trigger_halt should not deadlock (lock is released)
+        g.trigger_halt("from_callback")
+        callback_calls.append("completed")
+
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        guard = StormGuard(on_halt_callback=lambda: reentrant_halt_callback(guard))
+
+    t = threading.Thread(target=guard.trigger_halt, args=("initial-halt",))
+    t.start()
+    t.join(timeout=3.0)
+
+    assert not t.is_alive(), "trigger_halt deadlocked — thread still alive after 3s"
+    assert guard.state == StormGuardState.HALT
+    assert "entered" in callback_calls
+    assert "completed" in callback_calls
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Async halt callback uses run_coroutine_threadsafe, not create_task
+# ---------------------------------------------------------------------------
+
+
+def test_async_halt_callback_uses_threadsafe():
+    """When halt callback returns a coroutine, run_coroutine_threadsafe must be used."""
+
+    async def async_callback():
+        pass
+
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        guard = StormGuard(on_halt_callback=async_callback)
+
+    mock_loop = MagicMock()
+    mock_future = MagicMock()
+
+    with (
+        patch("asyncio.get_running_loop", return_value=mock_loop),
+        patch("asyncio.run_coroutine_threadsafe", return_value=mock_future) as mock_rcts,
+    ):
+        guard.trigger_halt("async-test")
+
+    assert guard.state == StormGuardState.HALT
+    assert mock_rcts.call_count == 1
+    # Verify called with the coroutine and the loop
+    args = mock_rcts.call_args
+    assert args[0][1] is mock_loop  # second arg is the loop
+    # Verify create_task was NOT called
+    mock_loop.create_task.assert_not_called()
