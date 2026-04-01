@@ -9,6 +9,7 @@ from structlog import get_logger
 from hft_platform.contracts.execution import FillEvent, OrderEvent
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
 from hft_platform.events import BidAskEvent, FeatureUpdateEvent, LOBStatsEvent, TickEvent
+from hft_platform.feature.engine import _StatsTupleProxy
 
 logger = get_logger("strategy")
 
@@ -235,7 +236,7 @@ class BaseStrategy(ABC):
         elif isinstance(event, LOBStatsEvent):
             self.on_stats(event)
         elif isinstance(event, tuple) and event and event[0] == "lobstats":
-            self.on_stats(event)  # type: ignore[arg-type]
+            self.on_stats(_StatsTupleProxy(event))
         elif isinstance(event, FeatureUpdateEvent):
             self.on_features(event)
         elif isinstance(event, FillEvent):
@@ -243,7 +244,7 @@ class BaseStrategy(ABC):
         elif isinstance(event, OrderEvent):
             self.on_order(event)
 
-        return self._generated_intents
+        return list(self._generated_intents)
 
     # --- Actions ---
 
