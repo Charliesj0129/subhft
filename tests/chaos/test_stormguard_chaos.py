@@ -125,7 +125,7 @@ class TestStormGuardChaos:
         for _ in range(1000):
             guard.update(drawdown_bps=-60)  # -> WARM
             # WARM -> NORMAL requires de-escalation threshold; force via transition
-            guard.transition(StormGuardState.NORMAL, "reset")
+            guard._transition(StormGuardState.NORMAL, "reset")
         # Should be NORMAL after last manual transition
         assert guard.state == StormGuardState.NORMAL
 
@@ -182,9 +182,9 @@ class TestStormGuardChaos:
                 if i % 3 == 0:
                     guard.trigger_halt(f"w-{i}")
                 elif i % 3 == 1:
-                    guard.transition(StormGuardState.WARM, f"w-{i}")
+                    guard._transition(StormGuardState.WARM, f"w-{i}")
                 else:
-                    guard.transition(StormGuardState.NORMAL, f"w-{i}")
+                    guard._transition(StormGuardState.NORMAL, f"w-{i}")
 
         readers = [threading.Thread(target=_reader) for _ in range(10)]
         writer = threading.Thread(target=_writer)
@@ -212,7 +212,7 @@ class TestStormGuardChaos:
         guard = StormGuard(on_halt_callback=_cb)
         for _ in range(5):
             guard.trigger_halt("cycle")
-            guard.transition(StormGuardState.NORMAL, "reset")
+            guard._transition(StormGuardState.NORMAL, "reset")
 
         assert call_count >= 5
 
@@ -352,7 +352,7 @@ class TestStormGuardChaos:
         guard.trigger_halt("metric-test")
         mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.HALT))
 
-        guard.transition(StormGuardState.NORMAL, "reset")
+        guard._transition(StormGuardState.NORMAL, "reset")
         mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.NORMAL))
 
     # 15. HALT -> NORMAL recovery cycle --------------------------------------

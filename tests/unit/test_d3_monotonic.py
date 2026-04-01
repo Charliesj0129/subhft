@@ -30,7 +30,7 @@ class TestStormGuardMonotonic:
         sg._de_escalate_threshold = 1
 
         with patch("time.monotonic", return_value=100.0):
-            sg.transition(StormGuardState.HALT, "test")
+            sg.trigger_halt("test")
 
         assert sg._halt_entry_ts == 100.0
 
@@ -49,7 +49,7 @@ class TestStormGuardMonotonic:
         sg.metrics = MagicMock()
 
         with patch("time.monotonic", return_value=42.0):
-            sg.transition(StormGuardState.WARM, "test")
+            sg.update(drawdown_bps=sg.thresholds.warm_drawdown_bps - 1)
 
         assert sg.last_state_change == 42.0
 

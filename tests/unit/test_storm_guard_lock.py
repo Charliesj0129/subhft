@@ -193,8 +193,12 @@ def test_halt_callback_fires_after_lock_released():
 
     assert not t.is_alive(), "trigger_halt deadlocked — thread still alive after 3s"
     assert guard.state == StormGuardState.HALT
-    assert "entered" in callback_calls
-    assert "completed" in callback_calls
+    # Callback must run exactly once — re-entrant trigger_halt should NOT re-fire
+    # because state is already HALT (old_state == HALT guard)
+    assert callback_calls.count("entered") == 1, (
+        f"callback entered {callback_calls.count('entered')} times — recursion detected"
+    )
+    assert callback_calls.count("completed") == 1
 
 
 # ---------------------------------------------------------------------------

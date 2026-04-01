@@ -304,7 +304,7 @@ def test_transition_audit_failure_does_not_propagate(guard):
         side_effect=RuntimeError("audit unavailable"),
     ):
         # Should not raise — audit is best-effort
-        guard.transition(StormGuardState.WARM, "test reason")
+        guard._transition(StormGuardState.WARM, "test reason")
     assert guard.state == StormGuardState.WARM
 
 

@@ -160,7 +160,7 @@ class StormGuard:
                     self._storm_entry_ts = now
                 if new_state == StormGuardState.HALT:
                     self._halt_entry_ts = now
-                _, fire_callback = self.transition(new_state, reason)
+                _, fire_callback = self._transition(new_state, reason)
             elif new_state < self.state:
                 # De-escalation from any elevated state requires cooldown + N consecutive clears
                 if self.state == StormGuardState.HALT:
@@ -175,7 +175,7 @@ class StormGuard:
                     if self._de_escalate_count >= self._de_escalate_threshold:
                         old_for_log = self.state
                         self._de_escalate_count = 0
-                        _, fire_callback = self.transition(new_state, "Recovery")
+                        _, fire_callback = self._transition(new_state, "Recovery")
                         logger.info(
                             "StormGuard de-escalated after hysteresis",
                             from_state=old_for_log.name,
@@ -250,7 +250,7 @@ class StormGuard:
                     self._storm_entry_ts = now
                 if target == StormGuardState.HALT:
                     self._halt_entry_ts = now
-                _, fire_callback = self.transition(target, reason)
+                _, fire_callback = self._transition(target, reason)
                 logger.info(
                     "StormGuard drift_burst escalation",
                     new_state=target.name,
@@ -265,7 +265,7 @@ class StormGuard:
 
         return current_state
 
-    def transition(self, new_state: StormGuardState, reason: str) -> tuple[StormGuardState, bool]:
+    def _transition(self, new_state: StormGuardState, reason: str) -> tuple[StormGuardState, bool]:
         """Transition state machine. Returns (old_state, should_fire_halt_callback).
 
         IMPORTANT: Caller must invoke _fire_halt_callback() AFTER releasing
@@ -273,13 +273,7 @@ class StormGuard:
         """
         old_state = self.state
         self.state = new_state
-        now_mono = time.monotonic()
-        self.last_state_change = now_mono
-        # Track entry timestamps for cooldown calculations when transition() is called directly
-        if new_state >= StormGuardState.STORM and old_state < StormGuardState.STORM:
-            self._storm_entry_ts = now_mono
-        if new_state == StormGuardState.HALT:
-            self._halt_entry_ts = now_mono
+        self.last_state_change = time.monotonic()
 
         logger.warning("StormGuard Transition", old=old_state.name, new=new_state.name, reason=reason)
 
@@ -309,7 +303,12 @@ class StormGuard:
             logger.debug("audit_guardrail_transition_failed", error=str(exc))
 
         # Signal caller to fire callback OUTSIDE the lock
-        should_fire = new_state == StormGuardState.HALT and self._on_halt_callback is not None
+        # Only fire on *entry* to HALT, not re-entry (prevents infinite recursion)
+        should_fire = (
+            new_state == StormGuardState.HALT
+            and old_state != StormGuardState.HALT
+            and self._on_halt_callback is not None
+        )
         return old_state, should_fire
 
     def _fire_halt_callback(self) -> None:
@@ -351,7 +350,12 @@ class StormGuard:
         """Manual or Supervisor override to force HALT."""
         fire_callback = False
         with self._state_lock:
-            _, fire_callback = self.transition(StormGuardState.HALT, reason)
+            now = time.monotonic()
+            if self.state < StormGuardState.STORM:
+                self._storm_entry_ts = now
+            self._halt_entry_ts = now
+            self._de_escalate_count = 0
+            _, fire_callback = self._transition(StormGuardState.HALT, reason)
 
         if fire_callback:
             self._fire_halt_callback()
