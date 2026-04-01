@@ -163,7 +163,7 @@ def parse_table_from_filename(fname: str) -> str:
     if base.startswith("orders"):
         return "orders"
     if base.startswith("fills"):
-        return "trades"
+        return "fills"
     if base.startswith("risk_log"):
         return "risk_log"
     if base.startswith("backtest_runs"):
@@ -183,7 +183,7 @@ def parse_batch_table_name(table_name: str) -> str:
         "market_data": "market_data",
         "orders": "orders",
         "trades": "trades",
-        "fills": "trades",
+        "fills": "fills",
         "risk_log": "risk_log",
         "logs": "risk_log",
         "backtest_runs": "backtest_runs",
