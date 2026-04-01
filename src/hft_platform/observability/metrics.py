@@ -205,6 +205,8 @@ class MetricsRegistry:
                 "e2e_order_latency_ns",
                 # Recorder exec drop counter (P-01)
                 "recorder_exec_drops_total",
+                # Recorder reinject circuit breaker drops (P-21)
+                "recorder_reinject_circuit_breaker_drops_total",
                 # Rust-to-Python normalizer fallbacks
                 "rust_fallback_total",
             ]
