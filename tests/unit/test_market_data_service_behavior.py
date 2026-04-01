@@ -527,3 +527,94 @@ def test_record_pending_puts_cap_prevents_unbounded_tasks(mds_factory):
         svc._recorder_dropped_count += 1
 
     assert svc._recorder_dropped_count == 1
+
+
+# ---------------------------------------------------------------------------
+# _maybe_update_features: consecutive failure counter
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_stats():
+    """Return a minimal object that passes the isinstance(stats, (LOBStatsEvent, tuple)) check."""
+    return (100, 200, 0.5)
+
+
+def _make_fake_event():
+    """Return a minimal TickEvent-like mock with required attrs."""
+    from hft_platform.events import MetaData
+
+    evt = MagicMock()
+    evt.symbol = "2330"
+    evt.price = 1000000
+    evt.volume = 1
+    evt.trade_direction = 0
+    evt.trade_confidence = 0.0
+    meta = MetaData(seq=1, source_ts=1000, local_ts=1000, topic="tick")
+    evt.meta = meta
+    # Make isinstance check fail for TickEvent so we skip on_tick
+    type(evt).__name__ = "FakeEvent"
+    return evt
+
+
+def test_feature_consecutive_failures_increment_and_escalate(mds_factory):
+    """After N consecutive failures, logging escalates from warning to error."""
+    svc = mds_factory()
+    svc._FEATURE_FAILURE_ESCALATE = 3
+    # Make feature engine raise on every call
+    svc._fe_process_lob_update = MagicMock(side_effect=RuntimeError("boom"))
+    svc.feature_engine = MagicMock()
+    svc.metrics_registry = None
+
+    event = _make_fake_event()
+    stats = _make_fake_stats()
+
+    # First 2 failures: counter increments, stays below threshold
+    for i in range(2):
+        result = svc._maybe_update_features(event, stats)
+        assert result is None
+        assert svc._feature_consecutive_failures == i + 1
+
+    # 3rd failure: should hit escalation threshold
+    result = svc._maybe_update_features(event, stats)
+    assert result is None
+    assert svc._feature_consecutive_failures == 3
+
+
+def test_feature_consecutive_failures_reset_on_success(mds_factory):
+    """Counter resets to 0 after a successful feature update."""
+    svc = mds_factory()
+    svc._FEATURE_FAILURE_ESCALATE = 5
+    svc.metrics_registry = None
+
+    event = _make_fake_event()
+    stats = _make_fake_stats()
+
+    # Simulate prior failures
+    svc._feature_consecutive_failures = 7
+
+    # Make feature engine succeed
+    fake_update = MagicMock()
+    svc._fe_process_lob_update = MagicMock(return_value=fake_update)
+    svc.feature_engine = MagicMock()
+
+    result = svc._maybe_update_features(event, stats)
+    assert result is fake_update
+    assert svc._feature_consecutive_failures == 0
+
+
+def test_feature_consecutive_failures_no_reset_when_zero(mds_factory):
+    """When counter is already 0, success path does not change it."""
+    svc = mds_factory()
+    svc.metrics_registry = None
+
+    event = _make_fake_event()
+    stats = _make_fake_stats()
+
+    svc._feature_consecutive_failures = 0
+    fake_update = MagicMock()
+    svc._fe_process_lob_update = MagicMock(return_value=fake_update)
+    svc.feature_engine = MagicMock()
+
+    result = svc._maybe_update_features(event, stats)
+    assert result is fake_update
+    assert svc._feature_consecutive_failures == 0

@@ -401,6 +401,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._feature_latency_counter = 0
         self._feature_shadow_counter = 0
         self._feature_shadow_mismatch_counter = 0
+        self._feature_consecutive_failures = 0
+        self._FEATURE_FAILURE_ESCALATE = int(os.getenv("HFT_FEATURE_FAILURE_ESCALATE", "10"))
 
         self._init_feature_shadow_engine()
         self._init_shm_publisher()
@@ -1072,6 +1074,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     except Exception as exc:
                         logger.debug("operation_fallback", error=str(exc))
                         pass
+            if self._feature_consecutive_failures > 0:
+                self._feature_consecutive_failures = 0
             return feature_update
         except Exception as exc:
             self._emit_trace(
@@ -1095,7 +1099,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 except Exception as metric_exc:
                     logger.debug("operation_fallback", error=str(metric_exc))
                     pass
-            logger.warning("feature_engine_update_failed", reason=str(exc))
+            self._feature_consecutive_failures += 1
+            if self._feature_consecutive_failures >= self._FEATURE_FAILURE_ESCALATE:
+                logger.error(
+                    "feature_engine_update_failed",
+                    reason=str(exc),
+                    consecutive_failures=self._feature_consecutive_failures,
+                )
+            else:
+                logger.warning("feature_engine_update_failed", reason=str(exc))
             return None
 
     def _maybe_run_feature_shadow_parity(
