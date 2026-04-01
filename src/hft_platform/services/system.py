@@ -151,7 +151,9 @@ class HFTSystem:
             lob_engine = getattr(self.md_service, "lob", None)
             if lob_engine is not None:
                 self._mtm_calculator = MarkToMarketCalculator(
-                    self.position_store, mid_price_fn=getattr(lob_engine, "get_mid_price", lambda s: None)
+                    self.position_store,
+                    mid_price_fn=getattr(lob_engine, "get_mid_price", lambda s: None),
+                    multiplier_fn=self.position_store.metadata.contract_multiplier,
                 )
         except Exception as exc:
             logger.warning("MTM calculator init failed", error=str(exc))

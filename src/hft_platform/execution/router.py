@@ -257,6 +257,42 @@ class ExecutionRouter:
                     pass  # task_done called too many times
         self.metrics.execution_router_alive.set(0)
 
+    async def stop(self, drain_timeout_s: float = 2.0) -> int:
+        """Graceful shutdown: stop accepting new events and drain remaining queue items.
+
+        Returns the number of events drained during shutdown.
+        """
+        self.running = False
+        drained = 0
+        import asyncio as _asyncio
+
+        deadline = timebase.now_ns() + int(drain_timeout_s * 1_000_000_000)
+        while timebase.now_ns() < deadline:
+            try:
+                raw = self.raw_queue.get_nowait()
+            except _asyncio.QueueEmpty:
+                break
+            try:
+                if raw.topic == "deal":
+                    fill_event = self.normalizer.normalize_fill(raw)
+                    if fill_event and fill_event.fill_id:
+                        if fill_event.fill_id not in self._seen_fill_ids:
+                            self._seen_fill_ids[fill_event.fill_id] = None
+                            if hasattr(self.position_store, "on_fill"):
+                                self.position_store.on_fill(fill_event)
+                                drained += 1
+                                logger.info("shutdown_drain_fill", fill_id=fill_event.fill_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("shutdown_drain_error", error=str(exc))
+            finally:
+                try:
+                    self.raw_queue.task_done()
+                except ValueError:
+                    pass
+        if drained > 0:
+            logger.info("shutdown_drain_complete", drained=drained)
+        return drained
+
     async def _retry_orphaned_fills(self) -> None:
         from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 

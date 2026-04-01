@@ -366,7 +366,8 @@ class PositionStore:
             mid = mid_prices.get(symbol)
             if mid is None:
                 continue
-            total += (mid - pos.avg_price_scaled) * pos.net_qty
+            multiplier = self.metadata.contract_multiplier(symbol)
+            total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
         return total
 
     def snapshot_positions(self) -> dict:

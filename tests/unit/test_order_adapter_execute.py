@@ -443,3 +443,91 @@ async def test_storm_guard_halt_allows_halt_flatten_order(adapter):
     # Should NOT be DLQ'd — should be dispatched
     adapter._dlq.add.assert_not_awaited()
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+# --- 19. StormGuard HALT allows CANCEL orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_allows_cancel_order(adapter):
+    """CANCEL orders bypass StormGuard HALT (Constitution: HALT blocks new, allows cancels)."""
+    cmd = make_cmd(intent_type=IntentType.CANCEL)
+    cmd.intent.target_order_id = "s1:1"
+    cmd.storm_guard_state = StormGuardState.HALT
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    adapter._dlq.add.assert_not_awaited()
+    adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+# --- 20. StormGuard HALT allows FORCE_FLAT orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_allows_force_flat_order(adapter):
+    """FORCE_FLAT orders bypass StormGuard HALT (Constitution: safety orders always allowed)."""
+    cmd = make_cmd(intent_type=IntentType.FORCE_FLAT)
+    cmd.storm_guard_state = StormGuardState.HALT
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    adapter._dlq.add.assert_not_awaited()
+    adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+# --- 21. StormGuard HALT still blocks NEW orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_blocks_new_order(adapter):
+    """NEW orders are still blocked during HALT (not exempt)."""
+    cmd = make_cmd(intent_type=IntentType.NEW)
+    cmd.storm_guard_state = StormGuardState.HALT
+
+    await adapter.execute(cmd)
+
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert "StormGuard HALT" in call_kwargs["error_message"]
+
+
+# --- 22. StormGuard HALT still blocks AMEND orders ---
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_blocks_amend_order(adapter):
+    """AMEND orders are blocked during HALT (not safety-critical)."""
+    cmd = make_cmd(intent_type=IntentType.AMEND)
+    cmd.intent.target_order_id = "s1:1"
+    cmd.storm_guard_state = StormGuardState.HALT
+
+    await adapter.execute(cmd)
+
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert "StormGuard HALT" in call_kwargs["error_message"]
+
+
+# --- 23. API queue full routes to DLQ + metric ---
+
+
+@pytest.mark.asyncio
+async def test_api_queue_full_routes_to_dlq(adapter):
+    """When API queue is full, order is routed to DLQ with reject metric."""
+    cmd = make_cmd()
+    # Make the API queue full
+    adapter._api_queue = asyncio.Queue(maxsize=1)
+    adapter._api_queue.put_nowait(make_cmd())  # fill it
+
+    adapter.running = False
+    await adapter._enqueue_api(cmd)
+
+    adapter._dlq.add.assert_awaited_once()
+    call_kwargs = adapter._dlq.add.call_args[1]
+    assert "API queue full" in call_kwargs["error_message"]
+    adapter.metrics.order_reject_total.inc.assert_called()

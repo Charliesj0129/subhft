@@ -417,7 +417,13 @@ class OrderAdapter:
         _is_halt = cmd.storm_guard_state == StormGuardState.HALT
         if not _is_halt and self._storm_guard is not None:
             _is_halt = getattr(self._storm_guard, "state", None) == StormGuardState.HALT
-        if _is_halt and intent.reason != "halt_flatten":
+        # Constitution: HALT blocks new orders but allows CANCEL/FORCE_FLAT through.
+        _halt_exempt = (
+            intent.reason == "halt_flatten"
+            or intent.intent_type == IntentType.CANCEL
+            or intent.intent_type == IntentType.FORCE_FLAT
+        )
+        if _is_halt and not _halt_exempt:
             await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "StormGuard HALT")
             return
 
@@ -998,8 +1004,15 @@ class OrderAdapter:
             self._api_queue.put_nowait(cmd)
             self._emit_trace("order_enqueue_api", cmd.intent, {"cmd_id": int(cmd.cmd_id)})
         except asyncio.QueueFull:
-            logger.warning("API queue full - dropping", cmd_id=cmd.cmd_id)
+            logger.warning(
+                "API queue full - routing to DLQ",
+                cmd_id=cmd.cmd_id,
+                strategy_id=cmd.intent.strategy_id,
+                symbol=cmd.intent.symbol,
+            )
+            self.metrics.order_reject_total.inc()
             self._emit_trace("order_reject", cmd.intent, {"reason": "API_QUEUE_FULL", "cmd_id": int(cmd.cmd_id)})
+            await self._add_to_dlq(cmd.intent, RejectionReason.RATE_LIMIT, "API queue full")
 
     def submit_typed_command_nowait(self, frame: TypedOrderCommandFrame) -> None:
         """Prototype typed command ingress from GatewayService (avoids early materialization)."""

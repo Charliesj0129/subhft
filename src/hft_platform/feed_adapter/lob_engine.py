@@ -316,7 +316,8 @@ class BookState:
             rs = self._rust_state
             if rs is not None:
                 try:
-                    return rs.get_stats_tuple()
+                    rust_t = rs.get_stats_tuple()
+                    return ("lobstats",) + rust_t
                 except Exception as exc:
                     logger.debug("rust_stats_tuple_fallback", symbol=self.symbol, error=str(exc))
             if isinstance(self.bids, np.ndarray):
@@ -330,6 +331,7 @@ class BookState:
                 best_ask = int(self.asks[0][0]) if self.asks else 0
 
             return (
+                "lobstats",  # [0] tag for runner tuple guard
                 self.symbol,
                 self.exch_ts,
                 self.mid_price_x2,  # Integer (best_bid + best_ask)

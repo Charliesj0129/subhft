@@ -36,15 +36,17 @@ class MarkToMarketCalculator:
         as a scaled integer, or *None* when no quote is available.
     """
 
-    __slots__ = ("_position_store", "_mid_price_fn", "_lock")
+    __slots__ = ("_position_store", "_mid_price_fn", "_multiplier_fn", "_lock")
 
     def __init__(
         self,
         position_store: PositionStore,
         mid_price_fn: Callable[[str], int | None],
+        multiplier_fn: Callable[[str], int] | None = None,
     ) -> None:
         self._position_store = position_store
         self._mid_price_fn = mid_price_fn
+        self._multiplier_fn: Callable[[str], int] = multiplier_fn if multiplier_fn is not None else lambda _: 1
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -75,7 +77,8 @@ class MarkToMarketCalculator:
                     )
                     continue
 
-                result[key] = self._unrealized(pos.net_qty, pos.avg_price_scaled, mid)
+                multiplier = self._multiplier_fn(pos.symbol)
+                result[key] = self._unrealized(pos.net_qty, pos.avg_price_scaled, mid, multiplier)
 
         return result
 
@@ -95,13 +98,17 @@ class MarkToMarketCalculator:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _unrealized(net_qty: int, avg_price_scaled: int, mid: int) -> int:
+    def _unrealized(net_qty: int, avg_price_scaled: int, mid: int, contract_multiplier: int = 1) -> int:
         """Compute unrealized PnL for a single position (scaled int).
 
-        Long  (net_qty > 0): ``(mid - avg) * qty``
-        Short (net_qty < 0): ``(avg - mid) * |qty|``
+        Long  (net_qty > 0): ``(mid - avg) * qty * contract_multiplier``
+        Short (net_qty < 0): ``(avg - mid) * |qty| * contract_multiplier``
+
+        Args:
+            contract_multiplier: Contract point value. Stocks=1, Futures=point_value
+                (e.g. TMF=10, MXF=50, TXF=200). Default 1 for backward compatibility.
         """
         if net_qty > 0:
-            return (mid - avg_price_scaled) * net_qty
+            return (mid - avg_price_scaled) * net_qty * contract_multiplier
         # net_qty < 0  (caller already guards == 0)
-        return (avg_price_scaled - mid) * (-net_qty)
+        return (avg_price_scaled - mid) * (-net_qty) * contract_multiplier

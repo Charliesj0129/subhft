@@ -61,8 +61,9 @@ class ExecutionOptimizer:
     ----------
     spread_threshold_pts : int
         Minimum spread (in price points) to consider limit order.  Default: 2.
-    fill_score_threshold : float
+    fill_score_threshold : float | int
         Minimum Q_opp / Q_near ratio to use limit.  Default: 1.5.
+        Internally stored as scaled integer x1000 for Precision Law compliance.
     limit_timeout_ns : int
         Max wait for limit fill before fallback to market.
         Default: 3_000_000_000 (3s).
@@ -72,7 +73,7 @@ class ExecutionOptimizer:
 
     __slots__ = (
         "_spread_threshold_pts",
-        "_fill_score_threshold",
+        "_fill_score_threshold_x1000",
         "_limit_timeout_ns",
         "_enabled",
         "_state",
@@ -88,7 +89,8 @@ class ExecutionOptimizer:
         enabled: bool = True,
     ) -> None:
         self._spread_threshold_pts: int = spread_threshold_pts
-        self._fill_score_threshold: float = fill_score_threshold
+        # Store as scaled integer x1000 for integer-only arithmetic on hot path
+        self._fill_score_threshold_x1000: int = int(fill_score_threshold * 1000)
         self._limit_timeout_ns: int = limit_timeout_ns
         self._enabled: bool = enabled
         self._state: _OptimizerState = _OptimizerState.IDLE
@@ -158,18 +160,19 @@ class ExecutionOptimizer:
         near_clamped = near_depth if near_depth > 1 else 1
         if opp_depth <= 0:
             return OrderType.MARKET
-        fill_score = opp_depth / near_clamped
-        # Favorable imbalance (buy+positive or sell+negative) adds 0.5 bonus
+        # Scaled integer arithmetic (x1000) — no float on hot path
+        fill_score_x1000 = (opp_depth * 1000) // near_clamped
+        # Favorable imbalance (buy+positive or sell+negative) adds 500 (= 0.5 × 1000)
         favorable_imb = (side > 0 and imbalance_ppm > 200_000) or (side < 0 and imbalance_ppm < -200_000)
         if favorable_imb:
-            fill_score += 0.5
+            fill_score_x1000 += 500
 
-        # In FAVORABLE regime, relax fill score threshold
-        effective_fill_threshold = self._fill_score_threshold
+        # In FAVORABLE regime, relax fill score threshold by 500 (= 0.5 × 1000)
+        effective_threshold_x1000 = self._fill_score_threshold_x1000
         if regime == Regime.FAVORABLE:
-            effective_fill_threshold = max(effective_fill_threshold - 0.5, 0.5)
+            effective_threshold_x1000 = max(effective_threshold_x1000 - 500, 500)
 
-        if fill_score < effective_fill_threshold:
+        if fill_score_x1000 < effective_threshold_x1000:
             return OrderType.MARKET
 
         # All conditions met -> LIMIT
