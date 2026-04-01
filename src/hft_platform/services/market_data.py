@@ -303,6 +303,14 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._record_direct = self.recorder_queue is not None and os.getenv(
             "HFT_MD_RECORD_DIRECT", "1"
         ).lower() not in {"0", "false", "no", "off"}
+        # Eagerly resolve recorder mapper to avoid per-tick import (INFRA-01)
+        self._map_event_to_record = None
+        if self._record_direct:
+            try:
+                from hft_platform.recorder.mapper import map_event_to_record
+                self._map_event_to_record = map_event_to_record
+            except Exception:
+                pass
         drop_default = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1")
         self._record_drop_on_full = os.getenv("HFT_MD_RECORD_DROP_ON_FULL", drop_default).lower() not in {
             "0",
@@ -319,7 +327,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._record_degrade_check_s = 10.0
         self._record_degrade_last_check: float = 0.0
 
-        # Per-symbol feed gap monitoring
+        # Per-symbol feed gap monitoring (bounded by subscribed symbol count)
         self._symbol_last_tick: dict[str, float] = {}
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "6.0"))
         self._watchdog_interval_s = float(os.getenv("HFT_WATCHDOG_INTERVAL_S", "1.0"))
@@ -1251,9 +1259,12 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 return
 
         try:
-            from hft_platform.recorder.mapper import map_event_to_record
-
-            mapped = map_event_to_record(event, self.symbol_metadata, self.normalizer.price_codec)
+            map_fn = self._map_event_to_record
+            if map_fn is None:
+                from hft_platform.recorder.mapper import map_event_to_record
+                self._map_event_to_record = map_event_to_record
+                map_fn = map_event_to_record
+            mapped = map_fn(event, self.symbol_metadata, self.normalizer.price_codec)
         except Exception as exc:
             logger.warning("Direct record mapping failed", error=str(exc), event_type=type(event).__name__)
             return
