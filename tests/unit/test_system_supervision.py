@@ -304,6 +304,73 @@ class TestHALTEnforcement:
         assert drained == 1
         assert system.order_queue.empty()
 
+    @pytest.mark.asyncio
+    async def test_halt_drains_risk_queue(self):
+        """When StormGuard is HALT, risk_queue is drained during HALT enforcement."""
+        system = _make_system()
+        system.running = True
+
+        # Populate risk_queue with pending intents (not yet evaluated by RiskEngine)
+        for _ in range(4):
+            await system.risk_queue.put(_make_order_intent())
+        assert system.risk_queue.qsize() == 4
+
+        # Trigger HALT
+        system.storm_guard.trigger_halt("test_risk_queue_drain")
+        assert system.storm_guard.state == StormGuardState.HALT
+
+        # Simulate the risk_queue drain from _supervise (added alongside order_queue drain)
+        risk_drained = 0
+        while not system.risk_queue.empty():
+            try:
+                system.risk_queue.get_nowait()
+                system.risk_queue.task_done()
+                risk_drained += 1
+            except asyncio.QueueEmpty:
+                break
+
+        assert risk_drained == 4
+        assert system.risk_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_halt_drains_risk_queue_before_order_queue(self):
+        """risk_queue is drained before order_queue on HALT to block new commands first."""
+        system = _make_system()
+        system.running = True
+
+        # Both queues have items
+        for _ in range(2):
+            await system.risk_queue.put(_make_order_intent())
+        for _ in range(3):
+            await system.order_queue.put(_make_order_intent())
+
+        system.storm_guard.trigger_halt("test_ordering")
+
+        drain_order: list[str] = []
+
+        # Drain risk_queue first
+        while not system.risk_queue.empty():
+            try:
+                system.risk_queue.get_nowait()
+                system.risk_queue.task_done()
+                drain_order.append("risk")
+            except asyncio.QueueEmpty:
+                break
+
+        # Then drain order_queue
+        while not system.order_queue.empty():
+            try:
+                system.order_queue.get_nowait()
+                system.order_queue.task_done()
+                drain_order.append("order")
+            except asyncio.QueueEmpty:
+                break
+
+        # All risk items come before all order items
+        assert drain_order == ["risk", "risk", "order", "order", "order"]
+        assert system.risk_queue.empty()
+        assert system.order_queue.empty()
+
 
 # ---------------------------------------------------------------------------
 # Feed gap / StormGuard

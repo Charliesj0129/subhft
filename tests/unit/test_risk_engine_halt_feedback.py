@@ -81,6 +81,16 @@ class _RaceHaltStormGuard(StormGuard):
         return (True, "OK")
 
 
+async def _wait_for_queue(q: asyncio.Queue, timeout: float = 1.0) -> bool:
+    """Poll queue until non-empty or timeout. Preferred over fixed sleep."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if not q.empty():
+            return True
+        await asyncio.sleep(0.001)
+    return False
+
+
 def _make_engine_with_race_halt(risk_config: str, rejection_sink: asyncio.Queue | None = None) -> RiskEngine:
     """
     Build a RiskEngine that exercises the post-approve HALT race condition path.
@@ -109,7 +119,7 @@ async def test_halt_blocked_sends_risk_feedback(risk_config):
     engine.intent_queue.put_nowait(intent)
 
     task = asyncio.create_task(engine.run())
-    await asyncio.sleep(0.05)
+    await _wait_for_queue(rejection_sink, timeout=1.0)
 
     engine.running = False
     task.cancel()
@@ -135,7 +145,8 @@ async def test_halt_blocked_sends_risk_feedback(risk_config):
 @pytest.mark.asyncio
 async def test_halt_blocked_increments_metric(risk_config):
     """risk_halt_blocked_total counter must still be incremented when HALT blocks intent."""
-    engine = _make_engine_with_race_halt(risk_config)
+    rejection_sink: asyncio.Queue[RiskFeedback] = asyncio.Queue()
+    engine = _make_engine_with_race_halt(risk_config, rejection_sink)
 
     # Capture initial counter value via the prometheus client internal API
     initial_count = engine.metrics.risk_halt_blocked_total._value.get()  # type: ignore[attr-defined]
@@ -144,7 +155,7 @@ async def test_halt_blocked_increments_metric(risk_config):
     engine.intent_queue.put_nowait(intent)
 
     task = asyncio.create_task(engine.run())
-    await asyncio.sleep(0.05)
+    await _wait_for_queue(rejection_sink, timeout=1.0)
 
     engine.running = False
     task.cancel()
@@ -159,22 +170,19 @@ async def test_halt_blocked_increments_metric(risk_config):
 
 @pytest.mark.asyncio
 async def test_cancel_not_blocked_by_halt_sends_no_feedback(risk_config):
-    """CANCEL safety orders must pass through HALT and NOT send rejection feedback."""
-    storm_guard = StormGuard()
-    storm_guard.trigger_halt("test_halt")
+    """CANCEL safety orders must pass through the post-approve HALT check and NOT send rejection feedback.
 
-    q_in: asyncio.Queue[OrderIntent] = asyncio.Queue()
-    q_out: asyncio.Queue = asyncio.Queue()
+    Uses _RaceHaltStormGuard so validate() returns (True, "OK") and the post-approve
+    HALT check at engine.py:384 is exercised — testing the _is_safety_order exemption.
+    """
     rejection_sink: asyncio.Queue[RiskFeedback] = asyncio.Queue()
-
-    engine = RiskEngine(risk_config, q_in, q_out, storm_guard=storm_guard)
-    engine._rejection_sink = rejection_sink
+    engine = _make_engine_with_race_halt(risk_config, rejection_sink)
 
     intent = _make_intent(IntentType.CANCEL, intent_id=99)
-    q_in.put_nowait(intent)
+    engine.intent_queue.put_nowait(intent)
 
     task = asyncio.create_task(engine.run())
-    await asyncio.sleep(0.05)
+    await _wait_for_queue(engine.order_queue, timeout=1.0)
 
     engine.running = False
     task.cancel()
@@ -183,9 +191,9 @@ async def test_cancel_not_blocked_by_halt_sends_no_feedback(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Safety order must reach order_queue
-    assert not q_out.empty(), "CANCEL must pass through HALT to order_queue"
-    cmd = q_out.get_nowait()
+    # Safety order must reach order_queue via the _is_safety_order exemption
+    assert not engine.order_queue.empty(), "CANCEL must pass through post-approve HALT check"
+    cmd = engine.order_queue.get_nowait()
     assert cmd.intent.intent_type == IntentType.CANCEL
 
     # No feedback for safety orders
@@ -194,22 +202,19 @@ async def test_cancel_not_blocked_by_halt_sends_no_feedback(risk_config):
 
 @pytest.mark.asyncio
 async def test_force_flat_not_blocked_by_halt_sends_no_feedback(risk_config):
-    """FORCE_FLAT safety orders must pass through HALT and NOT send rejection feedback."""
-    storm_guard = StormGuard()
-    storm_guard.trigger_halt("test_halt")
+    """FORCE_FLAT safety orders must pass through the post-approve HALT check and NOT send rejection feedback.
 
-    q_in: asyncio.Queue[OrderIntent] = asyncio.Queue()
-    q_out: asyncio.Queue = asyncio.Queue()
+    Uses _RaceHaltStormGuard so validate() returns (True, "OK") and the post-approve
+    HALT check at engine.py:384 is exercised — testing the _is_safety_order exemption.
+    """
     rejection_sink: asyncio.Queue[RiskFeedback] = asyncio.Queue()
-
-    engine = RiskEngine(risk_config, q_in, q_out, storm_guard=storm_guard)
-    engine._rejection_sink = rejection_sink
+    engine = _make_engine_with_race_halt(risk_config, rejection_sink)
 
     intent = _make_intent(IntentType.FORCE_FLAT, intent_id=77)
-    q_in.put_nowait(intent)
+    engine.intent_queue.put_nowait(intent)
 
     task = asyncio.create_task(engine.run())
-    await asyncio.sleep(0.05)
+    await _wait_for_queue(engine.order_queue, timeout=1.0)
 
     engine.running = False
     task.cancel()
@@ -218,9 +223,9 @@ async def test_force_flat_not_blocked_by_halt_sends_no_feedback(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Safety order must reach order_queue
-    assert not q_out.empty(), "FORCE_FLAT must pass through HALT to order_queue"
-    cmd = q_out.get_nowait()
+    # Safety order must reach order_queue via the _is_safety_order exemption
+    assert not engine.order_queue.empty(), "FORCE_FLAT must pass through post-approve HALT check"
+    cmd = engine.order_queue.get_nowait()
     assert cmd.intent.intent_type == IntentType.FORCE_FLAT
 
     # No feedback for safety orders
@@ -237,7 +242,7 @@ async def test_halt_blocked_feedback_reason_code_and_context(risk_config):
     engine.intent_queue.put_nowait(intent)
 
     task = asyncio.create_task(engine.run())
-    await asyncio.sleep(0.05)
+    await _wait_for_queue(rejection_sink, timeout=1.0)
 
     engine.running = False
     task.cancel()
