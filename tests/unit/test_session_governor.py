@@ -175,3 +175,92 @@ class TestSessionGovernorConfigLoading:
         assert cbs["symbols"] == ["TMFD6"]
         assert sessions["tracks"]["futures_day"]["symbols"] == ["TMFD6"]
         assert sessions["tracks"]["futures_night"]["symbols"] == ["TMFD6"]
+
+
+class TestFlattenTaskDoneCallback:
+    """H1: done_callback on fire-and-forget flatten task.
+
+    structlog uses PrintLoggerFactory (stdout) in tests, so we capture with
+    capsys rather than caplog.
+    """
+
+    @pytest.mark.asyncio
+    async def test_flatten_task_failure_logs_critical(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When flatten_track raises, _on_flatten_task_done logs at CRITICAL level."""
+        flattener = AsyncMock()
+        flattener.flatten_track = AsyncMock(side_effect=RuntimeError("broker down"))
+
+        gov = SessionGovernor(config_path=_write_config(tmp_path), position_flattener=flattener)
+
+        # Transition to FORCE_FLAT — this creates the task with the callback
+        gov.transition_track("futures_day", SessionPhase.FORCE_FLAT)
+
+        # Let the task run and the callback fire
+        await asyncio.sleep(0.05)
+
+        captured = capsys.readouterr()
+        assert "session_flatten_task_failed" in captured.out, (
+            "Expected 'session_flatten_task_failed' in log output but got: " + captured.out
+        )
+
+    @pytest.mark.asyncio
+    async def test_flatten_task_success_does_not_log_error(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When flatten_track succeeds, no error or critical log is emitted."""
+        flattener = AsyncMock()
+        flattener.flatten_track = AsyncMock(return_value=None)
+
+        gov = SessionGovernor(config_path=_write_config(tmp_path), position_flattener=flattener)
+
+        gov.transition_track("futures_day", SessionPhase.FORCE_FLAT)
+        await asyncio.sleep(0.05)
+
+        captured = capsys.readouterr()
+        assert "session_flatten_task_failed" not in captured.out, (
+            "Unexpected flatten failure log: " + captured.out
+        )
+
+    @pytest.mark.asyncio
+    async def test_flatten_task_cancelled_logs_warning(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When the flatten task is cancelled, _on_flatten_task_done logs a WARNING."""
+        flatten_started = asyncio.Event()
+        flattener = AsyncMock()
+
+        async def _slow_flatten(*args, **kwargs):  # noqa: ANN002, ANN003
+            flatten_started.set()
+            await asyncio.sleep(10)  # will be cancelled before finishing
+
+        flattener.flatten_track = _slow_flatten
+
+        gov = SessionGovernor(config_path=_write_config(tmp_path), position_flattener=flattener)
+
+        # Patch transition_track to capture the created task
+        created_tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
+        _orig_transition = gov.transition_track
+
+        def _patched_transition(track_name: str, new_phase: SessionPhase) -> None:
+            tasks_before = set(asyncio.all_tasks())
+            _orig_transition(track_name, new_phase)
+            new_tasks = set(asyncio.all_tasks()) - tasks_before
+            created_tasks.extend(new_tasks)
+
+        gov.transition_track = _patched_transition  # type: ignore[method-assign]
+
+        gov.transition_track("futures_day", SessionPhase.FORCE_FLAT)
+        # Wait for the flatten coroutine to start
+        await flatten_started.wait()
+
+        # Cancel only the flatten task
+        assert created_tasks, "Expected a task to be created"
+        for t in created_tasks:
+            t.cancel()
+
+        # Wait for cancellation and callback to fire
+        try:
+            await asyncio.gather(*created_tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            pass
+
+        captured = capsys.readouterr()
+        assert "session_flatten_task_cancelled" in captured.out, (
+            "Expected 'session_flatten_task_cancelled' in log output but got: " + captured.out
+        )

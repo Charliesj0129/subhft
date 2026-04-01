@@ -564,3 +564,37 @@ class TestSetServiceRunning:
 
 async def _run_failing_task(loop):
     raise RuntimeError("boom")
+
+
+# ---------------------------------------------------------------------------
+# AutonomyMonitor in supervised services
+# ---------------------------------------------------------------------------
+
+
+class TestAutonomyMonitorSupervised:
+    """AutonomyMonitor appears in _iter_supervised_services when configured."""
+
+    def test_autonomy_monitor_absent_when_not_configured(self):
+        """When autonomy_monitor is None, it must not appear in supervised list."""
+        system = _make_system()
+        assert system.autonomy_monitor is None
+        names = [name for name, _, _ in system._iter_supervised_services()]
+        assert "autonomy_monitor" not in names
+
+    def test_autonomy_monitor_present_when_configured(self):
+        """When autonomy_monitor is set, it appears in supervised list with run factory."""
+        system = _make_system()
+        mock_monitor = MagicMock()
+        mock_monitor.run = MagicMock(return_value=None)
+        system.autonomy_monitor = mock_monitor
+
+        supervised = system._iter_supervised_services()
+        names = [name for name, _, _ in supervised]
+        assert "autonomy_monitor" in names
+
+        # Confirm the coro_factory is the run method
+        entry = next((t for t in supervised if t[0] == "autonomy_monitor"), None)
+        assert entry is not None
+        name, component, coro_factory = entry
+        assert component == "AutonomyMonitor"
+        assert coro_factory is mock_monitor.run

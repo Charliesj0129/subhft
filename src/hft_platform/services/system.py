@@ -223,10 +223,9 @@ class HFTSystem:
                 await self.session_governor.start()
                 logger.info("SessionGovernor started")
 
-            # Opt-in: start AutonomyMonitor before market services
+            # Opt-in: start AutonomyMonitor via supervisor (so crashes are detected/restarted)
             if self.autonomy_monitor is not None:
-                await self.autonomy_monitor.start()
-                logger.info("AutonomyMonitor started")
+                self._start_service("autonomy_monitor", self.autonomy_monitor.run())
 
             # Start Services
             self._start_service("md", self.md_service.run())
@@ -412,6 +411,8 @@ class HFTSystem:
             services.append(("gateway", "GatewayService", self.gateway_service.run))
         else:
             services.append(("risk", "RiskEngine", self.risk_engine.run))
+        if self.autonomy_monitor is not None:
+            services.append(("autonomy_monitor", "AutonomyMonitor", self.autonomy_monitor.run))
         return services
 
     def _reset_restart_backoff_if_healthy(self, name: str, task: asyncio.Task[Any] | None) -> None:

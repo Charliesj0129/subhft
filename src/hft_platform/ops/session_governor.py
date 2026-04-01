@@ -208,7 +208,12 @@ class SessionGovernor:
         for item, minutes in zip(cfg.schedule, schedule_minutes, strict=False):
             if prev_minutes is not None and minutes < prev_minutes:
                 point_date += timedelta(days=1)
-            phase = _PHASE_NAME_MAP[str(item["phase"]).strip().lower()]
+            phase_key = str(item["phase"]).strip().lower()
+            if phase_key not in _PHASE_NAME_MAP:
+                valid = ", ".join(sorted(_PHASE_NAME_MAP))
+                msg = f"Invalid session phase '{item['phase']}' in track config. Valid phases: {valid}"
+                raise ValueError(msg)
+            phase = _PHASE_NAME_MAP[phase_key]
             points.append(
                 (
                     datetime.combine(point_date, dt_time(hour=minutes // 60, minute=minutes % 60), tzinfo=self._tz),
@@ -253,12 +258,28 @@ class SessionGovernor:
                 except RuntimeError:
                     logger.warning("session_force_flat_without_running_loop", track=track_name)
                 else:
-                    loop.create_task(self._position_flattener.flatten_track(track_name, list(track_cfg.symbols)))
+                    task = loop.create_task(
+                        self._position_flattener.flatten_track(track_name, list(track_cfg.symbols))
+                    )
+                    task.add_done_callback(self._on_flatten_task_done)
         for cb in self._phase_callbacks:
             try:
                 cb(track_name, old_phase, new_phase)
             except Exception as exc:  # noqa: BLE001
                 logger.error("session_phase_callback_error", error=str(exc))
+
+    def _on_flatten_task_done(self, task: asyncio.Task) -> None:  # type: ignore[type-arg]
+        """Log errors from fire-and-forget flatten tasks."""
+        if task.cancelled():
+            logger.warning("session_flatten_task_cancelled")
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.critical(
+                "session_flatten_task_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     def get_phase(self, symbol: str) -> SessionPhase:
         """Return current phase for a symbol."""

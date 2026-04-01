@@ -707,20 +707,7 @@ class StrategyRunner:
 
             # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:
-                from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
-
-                _CLOSE_ONLY_TYPES = (IntentType.CANCEL, IntentType.FORCE_FLAT)
-                _filtered: list = []
-                for _intent in intents:
-                    _intent_symbol = _typed_intent_symbol(_intent)
-                    _intent_type = _typed_intent_type(_intent)
-                    _phase = self.track_gate.get_phase(_intent_symbol)
-                    if _phase == SessionPhase.OPEN:
-                        _filtered.append(_intent)
-                    elif _phase == SessionPhase.CLOSE_ONLY:
-                        if _intent_type in _CLOSE_ONLY_TYPES:
-                            _filtered.append(_intent)
-                intents = _filtered
+                intents = StrategyRunner.filter_intents_by_phase(intents, self.track_gate)
 
             duration = time.perf_counter_ns() - start
             if getattr(self, "_trace_sampler", None) is not None:
@@ -851,6 +838,24 @@ class StrategyRunner:
                             strategy.enabled = False
                             self._circuit_halted_at_ns[_sid] = time.monotonic_ns()
                             logger.error("strategy_circuit_halted", id=_sid, reason="queue_full_partial_batch")
+
+    @staticmethod
+    def filter_intents_by_phase(intents: list, track_gate: Any) -> list:
+        """Filter intents based on session phase from TrackGate."""
+        from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
+
+        _CLOSE_ONLY_TYPES = (IntentType.CANCEL, IntentType.FORCE_FLAT)
+        _filtered: list = []
+        for _intent in intents:
+            _intent_symbol = _typed_intent_symbol(_intent)
+            _intent_type = _typed_intent_type(_intent)
+            _phase = track_gate.get_phase(_intent_symbol)
+            if _phase == SessionPhase.OPEN:
+                _filtered.append(_intent)
+            elif _phase in (SessionPhase.CLOSE_ONLY, SessionPhase.FORCE_FLAT):
+                if _intent_type in _CLOSE_ONLY_TYPES:
+                    _filtered.append(_intent)
+        return _filtered
 
     def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
         sampler = getattr(self, "_trace_sampler", None)
