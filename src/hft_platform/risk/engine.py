@@ -385,8 +385,22 @@ class RiskEngine:
                         logger.warning(
                             "risk_engine_blocked_by_halt",
                             cmd_id=cmd.cmd_id,
+                            strategy_id=intent.strategy_id,
+                            symbol=intent.symbol,
                         )
                         self.metrics.risk_halt_blocked_total.inc()
+                        self._emit_reject_metric(intent.strategy_id, "HALT_BLOCKED_POST_APPROVE")
+                        if self._rejection_sink is not None:
+                            try:
+                                self._rejection_sink.put_nowait(RiskFeedback(
+                                    intent_id=getattr(intent, "intent_id", 0),
+                                    strategy_id=getattr(intent, "strategy_id", ""),
+                                    symbol=getattr(intent, "symbol", ""),
+                                    reason_code="HALT_BLOCKED_POST_APPROVE",
+                                    timestamp_ns=timebase.now_ns(),
+                                ))
+                            except asyncio.QueueFull:
+                                pass
                     else:
                         try:
                             self.order_queue.put_nowait(cmd)
