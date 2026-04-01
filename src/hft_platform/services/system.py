@@ -268,6 +268,16 @@ class HFTSystem:
             self._start_service("recon", self.recon_service.run())
             self._start_service("strat", self.strategy_runner.run())
             self._start_service("recorder", self.recorder.run())
+
+            # Start AuditWriter flush tasks (singleton, lazy-created by RiskEngine/StormGuard)
+            try:
+                from hft_platform.recorder.audit import get_audit_writer
+                self._audit_writer = get_audit_writer()
+                await self._audit_writer.start()
+                logger.info("AuditWriter started")
+            except Exception as exc:
+                logger.warning("AuditWriter start failed", error=str(exc))
+                self._audit_writer = None
             self._start_service("recorder_bridge", self._recorder_bridge())
             if os.getenv("HFT_PNL_EXPORTER_ENABLED", "1").lower() not in {"0", "false", "no", "off"}:
                 self._start_service("pnl_exporter", self._pnl_snapshot_exporter())
@@ -650,6 +660,15 @@ class HFTSystem:
                 logger.info("Final position checkpoint written")
             except Exception as exc:
                 logger.warning("Final checkpoint failed", error=str(exc))
+
+        # Stop AuditWriter flush tasks and drain remaining rows
+        _aw = getattr(self, "_audit_writer", None)
+        if _aw is not None:
+            try:
+                await _aw.stop()
+                logger.info("AuditWriter stopped")
+            except Exception as exc:
+                logger.warning("AuditWriter stop failed", error=str(exc))
 
         # WU-01: Broker logout before task cancellation
         for cn in ("md_client", "order_client"):
