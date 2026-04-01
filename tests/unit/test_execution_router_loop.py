@@ -711,3 +711,51 @@ async def test_e2e_latency_not_observed_when_created_ns_zero(
         pass
 
     r.metrics.e2e_order_latency_ns.observe.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# DLQ retry TCA enrichment (M4 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dlq_retry_enriches_fill_with_tca_prices(
+    router: ExecutionRouter, position_store: MagicMock, bus: MagicMock
+) -> None:
+    """DLQ-resolved fills should be enriched with TCA decision/arrival prices."""
+    from unittest.mock import patch
+
+    from hft_platform.contracts.execution import FillEvent
+
+    fake_fill = FillEvent(
+        fill_id="F001",
+        account_id="acct1",
+        order_id="ORD001",
+        strategy_id="strat1",
+        symbol="2330",
+        side=1,
+        qty=1,
+        price=1_000_000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=1_000_000_000,
+        match_ts_ns=1_000_000_000,
+    )
+
+    # Seed order_id_map and TCA map
+    router._order_id_map["ORD001"] = "strat1:42"
+    router._cmd_tca_map["strat1:42"] = (5_000_000, 5_010_000)
+
+    mock_dlq = MagicMock()
+    mock_dlq.count = 1
+    mock_dlq.retry = MagicMock(return_value=([fake_fill], []))
+
+    with patch(
+        "hft_platform.execution.fill_dlq.get_orphaned_fill_dlq",
+        return_value=mock_dlq,
+    ):
+        await router._retry_orphaned_fills()
+
+    # TCA prices should be enriched on the fill
+    assert fake_fill.decision_price == 5_000_000
+    assert fake_fill.arrival_price == 5_010_000

@@ -126,7 +126,8 @@ class ExecutionRouter:
                                 try:
                                     self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
                                 except asyncio.QueueFull:
-                                    pass  # Recorder bridge is the backup path
+                                    self.metrics.recorder_exec_drops_total.labels(topic="orders").inc()
+                                    logger.warning("recorder_queue_full", topic="orders", event_type="order")
 
                         # OrderStatus 3=FILLED, 4=CANCELLED, 5=FAILED
                         if int(order_event.status) >= 3:
@@ -218,7 +219,8 @@ class ExecutionRouter:
                                 try:
                                     self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
                                 except asyncio.QueueFull:
-                                    pass  # Recorder bridge is the backup path; never block execution
+                                    self.metrics.recorder_exec_drops_total.labels(topic="fills").inc()
+                                    logger.warning("recorder_queue_full", topic="fills", event_type="fill")
 
                 # Periodically retry orphaned fills from DLQ
                 self._events_since_dlq_retry += 1
@@ -256,6 +258,14 @@ class ExecutionRouter:
                 remaining=len(still_orphaned),
             )
             for fill in resolved:
+                # TCA enrichment for DLQ-resolved fills (M4)
+                _order_key = self._order_id_map.get(fill.order_id)
+                if _order_key is not None:
+                    _tca = self._cmd_tca_map.get(_order_key)
+                    if _tca is not None:
+                        fill.decision_price = _tca[0]
+                        fill.arrival_price = _tca[1]
+
                 if hasattr(self.position_store, "on_fill_async"):
                     delta = await self.position_store.on_fill_async(fill)
                 elif hasattr(self.position_store, "on_fill"):
@@ -277,7 +287,8 @@ class ExecutionRouter:
                         try:
                             self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
                         except asyncio.QueueFull:
-                            pass
+                            self.metrics.recorder_exec_drops_total.labels(topic="fills").inc()
+                            logger.warning("recorder_queue_full", topic="fills", event_type="fill_dlq_retry")
             _dlq_metric = getattr(self.metrics, "dlq_retry_resolved_total", None)
             if _dlq_metric is not None:
                 _dlq_metric.inc(len(resolved))
