@@ -292,7 +292,7 @@ def render_heartbeat(
     """
     return (
         f"💓 Heartbeat | State: {autonomy_state} | "
-        f"PnL: {pnl_scaled} | Strategies: {strategies_active} | Feed: {feed_status}"
+        f"PnL: {pnl_scaled // 10000} NTD | Strategies: {strategies_active} | Feed: {feed_status}"
     )
 
 

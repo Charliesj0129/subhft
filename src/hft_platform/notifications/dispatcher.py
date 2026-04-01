@@ -41,9 +41,12 @@ class NotificationDispatcher:
 
     async def _send_critical(self, msg: str) -> None:
         """Send to primary (telegram) and fallback (webhook) channels."""
-        await self._sender.send(msg, critical=True)
+        import asyncio  # noqa: PLC0415
+
+        coros = [self._sender.send(msg, critical=True)]
         if self._fallback_sender is not None:
-            await self._fallback_sender.send(msg)
+            coros.append(self._fallback_sender.send(msg))
+        await asyncio.gather(*coros, return_exceptions=True)
 
     async def notify_halt(self, reason: str) -> None:
         """Notify operator that trading has been halted.

@@ -94,7 +94,11 @@ class AlertmanagerBridge:
                     except (ValueError, IndexError):
                         pass
 
+            _MAX_BODY = 1_048_576  # 1 MB
             body = b""
+            if content_length > _MAX_BODY:
+                self._send_response(writer, 413, b'{"error":"payload_too_large"}')
+                return
             if content_length > 0:
                 body = await asyncio.wait_for(reader.readexactly(content_length), timeout=5.0)
 

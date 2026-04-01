@@ -44,7 +44,7 @@ class SlippageDecomposer:
             )
 
         notional = float(notional_ntd)
-        commission_ntd = float(fee_ntd - tax_ntd) if fee_ntd > tax_ntd else float(fee_ntd)
+        commission_ntd = float(max(0, fee_ntd - tax_ntd))
 
         commission_bps = (commission_ntd / notional) * 10_000.0
         tax_bps = (float(tax_ntd) / notional) * 10_000.0

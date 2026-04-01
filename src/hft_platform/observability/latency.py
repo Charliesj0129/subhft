@@ -1,4 +1,5 @@
 import os
+import threading
 from collections import deque
 from typing import Any
 
@@ -85,10 +86,14 @@ class LatencyRecorder:
         self._retry_buffer: deque[dict] = deque(maxlen=self._retry_buffer_size)
         self._dropped_total = 0
 
+    _instance_lock: threading.Lock = threading.Lock()
+
     @classmethod
     def get(cls) -> "LatencyRecorder":
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     @classmethod
@@ -148,7 +153,7 @@ class LatencyRecorder:
         payload = {
             "ingest_ts": int(ts_ns),
             "stage": stage,
-            "latency_us": int(latency_ns / 1000),
+            "latency_us": latency_ns // 1000,
             "trace_id": trace_id,
             "symbol": symbol or "",
             "strategy_id": strategy_id or "",
