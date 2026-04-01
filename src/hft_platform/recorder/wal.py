@@ -459,7 +459,20 @@ class WALBatchWriter:
                     pass
             return True
         except Exception as e:
-            logger.critical("WAL batch write failed", error=str(e))
+            logger.critical(
+                "WAL batch write failed — merging data back for retry",
+                error=str(e),
+                rows=flush_rows,
+            )
+            # Merge failed data back into the active buffer so it can be retried
+            # on the next flush cycle (same pattern as _flush_timer_loop).
+            with self._lock:
+                for table, rows_list in flush_data.items():
+                    self._buffer.setdefault(table, []).extend(rows_list)
+                for table, cols_list in flush_columnar.items():
+                    self._columnar_buffer.setdefault(table, []).extend(cols_list)
+                self._buffer_rows += flush_rows
+                self._buffer_bytes += flush_bytes
             if self._metrics:
                 try:
                     self._metrics.wal_batch_flush_total.labels(result="error").inc()
