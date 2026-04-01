@@ -363,14 +363,19 @@ class OrderAdapter:
                         ids.add(val)
 
         async with self._order_id_map_lock:
-            # Evict oldest entries if at limit (simple FIFO eviction)
+            # Evict oldest entries if at limit — skip entries whose order_key
+            # is still in live_orders to prevent orphaning active fills (M6).
             if len(self.order_id_map) >= self._order_id_map_max_size:
-                # Remove oldest 10% to avoid frequent evictions
-                evict_count = max(1, len(self.order_id_map) // 10)
-                keys_to_remove = list(self.order_id_map.keys())[:evict_count]
-                for k in keys_to_remove:
-                    del self.order_id_map[k]
-                logger.info("Evicted stale order IDs", count=evict_count, remaining=len(self.order_id_map))
+                evict_target = max(1, len(self.order_id_map) // 10)
+                evicted = 0
+                for k in list(self.order_id_map.keys()):
+                    if evicted >= evict_target:
+                        break
+                    order_key = self.order_id_map[k]
+                    if order_key not in self.live_orders:
+                        del self.order_id_map[k]
+                        evicted += 1
+                logger.info("Evicted stale order IDs", count=evicted, remaining=len(self.order_id_map))
 
             for oid in ids:
                 self.order_id_map[str(oid)] = order_key

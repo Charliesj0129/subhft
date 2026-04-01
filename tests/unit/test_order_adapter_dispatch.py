@@ -318,7 +318,7 @@ async def test_load_config_updates_circuit_breaker(tmp_config):
 
 @pytest.mark.asyncio
 async def test_order_id_map_eviction_removes_oldest_10_percent(tmp_config):
-    """Eviction removes oldest 10% of entries when map reaches max size."""
+    """Eviction removes oldest 10% of non-live entries when map reaches max size."""
     adapter = _make_adapter(tmp_config)
     adapter._order_id_map_max_size = 100
     for i in range(100):
@@ -330,11 +330,38 @@ async def test_order_id_map_eviction_removes_oldest_10_percent(tmp_config):
     trade.id = None
     trade.order = None
     await adapter._register_broker_ids("s1:trigger", trade)
+    # Should evict 10 oldest non-live entries + add 1 new = 91
     assert len(adapter.order_id_map) == 91
     assert "TRIGGER" in adapter.order_id_map
     for i in range(10):
         assert f"id_{i:04d}" not in adapter.order_id_map
     assert "id_0010" in adapter.order_id_map
+
+
+@pytest.mark.asyncio
+async def test_order_id_map_eviction_skips_live_orders(tmp_config):
+    """M6: Eviction must not remove entries whose order_key is in live_orders."""
+    adapter = _make_adapter(tmp_config)
+    adapter._order_id_map_max_size = 20
+    # Seed 20 entries, make the first 5 point to live order keys
+    for i in range(20):
+        adapter.order_id_map[f"id_{i:02d}"] = f"key_{i}"
+    # Mark first 5 as live
+    for i in range(5):
+        adapter.live_orders[f"key_{i}"] = MagicMock()
+
+    trade = MagicMock()
+    trade.seq_no = "NEW"
+    trade.ord_no = None
+    trade.order_id = None
+    trade.id = None
+    trade.order = None
+    await adapter._register_broker_ids("s1:new", trade)
+
+    # Live entries (key_0..key_4) must survive eviction
+    for i in range(5):
+        assert f"id_{i:02d}" in adapter.order_id_map, f"Live entry id_{i:02d} should NOT be evicted"
+    assert "NEW" in adapter.order_id_map
 
 
 # ---------------------------------------------------------------------------
