@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import inspect
+import os
 from collections.abc import Coroutine
 from typing import Any, Callable, Dict, Optional, Union
 
@@ -81,6 +82,9 @@ class ExecutionRouter:
         self.running = False
         self.metrics = MetricsRegistry.get()
         self._dlq_retry_interval = 100  # Retry DLQ every 100 events processed
+        # Fill deduplication: prevent double-counting on broker reconnect (bounded FIFO dict)
+        self._fill_dedup_max_size: int = int(os.environ.get("HFT_FILL_DEDUP_MAX_SIZE", "10000"))
+        self._seen_fill_ids: collections.OrderedDict[str, None] = collections.OrderedDict()
         self._events_since_dlq_retry = 0
         self._recorder_queue: Optional[asyncio.Queue] = recorder_queue
         self._symbol_metadata = symbol_metadata
@@ -151,6 +155,19 @@ class ExecutionRouter:
                 elif raw.topic == "deal":
                     fill_event = self.normalizer.normalize_fill(raw)
                     if fill_event:
+                        # Fill deduplication: prevent double-counting on broker reconnect
+                        if fill_event.fill_id and fill_event.fill_id in self._seen_fill_ids:
+                            self.metrics.duplicate_fill_total.inc()
+                            logger.warning(
+                                "duplicate_fill_skipped",
+                                fill_id=fill_event.fill_id,
+                                symbol=fill_event.symbol,
+                            )
+                            continue
+                        if fill_event.fill_id:
+                            self._seen_fill_ids[fill_event.fill_id] = None
+                            if len(self._seen_fill_ids) > self._fill_dedup_max_size:
+                                self._seen_fill_ids.popitem(last=False)  # evict oldest
                         self.metrics.fills_total.inc()
                         if fill_event.strategy_id == "UNKNOWN":
                             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
@@ -258,6 +275,19 @@ class ExecutionRouter:
                 remaining=len(still_orphaned),
             )
             for fill in resolved:
+                # Fill deduplication: skip fills already applied via the main path
+                if fill.fill_id and fill.fill_id in self._seen_fill_ids:
+                    self.metrics.duplicate_fill_total.inc()
+                    logger.warning(
+                        "duplicate_fill_skipped_dlq",
+                        fill_id=fill.fill_id,
+                        symbol=fill.symbol,
+                    )
+                    continue
+                if fill.fill_id:
+                    self._seen_fill_ids[fill.fill_id] = None
+                    if len(self._seen_fill_ids) > self._fill_dedup_max_size:
+                        self._seen_fill_ids.popitem(last=False)  # evict oldest
                 # TCA enrichment for DLQ-resolved fills (M4)
                 _order_key = self._order_id_map.get(fill.order_id)
                 if _order_key is not None:
