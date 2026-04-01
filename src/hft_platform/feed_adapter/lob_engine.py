@@ -112,7 +112,8 @@ class BookState:
         self.bid_depth_total: int = 0
         self.ask_depth_total: int = 0
 
-        # Cached LOBStatsEvent to avoid per-tick allocation (DATA-01)
+        # _cached_stats retained as a slot placeholder; no longer used at runtime
+        # (get_stats() now creates a new LOBStatsEvent per tick to avoid shared-ref corruption).
         self._cached_stats: Any = None
 
         # Rust-accelerated book state (opt-in)
@@ -283,33 +284,23 @@ class BookState:
             else:
                 best_ask = int(self.asks[0][0]) if self.asks else 0
 
-            cached = self._cached_stats
-            if cached is None:
-                cached = LOBStatsEvent(
-                    symbol=self.symbol,
-                    ts=self.exch_ts,
-                    mid_price_x2=self.mid_price_x2,
-                    spread_scaled=self.spread,
-                    imbalance=self.imbalance,
-                    best_bid=best_bid,
-                    best_ask=best_ask,
-                    bid_depth=int(self.bid_depth_total),
-                    ask_depth=int(self.ask_depth_total),
-                )
-                self._cached_stats = cached
-                return cached
-
-            # Hot path: mutate in-place to avoid per-tick allocation
-            # mid_price/spread are read-only @property derived from mid_price_x2/spread_scaled
-            cached.ts = self.exch_ts
-            cached.mid_price_x2 = self.mid_price_x2
-            cached.spread_scaled = self.spread
-            cached.imbalance = self.imbalance
-            cached.best_bid = best_bid
-            cached.best_ask = best_ask
-            cached.bid_depth = int(self.bid_depth_total)
-            cached.ask_depth = int(self.ask_depth_total)
-            return cached
+            # Always create a new LOBStatsEvent per tick.
+            # Previously the same object was mutated in-place and returned; multiple
+            # consumers (StrategyRunner, RecorderService, FeatureEngine) held the same
+            # reference, so the next tick's mutation corrupted data still being read.
+            # A slotted dataclass with only primitive fields is cheap to allocate;
+            # correctness outweighs the minor allocation cost here.
+            return LOBStatsEvent(
+                symbol=self.symbol,
+                ts=self.exch_ts,
+                mid_price_x2=self.mid_price_x2,
+                spread_scaled=self.spread,
+                imbalance=self.imbalance,
+                best_bid=best_bid,
+                best_ask=best_ask,
+                bid_depth=int(self.bid_depth_total),
+                ask_depth=int(self.ask_depth_total),
+            )
 
     def get_stats_tuple(self) -> tuple:
         with self.lock:

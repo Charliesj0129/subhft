@@ -420,17 +420,12 @@ class FeatureEngine:
 
         if not self._emit_events:
             return None
-        # Hot-path: reuse per-symbol event object to avoid per-tick allocation
-        cached = self._event_cache.get(symbol)
-        if cached is not None:
-            cached.ts = source_ts_ns
-            cached.local_ts = local_ts_ns
-            cached.seq = seq
-            cached.changed_mask = changed_mask
-            cached.warmup_ready_mask = warmup_ready_mask
-            cached.quality_flags = qflags
-            cached.values = values
-            return cached
+        # Always create a new FeatureUpdateEvent per tick.
+        # Previously the cached event object was mutated in-place and returned;
+        # multiple downstream consumers (StrategyRunner, RecorderService) held the same
+        # reference, so the next tick's mutation could corrupt data still being read.
+        # _event_cache is kept to store the last emitted event per symbol for debugging,
+        # but the returned object is always a fresh allocation.
         evt = FeatureUpdateEvent(
             symbol=symbol,
             ts=source_ts_ns,
