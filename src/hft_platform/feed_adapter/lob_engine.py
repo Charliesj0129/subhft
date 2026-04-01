@@ -420,12 +420,17 @@ class LOBEngine:
         "_last_book",
         "feature_engine",
         "_max_symbols",
+        "_metrics_max_label_symbols",
+        "_metrics_known_symbols",
     )
 
     def __init__(self):
         self.books: Dict[str, BookState] = {}
         self.feature_engine: Any = None
         self._max_symbols: int = int(os.getenv("HFT_EXPOSURE_MAX_SYMBOLS", "10000"))
+        # Prometheus label cardinality guard (INFRA-05)
+        self._metrics_max_label_symbols: int = int(os.getenv("HFT_METRICS_MAX_LABEL_SYMBOLS", "200"))
+        self._metrics_known_symbols: set[str] = set()
         # Global lock removed!
         self.metrics = MetricsRegistry.get()
         self._metrics_enabled = _METRICS_ENABLED and self.metrics is not None
@@ -479,6 +484,12 @@ class LOBEngine:
     def _record_lob_metrics(self, symbol: str, is_snapshot: bool):
         if not self._is_metrics_enabled():
             return
+        # Guard Prometheus label cardinality (INFRA-05)
+        if symbol not in self._metrics_known_symbols:
+            if len(self._metrics_known_symbols) >= self._metrics_max_label_symbols:
+                symbol = "_other"
+            else:
+                self._metrics_known_symbols.add(symbol)
         self._metrics_pending_updates[(symbol, "BidAsk")] = self._metrics_pending_updates.get((symbol, "BidAsk"), 0) + 1
         if is_snapshot:
             self._metrics_pending_snapshots[symbol] = self._metrics_pending_snapshots.get(symbol, 0) + 1
