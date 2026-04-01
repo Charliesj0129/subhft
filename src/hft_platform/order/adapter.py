@@ -90,6 +90,7 @@ class OrderAdapter:
         "_deferred_terminals",
         "_cmd_created_ns_map",
         "_cmd_tca_map",
+        "_cmd_map_max_size",
         "_mid_price_fn",
         "_storm_guard",
         "__dict__",  # needed for test monkey-patching
@@ -122,6 +123,7 @@ class OrderAdapter:
         self._mid_price_fn: Callable[[str], int] | None = mid_price_fn
         self._storm_guard: Any = None  # Set post-init to close TOCTOU gap (M1)
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
+        self._cmd_map_max_size = int(os.getenv("HFT_CMD_MAP_MAX_SIZE", "10000"))
         self.running = False
         self.metrics = MetricsRegistry.get()
         self.latency = LatencyRecorder.get()
@@ -660,6 +662,27 @@ class OrderAdapter:
             # AMEND/CANCEL should not overwrite the original arrival reference point)
             if intent.intent_type == IntentType.NEW:
                 self._cmd_tca_map[order_key] = (int(cmd.decision_price), int(cmd.arrival_price))
+
+            # Bound cmd maps — evict oldest FIFO entries, skipping live orders (M6 pattern).
+            # Use _cmd_created_ns_map as the trigger since it is the superset (populated for
+            # all intent types, while _cmd_tca_map is NEW-only).
+            if len(self._cmd_created_ns_map) >= self._cmd_map_max_size:
+                evict_target = max(1, len(self._cmd_created_ns_map) // 10)
+                evicted = 0
+                for k in list(self._cmd_created_ns_map.keys()):
+                    if evicted >= evict_target:
+                        break
+                    if k not in self.live_orders:
+                        del self._cmd_created_ns_map[k]
+                        self._cmd_tca_map.pop(k, None)
+                        evicted += 1
+                if evicted:
+                    logger.warning(
+                        "cmd_map_eviction",
+                        evicted=evicted,
+                        remaining_created=len(self._cmd_created_ns_map),
+                        remaining_tca=len(self._cmd_tca_map),
+                    )
 
             if intent.intent_type == IntentType.NEW:
                 if self._broker_codec is None:
