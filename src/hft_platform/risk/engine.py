@@ -374,8 +374,7 @@ class RiskEngine:
 
                 if decision.approved:
                     cmd = self.create_command(decision.intent)
-                    _intent_type = getattr(cmd.intent, "intent_type", None)
-                    _is_safety_order = _intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                    _is_safety_order = cmd.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
                     if self.storm_guard.state == StormGuardState.HALT and not _is_safety_order:
                         logger.warning(
                             "risk_engine_blocked_by_halt",

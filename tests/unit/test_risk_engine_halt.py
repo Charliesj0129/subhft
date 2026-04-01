@@ -126,6 +126,32 @@ async def test_new_blocked_during_halt(risk_config):
         pass
 
 
+@pytest.mark.asyncio
+async def test_amend_blocked_during_halt(risk_config):
+    """AMEND intent must be blocked when StormGuard is HALT (not a safety order)."""
+    storm_guard = StormGuard()
+    storm_guard.trigger_halt("test_halt")
+
+    q_in = asyncio.Queue()
+    q_out = asyncio.Queue()
+    engine = RiskEngine(risk_config, q_in, q_out, storm_guard=storm_guard)
+
+    intent = _make_intent(IntentType.AMEND)
+    q_in.put_nowait(intent)
+
+    task = asyncio.create_task(engine.run())
+    await asyncio.sleep(0.05)
+
+    assert q_out.empty(), "AMEND intent should be blocked during HALT"
+
+    engine.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 def test_risk_engine_uses_injected_storm_guard(risk_config):
     """RiskEngine must use the injected StormGuard, not create a private one."""
     shared_guard = StormGuard()
