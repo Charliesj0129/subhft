@@ -468,7 +468,7 @@ class RiskEngine:
         price = getattr(intent, "price", None)
         if isinstance(price, float):
             self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
-            return RiskDecision(False, intent, "FLOAT_PRICE")
+            return self._reject(intent, "FLOAT_PRICE")
 
         if self._fast_gate is not None:
             try:
@@ -477,17 +477,17 @@ class RiskEngine:
                     if not ok:
                         reason = self._fast_gate_reason_map.get(int(code), "FASTGATE_REJECT")
                         self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": reason})
-                        return RiskDecision(False, intent, reason)
+                        return self._reject(intent, reason)
             except (OSError, RuntimeError) as exc:
                 # FastGate failure must fail-closed: reject order when risk gate errors.
                 logger.error("FastGate check error — rejecting order (fail-closed)", error=str(exc))
                 self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": "FASTGATE_ERROR"})
-                return RiskDecision(False, intent, "FASTGATE_ERROR")
+                return self._reject(intent, "FASTGATE_ERROR")
         # 1. StormGuard Check
         ok, reason = self.storm_guard.validate(intent)
         if not ok:
             self._emit_trace("risk_reject", intent, {"stage": "storm_guard", "reason": reason})
-            return RiskDecision(False, intent, reason)
+            return self._reject(intent, reason)
 
         # 2. Hard Validators — Rust fast path or Python fallback
         rv = self._rust_validator
@@ -507,7 +507,7 @@ class RiskEngine:
                 if not ok:
                     reason = self._rust_validator_reason_map.get(int(code), "RUST_VALIDATOR_REJECT")
                     self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
-                    return RiskDecision(False, intent, reason)
+                    return self._reject(intent, reason)
                 # Rust fast path passed — still run validators Rust doesn't cover
                 for v in self._rust_uncovered_validators:
                     ok, reason = v.check(intent)
@@ -518,7 +518,7 @@ class RiskEngine:
                             {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                         )
                         self._check_daily_loss_halt()
-                        return RiskDecision(False, intent, reason)
+                        return self._reject(intent, reason)
             except (OSError, RuntimeError) as exc:
                 logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
                 # Fall through to Python validators on error
@@ -531,7 +531,7 @@ class RiskEngine:
                             {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                         )
                         self._check_daily_loss_halt()
-                        return RiskDecision(False, intent, reason)
+                        return self._reject(intent, reason)
         else:
             for v in self.validators:
                 ok, reason = v.check(intent)
@@ -542,7 +542,7 @@ class RiskEngine:
                         {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                     )
                     self._check_daily_loss_halt()
-                    return RiskDecision(False, intent, reason)
+                    return self._reject(intent, reason)
 
         # Check if DailyLossLimitValidator triggered HALT after the validator loop
         self._check_daily_loss_halt()
@@ -551,7 +551,7 @@ class RiskEngine:
             ok, reason = self._greeks_validator.check(intent)
             if not ok:
                 self._emit_trace("risk_reject", intent, {"stage": "greeks_limit", "reason": reason})
-                return RiskDecision(False, intent, reason)
+                return self._reject(intent, reason)
 
         self._emit_trace("risk_approve", intent, {"stage": "evaluate"})
         decision = RiskDecision(True, intent)
@@ -656,6 +656,12 @@ class RiskEngine:
             child.inc()
         except Exception as exc:
             logger.debug("reject_metric_emit_failed", error=str(exc))
+
+    def _reject(self, intent: Any, reason: str) -> RiskDecision:
+        """Create a rejection decision and audit it."""
+        decision = RiskDecision(False, intent, reason)
+        self._audit_risk_decision(intent, decision)
+        return decision
 
     def _audit_risk_decision(self, intent: Any, decision: RiskDecision) -> None:
         """Non-blocking audit log of risk evaluation result."""
