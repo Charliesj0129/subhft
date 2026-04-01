@@ -727,3 +727,95 @@ def test_emit_trace_with_sampler(tmp_config):
     intent = _make_cmd().intent
     adapter._emit_trace("order_dispatch_start", intent, {"cmd_id": 1, "intent_type": 0})
     sampler.emit.assert_called_once()
+
+
+# ── _api_worker exception handler ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_api_worker_continues_after_unexpected_exception(tmp_config):
+    """_api_worker catches unexpected exceptions and continues processing subsequent items."""
+    adapter = _make_adapter(tmp_config)
+    adapter.running = True
+    adapter.circuit_breaker = MagicMock()
+
+    call_count = 0
+
+    async def dispatch_side_effect(cmd):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise KeyError("unexpected broker field missing")
+        # second call succeeds silently
+
+    adapter._dispatch_to_api = dispatch_side_effect
+
+    # Put commands one at a time with a small gap so they are processed in
+    # separate loop iterations (coalesce window is 0 by default).
+    cmd1 = _make_cmd(intent_id=1)
+    adapter._api_queue.put_nowait(cmd1)
+
+    task = asyncio.create_task(adapter._api_worker())
+    # Allow the first item (which raises) to be processed
+    await asyncio.sleep(0.02)
+
+    # Now put second command — worker must still be alive to receive it
+    cmd2 = _make_cmd(intent_id=2)
+    adapter._api_queue.put_nowait(cmd2)
+    await asyncio.sleep(0.02)
+
+    adapter.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # Worker processed both items (continued after first exception)
+    assert call_count == 2
+    # Metrics and circuit breaker were updated on the failure
+    adapter.metrics.order_reject_total.inc.assert_called()
+    adapter.circuit_breaker.record_failure.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_api_worker_cancelled_error_exits_immediately(tmp_config):
+    """CancelledError during queue.get() causes _api_worker to exit cleanly."""
+    adapter = _make_adapter(tmp_config)
+    adapter.running = True
+
+    task = asyncio.create_task(adapter._api_worker())
+    await asyncio.sleep(0.01)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_api_worker_materialize_exception_increments_metrics(tmp_config):
+    """Exception from _materialize_typed_command triggers metrics + cb failure."""
+    adapter = _make_adapter(tmp_config)
+    adapter.running = True
+    adapter.circuit_breaker = MagicMock()
+
+    # Put a typed frame that will cause _materialize_typed_command to raise
+    with patch.object(adapter, "_materialize_typed_command", side_effect=ValueError("bad frame")):
+        # Use a typed frame so _materialize_typed_command is called
+        typed_frame = ("typed_order_cmd_v1", 0, 0, 0, 0, None)
+        adapter._api_queue.put_nowait(typed_frame)
+
+        task = asyncio.create_task(adapter._api_worker())
+        await asyncio.sleep(0.05)
+        adapter.running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    adapter.metrics.order_reject_total.inc.assert_called()
+    adapter.circuit_breaker.record_failure.assert_called()

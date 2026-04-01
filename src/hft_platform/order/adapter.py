@@ -1063,37 +1063,42 @@ class OrderAdapter:
                 item = await self._api_queue.get()
             except asyncio.CancelledError:
                 return
-            cmd: OrderCommand = (
-                self._materialize_typed_command(item) if _is_typed_order_cmd_frame(item) else cast(OrderCommand, item)
-            )
-            if cmd.created_ns:
-                self._record_queue_latency(cmd)
-            self._store_pending(cmd)
+            try:
+                cmd: OrderCommand = (
+                    self._materialize_typed_command(item) if _is_typed_order_cmd_frame(item) else cast(OrderCommand, item)
+                )
+                if cmd.created_ns:
+                    self._record_queue_latency(cmd)
+                self._store_pending(cmd)
 
-            # Fast-path: skip coalesce window for urgent intent types (CANCEL,
-            # FORCE_FLAT) to minimise latency on safety-critical orders.
-            _urgent = cmd.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
-            if not _urgent and self._api_coalesce_window_s > 0:
-                start = time.monotonic()
-                while True:
-                    remaining = self._api_coalesce_window_s - (time.monotonic() - start)
-                    if remaining <= 0:
-                        break
-                    try:
-                        item = await asyncio.wait_for(self._api_queue.get(), timeout=remaining)
-                        cmd = (
-                            self._materialize_typed_command(item)
-                            if _is_typed_order_cmd_frame(item)
-                            else cast(OrderCommand, item)
-                        )
-                        self._store_pending(cmd)
-                    except asyncio.TimeoutError:
-                        break
+                # Fast-path: skip coalesce window for urgent intent types (CANCEL,
+                # FORCE_FLAT) to minimise latency on safety-critical orders.
+                _urgent = cmd.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                if not _urgent and self._api_coalesce_window_s > 0:
+                    start = time.monotonic()
+                    while True:
+                        remaining = self._api_coalesce_window_s - (time.monotonic() - start)
+                        if remaining <= 0:
+                            break
+                        try:
+                            item = await asyncio.wait_for(self._api_queue.get(), timeout=remaining)
+                            cmd = (
+                                self._materialize_typed_command(item)
+                                if _is_typed_order_cmd_frame(item)
+                                else cast(OrderCommand, item)
+                            )
+                            self._store_pending(cmd)
+                        except asyncio.TimeoutError:
+                            break
 
-            pending = list(self._api_pending.values())
-            self._api_pending.clear()
-            for item in pending:
-                await self._dispatch_to_api(item)
+                pending = list(self._api_pending.values())
+                self._api_pending.clear()
+                for item in pending:
+                    await self._dispatch_to_api(item)
+            except Exception:
+                logger.error("_api_worker: unexpected exception in dispatch loop", exc_info=True)
+                self.metrics.order_reject_total.inc()
+                self.circuit_breaker.record_failure()
 
     def _record_queue_latency(self, cmd: OrderCommand) -> None:
         if not self.latency:
