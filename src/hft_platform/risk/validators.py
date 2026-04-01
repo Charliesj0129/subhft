@@ -79,6 +79,10 @@ class PriceBandValidator(RiskValidator):
         if intent.price <= 0:
             return False, "PRICE_ZERO_OR_NEG"
 
+        qty = getattr(intent, "qty", 0)
+        if qty <= 0:
+            return False, "QTY_ZERO_OR_NEG"
+
         # Fat Finger Protection: Absolute price cap
         scale = self._scale_factor(intent.symbol)
         max_price_scaled = self._max_price_scaled_cache.get(intent.symbol)

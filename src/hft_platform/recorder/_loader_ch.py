@@ -196,8 +196,8 @@ def is_duplicate(svc: Any, table: str, content_hash: str) -> bool:
     try:
         with svc._ch_lock:
             result = svc.ch_client.command(
-                "SELECT count() FROM hft._wal_dedup WHERE table = %(table)s AND hash = %(hash)s",
-                parameters={"table": table, "hash": content_hash},
+                "SELECT count() FROM hft._wal_dedup WHERE table_name = %(table_name)s AND hash = %(hash)s",
+                parameters={"table_name": table, "hash": content_hash},
             )
         return int(result) > 0
     except Exception as _exc:  # noqa: BLE001
@@ -211,7 +211,7 @@ def record_dedup(svc: Any, table: str, content_hash: str, row_count: int) -> Non
             svc.ch_client.insert(
                 "hft._wal_dedup",
                 [[table, content_hash, row_count, timebase.now_ns()]],
-                column_names=["table", "hash", "row_count", "ts"],
+                column_names=["table_name", "hash", "row_count", "ts"],
             )
     except Exception as e:
         logger.warning("Failed to record dedup hash", error=str(e))

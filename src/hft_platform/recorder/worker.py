@@ -493,6 +493,10 @@ class RecorderService:
                     await self.batchers[topic].add(data)
                 else:
                     self._unknown_topic_drops += 1
+                    try:
+                        MetricsRegistry.get().recorder_exec_drops_total.labels(topic="unknown").inc()
+                    except Exception:  # noqa: BLE001
+                        pass
                     logger.warning(
                         "recorder_unknown_topic_dropped",
                         topic=topic,

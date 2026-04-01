@@ -5,12 +5,12 @@
 CREATE DATABASE IF NOT EXISTS hft;
 
 CREATE TABLE IF NOT EXISTS hft._wal_dedup (
-    table  String,
-    hash   String,
-    row_count UInt64,
-    ts     Int64
+    table_name  String,
+    hash        String,
+    row_count   UInt64,
+    ts          Int64
 ) ENGINE = MergeTree()
-ORDER BY (table, hash)
+ORDER BY (table_name, hash)
 TTL toDateTime(ts / 1000000000) + INTERVAL 30 DAY;
 
 -- Down
