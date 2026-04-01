@@ -204,6 +204,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         feature_engine: FeatureEngine | None = None,
     ):
         self.bus = bus
+        # Cache bus method refs to avoid per-tick getattr (DEC-10)
+        self._bus_publish_nowait = getattr(bus, "publish_nowait", None)
+        self._bus_publish_many_nowait = getattr(bus, "publish_many_nowait", None)
         self.raw_queue = raw_queue
         self.client = client
         self.publish_full_events = publish_full_events
@@ -953,16 +956,16 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             await result
 
     def _publish_nowait(self, event: Any) -> None:
-        publish_nowait = getattr(self.bus, "publish_nowait", None)
-        if publish_nowait:
-            publish_nowait(event)
+        fn = self._bus_publish_nowait
+        if fn is not None:
+            fn(event)
             return
         asyncio.create_task(self._publish(event))
 
     def _publish_many_nowait(self, events: list[Any] | tuple[Any, ...]) -> None:
-        publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
-        if publish_many_nowait:
-            publish_many_nowait(events)
+        fn = self._bus_publish_many_nowait
+        if fn is not None:
+            fn(events)
             return
         for event in events:
             self._publish_nowait(event)
