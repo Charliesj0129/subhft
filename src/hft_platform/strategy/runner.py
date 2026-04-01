@@ -456,6 +456,7 @@ class StrategyRunner:
                 str(trace_id or ""),
                 "",
                 0,
+                0,  # decision_price — populated by StrategyRunner from LOB mid
             )
         return OrderIntent(
             intent_id=self._intent_seq,
@@ -811,6 +812,10 @@ class StrategyRunner:
                             _mid = self.lob_engine.last_stats.mid_price_x2 // 2
                             intent.decision_mid = _mid  # deprecated: use decision_price
                             intent.decision_price = _mid
+                        elif isinstance(intent, tuple) and len(intent) >= 17 and intent[0] == "typed_intent_v1":
+                            _mid = self.lob_engine.last_stats.mid_price_x2 // 2
+                            # Typed intent tuple: position 16 is decision_price
+                            intent = (*intent[:16], _mid)
 
                     self._emit_trace(
                         "strategy_intent_submit",

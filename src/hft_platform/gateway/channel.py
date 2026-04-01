@@ -40,6 +40,7 @@ TypedIntentFrame: TypeAlias = tuple[
     str,  # trace_id
     str,  # idempotency_key
     int,  # ttl_ns
+    int,  # decision_price (LOB mid at signal time, scaled x10000)
 ]
 
 
@@ -80,6 +81,7 @@ class TypedIntentView:
     trace_id: str
     idempotency_key: str
     ttl_ns: int
+    decision_price: int = 0
 
 
 class IntentChannelProtocol(Protocol):
@@ -135,7 +137,7 @@ class LocalIntentChannel:
 
     def submit_typed_nowait(self, frame: TypedIntentFrame) -> str:
         """Typed fast-path ingress from StrategyRunner; avoids OrderIntent alloc on hot path."""
-        if not frame or len(frame) < 16 or frame[0] != "typed_intent_v1":
+        if not frame or len(frame) < 16 or frame[0] != "typed_intent_v1":  # 16 legacy, 17 with decision_price
             raise ValueError("Invalid typed intent frame")
         intent_id = int(frame[1])
         idempotency_key = str(frame[14] or "")
@@ -211,6 +213,7 @@ def typed_frame_to_view(frame: TypedIntentFrame) -> TypedIntentView:
         trace_id=str(frame[13]),
         idempotency_key=str(frame[14]),
         ttl_ns=int(frame[15]),
+        decision_price=int(frame[16]) if len(frame) > 16 else 0,
     )
 
 
@@ -231,6 +234,7 @@ def typed_view_to_intent(view: TypedIntentView) -> OrderIntent:
         trace_id=str(view.trace_id),
         idempotency_key=str(view.idempotency_key),
         ttl_ns=int(view.ttl_ns),
+        decision_price=int(view.decision_price),
     )
 
 
