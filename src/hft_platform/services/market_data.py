@@ -237,6 +237,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._shm_symbol_index: dict[str, int] = {}
         self._shm_symbol_hashes: dict[str, int] = {}
         self._redis_publisher: Any | None = None
+        self._redis_payload_cache: dict[str, dict] = {}
+        self._shm_lob_cache: dict[str, list[int]] = {}
+        self._shm_feat_cache: dict[str, list[int]] = {}
         self.symbol_metadata = symbol_metadata or SymbolMetadata()
         self.normalizer = MarketDataNormalizer(metadata=self.symbol_metadata)
 
@@ -465,16 +468,46 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             ingest_ts = getattr(meta, "local_ts", 0) if meta else 0
             if not ingest_ts:
                 ingest_ts = getattr(event, "local_ts", 0) or int(time.time_ns())
-            payload: dict = {"symbol": symbol, "ingest_ts": ingest_ts}
-            # BidAsk data
+
+            # Get or create cached payload dict for this symbol (DATA-03)
+            payload = self._redis_payload_cache.get(symbol)
+            if payload is None:
+                payload = {
+                    "symbol": symbol,
+                    "ingest_ts": 0,
+                    "bids_price": [0] * 5,
+                    "bids_vol": [0] * 5,
+                    "asks_price": [0] * 5,
+                    "asks_vol": [0] * 5,
+                    "price_scaled": 0,
+                    "volume": 0,
+                }
+                self._redis_payload_cache[symbol] = payload
+            payload["ingest_ts"] = ingest_ts
+
+            # BidAsk data — mutate cached lists in-place
             bids = getattr(event, "bids", None)
             asks = getattr(event, "asks", None)
             if bids is not None and len(bids) > 0:
-                payload["bids_price"] = [int(b[0]) for b in bids[:5]]
-                payload["bids_vol"] = [int(b[1]) for b in bids[:5]]
+                bp = payload["bids_price"]
+                bv = payload["bids_vol"]
+                n = min(len(bids), 5)
+                for i in range(n):
+                    bp[i] = int(bids[i][0])
+                    bv[i] = int(bids[i][1])
+                for i in range(n, 5):
+                    bp[i] = 0
+                    bv[i] = 0
             if asks is not None and len(asks) > 0:
-                payload["asks_price"] = [int(a[0]) for a in asks[:5]]
-                payload["asks_vol"] = [int(a[1]) for a in asks[:5]]
+                ap = payload["asks_price"]
+                av = payload["asks_vol"]
+                n = min(len(asks), 5)
+                for i in range(n):
+                    ap[i] = int(asks[i][0])
+                    av[i] = int(asks[i][1])
+                for i in range(n, 5):
+                    ap[i] = 0
+                    av[i] = 0
             # Tick data
             price = getattr(event, "price", None)
             if price is not None:
@@ -506,24 +539,34 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         sym_hash = self._shm_symbol_hashes[symbol]
         ts_ns = int(getattr(stats, "local_ts", 0) or 0) or time.time_ns()
 
-        # Extract 9 LOB fields from stats
-        lob_fields = [
-            int(getattr(stats, "best_bid", 0) or 0),
-            int(getattr(stats, "best_ask", 0) or 0),
-            int(getattr(stats, "mid_price_x2", 0) or 0),
-            int(getattr(stats, "spread_scaled", 0) or 0),
-            int(getattr(stats, "bid_depth", 0) or 0),
-            int(getattr(stats, "ask_depth", 0) or 0),
-            int(getattr(stats, "l1_bid_qty", 0) or 0),
-            int(getattr(stats, "l1_ask_qty", 0) or 0),
-            int(getattr(stats, "microprice_x2", 0) or 0),
-        ]
-
-        # Extract 16 features (pad with 0 if unavailable)
-        if feature_tuple is not None and len(feature_tuple) >= 16:
-            features = [int(v) for v in feature_tuple[:16]]
-        else:
+        # Get or create cached LOB + feature buffers for this symbol (DATA-04)
+        lob_fields = self._shm_lob_cache.get(symbol)
+        if lob_fields is None:
+            lob_fields = [0] * 9
+            self._shm_lob_cache[symbol] = lob_fields
+        features = self._shm_feat_cache.get(symbol)
+        if features is None:
             features = [0] * 16
+            self._shm_feat_cache[symbol] = features
+
+        # Mutate 9 LOB fields in-place
+        lob_fields[0] = int(getattr(stats, "best_bid", 0) or 0)
+        lob_fields[1] = int(getattr(stats, "best_ask", 0) or 0)
+        lob_fields[2] = int(getattr(stats, "mid_price_x2", 0) or 0)
+        lob_fields[3] = int(getattr(stats, "spread_scaled", 0) or 0)
+        lob_fields[4] = int(getattr(stats, "bid_depth", 0) or 0)
+        lob_fields[5] = int(getattr(stats, "ask_depth", 0) or 0)
+        lob_fields[6] = int(getattr(stats, "l1_bid_qty", 0) or 0)
+        lob_fields[7] = int(getattr(stats, "l1_ask_qty", 0) or 0)
+        lob_fields[8] = int(getattr(stats, "microprice_x2", 0) or 0)
+
+        # Mutate 16 features in-place
+        if feature_tuple is not None and len(feature_tuple) >= 16:
+            for i in range(16):
+                features[i] = int(feature_tuple[i])
+        else:
+            for i in range(16):
+                features[i] = 0
 
         try:
             publisher.publish(idx, ts_ns, sym_hash, lob_fields, features)
