@@ -263,13 +263,13 @@ async def test_halt_blocked_feedback_reason_code_and_context(risk_config):
 async def test_halt_blocked_no_rejection_sink_does_not_raise(risk_config):
     """When _rejection_sink is None, blocking by HALT must not raise exceptions."""
     engine = _make_engine_with_race_halt(risk_config, rejection_sink=None)
-    engine._rejection_sink = None  # Ensure None
 
     intent = _make_intent(IntentType.NEW)
     engine.intent_queue.put_nowait(intent)
 
     task = asyncio.create_task(engine.run())
-    await asyncio.sleep(0.05)
+    # No rejection_sink to poll — use short sleep (intent processed in <1ms)
+    await asyncio.sleep(0.01)
 
     engine.running = False
     task.cancel()
