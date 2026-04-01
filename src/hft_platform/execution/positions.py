@@ -130,6 +130,8 @@ class Position:
             # If we flipped position side, remaining qty starts new avg price
             if (current_sign > 0 and self.net_qty < 0) or (current_sign < 0 and self.net_qty > 0):
                 self.avg_price_scaled = fill_price_scaled
+            elif self.net_qty == 0:
+                self.avg_price_scaled = 0
 
         else:
             # Increasing position or flat -> open
@@ -145,7 +147,8 @@ class Position:
                 total_val = (self.net_qty * self.avg_price_scaled) + (signed_fill_qty * fill_price_scaled)
                 self.net_qty += signed_fill_qty
                 if self.net_qty != 0:
-                    self.avg_price_scaled = int(round(total_val / self.net_qty))
+                    # Integer-only division with rounding to nearest (Python ints: no overflow)
+                    self.avg_price_scaled = (2 * total_val + self.net_qty) // (2 * self.net_qty)
 
         self.last_update_ts = fill.match_ts_ns
 
