@@ -981,6 +981,7 @@ class SystemBootstrapper:
             order_queue,
             price_scale_provider,
             position_provider=position_store,
+            storm_guard=storm_guard,
         )
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
 
