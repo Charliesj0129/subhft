@@ -604,6 +604,46 @@ async def test_e2e_latency_not_observed_when_order_key_missing(
 
 
 # ---------------------------------------------------------------------------
+# Direct order recording safety net (H5 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_order_event_recorded_directly_to_recorder_queue(bus: MagicMock, position_store: MagicMock) -> None:
+    """OrderEvents should be written directly to recorder_queue to survive ring buffer overwrite."""
+    from unittest.mock import patch
+
+    recorder_q: asyncio.Queue = asyncio.Queue(maxsize=100)
+    symbol_meta = MagicMock()
+    price_codec = MagicMock()
+
+    q: asyncio.Queue = asyncio.Queue()
+    order_id_map: dict[str, str] = {}
+    handler = MagicMock()
+    r = ExecutionRouter(bus, q, order_id_map, position_store, handler)
+    r._recorder_queue = recorder_q
+    r._symbol_metadata = symbol_meta
+    r._price_codec = price_codec
+
+    raw = _make_order_raw(status="Submitted")
+    await r.raw_queue.put(raw)
+
+    with patch("hft_platform.recorder.mapper.map_event_to_record", return_value=("orders", {"id": "O1"})):
+        task = asyncio.create_task(r.run())
+        await r.raw_queue.join()
+        r.running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert not recorder_q.empty(), "OrderEvent should be recorded directly to recorder_queue"
+    item = recorder_q.get_nowait()
+    assert item["topic"] == "orders"
+
+
+# ---------------------------------------------------------------------------
 # DLQ retry uses on_fill_async (H2 fix)
 # ---------------------------------------------------------------------------
 

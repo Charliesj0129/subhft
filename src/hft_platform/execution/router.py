@@ -113,6 +113,21 @@ class ExecutionRouter:
                     order_event = self.normalizer.normalize_order(raw)
                     if order_event:
                         self._publish_nowait(order_event)
+
+                        # Direct order recording safety net: bypass RingBufferBus
+                        # to prevent order events from being overwritten by tick
+                        # flood before _recorder_bridge consumes them.
+                        if self._recorder_queue is not None and self._symbol_metadata is not None:
+                            from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+
+                            _mapped = map_event_to_record(order_event, self._symbol_metadata, self._price_codec)
+                            if _mapped:
+                                _topic, _payload = _mapped
+                                try:
+                                    self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
+                                except asyncio.QueueFull:
+                                    pass  # Recorder bridge is the backup path
+
                         # OrderStatus 3=FILLED, 4=CANCELLED, 5=FAILED
                         if int(order_event.status) >= 3:
                             handler = self.terminal_handler
