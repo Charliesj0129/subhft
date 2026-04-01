@@ -48,6 +48,8 @@ def write_to_dlq(
             )
             for row in rows:
                 f.write(_dumps(row) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
         logger.warning(
             "Wrote failed batch to DLQ",
             table=table,
