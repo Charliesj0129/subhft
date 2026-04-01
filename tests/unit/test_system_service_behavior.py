@@ -396,6 +396,65 @@ async def test_recorder_bridge_cancelled():
     sys_obj.bus.consume.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_recorder_bridge_drop_increments_prometheus_counter():
+    """recorder_bridge_drops_total is incremented when recorder_queue is full."""
+    sys_obj = _make_system()
+    sys_obj.running = True
+    sys_obj._md_record_direct = False
+    sys_obj._fill_record_direct = False
+    sys_obj._order_record_direct = False
+    sys_obj._recorder_bridge_drops = 0
+    sys_obj._recorder_drop_on_full = True
+
+    # Use a queue with maxsize=0 (no capacity) so every put_nowait raises QueueFull
+    sys_obj.recorder_queue = asyncio.Queue(maxsize=1)
+    # Pre-fill so it's full
+    sys_obj.recorder_queue.put_nowait({"topic": "dummy", "data": {}})
+
+    # Produce one event then cancel
+    from hft_platform.events import TickEvent
+
+    tick = MagicMock(spec=TickEvent)
+    tick.symbol = "TEST"
+
+    events_yielded = 0
+
+    async def _one_event_gen():
+        nonlocal events_yielded
+        events_yielded += 1
+        yield tick
+        raise asyncio.CancelledError
+
+    sys_obj.bus.consume.return_value = _one_event_gen()
+
+    mock_metrics = MagicMock()
+    mock_counter = MagicMock()
+    mock_metrics.recorder_bridge_drops_total.labels.return_value = mock_counter
+
+    with patch(
+        "hft_platform.observability.metrics.MetricsRegistry"
+    ) as MockMR:
+        MockMR.get.return_value = mock_metrics
+
+        # map_event_to_record must return a (topic, payload) tuple
+        with patch(
+            "hft_platform.recorder.mapper.map_event_to_record",
+            return_value=("tick", {"price": 100}),
+        ):
+            from hft_platform.services.system import HFTSystem
+
+            try:
+                await asyncio.wait_for(HFTSystem._recorder_bridge(sys_obj), timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+    # The Prometheus counter should have been incremented for the drop
+    mock_metrics.recorder_bridge_drops_total.labels.assert_called_once_with(topic="tick")
+    mock_counter.inc.assert_called_once()
+    assert sys_obj._recorder_bridge_drops == 1
+
+
 # ---------------------------------------------------------------------------
 # stop
 # ---------------------------------------------------------------------------

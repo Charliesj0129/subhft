@@ -511,6 +511,7 @@ class HFTSystem:
                                     mid_price_x2=book.mid_price_x2,
                                     spread_scaled=book.spread,
                                     imbalance=book.imbalance,
+                                    ts=timebase.now_ns(),
                                 )
 
                 # 5. Update per-symbol feed gap metrics
@@ -604,6 +605,17 @@ class HFTSystem:
             # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
                 logger.error("System HALTED by StormGuard - blocking orders")
+                # Drain risk queue first to prevent new OrderCommands from being created
+                risk_drained = 0
+                while not self.risk_queue.empty():
+                    try:
+                        self.risk_queue.get_nowait()
+                        self.risk_queue.task_done()
+                        risk_drained += 1
+                    except asyncio.QueueEmpty:
+                        break
+                if risk_drained > 0:
+                    logger.warning("Drained blocked intents from risk_queue during HALT", count=risk_drained)
                 # Drain order queue to prevent any pending orders from executing
                 drained_count = 0
                 while not self.order_queue.empty():
@@ -806,6 +818,7 @@ class HFTSystem:
         )
         from hft_platform.contracts.execution import FillEvent, OrderEvent
         from hft_platform.events import BidAskEvent, TickEvent
+        from hft_platform.observability.metrics import MetricsRegistry
         from hft_platform.recorder.mapper import map_event_to_record
 
         metadata = self.symbol_metadata
@@ -836,6 +849,7 @@ class HFTSystem:
                             self.recorder_queue.put_nowait({"topic": topic, "data": payload})
                         except asyncio.QueueFull:
                             self._recorder_bridge_drops += 1
+                            MetricsRegistry.get().recorder_bridge_drops_total.labels(topic=topic).inc()
                             if self._recorder_bridge_drops % 100 == 1:
                                 logger.warning(
                                     "recorder_bridge_queue_full",
