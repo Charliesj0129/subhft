@@ -1,0 +1,110 @@
+# =============================================================================
+# Alpha Research Shared Context Template
+# Copy this file, fill in the blanks, and paste into teammate spawn prompts.
+# =============================================================================
+
+round_id: R__                       # e.g., R32
+target_instrument: ___              # e.g., TMFD6
+research_goal: "___"                # e.g., "Explore TXO IV signals for TMF futures prediction"
+
+# --- Cost Model (update if fee structure changes) ---
+cost_model:
+  rt_cost_ntd: 40                   # Round-trip cost in NTD
+  rt_cost_pts: 4                    # Round-trip cost in points
+  rt_cost_bps: 1.33                 # Round-trip cost in bps
+  point_value_ntd: 10               # 1 point = 10 NTD for TMFD6
+  tax_per_side_ntd: 7               # Fixed tax per side
+  commission_per_side_ntd: 13       # Commission per side
+  # Note: Retail trader — NO maker rebates, NO tax exemptions
+
+# --- Latency Profile (from config/research/latency_profiles.yaml) ---
+latency_profile:
+  submit_p95_ms: 36
+  modify_p95_ms: 43
+  cancel_p95_ms: 47
+  internal_pipeline_us: 250
+
+# --- Data Inventory (update per round with latest CK counts) ---
+data_inventory:
+  TMFD6:
+    rows: "9.16M"
+    days: 58
+    range: "2026-01-27 ~ 2026-03-26"
+    levels: "L1-L5"
+  TXO:
+    rows: "33M"
+    days: 58
+    levels: "L1"
+    note: "UNTAPPED — never researched"
+  TMFC6:
+    rows: "14.1M"
+  TMFB6:
+    rows: "10.8M"
+  # Add new instruments here per round
+
+# --- Market Microstructure (TMFD6 baseline) ---
+market_microstructure:
+  median_spread_pts: 4
+  p75_spread_pts: 19
+  profitable_spread_pct: 45.5       # % of time spread >= 5 pts
+  avg_spread_when_profitable_pts: 19.7
+  tick_rate_per_sec: 1.8
+  l1_queue_depth_lots: 4.1
+
+# --- Killed Directions Blacklist (append new kills, never remove) ---
+killed_directions:
+  - id: "L1-micro-short"
+    rounds: "R14-R17"
+    reason: "Signal-horizon mismatch: IC dead at 60s+ where cost is viable"
+  - id: "bidirectional-MM"
+    rounds: "R12-R13"
+    reason: "Queue-back adverse selection, structurally unprofitable at 36ms RTT"
+  - id: "OFI-variants"
+    rounds: "R9-R11,R16,R26-R27"
+    reason: "All killed by cost or regime dependency"
+  - id: "spread-conditional-maker"
+    rounds: "R16"
+    reason: "Adverse selection trap, -8 pts/fill median"
+  - id: "LOB-KE-gravity"
+    rounds: "R15"
+    reason: "IC too weak"
+  - id: "VPIN-regime"
+    rounds: "R12"
+    reason: "DD -30.6% as MM overlay"
+  - id: "TX-TMF-leadlag"
+    rounds: "R26,R28"
+    reason: "2.47 pts edge vs 7.4 pts cost; D6-only artifact"
+  - id: "CBS-mean-reversion"
+    rounds: "R14-R17"
+    reason: "Mid-price artifact, no mean-reversion on TMFD6"
+  - id: "1min-strategies"
+    rounds: "R18"
+    reason: "Data sparsity at 1min horizon"
+  - id: "TWSE-stocks"
+    rounds: "R31"
+    reason: "58.5 bps RT cost (10x error in initial sim)"
+  - id: "MLOFI-Hawkes"
+    rounds: "R27"
+    reason: "Predictive R²=0.000001, TXF→TMF lead-lag inverted"
+  - id: "Omori-aftershock"
+    rounds: "R30"
+    reason: "4.7 pts RT cost consumes 92% of edge"
+  - id: "institutional-flow"
+    rounds: "R29"
+    reason: "No meta-orders detectable on retail TMFD6"
+  - id: "event-momentum-spike-fader"
+    rounds: "R29b"
+    reason: "StormGuard 60s cooldown blocks entry at T+0; T+90s residual marginal"
+  - id: "SG-LP"
+    rounds: "R18"
+    reason: "March spread < cost"
+  - id: "MLOFI-microprice"
+    rounds: "R18"
+    reason: "Trend contamination"
+  - id: "MF-extension"
+    rounds: "R19"
+    reason: "HF→MF transfer impossible"
+  - id: "VRR"
+    rounds: "R22"
+    reason: "vrr never registered, CBS filter killed"
+  # Append new kills here each round
