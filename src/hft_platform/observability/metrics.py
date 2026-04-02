@@ -62,6 +62,7 @@ class MetricsRegistry:
                 "strategy_micro_price",
                 "order_actions_total",
                 "order_reject_total",
+                "order_halt_skip_total",
                 "shadow_orders_total",
                 "shadow_mode_active",
                 "execution_events_total",
@@ -335,6 +336,10 @@ class MetricsRegistry:
         # Order
         self.order_actions_total = Counter("order_actions_total", "Order actions sent", ["type"])
         self.order_reject_total = Counter("order_reject_total", "Broker rejects")
+        self.order_halt_skip_total = Counter(
+            "order_halt_skip_total",
+            "Orders skipped in _api_worker because StormGuard transitioned to HALT",
+        )
         # Shadow mode metrics
         self.shadow_orders_total = Counter(
             "shadow_orders_total",

@@ -453,3 +453,117 @@ async def test_force_flat_skips_coalesce_window(tmp_config):
     # Dispatch should have been reached within 50ms, not after 500ms coalesce
     assert len(dispatched) == 1, "Expected exactly one dispatch call"
     assert dispatched[0] - t0 < 0.2, f"Dispatch took {dispatched[0] - t0:.3f}s — coalesce NOT bypassed"
+
+
+# ---------------------------------------------------------------------------
+# StormGuard HALT-skip in _api_worker: DLQ entry + dedicated metric
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_api_worker_halt_skip_sends_dlq_and_metric(tmp_config):
+    """When StormGuard transitions to HALT between risk-check and dispatch,
+    the _api_worker must (a) increment order_halt_skip_total, (b) add the
+    order to the DLQ with reason STORMGUARD_HALT, and (c) NOT call dispatch.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from hft_platform.order.deadletter import RejectionReason
+
+    client = _make_client()
+    adapter = _make_adapter(tmp_config, client)
+
+    # Inject a mock DLQ so we can assert on it
+    dlq_mock = AsyncMock()
+    adapter._dlq = dlq_mock
+
+    # Inject a mock metrics object so we can assert counter increments
+    metrics_mock = MagicMock()
+    metrics_mock.order_halt_skip_total = MagicMock()
+    metrics_mock.order_reject_total = MagicMock()
+    adapter.metrics = metrics_mock
+
+    # Set StormGuard to HALT
+    sg = MagicMock()
+    sg.state = StormGuardState.HALT
+    adapter._storm_guard = sg
+
+    # Disable coalesce window to keep the test fast
+    adapter._api_coalesce_window_s = 0.0
+
+    # Build a NEW intent (non-exempt) and put it into the _api_queue
+    intent = _make_intent(intent_type=IntentType.NEW, strategy_id="strat_halt", symbol="0050")
+    cmd = _make_cmd(intent=intent)
+    await adapter._api_queue.put(cmd)
+
+    # Patch _dispatch_to_api to confirm it is NOT called
+    dispatch_mock = AsyncMock()
+    adapter._dispatch_to_api = dispatch_mock
+
+    # Run the worker for one cycle then cancel
+    adapter.running = True
+    worker = asyncio.create_task(adapter._api_worker())
+    await asyncio.sleep(0.05)
+    adapter.running = False
+    worker.cancel()
+    try:
+        await worker
+    except asyncio.CancelledError:
+        pass
+
+    # Dedicated metric incremented
+    metrics_mock.order_halt_skip_total.inc.assert_called_once()
+    # Backward-compat reject metric also incremented
+    metrics_mock.order_reject_total.inc.assert_called_once()
+    # DLQ received the entry
+    dlq_mock.add.assert_awaited_once()
+    call_kwargs = dlq_mock.add.call_args[1]
+    assert call_kwargs["reason"] == RejectionReason.STORMGUARD_HALT
+    assert "STORMGUARD_HALT_SKIP" in call_kwargs["error_message"]
+    assert call_kwargs["strategy_id"] == "strat_halt"
+    assert call_kwargs["symbol"] == "0050"
+    # Broker dispatch must NOT be called
+    dispatch_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_api_worker_halt_skip_exempt_cancel_still_dispatched(tmp_config):
+    """CANCEL intents are exempt from HALT-skip: they must reach _dispatch_to_api
+    even when StormGuard is in HALT."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    client = _make_client()
+    adapter = _make_adapter(tmp_config, client)
+
+    metrics_mock = MagicMock()
+    metrics_mock.order_halt_skip_total = MagicMock()
+    metrics_mock.order_reject_total = MagicMock()
+    adapter.metrics = metrics_mock
+
+    sg = MagicMock()
+    sg.state = StormGuardState.HALT
+    adapter._storm_guard = sg
+    adapter._api_coalesce_window_s = 0.0
+
+    intent = _make_intent(intent_type=IntentType.CANCEL, strategy_id="strat_cancel")
+    intent.target_order_id = "strat_cancel:1"
+    cmd = _make_cmd(intent=intent)
+    await adapter._api_queue.put(cmd)
+
+    dispatch_mock = AsyncMock()
+    adapter._dispatch_to_api = dispatch_mock
+
+    adapter.running = True
+    worker = asyncio.create_task(adapter._api_worker())
+    await asyncio.sleep(0.05)
+    adapter.running = False
+    worker.cancel()
+    try:
+        await worker
+    except asyncio.CancelledError:
+        pass
+
+    # HALT-skip metric must NOT fire for exempt intents
+    metrics_mock.order_halt_skip_total.inc.assert_not_called()
+    # Dispatch must have been called for the CANCEL
+    dispatch_mock.assert_awaited_once_with(cmd)

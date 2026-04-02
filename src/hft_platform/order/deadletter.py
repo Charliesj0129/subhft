@@ -36,6 +36,7 @@ class RejectionReason(str, Enum):
     VALIDATION_ERROR = "validation_error"
     BROKER_REJECT = "broker_reject"
     DEADLINE_EXCEEDED = "deadline_exceeded"
+    STORMGUARD_HALT = "stormguard_halt"
     UNKNOWN = "unknown"
 
 

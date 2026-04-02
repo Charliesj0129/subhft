@@ -1120,10 +1120,28 @@ class OrderAdapter:
                             "api_worker_halt_skip",
                             cmd_id=item.cmd_id,
                             symbol=item.intent.symbol,
+                            strategy_id=item.intent.strategy_id,
+                            intent_type=item.intent.intent_type.name,
+                        )
+                        self.metrics.order_halt_skip_total.inc()
+                        self.metrics.order_reject_total.inc()
+                        await self._add_to_dlq(
+                            item.intent,
+                            RejectionReason.STORMGUARD_HALT,
+                            "STORMGUARD_HALT_SKIP",
+                        )
+                        continue
+                    try:
+                        await self._dispatch_to_api(item)
+                    except Exception:
+                        logger.error(
+                            "_api_worker: dispatch failed for single order",
+                            cmd_id=item.cmd_id,
+                            symbol=item.intent.symbol,
+                            exc_info=True,
                         )
                         self.metrics.order_reject_total.inc()
-                        continue
-                    await self._dispatch_to_api(item)
+                        self.circuit_breaker.record_failure()
             except Exception:
                 logger.error("_api_worker: unexpected exception in dispatch loop", exc_info=True)
                 self.metrics.order_reject_total.inc()
