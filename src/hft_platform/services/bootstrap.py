@@ -958,6 +958,14 @@ class SystemBootstrapper:
                 logger.info("fee_calculator_loaded", path=_fee_yaml)
             else:
                 logger.warning("fee_calculator_yaml_not_found", path=_fee_yaml)
+                # X2-H1: Missing fee config → PnL tracking excludes fees/tax
+                try:
+                    from hft_platform.observability.metrics import MetricsRegistry
+                    _m = MetricsRegistry.get()
+                    if hasattr(_m, "startup_warnings_total"):
+                        _m.startup_warnings_total.labels(component="fee_calculator").inc()
+                except Exception:
+                    pass
         except Exception as exc:
             logger.warning("fee_calculator_init_failed", error=str(exc))
 

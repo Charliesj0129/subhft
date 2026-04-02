@@ -723,14 +723,15 @@ class MarketDataNormalizer:
         try:
             if isinstance(payload, dict):
                 symbol = payload.get("code") or payload.get("Code")
-                ts_val = payload.get("ts") or payload.get("datetime")
+                ts_val = payload.get("ts") if payload.get("ts") is not None else payload.get("datetime")
                 bp = payload.get("bid_price") or []
                 bv = payload.get("bid_volume") or []
                 ap = payload.get("ask_price") or []
                 av = payload.get("ask_volume") or []
             else:
                 symbol = getattr(payload, "code", None) or getattr(payload, "Code", None)
-                ts_val = getattr(payload, "ts", None) or getattr(payload, "datetime", None)
+                _ba_ts = getattr(payload, "ts", None)
+                ts_val = _ba_ts if _ba_ts is not None else getattr(payload, "datetime", None)
                 bp = getattr(payload, "bid_price", None) or []
                 bv = getattr(payload, "bid_volume", None) or []
                 ap = getattr(payload, "ask_price", None) or []

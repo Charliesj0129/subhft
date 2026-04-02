@@ -370,6 +370,7 @@ class TxTmfLeadLagStrategy(BaseStrategy):
                 pos.pending_force_close = True
                 pos.exit_order_id = ""
                 pos.awaiting_exit = False
+                pos.aggressive_exit_inflight = False
                 continue
 
             self._emit_aggressive_exit(pos, best_bid, best_ask)
@@ -425,20 +426,30 @@ class TxTmfLeadLagStrategy(BaseStrategy):
                 )
                 return
 
-        # Exit fill — match by order_id first, then fall back to side
+        # Exit fill — match by order_id first, then awaiting_exit flag, then side
+        # Priority: exact order_id match > inflight exit with no order_id yet > side-only
+        best_match = None
         for pos in self._positions_open:
             exit_side = Side.SELL if pos.direction > 0 else Side.BUY
-            if event.side == exit_side and (
-                not pos.exit_order_id or pos.exit_order_id == event.order_id
-            ):
-                pnl_pts = pos.direction * (int(event.price) - pos.entry_price) // _PTS_SCALE
-                self._positions_open.remove(pos)
-                logger.info(
-                    "leadlag_exit_filled",
-                    pnl_pts=pnl_pts,
-                    open_positions=len(self._positions_open),
-                )
-                return
+            if event.side != exit_side:
+                continue
+            if pos.exit_order_id and pos.exit_order_id == event.order_id:
+                best_match = pos
+                break  # exact match — use immediately
+            if pos.aggressive_exit_inflight and not pos.exit_order_id and best_match is None:
+                best_match = pos  # inflight but order_id not yet set — best guess
+            elif not best_match:
+                best_match = pos  # fallback: side-only
+        if best_match is not None:
+            pos = best_match
+            pnl_pts = pos.direction * (int(event.price) - pos.entry_price) // _PTS_SCALE
+            self._positions_open.remove(pos)
+            logger.info(
+                "leadlag_exit_filled",
+                pnl_pts=pnl_pts,
+                open_positions=len(self._positions_open),
+            )
+            return
 
     def on_order(self, event: OrderEvent) -> None:
         if event.symbol != self._trade_symbol:
@@ -486,4 +497,6 @@ class TxTmfLeadLagStrategy(BaseStrategy):
                 if event.status in _TERMINAL_ORDER_STATUSES:
                     pos.exit_order_id = ""
                     pos.awaiting_exit = False
+                    pos.aggressive_exit_inflight = False
+                    pos.pending_force_close = True
                 return

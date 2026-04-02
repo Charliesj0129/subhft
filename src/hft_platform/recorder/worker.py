@@ -528,10 +528,13 @@ class RecorderService:
                     break
             if drained:
                 logger.info("recorder_shutdown_drained", items=drained)
-            for batcher in self.batchers.values():
-                await batcher.force_flush()
-            # Graceful shutdown of writer (flush WAL batch, stop pool)
-            await self.writer.shutdown()
+            # I2-H3: Shield flush/shutdown from re-cancellation during event loop teardown
+            try:
+                for batcher in self.batchers.values():
+                    await asyncio.shield(batcher.force_flush())
+                await asyncio.shield(self.writer.shutdown())
+            except asyncio.CancelledError:
+                logger.warning("recorder_shutdown_flush_cancelled")
             logger.info("Recorder stopped")
 
     async def _flush_loop(self):

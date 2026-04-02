@@ -1040,9 +1040,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         event: TickEvent | BidAskEvent,
         stats: object | None,
     ) -> FeatureUpdateEvent | None:
-        if self.feature_engine is None or stats is None:
+        if self.feature_engine is None:
             return None
-        # Forward classified tick data to FeatureEngine for toxicity tracking
+        # D2-C1: Forward classified tick data BEFORE stats check (stats=None for ticks)
         if isinstance(event, TickEvent) and event.trade_direction != 0:
             self.feature_engine.on_tick(
                 event.symbol,
@@ -1051,7 +1051,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 event.trade_direction,
                 event.trade_confidence,
             )
-        if not isinstance(stats, (LOBStatsEvent, tuple)):
+        if stats is None or not isinstance(stats, (LOBStatsEvent, tuple)):
             return None
         meta = event.meta
         local_ts_ns = int(getattr(meta, "local_ts", 0) or 0) if meta is not None else 0

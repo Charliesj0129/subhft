@@ -147,9 +147,9 @@ class ExecutionNormalizer:
                 strategy_id=strategy_id,
                 symbol=symbol,
                 status=status,
-                submitted_qty=order.get("quantity", 0),
-                filled_qty=0,  # Need to track cumulatives? Shioaji provides snapshot usually
-                remaining_qty=0,
+                submitted_qty=int(order.get("quantity") or 0),
+                filled_qty=int(order.get("deal_quantity") or order.get("cum_qty") or 0),
+                remaining_qty=int(order.get("quantity") or 0) - int(order.get("deal_quantity") or order.get("cum_qty") or 0),
                 price=price,
                 side=Side.BUY if order.get("action") == "Buy" else Side.SELL,
                 ingest_ts_ns=raw.ingest_ts_ns,
@@ -244,6 +244,8 @@ class ExecutionNormalizer:
             return OrderStatus.PENDING_SUBMIT
         if "SUBMITTED" in text or "PRESUBMITTED" in text:
             return OrderStatus.SUBMITTED
+        if "PART" in text and "FILL" in text:
+            return OrderStatus.PARTIALLY_FILLED
         if "FILLED" in text:
             return OrderStatus.FILLED
         if "CANCELLED" in text or "CANCELED" in text:

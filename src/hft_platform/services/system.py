@@ -569,6 +569,15 @@ class HFTSystem:
                     continue
                 if exc is None and name in ("order", "exec_gateway") and self.storm_guard.state == StormGuardState.HALT:
                     continue
+                # I2-C1: HALT-stopped services should restart when HALT de-escalates,
+                # not trigger a new HALT. Detect by: no exception + running + non-HALT.
+                if exc is None and name in ("order", "exec_gateway") and self.storm_guard.state != StormGuardState.HALT:
+                    logger.info("Restarting service after HALT de-escalation", task=name)
+                    _svc = self.order_adapter if name == "order" else self.execution_gateway
+                    self._set_service_running(_svc, True)
+                    if self.running:
+                        self._try_restart_service(name, component, coro_factory)
+                    continue
                 logger.critical(
                     "Critical service task stopped",
                     task=name,
@@ -674,6 +683,16 @@ class HFTSystem:
         if getattr(self, "gateway_service", None) is not None:
             self.gateway_service.running = False
 
+        # I2-C2: Drain remaining fills from exec queue before order cancellation
+        try:
+            drained = await asyncio.wait_for(self.exec_service.stop(), timeout=3.0)
+            if drained:
+                logger.info("ExecutionRouter shutdown drain", fills_drained=drained)
+        except asyncio.TimeoutError:
+            logger.warning("ExecutionRouter drain timeout during shutdown")
+        except Exception as exc:
+            logger.warning("ExecutionRouter drain failed", error=str(exc))
+
         # H1: Drain in-flight orders and checkpoint positions before shutdown
         try:
             await asyncio.wait_for(self.order_adapter.drain_and_cancel(), timeout=10.0)
@@ -702,8 +721,25 @@ class HFTSystem:
         for cn in ("md_client", "order_client"):
             self._close_broker_client(cn)
 
-        # Cancel and await all tasks for clean shutdown
+        # Phase 1: Cancel recorder_bridge first so it stops enqueuing into recorder_queue.
+        bridge_task = self.tasks.get("recorder_bridge")
+        if bridge_task and not bridge_task.done():
+            bridge_task.cancel()
+            try:
+                await asyncio.wait_for(bridge_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            except Exception as e:
+                logger.error("recorder_bridge cleanup error", error=str(e))
+
+        # Phase 2: Now signal recorder to drain remaining queue items and stop.
+        if hasattr(self, "recorder") and self.recorder is not None:
+            self.recorder.running = False
+
+        # Phase 3: Cancel and await all remaining tasks.
         for name, task in list(self.tasks.items()):
+            if name == "recorder_bridge":
+                continue  # Already handled above
             if task and not task.done():
                 task.cancel()
                 try:
@@ -748,10 +784,10 @@ class HFTSystem:
         self.risk_engine.running = False
         self.recon_service.running = False
         self.strategy_runner.running = False
-        # I-H5: Signal recorder to drain remaining queue items before task cancellation.
-        # RecorderService.run() drains the queue in its finally block when running=False.
-        if hasattr(self, "recorder") and self.recorder is not None:
-            self.recorder.running = False
+        # NOTE: Do NOT set recorder.running=False here. The recorder must stay
+        # alive until _recorder_bridge (and any direct-write producers) have
+        # stopped enqueuing. The async shutdown path (_async_stop / _cleanup_tasks)
+        # cancels the bridge first, THEN signals the recorder to drain.
         self.execution_gateway.stop()  # Clean shutdown
         self.session_hook_manager.stop()
         self.health_server.stop()
