@@ -299,6 +299,16 @@ class ExecutionRouter:
                             if hasattr(self.position_store, "on_fill"):
                                 self.position_store.on_fill(fill_event)
                                 drained += 1
+                                # Persist fill via WAL during shutdown drain
+                                self._wal_fallback_write("fills", fill_event)
+                                # Notify risk engine of PnL delta
+                                if self._risk_engine is not None:
+                                    notify = getattr(self._risk_engine, "notify_fill_pnl", None)
+                                    if callable(notify):
+                                        try:
+                                            notify(fill_event.strategy_id, fill_event.realized_pnl)
+                                        except Exception:
+                                            pass
                                 logger.info("shutdown_drain_fill", fill_id=fill_event.fill_id, dedup_key=_dedup_key)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("shutdown_drain_error", error=str(exc))
@@ -380,14 +390,26 @@ class ExecutionRouter:
                 _dlq_metric.inc(len(resolved))
 
     def _wal_fallback_write(self, topic: str, payload: Any) -> None:
-        """Fire-and-forget WAL write when recorder queue is full."""
+        """WAL write when recorder queue is full. Logs failures via done_callback."""
         if self._wal_writer is None:
             return
         try:
             _wal_fallback = getattr(self.metrics, "recorder_exec_wal_fallback_total", None)
             if _wal_fallback is not None:
                 _wal_fallback.labels(topic=topic).inc()
-            asyncio.ensure_future(self._wal_writer.write(topic, [payload]))
+            task = asyncio.ensure_future(self._wal_writer.write(topic, [payload]))
+
+            def _on_wal_done(fut: asyncio.Future) -> None:  # type: ignore[type-arg]
+                if fut.cancelled():
+                    return
+                exc = fut.exception()
+                if exc is not None:
+                    logger.error("wal_fallback_async_failed", error=str(exc), topic=topic)
+                    _fail = getattr(self.metrics, "recorder_exec_wal_fallback_failure_total", None)
+                    if _fail is not None:
+                        _fail.labels(topic=topic).inc()
+
+            task.add_done_callback(_on_wal_done)
         except Exception as wal_exc:  # noqa: BLE001
             logger.error("wal_fallback_failed", error=str(wal_exc), topic=topic)
 

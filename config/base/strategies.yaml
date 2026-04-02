@@ -53,6 +53,28 @@ strategies:
       session_start_sec: 0            # 00:00 TWN — full-day fallback; SessionGovernor is authoritative in prod
       session_end_sec: 86400          # 24:00 TWN — keeps day/night sessions eligible when governor is enabled
 
+  # --- TX→TMF Lead-Lag (R28) — DISABLED (shadow) ---
+  # Cross-symbol momentum: TX large-volume ticks predict TMF 10-30min moves.
+  # Research: R28, E[net]=+30.6 pts/trade (SL100 + 15min horizon).
+  # Enable for shadow: set enabled=true, run with HFT_ORDER_MODE=sim
+  # Subscribes to BOTH TXFD6 (signal) and TMFD6 (trade).
+  - id: "TX_TMF_LEADLAG"
+    module: "hft_platform.strategies.tx_tmf_leadlag"
+    class: "TxTmfLeadLagStrategy"
+    enabled: false
+    product_type: "FUT"
+    symbols: ["TXFD6", "TMFD6"]
+    params:
+      signal_symbol: "TXFD6"
+      trade_symbol: "TMFD6"
+      dvol_threshold: 20
+      sl_pts: 100
+      max_hold_ns: 900000000000      # 15min
+      max_position_lots: 3
+      cooldown_ns: 5000000000         # 5s between entries
+      session_start_sec: 2700         # 00:45 UTC = 08:45 TWN
+      session_end_sec: 20700          # 05:45 UTC = 13:45 TWN
+
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
   # Phase 3: Automated options market-making with delta-neutral hedging.
   # Enable for shadow: set enabled=true, run with HFT_ORDER_MODE=sim

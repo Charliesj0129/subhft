@@ -133,11 +133,12 @@ class GlobalMemoryGuard:
     lowest-priority batchers drop first.
     """
 
-    # Priority: higher = more important (market_data most important)
+    # Priority: higher = more important. Fills/orders must never be evicted
+    # for market data — financial integrity outranks tick completeness.
     DEFAULT_PRIORITIES: dict[str, int] = {
+        "hft.fills": 110,
+        "hft.orders": 105,
         "hft.market_data": 100,
-        "hft.orders": 90,
-        "hft.fills": 80,
         "hft.risk_log": 50,  # Also matches hft.logs
         "hft.logs": 50,
         "hft.backtest_runs": 30,

@@ -48,6 +48,7 @@ class StormGuard:
         "_on_halt_callback",
         "_drift_burst_detector",
         "_state_lock",
+        "_session_active",
     )
 
     def __init__(
@@ -70,6 +71,7 @@ class StormGuard:
         self._on_halt_callback = on_halt_callback
         self._drift_burst_detector = drift_burst_detector
         self._state_lock = threading.Lock()
+        self._session_active: bool = True  # default: active (safe)
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -125,7 +127,7 @@ class StormGuard:
             return StormGuardState.STORM, f"Drawdown {drawdown_bps}bps"
         if latency_us >= t.latency_storm_us:
             return StormGuardState.STORM, f"Latency {latency_us}us"
-        if feed_gap_s >= t.feed_gap_storm_s:
+        if feed_gap_s >= t.feed_gap_storm_s and self._session_active:
             return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
         if drawdown_bps <= t.warm_drawdown_bps:
             return StormGuardState.WARM, "Drawdown Warning"
@@ -370,6 +372,14 @@ class StormGuard:
                 if intent.intent_type == IntentType.NEW:
                     return False, "STORMGUARD_STORM_NEW_BLOCKED"
             return True, "OK"
+
+    def set_session_active(self, active: bool) -> None:
+        """Inform StormGuard whether any trading session is currently open.
+
+        When no session is active, feed gap evaluation is suppressed to avoid
+        spurious STORM transitions during expected inter-session breaks.
+        """
+        self._session_active = active
 
     def is_safe(self) -> bool:
         return self.state < StormGuardState.HALT

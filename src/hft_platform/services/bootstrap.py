@@ -961,6 +961,17 @@ class SystemBootstrapper:
         except Exception as exc:
             logger.warning("fee_calculator_init_failed", error=str(exc))
 
+        # WAL fallback for execution events dropped by full recorder queue
+        _exec_wal_writer = None
+        _exec_wal_dir = os.getenv("HFT_WAL_DIR", ".wal")
+        try:
+            from hft_platform.recorder.wal import WALWriter as _WALWriter
+
+            _exec_wal_writer = _WALWriter(_exec_wal_dir)
+            logger.info("exec_wal_fallback_enabled", wal_dir=_exec_wal_dir)
+        except Exception as exc:
+            logger.warning("exec_wal_fallback_init_failed", error=str(exc))
+
         exec_service = ExecutionRouter(
             bus,
             raw_exec_queue,
@@ -972,6 +983,7 @@ class SystemBootstrapper:
             recorder_queue=recorder_queue,
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
+            wal_writer=_exec_wal_writer,
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator
@@ -983,6 +995,8 @@ class SystemBootstrapper:
             position_provider=position_store,
             storm_guard=storm_guard,
         )
+        # Late-bind risk_engine to router (created after router due to dependency order)
+        exec_service._risk_engine = risk_engine
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
 
         # CE-M2: GatewayService wiring

@@ -21,7 +21,7 @@ logger = get_logger("feed_adapter.normalizer")
 
 _RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
 _RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
-_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "tuple").lower()
+_EVENT_MODE = os.getenv("HFT_EVENT_MODE", "event").lower()
 if "pytest" in sys.modules:
     _EVENT_MODE = "event"
 _RETURN_TUPLE = _EVENT_MODE in {"tuple", "raw"}

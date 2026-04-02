@@ -78,7 +78,11 @@ def _make_deal_raw(
     )
 
 
-def _make_router(metrics: MagicMock, recorder_queue: asyncio.Queue) -> ExecutionRouter:
+def _make_router(
+    metrics: MagicMock,
+    recorder_queue: asyncio.Queue,
+    wal_writer: object | None = None,
+) -> ExecutionRouter:
     bus = MagicMock()
     bus.publish_many_nowait = MagicMock()
 
@@ -95,6 +99,7 @@ def _make_router(metrics: MagicMock, recorder_queue: asyncio.Queue) -> Execution
         terminal_handler=MagicMock(),
         recorder_queue=recorder_queue,
         symbol_metadata=symbol_metadata,
+        wal_writer=wal_writer,
     )
     router.metrics = metrics
     return router
@@ -228,3 +233,135 @@ async def test_no_drop_counter_when_recorder_queue_has_space() -> None:
         assert call != ((), {"topic": "orders"}), "Drop counter was unexpectedly incremented"
 
     assert recorder_queue.qsize() == 1  # the item was successfully enqueued
+
+
+# ---------------------------------------------------------------------------
+# WAL fallback tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wal_fallback_called_on_order_recorder_queue_full() -> None:
+    """WAL writer receives fire-and-forget write when recorder queue is full on order path."""
+    metrics = _stub_metrics()
+    metrics.recorder_exec_wal_fallback_total = MagicMock()
+    recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    recorder_queue.put_nowait("prefill")
+
+    wal_writer = MagicMock()
+    wal_writer.write = AsyncMock(return_value=True)
+
+    router = _make_router(metrics, recorder_queue, wal_writer=wal_writer)
+
+    order_event = MagicMock()
+    order_event.strategy_id = "strat1"
+    order_event.order_id = "ORD001"
+    order_event.status = 1
+
+    mapped = ("orders", {"data": "payload"})
+    with (
+        patch.object(router.normalizer, "normalize_order", return_value=order_event),
+        patch("hft_platform.recorder.mapper.map_event_to_record", return_value=mapped),
+    ):
+        raw = _make_order_raw()
+        router.raw_queue.put_nowait(raw)
+
+        router.running = True
+        task = asyncio.create_task(router.run())
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # Let the ensure_future WAL write complete
+        await asyncio.sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    wal_writer.write.assert_awaited_once_with("orders", [{"data": "payload"}])
+    metrics.recorder_exec_wal_fallback_total.labels.assert_called_with(topic="orders")
+
+
+@pytest.mark.asyncio
+async def test_wal_fallback_called_on_fill_recorder_queue_full() -> None:
+    """WAL writer receives fire-and-forget write when recorder queue is full on fill path."""
+    metrics = _stub_metrics()
+    metrics.recorder_exec_wal_fallback_total = MagicMock()
+    recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    recorder_queue.put_nowait("prefill")
+
+    wal_writer = MagicMock()
+    wal_writer.write = AsyncMock(return_value=True)
+
+    router = _make_router(metrics, recorder_queue, wal_writer=wal_writer)
+
+    fill_event = MagicMock()
+    fill_event.strategy_id = "strat1"
+    fill_event.order_id = "ORD001"
+    fill_event.symbol = "2330"
+    fill_event.account_id = "acct1"
+    fill_event.ingest_ts_ns = 1_000_000_000
+    fill_event.decision_price = 0
+    fill_event.arrival_price = 0
+
+    delta = MagicMock()
+    router.position_store.on_fill = MagicMock(return_value=delta)
+    router.position_store.on_fill_async = AsyncMock(return_value=delta)
+
+    mapped = ("fills", {"data": "fill_payload"})
+    with (
+        patch.object(router.normalizer, "normalize_fill", return_value=fill_event),
+        patch("hft_platform.recorder.mapper.map_event_to_record", return_value=mapped),
+    ):
+        raw = _make_deal_raw()
+        router.raw_queue.put_nowait(raw)
+
+        router.running = True
+        task = asyncio.create_task(router.run())
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    wal_writer.write.assert_awaited_once_with("fills", [{"data": "fill_payload"}])
+    metrics.recorder_exec_wal_fallback_total.labels.assert_called_with(topic="fills")
+
+
+@pytest.mark.asyncio
+async def test_no_wal_fallback_when_wal_writer_is_none() -> None:
+    """No error when wal_writer is None and recorder queue is full."""
+    metrics = _stub_metrics()
+    recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    recorder_queue.put_nowait("prefill")
+
+    router = _make_router(metrics, recorder_queue, wal_writer=None)
+
+    order_event = MagicMock()
+    order_event.strategy_id = "strat1"
+    order_event.order_id = "ORD001"
+    order_event.status = 1
+
+    mapped = ("orders", {"data": "payload"})
+    with (
+        patch.object(router.normalizer, "normalize_order", return_value=order_event),
+        patch("hft_platform.recorder.mapper.map_event_to_record", return_value=mapped),
+    ):
+        raw = _make_order_raw()
+        router.raw_queue.put_nowait(raw)
+
+        router.running = True
+        task = asyncio.create_task(router.run())
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # Should not raise — drop metric still incremented
+    metrics.recorder_exec_drops_total.labels.assert_called_with(topic="orders")

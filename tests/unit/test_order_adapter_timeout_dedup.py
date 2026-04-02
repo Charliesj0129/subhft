@@ -270,5 +270,11 @@ async def test_cancellation_guard_prevents_late_broker_call(tmp_config):
     )
 
     assert result is None
-    # The broker call may or may not have completed (it's in a thread),
-    # but the important thing is _call_api returned None (no duplicate retry).
+    # Wait briefly for the thread to finish — the guard should prevent the
+    # broker call if the thread starts after cancellation was set.
+    time.sleep(0.15)
+    # The guarded wrapper sets cancelled before the 300ms sleep completes,
+    # so the broker function should NOT have been called.
+    assert not broker_actually_called.is_set(), (
+        "Cancellation guard failed: broker was called despite cancel flag"
+    )

@@ -228,6 +228,9 @@ class HFTSystem:
                 self._start_service("autonomy_monitor", self.autonomy_monitor.run())
 
             # Start Services
+            # Recorder MUST start before exec_router to prevent fill recording gaps
+            # during startup (fills can arrive as soon as execution callbacks are wired).
+            self._start_service("recorder", self.recorder.run())
             self._start_service("md", self.md_service.run())
             self._start_service("exec_router", self.exec_service.run())
             # CE-M2: start GatewayService when enabled; otherwise start RiskEngine standalone
@@ -266,7 +269,6 @@ class HFTSystem:
 
             self._start_service("recon", self.recon_service.run())
             self._start_service("strat", self.strategy_runner.run())
-            self._start_service("recorder", self.recorder.run())
 
             # Start AuditWriter flush tasks (singleton, lazy-created by RiskEngine/StormGuard)
             try:
@@ -493,6 +495,19 @@ class HFTSystem:
 
                 # 3. Get P99 latency estimate (convert event loop lag to microseconds as proxy)
                 latency_us = int(lag_s * 1_000_000)
+
+                # 3b. Inform StormGuard of session state to suppress feed-gap noise
+                if self.session_governor is not None:
+                    from hft_platform.ops.session_governor import SessionPhase
+                    _ACTIVE_PHASES = frozenset({
+                        SessionPhase.PRE_OPEN, SessionPhase.OPEN,
+                        SessionPhase.CLOSE_ONLY, SessionPhase.FORCE_FLAT,
+                    })
+                    gate = getattr(self.session_governor, "track_gate", None)
+                    if gate is not None:
+                        phases = gate.track_phases
+                        any_open = any(p in _ACTIVE_PHASES for p in phases.values())
+                        self.storm_guard.set_session_active(any_open)
 
                 # 4. Update StormGuard state (convert drawdown % to bps at boundary)
                 drawdown_bps = int(drawdown_pct * 10_000)
