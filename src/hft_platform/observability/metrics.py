@@ -102,6 +102,7 @@ class MetricsRegistry:
                 "orphaned_fill",
                 "fills_total",
                 "duplicate_fill",
+                "synthetic_fill_id",
                 "portfolio_total_pnl",
                 "reconciliation_discrepancy_count",
                 "recorder_insert_retry_total",
@@ -206,6 +207,8 @@ class MetricsRegistry:
                 "e2e_order_latency_ns",
                 # Recorder exec drop counter (P-01)
                 "recorder_exec_drops_total",
+                # Recorder exec WAL fallback counter
+                "recorder_exec_wal_fallback_total",
                 # Recorder reinject circuit breaker drops (P-21)
                 "recorder_reinject_circuit_breaker_drops_total",
                 # Recorder bridge queue-full drops
@@ -350,6 +353,10 @@ class MetricsRegistry:
         self.orphaned_fill_total = Counter("orphaned_fill_total", "Orphaned fills routed to DLQ")
         self.fills_total = Counter("fills_total", "Total successful fills processed")
         self.duplicate_fill_total = Counter("duplicate_fill_total", "Duplicate fills skipped by dedup check")
+        self.synthetic_fill_id_total = Counter(
+            "synthetic_fill_id_total",
+            "Fills with synthesized fill_id (broker omitted seqno)",
+        )
         self.execution_router_lag_ns = Histogram(
             "execution_router_lag_ns",
             "Execution report lag (ns)",
@@ -372,6 +379,11 @@ class MetricsRegistry:
         self.recorder_exec_drops_total = Counter(
             "recorder_exec_drops_total",
             "Execution events dropped due to full recorder queue",
+            ["topic"],
+        )
+        self.recorder_exec_wal_fallback_total = Counter(
+            "recorder_exec_wal_fallback_total",
+            "Execution events written to WAL fallback after recorder queue full",
             ["topic"],
         )
         self.position_pnl_realized = Gauge("position_pnl_realized", "Realized PnL", ["strategy", "symbol"])

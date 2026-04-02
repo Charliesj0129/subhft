@@ -203,8 +203,23 @@ class ExecutionNormalizer:
                 fee = breakdown.total
                 tax = breakdown.tax
 
+            raw_fill_id = get("seqno") or get("seq_no") or ""
+            fill_id = str(raw_fill_id)
+            if not fill_id:
+                # Synthesize a fill_id when broker omits seqno (e.g. reconnect replays).
+                # This enables downstream dedup to catch duplicate fills.
+                _exch_ts = self._normalize_ts_ns(get("ts"))
+                fill_id = f"synth_{sym}_{side.name}_{scale_price}_{qty}_{_exch_ts}"
+                self.metrics.synthetic_fill_id_total.inc()
+                logger.info(
+                    "synthetic_fill_id_generated",
+                    fill_id=fill_id,
+                    symbol=sym,
+                    side=side.name,
+                )
+
             return FillEvent(
-                fill_id=str(get("seqno") or get("seq_no") or ""),
+                fill_id=fill_id,
                 account_id=str(get("account_id") or "sim-account-01"),
                 order_id=str(get("ordno") or get("ord_no") or ""),
                 strategy_id=strategy_id,

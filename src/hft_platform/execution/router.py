@@ -13,8 +13,18 @@ from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.recorder.wal import WALWriter
 
 logger = get_logger("execution.router")
+
+
+def _synthesize_dedup_key(fill: Any) -> str:
+    """Synthesize a dedup key from fill fields when fill_id is empty.
+
+    Used to prevent duplicate processing of reconnect-replayed fills
+    that lack a broker sequence number.
+    """
+    return f"{fill.symbol}|{fill.side}|{fill.price}|{fill.qty}|{fill.match_ts_ns}"
 
 
 def _create_task_with_error_handling(coro: Coroutine[Any, Any, Any], name: Optional[str] = None) -> asyncio.Task[Any]:
@@ -68,6 +78,7 @@ class ExecutionRouter:
         recorder_queue: Optional[asyncio.Queue] = None,
         symbol_metadata: Optional[Any] = None,
         price_scale_provider: Optional[Any] = None,
+        wal_writer: Optional[WALWriter] = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
@@ -91,6 +102,7 @@ class ExecutionRouter:
         self._price_codec: Optional[PriceCodec] = (
             PriceCodec(price_scale_provider) if price_scale_provider is not None else None
         )
+        self._wal_writer: Optional[WALWriter] = wal_writer
 
     async def run(self) -> None:
         self.running = True
@@ -132,6 +144,7 @@ class ExecutionRouter:
                                 except asyncio.QueueFull:
                                     self.metrics.recorder_exec_drops_total.labels(topic="orders").inc()
                                     logger.warning("recorder_queue_full", topic="orders", event_type="order")
+                                    self._wal_fallback_write(_topic, _payload)
 
                         # OrderStatus 3=FILLED, 4=CANCELLED, 5=FAILED
                         if int(order_event.status) >= 3:
@@ -155,19 +168,22 @@ class ExecutionRouter:
                 elif raw.topic == "deal":
                     fill_event = self.normalizer.normalize_fill(raw)
                     if fill_event:
-                        # Fill deduplication: prevent double-counting on broker reconnect
-                        if fill_event.fill_id and fill_event.fill_id in self._seen_fill_ids:
+                        # Fill deduplication: prevent double-counting on broker reconnect.
+                        # When fill_id is empty (broker omitted seqno), synthesize a key
+                        # from fill fields so dedup still catches reconnect replays.
+                        _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
+                        if _dedup_key in self._seen_fill_ids:
                             self.metrics.duplicate_fill_total.inc()
                             logger.warning(
                                 "duplicate_fill_skipped",
                                 fill_id=fill_event.fill_id,
+                                dedup_key=_dedup_key,
                                 symbol=fill_event.symbol,
                             )
                             continue
-                        if fill_event.fill_id:
-                            self._seen_fill_ids[fill_event.fill_id] = None
-                            if len(self._seen_fill_ids) > self._fill_dedup_max_size:
-                                self._seen_fill_ids.popitem(last=False)  # evict oldest
+                        self._seen_fill_ids[_dedup_key] = None
+                        if len(self._seen_fill_ids) > self._fill_dedup_max_size:
+                            self._seen_fill_ids.popitem(last=False)  # evict oldest
                         self.metrics.fills_total.inc()
                         if fill_event.strategy_id == "UNKNOWN":
                             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
@@ -238,6 +254,7 @@ class ExecutionRouter:
                                 except asyncio.QueueFull:
                                     self.metrics.recorder_exec_drops_total.labels(topic="fills").inc()
                                     logger.warning("recorder_queue_full", topic="fills", event_type="fill")
+                                    self._wal_fallback_write(_topic, _payload)
 
                 # Periodically retry orphaned fills from DLQ
                 self._events_since_dlq_retry += 1
@@ -275,13 +292,14 @@ class ExecutionRouter:
             try:
                 if raw.topic == "deal":
                     fill_event = self.normalizer.normalize_fill(raw)
-                    if fill_event and fill_event.fill_id:
-                        if fill_event.fill_id not in self._seen_fill_ids:
-                            self._seen_fill_ids[fill_event.fill_id] = None
+                    if fill_event:
+                        _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
+                        if _dedup_key not in self._seen_fill_ids:
+                            self._seen_fill_ids[_dedup_key] = None
                             if hasattr(self.position_store, "on_fill"):
                                 self.position_store.on_fill(fill_event)
                                 drained += 1
-                                logger.info("shutdown_drain_fill", fill_id=fill_event.fill_id)
+                                logger.info("shutdown_drain_fill", fill_id=fill_event.fill_id, dedup_key=_dedup_key)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("shutdown_drain_error", error=str(exc))
             finally:
@@ -312,18 +330,19 @@ class ExecutionRouter:
             )
             for fill in resolved:
                 # Fill deduplication: skip fills already applied via the main path
-                if fill.fill_id and fill.fill_id in self._seen_fill_ids:
+                _dedup_key = fill.fill_id or _synthesize_dedup_key(fill)
+                if _dedup_key in self._seen_fill_ids:
                     self.metrics.duplicate_fill_total.inc()
                     logger.warning(
                         "duplicate_fill_skipped_dlq",
                         fill_id=fill.fill_id,
+                        dedup_key=_dedup_key,
                         symbol=fill.symbol,
                     )
                     continue
-                if fill.fill_id:
-                    self._seen_fill_ids[fill.fill_id] = None
-                    if len(self._seen_fill_ids) > self._fill_dedup_max_size:
-                        self._seen_fill_ids.popitem(last=False)  # evict oldest
+                self._seen_fill_ids[_dedup_key] = None
+                if len(self._seen_fill_ids) > self._fill_dedup_max_size:
+                    self._seen_fill_ids.popitem(last=False)  # evict oldest
                 # TCA enrichment for DLQ-resolved fills (M4)
                 _order_key = self._order_id_map.get(fill.order_id)
                 if _order_key is not None:
@@ -355,9 +374,22 @@ class ExecutionRouter:
                         except asyncio.QueueFull:
                             self.metrics.recorder_exec_drops_total.labels(topic="fills").inc()
                             logger.warning("recorder_queue_full", topic="fills", event_type="fill_dlq_retry")
+                            self._wal_fallback_write(_topic, _payload)
             _dlq_metric = getattr(self.metrics, "dlq_retry_resolved_total", None)
             if _dlq_metric is not None:
                 _dlq_metric.inc(len(resolved))
+
+    def _wal_fallback_write(self, topic: str, payload: Any) -> None:
+        """Fire-and-forget WAL write when recorder queue is full."""
+        if self._wal_writer is None:
+            return
+        try:
+            _wal_fallback = getattr(self.metrics, "recorder_exec_wal_fallback_total", None)
+            if _wal_fallback is not None:
+                _wal_fallback.labels(topic=topic).inc()
+            asyncio.ensure_future(self._wal_writer.write(topic, [payload]))
+        except Exception as wal_exc:  # noqa: BLE001
+            logger.error("wal_fallback_failed", error=str(wal_exc), topic=topic)
 
     def _publish_nowait(self, event: Any) -> None:
         publish_nowait = getattr(self.bus, "publish_nowait", None)
