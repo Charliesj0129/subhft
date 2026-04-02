@@ -734,16 +734,19 @@ class DataWriter:
             return data
         if not self._ts_max_future_ns:
             # Still enforce ingest_ts >= exch_ts when both present
+            result: list[dict] = []
             for row in data:
                 try:
                     exch_ts = row.get("exch_ts")
                     ingest_ts = row.get("ingest_ts")
                     if exch_ts and ingest_ts and int(ingest_ts) < int(exch_ts):
+                        row = dict(row)  # I-H1: shallow copy to avoid mutating shared references
                         row["ingest_ts"] = int(exch_ts)
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))
-                    continue
-            return data
+                finally:
+                    result.append(row)
+            return result
 
         now_ns = timebase.now_ns()
         kept: list[dict] = []
@@ -761,6 +764,7 @@ class DataWriter:
                     dropped += 1
                     continue
                 if exch_ts_i and ingest_ts_i and ingest_ts_i < exch_ts_i:
+                    row = dict(row)  # I-H1: shallow copy to avoid mutating shared references
                     row["ingest_ts"] = exch_ts_i
                 kept.append(row)
             except Exception as exc:

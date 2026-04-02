@@ -156,7 +156,7 @@ class TestSynthesizeDedupKey:
     def test_produces_deterministic_key(self) -> None:
         fill = _make_fill(fill_id="", symbol="TMFD6", side=Side.BUY, price=500_000, qty=1, match_ts_ns=999)
         key = _synthesize_dedup_key(fill)
-        assert key == f"TMFD6|{Side.BUY}|500000|1|999"
+        assert key == f"TMFD6|ORD001|{Side.BUY}|500000|1|999"
 
     def test_same_fill_produces_same_key(self) -> None:
         f1 = _make_fill(fill_id="", symbol="2330", side=Side.SELL, price=100, qty=5, match_ts_ns=123)

@@ -748,6 +748,10 @@ class HFTSystem:
         self.risk_engine.running = False
         self.recon_service.running = False
         self.strategy_runner.running = False
+        # I-H5: Signal recorder to drain remaining queue items before task cancellation.
+        # RecorderService.run() drains the queue in its finally block when running=False.
+        if hasattr(self, "recorder") and self.recorder is not None:
+            self.recorder.running = False
         self.execution_gateway.stop()  # Clean shutdown
         self.session_hook_manager.stop()
         self.health_server.stop()
@@ -819,11 +823,16 @@ class HFTSystem:
         # This callback runs in Shioaji thread.
         # We must schedule work on the main loop.
         loop = getattr(self, "loop", None)
-        if self.running and loop is not None:
-            from hft_platform.execution.normalizer import RawExecEvent
+        if not self.running:
+            return
+        from hft_platform.execution.normalizer import RawExecEvent
 
-            event = RawExecEvent(topic, data, timebase.now_ns())
+        event = RawExecEvent(topic, data, timebase.now_ns())
+        if loop is not None:
             loop.call_soon_threadsafe(self._safe_enqueue_exec, event)
+        else:
+            # I-H4: loop not yet assigned (startup race) — buffer so events aren't dropped
+            self._exec_overflow_buf.append(event)
 
     async def _recorder_bridge(self):
         """Bridge all Bus events to Recorder."""

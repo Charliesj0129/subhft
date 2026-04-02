@@ -373,3 +373,100 @@ def test_update_with_lob_does_not_de_escalate():
     g.trigger_halt("manual halt")
     result = g.update_with_lob(mid_price_x2=1000000, spread_scaled=100)
     assert result == StormGuardState.HALT
+
+
+# ── halt_exempt_strategies ──────────────────────────────────────────────────
+
+
+def _make_intent_with_strategy(intent_type: IntentType, strategy_id: str) -> OrderIntent:
+    return OrderIntent(
+        intent_id=1,
+        strategy_id=strategy_id,
+        symbol="TMFD6",
+        intent_type=intent_type,
+        side=Side.BUY,
+        price=5000000,
+        qty=1,
+    )
+
+
+@pytest.fixture
+def exempt_guard():
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        return StormGuard(halt_exempt_strategies=frozenset({"spike_fader"}))
+
+
+def test_exempt_strategy_bypasses_halt(exempt_guard):
+    """Exempt strategy can place NEW orders during HALT."""
+    exempt_guard.trigger_halt("drift_burst")
+    assert exempt_guard.state == StormGuardState.HALT
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
+    )
+    assert ok
+    assert reason == "HALT_EXEMPT"
+
+
+def test_non_exempt_strategy_still_blocked_during_halt(exempt_guard):
+    """Non-exempt strategy is still blocked during HALT."""
+    exempt_guard.trigger_halt("drift_burst")
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "cbs_tmfd6")
+    )
+    assert not ok
+    assert reason == "STORMGUARD_HALT"
+
+
+def test_exempt_strategy_bypasses_storm(exempt_guard):
+    """Exempt strategy can place NEW orders during STORM."""
+    exempt_guard.update(latency_us=25000)
+    assert exempt_guard.state == StormGuardState.STORM
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
+    )
+    assert ok
+    assert reason == "STORM_EXEMPT"
+
+
+def test_non_exempt_strategy_still_blocked_during_storm(exempt_guard):
+    """Non-exempt strategy is still blocked during STORM."""
+    exempt_guard.update(latency_us=25000)
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "cbs_tmfd6")
+    )
+    assert not ok
+    assert reason == "STORMGUARD_STORM_NEW_BLOCKED"
+
+
+def test_exempt_strategy_cancel_still_allowed_during_halt(exempt_guard):
+    """CANCEL always allowed regardless of exemption."""
+    exempt_guard.trigger_halt("test")
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.CANCEL, "spike_fader")
+    )
+    assert ok
+    assert reason == "OK"
+
+
+def test_exempt_strategy_normal_state_returns_ok(exempt_guard):
+    """In NORMAL state, exempt strategies get OK (not HALT_EXEMPT)."""
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
+    )
+    assert ok
+    assert reason == "OK"
+
+
+def test_no_exempt_strategies_default():
+    """Default StormGuard has no exempt strategies."""
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        g = StormGuard()
+    assert g._halt_exempt_strategies == frozenset()
+
+
+def test_env_var_halt_exempt_strategies():
+    """HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES env var populates exempt set."""
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        with patch.dict("os.environ", {"HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES": "spike_fader,event_momentum"}):
+            g = StormGuard()
+    assert g._halt_exempt_strategies == frozenset({"spike_fader", "event_momentum"})

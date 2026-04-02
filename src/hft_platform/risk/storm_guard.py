@@ -49,6 +49,7 @@ class StormGuard:
         "_drift_burst_detector",
         "_state_lock",
         "_session_active",
+        "_halt_exempt_strategies",
     )
 
     def __init__(
@@ -56,6 +57,7 @@ class StormGuard:
         thresholds: RiskThresholds | None = None,
         on_halt_callback: Callable[[], Any] | None = None,
         drift_burst_detector: DriftBurstDetector | None = None,
+        halt_exempt_strategies: frozenset[str] | None = None,
     ):
         self.state = StormGuardState.NORMAL
         self.thresholds = thresholds or RiskThresholds()
@@ -72,6 +74,11 @@ class StormGuard:
         self._drift_burst_detector = drift_burst_detector
         self._state_lock = threading.Lock()
         self._session_active: bool = True  # default: active (safe)
+        # Per-strategy HALT exemption: named strategies may bypass HALT/STORM blocking.
+        # All other risk checks (position limits, exposure, etc.) still apply.
+        env_exempt = os.getenv("HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES", "")
+        env_set = frozenset(s.strip() for s in env_exempt.split(",") if s.strip()) if env_exempt else frozenset()
+        self._halt_exempt_strategies: frozenset[str] = halt_exempt_strategies or env_set
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -367,9 +374,30 @@ class StormGuard:
             if self.state == StormGuardState.HALT:
                 if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
                     return True, "OK"
+                if intent.strategy_id in self._halt_exempt_strategies:
+                    logger.warning(
+                        "stormguard_halt_exempt_bypass",
+                        strategy_id=intent.strategy_id,
+                        intent_type=intent.intent_type.name,
+                        symbol=intent.symbol,
+                    )
+                    try:
+                        self.metrics.stormguard_transitions_total.labels(
+                            direction="halt_exempt_bypass"
+                        ).inc()
+                    except Exception:
+                        pass
+                    return True, "HALT_EXEMPT"
                 return False, "STORMGUARD_HALT"
             if self.state == StormGuardState.STORM:
                 if intent.intent_type == IntentType.NEW:
+                    if intent.strategy_id in self._halt_exempt_strategies:
+                        logger.warning(
+                            "stormguard_storm_exempt_bypass",
+                            strategy_id=intent.strategy_id,
+                            symbol=intent.symbol,
+                        )
+                        return True, "STORM_EXEMPT"
                     return False, "STORMGUARD_STORM_NEW_BLOCKED"
             return True, "OK"
 

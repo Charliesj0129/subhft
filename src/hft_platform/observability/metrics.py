@@ -210,6 +210,7 @@ class MetricsRegistry:
                 "recorder_exec_drops_total",
                 # Recorder exec WAL fallback counter
                 "recorder_exec_wal_fallback_total",
+                "recorder_exec_wal_fallback_failure_total",
                 # Recorder reinject circuit breaker drops (P-21)
                 "recorder_reinject_circuit_breaker_drops_total",
                 # Recorder bridge queue-full drops
@@ -389,6 +390,11 @@ class MetricsRegistry:
         self.recorder_exec_wal_fallback_total = Counter(
             "recorder_exec_wal_fallback_total",
             "Execution events written to WAL fallback after recorder queue full",
+            ["topic"],
+        )
+        self.recorder_exec_wal_fallback_failure_total = Counter(
+            "recorder_exec_wal_fallback_failure_total",
+            "WAL fallback write failures for execution events",
             ["topic"],
         )
         self.position_pnl_realized = Gauge("position_pnl_realized", "Realized PnL", ["strategy", "symbol"])

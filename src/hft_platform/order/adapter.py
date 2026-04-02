@@ -1050,7 +1050,7 @@ class OrderAdapter:
     def _coalesce_key(self, cmd: OrderCommand) -> tuple:
         intent = cmd.intent
         if intent.intent_type == IntentType.NEW:
-            return ("new", intent.strategy_id, intent.symbol)
+            return ("new", intent.strategy_id, intent.symbol, intent.intent_id)
         if intent.intent_type == IntentType.CANCEL:
             return ("cancel", intent.strategy_id, intent.target_order_id)
         if intent.intent_type == IntentType.AMEND:

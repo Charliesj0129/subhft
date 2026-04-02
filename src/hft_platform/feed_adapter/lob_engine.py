@@ -474,6 +474,13 @@ class LOBEngine:
 
         self._metrics_pending_total = 0
 
+    def reset_books(self) -> None:
+        """Clear all book state. Call on broker reconnect to prevent stale LOB data."""
+        self.books.clear()
+        self._last_symbol = None
+        self._last_book = None
+        logger.info("lob_books_reset", reason="reconnect")
+
     def _record_lob_metrics(self, symbol: str, is_snapshot: bool):
         if not self._is_metrics_enabled():
             return

@@ -24,7 +24,7 @@ def _synthesize_dedup_key(fill: Any) -> str:
     Used to prevent duplicate processing of reconnect-replayed fills
     that lack a broker sequence number.
     """
-    return f"{fill.symbol}|{fill.side}|{fill.price}|{fill.qty}|{fill.match_ts_ns}"
+    return f"{fill.symbol}|{fill.order_id}|{fill.side}|{fill.price}|{fill.qty}|{fill.match_ts_ns}"
 
 
 def _create_task_with_error_handling(coro: Coroutine[Any, Any, Any], name: Optional[str] = None) -> asyncio.Task[Any]:
@@ -297,18 +297,36 @@ class ExecutionRouter:
                         if _dedup_key not in self._seen_fill_ids:
                             self._seen_fill_ids[_dedup_key] = None
                             if hasattr(self.position_store, "on_fill"):
-                                self.position_store.on_fill(fill_event)
-                                drained += 1
-                                # Persist fill via WAL during shutdown drain
-                                self._wal_fallback_write("fills", fill_event)
-                                # Notify risk engine of PnL delta
+                                _pre_realized_sd = 0
                                 if self._risk_engine is not None:
-                                    notify = getattr(self._risk_engine, "notify_fill_pnl", None)
-                                    if callable(notify):
+                                    _pos_key_sd = f"{fill_event.account_id}:{fill_event.strategy_id}:{fill_event.symbol}"
+                                    _pre_pos_sd = self.position_store.positions.get(_pos_key_sd)
+                                    if _pre_pos_sd is not None:
+                                        _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
+                                delta = self.position_store.on_fill(fill_event)
+                                drained += 1
+                                # Persist fill via recorder queue (mapped) or WAL fallback
+                                if self._recorder_queue is not None and self._symbol_metadata is not None:
+                                    from hft_platform.recorder.mapper import map_event_to_record  # noqa: PLC0415
+
+                                    _mapped = map_event_to_record(fill_event, self._symbol_metadata, self._price_codec)
+                                    if _mapped:
+                                        _topic, _payload = _mapped
                                         try:
-                                            notify(fill_event.strategy_id, fill_event.realized_pnl)
-                                        except Exception:
-                                            pass
+                                            self._recorder_queue.put_nowait({"topic": _topic, "data": _payload})
+                                        except asyncio.QueueFull:
+                                            self._wal_fallback_write(_topic, _payload)
+                                    else:
+                                        logger.warning("shutdown_drain_fill_unmappable", fill_id=fill_event.fill_id)
+                                else:
+                                    self._wal_fallback_write("fills", fill_event)
+                                # Notify risk engine of PnL delta using PositionDelta
+                                if self._risk_engine is not None:
+                                    pnl_delta_sd = delta.realized_pnl - _pre_realized_sd
+                                    if pnl_delta_sd != 0:
+                                        notify = getattr(self._risk_engine, "notify_fill_pnl", None)
+                                        if callable(notify):
+                                            notify(fill_event.strategy_id, pnl_delta_sd)
                                 logger.info("shutdown_drain_fill", fill_id=fill_event.fill_id, dedup_key=_dedup_key)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("shutdown_drain_error", error=str(exc))
@@ -361,12 +379,26 @@ class ExecutionRouter:
                         fill.decision_price = _tca[0]
                         fill.arrival_price = _tca[1]
 
+                # Capture pre-fill realized PnL for incremental delta
+                _pre_realized_dlq = 0
+                if self._risk_engine is not None:
+                    _pos_key = f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}"
+                    _pre_pos = self.position_store.positions.get(_pos_key)
+                    if _pre_pos is not None:
+                        _pre_realized_dlq = _pre_pos.realized_pnl_scaled
+
                 if hasattr(self.position_store, "on_fill_async"):
                     delta = await self.position_store.on_fill_async(fill)
                 elif hasattr(self.position_store, "on_fill"):
                     delta = self.position_store.on_fill(fill)
                 else:
                     continue
+                if self._risk_engine is not None and delta is not None:
+                    pnl_delta_dlq = delta.realized_pnl - _pre_realized_dlq
+                    if pnl_delta_dlq != 0:
+                        notify = getattr(self._risk_engine, "notify_fill_pnl", None)
+                        if callable(notify):
+                            notify(fill.strategy_id, pnl_delta_dlq)
                 publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
                 if publish_many_nowait:
                     publish_many_nowait([delta, fill])

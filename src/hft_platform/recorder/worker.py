@@ -516,7 +516,11 @@ class RecorderService:
                     item = self.queue.get_nowait()
                     topic = item.get("topic")
                     data = item.get("data")
-                    if topic in self.batchers:
+                    if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
+                        rows = [data] if not isinstance(data, list) else data
+                        await self._wal_first_writer.write(topic, rows)
+                        drained += 1
+                    elif topic in self.batchers:
                         await self.batchers[topic].add(data)
                         drained += 1
                     self.queue.task_done()

@@ -1131,6 +1131,11 @@ class SystemBootstrapper:
                 evidence_writer = get_shared_autonomy_evidence_writer()
 
                 if notification_dispatcher is not None:
+                    # X-H1: Late-bind dispatcher to RiskEngine so daily-loss HALT alerts fire
+                    if hasattr(risk_engine, "_notification_dispatcher"):
+                        risk_engine._notification_dispatcher = notification_dispatcher
+                        logger.info("RiskEngine notification_dispatcher wired")
+
                     daily_report_service = DailyReportService(
                         ch_client=ch_client,
                         notification_dispatcher=notification_dispatcher,

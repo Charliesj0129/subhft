@@ -51,7 +51,7 @@ def test_coalesce_key_variants(tmp_path):
     cancel_cmd = _make_cmd(IntentType.CANCEL, target_order_id="OID")
     amend_cmd = _make_cmd(IntentType.AMEND, target_order_id="OID")
 
-    assert adapter._coalesce_key(new_cmd) == ("new", "strat", "TXF")
+    assert adapter._coalesce_key(new_cmd) == ("new", "strat", "TXF", 1)  # X-C2: intent_id included
     assert adapter._coalesce_key(cancel_cmd) == ("cancel", "strat", "OID")
     assert adapter._coalesce_key(amend_cmd) == ("amend", "strat", "OID")
 
