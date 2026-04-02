@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, Dict, TypeAlias, TypeGuard, cast
@@ -26,6 +27,14 @@ logger = get_logger("order_adapter")
 
 _PENDING_SENTINEL = object()
 _TERMINAL_BEFORE_REGISTERED = object()
+
+# Operations that mutate broker state and must not be retried if the
+# timed-out attempt might still succeed in the thread pool.
+_MUTATING_OPS: frozenset[str] = frozenset({"place_order", "update_order"})
+
+
+class _TimeoutCancelled(Exception):
+    """Raised inside the thread-pool wrapper when the attempt was cancelled."""
 
 
 TypedOrderCommandFrame: TypeAlias = tuple[
@@ -1165,13 +1174,29 @@ class OrderAdapter:
             return None
 
         base_delay_s = 0.01  # 10ms initial backoff
+        is_mutating = op in _MUTATING_OPS
 
         try:
             for attempt in range(max_retries + 1):
+                # For mutating operations, wrap the broker call with a
+                # cancellation guard so a timed-out thread cannot actually
+                # execute the broker SDK call after we move on to retry.
+                cancelled = threading.Event() if is_mutating else None
+
+                def _guarded_call(
+                    _fn: Any = fn,
+                    _args: tuple[Any, ...] = args,
+                    _kwargs: dict[str, Any] = kwargs,
+                    _cancelled: threading.Event | None = cancelled,
+                ) -> Any:
+                    if _cancelled is not None and _cancelled.is_set():
+                        raise _TimeoutCancelled()
+                    return _fn(*_args, **_kwargs)
+
                 try:
                     start_ns = time.perf_counter_ns()
                     result = await asyncio.wait_for(
-                        asyncio.to_thread(fn, *args, **kwargs),
+                        asyncio.to_thread(_guarded_call),
                         timeout=self._api_timeout_s,
                     )
                     duration = time.perf_counter_ns() - start_ns
@@ -1196,7 +1221,39 @@ class OrderAdapter:
                     return result
 
                 except Exception as exc:  # noqa: BLE001 — broker SDK retry
+                    # Signal the in-flight thread to abort if it hasn't
+                    # started the broker call yet (best-effort guard).
+                    if cancelled is not None:
+                        cancelled.set()
+
+                    # Treat our internal cancellation as a timeout
+                    if isinstance(exc, _TimeoutCancelled):
+                        exc = asyncio.TimeoutError()
+
                     is_transient = self._is_transient_error(exc)
+
+                    # For mutating ops that timed out, do NOT retry — the
+                    # original thread-pool call may still complete at the
+                    # broker side, and retrying would create a duplicate.
+                    if is_mutating and isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                        logger.error(
+                            "Mutating API call timed out, skipping retry to prevent duplicate",
+                            op=op,
+                            attempt=attempt + 1,
+                            timeout_s=self._api_timeout_s,
+                        )
+                        self.metrics.order_reject_total.inc()
+                        self.circuit_breaker.record_failure()
+                        if intent and self.latency and intent.source_ts_ns:
+                            e2e_ns = timebase.now_ns() - intent.source_ts_ns
+                            self.latency.record(
+                                "e2e_order",
+                                e2e_ns,
+                                trace_id=intent.trace_id,
+                                symbol=intent.symbol,
+                                strategy_id=intent.strategy_id,
+                            )
+                        return None
 
                     if is_transient and attempt < max_retries:
                         # Exponential backoff: 10ms, 20ms, 40ms...
