@@ -47,6 +47,7 @@ class MetricsRegistry:
                 "feed_latency_ns",
                 "feed_interarrival_ns",
                 "bus_overflow_total",
+                "bus_gap_events_total",
                 "normalization_errors_total",
                 "lob_updates_total",
                 "lob_snapshots_total",
@@ -230,6 +231,7 @@ class MetricsRegistry:
             buckets=[1_000_000, 2_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000, 500_000_000],
         )  # 1ms to 500ms
         self.bus_overflow_total = Counter("bus_overflow_total", "Event bus overflows")
+        self.bus_gap_events_total = Counter("bus_gap_events_total", "GapEvents injected on consumer overflow")
         self.normalization_errors_total = Counter("normalization_errors_total", "Normalization failures", ["type"])
         self.rust_fallback_total = Counter(
             "rust_fallback_total", "Rust-to-Python normalizer fallback count", ["type"]

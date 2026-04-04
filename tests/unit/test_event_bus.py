@@ -180,10 +180,11 @@ def test_overflow_count_resets_after_successful_consume():
 
     async def _run():
         gen = bus.consume(start_cursor=-1)
-        # Drain all available events from the inner while loop so it completes,
-        # which triggers the reset code. With size=2 and 5 published, after
-        # overflow skip local_seq = cursor - size = 5 - 2 = 3. Inner loop
-        # yields events at seq 4 and 5 (2 events).
+        # After overflow, a GapEvent is yielded first, then the remaining
+        # buffered events. With size=2 and 5 published, after overflow skip
+        # local_seq = cursor - size = 5 - 2 = 3. Inner loop yields events
+        # at seq 4 and 5 (2 events), preceded by the GapEvent.
+        gap_evt = await gen.__anext__()  # GapEvent injected on overflow
         evt1 = await gen.__anext__()
         evt2 = await gen.__anext__()
         # After evt2, the inner while loop condition (local_seq < current_cursor)
@@ -191,10 +192,12 @@ def test_overflow_count_resets_after_successful_consume():
         # Publish one more to unblock the wait so we can check the counter.
         bus.publish_nowait("probe")
         evt3 = await gen.__anext__()
-        return (evt1, evt2, evt3)
+        return (gap_evt, evt1, evt2, evt3)
 
     result = asyncio.run(_run())
-    assert result[2] == "probe"
+    from hft_platform.events import GapEvent
+    assert isinstance(result[0], GapEvent)
+    assert result[3] == "probe"
     # Counter was reset after the first catch-up completed.
     assert bus._overflow_count == 0
 
@@ -206,15 +209,19 @@ def test_overflow_count_resets_after_successful_consume_batch():
 
     async def _run():
         gen = bus.consume_batch(batch_size=10, start_cursor=-1)
-        # First batch drains all available events (inner loop completes → reset).
+        # First yield is a GapEvent batch injected on overflow.
+        gap_batch = await gen.__anext__()
+        # Second batch drains all available events (inner loop completes → reset).
         batch1 = await gen.__anext__()
         # Publish a probe to unblock the outer wait loop.
         bus.publish_nowait("probe")
         batch2 = await gen.__anext__()
-        return (batch1, batch2)
+        return (gap_batch, batch1, batch2)
 
     result = asyncio.run(_run())
-    assert "probe" in result[1]
+    from hft_platform.events import GapEvent
+    assert any(isinstance(e, GapEvent) for e in result[0])
+    assert "probe" in result[2]
     assert bus._overflow_count == 0
 
 
@@ -269,6 +276,8 @@ def test_non_consecutive_overflows_do_not_trigger_halt(monkeypatch):
         bus.publish_many_nowait(["x1", "x2", "x3", "x4", "x5"])
         gen = bus.consume(start_cursor=-1)
         # Drain all available events so the inner while loop completes.
+        # First yielded event is a GapEvent from overflow detection.
+        gap_evt = await gen.__anext__()
         evt1 = await gen.__anext__()
         evt2 = await gen.__anext__()
         # Inner loop done → reset fires. Publish probe to verify.

@@ -5,6 +5,8 @@ from typing import Any, Callable, List, Optional
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
+from hft_platform.events import GapEvent
 from hft_platform.observability.metrics import MetricsRegistry
 
 # from collections import deque
@@ -617,6 +619,8 @@ class RingBufferBus:
                     self.metrics.bus_overflow_total.inc()
                     self._overflow_count += 1
                     lag = current_cursor - local_seq
+                    first_missed = local_seq + 1
+                    last_missed = current_cursor - self.size
                     logger.error(
                         "CRITICAL: Consumer lagged too much, data loss occurred",
                         lag=lag,
@@ -631,6 +635,15 @@ class RingBufferBus:
                         logger.critical("StormGuard HALT triggered due to EventBus overflow")
 
                     local_seq = current_cursor - self.size
+
+                    # Inject GapEvent so downstream strategies can reset stale state
+                    self.metrics.bus_gap_events_total.inc()
+                    yield GapEvent(
+                        missed_count=lag - self.size,
+                        first_missed_seq=first_missed,
+                        last_missed_seq=last_missed,
+                        ts=timebase.now_ns(),
+                    )
 
                 while local_seq < current_cursor:
                     local_seq += 1
@@ -691,6 +704,8 @@ class RingBufferBus:
                     self.metrics.bus_overflow_total.inc()
                     self._overflow_count += 1
                     lag = current_cursor - local_seq
+                    first_missed = local_seq + 1
+                    last_missed = current_cursor - self.size
                     logger.error(
                         "CRITICAL: Consumer batch lagged too much, data loss occurred",
                         lag=lag,
@@ -704,6 +719,16 @@ class RingBufferBus:
                         logger.critical("StormGuard HALT triggered due to EventBus batch overflow")
 
                     local_seq = current_cursor - self.size
+
+                    # Inject GapEvent into batch so downstream strategies can reset stale state
+                    self.metrics.bus_gap_events_total.inc()
+                    gap_event = GapEvent(
+                        missed_count=lag - self.size,
+                        first_missed_seq=first_missed,
+                        last_missed_seq=last_missed,
+                        ts=timebase.now_ns(),
+                    )
+                    yield [gap_event]
 
                 batch: List[Any] = []
                 while local_seq < current_cursor and len(batch) < batch_size:

@@ -169,3 +169,18 @@ class FeatureUpdateEvent:
         from hft_platform.feature.boundary import event_to_typed_frame
 
         return event_to_typed_frame(self)
+
+
+@dataclass(slots=True)
+class GapEvent:
+    """Injected when RingBufferBus consumer detects overflow (skip-forward).
+
+    Strategies receiving this event should assume that ``missed_count`` events
+    were silently dropped and react accordingly (e.g. reset stale state,
+    re-request LOB snapshot).
+    """
+
+    missed_count: int
+    first_missed_seq: int
+    last_missed_seq: int
+    ts: int  # nanoseconds from timebase

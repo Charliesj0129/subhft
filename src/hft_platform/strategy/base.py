@@ -8,7 +8,7 @@ from structlog import get_logger
 # Fill/Order Events might be imported from contracts or events
 from hft_platform.contracts.execution import FillEvent, OrderEvent
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
-from hft_platform.events import BidAskEvent, FeatureUpdateEvent, LOBStatsEvent, TickEvent
+from hft_platform.events import BidAskEvent, FeatureUpdateEvent, GapEvent, LOBStatsEvent, TickEvent
 from hft_platform.feature.engine import _StatsTupleProxy
 
 logger = get_logger("strategy")
@@ -205,6 +205,15 @@ class BaseStrategy(ABC):
         """Handle Order Status Updates."""
         pass
 
+    def on_gap(self, event: "GapEvent") -> None:
+        """Called when RingBufferBus overflow caused missed events.
+
+        Strategies should override this to reset stale internal state
+        (e.g. re-request LOB snapshot, clear rolling accumulators).
+        Default implementation is a no-op.
+        """
+        pass
+
     def on_risk_feedback(self, feedback: "RiskFeedback") -> None:
         """Called when RiskEngine rejects an OrderIntent from this strategy."""
         pass
@@ -239,6 +248,8 @@ class BaseStrategy(ABC):
             self.on_stats(_StatsTupleProxy(event))
         elif isinstance(event, FeatureUpdateEvent):
             self.on_features(event)
+        elif isinstance(event, GapEvent):
+            self.on_gap(event)
         elif isinstance(event, FillEvent):
             self.on_fill(event)
         elif isinstance(event, OrderEvent):
