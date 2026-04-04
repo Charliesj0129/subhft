@@ -7,8 +7,15 @@ forwarding to registered callbacks.
 Design notes
 ------------
 - **Allocator Law**: Translation buffers (_tick_buffer, _bidask_buffer) are
-  pre-allocated once in ``__init__`` and reused by overwriting values in each
-  callback invocation.  No per-tick heap allocation.
+  pre-allocated once in ``__init__`` and reused as *workspace* to avoid
+  intermediate allocations during the field-translation step.  However, a
+  fresh snapshot dict is created for every callback invocation so the
+  callback (and any downstream async queue) receives an independent object
+  that cannot be overwritten by the next WebSocket message.
+- **Thread Safety**: Fubon WebSocket callbacks run in a separate thread; the
+  consumer runs in an asyncio event loop.  The snapshot dict ensures that by
+  the time the event loop dequeues the message the values are still correct —
+  the workspace buffer may already have been overwritten by the next callback.
 - **Precision Law**: Canonical callbacks receive x10000 scaled integer prices.
 - **Precision Law**: Float prices are scaled to canonical x10000 integers at
   this boundary before they leave the adapter.
@@ -66,9 +73,11 @@ class FubonQuoteRuntime:
         self._last_data_ts: float = 0.0
         self.log = logger
 
-        # Pre-allocated translation buffers (Allocator Law).
-        # Values are overwritten on each callback — the *same dict object*
-        # is reused every time to avoid per-tick heap allocation.
+        # Pre-allocated translation buffers used as *workspace* (Allocator Law).
+        # Values are overwritten on each callback to perform field translation
+        # without intermediate allocations.  A fresh snapshot dict is then
+        # passed to the registered callback — see _on_fubon_trade /
+        # _on_fubon_book for details.
         self._tick_buffer: dict[str, Any] = {
             "code": "",
             "close": 0,
@@ -180,7 +189,15 @@ class FubonQuoteRuntime:
             buf["ts"] = ts_ns
 
             self._last_data_ts = time.monotonic()
-            self._on_tick(buf)
+            # Create a fresh snapshot dict so the async consumer receives an
+            # independent object.  The workspace buf may be overwritten by the
+            # next callback before the event loop dequeues this message.
+            self._on_tick({
+                "code": buf["code"],
+                "close": buf["close"],
+                "volume": buf["volume"],
+                "ts": buf["ts"],
+            })
         except Exception as exc:
             self.log.error("Fubon trade callback error", error=str(exc))
 
@@ -222,7 +239,17 @@ class FubonQuoteRuntime:
             buf["ts"] = ts_ns
 
             self._last_data_ts = time.monotonic()
-            self._on_bidask(buf)
+            # Create a fresh snapshot dict with copies of the inner lists so
+            # the async consumer is fully isolated from the workspace buffer.
+            # list(bp) is safe because the elements are ints (immutable).
+            self._on_bidask({
+                "code": buf["code"],
+                "bid_price": list(bp),
+                "bid_volume": list(bv),
+                "ask_price": list(ap),
+                "ask_volume": list(av),
+                "ts": buf["ts"],
+            })
         except Exception as exc:
             self.log.error("Fubon book callback error", error=str(exc))
 

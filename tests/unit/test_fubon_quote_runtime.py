@@ -5,7 +5,8 @@ Tests cover:
 - Book callback translation (Fubon format → canonical bidask dict)
 - Subscribe / unsubscribe lifecycle
 - Watchdog start / stop
-- Pre-allocated buffer reuse (same dict object on every callback)
+- Snapshot isolation (each callback receives a distinct dict; workspace buffer
+  reuse must not corrupt previously received messages across the async boundary)
 - Price scaling (float → int x10000)
 """
 
@@ -195,23 +196,35 @@ class TestBookCallback:
 
 
 class TestBufferReuse:
-    def test_tick_buffer_same_object(self) -> None:
-        """The tick callback must receive the *same* dict object each time."""
+    def test_tick_callback_receives_distinct_dicts(self) -> None:
+        """Each tick callback invocation must receive a *distinct* dict object.
+
+        The pre-allocated workspace buffer is reused for translation, but a
+        fresh snapshot is passed to the callback so that the async consumer
+        cannot observe a later callback's overwrite.
+
+        We store the dict objects themselves (not just their ids) to prevent
+        premature GC from causing id() reuse between callbacks.
+        """
         rt = _make_runtime()
-        ids: list[int] = []
-        rt.register_quote_callbacks(on_tick=lambda d: ids.append(id(d)), on_bidask=MagicMock())
+        received: list[dict] = []
+        rt.register_quote_callbacks(on_tick=lambda d: received.append(d), on_bidask=MagicMock())
 
         rt._on_fubon_trade({"symbol": "2330", "close": 100.0, "volume": 1, "datetime": 0})
         rt._on_fubon_trade({"symbol": "2317", "close": 200.0, "volume": 2, "datetime": 0})
 
-        assert len(ids) == 2
-        assert ids[0] == ids[1], "tick buffer must be the same dict object (Allocator Law)"
+        assert len(received) == 2
+        assert received[0] is not received[1], "each tick callback must receive a fresh snapshot dict"
 
-    def test_bidask_buffer_same_object(self) -> None:
-        """The bidask callback must receive the *same* dict object each time."""
+    def test_bidask_callback_receives_distinct_dicts(self) -> None:
+        """Each bidask callback invocation must receive a *distinct* dict object.
+
+        We store the dict objects themselves (not just their ids) to prevent
+        premature GC from causing id() reuse between callbacks.
+        """
         rt = _make_runtime()
-        ids: list[int] = []
-        rt.register_quote_callbacks(on_tick=MagicMock(), on_bidask=lambda d: ids.append(id(d)))
+        received: list[dict] = []
+        rt.register_quote_callbacks(on_tick=MagicMock(), on_bidask=lambda d: received.append(d))
 
         book = {
             "symbol": "2330",
@@ -224,8 +237,72 @@ class TestBufferReuse:
         rt._on_fubon_book(book)
         rt._on_fubon_book(book)
 
-        assert len(ids) == 2
-        assert ids[0] == ids[1], "bidask buffer must be the same dict object (Allocator Law)"
+        assert len(received) == 2
+        assert received[0] is not received[1], "each bidask callback must receive a fresh snapshot dict"
+
+    def test_tick_snapshot_isolation(self) -> None:
+        """Data from the first tick must not be overwritten when a second tick arrives.
+
+        Simulates the async boundary: the callback stores a reference to the
+        received dict (no copy), then fires a second trade. The first stored
+        dict must still contain the first trade's values.
+        """
+        rt = _make_runtime()
+        stored: list[dict] = []
+        # Store the reference as-is — no copy — to simulate enqueue behaviour.
+        rt.register_quote_callbacks(on_tick=lambda d: stored.append(d), on_bidask=MagicMock())
+
+        rt._on_fubon_trade({"symbol": "2330", "close": 100.0, "volume": 1, "datetime": 0})
+        rt._on_fubon_trade({"symbol": "2317", "close": 200.0, "volume": 2, "datetime": 0})
+
+        assert len(stored) == 2
+        # First snapshot must still reflect the first trade.
+        assert stored[0]["code"] == "2330"
+        assert stored[0]["close"] == 1_000_000  # 100.0 * 10000
+        assert stored[0]["volume"] == 1
+        # Second snapshot must reflect the second trade.
+        assert stored[1]["code"] == "2317"
+        assert stored[1]["close"] == 2_000_000  # 200.0 * 10000
+        assert stored[1]["volume"] == 2
+
+    def test_bidask_snapshot_isolation(self) -> None:
+        """Nested bid/ask lists from the first book must not be overwritten by the second.
+
+        Simulates the async boundary: the callback stores the dict reference
+        without copying the inner lists. The first stored dict's lists must
+        still contain the first book's prices after a second callback fires.
+        """
+        rt = _make_runtime()
+        stored: list[dict] = []
+        # Store the reference as-is — no copy of inner lists.
+        rt.register_quote_callbacks(on_tick=MagicMock(), on_bidask=lambda d: stored.append(d))
+
+        book1 = {
+            "symbol": "2330",
+            "bid_prices": [595.0] * 5,
+            "bid_sizes": [10] * 5,
+            "ask_prices": [596.0] * 5,
+            "ask_sizes": [5] * 5,
+            "datetime": 0,
+        }
+        book2 = {
+            "symbol": "2317",
+            "bid_prices": [100.0] * 5,
+            "bid_sizes": [1] * 5,
+            "ask_prices": [101.0] * 5,
+            "ask_sizes": [1] * 5,
+            "datetime": 0,
+        }
+        rt._on_fubon_book(book1)
+        rt._on_fubon_book(book2)
+
+        assert len(stored) == 2
+        # First snapshot's bid_price list must still contain book1 prices.
+        assert stored[0]["bid_price"][0] == 5_950_000  # 595.0 * 10000
+        assert stored[0]["ask_price"][0] == 5_960_000  # 596.0 * 10000
+        # Second snapshot must contain book2 prices.
+        assert stored[1]["bid_price"][0] == 1_000_000  # 100.0 * 10000
+        assert stored[1]["ask_price"][0] == 1_010_000  # 101.0 * 10000
 
 
 # ---------------------------------------------------------------------------
