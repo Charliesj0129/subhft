@@ -404,9 +404,16 @@ class BookState:
 
             self.bid_depth_total = int(bid_depth)
             self.ask_depth_total = int(ask_depth)
-            self.mid_price_x2 = int(best_bid) + int(best_ask)
-            self.spread = int(best_ask) - int(best_bid)
-            self.imbalance = float(imbalance)
+            _bid = int(best_bid)
+            _ask = int(best_ask)
+            if _bid > 0 and _ask > 0 and _ask >= _bid:
+                self.mid_price_x2 = _bid + _ask
+                self.spread = _ask - _bid
+                self.imbalance = float(imbalance)
+            else:
+                self.mid_price_x2 = 0
+                self.spread = 0
+                self.imbalance = 0.0
             self.version += 1
 
 

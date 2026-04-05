@@ -466,3 +466,55 @@ class TestSymbolCardinalityGuard:
     def test_default_max_symbols_is_10000(self):
         engine = LOBEngine()
         assert engine._max_symbols == 10000
+
+
+class TestApplyUpdateWithStatsFieldsCrossedBookGuard:
+    """Verify apply_update_with_stats_fields rejects crossed-book inputs."""
+
+    def _make_book(self) -> "BookState":
+        from hft_platform.feed_adapter.lob_engine import BookState
+
+        return BookState("TEST")
+
+    def test_crossed_book_zeros_stats(self):
+        book = self._make_book()
+        bids = np.array([[5010000, 10]], dtype=np.int64)
+        asks = np.array([[5000000, 20]], dtype=np.int64)
+        # best_bid (5010000) > best_ask (5000000) — crossed book
+        book.apply_update_with_stats_fields(
+            bids, asks, exch_ts=1000,
+            best_bid=5010000, best_ask=5000000,
+            bid_depth=10, ask_depth=20,
+            _mid_price=0.0, _spread=0.0, imbalance=0.5,
+        )
+        assert book.mid_price_x2 == 0
+        assert book.spread == 0
+        assert book.imbalance == 0.0
+
+    def test_zero_bid_zeros_stats(self):
+        book = self._make_book()
+        bids = np.array([], dtype=np.int64).reshape(0, 2)
+        asks = np.array([[5000000, 20]], dtype=np.int64)
+        book.apply_update_with_stats_fields(
+            bids, asks, exch_ts=1000,
+            best_bid=0, best_ask=5000000,
+            bid_depth=0, ask_depth=20,
+            _mid_price=0.0, _spread=0.0, imbalance=0.0,
+        )
+        assert book.mid_price_x2 == 0
+        assert book.spread == 0
+        assert book.imbalance == 0.0
+
+    def test_normal_book_propagates_stats(self):
+        book = self._make_book()
+        bids = np.array([[5000000, 10]], dtype=np.int64)
+        asks = np.array([[5010000, 20]], dtype=np.int64)
+        book.apply_update_with_stats_fields(
+            bids, asks, exch_ts=1000,
+            best_bid=5000000, best_ask=5010000,
+            bid_depth=10, ask_depth=20,
+            _mid_price=5005000.0, _spread=10000.0, imbalance=-0.333,
+        )
+        assert book.mid_price_x2 == 10010000
+        assert book.spread == 10000
+        assert book.imbalance == pytest.approx(-0.333)
