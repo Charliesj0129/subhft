@@ -106,7 +106,8 @@ async def test_mutating_timeout_adds_phantom_candidate(tmp_config):
     )
 
     assert result is None
-    expected_key = f"{intent.strategy_id}:{intent.symbol}:{intent.intent_id}"
+    # R2-02: 2-part key format matching order_key convention
+    expected_key = f"{intent.strategy_id}:{intent.intent_id}"
     assert expected_key in adapter._phantom_order_keys
     adapter.metrics.phantom_order_candidates_total.inc.assert_called_once()
 
@@ -154,13 +155,15 @@ async def test_mutating_timeout_without_intent_no_phantom(tmp_config):
 def test_get_phantom_candidates_returns_frozenset(tmp_config):
     """get_phantom_candidates returns a frozenset copy of tracked keys."""
     adapter = _make_adapter(tmp_config)
-    adapter._phantom_order_keys.add("s1:2330:1")
-    adapter._phantom_order_keys.add("s2:2317:2")
+    import time
+    now = time.monotonic()
+    adapter._phantom_order_keys["s1:1"] = now
+    adapter._phantom_order_keys["s2:2"] = now
 
     result = adapter.get_phantom_candidates()
 
     assert isinstance(result, frozenset)
-    assert result == frozenset({"s1:2330:1", "s2:2317:2"})
+    assert result == frozenset({"s1:1", "s2:2"})
     # Mutating the returned set should not affect the adapter
     assert len(adapter._phantom_order_keys) == 2
 
@@ -168,20 +171,63 @@ def test_get_phantom_candidates_returns_frozenset(tmp_config):
 def test_clear_phantom_candidate_removes_key(tmp_config):
     """clear_phantom_candidate removes the specified key."""
     adapter = _make_adapter(tmp_config)
-    adapter._phantom_order_keys.add("s1:2330:1")
-    adapter._phantom_order_keys.add("s2:2317:2")
+    import time
+    now = time.monotonic()
+    adapter._phantom_order_keys["s1:1"] = now
+    adapter._phantom_order_keys["s2:2"] = now
 
-    adapter.clear_phantom_candidate("s1:2330:1")
+    adapter.clear_phantom_candidate("s1:1")
 
-    assert "s1:2330:1" not in adapter._phantom_order_keys
-    assert "s2:2317:2" in adapter._phantom_order_keys
+    assert "s1:1" not in adapter._phantom_order_keys
+    assert "s2:2" in adapter._phantom_order_keys
 
 
 def test_clear_phantom_candidate_missing_key_noop(tmp_config):
     """clear_phantom_candidate on a nonexistent key is a no-op."""
     adapter = _make_adapter(tmp_config)
-    adapter._phantom_order_keys.add("s1:2330:1")
+    import time
+    adapter._phantom_order_keys["s1:1"] = time.monotonic()
 
     adapter.clear_phantom_candidate("nonexistent:key:0")
 
-    assert adapter._phantom_order_keys == {"s1:2330:1"}
+    assert "s1:1" in adapter._phantom_order_keys
+    assert len(adapter._phantom_order_keys) == 1
+
+
+def test_phantom_key_format_is_two_part(tmp_config):
+    """R2-02: Phantom key must use 2-part format matching order_key convention."""
+    adapter = _make_adapter(tmp_config)
+    import time
+    adapter._phantom_order_keys["s1:42"] = time.monotonic()
+
+    candidates = adapter.get_phantom_candidates()
+    for key in candidates:
+        parts = key.split(":")
+        assert len(parts) == 2, f"Expected 2-part key, got {len(parts)}-part: {key}"
+
+
+@pytest.mark.asyncio
+async def test_phantom_set_eviction_at_max_size(tmp_config):
+    """R2-03: Phantom set should evict old entries when exceeding max size."""
+    adapter = _make_adapter(tmp_config)
+    adapter._phantom_order_max = 5  # Low cap for testing
+    adapter._api_timeout_s = 0.01
+
+    # Pre-fill with old entries (simulate timestamps from 2 hours ago)
+    import time
+    old_ts = time.monotonic() - 7200.0  # 2 hours ago
+    for i in range(6):
+        adapter._phantom_order_keys[f"old_strat:{i}"] = old_ts
+
+    assert len(adapter._phantom_order_keys) == 6
+
+    # Trigger a new phantom via timeout — this should trigger eviction
+    def _hang(*a, **kw):
+        time.sleep(5)
+
+    intent = _make_intent(intent_id=999)
+    await adapter._call_api("place_order", _hang, intent=intent, max_retries=0)
+
+    # Old entries (>1 hour) should be evicted, only the new one remains
+    assert len(adapter._phantom_order_keys) <= adapter._phantom_order_max
+    assert f"{intent.strategy_id}:{intent.intent_id}" in adapter._phantom_order_keys

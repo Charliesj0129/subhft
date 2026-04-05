@@ -106,6 +106,7 @@ class OrderAdapter:
         "_storm_guard",
         "_dedup_store",
         "_phantom_order_keys",
+        "_phantom_order_max",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -183,7 +184,9 @@ class OrderAdapter:
         self._dedup_store: IdempotencyStore | None = None if _gateway_on else IdempotencyStore(persist_enabled=False)
 
         # Phantom order tracking: timed-out mutating calls that may have succeeded at broker
-        self._phantom_order_keys: set[str] = set()
+        # R2-03: Bounded dict with TTL eviction (Architecture Governance Rule 12)
+        self._phantom_order_keys: dict[str, float] = {}  # key -> monotonic timestamp
+        self._phantom_order_max: int = 1000
 
         self.load_config()
 
@@ -198,11 +201,11 @@ class OrderAdapter:
 
     def get_phantom_candidates(self) -> frozenset[str]:
         """Return a frozen copy of phantom order keys for reconciliation."""
-        return frozenset(self._phantom_order_keys)
+        return frozenset(self._phantom_order_keys.keys())
 
     def clear_phantom_candidate(self, key: str) -> None:
         """Remove a phantom order key after reconciliation confirms resolution."""
-        self._phantom_order_keys.discard(key)
+        self._phantom_order_keys.pop(key, None)
 
     def load_config(self) -> None:
         with open(self.config_path, "r") as f:
@@ -480,59 +483,67 @@ class OrderAdapter:
                 await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Duplicate idempotency_key")
                 return
 
-        # Per-symbol rate limit check (WU-06)
-        if not _safety_exempt:
-            ps_result = self.per_symbol_rate_limiter.check(intent.symbol)
-            if ps_result == PerSymbolRateResult.HARD:
-                await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Per-symbol hard rate limit")
+        # R2-01: Track whether we reserved a dedup slot so we can release it on
+        # unexpected exception (prevents orphaned slots blocking re-submission).
+        _dedup_key = intent.idempotency_key if (not _safety_exempt and self._dedup_store is not None and intent.idempotency_key) else ""
+        try:
+            # Per-symbol rate limit check (WU-06)
+            if not _safety_exempt:
+                ps_result = self.per_symbol_rate_limiter.check(intent.symbol)
+                if ps_result == PerSymbolRateResult.HARD:
+                    await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Per-symbol hard rate limit")
+                    return
+
+            # Per-strategy circuit breaker check (WU-09)
+            if not _safety_exempt and self.strategy_cb_mgr.is_open(intent.strategy_id):
+                await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Per-strategy circuit breaker open")
                 return
 
-        # Per-strategy circuit breaker check (WU-09)
-        if not _safety_exempt and self.strategy_cb_mgr.is_open(intent.strategy_id):
-            await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Per-strategy circuit breaker open")
-            return
+            # Circuit Breaker Check
+            if not _safety_exempt and self.circuit_breaker.is_open():
+                logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
+                await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Circuit breaker open")
+                return
 
-        # Circuit Breaker Check
-        if not _safety_exempt and self.circuit_breaker.is_open():
-            logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
-            await self._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "Circuit breaker open")
-            return
+            if not _safety_exempt and not self.check_rate_limit():
+                # Rate limit exceeded
+                await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Rate limit exceeded")
+                return
 
-        if not _safety_exempt and not self.check_rate_limit():
-            # Rate limit exceeded
-            await self._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "Rate limit exceeded")
-            return
+            if not self._platform_degrade_allows(intent):
+                self.metrics.order_reject_total.inc()
+                self._emit_trace("order_reject", intent, {"reason": "platform_reduce_only", "cmd_id": int(cmd.cmd_id)})
+                await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Platform is in reduce-only mode")
+                return
+            self._reserve_platform_reduce_only_close(intent)
 
-        if not self._platform_degrade_allows(intent):
-            self.metrics.order_reject_total.inc()
-            self._emit_trace("order_reject", intent, {"reason": "platform_reduce_only", "cmd_id": int(cmd.cmd_id)})
-            await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Platform is in reduce-only mode")
-            return
-        self._reserve_platform_reduce_only_close(intent)
+            # Shadow mode intercept (WU-10)
+            if self.shadow_sink.enabled:
+                self.shadow_sink.intercept(intent)
+                self.per_symbol_rate_limiter.record(intent.symbol)
+                return
 
-        # Shadow mode intercept (WU-10)
-        if self.shadow_sink.enabled:
-            self.shadow_sink.intercept(intent)
-            self.per_symbol_rate_limiter.record(intent.symbol)
-            return
+            if not self._validate_client(intent):
+                self.metrics.order_reject_total.inc()
+                self.circuit_breaker.record_failure()
+                await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Client validation failed")
+                return
 
-        if not self._validate_client(intent):
-            self.metrics.order_reject_total.inc()
-            self.circuit_breaker.record_failure()
-            await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Client validation failed")
-            return
-
-        if not self.running:
-            if cmd.created_ns:
-                self._record_queue_latency(cmd)
-            try:
-                await self._dispatch_to_api(cmd)
-                self._dedup_commit(intent.idempotency_key, True, "OK", cmd.cmd_id)
-            except Exception:
-                self._dedup_commit(intent.idempotency_key, False, "dispatch_error", cmd.cmd_id)
-            return
-        if await self._enqueue_api(cmd):
-            self._dedup_commit(intent.idempotency_key, True, "enqueued", cmd.cmd_id)
+            if not self.running:
+                if cmd.created_ns:
+                    self._record_queue_latency(cmd)
+                try:
+                    await self._dispatch_to_api(cmd)
+                    self._dedup_commit(intent.idempotency_key, True, "OK", cmd.cmd_id)
+                except Exception:
+                    self._dedup_commit(intent.idempotency_key, False, "dispatch_error", cmd.cmd_id)
+                return
+            if await self._enqueue_api(cmd):
+                self._dedup_commit(intent.idempotency_key, True, "enqueued", cmd.cmd_id)
+        except Exception:
+            if _dedup_key:
+                self._dedup_commit(_dedup_key, False, "internal_error", 0)
+            raise
 
     def _dedup_commit(self, key: str, approved: bool, reason_code: str, cmd_id: int) -> None:
         """Commit dedup result if store is active and key is non-empty."""
@@ -1333,9 +1344,14 @@ class OrderAdapter:
                         self.metrics.order_reject_total.inc()
                         self.circuit_breaker.record_failure()
                         # D-03: Track phantom order candidates for reconciliation
+                        # R2-02: Use 2-part order_key format for reconciliation parity
                         if intent is not None:
-                            phantom_key = f"{intent.strategy_id}:{intent.symbol}:{intent.intent_id}"
-                            self._phantom_order_keys.add(phantom_key)
+                            phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
+                            self._phantom_order_keys[phantom_key] = time.monotonic()
+                            # R2-03: Evict entries older than 1 hour when over capacity
+                            if len(self._phantom_order_keys) > self._phantom_order_max:
+                                cutoff = time.monotonic() - 3600.0
+                                self._phantom_order_keys = {k: v for k, v in self._phantom_order_keys.items() if v > cutoff}
                             logger.warning(
                                 "phantom_order_candidate",
                                 strategy_id=intent.strategy_id,
