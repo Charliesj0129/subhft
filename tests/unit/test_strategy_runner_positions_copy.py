@@ -52,7 +52,7 @@ def _make_tick_event(symbol: str = "2330") -> object:
     from hft_platform.events import MetaData, TickEvent
 
     return TickEvent(
-        meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
+        meta=MetaData(seq=1, topic="tick", source_ts=0, local_ts=0),
         symbol=symbol,
         price=550_000,
         volume=1,

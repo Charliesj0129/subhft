@@ -178,7 +178,7 @@ async def test_circuit_breaker_normal_to_degraded():
     runner.register(strat)
 
     event = TickEvent(
-        meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
+        meta=MetaData(seq=1, topic="tick", source_ts=0, local_ts=0),
         symbol="2330",
         price=100_000,
         volume=1,
@@ -235,7 +235,7 @@ async def test_circuit_breaker_degraded_to_halted():
     runner.register(strat)
 
     event = TickEvent(
-        meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
+        meta=MetaData(seq=1, topic="tick", source_ts=0, local_ts=0),
         symbol="2330",
         price=100_000,
         volume=1,
@@ -293,7 +293,7 @@ async def test_circuit_breaker_degraded_recovery():
         runner._circuit_success_counts[sid] = 0
 
     event = TickEvent(
-        meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
+        meta=MetaData(seq=1, topic="tick", source_ts=0, local_ts=0),
         symbol="2330",
         price=100_000,
         volume=1,

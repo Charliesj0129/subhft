@@ -32,6 +32,8 @@ class TestStrategyDispatchIndex:
         runner._feature_set_source = None
         runner._feature_profile_source = None
         runner._feature_tuple_source = None
+        runner._feature_staleness_source = None
+        runner._staleness_counter = None
         runner.metrics = None
         runner.latency = None
         runner._trace_sampler = None
@@ -44,6 +46,9 @@ class TestStrategyDispatchIndex:
         runner._positions_dirty = True
         runner._current_source_ts_ns = 0
         runner._current_trace_id = ""
+        runner._stale_event_threshold_ns = 500 * 1_000_000  # 500ms
+        runner._stale_event_skip_total = 0
+        runner._stale_event_metric = None
         runner._strategy_metrics_sample_every = 1
         runner._strategy_metrics_batch = 1
         runner._strategy_metrics_seq = {}
@@ -65,6 +70,16 @@ class TestStrategyDispatchIndex:
         runner.track_gate = None
         runner.strategy_governor = None
         runner.running = False
+        runner._timeout_ns = 50_000_000  # 50ms
+        runner._timeout_strikes_limit = 3
+        runner._timeout_recover_ns = 60_000_000_000
+        runner._timeout_consecutive = {}
+        runner._timeout_broken = {}
+        runner._timeout_broken_at_ns = {}
+        runner._max_intents_per_event = 20
+        runner._default_intent_ttl_ns = 5000 * 1_000_000
+        runner._rejection_sink = None
+        runner._storm_guard = None
         runner.registry = MagicMock()
         runner.registry.instantiate.return_value = []
 
@@ -118,7 +133,7 @@ class TestStrategyDispatchIndex:
         event.strategy_id = "strat_b"
         event.symbol = "SYM1"
         event.meta = None
-        event.ts = 1000
+        event.ts = 0
 
         await runner.process_event(event)
 
@@ -136,7 +151,7 @@ class TestStrategyDispatchIndex:
         event.strategy_id = None  # broadcast
         event.symbol = "SYM1"
         event.meta = None
-        event.ts = 1000
+        event.ts = 0
 
         await runner.process_event(event)
 
@@ -152,7 +167,7 @@ class TestStrategyDispatchIndex:
         event.strategy_id = "nonexistent"
         event.symbol = "SYM1"
         event.meta = None
-        event.ts = 1000
+        event.ts = 0
 
         await runner.process_event(event)
 

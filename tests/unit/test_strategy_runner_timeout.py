@@ -75,7 +75,8 @@ class _SlowThenFastStrategy:
         return self._return_value
 
 
-def _make_event(symbol="TSMC", ts=123_000_000_000):
+def _make_event(symbol="TSMC", ts=0):
+    # ts=0 triggers fallback to now_ns() in _extract_event_trace so events are always fresh
     return SimpleNamespace(symbol=symbol, ts=ts)
 
 

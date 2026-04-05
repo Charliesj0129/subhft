@@ -50,7 +50,8 @@ def _make_intent(strategy_id: str = "strat_a"):
     return intent
 
 
-def _make_event(symbol: str = "TSMC", ts: int = 123_000_000_000):
+def _make_event(symbol: str = "TSMC", ts: int = 0):
+    # ts=0 triggers fallback to now_ns() in _extract_event_trace so events are always fresh
     return SimpleNamespace(symbol=symbol, ts=ts)
 
 
