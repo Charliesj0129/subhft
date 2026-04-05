@@ -44,10 +44,10 @@ def _run_equity(prices, positions, config):
 # ---------------------------------------------------------------------------
 
 
-def test_default_taifex_sell_tax_bps():
-    """BacktestConfig default sell_tax_bps must be 2.0 bps."""
+def test_default_sell_tax_bps_zero_for_futures():
+    """BacktestConfig default sell_tax_bps must be 0.0 (TAIFEX futures have no sell tax)."""
     cfg = BacktestConfig(data_paths=[_BASE_DATA_PATH])
-    assert cfg.sell_tax_bps == 2.0
+    assert cfg.sell_tax_bps == 0.0
 
 
 def test_sell_tax_applied_on_sells_only():

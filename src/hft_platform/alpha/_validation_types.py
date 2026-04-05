@@ -26,7 +26,7 @@ class ValidationConfig:
     live_uplift_factor: float = 1.5
     maker_fee_bps: float = -0.2
     taker_fee_bps: float = 0.2
-    sell_tax_bps: float = 2.0  # TAIFEX securities transaction tax on sells only (bps)
+    sell_tax_bps: float = 0.0  # Sell-side tax (bps). 0 for futures; set >0 for TWSE equities
     stat_pvalue_threshold: float = 0.1
     min_stat_tests_pass: int = 2
     stat_correction_method: str = "bh"
