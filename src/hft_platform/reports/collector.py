@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Callable
+import time
+from typing import Any, Callable, TypeVar
 
 import structlog
 
@@ -36,8 +37,10 @@ log = structlog.get_logger(__name__)
 __all__ = [
     "_ch_to_platform",
     "_day_filter",
+    "_is_transient",
     "_night_filter",
     "_validate_time_filter",
+    "_with_retry",
     "DataCollector",
 ]
 
@@ -60,6 +63,37 @@ _DANGEROUS_SQL_RE = re.compile(
 
 # Memory cap for every CH query
 _SETTINGS = "SETTINGS max_memory_usage = 2000000000"
+
+# ClickHouse connection / query timeouts and retry config
+_CH_CONNECT_TIMEOUT = 10
+_CH_QUERY_TIMEOUT = 60
+_CH_RETRY_DELAY_S = 2.0
+
+T = TypeVar("T")
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Return True for transient ClickHouse errors worth retrying."""
+    exc_type = type(exc).__name__
+    exc_msg = str(exc).lower()
+    return any(
+        keyword in exc_type.lower() or keyword in exc_msg
+        for keyword in ("timeout", "connection", "refused", "reset", "broken pipe", "eof")
+    )
+
+
+def _with_retry(fn: Callable[[], T]) -> T:
+    """Call *fn* with one retry on transient errors, backing off by ``_CH_RETRY_DELAY_S``."""
+    for attempt in range(2):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt == 0 and _is_transient(exc):
+                log.warning("ch_query_transient_error", attempt=attempt, error=str(exc))
+                time.sleep(_CH_RETRY_DELAY_S)
+                continue
+            raise
+    raise RuntimeError("unreachable")  # pragma: no cover — satisfies type checker
 
 
 def _validate_symbol(symbol: str) -> str:
@@ -145,19 +179,27 @@ def _make_execute(host: str) -> ExecuteFn:
     try:
         import clickhouse_connect
 
-        kwargs: dict[str, Any] = {"host": host, "username": user}
+        kwargs: dict[str, Any] = {
+            "host": host,
+            "username": user,
+            "connect_timeout": _CH_CONNECT_TIMEOUT,
+            "send_receive_timeout": _CH_QUERY_TIMEOUT,
+        }
         if password:
             kwargs["password"] = password
         client = clickhouse_connect.get_client(**kwargs)
         log.info("DataCollector using clickhouse_connect", host=host)
 
         def _exec(sql: str, params: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
-            if params:
-                import re as _re
+            def _do() -> list[tuple[Any, ...]]:
+                if params:
+                    import re as _re
 
-                cc_sql = _re.sub(r"%\((\w+)\)s", r"{\1:String}", sql)
-                return client.query(cc_sql, parameters=params).result_rows  # type: ignore[return-value]
-            return client.query(sql).result_rows  # type: ignore[return-value]
+                    cc_sql = _re.sub(r"%\((\w+)\)s", r"{\1:String}", sql)
+                    return client.query(cc_sql, parameters=params).result_rows  # type: ignore[return-value]
+                return client.query(sql).result_rows  # type: ignore[return-value]
+
+            return _with_retry(_do)
 
         return _exec
     except ImportError:
@@ -165,11 +207,20 @@ def _make_execute(host: str) -> ExecuteFn:
 
     from clickhouse_driver import Client  # type: ignore[import-untyped]
 
-    client_native = Client(host=host, user=user, password=password)
+    client_native = Client(
+        host=host,
+        user=user,
+        password=password,
+        connect_timeout=_CH_CONNECT_TIMEOUT,
+        send_receive_timeout=_CH_QUERY_TIMEOUT,
+    )
     log.info("DataCollector using clickhouse_driver", host=host)
 
     def _exec_native(sql: str, params: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
-        return client_native.execute(sql, params)
+        def _do() -> list[tuple[Any, ...]]:
+            return client_native.execute(sql, params)
+
+        return _with_retry(_do)
 
     return _exec_native
 

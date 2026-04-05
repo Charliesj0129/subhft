@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock, patch
 
-from hft_platform.reports.collector import DataCollector, _day_filter, _validate_time_filter
+from hft_platform.reports.collector import (
+    DataCollector,
+    _day_filter,
+    _is_transient,
+    _validate_time_filter,
+    _with_retry,
+)
 from hft_platform.reports.models import SessionData
 
 # ---------------------------------------------------------------------------
@@ -349,3 +355,110 @@ class TestValidateTimeFilter:
         collector, _mock_execute = _make_collector()
         with pytest.raises(ValueError, match="Unsafe time_filter"):
             collector.collect_core("TXFD6", "exch_ts > 0; DELETE FROM hft.market_data")
+
+
+# ---------------------------------------------------------------------------
+# _is_transient() — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestIsTransient:
+    def test_connection_error_is_transient(self) -> None:
+        """ConnectionError is treated as transient."""
+        assert _is_transient(ConnectionError("connection refused"))
+
+    def test_timeout_error_is_transient(self) -> None:
+        """TimeoutError is treated as transient."""
+        assert _is_transient(TimeoutError("timed out"))
+
+    def test_eof_in_message_is_transient(self) -> None:
+        """Exception with 'eof' in message is treated as transient."""
+        assert _is_transient(OSError("unexpected EOF"))
+
+    def test_reset_in_message_is_transient(self) -> None:
+        """Exception with 'reset' in message is treated as transient."""
+        assert _is_transient(OSError("connection reset by peer"))
+
+    def test_broken_pipe_is_transient(self) -> None:
+        """BrokenPipeError is treated as transient."""
+        assert _is_transient(BrokenPipeError("broken pipe"))
+
+    def test_value_error_is_not_transient(self) -> None:
+        """ValueError (bad SQL) is NOT transient and should not be retried."""
+        assert not _is_transient(ValueError("bad SQL syntax"))
+
+    def test_memory_error_is_not_transient(self) -> None:
+        """MemoryError (OOM) is NOT transient."""
+        assert not _is_transient(MemoryError("OOM"))
+
+
+# ---------------------------------------------------------------------------
+# _with_retry() — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestWithRetry:
+    def test_success_on_first_attempt(self) -> None:
+        """_with_retry() returns the result when the first call succeeds."""
+        calls: list[int] = []
+
+        def _fn() -> str:
+            calls.append(1)
+            return "ok"
+
+        result = _with_retry(_fn)
+        assert result == "ok"
+        assert len(calls) == 1
+
+    def test_retries_transient_error(self) -> None:
+        """_with_retry() retries once on a transient (connection) error."""
+        calls: list[int] = []
+
+        def _fn() -> str:
+            calls.append(1)
+            if len(calls) == 1:
+                raise ConnectionError("refused")
+            return "ok"
+
+        result = _with_retry(_fn)
+        assert result == "ok"
+        assert len(calls) == 2
+
+    def test_does_not_retry_non_transient_error(self) -> None:
+        """_with_retry() propagates non-transient errors immediately."""
+        calls: list[int] = []
+
+        def _fn() -> str:
+            calls.append(1)
+            raise ValueError("bad sql")
+
+        with pytest.raises(ValueError, match="bad sql"):
+            _with_retry(_fn)
+        assert len(calls) == 1
+
+    def test_raises_after_two_transient_failures(self) -> None:
+        """_with_retry() re-raises the transient error after the single retry fails."""
+
+        def _fn() -> str:
+            raise ConnectionError("always fails")
+
+        with pytest.raises(ConnectionError, match="always fails"):
+            _with_retry(_fn)
+
+    def test_sleep_called_on_retry(self) -> None:
+        """_with_retry() sleeps before the retry attempt."""
+        from unittest.mock import patch
+
+        calls: list[int] = []
+
+        def _fn() -> str:
+            calls.append(1)
+            if len(calls) == 1:
+                raise ConnectionError("refused")
+            return "ok"
+
+        with patch("hft_platform.reports.collector.time.sleep") as mock_sleep:
+            _with_retry(_fn)
+
+        mock_sleep.assert_called_once()
+        assert mock_sleep.call_args[0][0] > 0
