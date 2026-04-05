@@ -215,7 +215,7 @@ class BiasReasoner:
         if drift > 0.20:
             parts.append("尾盤加壓")
         elif drift < -0.20:
-            parts.append("尾盤加壓")
+            parts.append("尾盤轉弱")
 
         if fr.cross_day.trend_direction == "up":
             parts.append("連續上漲趨勢")
