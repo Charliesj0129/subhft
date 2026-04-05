@@ -25,6 +25,11 @@ def _now_utc() -> _dt.datetime:
     return _dt.datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
 
 
+def _now_ns() -> int:
+    """Current time as nanosecond epoch integer (matches ClickHouse Int64 ts columns)."""
+    return timebase.now_ns()
+
+
 if TYPE_CHECKING:
     from hft_platform.alpha.promotion import PromotionResult
     from hft_platform.alpha.validation import GateReport
@@ -82,7 +87,7 @@ def log_gate_result(
     try:
         client = _get_client()
         gate_letter = gate_report.gate.replace("Gate ", "")
-        now = _now_utc()
+        now = _now_ns()
         client.insert(
             "audit.alpha_gate_log",
             [
@@ -133,7 +138,7 @@ def log_promotion_result(
         return
     try:
         client = _get_client()
-        now = _now_utc()
+        now = _now_ns()
         client.insert(
             "audit.alpha_promotion_log",
             [
@@ -202,7 +207,7 @@ def log_canary_action(
         return
     try:
         client = _get_client()
-        now = _now_utc()
+        now = _now_ns()
         client.insert(
             "audit.alpha_canary_log",
             [
