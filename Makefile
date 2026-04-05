@@ -506,8 +506,8 @@ research-clean: ## Remove research cache artifacts (__pycache__, .pyc, numba cac
 research-audit: ## Audit research pipeline contract and write report
 	$(PY) -m research.factory audit
 
-research-audit-strict: ## Strict audit alias for CI compatibility
-	$(PY) -m research.factory audit
+research-audit-strict: ## Strict audit (--fail-on-warning) for CI compatibility
+	$(PY) -m research.factory audit --fail-on-warning
 
 research-index: ## Build machine-readable research pipeline index
 	$(PY) -m research.factory index

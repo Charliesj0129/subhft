@@ -15,7 +15,7 @@ data_fields:
   - TXO bid/ask quotes (bids_price, asks_price, bids_vol, asks_vol)
 
 complexity: "O(N_strikes)"
-status: DRAFT
+status: DEPRECATED
 
 data_availability_assessment:
   finding: >
