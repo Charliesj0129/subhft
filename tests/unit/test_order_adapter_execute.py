@@ -563,3 +563,57 @@ async def test_api_queue_full_routes_to_dlq(adapter):
     call_kwargs = adapter._dlq.add.call_args[1]
     assert "API queue full" in call_kwargs["error_message"]
     adapter.metrics.order_reject_total.inc.assert_called()
+
+
+# --- CANCEL target not found -> order_reject_total incremented ---
+
+
+@pytest.mark.asyncio
+async def test_cancel_target_not_found_increments_reject_metric(adapter):
+    """When CANCEL target is absent from live_orders, order_reject_total must be incremented."""
+    from unittest.mock import MagicMock
+
+    # Empty live_orders so target lookup always misses
+    adapter.live_orders = {}
+    # order_id_resolver returns a key that won't exist in live_orders
+    adapter.order_id_resolver = MagicMock()
+    adapter.order_id_resolver.resolve_order_key.return_value = "missing_key"
+
+    cmd = make_cmd(intent_type=IntentType.CANCEL)
+
+    reject_count_before = adapter.metrics.order_reject_total.inc.call_count
+    await adapter._dispatch_to_api(cmd)
+    reject_count_after = adapter.metrics.order_reject_total.inc.call_count
+
+    assert reject_count_after == reject_count_before + 1, (
+        "order_reject_total.inc() must be called once when CANCEL target is not found"
+    )
+    # Broker cancel_order must NOT be called
+    adapter.client.cancel_order.assert_not_called()
+
+
+# --- AMEND target not found -> order_reject_total incremented ---
+
+
+@pytest.mark.asyncio
+async def test_amend_target_not_found_increments_reject_metric(adapter):
+    """When AMEND target is absent from live_orders, order_reject_total must be incremented."""
+    from unittest.mock import MagicMock
+
+    # Empty live_orders so target lookup always misses
+    adapter.live_orders = {}
+    # order_id_resolver returns a key that won't exist in live_orders
+    adapter.order_id_resolver = MagicMock()
+    adapter.order_id_resolver.resolve_order_key.return_value = "missing_key"
+
+    cmd = make_cmd(intent_type=IntentType.AMEND)
+
+    reject_count_before = adapter.metrics.order_reject_total.inc.call_count
+    await adapter._dispatch_to_api(cmd)
+    reject_count_after = adapter.metrics.order_reject_total.inc.call_count
+
+    assert reject_count_after == reject_count_before + 1, (
+        "order_reject_total.inc() must be called once when AMEND target is not found"
+    )
+    # Broker update_order must NOT be called
+    adapter.client.update_order.assert_not_called()

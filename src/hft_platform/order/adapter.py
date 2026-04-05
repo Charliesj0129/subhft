@@ -1057,6 +1057,7 @@ class OrderAdapter:
                     self.rate_limiter.record()
                 else:
                     logger.warning("Cancel target not found", target=target_key)
+                    self.metrics.order_reject_total.inc()
 
             elif intent.intent_type == IntentType.AMEND:
                 async with self._live_orders_lock:
@@ -1083,6 +1084,7 @@ class OrderAdapter:
                     self.rate_limiter.record()
                 else:
                     logger.warning("Amend target not found", target=target_key)
+                    self.metrics.order_reject_total.inc()
 
         except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
             logger.error("Broker Error", error=str(e))
