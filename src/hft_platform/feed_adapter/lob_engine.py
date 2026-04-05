@@ -220,9 +220,16 @@ class BookState:
                 ) = _RUST_COMPUTE_STATS(self.bids, self.asks)
                 self.bid_depth_total = int(bid_depth_total)
                 self.ask_depth_total = int(ask_depth_total)
-                self.mid_price_x2 = int(best_bid) + int(best_ask)
-                self.spread = int(best_ask) - int(best_bid)
-                self.imbalance = float(imbalance)
+                bb = int(best_bid)
+                ba = int(best_ask)
+                if bb > 0 and ba > 0 and ba >= bb:
+                    self.mid_price_x2 = bb + ba
+                    self.spread = ba - bb
+                    self.imbalance = float(imbalance)
+                else:
+                    self.mid_price_x2 = 0
+                    self.spread = 0
+                    self.imbalance = 0.0
                 return
             except Exception as exc:
                 logger.debug("rust_compute_stats_fallback", symbol=self.symbol, error=str(exc))
@@ -434,6 +441,8 @@ class LOBEngine:
         "_max_symbols",
         "_metrics_max_label_symbols",
         "_metrics_known_symbols",
+        "_eviction_ttl_ns",
+        "_eviction_last_run_ns",
     )
 
     def __init__(self):
@@ -454,6 +463,9 @@ class LOBEngine:
         self._metrics_task: asyncio.Task | None = None
         self._last_symbol: str | None = None
         self._last_book: BookState | None = None
+        _evict_ttl_s = int(os.getenv("HFT_LOB_SYMBOL_TTL_S", "3600"))
+        self._eviction_ttl_ns: int = _evict_ttl_s * 1_000_000_000
+        self._eviction_last_run_ns: int = 0
 
     def _is_metrics_enabled(self) -> bool:
         if self._metrics_enabled:
@@ -474,6 +486,7 @@ class LOBEngine:
                         continue
                     self._metrics_flush_requested = False
                     self._flush_metrics()
+                    self.evict_stale_symbols()
             except asyncio.CancelledError:
                 pass
 
@@ -499,6 +512,38 @@ class LOBEngine:
         self._last_symbol = None
         self._last_book = None
         logger.info("lob_books_reset", reason="reconnect")
+
+    def evict_stale_symbols(self) -> int:
+        """Remove symbols whose last exchange timestamp is older than TTL.
+
+        Returns the number of evicted symbols. Safe to call from the metrics
+        worker or any periodic maintenance loop.
+        """
+        if self._eviction_ttl_ns <= 0:
+            return 0
+        now_ns = timebase.now_ns()
+        # Rate-limit: run at most once per minute
+        if now_ns - self._eviction_last_run_ns < 60_000_000_000:
+            return 0
+        self._eviction_last_run_ns = now_ns
+        cutoff_ns = now_ns - self._eviction_ttl_ns
+        stale = [
+            sym for sym, book in self.books.items()
+            if book.exch_ts > 0 and book.exch_ts < cutoff_ns
+        ]
+        for sym in stale:
+            del self.books[sym]
+        if stale:
+            # Clear single-entry cache if evicted symbol was cached
+            if self._last_symbol in stale:
+                self._last_symbol = None
+                self._last_book = None
+            logger.info(
+                "lob_stale_symbols_evicted",
+                count=len(stale),
+                symbols=stale[:5],  # log at most 5 for brevity
+            )
+        return len(stale)
 
     def _record_lob_metrics(self, symbol: str, is_snapshot: bool):
         if not self._is_metrics_enabled():
@@ -616,9 +661,16 @@ class LOBEngine:
                         book.asks = event.asks
                         book.bid_depth_total = int(fs.bid_depth)
                         book.ask_depth_total = int(fs.ask_depth)
-                        book.mid_price_x2 = int(fs.mid_price_x2)
-                        book.spread = int(fs.spread_scaled)
-                        book.imbalance = float(fs.imbalance)
+                        _fs_mid = int(fs.mid_price_x2)
+                        _fs_sp = int(fs.spread_scaled)
+                        if _fs_sp >= 0 and _fs_mid > 0:
+                            book.mid_price_x2 = _fs_mid
+                            book.spread = _fs_sp
+                            book.imbalance = float(fs.imbalance)
+                        else:
+                            book.mid_price_x2 = 0
+                            book.spread = 0
+                            book.imbalance = 0.0
                         book.version += 1
                 if metrics_enabled:
                     self._record_lob_metrics(event.symbol, event.is_snapshot)
