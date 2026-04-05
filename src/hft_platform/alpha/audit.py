@@ -82,6 +82,21 @@ def log_gate_result(
     config_hash: str | None,
 ) -> None:
     """Insert one row into audit.alpha_gate_log. Fails silently on error."""
+    try:
+        from hft_platform.observability.metrics import get_metrics
+
+        m = get_metrics()
+        if m is not None:
+            gate_letter = gate_report.gate.replace("Gate ", "")
+            result = "pass" if gate_report.passed else "fail"
+            m.alpha_gate_results_total.labels(
+                alpha_id=alpha_id,
+                gate=gate_letter,
+                result=result,
+            ).inc()
+    except Exception:  # noqa: BLE001
+        pass  # metrics are best-effort
+
     if not _is_enabled():
         return
     try:
@@ -134,6 +149,24 @@ def log_promotion_result(
     scorecard: dict[str, Any] | None = None,
 ) -> None:
     """Insert one row into audit.alpha_promotion_log. Fails silently on error."""
+    try:
+        from hft_platform.observability.metrics import get_metrics
+
+        m = get_metrics()
+        if m is not None:
+            if promotion_result.forced:
+                result = "forced"
+            elif promotion_result.approved:
+                result = "approved"
+            else:
+                result = "rejected"
+            m.alpha_promotion_results_total.labels(
+                alpha_id=promotion_result.alpha_id,
+                result=result,
+            ).inc()
+    except Exception:  # noqa: BLE001
+        pass  # metrics are best-effort
+
     if not _is_enabled():
         return
     try:
@@ -203,6 +236,18 @@ def log_canary_action(
     checks: dict[str, Any] | None = None,
 ) -> None:
     """Insert one row into audit.alpha_canary_log. Fails silently on error."""
+    try:
+        from hft_platform.observability.metrics import get_metrics
+
+        m = get_metrics()
+        if m is not None:
+            m.alpha_canary_actions_total.labels(
+                alpha_id=alpha_id,
+                action=action,
+            ).inc()
+    except Exception:  # noqa: BLE001
+        pass  # metrics are best-effort
+
     if not _is_enabled():
         return
     try:

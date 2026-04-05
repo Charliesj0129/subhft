@@ -58,12 +58,14 @@ class MetricsRegistry:
                 "risk_reject_total",
                 "stormguard_mode",
                 "stormguard_transitions_total",
+                "stormguard_halt_exempt_bypass_total",
                 "strategy_position",
                 "strategy_skew",
                 "strategy_micro_price",
                 "order_actions_total",
                 "order_reject_total",
                 "order_halt_skip_total",
+                "order_deadline_expired_total",
                 "phantom_order_candidates_total",
                 "api_guard_timeout_total",
                 "shadow_orders_total",
@@ -242,6 +244,9 @@ class MetricsRegistry:
                 "lob_only_latency_ns",
                 # Execution fill data loss
                 "exec_fill_data_loss",
+                # Pipeline health FSM (PipelineHealthTracker)
+                "pipeline_health_state",
+                "pipeline_degradation_events_total",
             ]
         )
         # Market Data
@@ -330,6 +335,10 @@ class MetricsRegistry:
             "StormGuard state transitions",
             ["direction"],  # "escalation" or "de_escalation"
         )
+        self.stormguard_halt_exempt_bypass_total = Counter(
+            "stormguard_halt_exempt_bypass_total",
+            "StormGuard halt-exempt bypass events (strategy allowed through HALT)",
+        )
         self.autonomy_mode = Gauge(
             "autonomy_mode",
             "Autonomy control-plane mode (0=NORMAL, 1=STRATEGY_QUARANTINED, 2=PLATFORM_REDUCE_ONLY, 3=HALT)",
@@ -367,6 +376,10 @@ class MetricsRegistry:
             "order_halt_skip_total",
             "Orders skipped in _api_worker because StormGuard transitioned to HALT",
             ["strategy_id"],
+        )
+        self.order_deadline_expired_total = Counter(
+            "order_deadline_expired_total",
+            "Orders dropped pre-dispatch because deadline_ns was exceeded",
         )
         self.phantom_order_candidates_total = Counter(
             "phantom_order_candidates_total",
@@ -478,6 +491,15 @@ class MetricsRegistry:
             "wal_disk_circuit_breaker_active",
             "WAL disk space circuit breaker state (1=active, 0=inactive)",
             ["writer"],
+        )
+        # Pipeline health FSM (PipelineHealthTracker)
+        self.pipeline_health_state = Gauge(
+            "pipeline_health_state",
+            "Recorder pipeline health state (0=HEALTHY, 1=DEGRADED, 2=CRITICAL, 3=DATA_LOSS)",
+        )
+        self.pipeline_degradation_events_total = Counter(
+            "pipeline_degradation_events_total",
+            "Pipeline health state transition count",
         )
         self.queue_depth = Gauge("queue_depth", "Queue depth by type", ["queue"])
         self.event_loop_lag_ms = Gauge("event_loop_lag_ms", "Event loop lag (ms)")
@@ -751,6 +773,22 @@ class MetricsRegistry:
             "alpha_last_signal_ts",
             "Unix timestamp of last non-flat alpha signal",
             ["strategy"],
+        )
+        # Alpha governance pipeline metrics
+        self.alpha_gate_results_total = Counter(
+            "alpha_gate_results_total",
+            "Alpha gate evaluation results",
+            ["alpha_id", "gate", "result"],  # result: "pass" | "fail"
+        )
+        self.alpha_promotion_results_total = Counter(
+            "alpha_promotion_results_total",
+            "Alpha promotion decisions",
+            ["alpha_id", "result"],  # result: "approved" | "rejected" | "forced"
+        )
+        self.alpha_canary_actions_total = Counter(
+            "alpha_canary_actions_total",
+            "Alpha canary state transitions",
+            ["alpha_id", "action"],  # action: "hold" | "escalated" | "rolled_back" | "graduated"
         )
         # Strategy exception counter — strategy, exception_type, method
         self.strategy_exceptions_total = Counter(
@@ -1045,3 +1083,13 @@ class MetricsRegistry:
 
 
 # Helper to expose via simple HTTP handler if needed, or just use Registry
+
+
+def get_metrics() -> "MetricsRegistry | None":
+    """Return the MetricsRegistry singleton, or None if not yet initialised.
+
+    Safe to call from any module — returns None rather than raising if the
+    singleton has not been constructed yet (e.g. during unit tests that do not
+    call MetricsRegistry.get() first).
+    """
+    return MetricsRegistry._instance
