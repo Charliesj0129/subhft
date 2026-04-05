@@ -964,22 +964,17 @@ class StrategyRunner:
                             batch_size=len(intents),
                         )
                 if _d7_dropped > 0:
-                    _sid = strategy.strategy_id
-                    if self._rust_circuit is not None:
-                        self._rust_circuit.record_failure(_sid, time.monotonic_ns())
-                    else:
-                        _failures = self._failure_counts.get(_sid, 0) + 1
-                        self._failure_counts[_sid] = _failures
-                        _state = self._circuit_states.get(_sid, "normal")
-                        _half = max(1, self._circuit_threshold // 2)
-                        if _state == "normal" and _failures >= _half:
-                            self._circuit_states[_sid] = "degraded"
-                            logger.warning("strategy_circuit_degraded", id=_sid, reason="queue_full_partial_batch")
-                        if _failures >= self._circuit_threshold and _state != "halted":
-                            self._circuit_states[_sid] = "halted"
-                            strategy.enabled = False
-                            self._circuit_halted_at_ns[_sid] = time.monotonic_ns()
-                            logger.error("strategy_circuit_halted", id=_sid, reason="queue_full_partial_batch")
+                    # QueueFull is an infrastructure backpressure issue, not a
+                    # strategy fault. Do NOT advance the circuit breaker here —
+                    # that would penalise healthy strategies for a full risk
+                    # queue. The intent_queue_full_total metric (incremented
+                    # per drop above) already provides observability.
+                    logger.warning(
+                        "intent_submit_queue_full_batch",
+                        strategy_id=strategy.strategy_id,
+                        submitted=_d7_submitted,
+                        dropped=_d7_dropped,
+                    )
 
     @staticmethod
     def filter_intents_by_phase(intents: list, track_gate: Any) -> list:
