@@ -1,6 +1,8 @@
 """Tests for OptionsLiveAdapter (float→int boundary)."""
 from unittest.mock import MagicMock
 
+from hft_platform.contracts.strategy import Side as StrategySide
+
 
 def _make_adapter(net_delta=5.0, net_gamma=2.0):
     from hft_platform.options.greeks import GreeksResult, PositionGreeks
@@ -50,27 +52,43 @@ def test_simulated_greeks_after():
 
 
 def test_simulated_greeks_after_adjusts_delta():
-    """simulated_greeks_after should reflect the intent's position change."""
+    """simulated_greeks_after should reflect the intent's position change (IntEnum BUY)."""
     adapter = _make_adapter(net_delta=5.0)
-    intent = MagicMock(symbol="TXO20000D6", qty=5, side="BUY")
+    intent = MagicMock(symbol="TXO20000D6", qty=5, side=StrategySide.BUY)
     agg = adapter.simulated_greeks_after(intent)
     # Current: 10 contracts * 0.5 delta = 5.0. After adding 5 more: 15 * 0.5 = 7.5
     assert abs(agg.net_delta - 7.5) < 0.01
 
 
 def test_simulated_greeks_after_sell_reduces_delta():
-    """Selling contracts should reduce net delta."""
+    """Selling contracts should reduce net delta (IntEnum SELL)."""
+    adapter = _make_adapter(net_delta=5.0)
+    intent = MagicMock(symbol="TXO20000D6", qty=5, side=StrategySide.SELL)
+    agg = adapter.simulated_greeks_after(intent)
+    # Current: 10 * 0.5 = 5.0. After selling 5: 5 * 0.5 = 2.5
+    assert abs(agg.net_delta - 2.5) < 0.01
+
+
+def test_simulated_greeks_after_buy_string_fallback():
+    """String 'BUY' side fallback still works for non-IntEnum callers."""
+    adapter = _make_adapter(net_delta=5.0)
+    intent = MagicMock(symbol="TXO20000D6", qty=5, side="BUY")
+    agg = adapter.simulated_greeks_after(intent)
+    assert abs(agg.net_delta - 7.5) < 0.01
+
+
+def test_simulated_greeks_after_sell_string_fallback():
+    """String 'SELL' side fallback still works for non-IntEnum callers."""
     adapter = _make_adapter(net_delta=5.0)
     intent = MagicMock(symbol="TXO20000D6", qty=5, side="SELL")
     agg = adapter.simulated_greeks_after(intent)
-    # Current: 10 * 0.5 = 5.0. After selling 5: 5 * 0.5 = 2.5
     assert abs(agg.net_delta - 2.5) < 0.01
 
 
 def test_simulated_greeks_after_unknown_symbol_returns_current():
     """Unknown symbol should return current Greeks unchanged."""
     adapter = _make_adapter(net_delta=5.0)
-    intent = MagicMock(symbol="UNKNOWN_OPT", qty=10, side="BUY")
+    intent = MagicMock(symbol="UNKNOWN_OPT", qty=10, side=StrategySide.BUY)
     agg = adapter.simulated_greeks_after(intent)
     assert abs(agg.net_delta - 5.0) < 0.01
 

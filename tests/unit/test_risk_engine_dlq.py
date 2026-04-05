@@ -1,6 +1,7 @@
 """Tests for RiskEngine DLQ drain/retry mechanism."""
 import asyncio
 import time
+from unittest.mock import PropertyMock, patch
 
 import pytest
 
@@ -233,3 +234,47 @@ class TestDlqHaltGuard:
         assert len(engine._order_dlq) == 0
         out = engine.order_queue.get_nowait()
         assert out.cmd_id == cmd.cmd_id
+
+
+class TestDlqDrainConcurrentHalt:
+    """Test per-item HALT recheck during DLQ drain (TOCTOU defense-in-depth)."""
+
+    def test_dlq_drain_stops_on_concurrent_halt(self, engine: RiskEngine) -> None:
+        """StormGuard transitions to HALT after first item is drained mid-loop.
+
+        Assert:
+        - Only cmd1 reaches order_queue (drained before HALT).
+        - cmd2 and cmd3 are cleared from DLQ (not pushed to order_queue).
+        - DLQ is empty after drain.
+        - order_queue contains exactly 1 item (cmd1).
+        """
+        now = time.monotonic_ns()
+        cmd1 = engine.create_command(_make_intent(1))
+        cmd2 = engine.create_command(_make_intent(2))
+        cmd3 = engine.create_command(_make_intent(3))
+        engine._order_dlq.append((cmd1, now))
+        engine._order_dlq.append((cmd2, now))
+        engine._order_dlq.append((cmd3, now))
+
+        # _drain_order_dlq calls storm_guard.state twice before the loop body:
+        #   1st call: top-level HALT guard (line ~486) → NORMAL (proceed to loop)
+        #   2nd call: per-item recheck for cmd1 → NORMAL (cmd1 drains successfully)
+        #   3rd call: per-item recheck for cmd2 → HALT (triggers mid-drain clear)
+        state_values = [StormGuardState.NORMAL, StormGuardState.NORMAL, StormGuardState.HALT]
+
+        with patch.object(
+            type(engine.storm_guard),
+            "state",
+            new_callable=PropertyMock,
+            side_effect=state_values,
+        ):
+            engine._drain_order_dlq()
+
+        # cmd1 was drained before HALT was detected
+        assert engine.order_queue.qsize() == 1
+        out = engine.order_queue.get_nowait()
+        assert out.cmd_id == cmd1.cmd_id
+
+        # cmd2 and cmd3 were cleared from the DLQ — not pushed to order_queue
+        assert len(engine._order_dlq) == 0
+        assert engine.order_queue.empty()

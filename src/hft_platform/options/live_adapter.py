@@ -68,9 +68,18 @@ class OptionsLiveAdapter:
         if not symbol or qty == 0:
             return self.current_portfolio_greeks()
 
-        # Determine signed qty change
-        side_str = str(side).upper() if side is not None else "BUY"
-        signed_qty = qty if "BUY" in side_str else -qty
+        # Determine signed qty change.
+        # Side is an IntEnum: BUY=0, SELL=1. In Python 3.12, str(IntEnum)
+        # returns "0"/"1", so the old "BUY" in str(side) check always failed
+        # for IntEnum values, treating every intent as SELL.
+        if side is None:
+            signed_qty = qty
+        elif isinstance(side, int):
+            # IntEnum comparison: 0 = BUY, 1 = SELL
+            signed_qty = qty if side == 0 else -qty
+        else:
+            # String fallback for tests or other callers
+            signed_qty = qty if "BUY" in str(side).upper() else -qty
 
         # Look up per-contract Greeks from existing positions
         per_contract_greeks: GreeksResult | None = None
@@ -87,20 +96,17 @@ class OptionsLiveAdapter:
             )
             return self.current_portfolio_greeks()
 
-        # Build simulated positions: copy existing + adjust the target symbol's qty
+        # Build simulated positions: copy existing + adjust the target symbol's qty.
+        # The `found` guard below is unreachable (per_contract_greeks is None when
+        # symbol is absent, handled above), so we use a simple loop.
         simulated: list[PositionGreeks] = []
-        found = False
         for pos in self._positions:
             if pos.symbol == symbol:
                 new_qty = pos.qty + signed_qty
                 if new_qty != 0:
                     simulated.append(PositionGreeks(symbol=pos.symbol, qty=new_qty, greeks=pos.greeks))
-                found = True
             else:
                 simulated.append(pos)
-
-        if not found:
-            simulated.append(PositionGreeks(symbol=symbol, qty=signed_qty, greeks=per_contract_greeks))
 
         return portfolio_greeks(simulated, self._multiplier)
 

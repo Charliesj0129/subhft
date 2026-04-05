@@ -495,6 +495,14 @@ class RiskEngine:
         expired = 0
         while self._order_dlq:
             cmd, enqueued_ns = self._order_dlq[0]
+            # Re-check HALT during drain to prevent commands leaking through
+            # during concurrent HALT transitions (TOCTOU defense-in-depth)
+            if self.storm_guard.state == StormGuardState.HALT:
+                cleared = len(self._order_dlq)
+                self._order_dlq.clear()
+                logger.warning("risk_dlq_cleared_during_halt_mid_drain", cleared=cleared)
+                self.metrics.risk_dlq_expired_total.inc(cleared)
+                break
             # Expire stale entries (DLQ TTL)
             if now_ns - enqueued_ns > ttl_ns:
                 self._order_dlq.popleft()
