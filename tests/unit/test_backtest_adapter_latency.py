@@ -7,13 +7,10 @@ structlog warning is emitted when the latencies differ.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.strategy.base import BaseStrategy
-
 
 # ---------------------------------------------------------------------------
 # Minimal stubs for hftbacktest objects
@@ -258,3 +255,5 @@ class TestWarningEmitted:
                 cancel_latency_us=100,
             )
         mock_warn.assert_not_called()
+        assert len(asset_stub.constant_latency_calls) == 1
+        assert asset_stub.constant_latency_calls[0] == (100 * 1000, 100 * 1000)

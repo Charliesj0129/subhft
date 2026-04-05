@@ -159,8 +159,8 @@ class HftBacktestAdapter:
             # conservative approximation so that no action type underestimates its
             # real round-trip time.  A warning is emitted so researchers are aware
             # of this approximation and can account for it in their analysis.
-            _mod = int(modify_latency_us)
-            _can = int(cancel_latency_us)
+            _mod = self.modify_latency_us
+            _can = self.cancel_latency_us
             if _mod > 0 or _can > 0:
                 effective_latency_us = max(latency_us, _mod, _can)
                 if effective_latency_us != latency_us:
