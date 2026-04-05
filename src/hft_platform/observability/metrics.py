@@ -62,9 +62,6 @@ class MetricsRegistry:
                 "stormguard_mode",
                 "stormguard_transitions_total",
                 "stormguard_halt_exempt_bypass_total",
-                "strategy_position",
-                "strategy_skew",
-                "strategy_micro_price",
                 "order_actions_total",
                 "order_reject_total",
                 "order_halt_skip_total",
@@ -197,6 +194,9 @@ class MetricsRegistry:
                 "reconciliation_discrepancy_total",
                 "reconciliation_consecutive_failures",
                 "reconciliation_last_success_ts",
+                "position_drift_qty",
+                "portfolio_drawdown_pct",
+                "portfolio_trade_count",
                 # ClickHouse backup metrics
                 "hft_backup_last_success_ts",
                 "hft_backup_size_bytes",
@@ -369,11 +369,6 @@ class MetricsRegistry:
             "Whether manual re-arm is required before autonomy rights return (1=required, 0=not required)",
             ["scope"],
         )
-
-        # Strategy Alpha (Whitebox)
-        self.strategy_position = Gauge("strategy_position", "Current Net Position", ["strategy", "symbol"])
-        self.strategy_skew = Gauge("strategy_skew", "Price Skew adjustment", ["strategy", "symbol"])
-        self.strategy_micro_price = Gauge("strategy_micro_price", "Computed MicroPrice", ["strategy", "symbol"])
 
         # Order
         self.order_actions_total = Counter("order_actions_total", "Order actions sent", ["type"])
