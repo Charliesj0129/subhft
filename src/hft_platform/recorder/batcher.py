@@ -572,6 +572,8 @@ class Batcher:
                     f.write(json.dumps(header, default=str).encode() + b"\n")
                     for row in rows:
                         f.write(json.dumps(row, default=str).encode() + b"\n")
+                f.flush()
+                os.fsync(f.fileno())
 
             logger.warning(
                 "emergency_wal_dump_written",
