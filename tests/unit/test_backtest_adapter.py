@@ -7,8 +7,10 @@ from hft_platform.strategy.base import BaseStrategy
 
 
 class _Depth:
-    best_bid = 10000
-    best_ask = 10010
+    # hftbacktest returns float prices; platform scaled-int prices are x10000.
+    # These are float prices as hftbacktest would expose them.
+    best_bid = 100.0
+    best_ask = 100.1
 
 
 class _Hbt:

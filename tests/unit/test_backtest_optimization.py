@@ -14,8 +14,9 @@ from hft_platform.strategy.base import BaseStrategy
 # Shared mocks
 # ---------------------------------------------------------------------------
 class _Depth:
-    best_bid = 10000
-    best_ask = 10010
+    # hftbacktest returns float prices (descaled by x10000 from platform convention).
+    best_bid = 1.0
+    best_ask = 1.001
     best_bid_qty = 100
     best_ask_qty = 200
     bid_qty = 100

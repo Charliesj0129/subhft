@@ -321,7 +321,9 @@ class HftBacktestAdapter:
 
     def get_mid_price_x2(self) -> int:
         dp = self.hbt.depth(0)
-        return int(dp.best_bid) + int(dp.best_ask)
+        bid_scaled = int(round(float(dp.best_bid) * self.price_scale))
+        ask_scaled = int(round(float(dp.best_ask) * self.price_scale))
+        return bid_scaled + ask_scaled
 
     def get_spread(self) -> float:
         dp = self.hbt.depth(0)
@@ -358,8 +360,10 @@ class HftBacktestAdapter:
 
     def _build_l1_bidask_event(self, depth_obj: object, ts_ns: int) -> BidAskEvent:
         self._hbt_seq += 1
-        best_bid = int(getattr(depth_obj, "best_bid", 0) or 0)
-        best_ask = int(getattr(depth_obj, "best_ask", 0) or 0)
+        raw_bid = float(getattr(depth_obj, "best_bid", 0) or 0)
+        raw_ask = float(getattr(depth_obj, "best_ask", 0) or 0)
+        best_bid = int(round(raw_bid * self.price_scale))
+        best_ask = int(round(raw_ask * self.price_scale))
         bid_qty = resolve_qty(depth_obj, "best_bid_qty", "bid_qty", "bid_volume")
         ask_qty = resolve_qty(depth_obj, "best_ask_qty", "ask_qty", "ask_volume")
         bids = np.asarray([[best_bid, bid_qty]], dtype=np.int64)
