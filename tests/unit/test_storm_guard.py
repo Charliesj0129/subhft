@@ -591,6 +591,31 @@ def test_grant_halt_exemption_idempotent(guard):
     assert guard.is_halt_exempt("mm_strategy") is True
 
 
+# ── stormguard_halt_exempt_bypass_total counter ───────────────────────────
+
+
+def test_halt_exempt_bypass_increments_dedicated_counter(exempt_guard):
+    """Halt-exempt bypass increments stormguard_halt_exempt_bypass_total, NOT
+    stormguard_transitions_total, ensuring bypass events are tracked separately
+    from FSM state transitions."""
+    exempt_guard.trigger_halt("drift_burst")
+
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
+    )
+    assert ok
+    assert reason == "HALT_EXEMPT"
+
+    metrics = exempt_guard.metrics
+    # Dedicated bypass counter must be incremented
+    metrics.stormguard_halt_exempt_bypass_total.inc.assert_called()
+    # Transition counter must NOT be called with "halt_exempt_bypass"
+    for call in metrics.stormguard_transitions_total.labels.call_args_list:
+        assert call.kwargs.get("direction") != "halt_exempt_bypass", (
+            "stormguard_transitions_total must not use direction='halt_exempt_bypass'"
+        )
+
+
 # ── report_feature_recovery does NOT transition (Fix 4) ───────────────────
 
 

@@ -417,9 +417,7 @@ class StormGuard:
                         symbol=intent.symbol,
                     )
                     try:
-                        self.metrics.stormguard_transitions_total.labels(
-                            direction="halt_exempt_bypass"
-                        ).inc()
+                        self.metrics.stormguard_halt_exempt_bypass_total.inc()
                     except Exception:
                         pass
                     return True, "HALT_EXEMPT"

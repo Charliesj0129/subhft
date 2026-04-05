@@ -1,3 +1,4 @@
+import os
 import threading
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram
@@ -38,8 +39,10 @@ def _unregister_all_custom_metrics() -> None:
 class MetricsRegistry:
     _instance = None
     _instance_lock = threading.Lock()
+    _MAX_LABEL_SYMBOLS: int = int(os.getenv("HFT_METRICS_MAX_LABEL_SYMBOLS", "200"))
 
     def __init__(self):
+        self._seen_symbols: set[str] = set()
         _unregister_all_custom_metrics()
         _unregister_metric_prefixes(
             [
@@ -1063,6 +1066,20 @@ class MetricsRegistry:
             # Here we just define them.
         except ImportError:
             pass
+
+    def cap_symbol(self, symbol: str) -> str:
+        """Return *symbol* for labelling, capping unique values at ``_MAX_LABEL_SYMBOLS``.
+
+        Once the cap is reached, unseen symbols are mapped to ``"_other"``
+        to prevent Prometheus cardinality explosion.  Already-seen symbols
+        always pass through unchanged.
+        """
+        if symbol in self._seen_symbols:
+            return symbol
+        if len(self._seen_symbols) < self._MAX_LABEL_SYMBOLS:
+            self._seen_symbols.add(symbol)
+            return symbol
+        return "_other"
 
     @classmethod
     def get(cls):
