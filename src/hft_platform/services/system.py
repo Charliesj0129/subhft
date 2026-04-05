@@ -588,8 +588,8 @@ class HFTSystem:
                 if self.running:
                     self._try_restart_service(name, component, coro_factory)
 
-            # Update Metrics
-            metrics.update_system_metrics()
+            # Update Metrics — offload blocking psutil calls off the event loop
+            await loop.run_in_executor(None, metrics.update_system_metrics)
             if metrics:
                 exec_task = self.tasks.get("exec_router")
                 gateway_task = self.tasks.get("exec_gateway")
