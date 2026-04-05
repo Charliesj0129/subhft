@@ -465,6 +465,12 @@ class FeatureEngine:
 
         if fused is not None:
             values, changed_mask, warmup_ready_mask = fused
+            # NaN/Inf guard for Rust path (Rust pipeline has no internal NaN protection)
+            ks = self._lob_kernel_states.get(symbol)
+            if ks is not None and ks.has_nan():
+                logger.warning("feature_nan_detected", symbol=symbol, backend="rust")
+                self.reset_symbol(symbol)
+                return None
         else:
             values = self._compute_values(symbol, event, stats_resolved)
             # NaN/Inf contamination guard — reset kernel state if detected

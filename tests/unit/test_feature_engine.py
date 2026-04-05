@@ -887,3 +887,37 @@ class TestLobKernelStateHasNan:
 
         mock_logger.warning.assert_called_once()
         assert mock_logger.warning.call_args[0][0] == "feature_nan_detected"
+
+
+def test_nan_guard_runs_on_rust_fused_path():
+    """NaN contamination guard must fire and reset_symbol when Rust fused path is active."""
+    from unittest.mock import MagicMock, patch
+
+    eng = FeatureEngine()
+    eng.process_lob_stats(_stats(), local_ts_ns=1)
+
+    # Corrupt kernel state to simulate NaN produced by Rust backend path
+    ks = eng._lob_kernel_states.get("2330")
+    assert ks is not None, "kernel state should exist after first tick"
+    ks.ofi_l1_ema8 = float("nan")
+
+    # Patch at the class level and set the instance backend flag
+    fake_fused = (tuple([0] * 27), 0, 0)
+    mock_logger = MagicMock()
+
+    with (
+        patch.object(FeatureEngine, "_compute_fused_rust", return_value=fake_fused),
+        patch("hft_platform.feature.engine.logger", mock_logger),
+    ):
+        eng._kernel_backend = "rust"
+        result = eng.process_lob_stats(_stats(ts=2), local_ts_ns=2)
+
+    # Engine must return None (tick skipped) and log the warning
+    assert result is None
+    mock_logger.warning.assert_called_once()
+    call_kwargs = mock_logger.warning.call_args
+    assert call_kwargs[0][0] == "feature_nan_detected"
+    assert call_kwargs[1].get("backend") == "rust"
+
+    # State for symbol must be cleared by reset_symbol
+    assert eng._states.get("2330") is None
