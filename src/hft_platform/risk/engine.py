@@ -366,6 +366,34 @@ class RiskEngine:
         while self.running:
             try:
                 intent: OrderIntent = await self.intent_queue.get()
+
+                # TTL expiry check — reject stale intents before evaluation
+                if intent.ttl_ns > 0 and intent.timestamp_ns > 0:
+                    age_ns = timebase.now_ns() - intent.timestamp_ns
+                    if age_ns > intent.ttl_ns:
+                        logger.warning(
+                            "risk_intent_ttl_expired",
+                            intent_id=intent.intent_id,
+                            strategy_id=intent.strategy_id,
+                            symbol=intent.symbol,
+                            age_ms=age_ns / 1_000_000,
+                            ttl_ms=intent.ttl_ns / 1_000_000,
+                        )
+                        self._emit_reject_metric(intent.strategy_id, "TTL_EXPIRED")
+                        if self._rejection_sink is not None:
+                            try:
+                                self._rejection_sink.put_nowait(RiskFeedback(
+                                    intent_id=intent.intent_id,
+                                    strategy_id=intent.strategy_id,
+                                    symbol=intent.symbol,
+                                    reason_code="TTL_EXPIRED",
+                                    timestamp_ns=timebase.now_ns(),
+                                ))
+                            except asyncio.QueueFull:
+                                pass
+                        self.intent_queue.task_done()
+                        continue
+
                 start_ns = time.perf_counter_ns()
                 decision = self.evaluate(intent)
                 duration = time.perf_counter_ns() - start_ns
