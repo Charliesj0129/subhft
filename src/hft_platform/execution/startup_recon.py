@@ -357,6 +357,7 @@ class StartupPositionVerifier:
                     "net_qty": broker_qty,
                     "avg_price_scaled": ckpt_entry.get("avg_price_scaled", 0),
                     "realized_pnl_scaled": ckpt_entry.get("realized_pnl_scaled", 0),
+                    "fees_scaled": ckpt_entry.get("fees_scaled", 0),
                 }
             else:
                 ckpt_entry = ckpt_by_symbol.get(symbol, {})
@@ -365,6 +366,7 @@ class StartupPositionVerifier:
                         "net_qty": broker_qty,
                         "avg_price_scaled": ckpt_entry.get("avg_price_scaled", 0),
                         "realized_pnl_scaled": ckpt_entry.get("realized_pnl_scaled", 0),
+                        "fees_scaled": ckpt_entry.get("fees_scaled", 0),
                     }
 
         if has_critical:
@@ -388,7 +390,7 @@ class StartupPositionVerifier:
         merged: Dict[str, Dict[str, Any]] = {}
         for symbol, qty in broker_map.items():
             if qty != 0:
-                merged[symbol] = {"net_qty": qty, "avg_price_scaled": 0, "realized_pnl_scaled": 0}
+                merged[symbol] = {"net_qty": qty, "avg_price_scaled": 0, "realized_pnl_scaled": 0, "fees_scaled": 0}
         loaded = self._write_to_store(merged, account_id)
         startup_recon_status.set(1)
         startup_recon_positions_loaded.set(loaded)
@@ -409,6 +411,7 @@ class StartupPositionVerifier:
                     "net_qty": qty,
                     "avg_price_scaled": pos_data.get("avg_price_scaled", 0),
                     "realized_pnl_scaled": pos_data.get("realized_pnl_scaled", 0),
+                    "fees_scaled": pos_data.get("fees_scaled", 0),
                 }
         loaded = self._write_to_store(merged, account_id)
         startup_recon_status.set(1)

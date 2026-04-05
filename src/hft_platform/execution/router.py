@@ -317,6 +317,13 @@ class ExecutionRouter:
                         _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
                         if _dedup_key not in self._seen_fill_ids:
                             self._seen_fill_ids[_dedup_key] = None
+                            # TCA enrichment for shutdown drain fills
+                            _drain_order_key = self._order_id_map.get(fill_event.order_id)
+                            if _drain_order_key is not None:
+                                _drain_tca = self._cmd_tca_map.get(_drain_order_key)
+                                if _drain_tca is not None:
+                                    fill_event.decision_price = _drain_tca[0]
+                                    fill_event.arrival_price = _drain_tca[1]
                             if hasattr(self.position_store, "on_fill"):
                                 _pre_realized_sd = 0
                                 if self._risk_engine is not None:

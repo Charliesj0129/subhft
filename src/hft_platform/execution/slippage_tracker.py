@@ -32,6 +32,19 @@ except ImportError:
     FILLS_TRACKED = None
 
 
+_MAX_LABEL_SYMBOLS = 200
+_seen_symbols: set[str] = set()
+
+
+def _cap_symbol(symbol: str) -> str:
+    if symbol in _seen_symbols:
+        return symbol
+    if len(_seen_symbols) < _MAX_LABEL_SYMBOLS:
+        _seen_symbols.add(symbol)
+        return symbol
+    return "_other"
+
+
 class SlippageTracker:
     __slots__ = ("_decomposer", "_total_tracked", "_last_slippage_bps")
 
@@ -71,7 +84,7 @@ class SlippageTracker:
         self._last_slippage_bps = breakdown.total_bps
 
         if SLIPPAGE_BPS is not None:
-            SLIPPAGE_BPS.labels(strategy=fill.strategy_id, symbol=fill.symbol).observe(breakdown.total_bps)
+            SLIPPAGE_BPS.labels(strategy=fill.strategy_id, symbol=_cap_symbol(fill.symbol)).observe(breakdown.total_bps)
         if FILLS_TRACKED is not None:
             FILLS_TRACKED.inc()
 

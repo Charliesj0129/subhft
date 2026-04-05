@@ -1284,6 +1284,8 @@ class OrderAdapter:
                 self.metrics.order_reject_total.inc()
                 self.circuit_breaker.record_failure()
                 self._update_cb_metric()
+                if item is not None and hasattr(item, "intent") and item.intent is not None:
+                    self.strategy_cb_mgr.record_failure(item.intent.strategy_id)
                 self._api_pending.clear()
 
     def _update_cb_metric(self) -> None:
