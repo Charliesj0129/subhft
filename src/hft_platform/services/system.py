@@ -673,6 +673,42 @@ class HFTSystem:
         self.exec_service.running = False
         self.risk_engine.running = False
         self.recon_service.running = False
+
+        # Drain RingBufferBus before stopping StrategyRunner consumer so that
+        # events already published but not yet processed are not lost.
+        _drain_timeout_ms = int(os.getenv("HFT_BUS_DRAIN_TIMEOUT_MS", "500"))
+        _drain_timeout_s = _drain_timeout_ms / 1000.0
+        _bus = getattr(self, "bus", None)
+        _sr = getattr(self, "strategy_runner", None)
+        if _bus is not None and _sr is not None and hasattr(_sr, "drain_to_cursor"):
+            _target_cursor = getattr(_bus, "cursor", -1)
+            if _target_cursor >= 0:
+                try:
+                    _drained, _skipped = await asyncio.wait_for(
+                        _sr.drain_to_cursor(_target_cursor, _drain_timeout_s),
+                        timeout=_drain_timeout_s + 0.1,
+                    )
+                    if _skipped > 0:
+                        logger.warning(
+                            "Bus drain timeout: events skipped",
+                            drained=_drained,
+                            skipped=_skipped,
+                            timeout_ms=_drain_timeout_ms,
+                        )
+                    else:
+                        logger.info(
+                            "Bus drain complete",
+                            drained=_drained,
+                            timeout_ms=_drain_timeout_ms,
+                        )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Bus drain outer timeout during shutdown",
+                        timeout_ms=_drain_timeout_ms,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Bus drain failed during shutdown", error=str(exc))
+
         self.strategy_runner.running = False
         self.execution_gateway.stop()  # Clean shutdown
         self.session_hook_manager.stop()

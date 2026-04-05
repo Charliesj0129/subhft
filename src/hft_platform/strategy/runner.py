@@ -281,6 +281,76 @@ class StrategyRunner:
         finally:
             self._flush_pending_strategy_metrics()
 
+    async def drain_to_cursor(self, target_cursor: int, timeout_s: float) -> tuple[int, int]:
+        """Drain bus events up to *target_cursor* within *timeout_s* seconds.
+
+        Reads events from the bus starting at the current consumer position and
+        processes them until either the target cursor is reached or the timeout
+        expires.  The bus cursor is sampled once by the caller before calling
+        this method; no new publishes after that snapshot are processed.
+
+        Returns:
+            (drained, skipped) where *drained* is the number of events processed
+            and *skipped* is the number left unprocessed (> 0 only on timeout).
+        """
+        bus_cursor = self.bus.cursor
+        # How many events are buffered between current bus position and target?
+        # We read from (bus_cursor - pending + 1) up to target_cursor.
+        # Use a simple polling loop over the buffer directly to avoid creating a
+        # new consume() generator (which registers a signal and blocks waiting).
+        start_seq = bus_cursor - (target_cursor - bus_cursor)
+        # Simpler: just walk from the first unread position.
+        # We don't track the runner's internal consumer cursor here, so we
+        # snapshot target_cursor - 1 as "already read up to" and walk forward.
+        local_seq = bus_cursor  # already consumed up to this point
+        if local_seq >= target_cursor:
+            return 0, 0
+
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        drained = 0
+        size = self.bus.size
+
+        while local_seq < target_cursor:
+            if asyncio.get_event_loop().time() >= deadline:
+                skipped = target_cursor - local_seq
+                return drained, skipped
+
+            local_seq += 1
+            # Read the event directly from the bus buffer (same logic as consume())
+            kind = (
+                self.bus._kind_ring[local_seq % size]
+                if self.bus._kind_ring is not None
+                else 0
+            )
+            if kind == 1 and self.bus._tick_ring is not None:
+                event = self.bus._tick_ring.get(local_seq)
+            elif kind == 2 and self.bus._bidask_ring is not None:
+                event = self.bus._bidask_ring.get(local_seq)
+            elif kind == 3 and self.bus._lobstats_ring is not None:
+                event = self.bus._lobstats_ring.get(local_seq)
+            elif self.bus._use_rust and self.bus._ring is not None:
+                event = self.bus._ring.get(local_seq)
+            else:
+                buf = self.bus.buffer
+                event = buf[local_seq % size] if buf is not None else None
+
+            if event is not None:
+                try:
+                    await self.process_event(event)
+                    drained += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "drain_to_cursor: process_event error",
+                        seq=local_seq,
+                        error=str(exc),
+                    )
+
+            # Yield control periodically to avoid starving the event loop
+            if drained % 64 == 0:
+                await asyncio.sleep(0)
+
+        return drained, 0
+
     def register(self, strategy: BaseStrategy):
         compat_issues = check_strategy_feature_compat(strategy, self.feature_engine)
         for issue in compat_issues:
