@@ -452,6 +452,46 @@ groups:
         summary: "Recorder pipeline DATA_LOSS — both ClickHouse and WAL failed"
         description: "pipeline_health_state has reached DATA_LOSS (3). Market data is being dropped with no persistence path available."
 
+  # Recorder reinject circuit breaker — permanent data loss
+  - alert: RecorderReinjectCircuitBreakerOpen
+    expr: increase(recorder_reinject_circuit_breaker_drops_total[5m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Recorder reinject circuit breaker open — PERMANENT DATA LOSS"
+        description: "Both ClickHouse and WAL have failed repeatedly. Rows are being permanently dropped."
+
+  # Execution recording drops
+  - alert: RecorderExecDropsDetected
+    expr: increase(recorder_exec_drops_total[5m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Execution event recording drops detected"
+        description: "Fill/order events are being dropped from the recorder queue."
+
+  # Execution WAL fallback failure
+  - alert: RecorderExecWalFallbackFailure
+    expr: increase(recorder_exec_wal_fallback_failure_total[5m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Execution WAL fallback failure — data loss risk"
+        description: "WAL fallback for execution events has failed."
+
+  # Fill data loss
+  - alert: ExecFillDataLossDetected
+    expr: increase(exec_fill_data_loss[5m]) > 0
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Fill data loss detected"
+        description: "Fill events have been permanently lost."
+
   # Schema initialization failure (WAL-only degraded mode)
   - alert: RecorderSchemaInitFailed
     expr: recorder_schema_init_failed == 1
@@ -641,14 +681,16 @@ groups:
       description: "{{ $value }} WAL replay error(s) in the last hour."
 
   # ── ClickHouse Pool (M-13) ───────────────────────────────────
-  - alert: ClickHousePoolExhausted
-    expr: increase(clickhouse_pool_timeout_total[5m]) > 0
-    for: 0s
-    labels:
-      severity: critical
-    annotations:
-      summary: "ClickHouse connection pool timeouts detected"
-      description: "{{ $value }} pool timeout(s) in 5 minutes. Writes may be stalling."
+  # DISABLED: clickhouse_pool_timeout_total is registered but never incremented.
+  # Re-enable when writer.py semaphore acquisition is instrumented.
+  # - alert: ClickHousePoolExhausted
+  #   expr: increase(clickhouse_pool_timeout_total[5m]) > 0
+  #   for: 0s
+  #   labels:
+  #     severity: critical
+  #   annotations:
+  #     summary: "ClickHouse connection pool timeouts detected"
+  #     description: "{{ $value }} pool timeout(s) in 5 minutes. Writes may be stalling."
 
   # ── Research Data Disk ──────────────────────────────────────────
   - alert: ResearchDataTooLarge
