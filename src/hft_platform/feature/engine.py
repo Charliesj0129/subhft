@@ -76,6 +76,28 @@ class _StatsTupleProxy:
         return self._t[9]
 
 
+def _top_qty(side: object) -> int | None:
+    """Extract top-of-book quantity from a bid/ask side array.
+
+    Module-level function (lifted from ``_extract_l1_qty`` closure) to avoid
+    allocating a new function object on every hot-path call.
+    """
+    if side is None:
+        return None
+    try:
+        if hasattr(side, "size"):
+            # numpy path
+            if int(getattr(side, "size", 0)) <= 0:
+                return 0
+            return int(side[0][1])
+        if len(side) <= 0:
+            return 0
+        top = side[0]
+        return int(top[1]) if len(top) > 1 else 0
+    except Exception:  # noqa: BLE001
+        return None
+
+
 QUALITY_FLAG_GAP = 1 << 0
 QUALITY_FLAG_STATE_RESET = 1 << 1
 QUALITY_FLAG_STALE_INPUT = 1 << 2
@@ -181,6 +203,8 @@ class FeatureEngine:
         "_event_cache",
         "_max_symbols",
         "_last_update_ns",
+        "_full_warmup_mask",
+        "_warmup_ready_symbols",
     )
 
     def __init__(
@@ -223,6 +247,9 @@ class FeatureEngine:
         if backend == "rust" and _RUST_LOB_FEATURE_KERNEL_V1 is None:
             backend = "python"
         self._kernel_backend = backend if backend in {"python", "rust"} else "python"
+        n = len(self._feature_set.features)
+        self._full_warmup_mask: int = (1 << n) - 1 if n > 0 else 0
+        self._warmup_ready_symbols: set[str] = set()
         if feature_profile is not None:
             self.apply_profile(feature_profile)
 
@@ -294,6 +321,7 @@ class FeatureEngine:
         self._states.pop(symbol, None)
         self._lob_kernel_states.pop(symbol, None)
         self._last_update_ns.pop(symbol, None)
+        self._warmup_ready_symbols.discard(symbol)
         kernel = self._rust_kernels.pop(symbol, None)
         if kernel is not None:
             try:
@@ -405,7 +433,7 @@ class FeatureEngine:
         else:
             values = self._compute_values(symbol, event, stats_resolved)
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
-            warmup_ready_mask = self._compute_warmup_ready_mask(warm_count)
+            warmup_ready_mask = self._compute_warmup_ready_mask(warm_count, symbol)
         qflags = int(self._quality_flags_next.pop(symbol, 0))
         if prev is not None and source_ts_ns and source_ts_ns < prev.source_ts_ns:
             qflags |= QUALITY_FLAG_OUT_OF_ORDER
@@ -939,22 +967,6 @@ class FeatureEngine:
         bids = getattr(event, "bids", None)
         asks = getattr(event, "asks", None)
 
-        def _top_qty(side) -> int | None:
-            if side is None:
-                return None
-            try:
-                if hasattr(side, "size"):
-                    # numpy path
-                    if int(getattr(side, "size", 0)) <= 0:
-                        return 0
-                    return int(side[0][1])
-                if len(side) <= 0:
-                    return 0
-                top = side[0]
-                return int(top[1]) if len(top) > 1 else 0
-            except Exception as _exc:  # noqa: BLE001
-                return None
-
         bq = _top_qty(bids)
         aq = _top_qty(asks)
         if bq is None:
@@ -1005,9 +1017,14 @@ class FeatureEngine:
                 mask |= 1 << idx
         return mask
 
-    def _compute_warmup_ready_mask(self, warm_count: int) -> int:
+    def _compute_warmup_ready_mask(self, warm_count: int, symbol: str) -> int:
+        # Fast path: once all features are warm for this symbol, skip the loop entirely.
+        if symbol in self._warmup_ready_symbols:
+            return self._full_warmup_mask
         mask = 0
         for idx, spec in enumerate(self._feature_set.features):
             if warm_count >= int(spec.warmup_min_events):
                 mask |= 1 << idx
+        if mask == self._full_warmup_mask:
+            self._warmup_ready_symbols.add(symbol)
         return mask
