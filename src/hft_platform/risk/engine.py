@@ -450,14 +450,27 @@ class RiskEngine:
         """Drain stale-filtered DLQ entries back into order_queue."""
         if not self._order_dlq:
             return
+        # During HALT, clear all pending DLQ entries — they were approved under
+        # pre-HALT conditions and must not be replayed to the broker.
+        if self.storm_guard.state == StormGuardState.HALT:
+            cleared = len(self._order_dlq)
+            self._order_dlq.clear()
+            logger.warning("risk_dlq_cleared_during_halt", cleared=cleared)
+            self.metrics.risk_dlq_expired_total.inc(cleared)
+            return
         now_ns = time.monotonic_ns()
         ttl_ns = self._dlq_ttl_ns
         drained = 0
         expired = 0
         while self._order_dlq:
             cmd, enqueued_ns = self._order_dlq[0]
-            # Expire stale entries
+            # Expire stale entries (DLQ TTL)
             if now_ns - enqueued_ns > ttl_ns:
+                self._order_dlq.popleft()
+                expired += 1
+                continue
+            # Expire commands whose execution deadline has passed
+            if cmd.deadline_ns > 0 and now_ns > cmd.deadline_ns:
                 self._order_dlq.popleft()
                 expired += 1
                 continue

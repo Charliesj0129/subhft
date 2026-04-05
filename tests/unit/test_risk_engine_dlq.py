@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side, StormGuardState
 from hft_platform.risk.engine import RiskEngine
 
 
@@ -178,3 +178,58 @@ class TestDlqDrainCounter:
         # Counter is 4, interval is 5 — should not drain yet
         assert engine._dlq_drain_counter < engine._dlq_drain_interval
         assert len(engine._order_dlq) == 1
+
+
+class TestDlqHaltGuard:
+    """Test HALT-state and deadline guards added to _drain_order_dlq."""
+
+    def test_drain_clears_dlq_during_halt(self, engine: RiskEngine) -> None:
+        """HALT state: entire DLQ is cleared, order_queue stays empty, metric incremented."""
+        engine.storm_guard.trigger_halt("test_halt")
+        assert engine.storm_guard.state == StormGuardState.HALT
+
+        now = time.monotonic_ns()
+        cmd1 = engine.create_command(_make_intent(1))
+        cmd2 = engine.create_command(_make_intent(2))
+        engine._order_dlq.append((cmd1, now))
+        engine._order_dlq.append((cmd2, now))
+
+        before = engine.metrics.risk_dlq_expired_total._value.get()
+        engine._drain_order_dlq()
+        after = engine.metrics.risk_dlq_expired_total._value.get()
+
+        assert len(engine._order_dlq) == 0
+        assert engine.order_queue.empty()
+        assert after - before == 2
+
+    def test_drain_expires_past_deadline_commands(self, engine: RiskEngine) -> None:
+        """Commands whose deadline_ns is in the past are expired, not replayed."""
+        cmd = engine.create_command(_make_intent(1))
+        # Override deadline to be in the past
+        import dataclasses
+        cmd = dataclasses.replace(cmd, deadline_ns=time.monotonic_ns() - 1_000_000)
+
+        engine._order_dlq.append((cmd, time.monotonic_ns()))
+
+        before_expired = engine.metrics.risk_dlq_expired_total._value.get()
+        engine._drain_order_dlq()
+        after_expired = engine.metrics.risk_dlq_expired_total._value.get()
+
+        assert engine.order_queue.empty()
+        assert len(engine._order_dlq) == 0
+        assert after_expired - before_expired == 1
+
+    def test_drain_allows_valid_commands_in_normal(self, engine: RiskEngine) -> None:
+        """Regression: NORMAL state + valid deadline → commands reach order_queue."""
+        assert engine.storm_guard.state == StormGuardState.NORMAL
+
+        cmd = engine.create_command(_make_intent(1))
+        # deadline_ns is 500ms in the future — should pass
+        engine._order_dlq.append((cmd, time.monotonic_ns()))
+
+        engine._drain_order_dlq()
+
+        assert engine.order_queue.qsize() == 1
+        assert len(engine._order_dlq) == 0
+        out = engine.order_queue.get_nowait()
+        assert out.cmd_id == cmd.cmd_id
