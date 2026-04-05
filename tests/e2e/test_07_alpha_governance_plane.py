@@ -113,9 +113,9 @@ class TestChain:
 
         report = run_gate_a(manifest, [data_file], root=tmp_path)
         assert report.passed is False
-        assert "bid_px" in report.details.get("missing_fields", []) or \
-               "ask_px" in report.details.get("missing_fields", []), (
-            f"Expected missing_fields to include required fields; got: {report.details}"
+        missing = report.details.get("missing_fields", [])
+        assert "bid_px" in missing and "ask_px" in missing, (
+            f"Expected both bid_px and ask_px in missing_fields; got: {missing}"
         )
 
     def test_gate_b_pytest_execution(self, tmp_path: Path) -> None:
@@ -131,7 +131,14 @@ class TestChain:
         assert report.details.get("skipped") is True
 
     def test_gate_c_backtest_scorecard(self) -> None:
-        """Gate C scorecard data contract has all required fields."""
+        """Gate C scorecard contract: validate against Gate D's actual required keys.
+
+        This test ensures the scorecard schema stays in sync with the production
+        _evaluate_gate_d function.  If Gate D starts reading a new field, this
+        test should break — forcing the scorecard contract to be updated.
+        """
+        from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_d
+
         scorecard: dict[str, Any] = {
             "sharpe_oos": 1.5,
             "max_drawdown": -0.08,
@@ -146,22 +153,26 @@ class TestChain:
             },
         }
 
-        required_keys = [
-            "sharpe_oos",
-            "max_drawdown",
-            "turnover",
-            "correlation_pool_max",
-            "latency_profile",
-        ]
-        for key in required_keys:
-            assert key in scorecard, f"Scorecard must contain '{key}'"
-
-        # Verify field types
-        assert isinstance(scorecard["sharpe_oos"], (int, float))
-        assert isinstance(scorecard["max_drawdown"], (int, float))
-        assert isinstance(scorecard["turnover"], (int, float))
-        assert isinstance(scorecard["correlation_pool_max"], (int, float))
-        assert isinstance(scorecard["latency_profile"], dict)
+        # Validate scorecard against the actual production gate
+        config = PromotionConfig(
+            alpha_id="contract_test",
+            owner="test_owner",
+            min_sharpe_oos=1.0,
+            max_abs_drawdown=0.2,
+            max_turnover=2.0,
+            max_correlation=0.7,
+        )
+        passed, checks = _evaluate_gate_d(scorecard, config)
+        assert passed is True, (
+            f"Well-formed scorecard must pass Gate D; failed checks: "
+            f"{[k for k, v in checks.items() if not v.get('pass')]}"
+        )
+        # Every check key in Gate D must be present in our scorecard
+        for key in checks:
+            assert key in scorecard, (
+                f"Gate D checks '{key}' but scorecard contract is missing it — "
+                "update the scorecard schema"
+            )
 
     def test_gate_d_threshold_evaluation(self) -> None:
         """Gate D passes when scorecard meets all thresholds."""
@@ -255,6 +266,9 @@ class TestChain:
         passed, checks = result
         assert isinstance(passed, bool)
         assert isinstance(checks, dict)
+        assert passed is True, (
+            f"Gate E should pass with valid shadow session inputs; checks: {checks}"
+        )
 
 
 # ===========================================================================
@@ -319,34 +333,31 @@ class TestIntegration:
             f"After rollback, enabled should be False or weight should be 0; got: {updated}"
         )
 
-    def test_gate_c_fail_blocks_promotion(self) -> None:
-        """Gate D rejects bad scorecard, confirming Gate C failure blocks promotion."""
-        from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_d
+    def test_gate_c_fail_blocks_promotion(self, tmp_path: Path) -> None:
+        """_verify_gate_c_passed raises ValueError when meta.json marks gate_c=False."""
+        from hft_platform.alpha.promotion import _verify_gate_c_passed
 
-        # Scorecard that fails all checks — simulates a Gate C failure outcome
-        bad_scorecard: dict[str, Any] = {
-            "sharpe_oos": 0.2,
-            "max_drawdown": -0.6,
-            "turnover": 5.0,
-            "correlation_pool_max": 0.9,
-            "latency_profile": None,
-        }
-        config = PromotionConfig(
-            alpha_id="bad_alpha",
-            owner="test_owner",
-            min_sharpe_oos=1.0,
-            max_abs_drawdown=0.2,
-            max_turnover=2.0,
-            max_correlation=0.7,
-        )
+        # Create a scorecard directory with meta.json indicating Gate C failure
+        run_dir = tmp_path / "research" / "experiments" / "runs" / "run_001"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        scorecard_path = run_dir / "scorecard.json"
+        scorecard_path.write_text(json.dumps({"sharpe_oos": 0.2}))
+        meta_path = run_dir / "meta.json"
+        meta_path.write_text(json.dumps({"gate_status": {"gate_c": False}}))
 
-        passed, checks = _evaluate_gate_d(bad_scorecard, config)
-        assert passed is False, (
-            "Gate D must reject a scorecard that fails all thresholds "
-            "(blocks promotion from a failed Gate C result)"
-        )
-        # Confirm multiple checks failed
-        failed_checks = [k for k, v in checks.items() if not v.get("pass", True)]
-        assert len(failed_checks) >= 3, (
-            f"Expected at least 3 failed checks, got {len(failed_checks)}: {failed_checks}"
-        )
+        with pytest.raises(ValueError, match="Gate C has not passed"):
+            _verify_gate_c_passed(scorecard_path)
+
+    def test_gate_c_pass_allows_promotion(self, tmp_path: Path) -> None:
+        """_verify_gate_c_passed succeeds when meta.json marks gate_c=True."""
+        from hft_platform.alpha.promotion import _verify_gate_c_passed
+
+        run_dir = tmp_path / "research" / "experiments" / "runs" / "run_002"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        scorecard_path = run_dir / "scorecard.json"
+        scorecard_path.write_text(json.dumps({"sharpe_oos": 1.5}))
+        meta_path = run_dir / "meta.json"
+        meta_path.write_text(json.dumps({"gate_status": {"gate_c": True}}))
+
+        # Should not raise
+        _verify_gate_c_passed(scorecard_path)
