@@ -92,7 +92,7 @@ class TestCostBpsComputed:
 
     def test_cost_bps_computed(self) -> None:
         # notional = price_scaled * qty summed = 1_000_000_0000 (scaled x10000)
-        # real notional = 1_000_000 NTD
+        # real notional = 1_000_000 NTD (point_value defaults to 1 when no map given)
         # fee_scaled = 2000_0000 (scaled x10000) => real fee = 2000 NTD
         # tax_scaled = 500_0000 (scaled x10000) => real tax = 500 NTD
         # commission = fee - tax = 1500 NTD
@@ -111,3 +111,90 @@ class TestCostBpsComputed:
         assert r.commission_bps_mean == pytest.approx(15.0)
         assert r.tax_bps_mean == pytest.approx(5.0)
         assert r.total_cost_bps_mean == pytest.approx(20.0)
+
+
+class TestPointValueMultiplier:
+    """Notional is multiplied by point_value before bps calculation."""
+
+    def test_tx_point_value_200_scales_notional(self) -> None:
+        # sum_notional_scaled = price_scaled * qty (no point_value in SQL).
+        # With point_value=200 for TX, corrected_notional = sum_notional_scaled * 200.
+        # fee_scaled / corrected_notional should give much smaller bps than without scaling.
+        #
+        # sum_notional_scaled = 200_0000_0000 = 20_000_000_000
+        # corrected_notional_scaled = 20_000_000_000 * 200 = 4_000_000_000_000
+        # notional_real = 4_000_000_000_000 / 10000 = 400_000_000 NTD
+        # fee_scaled = 4000_0000 = 40_000_000 → real fee = 4000 NTD; tax_scaled = 0
+        # commission_bps = (4000 / 400_000_000) * 10000 = 0.1 bps
+        rows = [
+            ("strat_a", "TXFD6", 1, 1, 200_0000_0000, 4000_0000, 0),
+        ]
+        client = FakeCHClient(rows=rows)
+        analyzer = TCAAnalyzer(
+            ch_client=client,
+            point_value_map={"TX": 200},
+            symbol_to_product={"TXFD6": "TX"},
+        )
+
+        reports = analyzer.daily_report("2026-03-25")
+
+        assert len(reports) == 1
+        r = reports[0]
+        assert r.commission_bps_mean == pytest.approx(0.1, abs=0.001)
+        assert r.notional == 200_0000_0000 * 200
+
+    def test_mtx_point_value_50(self) -> None:
+        # sum_notional_scaled = 100_0000_0000, point_value=50
+        # corrected = 5_000_000_0000 → notional_real = 500_000_000 NTD
+        # fee_scaled = 10_000_0000 → fee_real = 100_000 NTD, tax=0
+        # commission_bps = (100_000 / 500_000_000) * 10_000 = 2.0 bps
+        rows = [
+            ("strat_b", "MXFD6", 1, 1, 100_0000_0000, 10_000_0000, 0),
+        ]
+        client = FakeCHClient(rows=rows)
+        analyzer = TCAAnalyzer(
+            ch_client=client,
+            point_value_map={"MTX": 50},
+            symbol_to_product={"MXFD6": "MTX"},
+        )
+
+        reports = analyzer.daily_report("2026-03-25")
+
+        assert len(reports) == 1
+        r = reports[0]
+        assert r.commission_bps_mean == pytest.approx(2.0, abs=0.01)
+
+    def test_no_point_value_map_defaults_to_1(self) -> None:
+        # Without point_value_map, point_value=1 → notional unchanged.
+        rows = [
+            ("strat_a", "TXFD6", 1, 1, 1_000_0000_0000, 1000_0000, 0),
+        ]
+        client = FakeCHClient(rows=rows)
+        analyzer = TCAAnalyzer(ch_client=client)
+
+        reports = analyzer.daily_report("2026-03-25")
+
+        assert len(reports) == 1
+        # notional stored is sum_notional_scaled * 1 (unchanged)
+        assert reports[0].notional == 1_000_0000_0000
+
+
+class TestUnknownSymbolWarning:
+    """Unknown symbol logs a warning and defaults point_value to 1."""
+
+    def test_unknown_symbol_defaults_point_value_1(self, caplog: pytest.LogCaptureFixture) -> None:
+        rows = [
+            ("strat_a", "UNKNOWN123", 1, 1, 500_0000_0000, 100_0000, 0),
+        ]
+        client = FakeCHClient(rows=rows)
+        # Supply a map that does NOT contain "UNKNOWN123"
+        analyzer = TCAAnalyzer(
+            ch_client=client,
+            point_value_map={"TX": 200},
+        )
+
+        reports = analyzer.daily_report("2026-03-25")
+
+        assert len(reports) == 1
+        # Notional should be unchanged (×1)
+        assert reports[0].notional == 500_0000_0000

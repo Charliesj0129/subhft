@@ -29,10 +29,20 @@ ORDER BY strategy_id, symbol
 class TCAAnalyzer:
     """Queries ClickHouse hft.fills and produces TCADailyReport aggregates."""
 
-    __slots__ = ("_ch_client",)
+    __slots__ = ("_ch_client", "_point_value_map", "_symbol_to_product")
 
-    def __init__(self, ch_client: Any) -> None:
+    def __init__(
+        self,
+        ch_client: Any,
+        *,
+        point_value_map: dict[str, int] | None = None,
+        symbol_to_product: dict[str, str] | None = None,
+    ) -> None:
         self._ch_client = ch_client
+        # Maps product code (e.g. "TX", "MTX", "XMT") → point value (NTD per point).
+        self._point_value_map: dict[str, int] = point_value_map or {}
+        # Optional: maps symbol (e.g. "TXFD6") → product code (e.g. "TX").
+        self._symbol_to_product: dict[str, str] = symbol_to_product or {}
 
     def daily_report(self, date_str: str) -> list[TCADailyReport]:
         """Return per-(strategy, symbol) cost reports for a given date.
@@ -49,8 +59,21 @@ class TCAAnalyzer:
         for row in rows:
             strategy_id, symbol, trade_count, total_qty, sum_notional_scaled, total_fee_scaled, total_tax_scaled = row
 
-            # All scaled values are x10000. Convert to real NTD for bps calc.
-            notional_real = sum_notional_scaled / 10000.0 if sum_notional_scaled else 0.0
+            # Resolve point_value for this symbol.
+            # SQL gives price_scaled * qty; multiply by point_value to get true NTD notional.
+            product = self._symbol_to_product.get(symbol, symbol)
+            point_value = self._point_value_map.get(product, 1)
+            if point_value == 1 and (self._point_value_map or self._symbol_to_product):
+                logger.warning(
+                    "tca_unknown_symbol_point_value",
+                    symbol=symbol,
+                    product=product,
+                    defaulting_to=1,
+                )
+
+            # All scaled values are x10000. Apply point_value then convert to real NTD.
+            corrected_notional_scaled = sum_notional_scaled * point_value if sum_notional_scaled else 0
+            notional_real = corrected_notional_scaled / 10000.0 if corrected_notional_scaled else 0.0
 
             # fee_scaled is combined (commission + tax); tax_scaled is tax only
             # commission = fee - tax
@@ -73,7 +96,7 @@ class TCAAnalyzer:
                     symbol=symbol,
                     trade_count=trade_count,
                     volume=total_qty,
-                    notional=sum_notional_scaled,
+                    notional=corrected_notional_scaled,
                     commission_bps_mean=commission_bps,
                     tax_bps_mean=tax_bps,
                     delay_cost_bps_mean=0.0,
