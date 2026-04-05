@@ -32,6 +32,19 @@ from hft_platform.risk.validators import (
 
 logger = get_logger("risk_engine")
 
+_KNOWN_ERROR_TYPES = frozenset({
+    "ValueError", "TypeError", "KeyError", "AttributeError", "IndexError",
+    "RuntimeError", "TimeoutError", "OSError", "IOError", "ConnectionError",
+    "asyncio.TimeoutError", "Exception",
+})
+
+
+def _cap_error_type(e: Exception) -> str:
+    """Map exception type name to a known label value to cap Prometheus cardinality."""
+    name = type(e).__name__
+    return name if name in _KNOWN_ERROR_TYPES else "other"
+
+
 # Lazy import for Rust risk validator
 _RustRiskValidator = None
 
@@ -483,7 +496,7 @@ class RiskEngine:
             except Exception as e:  # noqa: BLE001 — wraps external risk validators
                 logger.exception("RiskEngine error", error=str(e), error_type=type(e).__name__)
                 try:
-                    self.metrics.risk_engine_error_total.labels(error_type=type(e).__name__).inc()
+                    self.metrics.risk_engine_error_total.labels(error_type=_cap_error_type(e)).inc()
                 except Exception:  # noqa: BLE001 — metric failure must not mask original error
                     pass
                 if self._rejection_sink is not None:

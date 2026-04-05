@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
-from hft_platform.risk.engine import RiskEngine
+from hft_platform.risk.engine import RiskEngine, _cap_error_type
 
 
 @pytest.fixture
@@ -150,6 +150,30 @@ async def test_rejection_sink_overflow_increments_metric(engine):
     assert overflow_count >= 1, (
         f"Expected rejection_sink_overflow_total >= 1, got {overflow_count}"
     )
+
+
+def test_cap_error_type_known_exceptions_pass_through():
+    """Known exception type names are returned unchanged."""
+    assert _cap_error_type(ValueError("bad")) == "ValueError"
+    assert _cap_error_type(TypeError("t")) == "TypeError"
+    assert _cap_error_type(KeyError("k")) == "KeyError"
+    assert _cap_error_type(RuntimeError("r")) == "RuntimeError"
+    assert _cap_error_type(TimeoutError("t")) == "TimeoutError"
+    assert _cap_error_type(OSError("o")) == "OSError"
+    assert _cap_error_type(ConnectionError("c")) == "ConnectionError"
+
+
+def test_cap_error_type_unknown_exception_maps_to_other():
+    """Unknown/dynamic exception type names are mapped to 'other' to bound label cardinality."""
+
+    class _DynamicFoo(Exception):
+        pass
+
+    class _AnotherCustom(Exception):
+        pass
+
+    assert _cap_error_type(_DynamicFoo()) == "other"
+    assert _cap_error_type(_AnotherCustom()) == "other"
 
 
 def test_create_command_propagates_decision_price(engine):
