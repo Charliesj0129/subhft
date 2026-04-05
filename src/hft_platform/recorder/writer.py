@@ -23,6 +23,12 @@ except ImportError:
 logger = get_logger("recorder.writer")
 
 
+class WriterDoubleFaultError(Exception):
+    """Both ClickHouse and WAL failed — raised to signal batcher of data loss risk."""
+
+    pass
+
+
 class DataWriter:
     # Default to native protocol (port 9000) for better performance
     # HTTP protocol (8123) is slower but more compatible
@@ -552,6 +558,9 @@ class DataWriter:
                 )
                 if self._health_tracker:
                     self._health_tracker.record_event("data_loss", table=table, count=row_count)
+                raise WriterDoubleFaultError(
+                    f"Both CH and WAL failed for table={table}, rows={row_count}"
+                )
 
     def _ch_insert_columnar(
         self,
@@ -702,6 +711,9 @@ class DataWriter:
                 )
                 if self._health_tracker:
                     self._health_tracker.record_event("data_loss", table=table, count=len(data))
+                raise WriterDoubleFaultError(
+                    f"Both CH and WAL failed for table={table}, rows={len(data)}"
+                )
 
     def _ch_insert(self, table, data):
         # Infer columns from first row assuming consistent dicts

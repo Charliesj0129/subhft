@@ -682,6 +682,8 @@ class Batcher:
             MetricsRegistry.get().recorder_reinject_circuit_breaker_drops_total.labels(
                 table=self.table_name
             ).inc(flush_buf.row_count)
+            if self._health_tracker:
+                self._health_tracker.record_event("data_loss", table=self.table_name, count=flush_buf.row_count)
             return
 
         try:
@@ -708,3 +710,5 @@ class Batcher:
                 error=str(e),
                 msg="PERMANENT DATA LOSS — could not re-inject rows",
             )
+            if self._health_tracker:
+                self._health_tracker.record_event("data_loss", table=self.table_name)
