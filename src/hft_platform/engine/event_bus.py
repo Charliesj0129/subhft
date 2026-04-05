@@ -1,6 +1,8 @@
 import asyncio
+import collections
 import importlib
 import os
+import time
 from typing import Any, Callable, List, Optional
 
 from structlog import get_logger
@@ -8,8 +10,6 @@ from structlog import get_logger
 from hft_platform.core import timebase
 from hft_platform.events import GapEvent
 from hft_platform.observability.metrics import MetricsRegistry
-
-# from collections import deque
 
 logger = get_logger("event_bus")
 
@@ -339,10 +339,39 @@ class RingBufferBus:
         # Overflow threshold for triggering HALT (consecutive overflows)
         self._overflow_halt_threshold = int(os.getenv("HFT_BUS_OVERFLOW_HALT_THRESHOLD", "3"))
         self._overflow_count = 0
+        # Sliding-window overflow rate tracker (XB-03)
+        self._overflow_window_s: float = float(os.getenv("HFT_BUS_OVERFLOW_WINDOW_S", "60.0"))
+        self._overflow_rate_threshold: int = int(os.getenv("HFT_BUS_OVERFLOW_RATE_THRESHOLD", "10"))
+        self._overflow_timestamps: collections.deque[float] = collections.deque(
+            maxlen=self._overflow_rate_threshold * 2,
+        )
 
     def set_storm_guard(self, storm_guard: Any) -> None:
         """Set StormGuard reference for overflow HALT triggering."""
         self._storm_guard = storm_guard
+
+    def _record_overflow_rate(self) -> None:
+        """Record an overflow timestamp and check sliding-window rate threshold (XB-03)."""
+        now = time.monotonic()
+        self._overflow_timestamps.append(now)
+        # Evict timestamps older than the window
+        cutoff = now - self._overflow_window_s
+        while self._overflow_timestamps and self._overflow_timestamps[0] < cutoff:
+            self._overflow_timestamps.popleft()
+        if (
+            len(self._overflow_timestamps) >= self._overflow_rate_threshold
+            and self._storm_guard is not None
+        ):
+            rate_count = len(self._overflow_timestamps)
+            self._storm_guard.trigger_halt(
+                f"EventBus overflow rate: {rate_count} in {self._overflow_window_s}s"
+            )
+            logger.critical(
+                "StormGuard HALT triggered due to EventBus overflow rate",
+                overflow_rate=rate_count,
+                window_s=self._overflow_window_s,
+                threshold=self._overflow_rate_threshold,
+            )
 
     def _store_fallback(self, seq: int, event: Any) -> None:
         """Write event to the generic fallback buffer (Rust PyObj ring or Python list)."""
@@ -618,6 +647,7 @@ class RingBufferBus:
                     # Lagged too much, skip to latest - size
                     self.metrics.bus_overflow_total.inc()
                     self._overflow_count += 1
+                    self._record_overflow_rate()
                     lag = current_cursor - local_seq
                     first_missed = local_seq + 1
                     last_missed = current_cursor - self.size
@@ -703,6 +733,7 @@ class RingBufferBus:
                 if current_cursor - local_seq > self.size:
                     self.metrics.bus_overflow_total.inc()
                     self._overflow_count += 1
+                    self._record_overflow_rate()
                     lag = current_cursor - local_seq
                     first_missed = local_seq + 1
                     last_missed = current_cursor - self.size
