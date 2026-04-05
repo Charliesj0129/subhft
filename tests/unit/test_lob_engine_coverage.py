@@ -524,3 +524,26 @@ class TestLOBEngineMetrics:
         assert engine._last_symbol == "BBBB"
         assert engine._last_book is b_b
         assert b_a is not b_b
+
+    def test_flush_metrics_applies_cap_symbol_guard(self):
+        """cap_symbol() must be applied at label-emission time to prevent cardinality explosion."""
+        engine = LOBEngine()
+        mock_metrics = MagicMock()
+        # cap_symbol returns "_other" for symbols beyond the cap
+        mock_metrics.cap_symbol.return_value = "_other"
+        engine.metrics = mock_metrics
+        engine._metrics_enabled = True
+
+        # Inject a pending update and snapshot
+        engine._metrics_pending_updates[("RARE_SYM", "bid")] = 3
+        engine._metrics_pending_snapshots["RARE_SYM"] = 1
+
+        engine._flush_metrics()
+
+        # cap_symbol must have been called for both emission points
+        assert mock_metrics.cap_symbol.call_count == 2
+        # The label passed to Prometheus must be the capped value, not the raw symbol
+        mock_metrics.lob_updates_total.labels.assert_called_once_with(
+            symbol="_other", type="bid"
+        )
+        mock_metrics.lob_snapshots_total.labels.assert_called_once_with(symbol="_other")

@@ -497,11 +497,11 @@ class LOBEngine:
             return
 
         for (symbol, update_type), count in self._metrics_pending_updates.items():
-            self.metrics.lob_updates_total.labels(symbol=symbol, type=update_type).inc(count)
+            self.metrics.lob_updates_total.labels(symbol=self.metrics.cap_symbol(symbol), type=update_type).inc(count)
         self._metrics_pending_updates.clear()
 
         for symbol, count in self._metrics_pending_snapshots.items():
-            self.metrics.lob_snapshots_total.labels(symbol=symbol).inc(count)
+            self.metrics.lob_snapshots_total.labels(symbol=self.metrics.cap_symbol(symbol)).inc(count)
         self._metrics_pending_snapshots.clear()
 
         self._metrics_pending_total = 0
