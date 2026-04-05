@@ -9,7 +9,14 @@ from typing import Any
 import yaml
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, RiskDecision, RiskFeedback, StormGuardState
+from hft_platform.contracts.strategy import (
+    IntentType,
+    OrderCommand,
+    OrderIntent,
+    RiskDecision,
+    RiskFeedback,
+    StormGuardState,
+)
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
@@ -513,6 +520,13 @@ class RiskEngine:
                 self._order_dlq.popleft()
                 expired += 1
                 continue
+            # Reject DLQ entries if StormGuard escalated to STORM since enqueue
+            if self.storm_guard.state >= StormGuardState.STORM:
+                cleared = len(self._order_dlq)
+                self._order_dlq.clear()
+                logger.warning("risk_dlq_cleared_during_storm", cleared=cleared)
+                self.metrics.risk_dlq_expired_total.inc(cleared)
+                break
             # Try to push back to order_queue
             try:
                 self.order_queue.put_nowait(cmd)
@@ -532,7 +546,7 @@ class RiskEngine:
 
     def evaluate(self, intent: Any) -> RiskDecision:  # noqa: C901
         price = getattr(intent, "price", None)
-        if isinstance(price, float):
+        if price is not None and not isinstance(price, int):
             self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
             return self._reject(intent, "FLOAT_PRICE")
 

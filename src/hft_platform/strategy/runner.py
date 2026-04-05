@@ -9,9 +9,9 @@ from typing import Any, List
 from structlog import get_logger
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent, RiskFeedback
-from hft_platform.events import GapEvent
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
+from hft_platform.events import GapEvent
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
