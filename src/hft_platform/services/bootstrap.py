@@ -1132,7 +1132,7 @@ class SystemBootstrapper:
                         )
                         from hft_platform.notifications.telegram import TelegramSender
 
-                        sender = TelegramSender()
+                        sender = TelegramSender(enabled=True)
                         notification_dispatcher = NotificationDispatcher(sender=sender)
                     except Exception:  # noqa: BLE001
                         pass
