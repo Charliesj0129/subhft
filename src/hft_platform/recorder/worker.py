@@ -528,14 +528,27 @@ class RecorderService:
                     break
             if drained:
                 logger.info("recorder_shutdown_drained", items=drained)
-            # I2-H3: Shield flush/shutdown from re-cancellation during event loop teardown
+            _shutdown_timeout_s = float(os.getenv("HFT_RECORDER_SHUTDOWN_TIMEOUT_S", "60"))
             try:
-                for batcher in self.batchers.values():
-                    await asyncio.shield(batcher.force_flush())
-                await asyncio.shield(self.writer.shutdown())
+                await asyncio.wait_for(self._shutdown_flush(), timeout=_shutdown_timeout_s)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "recorder_shutdown_flush_timeout",
+                    timeout_s=_shutdown_timeout_s,
+                    batchers=len(self.batchers),
+                )
             except asyncio.CancelledError:
                 logger.warning("recorder_shutdown_flush_cancelled")
             logger.info("Recorder stopped")
+
+    async def _shutdown_flush(self) -> None:
+        """Flush all batchers and shut down writer. Called during graceful shutdown."""
+        for batcher in self.batchers.values():
+            try:
+                await batcher.force_flush()
+            except Exception as exc:
+                logger.warning("recorder_batcher_flush_error", error=str(exc))
+        await self.writer.shutdown()
 
     async def _flush_loop(self):
         while self.running:
