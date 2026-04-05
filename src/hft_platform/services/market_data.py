@@ -372,6 +372,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # Per-message error counter for post-normalization processing
         self._process_raw_error_count = 0
 
+        # Normalization failure escalation circuit breaker
+        self._norm_consecutive_failures = 0
+        self._NORM_FAILURE_ESCALATE = int(os.getenv("HFT_NORM_FAILURE_ESCALATE", "50"))
+
         # P0-1: raw_queue backpressure tracking
         raw_queue_maxsize = getattr(self.raw_queue, "maxsize", 0) or 0
         self._raw_queue_size = (
@@ -701,6 +705,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 normalized = self.normalizer.normalize_tick(raw)
             if isinstance(normalized, (TickEvent, BidAskEvent)):
                 event = normalized
+                self._norm_consecutive_failures = 0
                 if isinstance(event, TickEvent):
                     if self._feed_events_tick_child is not None:
                         self._feed_events_tick_child.inc()
@@ -711,6 +716,14 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             logger.error("Normalization check failed", error=str(ne), raw_type=str(type(raw)))
             self._emit_trace("md_normalize_error", "", {"raw_type": str(type(raw)), "error": str(ne)})
             norm_duration = 0
+            self._norm_consecutive_failures += 1
+            if self.metrics_registry:
+                self.metrics_registry.normalize_error_total.inc()
+            if self._norm_consecutive_failures >= self._NORM_FAILURE_ESCALATE and self._storm_guard is not None:
+                try:
+                    self._storm_guard.report_feature_failure(self._norm_consecutive_failures)
+                except Exception as sg_exc:  # noqa: BLE001
+                    logger.debug("storm_guard_norm_escalation_failed", error=str(sg_exc))
 
         if not event:
             return

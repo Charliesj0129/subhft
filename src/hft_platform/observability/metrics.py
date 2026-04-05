@@ -222,6 +222,8 @@ class MetricsRegistry:
                 "rust_fallback_total",
                 # Post-normalization processing errors (LOB/feature/publish)
                 "process_raw_error_total",
+                # Normalization failures (pre-event) in MarketDataService
+                "normalize_error_total",
                 # FeatureEngine → StormGuard escalation
                 "feature_engine_escalation_total",
                 # Feature staleness detection
@@ -622,6 +624,10 @@ class MetricsRegistry:
         self.process_raw_error_total = Counter(
             "process_raw_error_total",
             "Post-normalization processing errors (LOB/feature/publish)",
+        )
+        self.normalize_error_total = Counter(
+            "normalize_error_total",
+            "Normalization failures in MarketDataService",
         )
         self.raw_queue_depth = Gauge(
             "raw_queue_depth",

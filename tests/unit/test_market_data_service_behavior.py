@@ -662,3 +662,71 @@ def test_feature_consecutive_failures_no_reset_when_zero(mds_factory):
     result = svc._maybe_update_features(event, stats)
     assert result is fake_update
     assert svc._feature_consecutive_failures == 0
+
+
+# ---------------------------------------------------------------------------
+# Normalization failure escalation circuit breaker
+# ---------------------------------------------------------------------------
+
+
+def test_norm_failure_increments_counter(mds_factory):
+    """Normalization exception increments _norm_consecutive_failures."""
+    svc = mds_factory()
+    svc.metrics_registry = None
+    svc._storm_guard = None
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.side_effect = RuntimeError("norm boom")
+
+    assert svc._norm_consecutive_failures == 0
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    assert svc._norm_consecutive_failures == 1
+
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    assert svc._norm_consecutive_failures == 2
+
+
+def test_norm_failure_escalates_to_storm_guard(mds_factory):
+    """After N consecutive normalization failures, storm_guard.report_feature_failure() is called."""
+    svc = mds_factory()
+    svc.metrics_registry = None
+    svc._NORM_FAILURE_ESCALATE = 3
+    mock_sg = MagicMock()
+    svc._storm_guard = mock_sg
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.side_effect = RuntimeError("norm boom")
+
+    # Two failures — should NOT escalate yet
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    mock_sg.report_feature_failure.assert_not_called()
+
+    # Third failure — should escalate
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    mock_sg.report_feature_failure.assert_called_once_with(3)
+
+
+def test_norm_success_resets_counter(mds_factory):
+    """After a normalization failure, a successful normalization resets _norm_consecutive_failures to 0."""
+    from hft_platform.events import MetaData, TickEvent
+
+    svc = mds_factory()
+    svc.metrics_registry = None
+    svc._storm_guard = None
+    svc._NORM_FAILURE_ESCALATE = 50
+
+    # Simulate prior failures
+    svc._norm_consecutive_failures = 5
+
+    # Set up normalizer to succeed
+    meta = MetaData(seq=1, source_ts=0, local_ts=0)
+    tick = TickEvent(meta=meta, symbol="2330", price=1000000, volume=1)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.return_value = tick
+    svc.lob = MagicMock()
+    svc.lob.process_event.return_value = None
+    svc._maybe_update_features = MagicMock(return_value=None)
+    svc._publish_events = MagicMock()
+    svc._record_direct = False
+
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    assert svc._norm_consecutive_failures == 0
