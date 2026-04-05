@@ -707,7 +707,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 event = normalized
                 if self._norm_consecutive_failures >= self._NORM_FAILURE_ESCALATE and self._storm_guard is not None:
                     try:
-                        self._storm_guard.report_feature_recovery()
+                        self._storm_guard.report_norm_recovery()
                     except Exception as sg_exc:  # noqa: BLE001
                         logger.debug("storm_guard_norm_recovery_failed", error=str(sg_exc))
                 self._norm_consecutive_failures = 0
@@ -726,7 +726,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 self.metrics_registry.normalize_error_total.inc()
             if self._norm_consecutive_failures >= self._NORM_FAILURE_ESCALATE and self._storm_guard is not None:
                 try:
-                    self._storm_guard.report_feature_failure(self._norm_consecutive_failures)
+                    self._storm_guard.report_norm_failure(self._norm_consecutive_failures)
                 except Exception as sg_exc:  # noqa: BLE001
                     logger.debug("storm_guard_norm_escalation_failed", error=str(sg_exc))
 

@@ -52,6 +52,8 @@ class StormGuard:
         "_halt_exempt_strategies",
         "_feature_failure_active",
         "_feature_failure_storm_ts",
+        "_norm_failure_active",
+        "_norm_failure_storm_ts",
     )
 
     def __init__(
@@ -83,6 +85,8 @@ class StormGuard:
         self._halt_exempt_strategies: frozenset[str] = halt_exempt_strategies or env_set
         self._feature_failure_active: bool = False
         self._feature_failure_storm_ts: float = 0.0
+        self._norm_failure_active: bool = False
+        self._norm_failure_storm_ts: float = 0.0
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -156,10 +160,16 @@ class StormGuard:
             return StormGuardState.STORM, f"Latency {latency_us}us"
         if feed_gap_s >= t.feed_gap_storm_s and self._session_active:
             return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
-        # FeatureEngine failure holds STORM regardless of drawdown/latency WARM thresholds.
+        # Component failure holds STORM regardless of drawdown/latency WARM thresholds.
         # Must be checked before WARM returns so that STORM persists even when
         # drawdown/latency are in the WARM range (not STORM range).
-        if self._feature_failure_active:
+        norm_fail = self._norm_failure_active
+        feat_fail = self._feature_failure_active
+        if norm_fail or feat_fail:
+            if norm_fail and feat_fail:
+                return StormGuardState.STORM, "Component failure active (norm+feature)"
+            if norm_fail:
+                return StormGuardState.STORM, "Normalizer failure active"
             return StormGuardState.STORM, "FeatureEngine failure active"
         if drawdown_bps <= t.warm_drawdown_bps:
             return StormGuardState.WARM, "Drawdown Warning"
@@ -494,6 +504,51 @@ class StormGuard:
             # Don't transition — let update() handle de-escalation so that
             # other active STORM conditions (latency, drawdown) are respected.
         logger.info("feature_engine_recovered_flag_cleared")
+
+    def report_norm_failure(self, count: int) -> None:
+        """Escalate to STORM when normalizer has consecutive failures.
+
+        Mirrors :meth:`report_feature_failure` for the normalizer domain.
+        Sets ``_norm_failure_active`` independently of feature-failure flag.
+        """
+        with self._state_lock:
+            self._norm_failure_active = True
+            self._norm_failure_storm_ts = time.monotonic()
+            if self.state < StormGuardState.STORM:
+                self._de_escalate_count = 0
+                self._storm_entry_ts = self._norm_failure_storm_ts
+                self._transition(
+                    StormGuardState.STORM,
+                    f"Normalizer consecutive failures: {count}",
+                )
+        try:
+            self.metrics.norm_engine_escalation_total.inc()
+        except Exception:
+            pass
+        logger.warning(
+            "stormguard_norm_failure_escalation",
+            consecutive_failures=count,
+        )
+
+    def report_norm_recovery(self) -> None:
+        """Clear normalizer-failure flag after normalizer recovers.
+
+        Mirrors :meth:`report_feature_recovery` for the normalizer domain.
+        Anti-flap hold period applies independently.
+        """
+        with self._state_lock:
+            if not self._norm_failure_active:
+                return
+            elapsed = time.monotonic() - self._norm_failure_storm_ts
+            if elapsed < self._FEATURE_RECOVERY_HOLD_S:
+                logger.debug(
+                    "stormguard_norm_recovery_suppressed",
+                    elapsed_s=round(elapsed, 2),
+                    hold_s=self._FEATURE_RECOVERY_HOLD_S,
+                )
+                return
+            self._norm_failure_active = False
+        logger.info("normalizer_recovered_flag_cleared")
 
     def is_halt_exempt(self, strategy_id: str) -> bool:
         """Public API: check if a strategy is halt-exempt."""

@@ -228,6 +228,8 @@ class MetricsRegistry:
                 "normalize_error_total",
                 # FeatureEngine → StormGuard escalation
                 "feature_engine_escalation_total",
+                # Normalizer → StormGuard escalation
+                "norm_engine_escalation_total",
                 # Feature staleness detection
                 "feature_staleness_detected_total",
                 # Strategy timeout circuit breaker
@@ -906,6 +908,10 @@ class MetricsRegistry:
         self.feature_engine_escalation_total = Counter(
             "feature_engine_escalation_total",
             "FeatureEngine consecutive failure escalations to StormGuard STORM",
+        )
+        self.norm_engine_escalation_total = Counter(
+            "norm_engine_escalation_total",
+            "Normalizer consecutive failure escalations to StormGuard STORM",
         )
         self.feature_staleness_detected_total = Counter(
             "feature_staleness_detected_total",
