@@ -8,16 +8,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from hft_platform.alpha._promotion_helpers import (
-    _resolve_scorecard_path,
-    _to_float,
-    build_promotion_checklist,
-)
-from hft_platform.alpha._promotion_types import (
+from hft_platform.alpha.promotion import (
     PromotionChecklist,
     PromotionChecklistItem,
     PromotionConfig,
     PromotionResult,
+    _resolve_scorecard_path,
+    _to_float,
+    build_promotion_checklist,
 )
 from hft_platform.alpha._validation_helpers import (
     _dataset_metadata_candidates,
@@ -386,7 +384,7 @@ class TestBuildPromotionChecklist:
 class TestPromotionTypes:
     def test_promotion_config_defaults(self) -> None:
         cfg = PromotionConfig(alpha_id="test", owner="me")
-        assert cfg.min_sharpe_oos == 0.7
+        assert cfg.min_sharpe_oos == 1.0
         assert cfg.max_abs_drawdown == 0.2
         assert cfg.force is False
         assert cfg.enable_rust_readiness_gate is False
