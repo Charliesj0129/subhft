@@ -543,12 +543,15 @@ class RecorderService:
 
     async def _shutdown_flush(self) -> None:
         """Flush all batchers and shut down writer. Called during graceful shutdown."""
-        for batcher in self.batchers.values():
+        for topic, batcher in self.batchers.items():
             try:
                 await batcher.force_flush()
             except Exception as exc:
-                logger.warning("recorder_batcher_flush_error", error=str(exc))
-        await self.writer.shutdown()
+                logger.warning("recorder_batcher_flush_error", topic=topic, error=str(exc))
+        try:
+            await self.writer.shutdown()
+        except Exception as exc:
+            logger.warning("recorder_writer_shutdown_error", error=str(exc))
 
     async def _flush_loop(self):
         while self.running:
