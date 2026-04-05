@@ -398,6 +398,8 @@ class RecorderService:
 
         # Counter for events routed to an unknown topic (P-03)
         self._unknown_topic_drops: int = 0
+        # Counter for unexpected processing errors in the main loop
+        self._process_errors: int = 0
 
     async def recover_wal(self):
         """Replay any unprocesed WAL files to ClickHouse on startup."""
@@ -469,41 +471,62 @@ class RecorderService:
         try:
             while self.running:
                 item = await self.queue.get()
-                topic = item.get("topic")
-                data = item.get("data")
+                topic: object = None
+                try:
+                    topic = item.get("topic") if isinstance(item, dict) else None
+                    data = item.get("data") if isinstance(item, dict) else None
 
-                # CE3-02: route to WAL-first writer or batcher depending on mode
-                if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
-                    if isinstance(data, dict):
-                        rows = [data]
-                    elif isinstance(data, list):
-                        rows = data
+                    if topic is None:
+                        logger.warning(
+                            "recorder_invalid_item",
+                            item_type=type(item).__name__,
+                        )
+                        continue
+
+                    # CE3-02: route to WAL-first writer or batcher depending on mode
+                    if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
+                        if isinstance(data, dict):
+                            rows = [data]
+                        elif isinstance(data, list):
+                            rows = data
+                        else:
+                            rows = [data]
+                        ok = await self._wal_first_writer.write(topic, rows)
+                        if not ok:
+                            self.health_tracker.record_event("data_loss")
+                            try:
+                                from hft_platform.observability.metrics import MetricsRegistry
+
+                                MetricsRegistry.get().recorder_failures_total.inc()
+                            except Exception as exc:
+                                logger.debug("operation_failed", error=str(exc))
+                    elif topic in self.batchers:
+                        await self.batchers[topic].add(data)
                     else:
-                        rows = [data]
-                    ok = await self._wal_first_writer.write(topic, rows)
-                    if not ok:
-                        self.health_tracker.record_event("data_loss")
+                        self._unknown_topic_drops += 1
                         try:
-                            from hft_platform.observability.metrics import MetricsRegistry
+                            MetricsRegistry.get().recorder_exec_drops_total.labels(topic="unknown").inc()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        logger.warning(
+                            "recorder_unknown_topic_dropped",
+                            topic=topic,
+                            total_drops=self._unknown_topic_drops,
+                        )
 
-                            MetricsRegistry.get().recorder_failures_total.inc()
-                        except Exception as exc:
-                            logger.debug("operation_failed", error=str(exc))
-                elif topic in self.batchers:
-                    await self.batchers[topic].add(data)
-                else:
-                    self._unknown_topic_drops += 1
-                    try:
-                        MetricsRegistry.get().recorder_exec_drops_total.labels(topic="unknown").inc()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    logger.warning(
-                        "recorder_unknown_topic_dropped",
+                except asyncio.CancelledError:
+                    raise  # Must propagate for shutdown
+                except Exception as exc:
+                    self._process_errors += 1
+                    logger.error(
+                        "recorder_process_error",
                         topic=topic,
-                        total_drops=self._unknown_topic_drops,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        total_errors=self._process_errors,
                     )
-
-                self.queue.task_done()
+                finally:
+                    self.queue.task_done()
         except asyncio.CancelledError:
             pass
         finally:
