@@ -86,39 +86,7 @@ class MarketDataObservabilityMixin:
         except Exception:
             return
 
-    # -- feature engine update -----------------------------------------------
-
-    def _maybe_update_features(
-        self: Any,
-        event: TickEvent | BidAskEvent,
-        stats: object | None,
-    ) -> FeatureUpdateEvent | None:
-        feature_engine: FeatureEngine | None = getattr(self, "feature_engine", None)
-        if feature_engine is None or stats is None:
-            return None
-        if not hasattr(stats, "best_bid") or not hasattr(stats, "best_ask"):
-            return None
-        meta = getattr(event, "meta", None)
-        local_ts_ns = int(getattr(meta, "local_ts", 0) or 0) if meta is not None else 0
-        start_ns = time.perf_counter_ns()
-        try:
-            process_lob_update = getattr(feature_engine, "process_lob_update", None)
-            if callable(process_lob_update):
-                feature_update = process_lob_update(event, stats, local_ts_ns=local_ts_ns)
-            else:
-                feature_update = feature_engine.process_lob_stats(cast(LOBStatsEvent, stats), local_ts_ns=local_ts_ns)
-            self._maybe_run_feature_shadow_parity(event, stats, local_ts_ns, feature_update)
-            self._record_feature_metrics(event, feature_update, start_ns)
-            return feature_update
-        except Exception as exc:
-            self._emit_trace(
-                "feature_update_error",
-                "",
-                {"symbol": getattr(event, "symbol", ""), "reason": str(exc)},
-            )
-            self._record_feature_error_metric()
-            logger.warning("feature_engine_update_failed", reason=str(exc))
-            return None
+    # -- feature engine metrics -----------------------------------------------
 
     def _record_feature_metrics(  # noqa: C901
         self: Any,
@@ -181,60 +149,7 @@ class MarketDataObservabilityMixin:
             except Exception:
                 pass
 
-    def _record_feature_error_metric(self: Any) -> None:
-        self._feature_metrics_counter += 1
-        metrics_registry: MetricsRegistry | None = getattr(self, "metrics_registry", None)
-        if metrics_registry and self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
-            try:
-                if hasattr(metrics_registry, "feature_plane_updates_total"):
-                    key = ("error", self._feature_set_id_cached)
-                    child = self._feature_update_metric_children.get(key)
-                    if child is None:
-                        child = metrics_registry.feature_plane_updates_total.labels(
-                            result="error",
-                            feature_set=self._feature_set_id_cached,
-                        )
-                        self._feature_update_metric_children[key] = child
-                    child.inc()
-            except Exception:
-                pass
-
     # -- feature shadow parity -----------------------------------------------
-
-    def _init_feature_shadow_engine(self: Any) -> None:
-        """Initialise the shadow feature engine for parity checking."""
-        import os
-
-        from hft_platform.feature.engine import FeatureEngine
-
-        feature_engine: FeatureEngine | None = getattr(self, "feature_engine", None)
-        if feature_engine is None:
-            return
-        enabled = os.getenv("HFT_FEATURE_SHADOW_PARITY", "0").strip().lower() in {"1", "true", "yes", "on"}
-        if not enabled:
-            return
-        try:
-            primary_backend = feature_engine.kernel_backend() if hasattr(feature_engine, "kernel_backend") else "python"
-        except Exception:
-            primary_backend = "python"
-        requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
-        shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
-        try:
-            shadow = FeatureEngine(
-                feature_set_id=(feature_engine.feature_set_id() if hasattr(feature_engine, "feature_set_id") else None),
-                emit_events=True,
-                kernel_backend=shadow_backend,
-            )
-            if (
-                requested == ""
-                and hasattr(shadow, "kernel_backend")
-                and shadow.kernel_backend() == primary_backend == "python"
-            ):
-                return
-            self._feature_shadow_engine = shadow
-        except Exception as exc:
-            logger.warning("feature_shadow_engine_init_failed", reason=str(exc))
-            self._feature_shadow_engine = None
 
     def _maybe_run_feature_shadow_parity(  # noqa: C901
         self: Any,

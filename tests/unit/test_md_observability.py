@@ -158,63 +158,6 @@ class TestRecordShioajiCrashSignature:
 
 
 # ---------------------------------------------------------------------------
-# _maybe_update_features
-# ---------------------------------------------------------------------------
-
-
-class TestMaybeUpdateFeatures:
-    def test_returns_none_when_no_feature_engine(self):
-        stub = _make_stub()
-        event = _make_tick_event()
-        result = stub._maybe_update_features(event, _make_stats())
-        assert result is None
-
-    def test_returns_none_when_stats_is_none(self):
-        stub = _make_stub(feature_engine=MagicMock())
-        result = stub._maybe_update_features(_make_tick_event(), None)
-        assert result is None
-
-    def test_returns_none_when_stats_missing_best_bid(self):
-        stub = _make_stub(feature_engine=MagicMock())
-        stats = MagicMock(spec=["best_ask"])  # only best_ask, no best_bid
-        result = stub._maybe_update_features(_make_tick_event(), stats)
-        assert result is None
-
-    def test_returns_none_when_stats_missing_best_ask(self):
-        stub = _make_stub(feature_engine=MagicMock())
-        stats = MagicMock(spec=["best_bid"])  # only best_bid, no best_ask
-        result = stub._maybe_update_features(_make_tick_event(), stats)
-        assert result is None
-
-    def test_calls_process_lob_update_when_available(self):
-        fu = _make_feature_update()
-        engine = MagicMock()
-        engine.process_lob_update = MagicMock(return_value=fu)
-        stub = _make_stub(feature_engine=engine)
-        result = stub._maybe_update_features(_make_tick_event(), _make_stats())
-        assert result is fu
-        engine.process_lob_update.assert_called_once()
-
-    def test_falls_back_to_process_lob_stats_when_no_process_lob_update(self):
-        fu = _make_feature_update()
-        engine = MagicMock(spec=["process_lob_stats"])  # no process_lob_update
-        engine.process_lob_stats = MagicMock(return_value=fu)
-        stub = _make_stub(feature_engine=engine)
-        result = stub._maybe_update_features(_make_tick_event(), _make_stats())
-        assert result is fu
-        engine.process_lob_stats.assert_called_once()
-
-    def test_returns_none_and_emits_error_on_exception(self):
-        engine = MagicMock()
-        engine.process_lob_update.side_effect = ValueError("bad input")
-        stub = _make_stub(feature_engine=engine)
-        result = stub._maybe_update_features(_make_tick_event(), _make_stats())
-        assert result is None
-        # Error metric counter should have incremented
-        assert stub._feature_metrics_counter > 0
-
-
-# ---------------------------------------------------------------------------
 # _record_feature_metrics
 # ---------------------------------------------------------------------------
 
@@ -301,38 +244,6 @@ class TestRecordFeatureMetrics:
         fu = _make_feature_update(quality_flags=0)
         stub._record_feature_metrics(_make_tick_event(), fu, 0)
         registry.feature_quality_flags_total.labels.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# _record_feature_error_metric
-# ---------------------------------------------------------------------------
-
-
-class TestRecordFeatureErrorMetric:
-    def test_increments_metrics_counter(self):
-        stub = _make_stub()
-        stub._record_feature_error_metric()
-        assert stub._feature_metrics_counter == 1
-
-    def test_emits_error_metric_at_sample_boundary(self):
-        registry = MagicMock()
-        child = MagicMock()
-        registry.feature_plane_updates_total.labels.return_value = child
-        stub = _make_stub(metrics_registry=registry)
-        stub._feature_metrics_sample_every = 1
-        stub._record_feature_error_metric()
-        registry.feature_plane_updates_total.labels.assert_called_once_with(
-            result="error",
-            feature_set=stub._feature_set_id_cached,
-        )
-        child.inc.assert_called_once()
-
-    def test_no_op_without_registry(self):
-        stub = _make_stub()
-        stub._feature_metrics_sample_every = 1
-        stub._record_feature_error_metric()
-        # no exception, just counter increment
-        assert stub._feature_metrics_counter == 1
 
 
 # ---------------------------------------------------------------------------
