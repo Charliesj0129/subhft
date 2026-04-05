@@ -239,6 +239,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._shm_symbol_index: dict[str, int] = {}
         self._shm_symbol_hashes: dict[str, int] = {}
         self._redis_publisher: Any | None = None
+        self._redis_pub_error_count: int = 0
         self._redis_payload_cache: dict[str, dict] = {}
         self._shm_lob_cache: dict[str, list[int]] = {}
         self._shm_feat_cache: dict[str, list[int]] = {}
@@ -522,7 +523,13 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 payload["volume"] = int(getattr(event, "volume", 0) or 0)
             pub.publish_market_data(payload)
         except Exception:
-            pass  # fire-and-forget — never block hot path
+            # fire-and-forget — never block hot path, but track errors
+            self._redis_pub_error_count += 1
+            if self._redis_pub_error_count % 1000 == 1:
+                logger.warning(
+                    "redis_publish_error",
+                    total_errors=self._redis_pub_error_count,
+                )
 
     # -- main loop -----------------------------------------------------------
 
