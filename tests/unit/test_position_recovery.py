@@ -87,6 +87,8 @@ def _write_checkpoint(path, trading_date, positions):
 
     store = MagicMock()
     store.positions = {}
+    store._peak_equity_scaled = 0
+    store._total_realized_pnl_scaled = 0
     for sym, data in positions.items():
         pos = Position(
             account_id="test",
@@ -97,6 +99,7 @@ def _write_checkpoint(path, trading_date, positions):
             realized_pnl_scaled=data.get("realized_pnl_scaled", 0),
         )
         store.positions[f"test::{sym}"] = pos
+    store.snapshot_positions.return_value = dict(store.positions)
 
     writer = PositionCheckpointWriter(
         store=store,
@@ -123,7 +126,15 @@ def test_recover_dual_source_match(tmp_path):
     assert result.positions_loaded == 1
     assert result.auto_corrected == 0
     assert result.halted is False
-    assert len(store.positions) == 1
+    # Recovery positions are now stored via load_recovery, not directly in positions
+    store.load_recovery.assert_called_once_with(
+        account_id="test",
+        symbol="2330",
+        net_qty=1000,
+        avg_price_scaled=0,
+        realized_pnl_scaled=0,
+        fees_scaled=0,
+    )
 
 
 def test_recover_minor_discrepancy_auto_corrects(tmp_path):
@@ -143,7 +154,15 @@ def test_recover_minor_discrepancy_auto_corrects(tmp_path):
     assert result.source == "dual"
     assert result.auto_corrected == 1
     assert result.halted is False
-    assert store.positions["test::2330"].net_qty == 1005
+    # Auto-corrected to broker qty (1005) via load_recovery
+    store.load_recovery.assert_called_once_with(
+        account_id="test",
+        symbol="2330",
+        net_qty=1005,
+        avg_price_scaled=0,
+        realized_pnl_scaled=0,
+        fees_scaled=0,
+    )
 
 
 def test_recover_critical_discrepancy_halts(tmp_path):
@@ -196,7 +215,15 @@ def test_recover_stale_checkpoint_broker_only(tmp_path):
     assert result.source == "broker_only"
     assert result.positions_loaded == 1
     assert result.halted is False
-    assert store.positions["test::2330"].net_qty == 1000
+    # Broker-only recovery uses load_recovery with broker qty
+    store.load_recovery.assert_called_once_with(
+        account_id="test",
+        symbol="2330",
+        net_qty=1000,
+        avg_price_scaled=0,
+        realized_pnl_scaled=0,
+        fees_scaled=0,
+    )
 
 
 def test_recover_broker_unavailable_checkpoint_only(tmp_path):
