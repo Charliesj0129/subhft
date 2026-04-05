@@ -125,6 +125,42 @@ class TestReportFeatureRecovery:
         # State MUST remain STORM — latency condition is still active
         assert guard.state == StormGuardState.STORM
 
+    def test_feature_failure_prevents_deescalation_to_warm(self, guard):
+        """_feature_failure_active must block de-escalation even when drawdown/latency
+        are only in the WARM range (not STORM range).
+
+        Regression: previously _feature_failure_active was checked AFTER the WARM
+        threshold returns, so update() with warm-range inputs would return WARM
+        and the hysteresis loop would de-escalate from STORM→WARM while
+        FeatureEngine was still broken.
+        """
+        guard._storm_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
+
+        guard.report_feature_failure(count=10)
+        assert guard.state == StormGuardState.STORM
+
+        # drawdown_bps=-60 is in the WARM range (-50 threshold), latency clean
+        result = guard.update(drawdown_bps=-60, latency_us=0, feed_gap_s=0.0)
+        # Must remain STORM — feature failure is still active
+        assert result == StormGuardState.STORM
+        assert guard.state == StormGuardState.STORM
+
+    def test_feature_failure_cleared_allows_deescalation_from_warm_range(self, guard):
+        """After feature recovery, update() with WARM-range inputs de-escalates to WARM."""
+        guard._storm_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
+
+        guard.report_feature_failure(count=10)
+        guard._feature_failure_storm_ts -= 10.0  # bypass anti-flap
+        guard.report_feature_recovery()
+        assert guard._feature_failure_active is False
+
+        # Now drawdown_bps=-60 is WARM range — should de-escalate to WARM
+        result = guard.update(drawdown_bps=-60, latency_us=0, feed_gap_s=0.0)
+        assert result == StormGuardState.WARM
+        assert guard.state == StormGuardState.WARM
+
     def test_recovery_suppressed_during_hold_period(self, guard):
         """Anti-flap: recovery within _FEATURE_RECOVERY_HOLD_S is suppressed."""
         guard.report_feature_failure(count=10)

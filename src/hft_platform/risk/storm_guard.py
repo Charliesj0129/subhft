@@ -156,12 +156,15 @@ class StormGuard:
             return StormGuardState.STORM, f"Latency {latency_us}us"
         if feed_gap_s >= t.feed_gap_storm_s and self._session_active:
             return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
+        # FeatureEngine failure holds STORM regardless of drawdown/latency WARM thresholds.
+        # Must be checked before WARM returns so that STORM persists even when
+        # drawdown/latency are in the WARM range (not STORM range).
+        if self._feature_failure_active:
+            return StormGuardState.STORM, "FeatureEngine failure active"
         if drawdown_bps <= t.warm_drawdown_bps:
             return StormGuardState.WARM, "Drawdown Warning"
         if latency_us >= t.latency_warm_us:
             return StormGuardState.WARM, "Latency Warning"
-        if self._feature_failure_active:
-            return StormGuardState.STORM, "FeatureEngine failure active"
         return StormGuardState.NORMAL, ""
 
     def update(
