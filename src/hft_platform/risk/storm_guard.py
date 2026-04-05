@@ -160,6 +160,8 @@ class StormGuard:
             return StormGuardState.WARM, "Drawdown Warning"
         if latency_us >= t.latency_warm_us:
             return StormGuardState.WARM, "Latency Warning"
+        if self._feature_failure_active:
+            return StormGuardState.STORM, "FeatureEngine failure active"
         return StormGuardState.NORMAL, ""
 
     def update(

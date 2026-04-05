@@ -631,3 +631,32 @@ def test_feature_recovery_clears_flag_only(guard):
     guard._de_escalate_threshold = 1
     guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
     assert guard.state == StormGuardState.NORMAL
+
+
+# ── _feature_failure_active blocks de-escalation ───────────────────────────
+
+
+def test_feature_failure_prevents_normal_deescalation(guard):
+    """_evaluate_target_state returns STORM when _feature_failure_active is True."""
+    guard._feature_failure_active = True
+    state, reason = guard._evaluate_target_state(0, 0, 0.0)
+    assert state == StormGuardState.STORM
+    assert reason == "FeatureEngine failure active"
+
+
+def test_feature_failure_cleared_allows_normal(guard):
+    """_evaluate_target_state returns NORMAL once _feature_failure_active is cleared."""
+    guard._feature_failure_active = True
+    guard._feature_failure_active = False
+    state, reason = guard._evaluate_target_state(0, 0, 0.0)
+    assert state == StormGuardState.NORMAL
+    assert reason == ""
+
+
+def test_feature_failure_does_not_override_halt(guard):
+    """HALT priority is preserved over _feature_failure_active (HALT > STORM)."""
+    guard._feature_failure_active = True
+    # halt_drawdown_bps default is -500; use a value that triggers HALT
+    halt_drawdown = guard.thresholds.halt_drawdown_bps - 1
+    state, _ = guard._evaluate_target_state(halt_drawdown, 0, 0.0)
+    assert state == StormGuardState.HALT
