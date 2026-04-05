@@ -281,7 +281,13 @@ class HFTSystem:
             except Exception as exc:
                 logger.warning("AuditWriter start failed", error=str(exc))
                 self._audit_writer = None
-            self._start_service("recorder_bridge", self._recorder_bridge())
+            if self._md_record_direct and self._fill_record_direct and self._order_record_direct:
+                logger.info(
+                    "recorder_bridge_skipped",
+                    reason="all_direct_recording_enabled",
+                )
+            else:
+                self._start_service("recorder_bridge", self._recorder_bridge())
             if os.getenv("HFT_PNL_EXPORTER_ENABLED", "1").lower() not in {"0", "false", "no", "off"}:
                 self._start_service("pnl_exporter", self._pnl_snapshot_exporter())
 
@@ -408,7 +414,11 @@ class HFTSystem:
             ("recon", "ReconciliationService", self.recon_service.run),
             ("strat", "StrategyRunner", self.strategy_runner.run),
             ("recorder", "RecorderService", self.recorder.run),
-            ("recorder_bridge", "RecorderBridge", self._recorder_bridge),
+            *(
+                [("recorder_bridge", "RecorderBridge", self._recorder_bridge)]
+                if not (self._md_record_direct and self._fill_record_direct and self._order_record_direct)
+                else []
+            ),
             ("pnl_exporter", "PnLSnapshotExporter", self._pnl_snapshot_exporter),
         ]
         if self.gateway_service is not None:
@@ -958,6 +968,13 @@ class HFTSystem:
 
     async def _recorder_bridge(self):
         """Bridge all Bus events to Recorder."""
+        # Safety guard: if all direct recording flags are set, this coroutine should not run.
+        if self._md_record_direct and self._fill_record_direct and self._order_record_direct:
+            logger.info(
+                "recorder_bridge_early_exit",
+                reason="all_direct_recording_enabled",
+            )
+            return
         # Start from -1 to capture first event
         batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
         consumer = (
