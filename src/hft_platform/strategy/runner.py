@@ -142,6 +142,7 @@ class StrategyRunner:
         "_timeout_broken_at_ns",
         "_default_intent_ttl_ns",
         "_rejection_sink",
+        "_storm_guard",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -276,6 +277,9 @@ class StrategyRunner:
 
         # Rejection sink: receives RiskFeedback when risk_queue is full (set by bootstrap)
         self._rejection_sink: asyncio.Queue | None = None
+
+        # StormGuard reference: set by bootstrap to trigger HALT on persistent risk_queue_full
+        self._storm_guard: Any = None
 
         # Load initial
         for strat in self.registry.instantiate():
@@ -1008,6 +1012,11 @@ class StrategyRunner:
                         submitted=_d7_submitted,
                         dropped=_d7_dropped,
                     )
+                    # Persistent risk_queue_full is a system-level threat:
+                    # trigger StormGuard HALT (symmetric with order_queue_full
+                    # in risk/engine.py line 449).
+                    if self._storm_guard is not None:
+                        self._storm_guard.trigger_halt("risk_queue_full")
 
     @staticmethod
     def filter_intents_by_phase(intents: list, track_gate: Any) -> list:

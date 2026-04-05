@@ -762,3 +762,74 @@ async def test_rejection_sink_none_does_not_raise_on_queue_full(runner_factory):
         await runner.process_event(event)
 
     assert runner._rejection_sink is None
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_triggered_on_risk_queue_full(runner_factory):
+    """StormGuard.trigger_halt('risk_queue_full') is called once per batch when risk_queue is full."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    runner._typed_intent_fastpath = False
+
+    mock_storm_guard = MagicMock()
+    runner._storm_guard = mock_storm_guard
+
+    intent = OrderIntent(
+        intent_id=50,
+        strategy_id="strat_sg",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+
+    strat = _make_strategy("strat_sg", symbols=["TSMC"])
+    runner.register(strat)
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    mock_storm_guard.trigger_halt.assert_called_once_with("risk_queue_full")
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_not_triggered_when_none(runner_factory):
+    """When _storm_guard is None, a full risk_queue must not raise."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    runner._typed_intent_fastpath = False
+    # _storm_guard stays None (default)
+
+    intent = OrderIntent(
+        intent_id=51,
+        strategy_id="strat_nosg",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+
+    strat = _make_strategy("strat_nosg", symbols=["TSMC"])
+    runner.register(strat)
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+    # Should not raise and _storm_guard stays None
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    assert runner._storm_guard is None

@@ -1059,6 +1059,9 @@ class SystemBootstrapper:
         if _rejection_queue is not None and hasattr(strategy_runner, '_rejection_sink'):
             strategy_runner._rejection_sink = _rejection_queue
 
+        if hasattr(strategy_runner, '_storm_guard'):
+            strategy_runner._storm_guard = storm_guard
+
         if _publish_queue is not None and hasattr(strategy_runner, '_publish_sink'):
             strategy_runner._publish_sink = lambda ch, payload: _publish_queue.put_nowait((ch, payload))
 
