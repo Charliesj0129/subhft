@@ -17,4 +17,7 @@ ScaledPnl = NewType("ScaledPnl", int)
 # Scaled integer fee/tax (x10000).
 ScaledFee = NewType("ScaledFee", int)
 
-__all__ = ["ScaledPrice", "ScaledPnl", "ScaledFee"]
+# Price scale factor: 1 NTD point = 10,000 in scaled representation.
+PLATFORM_SCALE: int = 10_000
+
+__all__ = ["ScaledPrice", "ScaledPnl", "ScaledFee", "PLATFORM_SCALE"]

@@ -66,7 +66,7 @@ class TestBar5m:
             volume=0,
             ticks=0,
         )
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             bar.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -102,7 +102,7 @@ class TestFlowBar:
             ud_ratio=1.0,
             net_flow=0,
         )
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             fb.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -129,7 +129,7 @@ class TestLargeTrade:
 
     def test_slots_prevents_extra_attrs(self) -> None:
         lt = LargeTrade(ts="t", price=ScaledPrice(1), volume=1, direction="buy")
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             lt.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -151,7 +151,7 @@ class TestDepthBar:
 
     def test_slots_prevents_extra_attrs(self) -> None:
         db = DepthBar(hour=9, avg_bid_vol=1.0, avg_ask_vol=1.0, bid_ratio=0.5)
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             db.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -188,7 +188,7 @@ class TestSessionData:
 
     def test_slots_prevents_extra_attrs(self) -> None:
         sd = self._make_session()
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             sd.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -209,7 +209,7 @@ class TestPriceLevel:
 
     def test_slots_prevents_extra_attrs(self) -> None:
         pl = PriceLevel(price=ScaledPrice(1), strength=0.5, reason="test")
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             pl.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -271,7 +271,7 @@ class TestSignalReport:
 
     def test_slots_prevents_extra_attrs(self) -> None:
         sr = self._make_signal()
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             sr.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -302,7 +302,7 @@ class TestScenario:
             target=ScaledPrice(1),
             description="d",
         )
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             sc.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -324,7 +324,7 @@ class TestKeyLevel:
 
     def test_slots_prevents_extra_attrs(self) -> None:
         kl = KeyLevel(price=ScaledPrice(1), label="L", importance=1, reason="r")
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             kl.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -396,7 +396,7 @@ class TestScenarioReport:
 
     def test_slots_prevents_extra_attrs(self) -> None:
         rpt = self._make_report()
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             rpt.extra_field = "nope"  # type: ignore[attr-defined]
 
 
@@ -499,7 +499,7 @@ class TestSegmentFact:
             high=220500, low=219800, dominant_side="bear",
         )
         assert hasattr(sf, "__slots__")
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             sf.extra = 1  # type: ignore[attr-defined]
 
 
@@ -522,7 +522,7 @@ class TestChipCluster:
             dominant_side="bull", first_ts="09:05", last_ts="09:20",
             time_range="09:05-09:20",
         )
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             cc.extra = 1  # type: ignore[attr-defined]
 
 
@@ -610,7 +610,7 @@ class TestDaySnapshot:
             open=219000, high=220500, low=218500, close=220000,
             volume=45000, ud_ratio=1.1, net_flow=500,
         )
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             ds.extra = 1  # type: ignore[attr-defined]
 
 
@@ -695,7 +695,7 @@ class TestEvidence:
             source="flow", fact_value="ud_ratio=1.5",
             direction="bull", weight=0.8,
         )
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             e.extra = 1  # type: ignore[attr-defined]
 
 
@@ -783,7 +783,7 @@ class TestMessagePart:
 
     def test_slots(self) -> None:
         mp = MessagePart(kind="text", content="Hello")
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             mp.extra = 1  # type: ignore[attr-defined]
 
 

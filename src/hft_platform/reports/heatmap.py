@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from hft_platform.contracts.types import PLATFORM_SCALE
+
 if TYPE_CHECKING:
     from hft_platform.reports.models import SessionData
 
 logger = structlog.get_logger(__name__)
-
-PLATFORM_SCALE = 10_000
 
 _SESSION_LABEL: dict[str, str] = {
     "day": "日",

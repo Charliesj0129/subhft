@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from hft_platform.reports.composer import (
@@ -471,6 +473,7 @@ class TestReportComposer:
         self, composer: ReportComposer, rr: ReasoningReport,
     ) -> None:
         fr = _make_fact_report(with_cross_day=True)
-        fr.session_data.session = "night"
-        result = composer.compose(fr, rr)
+        night_sd = dataclasses.replace(fr.session_data, session="night")
+        fr_night = dataclasses.replace(fr, session_data=night_sd)
+        result = composer.compose(fr_night, rr)
         assert "夜盤報告" in result.messages[0].content

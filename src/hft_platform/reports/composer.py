@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Final
 
 import structlog
 
+from hft_platform.contracts.types import PLATFORM_SCALE
 from hft_platform.reports.models import ComposedReport, MessagePart
 
 if TYPE_CHECKING:
@@ -21,8 +22,6 @@ if TYPE_CHECKING:
 __all__ = ["ReportComposer"]
 
 log = structlog.get_logger(__name__)
-
-PLATFORM_SCALE: Final[int] = 10_000
 TELEGRAM_MAX_LEN: Final[int] = 4096
 
 _SESSION_LABELS: Final[dict[str, str]] = {
