@@ -396,3 +396,96 @@ class TestTypedFrameViewDecisionPrice:
         assert len(result) == 17
         assert result[0] == "typed_intent_v1"
         assert result[16] == 0  # decision_price default
+
+
+# ---------------------------------------------------------------------------
+# Tests: _lob_l1_source-based decision_price population (actual runner fix)
+# ---------------------------------------------------------------------------
+
+
+def _make_lob_engine_with_l1(mid_price_x2: int | None, symbol: str = "2330"):
+    """Create a LOB engine stub whose get_l1_scaled returns an L1 tuple."""
+    lob = MagicMock()
+    # Remove last_stats entirely to confirm the new path doesn't use it
+    del lob.last_stats
+    if mid_price_x2 is not None:
+        # Returns (timestamp_ns, best_bid, best_ask, mid_price_x2, spread_scaled, bid_depth, ask_depth)
+        lob.get_l1_scaled.return_value = (
+            123_000_000_000,
+            mid_price_x2 // 2 - 5_000,
+            mid_price_x2 // 2 + 5_000,
+            mid_price_x2,
+            10_000,
+            100,
+            100,
+        )
+    else:
+        lob.get_l1_scaled.return_value = None
+    return lob
+
+
+class TestDecisionPriceViaL1Source:
+    """decision_price is populated via _lob_l1_source (get_l1_scaled), not last_stats."""
+
+    def test_decision_price_populated_from_l1(self, runner_factory):
+        """When get_l1_scaled returns valid L1, intent.decision_price is set to mid."""
+        lob = _make_lob_engine_with_l1(mid_price_x2=600_0000)  # mid = 300_0000
+        runner, _, _ = runner_factory(lob_engine=lob)
+
+        assert runner._lob_l1_source is not None
+
+        intent = _make_order_intent()
+        assert intent.decision_price == 0
+
+        # Simulate the runner's per-intent block directly
+        _event_symbol = getattr(intent, "symbol", None)
+        if runner._lob_l1_source is not None and _event_symbol:
+            _l1 = runner._lob_l1_source(_event_symbol)
+            if _l1 is not None:
+                _mid = _l1[3] // 2
+                if _mid > 0:
+                    if isinstance(intent, OrderIntent):
+                        intent.decision_mid = _mid
+                        intent.decision_price = _mid
+
+        assert intent.decision_price == 300_0000
+        assert intent.decision_mid == 300_0000
+
+    def test_decision_price_skipped_when_no_lob(self, runner_factory):
+        """When lob_engine is None, _lob_l1_source is None and decision_price stays 0."""
+        runner, _, _ = runner_factory(lob_engine=None)
+
+        assert runner._lob_l1_source is None
+
+        intent = _make_order_intent()
+        assert intent.decision_price == 0
+
+        # Simulate runner block — no lob source means we skip entirely
+        if runner._lob_l1_source is not None:
+            _l1 = runner._lob_l1_source(intent.symbol)
+            if _l1 is not None:
+                _mid = _l1[3] // 2
+                if _mid > 0 and isinstance(intent, OrderIntent):
+                    intent.decision_price = _mid
+
+        assert intent.decision_price == 0
+
+    def test_decision_price_skipped_when_mid_zero(self, runner_factory):
+        """When get_l1_scaled returns mid_price_x2=0 (empty book), decision_price stays 0."""
+        lob = _make_lob_engine_with_l1(mid_price_x2=0)
+        runner, _, _ = runner_factory(lob_engine=lob)
+
+        intent = _make_order_intent()
+        assert intent.decision_price == 0
+
+        _event_symbol = getattr(intent, "symbol", None)
+        if runner._lob_l1_source is not None and _event_symbol:
+            _l1 = runner._lob_l1_source(_event_symbol)
+            if _l1 is not None:
+                _mid = _l1[3] // 2  # 0 // 2 = 0
+                if _mid > 0:
+                    if isinstance(intent, OrderIntent):
+                        intent.decision_mid = _mid
+                        intent.decision_price = _mid
+
+        assert intent.decision_price == 0

@@ -910,16 +910,20 @@ class StrategyRunner:
                 _d7_submitted = 0
                 _d7_dropped = 0
                 for intent in intents:
-                    # Populate decision prices from LOB engine's last stats
-                    if hasattr(self.lob_engine, "last_stats") and self.lob_engine.last_stats is not None:
-                        _mid = self.lob_engine.last_stats.mid_price_x2 // 2
-                        if _mid > 0:
-                            if isinstance(intent, OrderIntent):
-                                intent.decision_mid = _mid  # deprecated: use decision_price
-                                intent.decision_price = _mid
-                            elif isinstance(intent, tuple) and len(intent) >= 17 and intent[0] == "typed_intent_v1":
-                                # Typed intent tuple: position 16 is decision_price
-                                intent = (*intent[:16], _mid)
+                    # Populate decision prices from LOB L1 data
+                    if self._lob_l1_source is not None:
+                        _event_symbol = getattr(intent, "symbol", None) if isinstance(intent, OrderIntent) else (intent[3] if isinstance(intent, tuple) and len(intent) > 3 else None)
+                        if _event_symbol:
+                            _l1 = self._lob_l1_source(_event_symbol)
+                            if _l1 is not None:
+                                _mid = _l1[3] // 2  # mid_price_x2 // 2
+                                if _mid > 0:
+                                    if isinstance(intent, OrderIntent):
+                                        intent.decision_mid = _mid  # deprecated: use decision_price
+                                        intent.decision_price = _mid
+                                    elif isinstance(intent, tuple) and len(intent) >= 17 and intent[0] == "typed_intent_v1":
+                                        # Typed intent tuple: position 16 is decision_price
+                                        intent = (*intent[:16], _mid)
 
                     self._emit_trace(
                         "strategy_intent_submit",
