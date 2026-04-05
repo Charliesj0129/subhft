@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from dataclasses import dataclass
@@ -75,11 +76,30 @@ def get_cached_health() -> HealthState | None:
 
 
 def poll_health(feed_live: int = 0, feed_stale: int = 0, feed_total: int = 0) -> HealthState | None:
+    """Synchronous poll (runs fetch on calling thread). Prefer poll_health_async() in async contexts."""
     global _poll_counter, _current_health  # noqa: PLW0603
     _poll_counter += 1
     if _poll_counter % 5 != 1:
         return _current_health
     health = _fetch_from_prometheus(feed_total=feed_total)
+    health.feed_live_count = feed_live
+    health.feed_stale_count = feed_stale
+    health.feed_total_count = feed_total
+    _current_health = health
+    return health
+
+
+async def poll_health_async(feed_live: int = 0, feed_stale: int = 0, feed_total: int = 0) -> HealthState | None:
+    """Async poll — offloads the blocking urlopen call to a thread executor.
+
+    Use this from async contexts (e.g. TUI event loop) to avoid stalling the
+    event loop for up to 2 seconds on a Prometheus timeout.
+    """
+    global _poll_counter, _current_health  # noqa: PLW0603
+    _poll_counter += 1
+    if _poll_counter % 5 != 1:
+        return _current_health
+    health = await asyncio.to_thread(_fetch_from_prometheus, feed_total=feed_total)
     health.feed_live_count = feed_live
     health.feed_stale_count = feed_stale
     health.feed_total_count = feed_total
@@ -129,7 +149,7 @@ def _fetch_from_prometheus(
     except (URLError, OSError, TimeoutError):
         return state
     state.engine_reachable = True
-    state.last_fetch_ts = time.time()
+    state.last_fetch_ts = time.monotonic()
     lines = raw.splitlines()
     sg = _parse_metric(lines, "stormguard_mode", 'strategy="system"')
     state.stormguard_state = int(sg) if sg is not None else -1

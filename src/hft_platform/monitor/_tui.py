@@ -64,7 +64,6 @@ async def run_monitor(
             build_health_panel,
             get_cached_health,
             is_health_visible,
-            poll_health,
         )
         from hft_platform.monitor._renderer import build_footer, build_help_overlay
         from hft_platform.monitor._types import Severity as _Severity
@@ -76,17 +75,9 @@ async def run_monitor(
             Layout(Panel(engine.get_header(), style="dim"), size=header_size, name="header"),
         ]
 
-        # System health panel (self-contained module)
+        # System health panel (self-contained module) — health is polled asynchronously
+        # before _make_display() is called; we only read the cached result here.
         if is_health_visible():
-            _live = _stale = _total = 0
-            for _ss in engine._sym_states:
-                if _ss.session_active:
-                    _total += 1
-                    if _ss.is_stale:
-                        _stale += 1
-                    elif _ss.tick_count > 0:
-                        _live += 1
-            poll_health(feed_live=_live, feed_stale=_stale, feed_total=_total)
             _health = get_cached_health()
             if _health is not None:
                 parts.append(Layout(build_health_panel(_health), size=8, name="health"))
@@ -139,6 +130,8 @@ async def run_monitor(
         # Non-blocking key reader
         key_task = asyncio.create_task(_key_listener(engine, stop_event))
 
+        from hft_platform.monitor._health_panel import poll_health_async
+
         while not stop_event.is_set():
             try:
                 # S6: Offload to dedicated single-thread executor for poll isolation.
@@ -147,6 +140,27 @@ async def run_monitor(
                 from structlog import get_logger
 
                 get_logger("monitor.tui").error("poll_error", error=str(exc))
+
+            # Poll health asynchronously — offloads blocking urlopen to a thread
+            # so the TUI event loop is never stalled for up to 2s on timeout.
+            try:
+                _live_cnt = _stale_cnt = _total_cnt = 0
+                for _ss in engine._sym_states:
+                    if _ss.session_active:
+                        _total_cnt += 1
+                        if _ss.is_stale:
+                            _stale_cnt += 1
+                        elif _ss.tick_count > 0:
+                            _live_cnt += 1
+                await poll_health_async(
+                    feed_live=_live_cnt,
+                    feed_stale=_stale_cnt,
+                    feed_total=_total_cnt,
+                )
+            except Exception as exc:
+                from structlog import get_logger
+
+                get_logger("monitor.tui").warning("health_poll_error", error=str(exc))
 
             live.update(_make_display())
 
