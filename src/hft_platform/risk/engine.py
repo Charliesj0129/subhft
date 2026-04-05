@@ -698,6 +698,7 @@ class RiskEngine:
             deadline_ns=deadline,
             storm_guard_state=self.storm_guard.state,
             created_ns=timebase.now_ns(),
+            decision_price=intent.decision_price,
         )
         self._emit_trace("risk_command", intent, {"cmd_id": int(cmd_id), "deadline_ns": int(deadline)})
         return cmd

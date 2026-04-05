@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 from unittest.mock import MagicMock
 
 import pytest
@@ -87,3 +88,15 @@ def test_rust_validator_fail_closed(engine):
     decision = engine.evaluate(intent)
     # Rust error falls through to Python validators which pass for a valid intent
     assert decision.approved is True
+
+
+def test_create_command_propagates_decision_price(engine):
+    """create_command must pass decision_price from intent to OrderCommand for TCA."""
+    decision_price = 1_234_560_000  # 123456.0 scaled x10000
+    base_intent = OrderIntent(6, "s1", "2330", IntentType.NEW, Side.BUY, 100, 1, TIF.ROD, None, 0)
+    intent = dataclasses.replace(base_intent, decision_price=decision_price)
+    cmd = engine.create_command(intent)
+    assert cmd.decision_price == decision_price, (
+        f"Expected decision_price={decision_price}, got {cmd.decision_price}; "
+        "TCA will be silently zeroed without this passthrough"
+    )
