@@ -790,3 +790,11 @@ def test_norm_recovery_not_called_without_prior_escalation(mds_factory):
 
     mock_sg.report_feature_recovery.assert_not_called()
     assert svc._norm_consecutive_failures == 0
+
+
+def test_recorder_direct_drops_prometheus_counter():
+    """Verify that recorder_direct_drops_total metric exists in MetricsRegistry."""
+    from hft_platform.observability.metrics import MetricsRegistry
+
+    m = MetricsRegistry.get()
+    assert hasattr(m, "recorder_direct_drops_total")

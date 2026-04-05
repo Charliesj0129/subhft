@@ -218,6 +218,8 @@ class MetricsRegistry:
                 "recorder_reinject_circuit_breaker_drops_total",
                 # Recorder bridge queue-full drops
                 "recorder_bridge_drops_total",
+                # Recorder direct-path queue drops
+                "recorder_direct_drops_total",
                 # Rust-to-Python normalizer fallbacks
                 "rust_fallback_total",
                 # Post-normalization processing errors (LOB/feature/publish)
@@ -437,6 +439,10 @@ class MetricsRegistry:
             "recorder_bridge_drops_total",
             "Events dropped by recorder bridge due to full recorder queue",
             ["topic"],
+        )
+        self.recorder_direct_drops_total = Counter(
+            "recorder_direct_drops_total",
+            "Direct-path recorder queue drops in MarketDataService",
         )
         self.recorder_failures_total = Counter("recorder_failures_total", "Recorder write failures")
         self.recorder_batches_flushed_total = Counter("recorder_batches_flushed_total", "Flushed batches", ["table"])

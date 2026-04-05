@@ -59,6 +59,7 @@ class PriceBandValidator(RiskValidator):
             val = self.defaults.get(key)
             if val is not None:
                 self._product_caps_raw[ptype] = float(val)
+        self._mid_price_max_age_ns = int(float(self.defaults.get("mid_price_max_age_s", 10)) * 1_000_000_000)
 
     def _resolve_cap_raw(self, symbol: str) -> float:
         """Resolve price cap: per-symbol > per-product-type > global."""
@@ -125,10 +126,18 @@ class PriceBandValidator(RiskValidator):
 
         Note: LOB stores prices in scaled format already. The mid_price from
         get_book_snapshot is mid_price_x2/2.0, which is already scaled.
+        Returns None if the book is stale (older than mid_price_max_age_s seconds).
         """
         if self.lob is None:
             return None
         try:
+            # Check freshness before returning any mid_price value
+            book_state = self.lob.get_book(symbol) if hasattr(self.lob, "get_book") else None
+            if book_state is not None and hasattr(book_state, "exch_ts") and book_state.exch_ts > 0:
+                age_ns = timebase.now_ns() - book_state.exch_ts
+                if age_ns > self._mid_price_max_age_ns:
+                    return None  # Stale — treat as unknown during feed gaps
+
             get_l1_scaled = getattr(self.lob, "get_l1_scaled", None)
             if callable(get_l1_scaled):
                 l1 = get_l1_scaled(symbol)

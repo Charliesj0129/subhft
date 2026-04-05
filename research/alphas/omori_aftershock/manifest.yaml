@@ -1,0 +1,47 @@
+alpha_id: omori_aftershock
+version: "0.1.0"
+name: "Omori Aftershock Trader"
+description: >
+  Event-driven strategy that detects large price moves (mainshocks) and trades
+  the post-event volatility relaxation phase using seismological Omori power-law
+  decay framework. Targets TMFD6/TXF futures on TAIFEX.
+author: "R30 Alpha Research Team"
+created: "2026-04-02"
+status: prototype
+
+paper_references:
+  - id: "1006.1882"
+    title: "Market dynamics immediately before and after financial shocks"
+    authors: "Petersen, Wang, Havlin, Stanley"
+    year: 2010
+    role: "Primary: Omori/productivity/Bath laws for financial aftershocks"
+  - id: "cond-mat/0111257"
+    title: "Power law relaxation in a complex system: Omori law after a financial market crash"
+    authors: "Lillo, Mantegna"
+    year: 2002
+    role: "Omori exponent estimation, post-crash dynamics"
+  - id: "2012.03012"
+    title: "Statistical properties of the aftershocks of stock market crashes revisited"
+    authors: "Rai, Mahata, Nurujjaman, Prakash"
+    year: 2020
+    role: "Gutenberg-Richter law for aftershock magnitudes"
+  - id: "0803.1769"
+    title: "Stock price jumps: news and volume play a minor role"
+    authors: "Joulin, Lefevre, Grunberg, Bouchaud"
+    year: 2008
+    role: "Endogenous vs exogenous jump classification via decay exponent"
+
+target_instruments:
+  - TMFD6
+  - TXFD6
+
+data_requirements:
+  - "Tick-level prices (hft.market_data type='Tick')"
+  - "L1-L5 BidAsk snapshots (hft.market_data type='BidAsk')"
+  - "1-minute OHLCV bars (derived from ticks)"
+
+gate_status:
+  gate_a: pending
+  gate_b: pending
+  gate_c: pending
+  gate_d: pending

@@ -1384,6 +1384,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 self.recorder_queue.put_nowait({"topic": topic, "data": payload})
             except asyncio.QueueFull:
                 self._recorder_dropped_count += 1
+                if self.metrics_registry:
+                    self.metrics_registry.recorder_direct_drops_total.inc()
                 if self._recorder_dropped_count >= self._record_degrade_threshold and not self._record_degraded:
                     self._record_degraded = True
                     self._record_degraded_since = time.monotonic()
@@ -1397,6 +1399,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         else:
             if self._record_pending_puts >= self._record_pending_puts_max:
                 self._recorder_dropped_count += 1
+                if self.metrics_registry:
+                    self.metrics_registry.recorder_direct_drops_total.inc()
                 return
             self._record_pending_puts += 1
             asyncio.create_task(self._record_put_with_tracking(topic, payload))

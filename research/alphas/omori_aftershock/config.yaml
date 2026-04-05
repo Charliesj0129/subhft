@@ -1,0 +1,49 @@
+# Omori Aftershock Trader — Configuration
+# All prices in index points (1 point = 10 NTD for TMFD6)
+
+mainshock_detector:
+  # Threshold for mainshock detection (index points)
+  thresholds: [100, 150, 200]
+  default_threshold: 150
+  # Rolling window for price change measurement (minutes)
+  window_minutes: 30
+  # Minimum gap between detected events (minutes)
+  min_event_gap_minutes: 30
+
+omori_tracker:
+  # Aftershock threshold: |1-min return| > X points counts as aftershock
+  aftershock_threshold_pts: 10
+  # Time bins for Omori decay estimation (minutes after mainshock)
+  decay_bins: [1, 2, 5, 10, 15, 30, 60]
+  # Maximum aftershock tracking window (minutes)
+  max_tracking_minutes: 120
+
+strategy:
+  # Session filter: only trade during these hours (Taiwan local, 24h format)
+  allowed_hours_local: [[8, 45, 13, 30]]  # Regular session
+  # Spread gate: max spread in points for entry
+  max_spread_pts: 5
+  # Entry delay after mainshock (seconds) — wait for initial chaos to settle
+  entry_delay_seconds: 60
+  # Entry direction: "continuation" or "mean_reversion"
+  entry_mode: "continuation"
+  # Position sizing
+  contracts_per_event: 1
+  # Stop-loss in points
+  stop_loss_pts: 30
+  # Take-profit in points
+  take_profit_pts: 80
+  # Max hold time (minutes)
+  max_hold_minutes: 30
+  # Use limit orders if spread > this
+  limit_order_spread_threshold_pts: 2
+
+risk:
+  # Maximum events to trade per day
+  max_events_per_day: 5
+  # Daily loss limit (points)
+  daily_loss_limit_pts: 200
+  # StormGuard: respect HALT state
+  respect_storm_guard: true
+  # Minimum time between trades (minutes)
+  min_trade_gap_minutes: 15
