@@ -678,3 +678,87 @@ async def test_tuple_guard_rejects_empty_tuple(runner_factory):
     with patch.object(runner, "_extract_event_trace", return_value=(0, "")) as mock_ext:
         await runner.process_event(())
         assert mock_ext.call_count == 0, "empty tuple should be rejected by guard"
+
+
+# ---------------------------------------------------------------------------
+# Tests: rejection feedback on risk_queue full
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rejection_sink_receives_feedback_on_queue_full(runner_factory):
+    """When risk_queue is full, a RiskFeedback with reason_code='risk_queue_full' is sent."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, RiskFeedback, Side
+
+    # Build a risk queue that always raises QueueFull
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    runner._rejection_sink = asyncio.Queue(maxsize=10)
+    runner._typed_intent_fastpath = False
+
+    # Create a minimal OrderIntent
+    intent = OrderIntent(
+        intent_id=42,
+        strategy_id="strat_x",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+
+    # Directly invoke the submit path so QueueFull fires
+    strat = _make_strategy("strat_x", symbols=["TSMC"])
+    runner.register(strat)
+
+    # Patch the strategy's handle_event to return the intent
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    assert not runner._rejection_sink.empty(), "rejection sink should have received feedback"
+    feedback = runner._rejection_sink.get_nowait()
+    assert isinstance(feedback, RiskFeedback)
+    assert feedback.reason_code == "risk_queue_full"
+    assert feedback.strategy_id == "strat_x"
+    assert feedback.symbol == "TSMC"
+
+
+@pytest.mark.asyncio
+async def test_rejection_sink_none_does_not_raise_on_queue_full(runner_factory):
+    """When _rejection_sink is None, a full risk_queue should not raise."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    # _rejection_sink stays None (default)
+    runner._typed_intent_fastpath = False
+
+    intent = OrderIntent(
+        intent_id=43,
+        strategy_id="strat_y",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+
+    strat = _make_strategy("strat_y", symbols=["TSMC"])
+    runner.register(strat)
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+    # Should not raise
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    assert runner._rejection_sink is None

@@ -8,7 +8,7 @@ from typing import Any, List
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent
+from hft_platform.contracts.strategy import IntentType, OrderIntent, RiskFeedback
 from hft_platform.events import GapEvent
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
@@ -272,6 +272,9 @@ class StrategyRunner:
             "no",
             "off",
         }
+
+        # Rejection sink: receives RiskFeedback when risk_queue is full (set by bootstrap)
+        self._rejection_sink: asyncio.Queue | None = None
 
         # Load initial
         for strat in self.registry.instantiate():
@@ -981,6 +984,17 @@ class StrategyRunner:
                             dropped=_d7_dropped,
                             batch_size=len(intents),
                         )
+                        if self._rejection_sink is not None:
+                            try:
+                                self._rejection_sink.put_nowait(RiskFeedback(
+                                    intent_id=getattr(intent, "intent_id", 0),
+                                    strategy_id=getattr(intent, "strategy_id", ""),
+                                    symbol=getattr(intent, "symbol", ""),
+                                    reason_code="risk_queue_full",
+                                    timestamp_ns=timebase.now_ns(),
+                                ))
+                            except asyncio.QueueFull:
+                                pass
                 if _d7_dropped > 0:
                     # QueueFull is an infrastructure backpressure issue, not a
                     # strategy fault. Do NOT advance the circuit breaker here —
