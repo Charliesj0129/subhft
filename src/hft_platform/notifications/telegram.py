@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from typing import TYPE_CHECKING, Any
@@ -27,7 +28,15 @@ class TelegramSender:
     Reads credentials from environment if not provided:
       - HFT_TELEGRAM_BOT_TOKEN
       - HFT_TELEGRAM_CHAT_ID
+
+    Critical messages (critical=True) are retried up to _MAX_CRITICAL_RETRIES
+    times with exponential backoff on transient errors (429, 5xx, network
+    exceptions). Non-critical messages are fire-and-forget (single attempt).
     """
+
+    _MAX_CRITICAL_RETRIES: int = 2
+    _RETRY_BACKOFF_S: float = 1.0
+    _TRANSIENT_STATUSES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
     __slots__ = (
         "_token",
@@ -80,31 +89,64 @@ class TelegramSender:
             logger.warning("telegram.aiohttp_unavailable")
             return False
 
-        try:
-            if self._session is None or self._session.closed:
-                self._session = aiohttp.ClientSession()
+        max_attempts = self._MAX_CRITICAL_RETRIES + 1 if critical else 1
+        url = _TELEGRAM_API_BASE.format(token=self._token, method="sendMessage")
+        payload = {
+            "chat_id": self._chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+        }
 
-            url = _TELEGRAM_API_BASE.format(token=self._token, method="sendMessage")
-            payload = {
-                "chat_id": self._chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-            }
-            async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
-                    self._last_send_ts = time.monotonic()
-                    logger.debug("telegram.sent", chat_id=self._chat_id, critical=critical)
-                    return True
-                body = await resp.text()
-                logger.warning(
-                    "telegram.send_failed",
-                    status=resp.status,
-                    body=body[:200],
-                )
+        for attempt in range(max_attempts):
+            try:
+                if self._session is None or self._session.closed:
+                    self._session = aiohttp.ClientSession()
+
+                async with self._session.post(
+                    url, json=payload, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        self._last_send_ts = time.monotonic()
+                        logger.debug("telegram.sent", chat_id=self._chat_id, critical=critical)
+                        return True
+
+                    body = await resp.text()
+
+                    if critical and attempt < max_attempts - 1 and resp.status in self._TRANSIENT_STATUSES:
+                        delay = self._RETRY_BACKOFF_S * (2**attempt)
+                        logger.warning(
+                            "telegram.retry",
+                            attempt=attempt + 1,
+                            max_attempts=max_attempts,
+                            status=resp.status,
+                            delay_s=delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    logger.warning(
+                        "telegram.send_failed",
+                        status=resp.status,
+                        body=body[:200],
+                    )
+                    return False
+
+            except Exception as exc:  # noqa: BLE001
+                if critical and attempt < max_attempts - 1:
+                    delay = self._RETRY_BACKOFF_S * (2**attempt)
+                    logger.warning(
+                        "telegram.retry_on_exception",
+                        attempt=attempt + 1,
+                        max_attempts=max_attempts,
+                        exc=str(exc),
+                        delay_s=delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.warning("telegram.send_exception", exc=str(exc))
                 return False
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("telegram.send_exception", exc=str(exc))
-            return False
+
+        return False  # exhausted all retries
 
     async def close(self) -> None:
         """Close the underlying aiohttp session."""
