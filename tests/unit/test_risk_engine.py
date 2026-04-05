@@ -120,6 +120,38 @@ async def test_rejection_feedback_sent_on_unexpected_exception(engine):
     assert feedback.reason_code == "risk_engine_error"
 
 
+@pytest.mark.asyncio
+async def test_rejection_sink_overflow_increments_metric(engine):
+    """When rejection_sink is full, rejection_sink_overflow_total must be incremented."""
+    from unittest.mock import patch
+
+    # Assign a maxsize=1 rejection_sink so the second write overflows
+    rejection_sink = asyncio.Queue(maxsize=1)
+    engine._rejection_sink = rejection_sink
+
+    # Two intents that will both be rejected (price=0 triggers PRICE_ZERO_OR_NEG)
+    intent1 = OrderIntent(10, "s1", "2330", IntentType.NEW, Side.BUY, 0, 1, TIF.ROD, None, 0)
+    intent2 = OrderIntent(11, "s1", "2330", IntentType.NEW, Side.BUY, 0, 1, TIF.ROD, None, 0)
+    engine.intent_queue.put_nowait(intent1)
+    engine.intent_queue.put_nowait(intent2)
+
+    task = asyncio.create_task(engine.run())
+    await asyncio.sleep(0.1)
+
+    engine.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # The sink holds 1 feedback; the second triggered an overflow
+    overflow_count = engine.metrics.rejection_sink_overflow_total._value.get()
+    assert overflow_count >= 1, (
+        f"Expected rejection_sink_overflow_total >= 1, got {overflow_count}"
+    )
+
+
 def test_create_command_propagates_decision_price(engine):
     """create_command must pass decision_price from intent to OrderCommand for TCA."""
     decision_price = 1_234_560_000  # 123456.0 scaled x10000

@@ -214,6 +214,8 @@ class MetricsRegistry:
                 "risk_dlq_expired_total",
                 "intent_queue_full_total",
                 "risk_engine_error_total",
+                # rejection_sink overflow
+                "rejection_sink_overflow_total",
                 # SLO-2: E2E order-to-fill latency
                 "e2e_order_latency_ns",
                 # Recorder exec drop counter (P-01)
@@ -1051,6 +1053,10 @@ class MetricsRegistry:
             "risk_engine_error_total",
             "RiskEngine internal errors caught in main run() loop",
             ["error_type"],
+        )
+        self.rejection_sink_overflow_total = Counter(
+            "rejection_sink_overflow_total",
+            "RiskFeedback drops due to rejection_sink QueueFull (feedback lost)",
         )
 
         # Recorder reinject circuit breaker drops (P-21)

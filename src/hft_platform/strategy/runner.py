@@ -1046,7 +1046,7 @@ class StrategyRunner:
                                     timestamp_ns=timebase.now_ns(),
                                 ))
                             except asyncio.QueueFull:
-                                pass
+                                self.metrics.rejection_sink_overflow_total.inc()
                 if _d7_dropped > 0:
                     # QueueFull is an infrastructure backpressure issue, not a
                     # strategy fault. Do NOT advance the circuit breaker here —

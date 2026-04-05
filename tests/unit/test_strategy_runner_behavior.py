@@ -766,6 +766,48 @@ async def test_rejection_sink_none_does_not_raise_on_queue_full(runner_factory):
 
 
 @pytest.mark.asyncio
+async def test_rejection_sink_overflow_increments_metric(runner_factory, _patch_metrics):
+    """When rejection_sink is full (maxsize=1), the second overflow must increment rejection_sink_overflow_total."""
+    from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+
+    # risk_queue always full → triggers the rejection_sink path
+    rq = MagicMock(spec=["put_nowait"])
+    rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
+
+    runner, bus, _ = runner_factory(rq=rq)
+    # rejection_sink with maxsize=1: first write succeeds, second overflows
+    runner._rejection_sink = asyncio.Queue(maxsize=1)
+    runner._typed_intent_fastpath = False
+
+    strat = _make_strategy("strat_z", symbols=["TSMC"])
+    runner.register(strat)
+
+    intent = OrderIntent(
+        intent_id=77,
+        strategy_id="strat_z",
+        symbol="TSMC",
+        side=Side.BUY,
+        price=500_0000,
+        qty=1,
+        intent_type=IntentType.NEW,
+    )
+    strat._return_value = [intent]
+
+    event = _make_event(symbol="TSMC")
+    runner.running = True
+
+    # First call fills rejection_sink (no overflow)
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    # Second call overflows rejection_sink
+    with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
+        await runner.process_event(event)
+
+    _patch_metrics.rejection_sink_overflow_total.inc.assert_called()
+
+
+@pytest.mark.asyncio
 async def test_storm_guard_halt_triggered_on_risk_queue_full(runner_factory):
     """StormGuard.trigger_halt('risk_queue_full') is called once per batch when risk_queue is full."""
     from hft_platform.contracts.strategy import IntentType, OrderIntent, Side

@@ -397,7 +397,7 @@ class RiskEngine:
                                     timestamp_ns=timebase.now_ns(),
                                 ))
                             except asyncio.QueueFull:
-                                pass
+                                self.metrics.rejection_sink_overflow_total.inc()
                         self.intent_queue.task_done()
                         continue
 
@@ -438,7 +438,7 @@ class RiskEngine:
                                     timestamp_ns=timebase.now_ns(),
                                 ))
                             except asyncio.QueueFull:
-                                pass
+                                self.metrics.rejection_sink_overflow_total.inc()
                     else:
                         try:
                             self.order_queue.put_nowait(cmd)
@@ -468,7 +468,7 @@ class RiskEngine:
                                 timestamp_ns=timebase.now_ns(),
                             ))
                         except asyncio.QueueFull:
-                            pass
+                            self.metrics.rejection_sink_overflow_total.inc()
 
                 self.intent_queue.task_done()
 
@@ -496,7 +496,7 @@ class RiskEngine:
                             timestamp_ns=timebase.now_ns(),
                         ))
                     except asyncio.QueueFull:
-                        pass
+                        self.metrics.rejection_sink_overflow_total.inc()
                 self.intent_queue.task_done()
 
     def _drain_order_dlq(self) -> None:
