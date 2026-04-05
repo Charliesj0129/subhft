@@ -134,11 +134,11 @@ def _night_filter(date: str) -> str:
 # ClickHouse client abstraction
 # ---------------------------------------------------------------------------
 
-ExecuteFn = Callable[[str], list[tuple[Any, ...]]]
+ExecuteFn = Callable[[str, "dict[str, Any] | None"], list[tuple[Any, ...]]]
 
 
 def _make_execute(host: str) -> ExecuteFn:
-    """Return a ``(sql) -> list[tuple]`` callable using whichever CH client is installed."""
+    """Return a ``(sql, params) -> list[tuple]`` callable using whichever CH client is installed."""
     user = os.environ.get("HFT_CLICKHOUSE_USER", os.environ.get("CLICKHOUSE_USER", "default"))
     password = os.environ.get("HFT_CLICKHOUSE_PASSWORD", os.environ.get("CLICKHOUSE_PASSWORD", ""))
 
@@ -151,7 +151,12 @@ def _make_execute(host: str) -> ExecuteFn:
         client = clickhouse_connect.get_client(**kwargs)
         log.info("DataCollector using clickhouse_connect", host=host)
 
-        def _exec(sql: str) -> list[tuple[Any, ...]]:
+        def _exec(sql: str, params: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
+            if params:
+                import re as _re
+
+                cc_sql = _re.sub(r"%\((\w+)\)s", r"{\1:String}", sql)
+                return client.query(cc_sql, parameters=params).result_rows  # type: ignore[return-value]
             return client.query(sql).result_rows  # type: ignore[return-value]
 
         return _exec
@@ -163,8 +168,8 @@ def _make_execute(host: str) -> ExecuteFn:
     client_native = Client(host=host, user=user, password=password)
     log.info("DataCollector using clickhouse_driver", host=host)
 
-    def _exec_native(sql: str) -> list[tuple[Any, ...]]:
-        return client_native.execute(sql)
+    def _exec_native(sql: str, params: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
+        return client_native.execute(sql, params)
 
     return _exec_native
 
@@ -317,7 +322,7 @@ class DataCollector:
                 sum(volume)                   AS volume,
                 sum(tick_count)               AS tick_count
             FROM hft.ohlcv_1m
-            WHERE symbol = '{symbol}'
+            WHERE symbol = %(symbol)s
               AND {time_filter}
             {_SETTINGS}
         """
@@ -337,7 +342,8 @@ class DataCollector:
                 FROM hft.ohlcv_1m
             ) AS ohlcv_1m""",
         )
-        rows = self._execute(sql)
+        params = {"symbol": symbol}
+        rows = self._execute(sql, params)
         if not rows or not rows[0][0]:
             log.warning("Q1 OHLCV returned no data", symbol=symbol)
             return {"open": 0, "high": 0, "low": 0, "close": 0, "volume": 0, "tick_count": 0}
@@ -365,7 +371,7 @@ class DataCollector:
                 sum(volume)                          AS volume,
                 sum(tick_count)                      AS ticks
             FROM hft.ohlcv_1m
-            WHERE symbol = '{symbol}'
+            WHERE symbol = %(symbol)s
               AND {time_filter}
             GROUP BY ts
             ORDER BY ts
@@ -387,7 +393,8 @@ class DataCollector:
                 FROM hft.ohlcv_1m
             ) AS ohlcv_1m""",
         )
-        rows = self._execute(sql)
+        params = {"symbol": symbol}
+        rows = self._execute(sql, params)
         return [
             Bar5m(
                 ts=str(row[0]),
@@ -416,7 +423,7 @@ class DataCollector:
                         ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
                     ) AS prev_price
                 FROM hft.market_data
-                WHERE symbol = '{symbol}'
+                WHERE symbol = %(symbol)s
                   AND type = 'Tick'
                   AND {time_filter}
             )
@@ -432,7 +439,8 @@ class DataCollector:
             ORDER BY bucket
             {_SETTINGS}
         """
-        rows = self._execute(sql)
+        params = {"symbol": symbol}
+        rows = self._execute(sql, params)
         result: list[FlowBar] = []
         for row in rows:
             ticks = int(row[1])
@@ -466,7 +474,7 @@ class DataCollector:
                     lagInFrame(price_scaled) OVER (ORDER BY exch_ts
                         ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS prev_price
                 FROM hft.market_data
-                WHERE symbol = '{symbol}'
+                WHERE symbol = %(symbol)s
                   AND type = 'Tick'
                   AND volume >= {threshold}
                   AND {time_filter}
@@ -476,7 +484,8 @@ class DataCollector:
             ORDER BY ts
             {_SETTINGS}
         """
-        rows = self._execute(sql)
+        params = {"symbol": symbol}
+        rows = self._execute(sql, params)
         result: list[LargeTrade] = []
         for row in rows:
             price_ch = int(row[1])
@@ -508,7 +517,7 @@ class DataCollector:
                 toInt32((asks_price[1] - bids_price[1]) / 1000000) AS spread_pts,
                 count()                                            AS cnt
             FROM hft.market_data
-            WHERE symbol = '{symbol}'
+            WHERE symbol = %(symbol)s
               AND type = 'BidAsk'
               AND length(bids_price) > 0
               AND length(asks_price) > 0
@@ -518,7 +527,8 @@ class DataCollector:
             ORDER BY spread_pts
             SETTINGS max_memory_usage = 3000000000
         """
-        rows = self._execute(sql)
+        params = {"symbol": symbol}
+        rows = self._execute(sql, params)
         return {int(row[0]): int(row[1]) for row in rows}
 
     def _query_depth_imbalance(self, symbol: str, time_filter: str) -> list[DepthBar]:
@@ -529,7 +539,7 @@ class DataCollector:
                 avg(bids_vol[1])                                        AS avg_bid_vol,
                 avg(asks_vol[1])                                        AS avg_ask_vol
             FROM hft.market_data
-            WHERE symbol = '{symbol}'
+            WHERE symbol = %(symbol)s
               AND type = 'BidAsk'
               AND length(bids_vol) > 0
               AND length(asks_vol) > 0
@@ -538,7 +548,8 @@ class DataCollector:
             ORDER BY hour
             {_SETTINGS}
         """
-        rows = self._execute(sql)
+        params = {"symbol": symbol}
+        rows = self._execute(sql, params)
         result: list[DepthBar] = []
         for row in rows:
             avg_bid = float(row[1])
@@ -623,16 +634,17 @@ class DataCollector:
                         ORDER BY exch_ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
                     ))                                        AS downtick_vol
                 FROM hft.market_data
-                WHERE symbol = '{symbol}'
+                WHERE symbol = %(symbol)s
                   AND type = 'Tick'
                   AND {tf}
             """
             parts.append(part)
 
         sql = " UNION ALL ".join(parts) + f" ORDER BY day DESC {_SETTINGS}"
+        params = {"symbol": symbol}
 
         try:
-            rows = self._execute(sql)
+            rows = self._execute(sql, params)
         except Exception:  # noqa: BLE001
             log.warning("Q7 cross-day query failed", symbol=symbol)
             return []

@@ -244,7 +244,7 @@ class TestCollectDelegation:
         """collect() sets spread_dist={} when Q5 raises."""
         collector, mock_execute = _make_collector()
 
-        def _side_effect(sql: str) -> list:
+        def _side_effect(sql: str, params: dict | None = None) -> list:
             if "asks_price" in sql:
                 raise MemoryError("OOM")
             if "bids_vol" in sql:
@@ -265,7 +265,7 @@ class TestCollectDelegation:
         """collect() sets depth_imbalance=[] when Q6 raises."""
         collector, mock_execute = _make_collector()
 
-        def _side_effect(sql: str) -> list:
+        def _side_effect(sql: str, params: dict | None = None) -> list:
             if "bids_vol" in sql:
                 raise MemoryError("OOM")
             if "asks_price" in sql:
