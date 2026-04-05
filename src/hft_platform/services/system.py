@@ -115,6 +115,7 @@ class HFTSystem:
         self.strategy_runner = self.registry.strategy_runner
         self.recorder = self.registry.recorder
         self.gateway_service = self.registry.gateway_service
+        self.intent_channel = getattr(self.registry, "intent_channel", None)
         self.checkpoint_writer = getattr(self.registry, "checkpoint_writer", None)
         self.startup_verifier = getattr(self.registry, "startup_verifier", None)
         self.session_governor = getattr(self.registry, "session_governor", None)
@@ -606,17 +607,27 @@ class HFTSystem:
                 metrics.queue_depth.labels(queue="recorder").set(self.recorder_queue.qsize())
                 metrics.queue_depth.labels(queue="risk").set(self.risk_queue.qsize())
                 metrics.queue_depth.labels(queue="order").set(self.order_queue.qsize())
+                if self.intent_channel is not None:
+                    depth = getattr(self.intent_channel, "qsize", lambda: 0)()
+                    metrics.queue_depth.labels(queue="gateway_intent").set(depth)
             now_s = timebase.now_s()
             if now_s - self._last_queue_log_s >= self._queue_log_every_s:
                 self._last_queue_log_s = now_s
-                logger.info(
-                    "Queues",
+                _gateway_intent_depth = (
+                    getattr(self.intent_channel, "qsize", lambda: 0)()
+                    if self.intent_channel is not None
+                    else None
+                )
+                _log_kwargs: dict = dict(
                     raw=self.raw_queue.qsize(),
                     rec=self.recorder_queue.qsize(),
                     risk=self.risk_queue.qsize(),
                     order=self.order_queue.qsize(),
                     raw_exec=self.raw_exec_queue.qsize(),
                 )
+                if _gateway_intent_depth is not None:
+                    _log_kwargs["gateway_intent"] = _gateway_intent_depth
+                logger.info("Queues", **_log_kwargs)
 
             self._update_platform_degrade_state()
 
