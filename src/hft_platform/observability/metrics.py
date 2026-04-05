@@ -224,6 +224,9 @@ class MetricsRegistry:
                 "feature_engine_escalation_total",
                 # Feature staleness detection
                 "feature_staleness_detected_total",
+                # Strategy timeout circuit breaker
+                "strategy_timeout_total",
+                "strategy_circuit_break_total",
             ]
         )
         # Market Data
@@ -722,6 +725,17 @@ class MetricsRegistry:
             "strategy_exceptions_total",
             "Strategy exceptions by type and handler method",
             ["strategy", "exception_type", "method"],
+        )
+        # Strategy timeout circuit breaker
+        self.strategy_timeout_total = Counter(
+            "strategy_timeout_total",
+            "Strategy handle_event calls exceeding wall-clock timeout",
+            ["strategy_name"],
+        )
+        self.strategy_circuit_break_total = Counter(
+            "strategy_circuit_break_total",
+            "Strategy circuit breaks triggered by consecutive timeouts",
+            ["strategy_name"],
         )
         # Quote watchdog recovery attempts (re-register callbacks / version downgrade)
         self.quote_watchdog_recovery_attempts_total = Counter(

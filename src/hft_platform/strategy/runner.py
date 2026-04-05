@@ -127,6 +127,13 @@ class StrategyRunner:
         "track_gate",
         "_strategies_version",
         "_executors_version",
+        # Timeout circuit breaker (wall-clock)
+        "_timeout_ns",
+        "_timeout_strikes_limit",
+        "_timeout_recover_ns",
+        "_timeout_consecutive",
+        "_timeout_broken",
+        "_timeout_broken_at_ns",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -225,6 +232,17 @@ class StrategyRunner:
                 logger.warning("rust_circuit_breaker_init_failed", error=str(exc))
         # TrackGate: per-event session phase filtering (set externally by SessionGovernor)
         self.track_gate: Any = None  # TrackGate | None
+
+        # Timeout circuit breaker: wall-clock protection per strategy
+        _timeout_ms = float(os.getenv("HFT_STRATEGY_TIMEOUT_MS", "50"))
+        self._timeout_ns: int = int(_timeout_ms * 1_000_000)
+        _strikes = os.getenv("HFT_STRATEGY_TIMEOUT_STRIKES", "3")
+        self._timeout_strikes_limit: int = int(_strikes) if _strikes.isdigit() else 3
+        _recover_s = float(os.getenv("HFT_STRATEGY_TIMEOUT_RECOVER_S", "60"))
+        self._timeout_recover_ns: int = int(_recover_s * 1_000_000_000)
+        self._timeout_consecutive: dict[str, int] = {}
+        self._timeout_broken: dict[str, bool] = {}
+        self._timeout_broken_at_ns: dict[str, int] = {}
 
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
@@ -605,6 +623,17 @@ class StrategyRunner:
                 # permanently disable the strategy before quarantine expires.
                 continue
 
+            # Timeout circuit breaker: skip strategies that are broken, with auto-recovery
+            sid_for_timeout = strategy.strategy_id
+            if self._timeout_broken.get(sid_for_timeout, False):
+                broken_at = self._timeout_broken_at_ns.get(sid_for_timeout, 0)
+                if broken_at and (time.monotonic_ns() - broken_at) >= self._timeout_recover_ns:
+                    self._timeout_broken[sid_for_timeout] = False
+                    self._timeout_consecutive[sid_for_timeout] = 0
+                    logger.info("Strategy timeout circuit breaker recovered", id=sid_for_timeout)
+                else:
+                    continue
+
             positions = positions_by_strategy.get(strategy.strategy_id) or positions_by_strategy.get("*", {})
             ctx.positions = dict(positions)  # Shallow copy to prevent strategy mutation corrupting cache
 
@@ -710,6 +739,39 @@ class StrategyRunner:
                 intents = StrategyRunner.filter_intents_by_phase(intents, self.track_gate)
 
             duration = time.perf_counter_ns() - start
+
+            # Timeout circuit breaker: check wall-clock duration
+            _timeout_sid = strategy.strategy_id
+            if duration > self._timeout_ns:
+                consec = self._timeout_consecutive.get(_timeout_sid, 0) + 1
+                self._timeout_consecutive[_timeout_sid] = consec
+                if self.metrics:
+                    _timeout_m = getattr(self.metrics, "strategy_timeout_total", None)
+                    if _timeout_m is not None:
+                        _timeout_m.labels(strategy_name=_timeout_sid).inc()
+                logger.warning(
+                    "Strategy handle_event exceeded timeout",
+                    id=_timeout_sid,
+                    duration_ns=duration,
+                    timeout_ns=self._timeout_ns,
+                    consecutive=consec,
+                )
+                if consec >= self._timeout_strikes_limit:
+                    self._timeout_broken[_timeout_sid] = True
+                    self._timeout_broken_at_ns[_timeout_sid] = time.monotonic_ns()
+                    if self.metrics:
+                        _cb_m = getattr(self.metrics, "strategy_circuit_break_total", None)
+                        if _cb_m is not None:
+                            _cb_m.labels(strategy_name=_timeout_sid).inc()
+                    logger.warning(
+                        "Strategy timeout circuit breaker activated",
+                        id=_timeout_sid,
+                        strikes=consec,
+                        recover_s=self._timeout_recover_ns / 1_000_000_000,
+                    )
+            else:
+                self._timeout_consecutive[_timeout_sid] = 0
+
             if getattr(self, "_trace_sampler", None) is not None:
                 self._emit_trace(
                     "strategy_dispatch_done",
