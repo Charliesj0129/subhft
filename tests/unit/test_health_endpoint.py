@@ -51,12 +51,12 @@ def _make_mock_system(
     system.md_service = MagicMock()
     system.md_service.running = md_running
 
-    # Mock recorder_service
+    # Mock recorder
     recorder = MagicMock()
     recorder.healthy = recorder_healthy
     # Remove last_write_ok to avoid MagicMock auto-creating it
     del recorder.last_write_ok
-    system.recorder_service = recorder
+    system.recorder = recorder
 
     # Mock queues with maxsize
     for qname in ("raw_queue", "raw_exec_queue", "risk_queue", "order_queue", "recorder_queue"):

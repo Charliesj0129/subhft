@@ -172,7 +172,7 @@ class HealthServer:
             degraded_reasons.append("feed_disconnected")
 
         # 7. ClickHouse write health
-        recorder_service = getattr(self._system, "recorder_service", None)
+        recorder_service = getattr(self._system, "recorder", None)
         if recorder_service is not None:
             ch_healthy = getattr(recorder_service, "healthy", None)
             last_write_ok = getattr(recorder_service, "last_write_ok", None)

@@ -744,6 +744,7 @@ class HftNativeRunner:
         oos_mid = _cat(oos_mid_list)
         oos_pos = _cat(oos_pos_list)
         all_signals = _cat(is_signals_list + oos_signals_list)
+        all_mid = _cat(is_mid_list + oos_mid_list)
         all_pos = _cat(is_pos_list + oos_pos_list)
         all_volume = _cat(volumes)
 
@@ -782,6 +783,7 @@ class HftNativeRunner:
             run_id=run_id,
             config_hash=_hash_config(self.config),
             latency_profile=latency_profile,
+            mid_prices=all_mid,
         )
 
     def run_walk_forward(

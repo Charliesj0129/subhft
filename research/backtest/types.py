@@ -61,6 +61,7 @@ class BacktestResult:
     run_id: str
     config_hash: str
     latency_profile: dict[str, Any]
+    mid_prices: np.ndarray | None = None
 
 
 @dataclass(frozen=True)

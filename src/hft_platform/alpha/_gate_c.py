@@ -15,6 +15,7 @@ from hft_platform.alpha._stat_tests import (
     _bh_correction,
     _compute_oos_returns,
     _evaluate_oos_statistical_tests,
+    _evaluate_trend_contamination,
     _extract_bds_pvalue,
     _extract_stat_test_pvalues,
 )
@@ -143,6 +144,16 @@ def run_gate_c(
         base_result=result,
         runner_cls=_runner_cls,
     )
+    # Trend contamination check (detrended IC)
+    _mid = getattr(result, "mid_prices", None)
+    if _mid is not None and hasattr(_mid, "size") and _mid.size > 0:
+        trend_check = _evaluate_trend_contamination(
+            signals=result.signals,
+            mid_prices=_mid,
+        )
+    else:
+        trend_check = {"passed": True, "detail": "mid_prices_unavailable (skipped)"}
+    trend_gate_passed = bool(trend_check.get("passed", True))
     scorecard_extra = {
         "walk_forward_sharpe_mean": (float(wf_result.fold_sharpe_mean) if wf_result is not None else None),
         "walk_forward_sharpe_std": (float(wf_result.fold_sharpe_std) if wf_result is not None else None),
@@ -200,6 +211,7 @@ def run_gate_c(
         and bool(optimization_gate_passed)
         and bool(stress_eval.get("passed"))
         and bool(robustness_eval.get("passed"))
+        and bool(trend_gate_passed)
     )
     report = GateReport(
         gate="Gate C",
@@ -239,6 +251,7 @@ def run_gate_c(
             "stat_gate_passed": stat_gate_passed,
             "walk_forward_gate_passed": wf_gate_passed,
             "optimization_gate_passed": optimization_gate_passed,
+            "trend_gate_passed": trend_gate_passed,
             "statistical_tests": stat_tests,
             "multiple_testing": {
                 "method": correction_method,
@@ -265,6 +278,7 @@ def run_gate_c(
             "parameter_optimization": optimization_eval,
             "stress_backtest": stress_eval,
             "parameter_robustness": robustness_eval,
+            "trend_contamination": trend_check,
             "latency_profile": result.latency_profile,
             "scorecard_path": str(scorecard_path),
             "scorecard_data_meta_path": data_meta_path,
@@ -297,6 +311,7 @@ def run_gate_c(
             "selected_signal_threshold": float(selected_cfg.signal_threshold),
             "stress_test_passed": float(bool(stress_eval.get("passed"))),
             "param_robustness_passed": float(bool(robustness_eval.get("passed"))),
+            "trend_gate_passed": float(bool(trend_gate_passed)),
         },
         gate_status={"gate_c": bool(passed)},
         scorecard_payload=scorecard.to_dict(),

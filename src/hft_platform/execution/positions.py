@@ -165,6 +165,9 @@ class PositionStore:
         "_fill_lock",
         "_peak_equity_scaled",
         "_total_realized_pnl_scaled",
+        "_recovery_positions",
+        "_recovery_rpnl_offsets",
+        "_recovery_fees_offsets",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -183,6 +186,11 @@ class PositionStore:
         # 2. The critical section is very short (microseconds for Rust path)
         # 3. For async contexts, use on_fill_async() which runs this in a thread pool
         self._fill_lock = threading.Lock()
+        # Recovery positions from crash recovery (keyed by "account:symbol")
+        self._recovery_positions: Dict[str, Dict[str, Any]] = {}
+        # Offsets to add to Rust-returned rpnl/fees (keyed by position key "acc:strat:sym")
+        self._recovery_rpnl_offsets: Dict[str, int] = {}
+        self._recovery_fees_offsets: Dict[str, int] = {}
         # Portfolio-level tracking for StormGuard drawdown
         self._peak_equity_scaled: int = 0  # High watermark of total realized PnL
         self._total_realized_pnl_scaled: int = 0  # Sum across all positions
@@ -221,6 +229,69 @@ class PositionStore:
         if self._total_realized_pnl_scaled > self._peak_equity_scaled:
             self._peak_equity_scaled = self._total_realized_pnl_scaled
 
+    def load_recovery(
+        self,
+        account_id: str,
+        symbol: str,
+        net_qty: int,
+        avg_price_scaled: int,
+        realized_pnl_scaled: int = 0,
+        fees_scaled: int = 0,
+    ) -> None:
+        """Store a recovery position to be merged on first fill.
+
+        Recovery positions are keyed by ``account:symbol`` and merged into
+        the real ``account:strategy:symbol`` key when the first fill arrives
+        for that symbol.  This avoids the stale ``acc::sym`` key problem.
+        """
+        if net_qty == 0:
+            return
+        rkey = f"{account_id}:{symbol}"
+        self._recovery_positions[rkey] = {
+            "account_id": account_id,
+            "symbol": symbol,
+            "net_qty": net_qty,
+            "avg_price_scaled": avg_price_scaled,
+            "realized_pnl_scaled": realized_pnl_scaled,
+            "fees_scaled": fees_scaled,
+        }
+        logger.info(
+            "recovery_position_loaded",
+            symbol=symbol,
+            net_qty=net_qty,
+            avg_price_scaled=avg_price_scaled,
+        )
+
+    def _seed_from_recovery(self, key: str, fill: FillEvent, recovery: Dict[str, Any]) -> None:
+        """Pre-seed position state from recovery data before processing first fill."""
+        net_qty = recovery["net_qty"]
+        avg_price = recovery["avg_price_scaled"]
+        rpnl = recovery["realized_pnl_scaled"]
+        fees = recovery["fees_scaled"]
+
+        # Seed Rust tracker with synthetic fill to establish net_qty + avg_price
+        if self._rust_tracker is not None:
+            side = 0 if net_qty > 0 else 1  # BUY=0, SELL=1
+            multiplier = self.metadata.contract_multiplier(fill.symbol)
+            self._rust_tracker.update(key, side, abs(net_qty), avg_price, 0, 0, 0, multiplier)
+            # Rust tracker now has correct net_qty and avg_price but zero rpnl/fees.
+            # Store offsets so _on_fill_rust can add historical recovery rpnl/fees.
+            self._recovery_rpnl_offsets[key] = rpnl
+            self._recovery_fees_offsets[key] = fees
+
+        # Create Python Position with full recovery data
+        pos = Position(
+            account_id=recovery["account_id"],
+            strategy_id=fill.strategy_id,
+            symbol=recovery["symbol"],
+            net_qty=net_qty,
+            avg_price_scaled=avg_price,
+            realized_pnl_scaled=rpnl,
+            fees_scaled=fees,
+        )
+        self.positions[key] = pos
+        logger.info("recovery_position_merged", key=key, net_qty=net_qty, avg_price=avg_price)
+
     def on_fill(self, fill: FillEvent) -> PositionDelta:
         """Process fill with atomic tracker access.
 
@@ -231,6 +302,12 @@ class PositionStore:
 
         # Use lock to ensure atomic check-and-call for tracker selection
         with self._fill_lock:
+            # Merge recovery position on first fill for this (account, symbol)
+            rkey = f"{fill.account_id}:{fill.symbol}"
+            recovery = self._recovery_positions.pop(rkey, None)
+            if recovery is not None and key not in self.positions:
+                self._seed_from_recovery(key, fill, recovery)
+
             if self._rust_tracker is not None:
                 return self._on_fill_rust(fill, key)
 
@@ -270,8 +347,11 @@ class PositionStore:
             self.positions[key] = pos
         pos.net_qty = int(net_qty)
         pos.avg_price_scaled = int(avg_price_scaled)
-        pos.realized_pnl_scaled = int(realized_pnl_scaled)
-        pos.fees_scaled = int(fees_scaled)
+        # Add recovery offsets (non-zero only for keys that had recovery seeding)
+        rpnl_offset = self._recovery_rpnl_offsets.get(key, 0)
+        fees_offset = self._recovery_fees_offsets.get(key, 0)
+        pos.realized_pnl_scaled = int(realized_pnl_scaled) + rpnl_offset
+        pos.fees_scaled = int(fees_scaled) + fees_offset
         pos.last_update_ts = fill.match_ts_ns
 
         if self._log_fills:
