@@ -36,6 +36,8 @@ DEFAULT_LATENCY_PROFILE = "sim_p95_v2026-02-26"
 
 class AlphaStatus(str, Enum):
     DRAFT = "DRAFT"
+    GATE_ZERO = "GATE_ZERO"
+    PROTOTYPE = "PROTOTYPE"
     GATE_A = "GATE_A"
     GATE_B = "GATE_B"
     GATE_C = "GATE_C"

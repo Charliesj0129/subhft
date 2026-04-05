@@ -1048,13 +1048,19 @@ class OrderAdapter:
                     )
                     target_trade = self.live_orders.get(target_key)
 
-                if target_trade:
+                if target_trade and target_trade is not _PENDING_SENTINEL and target_trade is not _TERMINAL_BEFORE_REGISTERED:
                     logger.info("Canceling Order", target=target_key)
                     result = await self._call_api("cancel_order", self.client.cancel_order, target_trade, intent=intent)
                     if result is None or result is _GUARD_TIMEOUT:
                         return
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
+                elif target_trade is _PENDING_SENTINEL:
+                    logger.warning("Cancel target still pending", target=target_key)
+                    self.metrics.order_reject_total.inc()
+                elif target_trade is _TERMINAL_BEFORE_REGISTERED:
+                    logger.warning("Cancel target terminated before registered", target=target_key)
+                    self.metrics.order_reject_total.inc()
                 else:
                     logger.warning("Cancel target not found", target=target_key)
                     self.metrics.order_reject_total.inc()
@@ -1066,7 +1072,7 @@ class OrderAdapter:
                     )
                     target_trade = self.live_orders.get(target_key)
 
-                if target_trade:
+                if target_trade and target_trade is not _PENDING_SENTINEL and target_trade is not _TERMINAL_BEFORE_REGISTERED:
                     # Descale price
                     price_f = self.price_codec.descale(intent.symbol, intent.price)
 
@@ -1082,6 +1088,12 @@ class OrderAdapter:
                         return
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
+                elif target_trade is _PENDING_SENTINEL:
+                    logger.warning("Amend target still pending", target=target_key)
+                    self.metrics.order_reject_total.inc()
+                elif target_trade is _TERMINAL_BEFORE_REGISTERED:
+                    logger.warning("Amend target terminated before registered", target=target_key)
+                    self.metrics.order_reject_total.inc()
                 else:
                     logger.warning("Amend target not found", target=target_key)
                     self.metrics.order_reject_total.inc()
