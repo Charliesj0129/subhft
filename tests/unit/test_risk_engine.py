@@ -90,6 +90,36 @@ def test_rust_validator_fail_closed(engine):
     assert decision.approved is True
 
 
+@pytest.mark.asyncio
+async def test_rejection_feedback_sent_on_unexpected_exception(engine):
+    """RiskEngine must emit RiskFeedback to rejection_sink when evaluate raises unexpectedly."""
+    from unittest.mock import patch
+
+    rejection_sink = asyncio.Queue()
+    engine._rejection_sink = rejection_sink
+
+    intent = OrderIntent(99, "s1", "2330", IntentType.NEW, Side.BUY, 100, 1, TIF.ROD, None, 0)
+    engine.intent_queue.put_nowait(intent)
+
+    with patch.object(engine, "evaluate", side_effect=RuntimeError("unexpected boom")):
+        task = asyncio.create_task(engine.run())
+        await asyncio.sleep(0.05)
+
+    engine.running = False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert not rejection_sink.empty(), "RiskFeedback should have been sent to rejection_sink"
+    feedback = rejection_sink.get_nowait()
+    assert feedback.intent_id == 99
+    assert feedback.strategy_id == "s1"
+    assert feedback.symbol == "2330"
+    assert feedback.reason_code == "risk_engine_error"
+
+
 def test_create_command_propagates_decision_price(engine):
     """create_command must pass decision_price from intent to OrderCommand for TCA."""
     decision_price = 1_234_560_000  # 123456.0 scaled x10000

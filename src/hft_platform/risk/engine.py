@@ -486,6 +486,17 @@ class RiskEngine:
                     self.metrics.risk_engine_error_total.labels(error_type=type(e).__name__).inc()
                 except Exception:  # noqa: BLE001 — metric failure must not mask original error
                     pass
+                if self._rejection_sink is not None:
+                    try:
+                        self._rejection_sink.put_nowait(RiskFeedback(
+                            intent_id=getattr(intent, "intent_id", 0),
+                            strategy_id=getattr(intent, "strategy_id", ""),
+                            symbol=getattr(intent, "symbol", ""),
+                            reason_code="risk_engine_error",
+                            timestamp_ns=timebase.now_ns(),
+                        ))
+                    except asyncio.QueueFull:
+                        pass
                 self.intent_queue.task_done()
 
     def _drain_order_dlq(self) -> None:
