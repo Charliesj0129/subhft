@@ -170,9 +170,17 @@ class BookState:
                         bids_2d = self.bids.reshape(-1, 2) if self.bids.ndim == 1 else self.bids
                         asks_2d = self.asks.reshape(-1, 2) if self.asks.ndim == 1 else self.asks
                         rs.apply_update(bids_2d, asks_2d, exch_ts)
-                        self.mid_price_x2 = rs.mid_price_x2
-                        self.spread = rs.spread
-                        self.imbalance = rs.imbalance
+                        # Crossed-book guard: Shioaji can emit best_bid > best_ask
+                        # during auction transitions. Zero out stats to prevent
+                        # negative spread propagating into FeatureEngine EMA state.
+                        if rs.spread < 0:
+                            self.mid_price_x2 = 0
+                            self.spread = 0
+                            self.imbalance = 0.0
+                        else:
+                            self.mid_price_x2 = rs.mid_price_x2
+                            self.spread = rs.spread
+                            self.imbalance = rs.imbalance
                         self.bid_depth_total = rs.bid_depth_total
                         self.ask_depth_total = rs.ask_depth_total
                         self.version += 1
@@ -257,7 +265,11 @@ class BookState:
             ask_vol_top = 0
 
         # 2. Price Stats
-        if best_bid > 0 and best_ask > 0:
+        # Guard against crossed book (best_bid > best_ask), which Shioaji can
+        # temporarily emit during auction transitions. Treat as invalid — same
+        # as the else branch — to prevent negative spread propagating into
+        # FeatureEngine EMA state.
+        if best_bid > 0 and best_ask > 0 and best_ask >= best_bid:
             self.mid_price_x2 = best_bid + best_ask
             self.spread = best_ask - best_bid
 
