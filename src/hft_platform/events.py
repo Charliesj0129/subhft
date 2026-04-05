@@ -105,6 +105,8 @@ class LOBStatsEvent:
     # Strict integer fields (preferred)
     mid_price_x2: int | None = None  # best_bid + best_ask (divide by 2 for mid price)
     spread_scaled: int | None = None  # best_ask - best_bid (scaled integer)
+    # Backtest-only: trades that occurred during elapse interval (None in live)
+    last_trades: object = None
 
     def __post_init__(self) -> None:
         # Compute integer fields if not provided (object.__setattr__ for frozen dataclass)

@@ -62,9 +62,9 @@ def run_elapse(adapter: object) -> object:
         # Attach last_trades to event for MM strategies (best-effort)
         if last_trades is not None:
             try:
-                event.last_trades = last_trades  # type: ignore[attr-defined]
-            except AttributeError:
-                pass  # __slots__ dataclass — skip
+                object.__setattr__(event, "last_trades", last_trades)
+            except (AttributeError, TypeError):
+                pass
 
         process_fills(adapter, ts_ns, best_bid_int, best_ask_int)
         dispatch_strategy(adapter, event, feature_event)

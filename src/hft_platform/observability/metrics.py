@@ -233,6 +233,8 @@ class MetricsRegistry:
                 "strategy_circuit_break_total",
                 # LOB-only split latency (P3b)
                 "lob_only_latency_ns",
+                # Execution fill data loss
+                "exec_fill_data_loss",
             ]
         )
         # Market Data
