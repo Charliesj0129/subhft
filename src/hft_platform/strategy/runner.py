@@ -9,6 +9,7 @@ from typing import Any, List
 from structlog import get_logger
 
 from hft_platform.contracts.strategy import IntentType, OrderIntent
+from hft_platform.events import GapEvent
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
@@ -813,8 +814,11 @@ class StrategyRunner:
             duration = time.perf_counter_ns() - start
 
             # Timeout circuit breaker: check wall-clock duration
+            # GapEvent handlers do recovery work (reset state, re-request snapshots)
+            # and should not count toward timeout strikes.
             _timeout_sid = strategy.strategy_id
-            if duration > self._timeout_ns:
+            _is_gap = isinstance(event, GapEvent)
+            if not _is_gap and duration > self._timeout_ns:
                 consec = self._timeout_consecutive.get(_timeout_sid, 0) + 1
                 self._timeout_consecutive[_timeout_sid] = consec
                 if self.metrics:
@@ -841,7 +845,7 @@ class StrategyRunner:
                         strikes=consec,
                         recover_s=self._timeout_recover_ns / 1_000_000_000,
                     )
-            else:
+            elif not _is_gap:
                 self._timeout_consecutive[_timeout_sid] = 0
 
             if getattr(self, "_trace_sampler", None) is not None:
