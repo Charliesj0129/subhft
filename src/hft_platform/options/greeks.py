@@ -79,6 +79,10 @@ def compute_greeks(
             delta = -disc if F < K else 0.0
         return GreeksResult(delta=delta, gamma=0.0, theta=0.0, vega=0.0, rho=0.0)
 
+    # Guard against non-positive F or K (corrupted market data)
+    if F <= 0.0 or K <= 0.0:
+        return GreeksResult(delta=0.0, gamma=0.0, theta=0.0, vega=0.0, rho=0.0)
+
     sqrt_T = math.sqrt(T)
     d1 = (math.log(F / K) + 0.5 * sigma ** 2 * T) / (sigma * sqrt_T)
     d2 = d1 - sigma * sqrt_T

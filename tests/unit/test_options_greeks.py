@@ -82,3 +82,17 @@ def test_portfolio_greeks_empty():
     assert agg.net_gamma == 0.0
     assert agg.net_theta_ntd == 0.0
     assert agg.net_vega_ntd == 0.0
+
+
+def test_compute_greeks_negative_F_returns_zero():
+    """Negative futures price (corrupted data) returns zero Greeks without crash."""
+    from hft_platform.options.greeks import compute_greeks
+    g = compute_greeks(-100.0, 20000.0, 30/365, 0.20, 0.01, "C")
+    assert g.delta == 0.0 and g.gamma == 0.0
+
+
+def test_compute_greeks_zero_K_returns_zero():
+    """Zero strike (corrupted data) returns zero Greeks without crash."""
+    from hft_platform.options.greeks import compute_greeks
+    g = compute_greeks(20000.0, 0.0, 30/365, 0.20, 0.01, "C")
+    assert g.delta == 0.0 and g.gamma == 0.0

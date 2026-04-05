@@ -17,15 +17,17 @@ _IV_MAX = 2.0
 class VolSurface:
     """Grid-based implied volatility surface.
 
-    Keys are ``(expiry_date, strike)`` tuples; IVs stored as plain floats.
+    Keys are ``(expiry_date, int(strike))`` tuples; IVs stored as plain floats.
     Interpolation uses CubicSpline when >= 4 strikes are present, otherwise
     linear interpolation. No extrapolation beyond the observed strike range.
+    CubicSpline instances are cached per expiry and invalidated on update.
     """
 
-    __slots__ = ("_grid",)
+    __slots__ = ("_grid", "_spline_cache")
 
     def __init__(self) -> None:
-        self._grid: dict[tuple[date, float], float] = {}
+        self._grid: dict[tuple[date, int], float] = {}
+        self._spline_cache: dict[date, CubicSpline] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -35,13 +37,15 @@ class VolSurface:
         """Store *iv* for *(expiry_date, strike)*.
 
         If *iv* is outside ``[0.01, 2.0]`` the entry is treated as stale and
-        removed (if present).
+        removed (if present). The CubicSpline cache for the affected expiry is
+        invalidated.
         """
-        key = (expiry_date, strike)
+        key = (expiry_date, int(strike))
         if _IV_MIN <= iv <= _IV_MAX:
             self._grid[key] = iv
         else:
             self._grid.pop(key, None)
+        self._spline_cache.pop(expiry_date, None)
 
     def get_iv(self, strike: float, expiry_date: date) -> float:
         """Return interpolated IV for *(strike, expiry_date)*.
@@ -51,7 +55,7 @@ class VolSurface:
         - fewer than 2 strikes are available (cannot interpolate)
         - the requested strike is outside the observed range (no extrapolation)
         """
-        key = (expiry_date, strike)
+        key = (expiry_date, int(strike))
         if key in self._grid:
             return self._grid[key]
 
@@ -65,18 +69,22 @@ class VolSurface:
             return _NAN
 
         if n >= 4:
-            cs = CubicSpline(strikes, ivs)
+            cs = self._spline_cache.get(expiry_date)
+            if cs is None:
+                cs = CubicSpline(np.array(strikes, dtype=float), np.array(ivs, dtype=float))
+                self._spline_cache[expiry_date] = cs
             return float(cs(strike))
         else:
-            return float(np.interp(strike, strikes, ivs))
+            return float(np.interp(strike, np.array(strikes, dtype=float), np.array(ivs, dtype=float)))
 
-    def snapshot(self) -> dict[tuple[date, float], float]:
+    def snapshot(self) -> dict[tuple[date, int], float]:
         """Return a shallow copy of the current grid."""
         return dict(self._grid)
 
-    def skew_25d(self, expiry_date: date) -> float:
-        """25D risk-reversal approximation: IV(25th pctl strike) - IV(75th pctl strike).
+    def skew_pctl25(self, expiry_date: date) -> float:
+        """Percentile-based skew approximation: IV(25th pctl strike) - IV(75th pctl strike).
 
+        This is a percentile-based approximation (not delta-based 25D skew).
         Returns NaN if fewer than 3 strikes are available.
         """
         _, ivs = self._sorted_for_expiry(expiry_date)
@@ -87,9 +95,10 @@ class VolSurface:
         iv_75 = float(np.percentile(arr, 75))
         return iv_25 - iv_75
 
-    def butterfly_25d(self, expiry_date: date) -> float:
-        """25D butterfly approximation: 0.5*(IV_25 + IV_75) - IV_50.
+    def butterfly_pctl25(self, expiry_date: date) -> float:
+        """Percentile-based butterfly approximation: 0.5*(IV_25 + IV_75) - IV_50.
 
+        This is a percentile-based approximation (not delta-based 25D butterfly).
         Returns NaN if fewer than 3 strikes are available.
         """
         _, ivs = self._sorted_for_expiry(expiry_date)
@@ -107,7 +116,7 @@ class VolSurface:
 
     def _sorted_for_expiry(
         self, expiry_date: date
-    ) -> tuple[list[float], list[float]]:
+    ) -> tuple[list[int], list[float]]:
         """Return *(strikes, ivs)* sorted ascending by strike for *expiry_date*."""
         pairs = [
             (k[1], v) for k, v in self._grid.items() if k[0] == expiry_date
