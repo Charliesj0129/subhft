@@ -10,6 +10,40 @@ from hft_platform.tca.types import TCADailyReport
 
 logger = structlog.get_logger(__name__)
 
+
+def _default_fee_yaml_path() -> str:
+    """Return the default path to config/base/fees/futures.yaml."""
+    import os
+
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    return os.path.join(base, "config", "base", "fees", "futures.yaml")
+
+
+def load_point_value_config(yaml_path: str) -> tuple[dict[str, int], dict[str, str]]:
+    """Load point_value_map and symbol_to_product from fee YAML.
+
+    Returns:
+        (point_value_map, symbol_to_product) — both dicts, empty on failure.
+    """
+    import yaml  # type: ignore[import-untyped]
+
+    try:
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+    except Exception:
+        logger.warning("tca_point_value_config_load_failed", path=yaml_path, exc_info=True)
+        return {}, {}
+
+    futures = data.get("futures", {})
+    pv_map: dict[str, int] = {}
+    for product, cfg in futures.items():
+        if product in ("overrides",) or not isinstance(cfg, dict):
+            continue
+        pv_map[product] = int(cfg.get("point_value", 1))
+
+    sym_map: dict[str, str] = data.get("symbol_map", {})
+    return pv_map, sym_map
+
 _DAILY_QUERY = """\
 SELECT
     strategy_id,

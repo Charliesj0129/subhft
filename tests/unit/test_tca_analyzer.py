@@ -179,6 +179,41 @@ class TestPointValueMultiplier:
         assert reports[0].notional == 1_000_0000_0000
 
 
+class TestLoadPointValueConfig:
+    """load_point_value_config correctly parses fee YAML."""
+
+    def test_load_point_value_config(self, tmp_path: pytest.TempPathFactory) -> None:
+        from hft_platform.tca.analyzer import load_point_value_config
+
+        yaml_content = """\
+futures:
+  TX:
+    point_value: 200
+  MTX:
+    point_value: 50
+  XMT:
+    point_value: 10
+  overrides:
+    "2330F":
+      commission_per_contract: 25
+symbol_map:
+  TXF: TX
+  MXF: MTX
+"""
+        p = tmp_path / "futures.yaml"
+        p.write_text(yaml_content)
+        pv_map, sym_map = load_point_value_config(str(p))
+        assert pv_map == {"TX": 200, "MTX": 50, "XMT": 10}
+        assert sym_map == {"TXF": "TX", "MXF": "MTX"}
+
+    def test_load_point_value_config_missing_file(self) -> None:
+        from hft_platform.tca.analyzer import load_point_value_config
+
+        pv_map, sym_map = load_point_value_config("/nonexistent/path.yaml")
+        assert pv_map == {}
+        assert sym_map == {}
+
+
 class TestUnknownSymbolWarning:
     """Unknown symbol logs a warning and defaults point_value to 1."""
 

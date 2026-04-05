@@ -98,11 +98,16 @@ class DailyReportService:
         # TCA section
         tca_section = ""
         try:
-            from hft_platform.tca.analyzer import TCAAnalyzer
+            from hft_platform.tca.analyzer import (
+                TCAAnalyzer,
+                _default_fee_yaml_path,
+                load_point_value_config,
+            )
             from hft_platform.tca.report import TCAReportGenerator
 
             tca_gen = TCAReportGenerator()
-            tca_analyzer = TCAAnalyzer(self._ch_client)
+            pv_map, sym_map = load_point_value_config(_default_fee_yaml_path())
+            tca_analyzer = TCAAnalyzer(self._ch_client, point_value_map=pv_map, symbol_to_product=sym_map)
             tca_reports = tca_analyzer.daily_report(date_str)
             tca_section = tca_gen.format_telegram_section(tca_reports)
         except Exception:  # noqa: BLE001
