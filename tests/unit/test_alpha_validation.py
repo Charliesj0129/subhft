@@ -139,6 +139,7 @@ def test_run_gate_a_requires_paper_index_link(tmp_path: Path):
         data_paths=[str(path)],
         require_paper_refs=True,
         require_paper_index_link=True,
+        enforce_latency_profile=False,
     )
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
     assert report.passed
@@ -198,6 +199,7 @@ def test_run_gate_a_data_meta_pass(tmp_path: Path):
         enforce_data_governance=True,
         require_data_meta=True,
         allowed_data_roots=(str(data_root),),
+        enforce_latency_profile=False,
     )
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
     assert report.passed
@@ -276,6 +278,7 @@ def test_run_gate_a_data_meta_with_provenance_keys_passes(tmp_path: Path):
         allowed_data_roots=(str(data_root),),
         required_data_provenance_fields=("source", "generator", "seed"),
         data_ul=1,
+        enforce_latency_profile=False,
     )
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
     assert report.passed
@@ -311,6 +314,7 @@ def test_run_gate_a_data_ul_reports_achieved_and_missing_fields_warn_only(tmp_pa
         require_data_meta=True,
         allowed_data_roots=(str(data_root),),
         data_ul=3,
+        enforce_latency_profile=False,
     )
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
     assert report.passed

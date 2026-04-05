@@ -117,7 +117,7 @@ class HftBacktestRunner:
 
             # Inspect internal stats if available in wrapper
             equity_series = extract_equity_series(adapter)
-            pnl = 1234.5
+            pnl = 0.0
             if equity_series is not None and equity_series.is_valid():
                 pnl = float(equity_series.equity[-1] - equity_series.equity[0])
             equity_points = int(equity_series.equity.size) if equity_series is not None else 0

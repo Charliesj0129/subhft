@@ -87,7 +87,7 @@ class ValidationConfig:
     latency_model: str = "IntpOrderLatency"
     exchange_model: str = "NoPartialFillExchange"
     min_queue_survival_rate: float = 0.3
-    enforce_latency_profile: bool = False
+    enforce_latency_profile: bool = True
 
 
 @dataclass(frozen=True)
