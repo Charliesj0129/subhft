@@ -99,12 +99,28 @@ class StormGuard:
         logger.info("StormGuard thresholds reloaded")
 
     def _apply_env_overrides(self) -> None:
-        feed_gap_override = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
-        if feed_gap_override:
+        # Canonical env var (preferred)
+        feed_gap_storm = os.getenv("HFT_STORMGUARD_FEED_GAP_STORM_S")
+        # Deprecated alias (kept for backward compatibility)
+        feed_gap_halt = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
+
+        if feed_gap_halt and not feed_gap_storm:
+            logger.warning(
+                "HFT_STORMGUARD_FEED_GAP_HALT_S is deprecated, use HFT_STORMGUARD_FEED_GAP_STORM_S",
+                deprecated_var="HFT_STORMGUARD_FEED_GAP_HALT_S",
+                value=feed_gap_halt,
+            )
+            feed_gap_storm = feed_gap_halt
+
+        if feed_gap_storm:
             try:
-                self.thresholds.feed_gap_storm_s = float(feed_gap_override)  # precision-time
+                self.thresholds.feed_gap_storm_s = float(feed_gap_storm)  # precision-time
             except ValueError:
-                logger.warning("Invalid HFT_STORMGUARD_FEED_GAP_HALT_S", value=feed_gap_override)
+                logger.warning(
+                    "Invalid feed gap storm threshold",
+                    var="HFT_STORMGUARD_FEED_GAP_STORM_S",
+                    value=feed_gap_storm,
+                )
 
         latency_storm = os.getenv("HFT_STORMGUARD_LATENCY_STORM_US")
         if latency_storm:

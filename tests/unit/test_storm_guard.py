@@ -123,6 +123,37 @@ def test_apply_env_override_feed_gap_invalid_value_logs_warning(monkeypatch):
     assert g.thresholds.feed_gap_storm_s == 1.0
 
 
+# ── canonical HFT_STORMGUARD_FEED_GAP_STORM_S env var ──────────────────────
+
+
+def test_feed_gap_storm_env_override(monkeypatch):
+    """Canonical HFT_STORMGUARD_FEED_GAP_STORM_S sets feed_gap_storm_s correctly."""
+    monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_STORM_S", "45")
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        g = StormGuard()
+    assert g.thresholds.feed_gap_storm_s == 45.0
+
+
+def test_feed_gap_deprecated_halt_env_still_works(monkeypatch, capfd):
+    """Deprecated HFT_STORMGUARD_FEED_GAP_HALT_S is applied and a deprecation warning is logged."""
+    monkeypatch.delenv("HFT_STORMGUARD_FEED_GAP_STORM_S", raising=False)
+    monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "60")
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        g = StormGuard()
+    # Deprecated alias is still honoured
+    assert g.thresholds.feed_gap_storm_s == 60.0
+
+
+def test_feed_gap_storm_env_takes_precedence(monkeypatch):
+    """When both env vars are set, HFT_STORMGUARD_FEED_GAP_STORM_S wins."""
+    monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_STORM_S", "45")
+    monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "99")
+    with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+        g = StormGuard()
+    # STORM_S should win over the deprecated HALT_S
+    assert g.thresholds.feed_gap_storm_s == 45.0
+
+
 def test_apply_env_override_latency_storm(monkeypatch):
     monkeypatch.setenv("HFT_STORMGUARD_LATENCY_STORM_US", "15000")
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
