@@ -13,7 +13,7 @@ def _make_system_with_mocks():
         patch("hft_platform.services.system.configure_logging"),
     ):
         registry = MagicMock()
-        registry.bus = MagicMock()
+        registry.bus = MagicMock(cursor=-1)
         registry.raw_queue = asyncio.Queue()
         registry.raw_exec_queue = asyncio.Queue()
         registry.risk_queue = asyncio.Queue()
@@ -31,6 +31,11 @@ def _make_system_with_mocks():
         registry.order_adapter = MagicMock()
         registry.execution_gateway = MagicMock()
         registry.exec_service = MagicMock()
+
+        async def _mock_exec_stop():
+            return 0
+
+        registry.exec_service.stop = _mock_exec_stop
         registry.risk_engine = MagicMock()
         registry.recon_service = MagicMock()
         registry.strategy_runner = MagicMock()

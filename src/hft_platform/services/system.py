@@ -313,7 +313,9 @@ class HFTSystem:
             if _gc_disabled:
                 gc.enable()
                 logger.info("GC re-enabled after trading session")
-            self.stop()
+            # Use stop_async() for ordered shutdown: bridge → recorder drain → tasks.
+            # The sync stop() skips the recorder drain path, risking data loss.
+            await self.stop_async()
 
     def _start_service(self, name, coro):
         if name in {"exec_router", "exec_gateway"}:
@@ -726,6 +728,10 @@ class HFTSystem:
                 # de-escalates. set_normal() is idempotent, safe to call repeatedly.
                 if self.gateway_service is not None:
                     self.gateway_service.set_normal()
+                # Fix P2-4: Re-enable OrderAdapter after HALT recovery.
+                # During HALT we set order_adapter.running=False (line 712);
+                # without this, the adapter stays stopped after de-escalation.
+                self._set_service_running(self.order_adapter, True)
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""

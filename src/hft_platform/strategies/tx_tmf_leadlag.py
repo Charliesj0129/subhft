@@ -370,7 +370,12 @@ class TxTmfLeadLagStrategy(BaseStrategy):
                 pos.pending_force_close = True
                 pos.exit_order_id = ""
                 pos.awaiting_exit = False
-                pos.aggressive_exit_inflight = False
+                # Do NOT clear aggressive_exit_inflight here — the cancel
+                # hasn't been ACK'd yet.  Clearing it prematurely allows a
+                # duplicate FORCE_FLAT IOC if the next tick re-enters
+                # _force_close_all before the cancel ACK arrives.  The
+                # on_order() terminal-status handler (line ~500) resets the
+                # flag safely after the broker confirms the cancellation.
                 continue
 
             self._emit_aggressive_exit(pos, best_bid, best_ask)
