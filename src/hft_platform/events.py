@@ -28,7 +28,7 @@ class FusedBookStats(NamedTuple):
     imbalance: float
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class MetaData:
     """Common metadata headers."""
 
@@ -42,7 +42,7 @@ class MetaData:
 TickMeta = MetaData
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class TickEvent:
     """
     Standardized Tick Data.
@@ -67,7 +67,7 @@ class TickEvent:
     trade_confidence: int = 0
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class BidAskEvent:
     """
     L1/L5 Update.
@@ -85,7 +85,7 @@ class BidAskEvent:
     is_snapshot: bool = False
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class LOBStatsEvent:
     """
     Derived LOB metrics emitted by LOBEngine.
@@ -107,17 +107,17 @@ class LOBStatsEvent:
     spread_scaled: int | None = None  # best_ask - best_bid (scaled integer)
 
     def __post_init__(self) -> None:
-        # Compute integer fields if not provided
+        # Compute integer fields if not provided (object.__setattr__ for frozen dataclass)
         if self.mid_price_x2 is None:
             if self.best_bid is not None and self.best_ask is not None:
-                self.mid_price_x2 = int(self.best_bid) + int(self.best_ask)
+                object.__setattr__(self, "mid_price_x2", int(self.best_bid) + int(self.best_ask))
             else:
-                self.mid_price_x2 = 0
+                object.__setattr__(self, "mid_price_x2", 0)
         if self.spread_scaled is None:
             if self.best_bid is not None and self.best_ask is not None:
-                self.spread_scaled = int(self.best_ask) - int(self.best_bid)
+                object.__setattr__(self, "spread_scaled", int(self.best_ask) - int(self.best_bid))
             else:
-                self.spread_scaled = 0
+                object.__setattr__(self, "spread_scaled", 0)
 
     @property
     def mid_price(self) -> float:

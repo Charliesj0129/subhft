@@ -3,6 +3,7 @@ import os
 import re
 import sys
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any, cast
 
 from structlog import get_logger
@@ -1194,5 +1195,5 @@ class MarketDataNormalizer:
                 return (event[0], event[1], event[2], event[3], event[4], True, *event[6:])
             return (event[0], event[1], event[2], event[3], event[4], True)
         if event:
-            event.is_snapshot = True
+            event = replace(event, is_snapshot=True)
         return event
