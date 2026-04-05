@@ -8,6 +8,8 @@ formatting directives.
 
 from __future__ import annotations
 
+from html import escape
+
 
 def render_halt(reason: str) -> str:
     """Critical: trading has been halted.
@@ -18,7 +20,7 @@ def render_halt(reason: str) -> str:
     Returns:
         Formatted HALT alert string.
     """
-    return f"🔴 HALT: {reason}. All trading stopped. Manual recovery required."
+    return f"🔴 HALT: {escape(reason)}. All trading stopped. Manual recovery required."
 
 
 def render_daily_loss(pnl_ntd: int, limit_ntd: int) -> str:
@@ -93,7 +95,7 @@ def render_stormguard_change(old: str, new: str, reason: str) -> str:
     Returns:
         Formatted StormGuard state-change alert string.
     """
-    return f"🟡 StormGuard: {old} → {new}. Reason: {reason}."
+    return f"🟡 StormGuard: {escape(old)} → {escape(new)}. Reason: {escape(reason)}."
 
 
 def render_pre_market_pass() -> str:
@@ -152,7 +154,7 @@ def render_reconnect_alert(count: int, flap_status: str) -> str:
     Returns:
         Formatted reconnect alert string.
     """
-    return f"🟡 券商重連 (第 {count} 次). Flap 狀態: {flap_status}."
+    return f"🟡 券商重連 (第 {count} 次). Flap 狀態: {escape(flap_status)}."
 
 
 def render_process_restart(attempt: int, max_attempts: int) -> str:
@@ -268,7 +270,7 @@ def render_flatten_result(
         f"{icon} Flatten [{scope}]: closed={fully_closed} partial={partially_closed} failed={failed}",
     ]
     if failed_symbols:
-        lines.append(f"Failed: {', '.join(failed_symbols[:5])}")
+        lines.append(f"Failed: {', '.join(escape(s) for s in failed_symbols[:5])}")
     return "\n".join(lines)
 
 
@@ -456,7 +458,7 @@ def render_backup_failed(
     Returns:
         Formatted backup failure notification string.
     """
-    return f"🔴 BACKUP 失敗 {date_str}\n錯誤: {error}\n最後成功備份: {last_success_date}\n請立即檢查備份磁碟"
+    return f"🔴 BACKUP 失敗 {date_str}\n錯誤: {escape(error)}\n最後成功備份: {last_success_date}\n請立即檢查備份磁碟"
 
 
 def render_position_recovery(
@@ -520,7 +522,7 @@ def render_position_recovery_failed(
     lines = [
         "🔴 部位恢復失敗 — HALT",
         f"來源: {source}",
-        f"原因: {reason}",
+        f"原因: {escape(reason)}",
     ]
     for m in mismatches[:5]:
         symbol = m.get("symbol", "?")

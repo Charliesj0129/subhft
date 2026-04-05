@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from html import escape
 from typing import Any
 
 from structlog import get_logger
@@ -42,9 +43,9 @@ def format_alert_message(payload: dict[str, Any]) -> str:
         description = annotations.get("description", "")
 
         icon = "\u26a0\ufe0f" if status == "FIRING" else "\u2705"
-        lines.append(f"{icon} <b>[{status}] {name}</b>\n  Severity: {severity}\n  {summary}")
+        lines.append(f"{icon} <b>[{escape(status)}] {escape(name)}</b>\n  Severity: {escape(severity)}\n  {escape(summary)}")
         if description:
-            lines.append(f"  {description}")
+            lines.append(f"  {escape(description)}")
 
     return "\n\n".join(lines)
 
