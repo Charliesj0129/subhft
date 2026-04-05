@@ -1055,6 +1055,7 @@ class OrderAdapter:
                 self.rate_limiter.record()
                 self.per_symbol_rate_limiter.record(intent.symbol)
                 self.circuit_breaker.record_success()
+                self._update_cb_metric()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
 
             elif intent.intent_type == IntentType.CANCEL:
@@ -1130,6 +1131,7 @@ class OrderAdapter:
             logger.error("Broker Error", error=str(e))
             self.metrics.order_reject_total.inc()
             self.circuit_breaker.record_failure()
+            self._update_cb_metric()
             self.strategy_cb_mgr.record_failure(intent.strategy_id)
             self._emit_trace("order_dispatch_error", intent, {"cmd_id": int(cmd.cmd_id), "error": str(e)})
         else:
@@ -1271,11 +1273,13 @@ class OrderAdapter:
                         )
                         self.metrics.order_reject_total.inc()
                         self.circuit_breaker.record_failure()
+                        self._update_cb_metric()
                         self.strategy_cb_mgr.record_failure(item.intent.strategy_id)
             except Exception:
                 logger.error("_api_worker: unexpected exception in dispatch loop", exc_info=True)
                 self.metrics.order_reject_total.inc()
                 self.circuit_breaker.record_failure()
+                self._update_cb_metric()
                 self._api_pending.clear()
 
     def _update_cb_metric(self) -> None:
@@ -1375,6 +1379,7 @@ class OrderAdapter:
                                 strategy_id=intent.strategy_id,
                             )
                     self.circuit_breaker.record_success()
+                    self._update_cb_metric()
                     if intent and intent.strategy_id:
                         self.strategy_cb_mgr.record_success(intent.strategy_id)
                     return result
@@ -1403,6 +1408,7 @@ class OrderAdapter:
                         )
                         self.metrics.order_reject_total.inc()
                         self.circuit_breaker.record_failure()
+                        self._update_cb_metric()
                         if intent and intent.strategy_id:
                             self.strategy_cb_mgr.record_failure(intent.strategy_id)
                         # D-03: Track phantom order candidates for reconciliation
@@ -1458,6 +1464,7 @@ class OrderAdapter:
                     )
                     self.metrics.order_reject_total.inc()
                     self.circuit_breaker.record_failure()
+                    self._update_cb_metric()
                     if intent and intent.strategy_id:
                         self.strategy_cb_mgr.record_failure(intent.strategy_id)
                     if intent and self.latency and intent.source_ts_ns:

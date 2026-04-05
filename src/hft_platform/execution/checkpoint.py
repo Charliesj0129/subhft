@@ -102,19 +102,30 @@ class PositionCheckpointWriter:
         """Serialize current positions to disk atomically.
 
         Returns the path written.
+
+        M3: Acquires _fill_lock via snapshot_positions() to ensure a consistent
+        read of position state during serialization (no concurrent fill mutations).
         """
+        # M3: Use snapshot_positions() which holds _fill_lock for the copy,
+        # preventing concurrent fills from producing partial/torn position state.
+        snapshot = self._store.snapshot_positions()
+
         positions_payload: Dict[str, Any] = {}
-        for key, pos in self._store.positions.items():
+        for key, pos in snapshot.items():
             positions_payload[key] = {
                 "symbol": pos.symbol,
                 "net_qty": pos.net_qty,
                 "avg_price_scaled": pos.avg_price_scaled,
                 "realized_pnl_scaled": pos.realized_pnl_scaled,
+                "fees_scaled": pos.fees_scaled,  # M1: include accumulated fees
             }
 
         body_obj = {
             "trading_date": self._trading_date_provider(),
             "timestamp_ns": now_ns(),
+            # M2: persist portfolio aggregates so StormGuard drawdown survives crash recovery
+            "peak_equity_scaled": self._store._peak_equity_scaled,
+            "total_realized_pnl_scaled": self._store._total_realized_pnl_scaled,
             "positions": positions_payload,
         }
         body_bytes = _dumps(body_obj)

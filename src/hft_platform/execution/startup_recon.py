@@ -258,6 +258,18 @@ class StartupPositionVerifier:
                 if ckpt_td == trading_date:
                     ckpt_valid = True
                     ckpt_positions = ckpt_data.get("positions", {})
+                    # M2: Restore portfolio-level aggregates so StormGuard drawdown
+                    # resumes from the correct high-watermark after crash recovery.
+                    peak_equity = int(ckpt_data.get("peak_equity_scaled") or 0)
+                    total_rpnl = int(ckpt_data.get("total_realized_pnl_scaled") or 0)
+                    if peak_equity or total_rpnl:
+                        self.store._peak_equity_scaled = peak_equity
+                        self.store._total_realized_pnl_scaled = total_rpnl
+                        logger.info(
+                            "position_recovery: portfolio aggregates restored",
+                            peak_equity_scaled=peak_equity,
+                            total_realized_pnl_scaled=total_rpnl,
+                        )
                     logger.info("position_recovery: checkpoint valid", symbols=len(ckpt_positions))
                 else:
                     logger.warning(
@@ -420,20 +432,22 @@ class StartupPositionVerifier:
         return any(c in symbol.upper() for c in ("FD", "FX", "TX", "MX", "TE", "TF"))
 
     def _write_to_store(self, positions: Dict[str, Dict[str, Any]], account_id: str) -> int:
-        """Write recovered positions into PositionStore. Returns count."""
-        from hft_platform.execution.positions import Position
+        """Write recovered positions into PositionStore via load_recovery.
 
+        Positions are stored as pending recovery entries keyed by
+        ``account:symbol``.  They merge into the correct
+        ``account:strategy:symbol`` key on the first live fill for that
+        symbol, so PnL is calculated against the recovered avg_price.
+        """
         count = 0
         for symbol, data in positions.items():
-            pos = Position(
+            self.store.load_recovery(
                 account_id=account_id,
-                strategy_id="",
                 symbol=symbol,
                 net_qty=data["net_qty"],
                 avg_price_scaled=data.get("avg_price_scaled", 0),
                 realized_pnl_scaled=data.get("realized_pnl_scaled", 0),
+                fees_scaled=data.get("fees_scaled", 0),
             )
-            key = f"{account_id}::{symbol}"
-            self.store.positions[key] = pos
             count += 1
         return count

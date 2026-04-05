@@ -248,3 +248,115 @@ def test_normalize_order_side_case_insensitive(tmp_path, monkeypatch, action, ex
     event = norm.normalize_order(raw)
     assert event is not None
     assert event.side == expected_side, f"action={action!r} expected {expected_side} got {event.side}"
+
+
+# ---------------------------------------------------------------------------
+# M8: Remove hardcoded sim-account-01 fallback in fill normalizer
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_fill_with_account_id_uses_it(tmp_path, monkeypatch):
+    """M8: When account_id is present, it must be used as-is."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer()
+    raw = RawExecEvent(
+        "deal",
+        {
+            "seqno": "F1",
+            "ordno": "O1",
+            "code": "AAA",
+            "action": "Buy",
+            "quantity": 1,
+            "price": 1.00,
+            "ts": 1,
+            "account_id": "live-account-99",
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_fill(raw)
+    assert event is not None
+    assert event.account_id == "live-account-99"
+
+
+def test_normalize_fill_missing_account_id_uses_unknown(tmp_path, monkeypatch):
+    """M8: Missing account_id must fall back to 'unknown', not 'sim-account-01'."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer()
+    raw = RawExecEvent(
+        "deal",
+        {
+            "seqno": "F2",
+            "ordno": "O2",
+            "code": "AAA",
+            "action": "Buy",
+            "quantity": 1,
+            "price": 1.00,
+            "ts": 1,
+            # account_id intentionally omitted
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_fill(raw)
+    assert event is not None
+    assert event.account_id == "unknown"
+    assert event.account_id != "sim-account-01"
+
+
+def test_normalize_fill_missing_account_id_logs_warning(tmp_path, monkeypatch):
+    """M8: A structlog warning must be emitted when account_id is missing."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+
+    warnings_emitted: list[dict] = []
+
+    import structlog
+
+    def capture_processor(logger, method, event_dict):
+        if method == "warning":
+            warnings_emitted.append(dict(event_dict))
+        return event_dict
+
+    with structlog.testing.capture_logs() as cap_logs:
+        norm = ExecutionNormalizer()
+        raw = RawExecEvent(
+            "deal",
+            {
+                "seqno": "F3",
+                "ordno": "O3",
+                "code": "AAA",
+                "action": "Sell",
+                "quantity": 2,
+                "price": 1.00,
+                "ts": 1,
+            },
+            time.time_ns(),
+        )
+        event = norm.normalize_fill(raw)
+
+    assert event is not None
+    warning_events = [e for e in cap_logs if e.get("log_level") == "warning"]
+    assert any("fill_missing_account_id" in str(e.get("event", "")) for e in warning_events), (
+        f"Expected fill_missing_account_id warning, got: {cap_logs}"
+    )
+
+
+def test_normalize_fill_none_account_id_uses_unknown(tmp_path, monkeypatch):
+    """M8: Explicit None account_id must fall back to 'unknown' (not crash)."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer()
+    raw = RawExecEvent(
+        "deal",
+        {
+            "seqno": "F4",
+            "ordno": "O4",
+            "code": "AAA",
+            "action": "Buy",
+            "quantity": 1,
+            "price": 1.00,
+            "ts": 1,
+            "account_id": None,
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_fill(raw)
+    assert event is not None
+    assert event.account_id == "unknown"
