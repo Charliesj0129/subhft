@@ -153,7 +153,32 @@ class HftBacktestAdapter:
         if latency_model_lower == "intporderlatency" and latency_data_path:
             asset_builder = call_if_exists(asset_builder, "intp_order_latency", latency_data_path)
         else:
-            lat_ns = latency_us * 1000
+            # hftbacktest's constant_order_latency does not support per-action-type
+            # latencies (place vs modify vs cancel). When modify_latency_us or
+            # cancel_latency_us are provided, we use the maximum of all three as a
+            # conservative approximation so that no action type underestimates its
+            # real round-trip time.  A warning is emitted so researchers are aware
+            # of this approximation and can account for it in their analysis.
+            _mod = int(modify_latency_us)
+            _can = int(cancel_latency_us)
+            if _mod > 0 or _can > 0:
+                effective_latency_us = max(latency_us, _mod, _can)
+                if effective_latency_us != latency_us:
+                    logger.warning(
+                        "backtest_latency_approximation",
+                        place_latency_us=latency_us,
+                        modify_latency_us=_mod,
+                        cancel_latency_us=_can,
+                        effective_latency_us=effective_latency_us,
+                        reason=(
+                            "hftbacktest constant_order_latency does not support "
+                            "per-action-type latencies; using max(place, modify, cancel) "
+                            "as a conservative approximation for all order actions"
+                        ),
+                    )
+            else:
+                effective_latency_us = latency_us
+            lat_ns = effective_latency_us * 1000
             asset_builder = call_if_exists(asset_builder, "constant_order_latency", lat_ns, lat_ns)
 
         queue_model_lower = str(queue_model).strip().lower()
