@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -161,38 +160,3 @@ class TestRecorderBridgeShortCircuit:
 
         sys_obj.bus.consume.assert_called_once()
 
-    def test_start_service_skips_bridge_when_all_direct(self):
-        """Calling run() path: _start_service('recorder_bridge') should NOT be invoked when all direct."""
-        sys_obj = _make_system(md_record_direct=True, fill_record_direct=True, order_record_direct=True)
-        start_calls: list[str] = []
-
-        def _mock_start_service(name: str, coro):
-            start_calls.append(name)
-
-        sys_obj._start_service = _mock_start_service  # type: ignore[method-assign]
-        # Trigger only the conditional block (not the full run() method)
-        if sys_obj._md_record_direct and sys_obj._fill_record_direct and sys_obj._order_record_direct:
-            pass  # bridge skipped — matches production logic
-        else:
-            sys_obj._start_service("recorder_bridge", sys_obj._recorder_bridge())
-
-        assert "recorder_bridge" not in start_calls
-
-    def test_start_service_starts_bridge_when_md_direct_disabled(self):
-        """Calling run() path: _start_service('recorder_bridge') SHOULD be invoked when md_record_direct=False."""
-        sys_obj = _make_system(md_record_direct=False, fill_record_direct=True, order_record_direct=True)
-        start_calls: list[str] = []
-
-        def _mock_start_service(name: str, coro):
-            start_calls.append(name)
-            # Close the coroutine to avoid RuntimeWarning: coroutine never awaited
-            coro.close()
-
-        sys_obj._start_service = _mock_start_service  # type: ignore[method-assign]
-        # Mirror the production conditional
-        if sys_obj._md_record_direct and sys_obj._fill_record_direct and sys_obj._order_record_direct:
-            pass
-        else:
-            sys_obj._start_service("recorder_bridge", sys_obj._recorder_bridge())
-
-        assert "recorder_bridge" in start_calls
