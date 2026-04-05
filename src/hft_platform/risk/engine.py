@@ -482,6 +482,10 @@ class RiskEngine:
                 break
             except Exception as e:  # noqa: BLE001 — wraps external risk validators
                 logger.exception("RiskEngine error", error=str(e), error_type=type(e).__name__)
+                try:
+                    self.metrics.risk_engine_error_total.labels(error_type=type(e).__name__).inc()
+                except Exception:  # noqa: BLE001 — metric failure must not mask original error
+                    pass
                 self.intent_queue.task_done()
 
     def _drain_order_dlq(self) -> None:

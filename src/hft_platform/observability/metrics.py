@@ -207,6 +207,7 @@ class MetricsRegistry:
                 "risk_dlq_drained_total",
                 "risk_dlq_expired_total",
                 "intent_queue_full_total",
+                "risk_engine_error_total",
                 # SLO-2: E2E order-to-fill latency
                 "e2e_order_latency_ns",
                 # Recorder exec drop counter (P-01)
@@ -232,6 +233,8 @@ class MetricsRegistry:
                 "norm_engine_escalation_total",
                 # Feature staleness detection
                 "feature_staleness_detected_total",
+                # Stale event skip counter
+                "stale_event_skip_total",
                 # Strategy timeout circuit breaker
                 "strategy_timeout_total",
                 "strategy_circuit_break_total",
@@ -917,6 +920,10 @@ class MetricsRegistry:
             "feature_staleness_detected_total",
             "Times is_feature_stale() returned True (stale or never-updated features)",
         )
+        self.stale_event_skip_total = Counter(
+            "stale_event_skip_total",
+            "Events skipped due to staleness in StrategyRunner",
+        )
         self.contract_refresh_total = Counter(
             "contract_refresh_total",
             "Contract refresh operations",
@@ -992,6 +999,11 @@ class MetricsRegistry:
         self.intent_queue_full_total = Counter(
             "intent_queue_full_total",
             "Intents dropped due to QueueFull in StrategyRunner submit loop",
+        )
+        self.risk_engine_error_total = Counter(
+            "risk_engine_error_total",
+            "RiskEngine internal errors caught in main run() loop",
+            ["error_type"],
         )
 
         # Recorder reinject circuit breaker drops (P-21)
