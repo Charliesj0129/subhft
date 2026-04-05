@@ -224,10 +224,22 @@ class ReconciliationService:
             logger.info("Portfolio Sync: Broker State", positions=broker_map)
 
             # 3. Build local position map {symbol: qty}
+            # Also build per-strategy breakdown for drift attribution (M9)
             local_map: Dict[str, int] = {}
+            per_strategy_map: Dict[str, Dict[str, int]] = {}  # strategy_id -> {symbol: qty}
             for key, pos in self.store.positions.items():
                 symbol = pos.symbol
                 local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
+                strat = pos.strategy_id
+                strat_positions = per_strategy_map.setdefault(strat, {})
+                strat_positions[symbol] = strat_positions.get(symbol, 0) + pos.net_qty
+
+            # Log per-strategy breakdown at DEBUG level (M9)
+            logger.debug(
+                "Portfolio Sync: Per-strategy position breakdown",
+                strategies=list(per_strategy_map.keys()),
+                per_strategy=per_strategy_map,
+            )
 
             logger.info("Portfolio Sync: Local State", positions=local_map)
             self.platform_degrade_controller.update_reference_positions(local_map=local_map, broker_map=broker_map)
@@ -263,6 +275,20 @@ class ReconciliationService:
                         {"symbol": d.symbol, "local": d.local_qty, "broker": d.broker_qty, "diff": d.diff}
                         for d in discrepancies
                     ],
+                )
+
+                # Log which strategies contribute to each drifting symbol (M9)
+                drifting_symbols = {d.symbol for d in discrepancies}
+                strategy_drift_attribution: Dict[str, Dict[str, int]] = {}
+                for symbol in drifting_symbols:
+                    for strat, strat_positions in per_strategy_map.items():
+                        qty = strat_positions.get(symbol, 0)
+                        if qty != 0:
+                            strategy_drift_attribution.setdefault(symbol, {})[strat] = qty
+                logger.warning(
+                    "Per-strategy drift attribution",
+                    drifting_symbols=sorted(drifting_symbols),
+                    attribution=strategy_drift_attribution,
                 )
 
                 # 8. Check for critical discrepancies and trigger HALT if needed

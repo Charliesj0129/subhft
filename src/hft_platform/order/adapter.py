@@ -16,12 +16,12 @@ from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvid
 from hft_platform.core.rate_limiter import PerSymbolRateLimiter, PerSymbolRateResult, RateLimiter
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.feed_adapter.protocol import BrokerOrderCodec
+from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
-from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.order.shadow import ShadowOrderSink
 
 logger = get_logger("order_adapter")
@@ -531,6 +531,7 @@ class OrderAdapter:
             if not self._validate_client(intent):
                 self.metrics.order_reject_total.inc()
                 self.circuit_breaker.record_failure()
+                self._update_cb_metric()
                 self.strategy_cb_mgr.record_failure(intent.strategy_id)
                 await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Client validation failed")
                 return
@@ -761,7 +762,16 @@ class OrderAdapter:
             # TCA: store decision/arrival prices for fill enrichment (NEW only —
             # AMEND/CANCEL should not overwrite the original arrival reference point)
             if intent.intent_type == IntentType.NEW:
-                self._cmd_tca_map[order_key] = (int(cmd.decision_price), int(cmd.arrival_price))
+                arrival = int(cmd.arrival_price)
+                # RiskEngine path leaves arrival_price=0; stamp from LOB mid-price
+                if arrival <= 0 and self._mid_price_fn is not None:
+                    try:
+                        arrival = self._mid_price_fn(intent.symbol)
+                    except Exception:  # noqa: BLE001
+                        arrival = int(cmd.decision_price)
+                if arrival <= 0:
+                    arrival = int(cmd.decision_price)
+                self._cmd_tca_map[order_key] = (int(cmd.decision_price), arrival)
 
             # Bound cmd maps — evict oldest FIFO entries, skipping live orders (M6 pattern).
             # Use _cmd_created_ns_map as the trigger since it is the superset (populated for
@@ -942,7 +952,9 @@ class OrderAdapter:
                 await self._drain_deferred_terminals(order_key, trade)
 
                 self.rate_limiter.record()
+                self.per_symbol_rate_limiter.record(intent.symbol)
                 self.circuit_breaker.record_success()
+                self._update_cb_metric()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
 
             elif intent.intent_type == IntentType.FORCE_FLAT:
@@ -1041,6 +1053,7 @@ class OrderAdapter:
                 await self._drain_deferred_terminals(order_key, trade)
                 self.metrics.order_actions_total.labels(type="force_flat").inc()
                 self.rate_limiter.record()
+                self.per_symbol_rate_limiter.record(intent.symbol)
                 self.circuit_breaker.record_success()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
 
@@ -1058,15 +1071,21 @@ class OrderAdapter:
                         return
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
+                    self.per_symbol_rate_limiter.record(intent.symbol)
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Cancel target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
+                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Cancel target still pending")
                 elif target_trade is _TERMINAL_BEFORE_REGISTERED:
                     logger.warning("Cancel target terminated before registered", target=target_key)
                     self.metrics.order_reject_total.inc()
+                    await self._add_to_dlq(
+                        intent, RejectionReason.VALIDATION_ERROR, "Cancel target terminated before registered"
+                    )
                 else:
                     logger.warning("Cancel target not found", target=target_key)
                     self.metrics.order_reject_total.inc()
+                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Cancel target not found")
 
             elif intent.intent_type == IntentType.AMEND:
                 async with self._live_orders_lock:
@@ -1091,15 +1110,21 @@ class OrderAdapter:
                         return
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
+                    self.per_symbol_rate_limiter.record(intent.symbol)
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Amend target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
+                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Amend target still pending")
                 elif target_trade is _TERMINAL_BEFORE_REGISTERED:
                     logger.warning("Amend target terminated before registered", target=target_key)
                     self.metrics.order_reject_total.inc()
+                    await self._add_to_dlq(
+                        intent, RejectionReason.VALIDATION_ERROR, "Amend target terminated before registered"
+                    )
                 else:
                     logger.warning("Amend target not found", target=target_key)
                     self.metrics.order_reject_total.inc()
+                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Amend target not found")
 
         except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
             logger.error("Broker Error", error=str(e))
@@ -1252,6 +1277,15 @@ class OrderAdapter:
                 self.metrics.order_reject_total.inc()
                 self.circuit_breaker.record_failure()
                 self._api_pending.clear()
+
+    def _update_cb_metric(self) -> None:
+        """Emit global circuit-breaker state to Prometheus (0=closed, 1=open)."""
+        try:
+            self.metrics.circuit_breaker_state.labels(component="order_adapter").set(
+                1 if self.circuit_breaker.is_open() else 0
+            )
+        except Exception:  # noqa: BLE001 — metrics must never crash the hot path
+            pass
 
     def _record_queue_latency(self, cmd: OrderCommand) -> None:
         if not self.latency:
