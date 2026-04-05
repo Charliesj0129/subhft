@@ -13,6 +13,8 @@ logger = structlog.get_logger("observability.latency")
 _VALID_STAGES: frozenset[str] = frozenset({
     "normalize",
     "lob",
+    "lob_only",
+    "lob_process",
     "feature",
     "strategy",
     "risk",

@@ -291,6 +291,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._feature_update_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_quality_flag_metric_children: dict[str, Any] = {}
         self._feature_latency_metric_child = None
+        self._lob_only_latency_metric_child = None
         self._feature_shadow_checks_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_shadow_mismatch_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_set_id_cached = (
@@ -734,6 +735,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         try:
             lob_start_ns = time.perf_counter_ns()
             stats = self.lob.process_event(event)
+            lob_only_duration = time.perf_counter_ns() - lob_start_ns
             feature_update = self._maybe_update_features(event, stats)
             lob_duration = time.perf_counter_ns() - lob_start_ns
             if self.latency and self._md_latency_counter % self._md_latency_sample_every == 0:
@@ -743,6 +745,22 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     trace_id=trace_id,
                     symbol=getattr(event, "symbol", ""),
                 )
+                self.latency.record(
+                    "lob_only",
+                    lob_only_duration,
+                    trace_id=trace_id,
+                    symbol=getattr(event, "symbol", ""),
+                )
+            if self.metrics_registry and self._md_latency_counter % self._md_latency_sample_every == 0:
+                try:
+                    if self._lob_only_latency_metric_child is None and hasattr(
+                        self.metrics_registry, "lob_only_latency_ns"
+                    ):
+                        self._lob_only_latency_metric_child = self.metrics_registry.lob_only_latency_ns
+                    if self._lob_only_latency_metric_child is not None:
+                        self._lob_only_latency_metric_child.observe(lob_only_duration)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("lob_only_latency_observe_failed", error=str(exc))
             if getattr(self, "_trace_sampler", None) is not None:
                 self._emit_trace(
                     "md_event",
@@ -1072,7 +1090,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             self._feature_latency_counter += 1
             self._feature_metrics_counter += 1
             if self.metrics_registry:
-                if self._feature_latency_counter % self._feature_latency_sample_every == 0:
+                if self._md_latency_counter % self._md_latency_sample_every == 0:
                     try:
                         if self._feature_latency_metric_child is None and hasattr(
                             self.metrics_registry, "feature_plane_latency_ns"

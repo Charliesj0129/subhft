@@ -12,6 +12,8 @@ class TestValidStagesAllowlist:
         expected = {
             "normalize",
             "lob",
+            "lob_only",
+            "lob_process",
             "feature",
             "strategy",
             "risk",
