@@ -551,7 +551,8 @@ class HFTSystem:
                 feed_gap_metric = getattr(metrics, "feed_gap_by_symbol_seconds", None)
                 if feed_gap_metric is not None:
                     for symbol, gap in self._get_feed_gaps_by_symbol(self.md_service).items():
-                        feed_gap_metric.labels(symbol=symbol).set(gap)
+                        capped = metrics.cap_symbol(symbol) if metrics else symbol
+                        feed_gap_metric.labels(symbol=capped).set(gap)
 
             except Exception as e:
                 logger.warning("StormGuard update failed", error=str(e))

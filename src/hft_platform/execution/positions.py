@@ -358,18 +358,19 @@ class PositionStore:
             logger.info(
                 "Fill processed",
                 key=key,
-                net_qty=net_qty,
-                pnl=realized_pnl_scaled,
+                net_qty=pos.net_qty,
+                pnl=pos.realized_pnl_scaled,
                 rust=True,
             )
 
         # Update portfolio-level aggregates with O(1) delta
-        _pnl_delta = int(realized_pnl_scaled) - _prev_pnl
+        _pnl_delta = pos.realized_pnl_scaled - _prev_pnl
         self._update_portfolio_aggregates(_pnl_delta)
 
         if self.metrics:
-            self.metrics.position_pnl_realized.labels(strategy=fill.strategy_id, symbol=fill.symbol).set(
-                realized_pnl_scaled
+            _sym = self.metrics.cap_symbol(fill.symbol)
+            self.metrics.position_pnl_realized.labels(strategy=fill.strategy_id, symbol=_sym).set(
+                pos.realized_pnl_scaled
             )
             if hasattr(self.metrics, "portfolio_total_pnl"):
                 self.metrics.portfolio_total_pnl.set(self._total_realized_pnl_scaled)
@@ -380,9 +381,9 @@ class PositionStore:
             account_id=fill.account_id,
             strategy_id=fill.strategy_id,
             symbol=fill.symbol,
-            net_qty=net_qty,
-            avg_price=avg_price_scaled,
-            realized_pnl=realized_pnl_scaled,
+            net_qty=pos.net_qty,
+            avg_price=pos.avg_price_scaled,
+            realized_pnl=pos.realized_pnl_scaled,
             unrealized_pnl=0,
             delta_source="FILL",
         )
@@ -407,7 +408,8 @@ class PositionStore:
 
         # Emit delta / Update PnL Gauge (all values are already scaled integers)
         if self.metrics:
-            self.metrics.position_pnl_realized.labels(strategy=pos.strategy_id, symbol=pos.symbol).set(
+            _sym = self.metrics.cap_symbol(pos.symbol)
+            self.metrics.position_pnl_realized.labels(strategy=pos.strategy_id, symbol=_sym).set(
                 pos.realized_pnl_scaled
             )
             if hasattr(self.metrics, "portfolio_total_pnl"):

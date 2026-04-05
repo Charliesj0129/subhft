@@ -258,8 +258,10 @@ class ReconciliationService:
             # 6b. Emit per-symbol position drift gauge (M5)
             _drift_gauge = getattr(self._metrics(), "position_drift_qty", None)
             if _drift_gauge is not None:
+                _m = self._metrics()
                 for d in discrepancies:
-                    _drift_gauge.labels(strategy="", symbol=d.symbol).set(abs(d.diff))
+                    _capped = _m.cap_symbol(d.symbol) if _m else d.symbol
+                    _drift_gauge.labels(strategy="", symbol=_capped).set(abs(d.diff))
 
             # 7. Duration + success metrics
             duration = time.monotonic() - t0
