@@ -65,6 +65,7 @@ class MetricsRegistry:
                 "order_reject_total",
                 "order_halt_skip_total",
                 "phantom_order_candidates_total",
+                "api_guard_timeout_total",
                 "shadow_orders_total",
                 "shadow_mode_active",
                 "execution_events_total",
@@ -354,10 +355,15 @@ class MetricsRegistry:
         self.order_halt_skip_total = Counter(
             "order_halt_skip_total",
             "Orders skipped in _api_worker because StormGuard transitioned to HALT",
+            ["strategy_id"],
         )
         self.phantom_order_candidates_total = Counter(
             "phantom_order_candidates_total",
             "Timed-out mutating API calls that may have succeeded at broker",
+        )
+        self.api_guard_timeout_total = Counter(
+            "api_guard_timeout_total",
+            "API semaphore guard timeouts (not counted as circuit breaker failures)",
         )
         # Shadow mode metrics
         self.shadow_orders_total = Counter(

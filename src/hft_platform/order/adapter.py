@@ -28,6 +28,7 @@ logger = get_logger("order_adapter")
 
 _PENDING_SENTINEL = object()
 _TERMINAL_BEFORE_REGISTERED = object()
+_GUARD_TIMEOUT = object()
 
 # Operations that mutate broker state and must not be retried if the
 # timed-out attempt might still succeed in the thread pool.
@@ -445,13 +446,19 @@ class OrderAdapter:
         if not _is_halt and self._storm_guard is not None:
             _is_halt = getattr(self._storm_guard, "state", None) == StormGuardState.HALT
         # Constitution: HALT blocks new orders but allows CANCEL/FORCE_FLAT through.
+        # halt_flatten requires conjunction with FORCE_FLAT to prevent spoofing.
         _halt_exempt = (
-            intent.reason == "halt_flatten"
-            or intent.intent_type == IntentType.CANCEL
+            intent.intent_type == IntentType.CANCEL
             or intent.intent_type == IntentType.FORCE_FLAT
+            or self._is_strategy_halt_exempt(intent.strategy_id)
         )
         if _is_halt and not _halt_exempt:
-            await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "StormGuard HALT")
+            await self._add_to_dlq(
+                intent,
+                RejectionReason.VALIDATION_ERROR,
+                "StormGuard HALT",
+                halt_exempt_blocked=self._is_strategy_halt_exempt(intent.strategy_id),
+            )
             return
 
         # Safety-critical intents (CANCEL/FORCE_FLAT) bypass rate limiters and
@@ -518,22 +525,36 @@ class OrderAdapter:
         if not self.running:
             if cmd.created_ns:
                 self._record_queue_latency(cmd)
-            await self._dispatch_to_api(cmd)
-            self._dedup_commit(intent.idempotency_key, True, "OK", cmd.cmd_id)
+            try:
+                await self._dispatch_to_api(cmd)
+                self._dedup_commit(intent.idempotency_key, True, "OK", cmd.cmd_id)
+            except Exception:
+                self._dedup_commit(intent.idempotency_key, False, "dispatch_error", cmd.cmd_id)
             return
-        await self._enqueue_api(cmd)
-        self._dedup_commit(intent.idempotency_key, True, "enqueued", cmd.cmd_id)
+        if await self._enqueue_api(cmd):
+            self._dedup_commit(intent.idempotency_key, True, "enqueued", cmd.cmd_id)
 
     def _dedup_commit(self, key: str, approved: bool, reason_code: str, cmd_id: int) -> None:
         """Commit dedup result if store is active and key is non-empty."""
         if self._dedup_store is not None and key:
             self._dedup_store.commit(key, approved, reason_code, cmd_id)
 
+    def _is_strategy_halt_exempt(self, strategy_id: str) -> bool:
+        """Check if a strategy is halt-exempt via StormGuard."""
+        sg = self._storm_guard
+        if sg is None:
+            return False
+        is_exempt = getattr(sg, "is_halt_exempt", None)
+        if callable(is_exempt):
+            return is_exempt(strategy_id)
+        return strategy_id in getattr(sg, "_halt_exempt_strategies", frozenset())
+
     async def _add_to_dlq(
         self,
         intent: OrderIntent,
         reason: RejectionReason,
         error_message: str,
+        halt_exempt_blocked: bool = False,
     ) -> None:
         """Add a rejected order to the dead letter queue."""
         self._dedup_commit(intent.idempotency_key, False, error_message, 0)
@@ -549,6 +570,7 @@ class OrderAdapter:
                 error_message=error_message,
                 intent_type=str(intent.intent_type.name if hasattr(intent.intent_type, "name") else intent.intent_type),
                 trace_id=getattr(intent, "trace_id", ""),
+                halt_exempt_blocked=halt_exempt_blocked,
             )
         except (TypeError, ValueError, OSError) as e:
             logger.error("Failed to add to DLQ", error=str(e))
@@ -868,7 +890,7 @@ class OrderAdapter:
                     intent=intent,
                     **order_params,
                 )
-                if trade is None:
+                if trade is None or trade is _GUARD_TIMEOUT:
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._pending_order_keys.discard(order_key)
@@ -977,7 +999,7 @@ class OrderAdapter:
                     intent=intent,
                     **order_params,
                 )
-                if trade is None:
+                if trade is None or trade is _GUARD_TIMEOUT:
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._pending_order_keys.discard(order_key)
@@ -1013,7 +1035,7 @@ class OrderAdapter:
                 if target_trade:
                     logger.info("Canceling Order", target=target_key)
                     result = await self._call_api("cancel_order", self.client.cancel_order, target_trade, intent=intent)
-                    if result is None:
+                    if result is None or result is _GUARD_TIMEOUT:
                         return
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
@@ -1039,7 +1061,7 @@ class OrderAdapter:
                         price=price_f,
                         intent=intent,
                     )
-                    if result is None:
+                    if result is None or result is _GUARD_TIMEOUT:
                         return
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
@@ -1054,10 +1076,12 @@ class OrderAdapter:
         else:
             self._emit_trace("order_dispatch_ok", intent, {"cmd_id": int(cmd.cmd_id)})
 
-    async def _enqueue_api(self, cmd: OrderCommand) -> None:
+    async def _enqueue_api(self, cmd: OrderCommand) -> bool:
+        """Enqueue command to API worker. Returns True on success, False if DLQ'd."""
         try:
             self._api_queue.put_nowait(cmd)
             self._emit_trace("order_enqueue_api", cmd.intent, {"cmd_id": int(cmd.cmd_id)})
+            return True
         except asyncio.QueueFull:
             logger.warning(
                 "API queue full - routing to DLQ",
@@ -1068,6 +1092,7 @@ class OrderAdapter:
             self.metrics.order_reject_total.inc()
             self._emit_trace("order_reject", cmd.intent, {"reason": "API_QUEUE_FULL", "cmd_id": int(cmd.cmd_id)})
             await self._add_to_dlq(cmd.intent, RejectionReason.RATE_LIMIT, "API queue full")
+            return False
 
     def submit_typed_command_nowait(self, frame: TypedOrderCommandFrame) -> None:
         """Prototype typed command ingress from GatewayService (avoids early materialization)."""
@@ -1149,8 +1174,9 @@ class OrderAdapter:
                 pending = list(self._api_pending.values())
                 self._api_pending.clear()
                 for item in pending:
-                    _exempt = item.intent.intent_type in (
-                        IntentType.CANCEL, IntentType.FORCE_FLAT,
+                    _exempt = (
+                        item.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                        or self._is_strategy_halt_exempt(item.intent.strategy_id)
                     )
                     _sg_halt = (
                         self._storm_guard is not None
@@ -1164,12 +1190,15 @@ class OrderAdapter:
                             strategy_id=item.intent.strategy_id,
                             intent_type=item.intent.intent_type.name,
                         )
-                        self.metrics.order_halt_skip_total.inc()
+                        self.metrics.order_halt_skip_total.labels(
+                            strategy_id=item.intent.strategy_id,
+                        ).inc()
                         self.metrics.order_reject_total.inc()
                         await self._add_to_dlq(
                             item.intent,
                             RejectionReason.STORMGUARD_HALT,
                             "STORMGUARD_HALT_SKIP",
+                            halt_exempt_blocked=self._is_strategy_halt_exempt(item.intent.strategy_id),
                         )
                         continue
                     try:
@@ -1229,8 +1258,8 @@ class OrderAdapter:
             await asyncio.wait_for(self._api_semaphore.acquire(), timeout=self._api_guard_timeout_s)
         except asyncio.TimeoutError:
             logger.warning("API guard tripped", op=op)
-            self.metrics.order_reject_total.inc()
-            return None
+            self.metrics.api_guard_timeout_total.inc()
+            return _GUARD_TIMEOUT
 
         base_delay_s = 0.01  # 10ms initial backoff
         is_mutating = op in _MUTATING_OPS
