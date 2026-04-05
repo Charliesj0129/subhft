@@ -730,3 +730,63 @@ def test_norm_success_resets_counter(mds_factory):
 
     svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
     assert svc._norm_consecutive_failures == 0
+
+
+def test_norm_recovery_calls_storm_guard_after_escalation(mds_factory):
+    """After escalation (>= threshold failures), recovery calls report_feature_recovery()."""
+    from hft_platform.events import MetaData, TickEvent
+
+    svc = mds_factory()
+    svc.metrics_registry = None
+    svc._NORM_FAILURE_ESCALATE = 50
+    mock_sg = MagicMock()
+    svc._storm_guard = mock_sg
+
+    # Simulate counter at or above the escalation threshold (as if 50 failures happened)
+    svc._norm_consecutive_failures = 50
+
+    # Set up normalizer to succeed this time
+    meta = MetaData(seq=1, source_ts=0, local_ts=0)
+    tick = TickEvent(meta=meta, symbol="2330", price=1000000, volume=1)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.return_value = tick
+    svc.lob = MagicMock()
+    svc.lob.process_event.return_value = None
+    svc._maybe_update_features = MagicMock(return_value=None)
+    svc._publish_events = MagicMock()
+    svc._record_direct = False
+
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+
+    mock_sg.report_feature_recovery.assert_called_once()
+    assert svc._norm_consecutive_failures == 0
+
+
+def test_norm_recovery_not_called_without_prior_escalation(mds_factory):
+    """When failures never reached the threshold, report_feature_recovery() is NOT called on success."""
+    from hft_platform.events import MetaData, TickEvent
+
+    svc = mds_factory()
+    svc.metrics_registry = None
+    svc._NORM_FAILURE_ESCALATE = 50
+    mock_sg = MagicMock()
+    svc._storm_guard = mock_sg
+
+    # Simulate counter below the escalation threshold
+    svc._norm_consecutive_failures = 5
+
+    # Set up normalizer to succeed
+    meta = MetaData(seq=1, source_ts=0, local_ts=0)
+    tick = TickEvent(meta=meta, symbol="2330", price=1000000, volume=1)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.return_value = tick
+    svc.lob = MagicMock()
+    svc.lob.process_event.return_value = None
+    svc._maybe_update_features = MagicMock(return_value=None)
+    svc._publish_events = MagicMock()
+    svc._record_direct = False
+
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+
+    mock_sg.report_feature_recovery.assert_not_called()
+    assert svc._norm_consecutive_failures == 0

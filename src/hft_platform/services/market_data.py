@@ -705,6 +705,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 normalized = self.normalizer.normalize_tick(raw)
             if isinstance(normalized, (TickEvent, BidAskEvent)):
                 event = normalized
+                if self._norm_consecutive_failures >= self._NORM_FAILURE_ESCALATE and self._storm_guard is not None:
+                    try:
+                        self._storm_guard.report_feature_recovery()
+                    except Exception as sg_exc:  # noqa: BLE001
+                        logger.debug("storm_guard_norm_recovery_failed", error=str(sg_exc))
                 self._norm_consecutive_failures = 0
                 if isinstance(event, TickEvent):
                     if self._feed_events_tick_child is not None:

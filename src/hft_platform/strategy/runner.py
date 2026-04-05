@@ -97,6 +97,7 @@ class StrategyRunner:
         "_feature_tuple_source",
         "_feature_staleness_source",
         "_staleness_counter",
+        "_consumer_seq",
         "metrics",
         "latency",
         "_trace_sampler",
@@ -173,6 +174,7 @@ class StrategyRunner:
         self._feature_profile_source = getattr(fe, "active_profile_id", None) if fe else None
         self._feature_tuple_source = getattr(fe, "get_feature_tuple", None) if fe else None
         self._feature_staleness_source = getattr(fe, "last_update_ns", None) if fe else None
+        self._consumer_seq: int = -1  # tracks last-processed bus sequence for drain
         self.metrics = MetricsRegistry.get()
         self._staleness_counter = getattr(self.metrics, "feature_staleness_detected_total", None)
         self.latency = LatencyRecorder.get()
@@ -276,9 +278,11 @@ class StrategyRunner:
                 async for batch in self.bus.consume_batch(batch_size):
                     for event in batch:
                         await self.process_event(event)
+                    self._consumer_seq = self.bus.cursor
             else:
                 async for event in self.bus.consume():
                     await self.process_event(event)
+                    self._consumer_seq = self.bus.cursor
         except asyncio.CancelledError:
             pass
         finally:
@@ -296,16 +300,9 @@ class StrategyRunner:
             (drained, skipped) where *drained* is the number of events processed
             and *skipped* is the number left unprocessed (> 0 only on timeout).
         """
-        bus_cursor = self.bus.cursor
-        # How many events are buffered between current bus position and target?
-        # We read from (bus_cursor - pending + 1) up to target_cursor.
-        # Use a simple polling loop over the buffer directly to avoid creating a
-        # new consume() generator (which registers a signal and blocks waiting).
-        start_seq = bus_cursor - (target_cursor - bus_cursor)
-        # Simpler: just walk from the first unread position.
-        # We don't track the runner's internal consumer cursor here, so we
-        # snapshot target_cursor - 1 as "already read up to" and walk forward.
-        local_seq = bus_cursor  # already consumed up to this point
+        # Start from the last sequence the consumer processed (tracked during run()).
+        # If _consumer_seq is -1 (never consumed), nothing to drain.
+        local_seq = self._consumer_seq
         if local_seq >= target_cursor:
             return 0, 0
 
