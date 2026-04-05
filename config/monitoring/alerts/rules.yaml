@@ -442,6 +442,16 @@ groups:
         description: "WAL disk pressure at CRITICAL or HALT level. Data may be dropped."
         runbook_url: "docs/runbooks/WALDiskPressureCritical.md"
 
+  # Pipeline dual-fault (CH + WAL both failed)
+  - alert: PipelineDataLoss
+    expr: pipeline_health_state >= 3
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Recorder pipeline DATA_LOSS — both ClickHouse and WAL failed"
+        description: "pipeline_health_state has reached DATA_LOSS (3). Market data is being dropped with no persistence path available."
+
   # Event loop lag
   - alert: EventLoopLagHigh
     expr: event_loop_lag_ms > 5
