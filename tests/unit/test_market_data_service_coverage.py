@@ -554,6 +554,53 @@ def test_maybe_update_features_engine_raises():
     assert result is None
 
 
+def test_maybe_update_features_error_counted_without_sampling():
+    """Every FeatureEngine error must increment the metric counter unconditionally.
+
+    The sampling guard (_feature_metrics_sample_every) must NOT gate error
+    counting — errors are rare and losing any count is unacceptable for
+    alerting.  This test triggers N errors where N < sample_every and asserts
+    that the error metric child was incremented exactly N times.
+    """
+    svc, *_ = _make_service()
+
+    # Set up a feature engine that always raises via the fast-path callable.
+    feature_engine = MagicMock()
+    raising_fn = MagicMock(side_effect=RuntimeError("test error"))
+    svc.feature_engine = feature_engine
+    svc._fe_process_lob_update = raising_fn
+
+    # Build a minimal metrics registry with a mock counter.
+    error_child = MagicMock()
+    mock_metric = MagicMock()
+    mock_metric.labels.return_value = error_child
+
+    metrics_registry = MagicMock()
+    metrics_registry.feature_plane_updates_total = mock_metric
+    svc.metrics_registry = metrics_registry
+
+    # Use a sample_every value large enough that the old (broken) code would
+    # never fire the counter within our test loop.
+    sample_every = 100
+    svc._feature_metrics_sample_every = sample_every
+    svc._feature_metrics_counter = 0
+
+    event = SimpleNamespace(symbol="2330", trade_direction=0, meta=None)
+    # stats must be a tuple or LOBStatsEvent to pass isinstance guard in the method.
+    stats = ("lobstats", "2330", 0, 200000, 100, 0.5, 100000, 100100, 500, 500)
+
+    num_errors = 5  # well below sample_every=100
+    for _ in range(num_errors):
+        result = svc._maybe_update_features(event, stats)
+        assert result is None
+
+    # With the fix: error_child.inc() called once per error regardless of sampling.
+    assert error_child.inc.call_count == num_errors, (
+        f"Expected {num_errors} error increments, got {error_child.inc.call_count}. "
+        "Error metrics must NOT be gated by the sampling guard."
+    )
+
+
 def test_maybe_update_features_on_tick_called_for_classified_tick():
     from hft_platform.events import TickEvent
 

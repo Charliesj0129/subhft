@@ -1175,7 +1175,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 {"symbol": getattr(event, "symbol", ""), "reason": str(exc)},
             )
             self._feature_metrics_counter += 1
-            if self.metrics_registry and self._feature_metrics_counter % self._feature_metrics_sample_every == 0:
+            # Error counter is always incremented — errors are rare and must never
+            # be under-counted due to sampling.  Success metrics stay sampled for
+            # performance (high-frequency, cheap to lose occasional sample).
+            if self.metrics_registry:
                 try:
                     if hasattr(self.metrics_registry, "feature_plane_updates_total"):
                         key = ("error", self._feature_set_id_cached)
