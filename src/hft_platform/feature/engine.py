@@ -8,6 +8,7 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.core.timebase import now_ns as _now_ns
 from hft_platform.events import FeatureUpdateEvent, LOBStatsEvent
 from hft_platform.feature.profile import FeatureProfile
 from hft_platform.feature.registry import FeatureRegistry, default_feature_registry
@@ -179,6 +180,7 @@ class FeatureEngine:
         "_alpha_300s",
         "_event_cache",
         "_max_symbols",
+        "_last_update_ns",
     )
 
     def __init__(
@@ -199,6 +201,7 @@ class FeatureEngine:
         self._rust_kernels: dict[str, Any] = {}
         self._rust_pipelines: dict[str, Any] = {}
         self._max_symbols: int = int(os.getenv("HFT_EXPOSURE_MAX_SYMBOLS", "10000"))
+        self._last_update_ns: dict[str, int] = {}
         self._seq = 0
         if emit_events is None:
             emit_events = os.getenv("HFT_FEATURE_ENGINE_EMIT_EVENTS", "1").strip().lower() not in {
@@ -279,6 +282,10 @@ class FeatureEngine:
     def rust_backend_available(self) -> bool:
         return _RUST_LOB_FEATURE_KERNEL_V1 is not None
 
+    def last_update_ns(self, symbol: str) -> int | None:
+        """Return the wall-clock ns timestamp of the last successful update, or None if never updated."""
+        return self._last_update_ns.get(str(symbol))
+
     def has_symbol(self, symbol: str) -> bool:
         return str(symbol) in self._states
 
@@ -286,6 +293,7 @@ class FeatureEngine:
         symbol = str(symbol)
         self._states.pop(symbol, None)
         self._lob_kernel_states.pop(symbol, None)
+        self._last_update_ns.pop(symbol, None)
         kernel = self._rust_kernels.pop(symbol, None)
         if kernel is not None:
             try:
@@ -311,6 +319,7 @@ class FeatureEngine:
         self._lob_kernel_states.clear()
         self._rust_kernels.clear()
         self._rust_pipelines.clear()
+        self._last_update_ns.clear()
 
     def get_feature(self, symbol: str, feature_id: str) -> int | float | None:
         state = self._states.get(str(symbol))
@@ -418,6 +427,8 @@ class FeatureEngine:
                 warm_count=warm_count,
                 quality_flags=qflags,
             )
+
+        self._last_update_ns[symbol] = _now_ns()
 
         if not self._emit_events:
             return None

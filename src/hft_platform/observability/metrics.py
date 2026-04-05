@@ -222,6 +222,8 @@ class MetricsRegistry:
                 "process_raw_error_total",
                 # FeatureEngine → StormGuard escalation
                 "feature_engine_escalation_total",
+                # Feature staleness detection
+                "feature_staleness_detected_total",
             ]
         )
         # Market Data
@@ -847,6 +849,10 @@ class MetricsRegistry:
         self.feature_engine_escalation_total = Counter(
             "feature_engine_escalation_total",
             "FeatureEngine consecutive failure escalations to StormGuard STORM",
+        )
+        self.feature_staleness_detected_total = Counter(
+            "feature_staleness_detected_total",
+            "Times is_feature_stale() returned True (stale or never-updated features)",
         )
         self.contract_refresh_total = Counter(
             "contract_refresh_total",

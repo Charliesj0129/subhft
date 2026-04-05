@@ -1,13 +1,14 @@
 import os
 from abc import ABC
 from decimal import Decimal
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from structlog import get_logger
 
 # Fill/Order Events might be imported from contracts or events
 from hft_platform.contracts.execution import FillEvent, OrderEvent
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
+from hft_platform.core.timebase import now_ns as _now_ns
 from hft_platform.events import BidAskEvent, FeatureUpdateEvent, GapEvent, LOBStatsEvent, TickEvent
 from hft_platform.feature.engine import _StatsTupleProxy
 
@@ -33,6 +34,8 @@ class StrategyContext:
         "_feature_set_source",
         "_feature_profile_source",
         "_feature_tuple_get",
+        "_feature_staleness_source",
+        "_staleness_counter",
         "_publish_sink",
     )
 
@@ -49,6 +52,8 @@ class StrategyContext:
         feature_set_source: Callable[[], str] | None = None,
         feature_profile_source: Callable[[], str | None] | None = None,
         feature_tuple_source: Callable[[str], Optional[tuple]] | None = None,
+        feature_staleness_source: Callable[[str], Optional[int]] | None = None,
+        staleness_counter: Any = None,
         publish_sink: Callable[[str, dict], None] | None = None,
     ):
         self.positions = positions
@@ -62,6 +67,8 @@ class StrategyContext:
         self._feature_set_source = feature_set_source
         self._feature_profile_source = feature_profile_source
         self._feature_tuple_get = feature_tuple_source
+        self._feature_staleness_source = feature_staleness_source
+        self._staleness_counter = staleness_counter
         self._publish_sink = publish_sink
 
     def place_order(
@@ -125,6 +132,22 @@ class StrategyContext:
         if self._feature_source is None:
             return None
         return self._feature_source(symbol, feature_id)
+
+    def is_feature_stale(self, symbol: str, max_age_ns: int) -> bool:
+        """Return True if feature data for *symbol* is older than *max_age_ns* or was never updated."""
+        if self._feature_staleness_source is None:
+            return True
+        ts = self._feature_staleness_source(symbol)
+        if ts is None:
+            stale = True
+        else:
+            stale = (_now_ns() - ts) > max_age_ns
+        if stale and self._staleness_counter is not None:
+            try:
+                self._staleness_counter.inc()
+            except Exception:  # noqa: BLE001
+                pass
+        return stale
 
     def get_feature_view(self, symbol: str) -> Optional[Dict]:
         if self._feature_view_source is None:
@@ -223,7 +246,7 @@ class BaseStrategy(ABC):
     def handle_event(
         self,
         ctx: StrategyContext,
-        event: Union[TickEvent, BidAskEvent, LOBStatsEvent, FeatureUpdateEvent, FillEvent, OrderEvent],
+        event: Union[TickEvent, BidAskEvent, LOBStatsEvent, FeatureUpdateEvent, FillEvent, OrderEvent, "GapEvent"],
     ) -> List[OrderIntent]:
         self.ctx = ctx
         self._generated_intents.clear()
