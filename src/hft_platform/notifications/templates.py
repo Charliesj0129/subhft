@@ -488,6 +488,19 @@ def render_position_recovery(
     return "\n".join(lines)
 
 
+def render_tca_pnl_supplement(*, tca_section: str, pnl_section: str) -> str:
+    """TCA + PnL supplement for the daily report.
+
+    Args:
+        tca_section: Formatted TCA (Transaction Cost Analysis) section text.
+        pnl_section: Formatted PnL breakdown section text.
+
+    Returns:
+        Multi-line formatted TCA and PnL supplement string.
+    """
+    return f"📊 TCA & PnL Supplement\n\n{tca_section}\n\n{pnl_section}"
+
+
 def render_position_recovery_failed(
     *,
     source: str,

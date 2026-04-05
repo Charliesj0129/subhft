@@ -518,6 +518,17 @@ class NotificationDispatcher:
         logger.info("dispatcher.notify_position_recovery", source=source, loaded=loaded)
         await self._sender.send(msg, critical=False)
 
+    async def notify_tca_pnl_supplement(self, *, tca_section: str, pnl_section: str) -> None:
+        """Send the TCA and PnL supplement for the daily report.
+
+        Args:
+            tca_section: Formatted TCA (Transaction Cost Analysis) section text.
+            pnl_section: Formatted PnL breakdown section text.
+        """
+        msg = templates.render_tca_pnl_supplement(tca_section=tca_section, pnl_section=pnl_section)
+        logger.info("dispatcher.notify_tca_pnl_supplement")
+        await self._sender.send(msg, critical=False)
+
     async def notify_position_recovery_failed(
         self,
         *,
