@@ -218,6 +218,8 @@ class MetricsRegistry:
                 "recorder_bridge_drops_total",
                 # Rust-to-Python normalizer fallbacks
                 "rust_fallback_total",
+                # Post-normalization processing errors (LOB/feature/publish)
+                "process_raw_error_total",
             ]
         )
         # Market Data
@@ -596,6 +598,10 @@ class MetricsRegistry:
         self.raw_queue_dropped_total = Counter(
             "raw_queue_dropped_total",
             "Raw queue messages dropped due to backpressure",
+        )
+        self.process_raw_error_total = Counter(
+            "process_raw_error_total",
+            "Post-normalization processing errors (LOB/feature/publish)",
         )
         self.raw_queue_depth = Gauge(
             "raw_queue_depth",

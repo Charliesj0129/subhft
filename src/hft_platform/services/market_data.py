@@ -772,6 +772,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             self._publish_to_redis(event, stats)
         except Exception as exc:
             self._process_raw_error_count += 1
+            if self.metrics_registry:
+                self.metrics_registry.process_raw_error_total.inc()
             logger.error(
                 "process_raw_post_norm_error",
                 symbol=event.symbol,

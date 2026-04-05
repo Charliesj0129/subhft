@@ -494,6 +494,50 @@ def test_process_raw_post_norm_error_publish_failure(mds_factory):
     assert svc._process_raw_error_count == 1  # publish path error
 
 
+def test_process_raw_error_increments_prometheus_metric(mds_factory):
+    """process_raw_error_total Prometheus metric is incremented on post-norm errors."""
+    from hft_platform.events import MetaData, TickEvent
+
+    svc = mds_factory()
+    # Attach a mock metrics_registry with a process_raw_error_total counter
+    mock_registry = MagicMock()
+    svc.metrics_registry = mock_registry
+
+    svc.lob = MagicMock()
+    svc.lob.process_event.side_effect = RuntimeError("LOB kaboom")
+    svc._record_direct = False
+
+    meta = MetaData(seq=1, source_ts=0, local_ts=0)
+    tick = TickEvent(meta=meta, symbol="2330", price=1000000, volume=1)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.return_value = tick
+
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+
+    mock_registry.process_raw_error_total.inc.assert_called_once()
+
+
+def test_process_raw_error_metric_absent_when_no_registry(mds_factory):
+    """No AttributeError when metrics_registry is None and post-norm error occurs."""
+    from hft_platform.events import MetaData, TickEvent
+
+    svc = mds_factory()
+    svc.metrics_registry = None
+
+    svc.lob = MagicMock()
+    svc.lob.process_event.side_effect = RuntimeError("LOB kaboom")
+    svc._record_direct = False
+
+    meta = MetaData(seq=1, source_ts=0, local_ts=0)
+    tick = TickEvent(meta=meta, symbol="2330", price=1000000, volume=1)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.return_value = tick
+
+    # Must not raise, metric path is guarded by if self.metrics_registry
+    svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
+    assert svc._process_raw_error_count == 1
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_record_put_with_tracking_decrements_counter(mds_factory):
