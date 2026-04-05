@@ -21,6 +21,7 @@ from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
+from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.order.shadow import ShadowOrderSink
 
 logger = get_logger("order_adapter")
@@ -102,6 +103,8 @@ class OrderAdapter:
         "_cmd_map_max_size",
         "_mid_price_fn",
         "_storm_guard",
+        "_dedup_store",
+        "_phantom_order_keys",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -174,6 +177,13 @@ class OrderAdapter:
         self.platform_degrade_controller = get_shared_platform_degrade_controller(metrics=self.metrics)
         self.position_store: Any = None
 
+        # Idempotency dedup for non-gateway path (avoid double-dedup when Gateway is active)
+        _gateway_on = os.getenv("HFT_GATEWAY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+        self._dedup_store: IdempotencyStore | None = None if _gateway_on else IdempotencyStore(persist_enabled=False)
+
+        # Phantom order tracking: timed-out mutating calls that may have succeeded at broker
+        self._phantom_order_keys: set[str] = set()
+
         self.load_config()
 
     @property
@@ -184,6 +194,14 @@ class OrderAdapter:
     def metadata(self, value: SymbolMetadata) -> None:
         self._metadata = value
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
+
+    def get_phantom_candidates(self) -> frozenset[str]:
+        """Return a frozen copy of phantom order keys for reconciliation."""
+        return frozenset(self._phantom_order_keys)
+
+    def clear_phantom_candidate(self, key: str) -> None:
+        """Remove a phantom order key after reconciliation confirms resolution."""
+        self._phantom_order_keys.discard(key)
 
     def load_config(self) -> None:
         with open(self.config_path, "r") as f:
@@ -440,6 +458,21 @@ class OrderAdapter:
         # circuit breakers — they must never be blocked during HALT evacuation.
         _safety_exempt = intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
 
+        # Idempotency dedup check (D-01) — skip for safety-exempt and empty keys
+        if not _safety_exempt and self._dedup_store is not None and intent.idempotency_key:
+            existing = self._dedup_store.check_or_reserve(intent.idempotency_key)
+            if existing is not None:
+                logger.warning(
+                    "duplicate_idempotency_key",
+                    key=intent.idempotency_key,
+                    strategy_id=intent.strategy_id,
+                    symbol=intent.symbol,
+                    prior_approved=existing.approved,
+                )
+                self.metrics.order_reject_total.inc()
+                await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "Duplicate idempotency_key")
+                return
+
         # Per-symbol rate limit check (WU-06)
         if not _safety_exempt:
             ps_result = self.per_symbol_rate_limiter.check(intent.symbol)
@@ -486,8 +519,15 @@ class OrderAdapter:
             if cmd.created_ns:
                 self._record_queue_latency(cmd)
             await self._dispatch_to_api(cmd)
+            self._dedup_commit(intent.idempotency_key, True, "OK", cmd.cmd_id)
             return
         await self._enqueue_api(cmd)
+        self._dedup_commit(intent.idempotency_key, True, "enqueued", cmd.cmd_id)
+
+    def _dedup_commit(self, key: str, approved: bool, reason_code: str, cmd_id: int) -> None:
+        """Commit dedup result if store is active and key is non-empty."""
+        if self._dedup_store is not None and key:
+            self._dedup_store.commit(key, approved, reason_code, cmd_id)
 
     async def _add_to_dlq(
         self,
@@ -496,6 +536,7 @@ class OrderAdapter:
         error_message: str,
     ) -> None:
         """Add a rejected order to the dead letter queue."""
+        self._dedup_commit(intent.idempotency_key, False, error_message, 0)
         try:
             await self._dlq.add(
                 order_id=str(intent.intent_id),
@@ -1262,6 +1303,18 @@ class OrderAdapter:
                         )
                         self.metrics.order_reject_total.inc()
                         self.circuit_breaker.record_failure()
+                        # D-03: Track phantom order candidates for reconciliation
+                        if intent is not None:
+                            phantom_key = f"{intent.strategy_id}:{intent.symbol}:{intent.intent_id}"
+                            self._phantom_order_keys.add(phantom_key)
+                            logger.warning(
+                                "phantom_order_candidate",
+                                strategy_id=intent.strategy_id,
+                                symbol=intent.symbol,
+                                op=op,
+                                order_key=phantom_key,
+                            )
+                            self.metrics.phantom_order_candidates_total.inc()
                         if intent and self.latency and intent.source_ts_ns:
                             e2e_ns = timebase.now_ns() - intent.source_ts_ns
                             self.latency.record(

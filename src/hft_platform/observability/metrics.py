@@ -64,6 +64,7 @@ class MetricsRegistry:
                 "order_actions_total",
                 "order_reject_total",
                 "order_halt_skip_total",
+                "phantom_order_candidates_total",
                 "shadow_orders_total",
                 "shadow_mode_active",
                 "execution_events_total",
@@ -227,6 +228,8 @@ class MetricsRegistry:
                 # Strategy timeout circuit breaker
                 "strategy_timeout_total",
                 "strategy_circuit_break_total",
+                # LOB-only split latency (P3b)
+                "lob_only_latency_ns",
             ]
         )
         # Market Data
@@ -351,6 +354,10 @@ class MetricsRegistry:
         self.order_halt_skip_total = Counter(
             "order_halt_skip_total",
             "Orders skipped in _api_worker because StormGuard transitioned to HALT",
+        )
+        self.phantom_order_candidates_total = Counter(
+            "phantom_order_candidates_total",
+            "Timed-out mutating API calls that may have succeeded at broker",
         )
         # Shadow mode metrics
         self.shadow_orders_total = Counter(
@@ -816,6 +823,22 @@ class MetricsRegistry:
         self.feature_plane_latency_ns = Histogram(
             "feature_plane_latency_ns",
             "FeatureEngine processing latency (ns)",
+            buckets=[
+                1_000,
+                5_000,
+                10_000,
+                20_000,
+                50_000,
+                100_000,
+                200_000,
+                500_000,
+                1_000_000,
+                5_000_000,
+            ],
+        )
+        self.lob_only_latency_ns = Histogram(
+            "lob_only_latency_ns",
+            "LOB-only processing latency (ns), excluding FeatureEngine",
             buckets=[
                 1_000,
                 5_000,
