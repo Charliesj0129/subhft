@@ -257,11 +257,10 @@ class TestDlqDrainConcurrentHalt:
         engine._order_dlq.append((cmd3, now))
 
         # _drain_order_dlq calls storm_guard.state per-item in this order:
-        #   1st call: top-level HALT guard (before loop) → NORMAL (proceed to loop)
-        #   2nd call: TOCTOU HALT recheck for cmd1 → NORMAL
-        #   3rd call: STORM check for cmd1 → NORMAL (cmd1 drains successfully)
-        #   4th call: TOCTOU HALT recheck for cmd2 → HALT (triggers mid-drain clear)
-        state_values = [StormGuardState.NORMAL, StormGuardState.NORMAL, StormGuardState.NORMAL, StormGuardState.HALT]
+        #   1st call: top-level >= STORM guard (before loop) → NORMAL (proceed to loop)
+        #   2nd call: in-loop >= STORM recheck for cmd1 → NORMAL (cmd1 drains)
+        #   3rd call: in-loop >= STORM recheck for cmd2 → HALT (triggers mid-drain clear)
+        state_values = [StormGuardState.NORMAL, StormGuardState.NORMAL, StormGuardState.HALT]
 
         with patch.object(
             type(engine.storm_guard),

@@ -488,13 +488,15 @@ class RiskEngine:
         """Drain stale-filtered DLQ entries back into order_queue."""
         if not self._order_dlq:
             return
-        # During HALT, clear all pending DLQ entries — they were approved under
-        # pre-HALT conditions and must not be replayed to the broker.
-        if self.storm_guard.state == StormGuardState.HALT:
+        # During HALT or STORM, clear all pending DLQ entries — they were approved
+        # under pre-escalation conditions and must not be replayed to the broker.
+        if self.storm_guard.state >= StormGuardState.STORM:
             cleared = len(self._order_dlq)
             self._order_dlq.clear()
-            logger.warning("risk_dlq_cleared_during_halt", cleared=cleared)
-            self.metrics.risk_dlq_expired_total.inc(cleared)
+            if cleared > 0:
+                sg_label = "halt" if self.storm_guard.state == StormGuardState.HALT else "storm"
+                logger.warning("risk_dlq_cleared_during_escalation", cleared=cleared, sg_state=sg_label)
+                self.metrics.risk_dlq_expired_total.inc(cleared)
             return
         now_ns = time.monotonic_ns()
         ttl_ns = self._dlq_ttl_ns
@@ -502,12 +504,11 @@ class RiskEngine:
         expired = 0
         while self._order_dlq:
             cmd, enqueued_ns = self._order_dlq[0]
-            # Re-check HALT during drain to prevent commands leaking through
-            # during concurrent HALT transitions (TOCTOU defense-in-depth)
-            if self.storm_guard.state == StormGuardState.HALT:
+            # Re-check escalated state during drain (TOCTOU defense-in-depth)
+            if self.storm_guard.state >= StormGuardState.STORM:
                 cleared = len(self._order_dlq)
                 self._order_dlq.clear()
-                logger.warning("risk_dlq_cleared_during_halt_mid_drain", cleared=cleared)
+                logger.warning("risk_dlq_cleared_during_escalation_mid_drain", cleared=cleared)
                 self.metrics.risk_dlq_expired_total.inc(cleared)
                 break
             # Expire stale entries (DLQ TTL)
@@ -520,13 +521,6 @@ class RiskEngine:
                 self._order_dlq.popleft()
                 expired += 1
                 continue
-            # Reject DLQ entries if StormGuard escalated to STORM since enqueue
-            if self.storm_guard.state >= StormGuardState.STORM:
-                cleared = len(self._order_dlq)
-                self._order_dlq.clear()
-                logger.warning("risk_dlq_cleared_during_storm", cleared=cleared)
-                self.metrics.risk_dlq_expired_total.inc(cleared)
-                break
             # Try to push back to order_queue
             try:
                 self.order_queue.put_nowait(cmd)

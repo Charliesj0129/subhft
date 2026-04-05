@@ -49,8 +49,8 @@ class TestDlqStormStateCheck:
         assert len(engine._order_dlq) == 0
         assert engine.order_queue.empty()
 
-    def test_dlq_cleared_when_halt_state_still_works(self, engine: RiskEngine) -> None:
-        """HALT >= STORM, so HALT should also clear via the STORM check path."""
+    def test_dlq_cleared_via_halt_early_exit(self, engine: RiskEngine) -> None:
+        """HALT >= STORM — caught by the top-level >= STORM early-exit guard."""
         cmd = engine.create_command(_make_intent(1))
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
