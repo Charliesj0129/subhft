@@ -642,7 +642,18 @@ class Batcher:
                     return
         # Successful write (or WAL fallback succeeded) — reset reinject counter
         self._reinject_consecutive_failures = 0
+        row_count = flush_buf.row_count
         flush_buf.clear()
+        # Record flush metrics (must never raise — wrap defensively)
+        if row_count > 0:
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry  # lazy import to avoid circular deps
+
+                m = MetricsRegistry.get()
+                m.recorder_batches_flushed_total.labels(table=self.table_name).inc()
+                m.recorder_rows_flushed_total.labels(table=self.table_name).inc(row_count)
+            except Exception:  # noqa: BLE001
+                pass  # Metrics must never break the recording path
 
     async def _reinject_failed_buffer(self, flush_buf: ColumnarBuffer) -> None:
         """Re-inject failed flush buffer rows back into active for retry.
