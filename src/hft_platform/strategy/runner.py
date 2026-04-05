@@ -140,6 +140,7 @@ class StrategyRunner:
         "_timeout_consecutive",
         "_timeout_broken",
         "_timeout_broken_at_ns",
+        "_default_intent_ttl_ns",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -240,6 +241,9 @@ class StrategyRunner:
                 logger.warning("rust_circuit_breaker_init_failed", error=str(exc))
         # TrackGate: per-event session phase filtering (set externally by SessionGovernor)
         self.track_gate: Any = None  # TrackGate | None
+
+        # Default intent TTL: intents older than this are rejected by RiskEngine TTL check
+        self._default_intent_ttl_ns: int = int(os.getenv("HFT_DEFAULT_INTENT_TTL_MS", "5000")) * 1_000_000
 
         # Timeout circuit breaker: wall-clock protection per strategy
         _timeout_ms = float(os.getenv("HFT_STRATEGY_TIMEOUT_MS", "50"))
@@ -551,7 +555,7 @@ class StrategyRunner:
                 "",
                 str(trace_id or ""),
                 "",
-                0,
+                self._default_intent_ttl_ns,  # ttl_ns
                 0,  # decision_price — populated by StrategyRunner from LOB mid
             )
         return OrderIntent(
@@ -568,6 +572,7 @@ class StrategyRunner:
             source_ts_ns=int(source_ts_ns or 0),
             trace_id=str(trace_id or ""),
             price_type=price_type,
+            ttl_ns=self._default_intent_ttl_ns,
         )
 
     def _scale_price(self, symbol: str, price: int | Decimal) -> int:

@@ -1,11 +1,13 @@
 """Tests for RiskEngine TTL expiry check on OrderIntent."""
 import asyncio
-from unittest.mock import patch
+import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
 from hft_platform.risk.engine import RiskEngine
+from hft_platform.strategy.runner import StrategyRunner
 
 
 def _make_intent(
@@ -140,3 +142,63 @@ class TestTtlExpiry:
         assert feedback.strategy_id == "s1"
         assert feedback.symbol == "2330"
         assert feedback.reason_code == "TTL_EXPIRED"
+
+
+class TestStrategyRunnerDefaultTtl:
+    """Verify StrategyRunner propagates _default_intent_ttl_ns to both intent paths."""
+
+    def _make_runner(self, ttl_ms: str = "3000") -> StrategyRunner:
+        with patch.dict(os.environ, {"HFT_DEFAULT_INTENT_TTL_MS": ttl_ms}):
+            runner = StrategyRunner(
+                bus=MagicMock(),
+                risk_queue=asyncio.Queue(),
+                config_path="dummy",
+            )
+        return runner
+
+    def test_default_ttl_propagated_to_typed_intent(self) -> None:
+        """_intent_factory uses _default_intent_ttl_ns at tuple position [15]."""
+        expected_ttl_ns = 3000 * 1_000_000  # 3000 ms
+        runner = self._make_runner(ttl_ms="3000")
+        assert runner._default_intent_ttl_ns == expected_ttl_ns
+
+        # Force typed fastpath on
+        runner._typed_intent_fastpath = True
+        intent_tuple = runner._intent_factory(
+            strategy_id="s1",
+            symbol="2330",
+            side=1,
+            price=100_0000,
+            qty=1,
+            tif=TIF.ROD,
+            intent_type=IntentType.NEW,
+        )
+
+        assert isinstance(intent_tuple, tuple), "Expected typed tuple on fastpath"
+        assert intent_tuple[0] == "typed_intent_v1"
+        assert intent_tuple[15] == expected_ttl_ns, (
+            f"ttl_ns at position [15] should be {expected_ttl_ns}, got {intent_tuple[15]}"
+        )
+
+    def test_default_ttl_propagated_to_order_intent(self) -> None:
+        """_intent_factory uses _default_intent_ttl_ns on the OrderIntent path."""
+        expected_ttl_ns = 2000 * 1_000_000  # 2000 ms
+        runner = self._make_runner(ttl_ms="2000")
+        assert runner._default_intent_ttl_ns == expected_ttl_ns
+
+        # Force non-fastpath (OrderIntent object)
+        runner._typed_intent_fastpath = False
+        intent = runner._intent_factory(
+            strategy_id="s1",
+            symbol="2330",
+            side=1,
+            price=100_0000,
+            qty=1,
+            tif=TIF.ROD,
+            intent_type=IntentType.NEW,
+        )
+
+        assert isinstance(intent, OrderIntent), "Expected OrderIntent on non-fastpath"
+        assert intent.ttl_ns == expected_ttl_ns, (
+            f"intent.ttl_ns should be {expected_ttl_ns}, got {intent.ttl_ns}"
+        )
