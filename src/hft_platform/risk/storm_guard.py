@@ -51,6 +51,7 @@ class StormGuard:
         "_session_active",
         "_halt_exempt_strategies",
         "_feature_failure_active",
+        "_feature_failure_storm_ts",
     )
 
     def __init__(
@@ -81,6 +82,7 @@ class StormGuard:
         env_set = frozenset(s.strip() for s in env_exempt.split(",") if s.strip()) if env_exempt else frozenset()
         self._halt_exempt_strategies: frozenset[str] = halt_exempt_strategies or env_set
         self._feature_failure_active: bool = False
+        self._feature_failure_storm_ts: float = 0.0
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -437,10 +439,10 @@ class StormGuard:
         """
         with self._state_lock:
             self._feature_failure_active = True
+            self._feature_failure_storm_ts = time.monotonic()
             if self.state < StormGuardState.STORM:
-                now = time.monotonic()
                 self._de_escalate_count = 0
-                self._storm_entry_ts = now
+                self._storm_entry_ts = self._feature_failure_storm_ts
                 self._transition(
                     StormGuardState.STORM,
                     f"FeatureEngine consecutive failures: {count}",
@@ -454,6 +456,10 @@ class StormGuard:
             consecutive_failures=count,
         )
 
+    _FEATURE_RECOVERY_HOLD_S: float = float(
+        os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5")
+    )
+
     def report_feature_recovery(self) -> None:
         """Clear feature-failure STORM condition after FeatureEngine recovers.
 
@@ -461,9 +467,22 @@ class StormGuard:
         transition back to NORMAL.  If the state is elevated for other reasons
         (e.g. drawdown, latency), leave it alone — the regular ``update()``
         cycle will handle de-escalation.
+
+        Anti-flap: recovery is suppressed if less than
+        ``_FEATURE_RECOVERY_HOLD_S`` seconds have passed since the last
+        feature-failure escalation.
         """
         with self._state_lock:
             if not self._feature_failure_active:
+                return
+            # Anti-flap: hold STORM for a minimum period
+            elapsed = time.monotonic() - self._feature_failure_storm_ts
+            if elapsed < self._FEATURE_RECOVERY_HOLD_S:
+                logger.debug(
+                    "stormguard_feature_recovery_suppressed",
+                    elapsed_s=round(elapsed, 2),
+                    hold_s=self._FEATURE_RECOVERY_HOLD_S,
+                )
                 return
             self._feature_failure_active = False
             # Only de-escalate if we are in STORM (not HALT) and the feature
