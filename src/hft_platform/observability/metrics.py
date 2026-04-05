@@ -920,6 +920,12 @@ class MetricsRegistry:
             "Number of ClickHouse backups currently retained on disk",
         )
 
+        # ── Fill Data Loss (I-09) ─────────────────────────────────────
+        self.exec_fill_data_loss_total = Counter(
+            "exec_fill_data_loss_total",
+            "Fills LOST because WAL writer unavailable and recorder queue full",
+        )
+
         # ── Pipeline Determinism & Async Defense (D1-D8) ─────────────
         self.exec_queue_overflow_total = Counter(
             "exec_queue_overflow_total",

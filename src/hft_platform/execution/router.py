@@ -424,6 +424,16 @@ class ExecutionRouter:
     def _wal_fallback_write(self, topic: str, payload: Any) -> None:
         """WAL write when recorder queue is full. Logs failures via done_callback."""
         if self._wal_writer is None:
+            _symbol = getattr(payload, "symbol", None) if payload is not None else None
+            logger.critical(
+                "fill_data_loss",
+                event_type=topic,
+                symbol=_symbol,
+                reason="wal_writer_none_and_recorder_full",
+            )
+            _loss = getattr(self.metrics, "exec_fill_data_loss_total", None)
+            if _loss is not None:
+                _loss.inc()
             return
         try:
             _wal_fallback = getattr(self.metrics, "recorder_exec_wal_fallback_total", None)
