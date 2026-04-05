@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.execution import FillEvent, Side
+from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus, Side
 from hft_platform.core import timebase
 from hft_platform.execution.normalizer import RawExecEvent
 
@@ -120,3 +120,100 @@ async def test_stop_sets_running_false(router_parts):
     await router.stop()
 
     assert router.running is False
+
+
+# ---------------------------------------------------------------------------
+# M7: order events processed during shutdown drain
+# ---------------------------------------------------------------------------
+
+
+def _make_order_raw(order_id: str = "O001", status: str = "Submitted") -> RawExecEvent:
+    return RawExecEvent(
+        topic="order",
+        data={
+            "ord_no": order_id,
+            "status": {"status": status},
+            "contract": {"code": "2330"},
+            "order": {"action": "Buy", "price": 5_000_000, "quantity": 1},
+        },
+        ingest_ts_ns=timebase.now_ns(),
+    )
+
+
+def _make_order_event(order_id: str = "O001", status: OrderStatus = OrderStatus.SUBMITTED) -> OrderEvent:
+    return OrderEvent(
+        order_id=order_id,
+        strategy_id="s1",
+        symbol="2330",
+        status=status,
+        submitted_qty=1,
+        filled_qty=0,
+        remaining_qty=1,
+        price=5_000_000,
+        side=Side.BUY,
+        ingest_ts_ns=timebase.now_ns(),
+        broker_ts_ns=timebase.now_ns(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_stop_drains_order_events(router_parts):
+    """stop() processes order events remaining in the queue during drain."""
+    router, raw_queue, normalizer, position_store = router_parts
+
+    order_event = _make_order_event("O001", OrderStatus.SUBMITTED)
+    normalizer.normalize_order.return_value = order_event
+    raw_queue.put_nowait(_make_order_raw("O001", "Submitted"))
+
+    drained = await router.stop(drain_timeout_s=1.0)
+
+    assert drained == 1
+    router.bus.publish_nowait.assert_called_once_with(order_event)
+
+
+@pytest.mark.asyncio
+async def test_stop_drain_order_terminal_calls_terminal_handler(router_parts):
+    """stop() calls terminal_handler for terminal-state orders during drain."""
+    router, raw_queue, normalizer, _ = router_parts
+
+    terminal_event = _make_order_event("O002", OrderStatus.FILLED)
+    normalizer.normalize_order.return_value = terminal_event
+    raw_queue.put_nowait(_make_order_raw("O002", "Filled"))
+
+    await router.stop(drain_timeout_s=1.0)
+
+    router.terminal_handler.assert_called_once_with(terminal_event.strategy_id, terminal_event.order_id)
+
+
+@pytest.mark.asyncio
+async def test_stop_drain_order_non_terminal_skips_terminal_handler(router_parts):
+    """stop() does NOT call terminal_handler for non-terminal orders during drain."""
+    router, raw_queue, normalizer, _ = router_parts
+
+    submitted_event = _make_order_event("O003", OrderStatus.SUBMITTED)
+    normalizer.normalize_order.return_value = submitted_event
+    raw_queue.put_nowait(_make_order_raw("O003", "Submitted"))
+
+    await router.stop(drain_timeout_s=1.0)
+
+    router.terminal_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stop_drain_mixed_order_and_fill_events(router_parts):
+    """stop() correctly drains a queue with both order and fill events."""
+    router, raw_queue, normalizer, position_store = router_parts
+
+    order_event = _make_order_event("O004", OrderStatus.SUBMITTED)
+    fill_event = _make_fill("F004")
+    normalizer.normalize_order.return_value = order_event
+    normalizer.normalize_fill.return_value = fill_event
+
+    raw_queue.put_nowait(_make_order_raw("O004", "Submitted"))
+    raw_queue.put_nowait(_make_deal_raw("F004"))
+
+    drained = await router.stop(drain_timeout_s=1.0)
+
+    # Both events count as drained
+    assert drained == 2
+    position_store.on_fill.assert_called_once_with(fill_event)

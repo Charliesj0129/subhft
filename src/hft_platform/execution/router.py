@@ -290,7 +290,28 @@ class ExecutionRouter:
             except _asyncio.QueueEmpty:
                 break
             try:
-                if raw.topic == "deal":
+                if raw.topic == "order":
+                    order_event = self.normalizer.normalize_order(raw)
+                    if order_event:
+                        self._publish_nowait(order_event)
+                        if int(order_event.status) >= 3:
+                            handler = self.terminal_handler
+                            if callable(handler):
+                                result = handler(order_event.strategy_id, order_event.order_id)
+                                if inspect.iscoroutine(result):
+                                    result.close()  # no event loop during drain; discard coroutine
+                            elif hasattr(handler, "on_terminal_state"):
+                                method = handler.on_terminal_state
+                                result = method(order_event.strategy_id, order_event.order_id)
+                                if inspect.iscoroutine(result):
+                                    result.close()
+                        drained += 1
+                        logger.info(
+                            "shutdown_drain_order",
+                            order_id=order_event.order_id,
+                            status=order_event.status,
+                        )
+                elif raw.topic == "deal":
                     fill_event = self.normalizer.normalize_fill(raw)
                     if fill_event:
                         _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)

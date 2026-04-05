@@ -151,7 +151,7 @@ class ExecutionNormalizer:
                 filled_qty=int(order.get("deal_quantity") or order.get("cum_qty") or 0),
                 remaining_qty=int(order.get("quantity") or 0) - int(order.get("deal_quantity") or order.get("cum_qty") or 0),
                 price=price,
-                side=Side.BUY if order.get("action") == "Buy" else Side.SELL,
+                side=Side.BUY if "buy" in str(order.get("action", "")).lower() else Side.SELL,
                 ingest_ts_ns=raw.ingest_ts_ns,
                 broker_ts_ns=self._normalize_ts_ns(exchange_ts),
             )
@@ -218,9 +218,21 @@ class ExecutionNormalizer:
                     side=side.name,
                 )
 
+            raw_account_id = get("account_id")
+            if not raw_account_id:
+                # M8: Missing account_id is dangerous in multi-account/live environments.
+                # Log a warning with context instead of silently using a hardcoded fake account.
+                logger.warning(
+                    "fill_missing_account_id",
+                    fill_id=fill_id,
+                    symbol=sym,
+                )
+                raw_account_id = "unknown"
+            account_id = str(raw_account_id)
+
             return FillEvent(
                 fill_id=fill_id,
-                account_id=str(get("account_id") or "sim-account-01"),
+                account_id=account_id,
                 order_id=str(get("ordno") or get("ord_no") or ""),
                 strategy_id=strategy_id,
                 symbol=sym,

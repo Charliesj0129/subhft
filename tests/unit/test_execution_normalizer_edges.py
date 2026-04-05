@@ -212,3 +212,39 @@ def test_normalize_fill_order_id_map_shapes(tmp_path, monkeypatch, mapping, expe
     )
     event = norm.normalize_fill(raw)
     assert event.strategy_id == expected
+
+
+# ---------------------------------------------------------------------------
+# M6: case-insensitive order side mapping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_side"),
+    [
+        ("Buy", Side.BUY),       # original exact-match case
+        ("buy", Side.BUY),       # lowercase
+        ("BUY", Side.BUY),       # uppercase
+        ("Sell", Side.SELL),
+        ("sell", Side.SELL),
+        ("SELL", Side.SELL),
+        ("", Side.SELL),         # empty → default SELL
+        (None, Side.SELL),       # missing → default SELL
+    ],
+)
+def test_normalize_order_side_case_insensitive(tmp_path, monkeypatch, action, expected_side):
+    """Order side mapping must be case-insensitive, matching fill normalizer behaviour."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer()
+    data: dict = {
+        "ord_no": "O1",
+        "status": {"status": "Submitted"},
+        "contract": {"code": "AAA"},
+        "order": {"price": 1.00, "quantity": 1},
+    }
+    if action is not None:
+        data["order"]["action"] = action
+    raw = RawExecEvent("order", data, time.time_ns())
+    event = norm.normalize_order(raw)
+    assert event is not None
+    assert event.side == expected_side, f"action={action!r} expected {expected_side} got {event.side}"
