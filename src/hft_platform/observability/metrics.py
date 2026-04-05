@@ -87,6 +87,7 @@ class MetricsRegistry:
                 "shioaji_api_jitter_ms",
                 "shioaji_api_jitter_ms_hist",
                 "pipeline_latency_ns",
+                "recorder_schema_init_failed",
                 "recorder_failures_total",
                 "recorder_batches_flushed_total",
                 "recorder_rows_flushed_total",
@@ -464,6 +465,11 @@ class MetricsRegistry:
         self.recorder_direct_drops_total = Counter(
             "recorder_direct_drops_total",
             "Direct-path recorder queue drops in MarketDataService",
+        )
+        # Schema initialization
+        self.recorder_schema_init_failed = Gauge(
+            "recorder_schema_init_failed",
+            "1 if ClickHouse schema initialization failed at startup (WAL-only mode)",
         )
         self.recorder_failures_total = Counter("recorder_failures_total", "Recorder write failures")
         self.recorder_batches_flushed_total = Counter("recorder_batches_flushed_total", "Flushed batches", ["table"])

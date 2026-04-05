@@ -207,6 +207,39 @@ def test_phantom_key_format_is_two_part(tmp_config):
 
 
 @pytest.mark.asyncio
+async def test_deadline_expired_increments_metric(tmp_config):
+    """Expired pre-dispatch orders must increment order_deadline_expired_total."""
+    import time as _time
+
+    adapter = _make_adapter(tmp_config)
+    adapter.metrics.order_deadline_expired_total = MagicMock()
+
+    # Build a command whose deadline is already in the past
+    from hft_platform.contracts.strategy import OrderCommand, StormGuardState
+
+    past_deadline = _time.monotonic_ns() - 1_000_000  # 1 ms in the past
+    cmd = OrderCommand(
+        cmd_id=1,
+        intent=_make_intent(),
+        deadline_ns=past_deadline,
+        storm_guard_state=StormGuardState.NORMAL,
+    )
+    await adapter.order_queue.put(cmd)
+
+    # Run the adapter.run() coroutine briefly — the deadline check lives there
+    run_task = asyncio.create_task(adapter.run())
+    await asyncio.sleep(0.05)
+    adapter.running = False
+    run_task.cancel()
+    try:
+        await asyncio.wait_for(run_task, timeout=2.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass
+
+    adapter.metrics.order_deadline_expired_total.inc.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_phantom_set_eviction_at_max_size(tmp_config):
     """R2-03: Phantom set should evict old entries when exceeding max size."""
     adapter = _make_adapter(tmp_config)

@@ -276,6 +276,10 @@ class OrderAdapter:
                 # Check Deadline
                 if time.monotonic_ns() > cmd.deadline_ns:
                     logger.warning("Order Timeout (Pre-dispatch)", cmd_id=cmd.cmd_id)
+                    try:
+                        self.metrics.order_deadline_expired_total.inc()
+                    except Exception:  # noqa: BLE001
+                        pass
                     self.order_queue.task_done()
                     continue
 
