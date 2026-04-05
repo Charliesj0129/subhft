@@ -12,8 +12,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from hft_platform.options.greeks import AggregatedGreeks, PositionGreeks, portfolio_greeks
+import structlog
+
+from hft_platform.options.greeks import AggregatedGreeks, GreeksResult, PositionGreeks, portfolio_greeks
 from hft_platform.options.surface import VolSurface
+
+logger = structlog.get_logger(__name__)
 
 
 class OptionsLiveAdapter:
@@ -54,10 +58,51 @@ class OptionsLiveAdapter:
     def simulated_greeks_after(self, intent: Any) -> AggregatedGreeks:
         """Return Greeks after a hypothetical order intent.
 
-        Conservative approximation: returns current Greeks unchanged.
-        A full implementation would add the intent's delta contribution.
+        Builds a simulated position list by applying the intent's qty change
+        to the matching symbol, then recomputes aggregated Greeks.
         """
-        return self.current_portfolio_greeks()
+        symbol = getattr(intent, "symbol", None)
+        qty = getattr(intent, "qty", 0)
+        side = getattr(intent, "side", None)
+
+        if not symbol or qty == 0:
+            return self.current_portfolio_greeks()
+
+        # Determine signed qty change
+        side_str = str(side).upper() if side is not None else "BUY"
+        signed_qty = qty if "BUY" in side_str else -qty
+
+        # Look up per-contract Greeks from existing positions
+        per_contract_greeks: GreeksResult | None = None
+        for pos in self._positions:
+            if pos.symbol == symbol:
+                per_contract_greeks = pos.greeks
+                break
+
+        if per_contract_greeks is None:
+            logger.warning(
+                "simulated_greeks_unknown_symbol",
+                symbol=symbol,
+                msg="cannot simulate Greeks for unknown option; returning current portfolio",
+            )
+            return self.current_portfolio_greeks()
+
+        # Build simulated positions: copy existing + adjust the target symbol's qty
+        simulated: list[PositionGreeks] = []
+        found = False
+        for pos in self._positions:
+            if pos.symbol == symbol:
+                new_qty = pos.qty + signed_qty
+                if new_qty != 0:
+                    simulated.append(PositionGreeks(symbol=pos.symbol, qty=new_qty, greeks=pos.greeks))
+                found = True
+            else:
+                simulated.append(pos)
+
+        if not found:
+            simulated.append(PositionGreeks(symbol=symbol, qty=signed_qty, greeks=per_contract_greeks))
+
+        return portfolio_greeks(simulated, self._multiplier)
 
     # ------------------------------------------------------------------
     # Float → int boundary helpers
@@ -105,16 +150,19 @@ class OptionsLiveAdapter:
         self,
         scenarios: list,
         underlying_price: float,
+        max_loss_ntd: float = -500_000.0,
     ) -> tuple[bool, float]:
         """Run scenario stress tests and return worst-case P&L.
 
         Args:
             scenarios:        List of ``ScenarioConfig`` objects.
             underlying_price: Current futures/underlying price.
+            max_loss_ntd:     Maximum acceptable loss in NTD (negative).
+                              Default: −500 000.
 
         Returns:
             ``(within_limit, worst_pnl_ntd)`` where ``within_limit`` is
-            ``True`` when the worst scenario loss is above −500 000 NTD.
+            ``True`` when the worst scenario loss is above ``max_loss_ntd``.
         """
         from hft_platform.risk.stress_test import run_stress_test
 
@@ -128,4 +176,4 @@ class OptionsLiveAdapter:
         if not results:
             return (True, 0.0)
         worst = min(r.pnl_ntd for r in results)
-        return (worst > -500_000, worst)
+        return (worst > max_loss_ntd, worst)

@@ -47,3 +47,38 @@ def test_simulated_greeks_after():
     intent = MagicMock()
     agg = adapter.simulated_greeks_after(intent)
     assert hasattr(agg, "net_delta")
+
+
+def test_simulated_greeks_after_adjusts_delta():
+    """simulated_greeks_after should reflect the intent's position change."""
+    adapter = _make_adapter(net_delta=5.0)
+    intent = MagicMock(symbol="TXO20000D6", qty=5, side="BUY")
+    agg = adapter.simulated_greeks_after(intent)
+    # Current: 10 contracts * 0.5 delta = 5.0. After adding 5 more: 15 * 0.5 = 7.5
+    assert abs(agg.net_delta - 7.5) < 0.01
+
+
+def test_simulated_greeks_after_sell_reduces_delta():
+    """Selling contracts should reduce net delta."""
+    adapter = _make_adapter(net_delta=5.0)
+    intent = MagicMock(symbol="TXO20000D6", qty=5, side="SELL")
+    agg = adapter.simulated_greeks_after(intent)
+    # Current: 10 * 0.5 = 5.0. After selling 5: 5 * 0.5 = 2.5
+    assert abs(agg.net_delta - 2.5) < 0.01
+
+
+def test_simulated_greeks_after_unknown_symbol_returns_current():
+    """Unknown symbol should return current Greeks unchanged."""
+    adapter = _make_adapter(net_delta=5.0)
+    intent = MagicMock(symbol="UNKNOWN_OPT", qty=10, side="BUY")
+    agg = adapter.simulated_greeks_after(intent)
+    assert abs(agg.net_delta - 5.0) < 0.01
+
+
+def test_stress_limit_configurable():
+    """run_stress should accept max_loss_ntd parameter."""
+    import inspect
+
+    adapter = _make_adapter()
+    sig = inspect.signature(adapter.run_stress)
+    assert "max_loss_ntd" in sig.parameters
