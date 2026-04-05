@@ -202,6 +202,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         symbol_metadata: SymbolMetadata | None = None,
         recorder_queue: asyncio.Queue | None = None,
         feature_engine: FeatureEngine | None = None,
+        storm_guard: Any | None = None,
     ):
         self.bus = bus
         # Cache bus method refs to avoid per-tick getattr (DEC-10)
@@ -211,6 +212,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self.client = client
         self.publish_full_events = publish_full_events
         self.recorder_queue = recorder_queue
+        self._storm_guard = storm_guard
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
@@ -1124,6 +1126,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                         pass
             if self._feature_consecutive_failures > 0:
                 self._feature_consecutive_failures = 0
+                if self._storm_guard is not None:
+                    try:
+                        self._storm_guard.report_feature_recovery()
+                    except Exception as sg_exc:
+                        logger.debug("storm_guard_feature_recovery_failed", error=str(sg_exc))
             return feature_update
         except Exception as exc:
             self._emit_trace(
@@ -1154,6 +1161,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     reason=str(exc),
                     consecutive_failures=self._feature_consecutive_failures,
                 )
+                if self._storm_guard is not None:
+                    try:
+                        self._storm_guard.report_feature_failure(self._feature_consecutive_failures)
+                    except Exception as sg_exc:
+                        logger.debug("storm_guard_feature_escalation_failed", error=str(sg_exc))
             else:
                 logger.warning("feature_engine_update_failed", reason=str(exc))
             return None

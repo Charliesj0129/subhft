@@ -50,6 +50,7 @@ class StormGuard:
         "_state_lock",
         "_session_active",
         "_halt_exempt_strategies",
+        "_feature_failure_active",
     )
 
     def __init__(
@@ -79,6 +80,7 @@ class StormGuard:
         env_exempt = os.getenv("HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES", "")
         env_set = frozenset(s.strip() for s in env_exempt.split(",") if s.strip()) if env_exempt else frozenset()
         self._halt_exempt_strategies: frozenset[str] = halt_exempt_strategies or env_set
+        self._feature_failure_active: bool = False
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -424,6 +426,53 @@ class StormGuard:
         spurious STORM transitions during expected inter-session breaks.
         """
         self._session_active = active
+
+    def report_feature_failure(self, count: int) -> None:
+        """Escalate to STORM when FeatureEngine has consecutive failures.
+
+        This is a targeted escalation: it sets ``_feature_failure_active`` so
+        that :meth:`report_feature_recovery` can clear the condition.  If the
+        system is already at STORM or higher for another reason, this is a
+        no-op on state but still marks the feature-failure flag.
+        """
+        with self._state_lock:
+            self._feature_failure_active = True
+            if self.state < StormGuardState.STORM:
+                now = time.monotonic()
+                self._de_escalate_count = 0
+                self._storm_entry_ts = now
+                self._transition(
+                    StormGuardState.STORM,
+                    f"FeatureEngine consecutive failures: {count}",
+                )
+        try:
+            self.metrics.feature_engine_escalation_total.inc()
+        except Exception:
+            pass
+        logger.warning(
+            "stormguard_feature_failure_escalation",
+            consecutive_failures=count,
+        )
+
+    def report_feature_recovery(self) -> None:
+        """Clear feature-failure STORM condition after FeatureEngine recovers.
+
+        If the current state is STORM and the only reason was feature failure,
+        transition back to NORMAL.  If the state is elevated for other reasons
+        (e.g. drawdown, latency), leave it alone — the regular ``update()``
+        cycle will handle de-escalation.
+        """
+        with self._state_lock:
+            if not self._feature_failure_active:
+                return
+            self._feature_failure_active = False
+            # Only de-escalate if we are in STORM (not HALT) and the feature
+            # failure was the cause.  We reset de-escalate count to allow
+            # immediate recovery rather than requiring hysteresis cycles.
+            if self.state == StormGuardState.STORM:
+                self._de_escalate_count = 0
+                self._transition(StormGuardState.NORMAL, "FeatureEngine recovered")
+        logger.info("stormguard_feature_failure_recovered")
 
     def is_safe(self) -> bool:
         return self.state < StormGuardState.HALT

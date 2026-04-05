@@ -220,6 +220,8 @@ class MetricsRegistry:
                 "rust_fallback_total",
                 # Post-normalization processing errors (LOB/feature/publish)
                 "process_raw_error_total",
+                # FeatureEngine → StormGuard escalation
+                "feature_engine_escalation_total",
             ]
         )
         # Market Data
@@ -841,6 +843,10 @@ class MetricsRegistry:
             "feature_profile_compat_failures_total",
             "Strategy/Feature compatibility failures",
             ["strategy", "code"],
+        )
+        self.feature_engine_escalation_total = Counter(
+            "feature_engine_escalation_total",
+            "FeatureEngine consecutive failure escalations to StormGuard STORM",
         )
         self.contract_refresh_total = Counter(
             "contract_refresh_total",

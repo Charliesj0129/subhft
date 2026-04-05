@@ -908,6 +908,7 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
             recorder_queue=recorder_queue,
             feature_engine=feature_engine,
+            storm_guard=storm_guard,
         )
         _broker_codec: BrokerOrderCodec
         if broker_id == "fubon":
