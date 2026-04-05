@@ -215,14 +215,22 @@ class CanaryAutoScheduler:
                 "sessions_live": 0,
             }
 
-        # If live_metrics present, fill in missing fields with fail-safe defaults
+        # If live_metrics present, fill in missing fields with fail-safe defaults.
+        # Use _safe_float/_safe_int to handle explicit None values in YAML
+        # (e.g., ``slippage_bps: null``), which dict.get() returns as None.
+        def _safe_float(val: Any, default: float) -> float:
+            return float(val) if val is not None else default
+
+        def _safe_int(val: Any, default: int) -> int:
+            return int(val) if val is not None else default
+
         metrics: dict[str, Any] = {
-            "slippage_bps": float(stored.get("slippage_bps", _FAILSAFE_SLIPPAGE_BPS)),
-            "drawdown_contribution": float(stored.get("drawdown_contribution", _FAILSAFE_DRAWDOWN)),
-            "execution_error_rate": float(stored.get("execution_error_rate", _FAILSAFE_ERROR_RATE)),
-            "sessions_live": int(stored.get("sessions_live", 0)),
+            "slippage_bps": _safe_float(stored.get("slippage_bps"), _FAILSAFE_SLIPPAGE_BPS),
+            "drawdown_contribution": _safe_float(stored.get("drawdown_contribution"), _FAILSAFE_DRAWDOWN),
+            "execution_error_rate": _safe_float(stored.get("execution_error_rate"), _FAILSAFE_ERROR_RATE),
+            "sessions_live": _safe_int(stored.get("sessions_live"), 0),
         }
-        if "sharpe_live" in stored:
+        if "sharpe_live" in stored and stored["sharpe_live"] is not None:
             metrics["sharpe_live"] = float(stored["sharpe_live"])
 
         return metrics

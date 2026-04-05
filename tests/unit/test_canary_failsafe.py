@@ -90,6 +90,26 @@ class TestCanaryFailsafeMissingLiveMetrics:
         assert metrics["execution_error_rate"] == 1.0
 
 
+    def test_explicit_null_values_use_failsafe(self) -> None:
+        """YAML ``slippage_bps: null`` must not crash with float(None)."""
+        canary: dict = {
+            "alpha_id": "test_alpha",
+            "live_metrics": {
+                "slippage_bps": None,
+                "drawdown_contribution": None,
+                "execution_error_rate": None,
+                "sessions_live": None,
+            },
+        }
+        metrics = CanaryAutoScheduler._build_metrics(canary)
+
+        assert metrics["slippage_bps"] == 999.0
+        assert metrics["drawdown_contribution"] == 1.0
+        assert metrics["execution_error_rate"] == 1.0
+        assert metrics["sessions_live"] == 0
+        assert "sharpe_live" not in metrics
+
+
 class TestCanaryFailsafePartialLiveMetrics:
     """Test fail-safe defaults when live_metrics is present but incomplete."""
 
