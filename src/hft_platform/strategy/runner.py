@@ -744,6 +744,11 @@ class StrategyRunner:
                 if broken_at and (time.monotonic_ns() - broken_at) >= self._timeout_recover_ns:
                     self._timeout_broken[sid_for_timeout] = False
                     self._timeout_consecutive[sid_for_timeout] = 0
+                    if self.metrics:
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid_for_timeout}").set(0)  # normal
+                        except Exception:  # noqa: BLE001
+                            pass
                     logger.info("Strategy timeout circuit breaker recovered", id=sid_for_timeout)
                 else:
                     continue
@@ -904,6 +909,10 @@ class StrategyRunner:
                         _cb_m = getattr(self.metrics, "strategy_circuit_break_total", None)
                         if _cb_m is not None:
                             _cb_m.labels(strategy_name=_timeout_sid).inc()
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{_timeout_sid}").set(2)  # halted
+                        except Exception:  # noqa: BLE001
+                            pass
                     logger.warning(
                         "Strategy timeout circuit breaker activated",
                         id=_timeout_sid,

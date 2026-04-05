@@ -252,3 +252,53 @@ async def test_timeout_metrics_incremented(make_runner, mock_metrics):
     mock_metrics.strategy_circuit_break_total.labels.assert_called_with(strategy_name="slow_one")
     cb_counter = mock_metrics.strategy_circuit_break_total.labels.return_value
     assert cb_counter.inc.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_timeout_cb_activation_emits_circuit_breaker_state(make_runner, mock_metrics):
+    """When timeout CB activates, circuit_breaker_state gauge is set to 2 (halted)."""
+    runner = make_runner()
+    slow_strat = _FakeStrategy(sid="slow_one", delay_ns=5_000_000)
+    runner.register(slow_strat)
+
+    # Trigger 3 consecutive timeouts to activate the circuit breaker
+    for _ in range(3):
+        await runner.process_event(_make_event())
+
+    assert runner._timeout_broken.get("slow_one") is True
+
+    # circuit_breaker_state should have been set to 2 (halted) for the timeout CB
+    mock_metrics.circuit_breaker_state.labels.assert_called_with(component="runner:slow_one")
+    cb_gauge = mock_metrics.circuit_breaker_state.labels.return_value
+    cb_gauge.set.assert_called_with(2)
+
+
+@pytest.mark.asyncio
+async def test_timeout_cb_recovery_emits_circuit_breaker_state(make_runner, mock_metrics):
+    """When timeout CB recovers, circuit_breaker_state gauge is reset to 0 (normal)."""
+    runner = make_runner()
+    slow_strat = _FakeStrategy(sid="slow_one", delay_ns=5_000_000)
+    runner.register(slow_strat)
+
+    # Activate timeout CB
+    for _ in range(3):
+        await runner.process_event(_make_event())
+    assert runner._timeout_broken.get("slow_one") is True
+
+    # Backdate the broken_at timestamp to simulate recovery window elapsed
+    runner._timeout_broken_at_ns["slow_one"] = time.monotonic_ns() - runner._timeout_recover_ns - 1
+
+    # Make strategy fast so it doesn't re-break immediately
+    slow_strat._delay_ns = 0
+
+    # Reset call tracking on the gauge mock
+    mock_metrics.circuit_breaker_state.labels.reset_mock()
+
+    # Next event triggers recovery
+    await runner.process_event(_make_event())
+    assert runner._timeout_broken.get("slow_one") is False
+
+    # circuit_breaker_state should have been set to 0 (normal) on recovery
+    mock_metrics.circuit_breaker_state.labels.assert_called_with(component="runner:slow_one")
+    cb_gauge = mock_metrics.circuit_breaker_state.labels.return_value
+    cb_gauge.set.assert_called_with(0)
