@@ -226,7 +226,12 @@ class OrderAdapter:
         mono_ns = time.monotonic_ns()  # monotonic clock for deadline comparison
         created_ns = timebase.now_ns()  # epoch wall-clock for TCA / recording
         ttl_ns = int(intent.ttl_ns) if intent.ttl_ns > 0 else 5_000_000_000
-        storm_guard_state = StormGuardState.HALT if intent.reason == "halt_flatten" else StormGuardState.NORMAL
+        # Stamp HALT only for legitimate HaltFlattener intents (FORCE_FLAT + halt_flatten reason)
+        storm_guard_state = (
+            StormGuardState.HALT
+            if intent.reason == "halt_flatten" and intent.intent_type == IntentType.FORCE_FLAT
+            else StormGuardState.NORMAL
+        )
         # TCA: arrival_price = current LOB mid-price (not decision_price)
         if self._mid_price_fn is not None:
             try:

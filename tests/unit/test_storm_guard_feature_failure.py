@@ -146,6 +146,19 @@ class TestReportFeatureRecovery:
         assert result == StormGuardState.STORM
         assert guard.state == StormGuardState.STORM
 
+    def test_feature_failure_prevents_deescalation_all_clear_inputs(self, guard):
+        """_feature_failure_active blocks de-escalation even with ALL inputs at zero."""
+        guard._storm_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
+
+        guard.report_feature_failure(count=10)
+        assert guard.state == StormGuardState.STORM
+
+        # All inputs at zero — would normally return NORMAL
+        result = guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        assert result == StormGuardState.STORM
+        assert guard.state == StormGuardState.STORM
+
     def test_feature_failure_cleared_allows_deescalation_from_warm_range(self, guard):
         """After feature recovery, update() with WARM-range inputs de-escalates to WARM."""
         guard._storm_cooldown_s = 0.0

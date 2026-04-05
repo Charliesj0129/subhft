@@ -12,6 +12,7 @@ from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
+from hft_platform.contracts.strategy import IntentType
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
 from hft_platform.services.heartbeat import write_heartbeat
@@ -518,12 +519,14 @@ class HFTSystem:
                 )
 
                 # 4b. Update StormGuard with LOB-derived drift-burst toxicity.
-                # Feed only the first active book to a single DriftBurstDetector
-                # to avoid cross-symbol contamination (M4 fix).
+                # Feed only the primary symbol to DriftBurstDetector to avoid
+                # cross-symbol contamination (M4 fix). Primary = first subscribed
+                # symbol with an active book. For multi-symbol deployments, consider
+                # per-symbol DriftBurstDetector instances.
                 if hasattr(self.storm_guard, "update_with_lob"):
                     lob_engine = getattr(self.md_service, "lob", None)
                     if lob_engine is not None:
-                        for book in lob_engine.books.values():
+                        for _sym, book in lob_engine.books.items():
                             if book.mid_price_x2 > 0:
                                 self.storm_guard.update_with_lob(
                                     mid_price_x2=book.mid_price_x2,
@@ -531,7 +534,7 @@ class HFTSystem:
                                     imbalance=book.imbalance,
                                     ts=timebase.now_ns(),
                                 )
-                                break  # M4: single detector, feed primary symbol only
+                                break  # single detector: primary symbol only
 
                 # 5. Update per-symbol feed gap metrics
                 feed_gap_metric = getattr(metrics, "feed_gap_by_symbol_seconds", None)
@@ -633,16 +636,19 @@ class HFTSystem:
             # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
                 logger.error("System HALTED by StormGuard - blocking orders")
-                # Drain risk queue — but preserve halt-exempt strategy intents
+                # Drain risk queue — preserve safety orders + halt-exempt intents
                 risk_drained = 0
                 _requeue: list = []
                 while not self.risk_queue.empty():
                     try:
                         item = self.risk_queue.get_nowait()
                         self.risk_queue.task_done()
-                        # Preserve halt-exempt strategy intents for processing
+                        _itype = getattr(item, "intent_type", None)
                         _sid = getattr(item, "strategy_id", None)
-                        if _sid and self.storm_guard.is_halt_exempt(_sid):
+                        # Preserve: CANCEL/FORCE_FLAT (always safe) + halt-exempt strategies
+                        _is_safety = _itype in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                        _is_exempt = bool(_sid) and self.storm_guard.is_halt_exempt(_sid)
+                        if _is_safety or _is_exempt:
                             _requeue.append(item)
                         else:
                             risk_drained += 1
@@ -655,15 +661,29 @@ class HFTSystem:
                         logger.warning("risk_queue_full_requeue_halt_exempt", strategy_id=getattr(item, "strategy_id", "?"))
                 if risk_drained > 0:
                     logger.warning("Drained blocked intents from risk_queue during HALT", count=risk_drained)
-                # Drain order queue to prevent any pending orders from executing
+                # Drain order queue — preserve safety commands + halt-exempt
                 drained_count = 0
+                _cmd_requeue: list = []
                 while not self.order_queue.empty():
                     try:
-                        self.order_queue.get_nowait()
+                        cmd = self.order_queue.get_nowait()
                         self.order_queue.task_done()
-                        drained_count += 1
+                        _intent = getattr(cmd, "intent", None)
+                        _itype = getattr(_intent, "intent_type", None) if _intent else None
+                        _sid = getattr(_intent, "strategy_id", None) if _intent else None
+                        _is_safety = _itype in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                        _is_exempt = bool(_sid) and self.storm_guard.is_halt_exempt(_sid)
+                        if _is_safety or _is_exempt:
+                            _cmd_requeue.append(cmd)
+                        else:
+                            drained_count += 1
                     except asyncio.QueueEmpty:
                         break
+                for cmd in _cmd_requeue:
+                    try:
+                        self.order_queue.put_nowait(cmd)
+                    except asyncio.QueueFull:
+                        logger.warning("order_queue_full_requeue_safety", cmd_id=getattr(cmd, "cmd_id", "?"))
                 if drained_count > 0:
                     logger.warning("Drained blocked orders during HALT", count=drained_count)
                 # Signal order adapter to stop processing

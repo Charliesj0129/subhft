@@ -511,12 +511,23 @@ class StormGuard:
                 return True
             return False
 
+    _MAX_HALT_EXEMPT_STRATEGIES = 50
+
     def grant_halt_exemption(self, strategy_id: str) -> bool:
         """Runtime grant: add halt-exempt status (audit logged).
 
         Thread-safe. Uses frozenset replacement under lock.
+        Returns False if cardinality limit (_MAX_HALT_EXEMPT_STRATEGIES) reached.
         """
         with self._state_lock:
+            if len(self._halt_exempt_strategies) >= self._MAX_HALT_EXEMPT_STRATEGIES:
+                logger.warning(
+                    "halt_exempt_grant_rejected_cardinality",
+                    strategy_id=strategy_id,
+                    current=len(self._halt_exempt_strategies),
+                    limit=self._MAX_HALT_EXEMPT_STRATEGIES,
+                )
+                return False
             self._halt_exempt_strategies = self._halt_exempt_strategies | {strategy_id}
             logger.warning("halt_exempt_granted", strategy_id=strategy_id)
             return True
