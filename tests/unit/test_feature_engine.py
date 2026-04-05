@@ -3,7 +3,7 @@ import pytest
 
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData
 from hft_platform.feature.boundary import event_to_typed_frame, typed_frame_to_event
-from hft_platform.feature.engine import QUALITY_FLAG_OUT_OF_ORDER, QUALITY_FLAG_STATE_RESET, FeatureEngine
+from hft_platform.feature.engine import QUALITY_FLAG_OUT_OF_ORDER, QUALITY_FLAG_STATE_RESET, FeatureEngine, _LobKernelState
 from hft_platform.feature.registry import (
     build_default_lob_feature_set_v1,
     build_default_lob_feature_set_v2,
@@ -765,3 +765,125 @@ class TestSymbolCardinalityGuard:
     def test_default_max_symbols_is_10000(self):
         eng = FeatureEngine()
         assert eng._max_symbols == 10000
+
+
+class TestLobKernelStateHasNan:
+    """Tests for _LobKernelState.has_nan() — NaN/Inf contamination detection."""
+
+    def test_clean_state_returns_false(self):
+        ks = _LobKernelState()
+        assert ks.has_nan() is False
+
+    def test_ofi_l1_ema8_nan_detected(self):
+        ks = _LobKernelState()
+        ks.ofi_l1_ema8 = float("nan")
+        assert ks.has_nan() is True
+
+    def test_spread_ema8_nan_detected(self):
+        ks = _LobKernelState()
+        ks.spread_ema8 = float("nan")
+        assert ks.has_nan() is True
+
+    def test_imbalance_ema8_ppm_nan_detected(self):
+        ks = _LobKernelState()
+        ks.imbalance_ema8_ppm = float("nan")
+        assert ks.has_nan() is True
+
+    def test_iss_ema_ofi_nan_detected(self):
+        """Previously unchecked field: iss_ema_ofi."""
+        ks = _LobKernelState()
+        ks.iss_ema_ofi = float("nan")
+        assert ks.has_nan() is True
+
+    def test_iss_ema_ret_nan_detected(self):
+        ks = _LobKernelState()
+        ks.iss_ema_ret = float("nan")
+        assert ks.has_nan() is True
+
+    def test_iss_ema_ofi2_inf_detected(self):
+        ks = _LobKernelState()
+        ks.iss_ema_ofi2 = float("inf")
+        assert ks.has_nan() is True
+
+    def test_iss_ema_ofi_ret_nan_detected(self):
+        ks = _LobKernelState()
+        ks.iss_ema_ofi_ret = float("nan")
+        assert ks.has_nan() is True
+
+    def test_iss_baseline_ema_nan_detected(self):
+        ks = _LobKernelState()
+        ks.iss_baseline_ema = float("nan")
+        assert ks.has_nan() is True
+
+    def test_mldm_deep_ema_fast_nan_detected(self):
+        ks = _LobKernelState()
+        ks.mldm_deep_ema_fast = float("nan")
+        assert ks.has_nan() is True
+
+    def test_mldm_deep_ema_slow_nan_detected(self):
+        ks = _LobKernelState()
+        ks.mldm_deep_ema_slow = float("nan")
+        assert ks.has_nan() is True
+
+    def test_mldm_output_ema_nan_detected(self):
+        ks = _LobKernelState()
+        ks.mldm_output_ema = float("nan")
+        assert ks.has_nan() is True
+
+    def test_tox_signed_vol_ema_nan_detected(self):
+        ks = _LobKernelState()
+        ks.tox_signed_vol_ema = float("nan")
+        assert ks.has_nan() is True
+
+    def test_tox_total_vol_ema_nan_detected(self):
+        ks = _LobKernelState()
+        ks.tox_total_vol_ema = float("nan")
+        assert ks.has_nan() is True
+
+    def test_agg_ofi_ema5s_nan_detected(self):
+        ks = _LobKernelState()
+        ks.agg_ofi_ema5s = float("nan")
+        assert ks.has_nan() is True
+
+    def test_agg_ofi_ema30s_nan_detected(self):
+        ks = _LobKernelState()
+        ks.agg_ofi_ema30s = float("nan")
+        assert ks.has_nan() is True
+
+    def test_agg_imb_ema5s_nan_detected(self):
+        ks = _LobKernelState()
+        ks.agg_imb_ema5s = float("nan")
+        assert ks.has_nan() is True
+
+    def test_agg_spread_ema30s_nan_detected(self):
+        ks = _LobKernelState()
+        ks.agg_spread_ema30s = float("nan")
+        assert ks.has_nan() is True
+
+    def test_agg_spread_ema300s_nan_detected(self):
+        ks = _LobKernelState()
+        ks.agg_spread_ema300s = float("nan")
+        assert ks.has_nan() is True
+
+    def test_negative_inf_detected(self):
+        ks = _LobKernelState()
+        ks.tox_total_vol_ema = float("-inf")
+        assert ks.has_nan() is True
+
+    def test_engine_resets_symbol_on_nan_in_new_field(self):
+        """Integration: engine resets state when a previously-unguarded field goes NaN."""
+        from unittest.mock import patch, MagicMock
+
+        eng = FeatureEngine()
+        eng.process_lob_stats(_stats(), local_ts_ns=1)
+        # Corrupt a field that was NOT previously guarded
+        ks = eng._lob_kernel_states["2330"]
+        assert ks is not None
+        ks.iss_ema_ofi = float("nan")
+
+        mock_logger = MagicMock()
+        with patch("hft_platform.feature.engine.logger", mock_logger):
+            eng.process_lob_stats(_stats(ts=2), local_ts_ns=2)
+
+        mock_logger.warning.assert_called_once()
+        assert mock_logger.warning.call_args[0][0] == "feature_nan_detected"

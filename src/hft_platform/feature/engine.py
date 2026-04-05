@@ -177,6 +177,33 @@ class _LobKernelState:
     agg_spread_ema30s: float = 0.0
     agg_spread_ema300s: float = 0.0
 
+    def has_nan(self) -> bool:
+        """Check if any float EMA field contains NaN or Inf.
+
+        Hot-path safe: explicit or-chain avoids any per-call allocation or
+        attribute iteration overhead.
+        """
+        return (
+            not math.isfinite(self.ofi_l1_ema8)
+            or not math.isfinite(self.spread_ema8)
+            or not math.isfinite(self.imbalance_ema8_ppm)
+            or not math.isfinite(self.iss_ema_ofi)
+            or not math.isfinite(self.iss_ema_ret)
+            or not math.isfinite(self.iss_ema_ofi2)
+            or not math.isfinite(self.iss_ema_ofi_ret)
+            or not math.isfinite(self.iss_baseline_ema)
+            or not math.isfinite(self.mldm_deep_ema_fast)
+            or not math.isfinite(self.mldm_deep_ema_slow)
+            or not math.isfinite(self.mldm_output_ema)
+            or not math.isfinite(self.tox_signed_vol_ema)
+            or not math.isfinite(self.tox_total_vol_ema)
+            or not math.isfinite(self.agg_ofi_ema5s)
+            or not math.isfinite(self.agg_ofi_ema30s)
+            or not math.isfinite(self.agg_imb_ema5s)
+            or not math.isfinite(self.agg_spread_ema30s)
+            or not math.isfinite(self.agg_spread_ema300s)
+        )
+
 
 class FeatureEngine:
     """Shared LOB-derived feature computation and cache (prototype).
@@ -442,9 +469,7 @@ class FeatureEngine:
             values = self._compute_values(symbol, event, stats_resolved)
             # NaN/Inf contamination guard — reset kernel state if detected
             ks = self._lob_kernel_states.get(symbol)
-            if ks is not None and (
-                not math.isfinite(ks.ofi_l1_ema8) or not math.isfinite(ks.spread_ema8)
-            ):
+            if ks is not None and ks.has_nan():
                 logger.warning("feature_nan_detected", symbol=symbol)
                 self.reset_symbol(symbol)
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
