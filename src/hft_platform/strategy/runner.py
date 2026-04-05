@@ -31,6 +31,8 @@ _RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not 
     "off",
 }
 
+_MAX_INTENTS_PER_EVENT: int = int(os.getenv("HFT_MAX_INTENTS_PER_EVENT", "20"))
+
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
@@ -249,6 +251,9 @@ class StrategyRunner:
         self._timeout_consecutive: dict[str, int] = {}
         self._timeout_broken: dict[str, bool] = {}
         self._timeout_broken_at_ns: dict[str, int] = {}
+
+        # Per-strategy intent flood cap: limits intents submitted per event
+        self._max_intents_per_event: int = int(os.getenv("HFT_MAX_INTENTS_PER_EVENT", "20"))
 
         # Cache for parsed position keys: "pos:strat_id:symbol" → (strat_id, symbol)
         self._position_key_cache: dict[str, tuple[str, str]] = {}
@@ -913,6 +918,14 @@ class StrategyRunner:
                 )
 
             if intents:
+                if len(intents) > self._max_intents_per_event:
+                    logger.warning(
+                        "strategy_intent_flood",
+                        strategy_id=strategy.strategy_id,
+                        intent_count=len(intents),
+                        cap=self._max_intents_per_event,
+                    )
+                    intents = intents[: self._max_intents_per_event]
                 _d7_submitted = 0
                 _d7_dropped = 0
                 for intent in intents:
