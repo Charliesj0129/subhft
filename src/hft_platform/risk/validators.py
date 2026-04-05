@@ -549,7 +549,12 @@ class PerSymbolNotionalValidator(RiskValidator):
 
 
 class StormGuardFSM:
-    """Thin shim that delegates to StormGuard (storm_guard.py)."""
+    """DEPRECATED: Compatibility shim for tests only. Use StormGuard directly.
+
+    This shim wraps StormGuard with a config-dict constructor for backward
+    compatibility with existing tests. It creates a standalone instance —
+    do NOT use in production code (use the shared StormGuard from bootstrap).
+    """
 
     def __init__(self, config: Dict[str, Any]):
         from hft_platform.risk.storm_guard import RiskThresholds, StormGuard

@@ -517,7 +517,9 @@ class HFTSystem:
                     feed_gap_s=feed_gap_s,
                 )
 
-                # 4b. Update StormGuard with LOB-derived drift-burst toxicity
+                # 4b. Update StormGuard with LOB-derived drift-burst toxicity.
+                # Feed only the first active book to a single DriftBurstDetector
+                # to avoid cross-symbol contamination (M4 fix).
                 if hasattr(self.storm_guard, "update_with_lob"):
                     lob_engine = getattr(self.md_service, "lob", None)
                     if lob_engine is not None:
@@ -529,6 +531,7 @@ class HFTSystem:
                                     imbalance=book.imbalance,
                                     ts=timebase.now_ns(),
                                 )
+                                break  # M4: single detector, feed primary symbol only
 
                 # 5. Update per-symbol feed gap metrics
                 feed_gap_metric = getattr(metrics, "feed_gap_by_symbol_seconds", None)
@@ -630,15 +633,26 @@ class HFTSystem:
             # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
                 logger.error("System HALTED by StormGuard - blocking orders")
-                # Drain risk queue first to prevent new OrderCommands from being created
+                # Drain risk queue — but preserve halt-exempt strategy intents
                 risk_drained = 0
+                _requeue: list = []
                 while not self.risk_queue.empty():
                     try:
-                        self.risk_queue.get_nowait()
+                        item = self.risk_queue.get_nowait()
                         self.risk_queue.task_done()
-                        risk_drained += 1
+                        # Preserve halt-exempt strategy intents for processing
+                        _sid = getattr(item, "strategy_id", None)
+                        if _sid and self.storm_guard.is_halt_exempt(_sid):
+                            _requeue.append(item)
+                        else:
+                            risk_drained += 1
                     except asyncio.QueueEmpty:
                         break
+                for item in _requeue:
+                    try:
+                        self.risk_queue.put_nowait(item)
+                    except asyncio.QueueFull:
+                        logger.warning("risk_queue_full_requeue_halt_exempt", strategy_id=getattr(item, "strategy_id", "?"))
                 if risk_drained > 0:
                     logger.warning("Drained blocked intents from risk_queue during HALT", count=risk_drained)
                 # Drain order queue to prevent any pending orders from executing
@@ -665,6 +679,11 @@ class HFTSystem:
                     asyncio.create_task(self.order_adapter.drain_and_cancel())
                 except Exception as exc:
                     logger.warning("In-flight order cancellation failed during HALT", error=str(exc))
+            else:
+                # Fix H5: Recover GatewayPolicy from sticky HALT when StormGuard
+                # de-escalates. set_normal() is idempotent, safe to call repeatedly.
+                if self.gateway_service is not None:
+                    self.gateway_service.set_normal()
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""

@@ -62,14 +62,22 @@ class TestReportFeatureFailure:
 class TestReportFeatureRecovery:
     """report_feature_recovery() clears feature-failure STORM."""
 
-    def test_recovers_to_normal_from_feature_storm(self, guard):
+    def test_recovery_clears_flag_without_transitioning(self, guard):
+        """report_feature_recovery() clears the flag but does NOT transition.
+        The next update() cycle handles de-escalation."""
         guard.report_feature_failure(count=10)
         assert guard.state == StormGuardState.STORM
         # Bypass anti-flap hold time
         guard._feature_failure_storm_ts -= 10.0
         guard.report_feature_recovery()
-        assert guard.state == StormGuardState.NORMAL
+        # Flag cleared, but state stays STORM until update() handles it
         assert guard._feature_failure_active is False
+        assert guard.state == StormGuardState.STORM
+        # update() with clear inputs de-escalates via hysteresis
+        guard._storm_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
+        guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
+        assert guard.state == StormGuardState.NORMAL
 
     def test_noop_when_no_feature_failure_active(self, guard):
         # Transition to STORM via other means
@@ -96,9 +104,9 @@ class TestReportFeatureRecovery:
         assert guard._feature_failure_active is False
 
 
-    def test_dual_cause_storm_recovery_does_not_clear_other_cause(self, guard):
+    def test_dual_cause_storm_recovery_preserves_other_cause(self, guard):
         """If latency AND feature failure both cause STORM, feature recovery
-        should NOT clear STORM — the latency condition is still active."""
+        clears the flag but state remains STORM (latency still active)."""
         # Latency causes STORM first
         guard.update(latency_us=25000)
         assert guard.state == StormGuardState.STORM
@@ -113,10 +121,9 @@ class TestReportFeatureRecovery:
 
         # Feature recovers — but latency is still elevated
         guard.report_feature_recovery()
-        # The flag is cleared and state transitions to NORMAL...
-        # This is a known limitation: the next update() cycle (1s) will
-        # re-escalate from latency. Documenting the behavior.
         assert guard._feature_failure_active is False
+        # State MUST remain STORM — latency condition is still active
+        assert guard.state == StormGuardState.STORM
 
     def test_recovery_suppressed_during_hold_period(self, guard):
         """Anti-flap: recovery within _FEATURE_RECOVERY_HOLD_S is suppressed."""
@@ -131,10 +138,11 @@ class TestReportFeatureRecovery:
         # Advance past hold time
         guard._feature_failure_storm_ts -= 10.0
 
-        # Now recovery should succeed
+        # Now recovery clears the flag (but does not transition)
         guard.report_feature_recovery()
-        assert guard.state == StormGuardState.NORMAL
         assert guard._feature_failure_active is False
+        # State stays STORM — update() handles de-escalation
+        assert guard.state == StormGuardState.STORM
 
 
 class TestMarketDataServiceFeatureEscalation:
@@ -229,6 +237,12 @@ class TestMarketDataServiceFeatureEscalation:
         # Bypass anti-flap hold time so recovery can proceed
         guard._feature_failure_storm_ts -= 10.0
 
-        # Next call succeeds → recovery
+        # Next call succeeds → flag cleared (state stays STORM until update())
         mds._maybe_update_features(event, stats)
+        assert guard._feature_failure_active is False
+        assert guard.state == StormGuardState.STORM
+        # update() with clear inputs de-escalates via hysteresis
+        guard._storm_cooldown_s = 0.0
+        guard._de_escalate_threshold = 1
+        guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
         assert guard.state == StormGuardState.NORMAL

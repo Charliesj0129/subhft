@@ -408,7 +408,10 @@ class RiskEngine:
 
                 if decision.approved:
                     cmd = self.create_command(decision.intent)
-                    _is_safety_order = cmd.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                    _is_safety_order = (
+                        cmd.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                        or self._is_halt_exempt(intent.strategy_id)
+                    )
                     if self.storm_guard.state == StormGuardState.HALT and not _is_safety_order:
                         logger.warning(
                             "risk_engine_blocked_by_halt",
@@ -690,6 +693,14 @@ class RiskEngine:
         )
         self._emit_trace("risk_command", intent, {"cmd_id": int(cmd_id), "deadline_ns": int(deadline)})
         return cmd
+
+    def _is_halt_exempt(self, strategy_id: str) -> bool:
+        """Check if a strategy is halt-exempt via StormGuard."""
+        sg = self.storm_guard
+        is_exempt = getattr(sg, "is_halt_exempt", None)
+        if callable(is_exempt):
+            return is_exempt(strategy_id)
+        return strategy_id in getattr(sg, "_halt_exempt_strategies", frozenset())
 
     def _emit_reject_metric(self, strategy_id: str, reason: str) -> None:
         metrics = self.metrics

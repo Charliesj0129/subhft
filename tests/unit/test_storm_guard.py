@@ -501,3 +501,133 @@ def test_env_var_halt_exempt_strategies():
         with patch.dict("os.environ", {"HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES": "spike_fader,event_momentum"}):
             g = StormGuard()
     assert g._halt_exempt_strategies == frozenset({"spike_fader", "event_momentum"})
+
+
+# ── is_halt_exempt public API ──────────────────────────────────────────────
+
+
+def test_is_halt_exempt_returns_true_for_exempt(exempt_guard):
+    """is_halt_exempt returns True for registered strategy."""
+    assert exempt_guard.is_halt_exempt("spike_fader") is True
+
+
+def test_is_halt_exempt_returns_false_for_non_exempt(exempt_guard):
+    """is_halt_exempt returns False for unregistered strategy."""
+    assert exempt_guard.is_halt_exempt("cbs_tmfd6") is False
+
+
+def test_is_halt_exempt_empty_guard(guard):
+    """is_halt_exempt returns False when no strategies are exempt."""
+    assert guard.is_halt_exempt("any_strategy") is False
+
+
+# ── revoke_halt_exemption runtime kill switch ──────────────────────────────
+
+
+def test_revoke_halt_exemption_removes_strategy(exempt_guard):
+    """Revoking an exempt strategy removes it from the set."""
+    assert exempt_guard.is_halt_exempt("spike_fader") is True
+    result = exempt_guard.revoke_halt_exemption("spike_fader")
+    assert result is True
+    assert exempt_guard.is_halt_exempt("spike_fader") is False
+
+
+def test_revoke_halt_exemption_returns_false_for_unknown(exempt_guard):
+    """Revoking a non-exempt strategy returns False."""
+    result = exempt_guard.revoke_halt_exemption("unknown_strategy")
+    assert result is False
+
+
+def test_revoke_halt_exemption_blocks_previously_exempt_orders(exempt_guard):
+    """After revocation, previously exempt strategy is blocked during HALT."""
+    exempt_guard.trigger_halt("test")
+    # Before revocation: exempt
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
+    )
+    assert ok
+    assert reason == "HALT_EXEMPT"
+
+    # Revoke
+    exempt_guard.revoke_halt_exemption("spike_fader")
+
+    # After revocation: blocked
+    ok, reason = exempt_guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
+    )
+    assert not ok
+    assert reason == "STORMGUARD_HALT"
+
+
+# ── grant_halt_exemption ──────────────────────────────────────────────────
+
+
+def test_grant_halt_exemption_adds_strategy(guard):
+    """Granting exemption allows strategy through HALT."""
+    guard.trigger_halt("test")
+    # Before grant: blocked
+    ok, _ = guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "new_mm")
+    )
+    assert not ok
+
+    # Grant
+    result = guard.grant_halt_exemption("new_mm")
+    assert result is True
+    assert guard.is_halt_exempt("new_mm") is True
+
+    # After grant: allowed
+    ok, reason = guard.validate(
+        _make_intent_with_strategy(IntentType.NEW, "new_mm")
+    )
+    assert ok
+    assert reason == "HALT_EXEMPT"
+
+
+def test_grant_halt_exemption_idempotent(guard):
+    """Granting exemption twice is safe."""
+    guard.grant_halt_exemption("mm_strategy")
+    guard.grant_halt_exemption("mm_strategy")
+    assert guard.is_halt_exempt("mm_strategy") is True
+
+
+# ── report_feature_recovery does NOT transition (Fix 4) ───────────────────
+
+
+def test_feature_recovery_does_not_transition_when_other_storm_active(guard):
+    """Feature recovery only clears flag; does not de-escalate if other
+    STORM conditions (latency) are still active."""
+    # Latency causes STORM
+    guard.update(latency_us=25000)
+    assert guard.state == StormGuardState.STORM
+
+    # Feature failure also fires (state already STORM)
+    guard.report_feature_failure(count=10)
+    assert guard._feature_failure_active is True
+
+    # Bypass anti-flap hold
+    guard._feature_failure_storm_ts -= 10.0
+
+    # Feature recovers — but latency is still elevated
+    guard.report_feature_recovery()
+    assert guard._feature_failure_active is False
+    # State MUST remain STORM (latency still elevated)
+    assert guard.state == StormGuardState.STORM
+
+
+def test_feature_recovery_clears_flag_only(guard):
+    """Feature recovery only clears the flag; next update() handles state."""
+    guard.report_feature_failure(count=10)
+    assert guard.state == StormGuardState.STORM
+    guard._feature_failure_storm_ts -= 10.0
+
+    guard.report_feature_recovery()
+    assert guard._feature_failure_active is False
+    # State is still STORM until update() clears it
+    assert guard.state == StormGuardState.STORM
+
+    # Now update() with clear inputs de-escalates via hysteresis
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
+    assert guard.state == StormGuardState.NORMAL

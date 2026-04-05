@@ -1023,7 +1023,7 @@ class SystemBootstrapper:
             exposure_store = ExposureStore()
             dedup_store = IdempotencyStore()
             dedup_store.load()
-            gateway_policy = GatewayPolicy()
+            gateway_policy = GatewayPolicy(storm_guard=storm_guard)
             gateway_service = GatewayService(
                 channel=intent_channel,
                 risk_engine=risk_engine,

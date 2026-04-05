@@ -139,6 +139,16 @@ groups:
         description: "Strategy {{ $labels.strategy }} hit HALT threshold."
         runbook_url: "docs/runbooks/StormGuardHalt.md"
 
+  - alert: StormGuardHaltStuck
+    expr: stormguard_mode == 3
+    for: 5m
+    labels:
+        severity: critical
+    annotations:
+        summary: "StormGuard stuck in HALT for >5 minutes"
+        description: "StormGuard has been in HALT state for over 5 minutes. Manual intervention may be required."
+        runbook_url: "docs/runbooks/StormGuardHalt.md"
+
   - alert: HighRejectRate
     expr: rate(order_reject_total[1m]) / (rate(order_actions_total[1m]) + 1) > 0.1
     for: 1m

@@ -256,10 +256,13 @@ class GatewayService:
             )
             return
 
-        # Step 2: Policy gate
+        # Step 2: Policy gate (pass strategy_id for halt-exempt awareness)
         sg_state = self._storm_guard.state
+        _strategy_id = str(getattr(intent, "strategy_id", ""))
         if is_typed_view and hasattr(self._policy, "gate_typed"):
-            allowed, reason = self._policy.gate_typed(intent_type_value, sg_state)
+            allowed, reason = self._policy.gate_typed(
+                intent_type_value, sg_state, strategy_id=_strategy_id,
+            )
         else:
             allowed, reason = self._policy.gate(intent, sg_state)
         if not allowed:

@@ -57,6 +57,7 @@ class DeadLetterEntry:
     metadata: Dict[str, Any] = field(default_factory=dict)
     retry_count: int = 0
     trace_id: str = ""
+    halt_exempt_blocked: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -114,6 +115,7 @@ class DeadLetterQueue:
         intent_type: str = "NEW",
         metadata: Optional[Dict[str, Any]] = None,
         trace_id: str = "",
+        halt_exempt_blocked: bool = False,
     ) -> None:
         """Add a rejected order to the dead letter queue."""
         entry = DeadLetterEntry(
@@ -129,6 +131,7 @@ class DeadLetterQueue:
             intent_type=intent_type,
             metadata=metadata or {},
             trace_id=trace_id,
+            halt_exempt_blocked=halt_exempt_blocked,
         )
 
         async with self._lock:

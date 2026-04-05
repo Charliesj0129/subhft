@@ -413,8 +413,41 @@ async def test_storm_guard_halt_rejects_to_dlq(adapter):
 
 
 @pytest.mark.asyncio
-async def test_storm_guard_halt_allows_halt_flatten_order(adapter):
-    """halt_flatten orders bypass the StormGuard HALT check and proceed normally."""
+async def test_storm_guard_halt_allows_halt_flatten_force_flat_order(adapter):
+    """FORCE_FLAT halt_flatten orders bypass the StormGuard HALT check (legitimate HaltFlattener path)."""
+    from hft_platform.contracts.strategy import OrderIntent
+
+    intent = OrderIntent(
+        intent_id=2,
+        strategy_id="s1",
+        symbol="2330",
+        intent_type=IntentType.FORCE_FLAT,
+        side=Side.SELL,
+        price=5_000_000,
+        qty=10,
+        reason="halt_flatten",
+    )
+    now = timebase.now_ns()
+    cmd = OrderCommand(
+        cmd_id=2,
+        intent=intent,
+        deadline_ns=now + 10_000_000_000,
+        storm_guard_state=StormGuardState.HALT,
+        created_ns=now,
+    )
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    # Should NOT be DLQ'd — should be dispatched (FORCE_FLAT bypasses HALT)
+    adapter._dlq.add.assert_not_awaited()
+    adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+@pytest.mark.asyncio
+async def test_storm_guard_halt_blocks_new_with_halt_flatten_reason(adapter):
+    """NEW orders with reason='halt_flatten' should be blocked (spoof prevention)."""
     from hft_platform.contracts.strategy import OrderIntent
 
     intent = OrderIntent(
@@ -440,9 +473,8 @@ async def test_storm_guard_halt_allows_halt_flatten_order(adapter):
 
     await adapter.execute(cmd)
 
-    # Should NOT be DLQ'd — should be dispatched
-    adapter._dlq.add.assert_not_awaited()
-    adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+    # Should be DLQ'd — NEW with reason=halt_flatten is no longer a bypass
+    adapter._dlq.add.assert_awaited_once()
 
 
 # --- 19. StormGuard HALT allows CANCEL orders ---

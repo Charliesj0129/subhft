@@ -461,12 +461,13 @@ class StormGuard:
     )
 
     def report_feature_recovery(self) -> None:
-        """Clear feature-failure STORM condition after FeatureEngine recovers.
+        """Clear feature-failure flag after FeatureEngine recovers.
 
-        If the current state is STORM and the only reason was feature failure,
-        transition back to NORMAL.  If the state is elevated for other reasons
-        (e.g. drawdown, latency), leave it alone — the regular ``update()``
-        cycle will handle de-escalation.
+        Does NOT transition state directly — the next ``update()`` cycle will
+        re-evaluate all conditions (latency, drawdown, feed gap) and
+        de-escalate only if ALL reasons have cleared.  This prevents the bug
+        where feature recovery incorrectly de-escalates STORM caused by
+        multiple concurrent conditions.
 
         Anti-flap: recovery is suppressed if less than
         ``_FEATURE_RECOVERY_HOLD_S`` seconds have passed since the last
@@ -485,13 +486,35 @@ class StormGuard:
                 )
                 return
             self._feature_failure_active = False
-            # Only de-escalate if we are in STORM (not HALT) and the feature
-            # failure was the cause.  We reset de-escalate count to allow
-            # immediate recovery rather than requiring hysteresis cycles.
-            if self.state == StormGuardState.STORM:
-                self._de_escalate_count = 0
-                self._transition(StormGuardState.NORMAL, "FeatureEngine recovered")
-        logger.info("stormguard_feature_failure_recovered")
+            # Don't transition — let update() handle de-escalation so that
+            # other active STORM conditions (latency, drawdown) are respected.
+        logger.info("feature_engine_recovered_flag_cleared")
+
+    def is_halt_exempt(self, strategy_id: str) -> bool:
+        """Public API: check if a strategy is halt-exempt."""
+        return strategy_id in self._halt_exempt_strategies
+
+    def revoke_halt_exemption(self, strategy_id: str) -> bool:
+        """Runtime kill switch: revoke halt-exempt status for a strategy.
+
+        Thread-safe. Uses frozenset replacement under lock.
+        """
+        with self._state_lock:
+            if strategy_id in self._halt_exempt_strategies:
+                self._halt_exempt_strategies = self._halt_exempt_strategies - {strategy_id}
+                logger.warning("halt_exempt_revoked", strategy_id=strategy_id)
+                return True
+            return False
+
+    def grant_halt_exemption(self, strategy_id: str) -> bool:
+        """Runtime grant: add halt-exempt status (audit logged).
+
+        Thread-safe. Uses frozenset replacement under lock.
+        """
+        with self._state_lock:
+            self._halt_exempt_strategies = self._halt_exempt_strategies | {strategy_id}
+            logger.warning("halt_exempt_granted", strategy_id=strategy_id)
+            return True
 
     def is_safe(self) -> bool:
         return self.state < StormGuardState.HALT
