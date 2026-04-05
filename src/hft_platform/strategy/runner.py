@@ -141,6 +141,7 @@ class StrategyRunner:
         "_timeout_broken",
         "_timeout_broken_at_ns",
         "_default_intent_ttl_ns",
+        "_rejection_sink",
         "__dict__",  # needed for test monkey-patching
     )
 
