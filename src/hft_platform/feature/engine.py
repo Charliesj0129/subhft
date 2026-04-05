@@ -15,6 +15,14 @@ from hft_platform.feature.registry import FeatureRegistry, default_feature_regis
 
 logger = get_logger("feature.engine")
 
+
+def _safe_int_round(val: float, default: int = 0) -> int:
+    """Convert float to int, returning default if NaN/Inf."""
+    if not math.isfinite(val):
+        return default
+    return int(round(val))
+
+
 try:
     try:
         _rust_core = importlib.import_module("hft_platform.rust_core")
@@ -432,6 +440,13 @@ class FeatureEngine:
             values, changed_mask, warmup_ready_mask = fused
         else:
             values = self._compute_values(symbol, event, stats_resolved)
+            # NaN/Inf contamination guard — reset kernel state if detected
+            ks = self._lob_kernel_states.get(symbol)
+            if ks is not None and (
+                not math.isfinite(ks.ofi_l1_ema8) or not math.isfinite(ks.spread_ema8)
+            ):
+                logger.warning("feature_nan_detected", symbol=symbol)
+                self.reset_symbol(symbol)
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
             warmup_ready_mask = self._compute_warmup_ready_mask(warm_count, symbol)
         qflags = int(self._quality_flags_next.pop(symbol, 0))
@@ -522,8 +537,8 @@ class FeatureEngine:
             ofi_l1_ema8 = 0
             ks.spread_ema8 = float(spread_scaled)
             ks.imbalance_ema8_ppm = float(l1_imbalance_ppm)
-            spread_ema8_scaled = int(round(ks.spread_ema8))
-            depth_imbalance_ema8_ppm = int(round(ks.imbalance_ema8_ppm))
+            spread_ema8_scaled = _safe_int_round(ks.spread_ema8)
+            depth_imbalance_ema8_ppm = _safe_int_round(ks.imbalance_ema8_ppm)
             # v3 EMA seed values
             ks.agg_ofi_ema5s = 0.0
             ks.agg_ofi_ema30s = 0.0
@@ -554,9 +569,9 @@ class FeatureEngine:
             ks.spread_ema8 = (1.0 - alpha) * ks.spread_ema8 + alpha * float(spread_scaled)
             ks.imbalance_ema8_ppm = (1.0 - alpha) * ks.imbalance_ema8_ppm + alpha * float(l1_imbalance_ppm)
             ofi_l1_cum = int(ks.ofi_l1_cum)
-            ofi_l1_ema8 = int(round(ks.ofi_l1_ema8))
-            spread_ema8_scaled = int(round(ks.spread_ema8))
-            depth_imbalance_ema8_ppm = int(round(ks.imbalance_ema8_ppm))
+            ofi_l1_ema8 = _safe_int_round(ks.ofi_l1_ema8)
+            spread_ema8_scaled = _safe_int_round(ks.spread_ema8)
+            depth_imbalance_ema8_ppm = _safe_int_round(ks.imbalance_ema8_ppm)
 
         v1_tuple = (
             best_bid,
@@ -630,11 +645,11 @@ class FeatureEngine:
             iss_val,
             mldm_val,
             tox_val,
-            int(round(ks.agg_ofi_ema5s)),
-            int(round(ks.agg_ofi_ema30s)),
-            int(round(ks.agg_imb_ema5s)),
-            int(round(ks.agg_spread_ema30s)),
-            int(round(ks.agg_spread_ema300s)),
+            _safe_int_round(ks.agg_ofi_ema5s),
+            _safe_int_round(ks.agg_ofi_ema30s),
+            _safe_int_round(ks.agg_imb_ema5s),
+            _safe_int_round(ks.agg_spread_ema30s),
+            _safe_int_round(ks.agg_spread_ema300s),
         )
 
     def _compute_v2_features(
