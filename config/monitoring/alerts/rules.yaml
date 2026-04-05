@@ -452,6 +452,16 @@ groups:
         summary: "Recorder pipeline DATA_LOSS — both ClickHouse and WAL failed"
         description: "pipeline_health_state has reached DATA_LOSS (3). Market data is being dropped with no persistence path available."
 
+  # Schema initialization failure (WAL-only degraded mode)
+  - alert: RecorderSchemaInitFailed
+    expr: recorder_schema_init_failed == 1
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Recorder schema initialization failed — WAL-only mode"
+        description: "ClickHouse schema migration failed at startup. All data is going to WAL with no ClickHouse persistence path."
+
   # Event loop lag
   - alert: EventLoopLagHigh
     expr: event_loop_lag_ms > 5

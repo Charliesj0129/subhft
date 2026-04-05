@@ -354,6 +354,11 @@ class DataWriter:
         try:
             apply_schema(self.ch_client)
             self._schema_initialized = True
+            if self.metrics:
+                try:
+                    self.metrics.recorder_schema_init_failed.set(0)
+                except Exception:
+                    pass
         except Exception as se:
             logger.critical(
                 "Schema initialization failed - falling back to WAL-only mode",
@@ -362,6 +367,11 @@ class DataWriter:
             )
             self._schema_initialized = False
             self.connected = False
+            if self.metrics:
+                try:
+                    self.metrics.recorder_schema_init_failed.set(1)
+                except Exception:
+                    pass
             return
 
         try:
