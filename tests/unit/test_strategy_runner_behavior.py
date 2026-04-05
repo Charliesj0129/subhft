@@ -54,7 +54,8 @@ def _make_strategy(sid="strat_a", symbols=None, enabled=True):
     return _FakeStrategy(sid=sid, symbols=symbols, enabled=enabled)
 
 
-def _make_event(symbol="TSMC", ts=123_000_000_000):
+def _make_event(symbol="TSMC", ts=0):
+    # ts=0 triggers fallback to now_ns() in _extract_event_trace so events are always fresh
     return SimpleNamespace(symbol=symbol, ts=ts)
 
 
@@ -488,7 +489,7 @@ async def test_process_event_circuit_degraded_transition(runner_factory):
 async def test_process_event_delta_source_invalidates_positions(runner_factory):
     runner, _, _ = runner_factory()
     runner._positions_dirty = False
-    event = SimpleNamespace(delta_source="fill", symbol="TSMC", ts=1)
+    event = SimpleNamespace(delta_source="fill", symbol="TSMC", ts=0)
     await runner.process_event(event)
     assert runner._positions_dirty is False  # was rebuilt
 
@@ -500,7 +501,7 @@ async def test_process_event_targeted_dispatch(runner_factory):
     strat_b = _make_strategy("strat_b")
     runner.register(strat_a)
     runner.register(strat_b)
-    event = SimpleNamespace(symbol="TSMC", ts=1, strategy_id="strat_a")
+    event = SimpleNamespace(symbol="TSMC", ts=0, strategy_id="strat_a")
     await runner.process_event(event)
     assert len(strat_a._calls) == 1
     assert len(strat_b._calls) == 0
@@ -833,3 +834,100 @@ async def test_storm_guard_not_triggered_when_none(runner_factory):
         await runner.process_event(event)
 
     assert runner._storm_guard is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: circuit breaker Prometheus metric emission
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_emits_degraded_metric(runner_factory, _patch_metrics):
+    """normal → degraded transition emits circuit_breaker_state=1."""
+
+    class _ErrStrat(_FakeStrategy):
+        def handle_event(self, ctx, event):
+            raise RuntimeError("err")
+
+    runner, _, _ = runner_factory()
+    strat = _ErrStrat("strat_a")
+    runner.register(strat)
+    runner._rust_circuit = None
+    runner._circuit_threshold = 4  # half_threshold = 2 → degraded after 2 failures
+    runner.strategy_governor = None  # disable quarantine
+
+    gauge_mock = _patch_metrics.circuit_breaker_state.labels.return_value
+
+    for _ in range(2):
+        await runner.process_event(_make_event())
+
+    assert runner._circuit_states.get("strat_a") == "degraded"
+    _patch_metrics.circuit_breaker_state.labels.assert_any_call(component="runner:strat_a")
+    gauge_mock.set.assert_any_call(1)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_emits_halted_metric(runner_factory, _patch_metrics):
+    """degraded → halted transition emits circuit_breaker_state=2."""
+
+    class _ErrStrat(_FakeStrategy):
+        def handle_event(self, ctx, event):
+            raise RuntimeError("err")
+
+    runner, _, _ = runner_factory()
+    strat = _ErrStrat("strat_a")
+    runner.register(strat)
+    runner._rust_circuit = None
+    runner._circuit_threshold = 2  # half_threshold=1, halted after 2
+    runner.strategy_governor = None
+
+    gauge_mock = _patch_metrics.circuit_breaker_state.labels.return_value
+
+    for _ in range(2):
+        await runner.process_event(_make_event())
+
+    assert runner._circuit_states.get("strat_a") == "halted"
+    _patch_metrics.circuit_breaker_state.labels.assert_any_call(component="runner:strat_a")
+    gauge_mock.set.assert_any_call(2)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_emits_recovery_metric(runner_factory, _patch_metrics):
+    """degraded → normal recovery emits circuit_breaker_state=0."""
+    runner, _, _ = runner_factory()
+    strat = _make_strategy("strat_a")
+    runner.register(strat)
+    runner._rust_circuit = None
+    runner._circuit_states["strat_a"] = "degraded"
+    runner._circuit_recovery_threshold = 1
+
+    gauge_mock = _patch_metrics.circuit_breaker_state.labels.return_value
+
+    await runner.process_event(_make_event())
+
+    assert runner._circuit_states.get("strat_a") == "normal"
+    _patch_metrics.circuit_breaker_state.labels.assert_any_call(component="runner:strat_a")
+    gauge_mock.set.assert_any_call(0)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_metric_suppresses_exceptions(runner_factory, _patch_metrics):
+    """Metric emission errors must not propagate to the trading path."""
+
+    class _ErrStrat(_FakeStrategy):
+        def handle_event(self, ctx, event):
+            raise RuntimeError("err")
+
+    runner, _, _ = runner_factory()
+    strat = _ErrStrat("strat_a")
+    runner.register(strat)
+    runner._rust_circuit = None
+    runner._circuit_threshold = 2
+    runner.strategy_governor = None
+
+    # Make the metric gauge raise
+    _patch_metrics.circuit_breaker_state.labels.side_effect = RuntimeError("metric_boom")
+
+    # Should not raise — exception swallowed
+    for _ in range(2):
+        await runner.process_event(_make_event())

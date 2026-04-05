@@ -143,6 +143,9 @@ class StrategyRunner:
         "_default_intent_ttl_ns",
         "_rejection_sink",
         "_storm_guard",
+        "_stale_event_threshold_ns",
+        "_stale_event_skip_total",
+        "_stale_event_metric",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -195,6 +198,10 @@ class StrategyRunner:
         self._positions_dirty = True
         self._current_source_ts_ns = 0
         self._current_trace_id = ""
+        _stale_ms = int(os.getenv("HFT_STALE_EVENT_THRESHOLD_MS", "500"))
+        self._stale_event_threshold_ns: int = _stale_ms * 1_000_000
+        self._stale_event_skip_total: int = 0
+        self._stale_event_metric = getattr(self.metrics, "stale_event_skip_total", None)
         try:
             default_sample = "1"
             if self._obs_policy == "balanced":
@@ -644,6 +651,22 @@ class StrategyRunner:
         source_ts_ns, trace_id = self._extract_event_trace(event)
         self._current_source_ts_ns = source_ts_ns
         self._current_trace_id = trace_id
+        # Staleness guard: skip events older than threshold to prevent
+        # strategies from acting on stale market data during event loop lag.
+        if source_ts_ns > 0:
+            event_age_ns = timebase.now_ns() - source_ts_ns
+            if event_age_ns > self._stale_event_threshold_ns:
+                self._stale_event_skip_total += 1
+                if self._stale_event_metric is not None:
+                    self._stale_event_metric.inc()
+                if self._stale_event_skip_total % 100 == 1:
+                    logger.warning(
+                        "stale_event_skipped",
+                        age_ms=event_age_ns / 1_000_000,
+                        threshold_ms=self._stale_event_threshold_ns / 1_000_000,
+                        total_skipped=self._stale_event_skip_total,
+                    )
+                return
         # Invalidate on position delta events
         if hasattr(event, "delta_source"):
             self._positions_dirty = True
@@ -785,8 +808,16 @@ class StrategyRunner:
                             id=sid,
                             threshold=self._circuit_threshold,
                         )
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(2)
+                        except Exception:  # noqa: BLE001
+                            pass
                     elif new_state == 1:  # DEGRADED
                         logger.warning("Strategy circuit degraded", id=sid)
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(1)
+                        except Exception:  # noqa: BLE001
+                            pass
                 else:
                     self._circuit_success_counts[sid] = 0
                     failures = self._failure_counts.get(sid, 0) + 1
@@ -796,6 +827,10 @@ class StrategyRunner:
                     if state == "normal" and failures >= half_threshold:
                         self._circuit_states[sid] = "degraded"
                         logger.warning("Strategy circuit degraded", id=sid, failures=failures)
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(1)
+                        except Exception:  # noqa: BLE001
+                            pass
                     if failures >= self._circuit_threshold and state != "halted":
                         self._circuit_states[sid] = "halted"
                         strategy.enabled = False
@@ -806,6 +841,10 @@ class StrategyRunner:
                             failures=failures,
                             threshold=self._circuit_threshold,
                         )
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(2)
+                        except Exception:  # noqa: BLE001
+                            pass
             else:
                 # S4: Gradual recovery: in degraded state, require N consecutive successes
                 sid = strategy.strategy_id
@@ -814,6 +853,10 @@ class StrategyRunner:
                     _new_state, recovered = rc.record_success(sid)
                     if recovered:
                         logger.info("Strategy circuit recovered to normal", id=sid)
+                        try:
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(0)
+                        except Exception:  # noqa: BLE001
+                            pass
                 else:
                     state = self._circuit_states.get(sid, "normal")
                     if state == "degraded":
@@ -824,6 +867,10 @@ class StrategyRunner:
                             self._failure_counts[sid] = 0
                             self._circuit_success_counts[sid] = 0
                             logger.info("Strategy circuit recovered to normal", id=sid)
+                            try:
+                                self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(0)
+                            except Exception:  # noqa: BLE001
+                                pass
 
             # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:
