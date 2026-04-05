@@ -47,6 +47,7 @@ def run_gate_c(
         max_position=int(config.max_position),
         maker_fee_bps=float(config.maker_fee_bps),
         taker_fee_bps=float(config.taker_fee_bps),
+        sell_tax_bps=float(config.sell_tax_bps),
         latency_profile_id=str(config.latency_profile_id),
         local_decision_pipeline_latency_us=int(config.local_decision_pipeline_latency_us),
         submit_ack_latency_ms=float(config.submit_ack_latency_ms),

@@ -37,6 +37,12 @@ logger = get_logger("alpha.canary_scheduler")
 _DEFAULT_INTERVAL_S = 86400.0  # 24 hours
 _DEFAULT_DRY_RUN = True
 
+# Conservative fail-safe defaults: exceed rollback thresholds to trigger rollback when data missing.
+# This is fail-safe: missing metrics = assume worst case.
+_FAILSAFE_SLIPPAGE_BPS = 999.0  # well above any reasonable max_slippage threshold
+_FAILSAFE_DRAWDOWN = 1.0  # 100% drawdown — worst possible
+_FAILSAFE_ERROR_RATE = 1.0  # 100% error rate — worst possible
+
 
 class CanaryAutoScheduler:
     """Periodically evaluate all active canaries and optionally apply decisions.
@@ -129,7 +135,8 @@ class CanaryAutoScheduler:
 
         For each active canary YAML, this method:
         1. Builds a metrics dict from the YAML state (sessions_live, sharpe_live
-           if available; slippage/drawdown/error default to 0 when not stored).
+           if available; slippage/drawdown/error default to fail-safe worst-case
+           values when not stored, triggering rollback if data is missing).
         2. Calls ``monitor.evaluate()`` to produce a :class:`CanaryStatus`.
         3. If not dry-run, calls ``monitor.apply_decision()`` to modify config.
 
@@ -191,17 +198,28 @@ class CanaryAutoScheduler:
         """Extract live metrics from canary YAML state.
 
         The YAML may contain a ``live_metrics`` block with recorded values.
-        Missing fields default to safe zeros so ``evaluate()`` treats them as
-        passing.
+        Missing fields default to fail-safe (worst-case) values, triggering
+        rollback when data is missing. This is conservative: missing metrics
+        are treated as worst-case performance.
         """
         stored = canary.get("live_metrics", {})
         if not isinstance(stored, dict):
             stored = {}
 
+        # If live_metrics entirely absent, return all fail-safe defaults
+        if not stored:
+            return {
+                "slippage_bps": _FAILSAFE_SLIPPAGE_BPS,
+                "drawdown_contribution": _FAILSAFE_DRAWDOWN,
+                "execution_error_rate": _FAILSAFE_ERROR_RATE,
+                "sessions_live": 0,
+            }
+
+        # If live_metrics present, fill in missing fields with fail-safe defaults
         metrics: dict[str, Any] = {
-            "slippage_bps": float(stored.get("slippage_bps", 0.0)),
-            "drawdown_contribution": float(stored.get("drawdown_contribution", 0.0)),
-            "execution_error_rate": float(stored.get("execution_error_rate", 0.0)),
+            "slippage_bps": float(stored.get("slippage_bps", _FAILSAFE_SLIPPAGE_BPS)),
+            "drawdown_contribution": float(stored.get("drawdown_contribution", _FAILSAFE_DRAWDOWN)),
+            "execution_error_rate": float(stored.get("execution_error_rate", _FAILSAFE_ERROR_RATE)),
             "sessions_live": int(stored.get("sessions_live", 0)),
         }
         if "sharpe_live" in stored:

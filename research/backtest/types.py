@@ -19,6 +19,7 @@ class BacktestConfig:
     is_oos_split: float = 0.7
     maker_fee_bps: float = -0.2
     taker_fee_bps: float = 0.2
+    sell_tax_bps: float = 2.0  # TAIFEX securities transaction tax on sells only (bps)
     signal_threshold: float = 0.3
     max_position: int = 5
     initial_equity: float = 1_000_000.0

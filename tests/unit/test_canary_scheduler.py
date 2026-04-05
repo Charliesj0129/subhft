@@ -228,9 +228,13 @@ class TestCanaryAutoSchedulerEvaluateAll:
 
 class TestBuildMetrics:
     def test_defaults_when_no_live_metrics(self) -> None:
+        """When live_metrics is missing, use fail-safe (worst-case) defaults."""
         canary: dict = {"alpha_id": "test"}
         metrics = CanaryAutoScheduler._build_metrics(canary)
-        assert metrics["slippage_bps"] == 0.0
+        # Fail-safe defaults: exceed rollback thresholds
+        assert metrics["slippage_bps"] == 999.0
+        assert metrics["drawdown_contribution"] == 1.0
+        assert metrics["execution_error_rate"] == 1.0
         assert metrics["sessions_live"] == 0
         assert "sharpe_live" not in metrics
 
@@ -249,6 +253,10 @@ class TestBuildMetrics:
         assert metrics["sharpe_live"] == 2.1
 
     def test_handles_non_dict_live_metrics(self) -> None:
+        """When live_metrics is not a dict, use fail-safe defaults."""
         canary: dict = {"alpha_id": "test", "live_metrics": "invalid"}
         metrics = CanaryAutoScheduler._build_metrics(canary)
-        assert metrics["slippage_bps"] == 0.0
+        # Fail-safe defaults
+        assert metrics["slippage_bps"] == 999.0
+        assert metrics["drawdown_contribution"] == 1.0
+        assert metrics["execution_error_rate"] == 1.0

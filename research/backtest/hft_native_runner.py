@@ -335,7 +335,10 @@ def _compute_equity_curve(
     """Compute equity curve from prices and positions with fee deduction.
 
     ``pnl_step = positions[:-1] * diff(prices)`` captures mark-to-market PnL.
-    Fees are proportional to turnover (absolute position change) times price.
+    Fees are asymmetric per TAIFEX structure:
+      - buys:  taker_fee_bps
+      - sells: taker_fee_bps + sell_tax_bps (securities transaction tax)
+    maker_fee_bps is reserved for future maker/taker split modelling (not applied).
     """
     n = min(prices.size, positions.size)
     base = config.initial_equity if initial_equity is None else float(initial_equity)
@@ -345,9 +348,22 @@ def _compute_equity_curve(
     pos = positions[:n]
 
     pnl_step = pos[:-1] * np.diff(px)
-    turnover = np.abs(np.diff(pos, prepend=0))
-    fee_rate = max(config.taker_fee_bps, 0.0) / 10_000.0
-    fee_step = turnover[1:] * np.abs(px[1:]) * fee_rate
+
+    # Asymmetric TAIFEX fee model:
+    #   buys  → taker_fee_bps only
+    #   sells → taker_fee_bps + sell_tax_bps (securities transaction tax)
+    # maker_fee_bps is preserved in BacktestConfig for future maker/taker split
+    # modelling but is NOT applied here (conservative taker-only assumption).
+    pos_change = np.diff(pos, prepend=0.0)
+    buys = np.maximum(pos_change, 0.0)    # shares added (long entry / short cover)
+    sells = np.maximum(-pos_change, 0.0)  # shares removed (long exit / short entry)
+
+    buy_fee_rate = max(config.taker_fee_bps, 0.0) / 10_000.0
+    sell_fee_rate = (max(config.taker_fee_bps, 0.0) + max(config.sell_tax_bps, 0.0)) / 10_000.0
+
+    buy_fee = buys[1:] * np.abs(px[1:]) * buy_fee_rate
+    sell_fee = sells[1:] * np.abs(px[1:]) * sell_fee_rate
+    fee_step = buy_fee + sell_fee
     pnl_after_fee = pnl_step - fee_step
     pnl_cum = np.cumsum(pnl_after_fee, dtype=np.float64)
 
