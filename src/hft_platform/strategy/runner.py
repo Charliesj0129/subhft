@@ -95,6 +95,8 @@ class StrategyRunner:
         "_feature_set_source",
         "_feature_profile_source",
         "_feature_tuple_source",
+        "_feature_staleness_source",
+        "_staleness_counter",
         "metrics",
         "latency",
         "_trace_sampler",
@@ -170,8 +172,9 @@ class StrategyRunner:
         self._feature_set_source = getattr(fe, "feature_set_id", None) if fe else None
         self._feature_profile_source = getattr(fe, "active_profile_id", None) if fe else None
         self._feature_tuple_source = getattr(fe, "get_feature_tuple", None) if fe else None
-
+        self._feature_staleness_source = getattr(fe, "last_update_ns", None) if fe else None
         self.metrics = MetricsRegistry.get()
+        self._staleness_counter = getattr(self.metrics, "feature_staleness_detected_total", None)
         self.latency = LatencyRecorder.get()
         self.strategy_governor = StrategyHealthGovernor(metrics=self.metrics)
         self._trace_sampler = _get_trace_sampler()
@@ -496,6 +499,8 @@ class StrategyRunner:
             feature_set_source=self._feature_set_source,
             feature_profile_source=self._feature_profile_source,
             feature_tuple_source=self._feature_tuple_source,
+            feature_staleness_source=self._feature_staleness_source,
+            staleness_counter=self._staleness_counter,
         )
         return (strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g)
 
