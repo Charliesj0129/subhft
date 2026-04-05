@@ -642,6 +642,8 @@ class MarketDataNormalizer:
                             # Rust extract::<f64> fails on str values; fall through to Python
                             if price == 0 and close_val:
                                 raise ValueError("rust returned zero price for non-zero close")
+                            if price <= 0:
+                                return None
                             if exch_ts_py:
                                 exch_ts = exch_ts_py
                             if _RETURN_TUPLE:
@@ -675,6 +677,8 @@ class MarketDataNormalizer:
                         if self._rust_fallback_tick:
                             self._rust_fallback_tick.inc()
                 price = int(round(float(close_val) * scale))
+                if price <= 0:
+                    return None
             else:
                 price = 0
 
