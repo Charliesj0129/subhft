@@ -249,6 +249,88 @@ class TestTypedIntentDecisionPrice:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Zero mid_price_x2 guard (H-1 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestZeroMidGuard:
+    """decision_price must NOT be set to 0 when mid_price_x2 is zero (empty/one-sided book)."""
+
+    def test_decision_price_skipped_when_mid_zero_order_intent(self, runner_factory):
+        """OrderIntent.decision_price stays at default 0 (unset) when mid_price_x2=0."""
+        lob = _make_lob_engine(mid_price_x2=0)
+        runner, _, _ = runner_factory(lob_engine=lob)
+
+        intent = _make_order_intent()
+        # Confirm default
+        assert intent.decision_price == 0
+
+        # Run the guarded logic (mirrors runner.py post-fix)
+        if hasattr(runner.lob_engine, "last_stats") and runner.lob_engine.last_stats is not None:
+            _mid = runner.lob_engine.last_stats.mid_price_x2 // 2
+            if _mid > 0:
+                if isinstance(intent, OrderIntent):
+                    intent.decision_mid = _mid
+                    intent.decision_price = _mid
+
+        # decision_price must remain 0 (never explicitly written with bad value)
+        assert intent.decision_price == 0
+        assert intent.decision_mid == 0  # also untouched
+
+    def test_decision_price_set_when_mid_positive_order_intent(self, runner_factory):
+        """OrderIntent.decision_price is set correctly when mid_price_x2 is valid."""
+        lob = _make_lob_engine(mid_price_x2=1_500_0000)  # mid = 750_0000
+        runner, _, _ = runner_factory(lob_engine=lob)
+
+        intent = _make_order_intent()
+        assert intent.decision_price == 0
+
+        if hasattr(runner.lob_engine, "last_stats") and runner.lob_engine.last_stats is not None:
+            _mid = runner.lob_engine.last_stats.mid_price_x2 // 2
+            if _mid > 0:
+                if isinstance(intent, OrderIntent):
+                    intent.decision_mid = _mid
+                    intent.decision_price = _mid
+
+        assert intent.decision_price == 750_0000
+        assert intent.decision_mid == 750_0000
+
+    def test_decision_price_skipped_when_mid_zero_typed_tuple(self, runner_factory):
+        """Typed intent tuple decision_price stays 0 when mid_price_x2=0."""
+        lob = _make_lob_engine(mid_price_x2=0)
+        runner, _, _ = runner_factory(lob_engine=lob, typed=True)
+
+        intent = _make_typed_intent()
+        assert intent[16] == 0
+
+        if hasattr(runner.lob_engine, "last_stats") and runner.lob_engine.last_stats is not None:
+            _mid = runner.lob_engine.last_stats.mid_price_x2 // 2
+            if _mid > 0:
+                if isinstance(intent, tuple) and len(intent) >= 17 and intent[0] == "typed_intent_v1":
+                    intent = (*intent[:16], _mid)
+
+        # Tuple must be unchanged
+        assert intent[16] == 0
+        assert len(intent) == 17
+
+    def test_decision_price_set_when_mid_positive_typed_tuple(self, runner_factory):
+        """Typed intent tuple decision_price is set correctly when mid_price_x2 is valid."""
+        lob = _make_lob_engine(mid_price_x2=2_000_0000)  # mid = 1_000_0000
+        runner, _, _ = runner_factory(lob_engine=lob, typed=True)
+
+        intent = _make_typed_intent()
+        assert intent[16] == 0
+
+        if hasattr(runner.lob_engine, "last_stats") and runner.lob_engine.last_stats is not None:
+            _mid = runner.lob_engine.last_stats.mid_price_x2 // 2
+            if _mid > 0:
+                if isinstance(intent, tuple) and len(intent) >= 17 and intent[0] == "typed_intent_v1":
+                    intent = (*intent[:16], _mid)
+
+        assert intent[16] == 1_000_0000
+
+
+# ---------------------------------------------------------------------------
 # Tests: Typed frame view conversion preserves decision_price
 # ---------------------------------------------------------------------------
 

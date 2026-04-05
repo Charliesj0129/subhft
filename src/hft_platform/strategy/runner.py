@@ -780,14 +780,14 @@ class StrategyRunner:
                 for intent in intents:
                     # Populate decision prices from LOB engine's last stats
                     if hasattr(self.lob_engine, "last_stats") and self.lob_engine.last_stats is not None:
-                        if isinstance(intent, OrderIntent):
-                            _mid = self.lob_engine.last_stats.mid_price_x2 // 2
-                            intent.decision_mid = _mid  # deprecated: use decision_price
-                            intent.decision_price = _mid
-                        elif isinstance(intent, tuple) and len(intent) >= 17 and intent[0] == "typed_intent_v1":
-                            _mid = self.lob_engine.last_stats.mid_price_x2 // 2
-                            # Typed intent tuple: position 16 is decision_price
-                            intent = (*intent[:16], _mid)
+                        _mid = self.lob_engine.last_stats.mid_price_x2 // 2
+                        if _mid > 0:
+                            if isinstance(intent, OrderIntent):
+                                intent.decision_mid = _mid  # deprecated: use decision_price
+                                intent.decision_price = _mid
+                            elif isinstance(intent, tuple) and len(intent) >= 17 and intent[0] == "typed_intent_v1":
+                                # Typed intent tuple: position 16 is decision_price
+                                intent = (*intent[:16], _mid)
 
                     self._emit_trace(
                         "strategy_intent_submit",
