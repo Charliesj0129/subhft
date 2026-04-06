@@ -10,7 +10,9 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 import yaml
@@ -73,6 +75,8 @@ class QuoteConnectionPool:
         "_config",
         "_all_symbols",
         "_login_interval_s",
+        "_options_expiry",
+        "_options_refresh_running",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -89,6 +93,8 @@ class QuoteConnectionPool:
         self._num_conns = num_conns
         self._config = shioaji_cfg
         self._login_interval_s = float(os.getenv("HFT_QUOTE_LOGIN_INTERVAL_S", "2"))
+        self._options_expiry: str | None = None
+        self._options_refresh_running: bool = False
 
         with open(symbols_path, "r") as f:
             data = yaml.safe_load(f) or {}
@@ -183,6 +189,10 @@ class QuoteConnectionPool:
             except Exception as exc:
                 log.error("Subscribe failed", error=str(exc))
 
+        # Auto-start options expiry refresh if enabled
+        if os.getenv("HFT_OPTIONS_AUTO_REFRESH", "1").lower() not in {"0", "false", "no", "off"}:
+            self.start_options_refresh_thread(cb=cb)
+
     def subscribe_basket(self, cb: Callable[..., Any]) -> None:
         """Duck-type alias for MarketDataService compatibility."""
         self.subscribe_all(cb)
@@ -266,3 +276,175 @@ class QuoteConnectionPool:
             last_ts = getattr(c._client, "_last_quote_data_ts", 0.0)
             age = now_s - last_ts if last_ts > 0 else -1
             _METRIC_LAST_DATA_AGE.labels(conn_id=label).set(age)
+
+    # ── Options auto-refresh ─────────────────────────────────────────────
+
+    def refresh_options_symbols(self, cb: Callable[..., Any] | None = None) -> bool:
+        """Regenerate the options YAML if the nearest TXO expiry has changed.
+
+        Returns True if symbols were updated and resubscribed.
+        """
+        if not self._clients:
+            return False
+
+        # Use the first logged-in client's API to query contracts
+        api = None
+        for c in self._clients:
+            if c.logged_in and getattr(c._client, "api", None):
+                api = c._client.api
+                break
+        if api is None:
+            logger.warning("options_refresh_skipped_no_api")
+            return False
+
+        try:
+            opts = list(api.Contracts.Options.TXO)
+        except Exception as exc:
+            logger.warning("options_refresh_fetch_failed", error=str(exc))
+            return False
+
+        if not opts:
+            logger.warning("options_refresh_no_contracts")
+            return False
+
+        dates = sorted(set(c.delivery_date for c in opts))
+        nearest_date = dates[0]
+
+        # Check if expiry changed from what's in the current YAML
+        symbols_path = Path(self._all_symbols[0].get("_source_path", "")) if self._all_symbols else None
+        if symbols_path is None or not str(symbols_path):
+            symbols_path = Path(os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml"))
+
+        current_expiry = self._options_expiry
+        if current_expiry == nearest_date:
+            logger.debug("options_refresh_no_change", expiry=nearest_date)
+            return False
+
+        logger.info(
+            "options_expiry_changed",
+            old_expiry=current_expiry,
+            new_expiry=nearest_date,
+        )
+
+        # Rebuild YAML
+        nearest = [c for c in opts if c.delivery_date == nearest_date]
+        calls = sorted(
+            [c for c in nearest if c.option_right.value == "C"],
+            key=lambda c: c.strike_price,
+        )
+        puts = sorted(
+            [c for c in nearest if c.option_right.value == "P"],
+            key=lambda c: c.strike_price,
+        )
+
+        # Preserve group 0 (non-option symbols)
+        base_symbols = [s for s in self._all_symbols if s.get("group", 0) == 0]
+        symbols: list[dict[str, Any]] = []
+        for s in base_symbols:
+            entry = dict(s)
+            entry["group"] = 0
+            symbols.append(entry)
+        for c in calls:
+            symbols.append({"code": c.code, "exchange": "OPT", "group": 1})
+        for c in puts:
+            symbols.append({"code": c.code, "exchange": "OPT", "group": 2})
+
+        out_path = os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml")
+        try:
+            with open(out_path, "w") as f:
+                f.write(f"# Auto-refreshed by QuoteConnectionPool\n")
+                f.write(f"# TXO nearest expiry: {nearest_date}\n")
+                f.write(f"# Group 0: Base ({len(base_symbols)})\n")
+                f.write(f"# Group 1: TXO Calls ({len(calls)})\n")
+                f.write(f"# Group 2: TXO Puts ({len(puts)})\n\n")
+                yaml.dump({"symbols": symbols}, f, default_flow_style=False, allow_unicode=True)
+        except Exception as exc:
+            logger.error("options_refresh_write_failed", error=str(exc))
+            return False
+
+        self._options_expiry = nearest_date
+        self._all_symbols = symbols
+
+        # Rebuild shard files and reload each connection's config
+        groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(self._num_conns)}
+        for sym in symbols:
+            g = sym.get("group", 0)
+            if 0 <= g < self._num_conns:
+                groups[g].append(sym)
+
+        for group_id in range(self._num_conns):
+            shard_path = self._shard_paths[group_id] if group_id < len(self._shard_paths) else None
+            if shard_path:
+                with open(shard_path, "w") as f:
+                    yaml.safe_dump({"symbols": groups[group_id]}, f, sort_keys=False)
+
+        # Reload config and resubscribe each connection
+        resubscribed = 0
+        for i, facade in enumerate(self._clients):
+            try:
+                facade._client._load_config()
+                if facade.logged_in and cb is not None:
+                    facade.subscribe_basket(cb)
+                    resubscribed += 1
+            except Exception as exc:
+                logger.error("options_refresh_reload_failed", conn_id=i, error=str(exc))
+
+        logger.info(
+            "options_refresh_complete",
+            expiry=nearest_date,
+            total_symbols=len(symbols),
+            calls=len(calls),
+            puts=len(puts),
+            resubscribed=resubscribed,
+        )
+        return True
+
+    def start_options_refresh_thread(
+        self,
+        cb: Callable[..., Any] | None = None,
+        interval_s: float | None = None,
+    ) -> None:
+        """Start a background thread that checks for TXO expiry changes.
+
+        Default interval: HFT_OPTIONS_REFRESH_S env var or 3600 (hourly).
+        """
+        if getattr(self, "_options_refresh_running", False):
+            return
+        if interval_s is None:
+            interval_s = float(os.getenv("HFT_OPTIONS_REFRESH_S", "3600"))
+
+        self._options_refresh_running = True
+
+        # Detect current expiry from the loaded symbols
+        opt_codes = [s["code"] for s in self._all_symbols if s.get("exchange") == "OPT"]
+        if opt_codes:
+            # Extract expiry suffix from first option code (e.g. TXO31000D6)
+            # We'll let the first refresh call set it properly
+            pass
+
+        def _loop() -> None:
+            # Initial refresh on startup
+            time.sleep(30)  # Wait for login to complete
+            try:
+                self.refresh_options_symbols(cb)
+            except Exception as exc:
+                logger.warning("options_refresh_initial_failed", error=str(exc))
+
+            next_check = time.monotonic() + interval_s
+            while self._options_refresh_running:
+                time.sleep(60)
+                if not self._options_refresh_running:
+                    break
+                if time.monotonic() >= next_check:
+                    try:
+                        self.refresh_options_symbols(cb)
+                    except Exception as exc:
+                        logger.warning("options_refresh_failed", error=str(exc))
+                    next_check = time.monotonic() + interval_s
+
+        t = threading.Thread(target=_loop, name="options-expiry-refresh", daemon=True)
+        t.start()
+        logger.info("options_refresh_thread_started", interval_s=interval_s)
+
+    def stop_options_refresh(self) -> None:
+        self._options_refresh_running = False
