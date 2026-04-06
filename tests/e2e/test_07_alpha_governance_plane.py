@@ -359,5 +359,6 @@ class TestIntegration:
         meta_path = run_dir / "meta.json"
         meta_path.write_text(json.dumps({"gate_status": {"gate_c": True}}))
 
-        # Should not raise
-        _verify_gate_c_passed(scorecard_path)
+        # Should not raise — returns None on success
+        result = _verify_gate_c_passed(scorecard_path)
+        assert result is None
