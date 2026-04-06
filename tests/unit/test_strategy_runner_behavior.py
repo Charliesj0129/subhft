@@ -973,3 +973,107 @@ async def test_circuit_breaker_metric_suppresses_exceptions(runner_factory, _pat
     # Should not raise — exception swallowed
     for _ in range(2):
         await runner.process_event(_make_event())
+
+
+# ---------------------------------------------------------------------------
+# Tests: _run_rejection_consumer()
+# ---------------------------------------------------------------------------
+
+
+def _make_risk_feedback(strategy_id: str = "strat_a") -> "RiskFeedback":  # noqa: F821
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    return RiskFeedback(
+        intent_id=1,
+        strategy_id=strategy_id,
+        symbol="TSMC",
+        reason_code="QUEUE_FULL",
+        timestamp_ns=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_rejection_consumer_routes_feedback_to_strategy(runner_factory):
+    """Consumer reads RiskFeedback from queue and calls on_risk_feedback on matching strategy."""
+    runner, _, _ = runner_factory()
+    strat = _make_strategy("strat_a")
+    strat.on_risk_feedback = MagicMock()
+    runner.register(strat)
+
+    q: asyncio.Queue = asyncio.Queue()
+    runner._rejection_queue = q
+
+    feedback = _make_risk_feedback("strat_a")
+    await q.put(feedback)
+
+    # Run the consumer briefly; it will process the one item then block waiting for more.
+    consumer_task = asyncio.create_task(runner._run_rejection_consumer())
+    await q.join()  # wait until the single item is processed
+    consumer_task.cancel()
+    try:
+        await consumer_task
+    except asyncio.CancelledError:
+        pass
+
+    strat.on_risk_feedback.assert_called_once_with(feedback)
+
+
+@pytest.mark.asyncio
+async def test_rejection_consumer_unknown_strategy_continues(runner_factory):
+    """Consumer logs a warning for unknown strategy_id and does not crash."""
+    runner, _, _ = runner_factory()
+
+    q: asyncio.Queue = asyncio.Queue()
+    runner._rejection_queue = q
+
+    feedback = _make_risk_feedback("nonexistent_strategy")
+    await q.put(feedback)
+
+    consumer_task = asyncio.create_task(runner._run_rejection_consumer())
+    await q.join()
+    consumer_task.cancel()
+    try:
+        await consumer_task
+    except asyncio.CancelledError:
+        pass
+
+    # No exception raised; queue drained cleanly.
+    assert q.empty()
+
+
+@pytest.mark.asyncio
+async def test_rejection_consumer_strategy_exception_continues(runner_factory):
+    """Consumer continues processing after on_risk_feedback raises."""
+    runner, _, _ = runner_factory()
+    strat = _make_strategy("strat_a")
+    strat.on_risk_feedback = MagicMock(side_effect=RuntimeError("boom"))
+    runner.register(strat)
+
+    q: asyncio.Queue = asyncio.Queue()
+    runner._rejection_queue = q
+
+    # Put two feedbacks; second should still be processed after the first raises.
+    feedback1 = _make_risk_feedback("strat_a")
+    feedback2 = _make_risk_feedback("strat_a")
+    await q.put(feedback1)
+    await q.put(feedback2)
+
+    consumer_task = asyncio.create_task(runner._run_rejection_consumer())
+    await q.join()
+    consumer_task.cancel()
+    try:
+        await consumer_task
+    except asyncio.CancelledError:
+        pass
+
+    assert strat.on_risk_feedback.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rejection_consumer_none_queue_returns_immediately(runner_factory):
+    """Consumer returns immediately when _rejection_queue is None."""
+    runner, _, _ = runner_factory()
+    assert runner._rejection_queue is None
+
+    # Should complete without blocking or raising.
+    await runner._run_rejection_consumer()

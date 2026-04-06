@@ -949,6 +949,9 @@ class SystemBootstrapper:
         if _rejection_queue is not None and hasattr(strategy_runner, '_rejection_sink'):
             strategy_runner._rejection_sink = _rejection_queue
 
+        if _rejection_queue is not None and hasattr(strategy_runner, '_rejection_queue'):
+            strategy_runner._rejection_queue = _rejection_queue
+
         if hasattr(strategy_runner, '_storm_guard'):
             strategy_runner._storm_guard = storm_guard
 

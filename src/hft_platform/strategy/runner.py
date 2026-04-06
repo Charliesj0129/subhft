@@ -142,6 +142,7 @@ class StrategyRunner:
         "_timeout_broken_at_ns",
         "_default_intent_ttl_ns",
         "_rejection_sink",
+        "_rejection_queue",
         "_storm_guard",
         "_stale_event_threshold_ns",
         "_stale_event_skip_total",
@@ -285,6 +286,9 @@ class StrategyRunner:
         # Rejection sink: receives RiskFeedback when risk_queue is full (set by bootstrap)
         self._rejection_sink: asyncio.Queue | None = None
 
+        # Rejection queue: shared queue for consuming RiskFeedback dispatched to strategies (set by bootstrap)
+        self._rejection_queue: asyncio.Queue | None = None
+
         # StormGuard reference: set by bootstrap to trigger HALT on persistent risk_queue_full
         self._storm_guard: Any = None
 
@@ -312,6 +316,28 @@ class StrategyRunner:
             pass
         finally:
             self._flush_pending_strategy_metrics()
+
+    async def _run_rejection_consumer(self) -> None:
+        """Consume RiskFeedback from rejection queue and dispatch to strategies."""
+        if self._rejection_queue is None:
+            return
+        while True:
+            try:
+                feedback = await self._rejection_queue.get()
+            except asyncio.CancelledError:
+                break
+            try:
+                indices = self._strat_index.get(feedback.strategy_id)
+                if indices:
+                    for idx in indices:
+                        executor = self._strat_executors[idx]
+                        executor[0].on_risk_feedback(feedback)
+                else:
+                    logger.warning("rejection_feedback_unknown_strategy", strategy_id=feedback.strategy_id)
+            except Exception:
+                logger.exception("rejection_feedback_dispatch_error", strategy_id=getattr(feedback, "strategy_id", "?"))
+            finally:
+                self._rejection_queue.task_done()
 
     async def drain_to_cursor(self, target_cursor: int, timeout_s: float) -> tuple[int, int]:
         """Drain bus events up to *target_cursor* within *timeout_s* seconds.

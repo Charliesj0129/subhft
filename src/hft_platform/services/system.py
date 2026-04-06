@@ -271,6 +271,8 @@ class HFTSystem:
 
             self._start_service("recon", self.recon_service.run())
             self._start_service("strat", self.strategy_runner.run())
+            if hasattr(self.strategy_runner, '_rejection_queue') and self.strategy_runner._rejection_queue is not None:
+                self._start_service("rejection_consumer", self.strategy_runner._run_rejection_consumer())
 
             # Start AuditWriter flush tasks (singleton, lazy-created by RiskEngine/StormGuard)
             try:
