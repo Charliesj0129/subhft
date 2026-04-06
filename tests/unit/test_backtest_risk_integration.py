@@ -87,3 +87,41 @@ class TestDispatchStrategyRiskGate:
         intent = _make_intent(qty=1)
         decision = evaluator.evaluate(intent)
         assert decision.approved is False
+
+
+class TestRunResultRejectionData:
+    def test_run_result_includes_rejection_fields(self):
+        from hft_platform.backtest.runner import HftBacktestRunResult
+
+        result = HftBacktestRunResult(
+            run_id="test",
+            config_hash="abc",
+            symbol="2330",
+            strategy_name="demo",
+            data_path="/tmp/test.npz",
+            pnl=0.0,
+            equity_points=0,
+            used_synthetic_equity=False,
+            report_path=None,
+            risk_rejection_count=5,
+            risk_rejection_breakdown={"POSITION_LIMIT": 3, "PRICE_BAND": 2},
+        )
+        assert result.risk_rejection_count == 5
+        assert result.risk_rejection_breakdown["POSITION_LIMIT"] == 3
+
+    def test_run_result_defaults_to_zero_rejections(self):
+        from hft_platform.backtest.runner import HftBacktestRunResult
+
+        result = HftBacktestRunResult(
+            run_id="test",
+            config_hash="abc",
+            symbol="2330",
+            strategy_name="demo",
+            data_path="/tmp/test.npz",
+            pnl=0.0,
+            equity_points=0,
+            used_synthetic_equity=False,
+            report_path=None,
+        )
+        assert result.risk_rejection_count == 0
+        assert result.risk_rejection_breakdown == {}

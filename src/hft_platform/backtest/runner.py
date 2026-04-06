@@ -29,6 +29,7 @@ class HftBacktestConfig:
     record_out: str | None = None
     report: bool = False
     seed: int = 42
+    risk_config: Any = None  # BacktestRiskConfig or None
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,8 @@ class HftBacktestRunResult:
     equity_points: int
     used_synthetic_equity: bool
     report_path: str | None
+    risk_rejection_count: int = 0
+    risk_rejection_breakdown: dict[str, int] = field(default_factory=dict)
 
 
 class HftBacktestRunner:
@@ -106,6 +109,7 @@ class HftBacktestRunner:
                 maker_fee=self.cfg.fee_maker,
                 taker_fee=self.cfg.fee_taker,
                 partial_fill=self.cfg.partial_fill,
+                risk_config=self.cfg.risk_config,
             )
 
             # Run
@@ -142,6 +146,12 @@ class HftBacktestRunner:
                 else:
                     report_path, used_synthetic_equity = self._generate_report(pnl)
 
+            risk_rejection_count = 0
+            risk_rejection_breakdown: dict[str, int] = {}
+            if hasattr(adapter, "_risk_evaluator") and adapter._risk_evaluator is not None:
+                risk_rejection_count = adapter._risk_evaluator.rejection_count
+                risk_rejection_breakdown = adapter._risk_evaluator.rejection_breakdown
+
             run_result = HftBacktestRunResult(
                 run_id=run_id,
                 config_hash=config_hash,
@@ -152,6 +162,8 @@ class HftBacktestRunner:
                 equity_points=equity_points,
                 used_synthetic_equity=bool(used_synthetic_equity),
                 report_path=report_path,
+                risk_rejection_count=risk_rejection_count,
+                risk_rejection_breakdown=risk_rejection_breakdown,
             )
             self._write_run_summary(run_result)
             return run_result
