@@ -166,3 +166,131 @@ class TestBatchRecordSessions:
         )
         regimes = {r["regime"] for r in results}
         assert len(regimes) >= 2  # Should cover multiple regimes with 8 sessions
+
+
+class TestDiscoverGateDCandidatesAdditional:
+    def test_skips_missing_scorecard_file(self, tmp_path: Path) -> None:
+        """Line 51: scorecard path in meta points to non-existent file — alpha skipped."""
+        exp_dir = tmp_path / "experiments"
+        runs_dir = exp_dir / "runs"
+        run_dir = runs_dir / "run_missing_sc"
+        run_dir.mkdir(parents=True)
+
+        sc_path = run_dir / "scorecard_MISSING.json"  # deliberately absent
+        (run_dir / "backtest_report.json").write_text("{}")
+        signal = np.random.RandomState(0).randn(50)
+        sig_path = run_dir / "signals.npy"
+        np.save(sig_path, signal)
+
+        meta = {
+            "run_id": "run_missing_sc",
+            "alpha_id": "missing_sc_alpha",
+            "config_hash": "abc",
+            "timestamp": "2026-03-01T00:00:00",
+            "data_paths": [],
+            "metrics": {},
+            "gate_status": {},
+            "scorecard_path": str(sc_path),
+            "backtest_report_path": str(run_dir / "backtest_report.json"),
+            "signals_path": str(sig_path),
+            "equity_path": None,
+        }
+        (run_dir / "meta.json").write_text(json.dumps(meta))
+
+        candidates = discover_gate_d_candidates(experiments_dir=str(exp_dir))
+        assert candidates == []
+
+    def test_skips_invalid_json_scorecard(self, tmp_path: Path) -> None:
+        """Lines 54-55: corrupt scorecard JSON causes alpha to be skipped."""
+        exp_dir = tmp_path / "experiments"
+        runs_dir = exp_dir / "runs"
+        run_dir = runs_dir / "run_bad_json"
+        run_dir.mkdir(parents=True)
+
+        sc_path = run_dir / "scorecard.json"
+        sc_path.write_text("NOT VALID JSON <<<")
+        (run_dir / "backtest_report.json").write_text("{}")
+        signal = np.random.RandomState(0).randn(50)
+        sig_path = run_dir / "signals.npy"
+        np.save(sig_path, signal)
+
+        meta = {
+            "run_id": "run_bad_json",
+            "alpha_id": "bad_json_alpha",
+            "config_hash": "abc",
+            "timestamp": "2026-03-01T00:00:00",
+            "data_paths": [],
+            "metrics": {},
+            "gate_status": {},
+            "scorecard_path": str(sc_path),
+            "backtest_report_path": str(run_dir / "backtest_report.json"),
+            "signals_path": str(sig_path),
+            "equity_path": None,
+        }
+        (run_dir / "meta.json").write_text(json.dumps(meta))
+
+        candidates = discover_gate_d_candidates(experiments_dir=str(exp_dir))
+        assert candidates == []
+
+    def test_skips_duplicate_alpha_id_runs(self, tmp_path: Path) -> None:
+        """Line 44: second run with same alpha_id is skipped — only first kept."""
+        exp_dir = tmp_path / "experiments"
+        runs_dir = exp_dir / "runs"
+        alpha_id = "dup_alpha"
+
+        # Create two runs for the same alpha_id; both pass Gate D
+        for i in range(2):
+            run_dir = runs_dir / f"run_{i}"
+            run_dir.mkdir(parents=True)
+            sc_path = run_dir / "scorecard.json"
+            sc_path.write_text(
+                json.dumps(
+                    {
+                        "sharpe_oos": 2.0 + i,
+                        "max_drawdown": 0.05,
+                        "correlation_pool_max": 0.1,
+                    }
+                )
+            )
+            (run_dir / "backtest_report.json").write_text("{}")
+            signal = np.random.RandomState(i).randn(50)
+            sig_path = run_dir / "signals.npy"
+            np.save(sig_path, signal)
+            meta = {
+                "run_id": f"run_{i}",
+                "alpha_id": alpha_id,
+                "config_hash": "abc",
+                "timestamp": f"2026-03-0{i + 1}T00:00:00",
+                "data_paths": [],
+                "metrics": {"sharpe_oos": 2.0 + i},
+                "gate_status": {},
+                "scorecard_path": str(sc_path),
+                "backtest_report_path": str(run_dir / "backtest_report.json"),
+                "signals_path": str(sig_path),
+                "equity_path": None,
+            }
+            (run_dir / "meta.json").write_text(json.dumps(meta))
+
+        candidates = discover_gate_d_candidates(experiments_dir=str(exp_dir))
+        # Despite two runs, only one candidate per alpha_id
+        assert len(candidates) == 1
+        assert candidates[0]["alpha_id"] == alpha_id
+
+    def test_skips_alpha_with_enough_sessions(self, tmp_path: Path) -> None:
+        """Line 74: alpha with session_count >= 5 is excluded from candidates."""
+        from hft_platform.alpha.experiments import ExperimentTracker
+
+        exp_dir = _setup_experiment(tmp_path, "rich_alpha", sharpe_oos=2.0)
+
+        # Pre-record 5 sessions so session_count >= 5
+        tracker = ExperimentTracker(base_dir=exp_dir)
+        for i in range(5):
+            tracker.log_paper_trade_session(
+                alpha_id="rich_alpha",
+                trading_day=f"2026-03-{10 + i:02d}",
+                fills=20,
+                pnl_bps=1.5,
+            )
+
+        candidates = discover_gate_d_candidates(experiments_dir=str(exp_dir))
+        assert all(c["alpha_id"] != "rich_alpha" for c in candidates)
