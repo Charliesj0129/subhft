@@ -260,3 +260,128 @@ class TestBuildMetrics:
         assert metrics["slippage_bps"] == 999.0
         assert metrics["drawdown_contribution"] == 1.0
         assert metrics["execution_error_rate"] == 1.0
+
+
+class TestSchedulerMetricsQuery:
+    def test_evaluate_all_no_query_backward_compat(self, tmp_path: Path) -> None:
+        """metrics_query=None → existing YAML-based _build_metrics behavior."""
+        promo_dir = tmp_path / "promos"
+        _write_canary_yaml(
+            promo_dir / "a.yaml",
+            alpha_id="alpha_a",
+            slippage_bps=1.0,
+            sessions_live=5,
+        )
+
+        monitor = CanaryMonitor(promotions_dir=str(promo_dir))
+        scheduler = CanaryAutoScheduler(monitor=monitor, dry_run=True, metrics_query=None)
+
+        loop = asyncio.new_event_loop()
+        try:
+            results = loop.run_until_complete(scheduler.evaluate_all())
+        finally:
+            loop.close()
+
+        assert len(results) == 1
+        assert results[0].alpha_id == "alpha_a"
+        # slippage=1.0 is below the 3.0 guardrail → canary continues
+        assert results[0].state == "canary"
+
+    def test_evaluate_all_uses_ck_metrics(self, tmp_path: Path) -> None:
+        """Mock query returns good metrics → canary NOT rolled back."""
+        promo_dir = tmp_path / "promos"
+        # Write YAML with empty live_metrics (would trigger fail-safe rollback if used)
+        promo_dir.mkdir(parents=True, exist_ok=True)
+        import yaml as _yaml
+
+        payload = {
+            "alpha_id": "alpha_ck",
+            "enabled": True,
+            "weight": 0.02,
+            "owner": "test",
+            "guardrails": {
+                "max_live_slippage_bps": 3.0,
+                "max_live_drawdown_contribution": 0.02,
+                "max_execution_error_rate": 0.01,
+            },
+            "rollback": {
+                "trigger": {
+                    "live_slippage_bps_gt": 3.0,
+                    "live_drawdown_contribution_gt": 0.02,
+                    "execution_error_rate_gt": 0.01,
+                },
+            },
+            "scorecard_snapshot": {"sharpe_oos": 1.5},
+            # intentionally no live_metrics block
+        }
+        (promo_dir / "ck.yaml").write_text(_yaml.safe_dump(payload, sort_keys=False))
+
+        mock_query = MagicMock()
+        mock_query.fetch.return_value = {
+            "slippage_bps": 0.5,
+            "drawdown_contribution": 0.001,
+            "execution_error_rate": 0.0,
+            "sessions_live": 10,
+        }
+
+        monitor = CanaryMonitor(promotions_dir=str(promo_dir))
+        scheduler = CanaryAutoScheduler(monitor=monitor, dry_run=True, metrics_query=mock_query)
+
+        loop = asyncio.new_event_loop()
+        try:
+            results = loop.run_until_complete(scheduler.evaluate_all())
+        finally:
+            loop.close()
+
+        assert len(results) == 1
+        assert results[0].alpha_id == "alpha_ck"
+        # Good CK metrics → should stay in canary (not rolled back)
+        assert results[0].state == "canary"
+        mock_query.fetch.assert_called_once_with("alpha_ck", "alpha_ck", 0)
+
+    def test_evaluate_all_fallback_on_none(self, tmp_path: Path) -> None:
+        """Mock query returns None → falls back to _build_metrics (fail-safe defaults trigger rollback)."""
+        promo_dir = tmp_path / "promos"
+        # Write YAML with no live_metrics → _build_metrics will return fail-safe defaults
+        promo_dir.mkdir(parents=True, exist_ok=True)
+        import yaml as _yaml
+
+        payload = {
+            "alpha_id": "alpha_fb",
+            "enabled": True,
+            "weight": 0.02,
+            "owner": "test",
+            "guardrails": {
+                "max_live_slippage_bps": 3.0,
+                "max_live_drawdown_contribution": 0.02,
+                "max_execution_error_rate": 0.01,
+            },
+            "rollback": {
+                "trigger": {
+                    "live_slippage_bps_gt": 3.0,
+                    "live_drawdown_contribution_gt": 0.02,
+                    "execution_error_rate_gt": 0.01,
+                },
+            },
+            "scorecard_snapshot": {"sharpe_oos": 1.5},
+            # no live_metrics → fail-safe defaults → rollback
+        }
+        (promo_dir / "fb.yaml").write_text(_yaml.safe_dump(payload, sort_keys=False))
+
+        mock_query = MagicMock()
+        mock_query.fetch.return_value = None  # query returns None → fall back
+
+        monitor = CanaryMonitor(promotions_dir=str(promo_dir))
+        scheduler = CanaryAutoScheduler(monitor=monitor, dry_run=True, metrics_query=mock_query)
+
+        loop = asyncio.new_event_loop()
+        try:
+            results = loop.run_until_complete(scheduler.evaluate_all())
+        finally:
+            loop.close()
+
+        assert len(results) == 1
+        assert results[0].alpha_id == "alpha_fb"
+        # Fail-safe defaults from _build_metrics should trigger rollback
+        assert results[0].state == "rolled_back"
+        mock_query.fetch.assert_called_once()

@@ -62,6 +62,7 @@ class CanaryAutoScheduler:
         monitor: CanaryMonitor,
         interval_s: float | None = None,
         dry_run: bool | None = None,
+        metrics_query: Any | None = None,
     ) -> None:
         self._monitor = monitor
 
@@ -70,6 +71,8 @@ class CanaryAutoScheduler:
 
         env_dry_run = os.getenv("HFT_CANARY_AUTO_DRY_RUN", "1") == "1"
         self._dry_run: bool = dry_run if dry_run is not None else env_dry_run
+
+        self._metrics_query: Any | None = metrics_query
 
         self._task: asyncio.Task[None] | None = None
 
@@ -155,16 +158,28 @@ class CanaryAutoScheduler:
                 continue
 
             try:
-                live_metrics = self._build_metrics(canary)
+                # Try CK metrics first, fall back to YAML-based _build_metrics
+                live_metrics = None
+                if self._metrics_query is not None:
+                    strategy_id = canary.get("strategy_id", str(alpha_id))
+                    since_ns = int(canary.get("promoted_at_ns", 0))
+                    live_metrics = self._metrics_query.fetch(
+                        str(alpha_id), str(strategy_id), since_ns,
+                    )
+                if live_metrics is None:
+                    live_metrics = self._build_metrics(canary)
+
                 status = self._monitor.evaluate(str(alpha_id), live_metrics)
                 results.append(status)
 
+                _ck_used = self._metrics_query is not None and live_metrics is not None
                 logger.info(
                     "canary_auto_evaluated",
                     alpha_id=alpha_id,
                     state=status.state,
                     reason=status.reason,
                     dry_run=self._dry_run,
+                    metrics_source="clickhouse" if _ck_used else "yaml_fallback",
                 )
 
                 if not self._dry_run:
