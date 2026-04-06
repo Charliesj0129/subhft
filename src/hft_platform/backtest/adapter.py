@@ -36,6 +36,7 @@ from hft_platform.backtest._hbt_utils import (
     infer_tick_size_from_data,
     resolve_qty,
 )
+from hft_platform.backtest.risk_evaluator import BacktestRiskConfig, BacktestRiskEvaluator
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.core.pricing import FixedPriceScaleProvider, PriceCodec
 from hft_platform.events import BidAskEvent, MetaData
@@ -85,6 +86,7 @@ class HftBacktestAdapter:
         tick_mode: str = "feed",
         elapse_ns: int = 100_000_000,
         feature_array_source: tuple[np.ndarray, np.ndarray] | None = None,
+        risk_config: BacktestRiskConfig | None = None,
     ):
         if not HFTBACKTEST_AVAILABLE:
             raise ImportError("hftbacktest not installed")
@@ -124,6 +126,20 @@ class HftBacktestAdapter:
         self._equity_ts_buf = np.zeros(_EQUITY_CAPACITY, dtype=np.int64)
         self._equity_val_buf = np.zeros(_EQUITY_CAPACITY, dtype=np.float64)
         self._equity_count: int = 0
+
+        # Risk evaluator (opt-in)
+        _REJECT_CAPACITY = 256
+        self._reject_ts_ns = np.zeros(_REJECT_CAPACITY, dtype=np.int64)
+        self._reject_reasons: list[str] = []
+        self._reject_count: int = 0
+        if risk_config is not None and risk_config.enabled:
+            self._risk_evaluator: BacktestRiskEvaluator | None = BacktestRiskEvaluator(
+                risk_config,
+                position_provider=lambda sym, sid: self.positions.get(sym, 0),
+                price_scale_provider=None,
+            )
+        else:
+            self._risk_evaluator = None
 
         self._wait_status_mode = detect_wait_status_mode()
         self.feature_mode = str(feature_mode or "stats_only").strip().lower()
@@ -251,6 +267,19 @@ class HftBacktestAdapter:
         self._fill_position_after[idx] = position_after
         self._fill_mid_price_x2[idx] = mid_price_x2
         self._fill_count = idx + 1
+
+    def _record_rejection(self, intent: OrderIntent, reason: str) -> None:
+        """Record a risk rejection in SoA buffers."""
+        from hft_platform.core import timebase
+
+        if self._reject_count >= len(self._reject_ts_ns):
+            new_cap = len(self._reject_ts_ns) * 2
+            new_buf = np.zeros(new_cap, dtype=np.int64)
+            new_buf[: len(self._reject_ts_ns)] = self._reject_ts_ns
+            self._reject_ts_ns = new_buf
+        self._reject_ts_ns[self._reject_count] = timebase.now_ns()
+        self._reject_reasons.append(reason)
+        self._reject_count += 1
 
     def _reset_equity_buffers(self) -> None:
         self._equity_count = 0

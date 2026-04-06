@@ -150,7 +150,13 @@ def dispatch_strategy(adapter: object, event: object, feature_event: object | No
         more = adapter.strategy.handle_event(adapter.ctx, feature_event)  # type: ignore[attr-defined]
         if more:
             intents.extend(more)
+    risk_eval = getattr(adapter, "_risk_evaluator", None)
     for intent in intents:
+        if risk_eval is not None:
+            decision = risk_eval.evaluate(intent)
+            if not decision.approved:
+                adapter._record_rejection(intent, decision.reason_code)  # type: ignore[attr-defined]
+                continue
         adapter.execute_intent(intent)  # type: ignore[attr-defined]
 
 
