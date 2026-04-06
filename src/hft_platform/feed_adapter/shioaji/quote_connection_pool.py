@@ -279,62 +279,115 @@ class QuoteConnectionPool:
 
     # ── Options auto-refresh ─────────────────────────────────────────────
 
+    def _load_options_from_cache(self) -> list[dict[str, Any]]:
+        """Load TXO option contracts from the local contract cache.
+
+        Falls back to live Shioaji API if cache is empty or stale.
+        """
+        cache_path = os.getenv("HFT_CONTRACT_CACHE_PATH", "config/contracts.json")
+        try:
+            import json
+
+            with open(cache_path) as f:
+                data = json.load(f)
+            contracts = data.get("contracts", [])
+            opts = [
+                c for c in contracts
+                if c.get("type") == "option" and c.get("root") == "TXO"
+            ]
+            if opts:
+                logger.debug("options_loaded_from_cache", count=len(opts))
+                return opts
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            pass
+
+        # Fallback: query Shioaji API directly
+        for c in self._clients:
+            if not c.logged_in or not getattr(c._client, "api", None):
+                continue
+            try:
+                raw = list(c._client.api.Contracts.Options.TXO)
+                return [
+                    {
+                        "code": getattr(o, "code", ""),
+                        "delivery_date": getattr(o, "delivery_date", ""),
+                        "strike": getattr(o, "strike_price", None),
+                        "right": getattr(o.option_right, "value", None),
+                        "reference": getattr(o, "reference", None),
+                    }
+                    for o in raw
+                ]
+            except Exception as exc:
+                logger.warning("options_api_fallback_failed", error=str(exc))
+        return []
+
     def refresh_options_symbols(self, cb: Callable[..., Any] | None = None) -> bool:
         """Regenerate the options YAML if the nearest TXO expiry has changed.
+
+        Reads from contract cache first (no API call needed), falls back
+        to live API.  Uses ``reference`` price to compute ATM and filters
+        strikes to ATM ± ``HFT_OPTIONS_STRIKE_RANGE`` (default: all).
 
         Returns True if symbols were updated and resubscribed.
         """
         if not self._clients:
             return False
 
-        # Use the first logged-in client's API to query contracts
-        api = None
-        for c in self._clients:
-            if c.logged_in and getattr(c._client, "api", None):
-                api = c._client.api
-                break
-        if api is None:
-            logger.warning("options_refresh_skipped_no_api")
-            return False
-
-        try:
-            opts = list(api.Contracts.Options.TXO)
-        except Exception as exc:
-            logger.warning("options_refresh_fetch_failed", error=str(exc))
-            return False
-
+        opts = self._load_options_from_cache()
         if not opts:
             logger.warning("options_refresh_no_contracts")
             return False
 
-        dates = sorted(set(c.delivery_date for c in opts))
+        # Find nearest expiry
+        dates = sorted(set(str(c.get("delivery_date", "")) for c in opts if c.get("delivery_date")))
+        if not dates:
+            return False
         nearest_date = dates[0]
 
-        # Check if expiry changed from what's in the current YAML
-        symbols_path = Path(self._all_symbols[0].get("_source_path", "")) if self._all_symbols else None
-        if symbols_path is None or not str(symbols_path):
-            symbols_path = Path(os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml"))
-
-        current_expiry = self._options_expiry
-        if current_expiry == nearest_date:
+        if self._options_expiry == nearest_date:
             logger.debug("options_refresh_no_change", expiry=nearest_date)
             return False
 
         logger.info(
             "options_expiry_changed",
-            old_expiry=current_expiry,
+            old_expiry=self._options_expiry,
             new_expiry=nearest_date,
         )
 
-        # Rebuild YAML
-        nearest = [c for c in opts if c.delivery_date == nearest_date]
+        nearest = [c for c in opts if str(c.get("delivery_date", "")) == nearest_date]
+
+        # Optional ATM filtering via HFT_OPTIONS_STRIKE_RANGE
+        strike_range = int(os.getenv("HFT_OPTIONS_STRIKE_RANGE", "0"))  # 0 = all
+        if strike_range > 0:
+            # Find ATM from reference prices
+            refs = [float(c["reference"]) for c in nearest if c.get("reference")]
+            if refs:
+                atm = sum(refs) / len(refs)
+                strikes = sorted(set(float(c["strike"]) for c in nearest if c.get("strike")))
+                if strikes:
+                    atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm))
+                    lo = max(atm_idx - strike_range, 0)
+                    hi = min(atm_idx + strike_range, len(strikes) - 1)
+                    allowed = set(strikes[lo:hi + 1])
+                    nearest = [
+                        c for c in nearest
+                        if c.get("strike") is not None and float(c["strike"]) in allowed
+                    ]
+                    logger.info(
+                        "options_strike_filter",
+                        atm=atm,
+                        range=strike_range,
+                        strikes_before=len(strikes),
+                        strikes_after=len(allowed),
+                    )
+
         calls = sorted(
-            [c for c in nearest if c.option_right.value == "C"],
-            key=lambda c: c.strike_price,
+            [c for c in nearest if c.get("right") == "C"],
+            key=lambda c: float(c.get("strike", 0)),
         )
         puts = sorted(
-            [c for c in nearest if c.option_right.value == "P"],
-            key=lambda c: c.strike_price,
+            [c for c in nearest if c.get("right") == "P"],
+            key=lambda c: float(c.get("strike", 0)),
         )
 
         # Preserve group 0 (non-option symbols)
@@ -345,9 +398,19 @@ class QuoteConnectionPool:
             entry["group"] = 0
             symbols.append(entry)
         for c in calls:
-            symbols.append({"code": c.code, "exchange": "OPT", "group": 1})
+            symbols.append({"code": c["code"], "exchange": "OPT", "group": 1})
         for c in puts:
-            symbols.append({"code": c.code, "exchange": "OPT", "group": 2})
+            symbols.append({"code": c["code"], "exchange": "OPT", "group": 2})
+
+        # Validate connection limits
+        for g in range(self._num_conns):
+            count = sum(1 for s in symbols if s.get("group") == g)
+            if count > _MAX_SUBSCRIPTIONS_PER_CONN:
+                logger.error(
+                    "options_refresh_group_overflow",
+                    group=g, count=count, limit=_MAX_SUBSCRIPTIONS_PER_CONN,
+                )
+                return False
 
         out_path = os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml")
         try:
