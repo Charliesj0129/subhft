@@ -103,10 +103,8 @@ def test_sampler_emit_suppresses_exceptions(tmp_path):
     # Even if the file write fails, emit must not raise
     sampler = DecisionTraceSampler(enabled=True, sample_every=1, out_dir="/nonexistent_root/bad/path", max_bytes_per_file=1_000_000)
     # Should not raise even though directory creation will fail on read-only root
-    try:
-        sampler.emit(stage="s", trace_id="t", payload={})
-    except Exception as exc:  # noqa: BLE001
-        pytest.fail(f"emit() raised unexpectedly: {exc}")
+    result = sampler.emit(stage="s", trace_id="t", payload={})
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
