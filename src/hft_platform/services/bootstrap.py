@@ -597,6 +597,11 @@ class SystemBootstrapper:
 
             pool = QuoteConnectionPool(symbols_path, base_shioaji_cfg, num_conns)
             pool.create_facades()
+            # Order client needs the full symbol list for contract resolution
+            # but does NOT subscribe to quotes, so the per-connection subscription
+            # limit does not apply.  Temporarily raise it for the order facade.
+            order_cfg = dict(order_cfg)
+            order_cfg["max_subscriptions"] = num_conns * 200
             return pool, ShioajiClientFacade(symbols_path, order_cfg)
         return ShioajiClientFacade(symbols_path, base_shioaji_cfg), ShioajiClientFacade(symbols_path, order_cfg)
 
