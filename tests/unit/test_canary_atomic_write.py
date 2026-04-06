@@ -210,3 +210,6 @@ class TestApplyDecisionHold:
 
         # Should not raise; just log a warning
         monitor.apply_decision(status)
+
+        # Unknown alpha — no config was written or modified
+        assert list(tmp_path.iterdir()) == []

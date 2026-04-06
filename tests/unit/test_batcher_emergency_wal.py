@@ -129,7 +129,10 @@ class TestWalEmergencyDump:
         # Make makedirs succeed but open() fail
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             with patch("builtins.open", side_effect=OSError("disk full")):
-                batcher._wal_emergency_dump(batcher._active)  # must not raise
+                result = batcher._wal_emergency_dump(batcher._active)  # must not raise
+
+        # File write failure returns False (WAL dump failed)
+        assert result is False
 
     def test_returns_true_on_success(self, tmp_path) -> None:
         writer = MagicMock()
@@ -313,10 +316,16 @@ class TestWriteFlushBufferEmergencyFallback:
         flush_buf.row_count = 1
         flush_buf.to_row_dicts = MagicMock(side_effect=[rows, RuntimeError("extract fail")])
 
+        row_count_before = batcher._active.row_count
+
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             with patch("builtins.open", side_effect=OSError("disk full")):
                 # Must not raise despite triple fault
                 self._run(batcher._write_flush_buffer(flush_buf))
+
+        # Both WAL dump and reinject failed — active buffer row count is unchanged
+        # (no rows from flush_buf were added via reinject)
+        assert batcher._active.row_count == row_count_before
 
 
 # ---------------------------------------------------------------------------
@@ -379,3 +388,6 @@ class TestReinjectFailedBuffer:
 
         # Must not raise
         self._run(batcher._reinject_failed_buffer(buf))
+
+        # Reinject failed — active buffer remains empty (no rows added)
+        assert batcher._active.row_count == 0

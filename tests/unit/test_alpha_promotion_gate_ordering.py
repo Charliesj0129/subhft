@@ -55,7 +55,10 @@ def test_verify_gate_c_passes_when_gate_c_true(tmp_path: Path) -> None:
     _write_meta(tmp_path, gate_c=True)
 
     # Must not raise
-    _verify_gate_c_passed(sc_path)
+    result = _verify_gate_c_passed(sc_path)
+
+    # Gate C passed — function returns None (no exception, no side effects)
+    assert result is None
 
 
 def test_verify_gate_c_warns_and_proceeds_when_no_meta(

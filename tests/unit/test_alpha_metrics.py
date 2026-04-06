@@ -116,7 +116,10 @@ class TestGateResultMetrics:
             import hft_platform.alpha.audit as audit
 
             # Should complete without raising
-            audit.log_gate_result("alpha_x", None, _make_gate_report(), None)
+            result = audit.log_gate_result("alpha_x", None, _make_gate_report(), None)
+
+        # Metrics path is skipped gracefully — function returns None
+        assert result is None
 
     def test_metrics_exception_is_swallowed(self):
         """If the counter raises unexpectedly, log_gate_result must not propagate."""
@@ -126,7 +129,10 @@ class TestGateResultMetrics:
             import hft_platform.alpha.audit as audit
 
             # Must not raise
-            audit.log_gate_result("alpha_x", None, _make_gate_report(), None)
+            result = audit.log_gate_result("alpha_x", None, _make_gate_report(), None)
+
+        # Metrics exception is swallowed — function returns None
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

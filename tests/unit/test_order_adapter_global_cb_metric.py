@@ -224,7 +224,11 @@ def test_update_cb_metric_does_not_raise_on_metrics_error(tmp_path):
     adapter.metrics.circuit_breaker_state.labels.side_effect = RuntimeError("metrics broken")
 
     # Must not raise
-    adapter._update_cb_metric()
+    result = adapter._update_cb_metric()
+
+    # Metrics errors are silently swallowed; circuit breaker state is unchanged
+    assert result is None
+    assert not adapter.circuit_breaker.is_open()
 
 
 # ---------------------------------------------------------------------------

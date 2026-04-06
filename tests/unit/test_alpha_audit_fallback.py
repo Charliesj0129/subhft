@@ -93,7 +93,10 @@ class TestWriteFallback:
         # Patch open to raise to simulate disk full / permission error
         with patch("builtins.open", side_effect=OSError("disk full")):
             # Should not raise
-            _write_fallback("some_table", {"data": 1})
+            result = _write_fallback("some_table", {"data": 1})
+
+        # _write_fallback swallows exceptions and always returns None
+        assert result is None
 
     def test_uses_separate_files_per_table(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
