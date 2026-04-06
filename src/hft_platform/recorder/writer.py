@@ -621,6 +621,11 @@ class DataWriter:
                     values = self._transpose_columnar_rows(column_data, row_count)
                     self.ch_client.insert(table, values, column_names=column_names)
         elapsed_ms = time.monotonic() * 1000 - start_ms
+        try:
+            if self.metrics:
+                self.metrics.recorder_ch_insert_latency_ms.labels(table=table).observe(elapsed_ms)
+        except Exception:  # noqa: BLE001
+            pass
         if elapsed_ms > self._insert_warn_ms:
             logger.warning(
                 "Slow ClickHouse insert",
@@ -739,6 +744,11 @@ class DataWriter:
                 self.ch_client.insert(table, values, column_names=keys)
 
         elapsed_ms = time.monotonic() * 1000 - start_ms
+        try:
+            if self.metrics:
+                self.metrics.recorder_ch_insert_latency_ms.labels(table=table).observe(elapsed_ms)
+        except Exception:  # noqa: BLE001
+            pass
         if elapsed_ms > self._insert_warn_ms:
             logger.warning(
                 "Slow ClickHouse insert",

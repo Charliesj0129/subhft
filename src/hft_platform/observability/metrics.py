@@ -92,6 +92,7 @@ class MetricsRegistry:
                 "recorder_wal_skipped_rows_total",
                 "recorder_wal_write_latency_ms",
                 "recorder_wal_fsync_latency_ms",
+                "recorder_ch_insert_latency_ms",
                 "recorder_insert_batches_total",
                 "wal_disk_available_mb",
                 "wal_disk_circuit_breaker_active",
@@ -482,6 +483,12 @@ class MetricsRegistry:
             "Recorder WAL write latency in milliseconds",
             ["writer", "mode"],
             buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 250, 500, 1000],
+        )
+        self.recorder_ch_insert_latency_ms = Histogram(
+            "recorder_ch_insert_latency_ms",
+            "ClickHouse insert latency in milliseconds",
+            ["table"],
+            buckets=[1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 30000],
         )
         self.recorder_wal_fsync_latency_ms = Histogram(
             "recorder_wal_fsync_latency_ms",
