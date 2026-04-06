@@ -566,11 +566,32 @@ class RecorderService:
 
     async def _shutdown_flush(self) -> None:
         """Flush all batchers and shut down writer. Called during graceful shutdown."""
-        for topic, batcher in self.batchers.items():
-            try:
-                await batcher.force_flush()
-            except Exception as exc:
-                logger.warning("recorder_batcher_flush_error", topic=topic, error=str(exc))
+        flushed: list[str] = []
+        skipped: list[str] = []
+        all_topics = list(self.batchers.keys())
+
+        try:
+            for topic, batcher in self.batchers.items():
+                try:
+                    await batcher.force_flush()
+                    flushed.append(topic)
+                except asyncio.CancelledError:
+                    skipped.extend(t for t in all_topics if t not in flushed and t != topic)
+                    skipped.append(topic)
+                    raise  # Re-raise to exit the loop
+                except Exception as exc:
+                    logger.warning("recorder_batcher_flush_error", topic=topic, error=str(exc))
+                    flushed.append(topic)  # Attempted, move on
+        except asyncio.CancelledError:
+            if skipped:
+                logger.error(
+                    "recorder_shutdown_batchers_skipped",
+                    flushed=flushed,
+                    skipped=skipped,
+                    msg="Shutdown timeout — some batchers were not flushed",
+                )
+            raise  # Must re-raise for wait_for to handle
+
         try:
             await self.writer.shutdown()
         except Exception as exc:
