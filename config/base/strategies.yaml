@@ -40,7 +40,7 @@ strategies:
   - id: "CBS_TMFD6"
     module: "hft_platform.strategies.cascade_bounce"
     class: "CascadeBounceStrategy"
-    enabled: true
+    enabled: false  # Disabled: 0/84 contrarian, 0/6 momentum configs profitable
     product_type: "FUT"
     symbols: ["TMFD6"]
     params:
@@ -50,8 +50,31 @@ strategies:
       take_profit_pts: 8
       stop_loss_pts: 6
       min_vol_samples: 8
+      max_spread_pts: 3               # Skip entry when spread > 3 pts (wide spread = bad IOC fill)
       session_start_sec: 0            # 00:00 TWN — full-day fallback; SessionGovernor is authoritative in prod
       session_end_sec: 86400          # 24:00 TWN — keeps day/night sessions eligible when governor is enabled
+
+  # --- Momentum Bounce (CBS-Flipped) TMFD6 — SHADOW MODE ---
+  # Trades WITH sigma-normalized large moves (momentum, not contrarian).
+  # Trailing stop + hard SL + time exit. Deploy with HFT_ORDER_MODE=sim.
+  # March regime: 51% win, median ~breakeven. Jan-Feb: anti-momentum.
+  # Shadow mode accumulates OOS evidence; switch to live after 5+ positive days.
+  - id: "MOMENTUM_BOUNCE_TMFD6"
+    module: "hft_platform.strategies.momentum_bounce"
+    class: "MomentumBounceStrategy"
+    enabled: false  # Disabled: research incomplete, not ready for live
+    product_type: "FUT"
+    symbols: ["TMFD6"]
+    params:
+      lookback_ns: 60000000000         # 60s vol window (same as CBS)
+      trigger_sigma: 3.0               # 3-sigma normalized move threshold
+      max_hold_ns: 900000000000        # 900s (15 min) max hold
+      stop_loss_pts: 10                # Hard SL at -10 pts
+      trailing_stop_pts: 6             # Trail 6 pts from peak PnL
+      min_vol_samples: 8
+      max_spread_pts: 3                # Skip entry when spread > 3 pts
+      session_start_sec: 0
+      session_end_sec: 86400
 
   # --- TX→TMF Lead-Lag (R28) — DISABLED (shadow) ---
   # Cross-symbol momentum: TX large-volume ticks predict TMF 10-30min moves.
