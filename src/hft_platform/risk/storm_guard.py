@@ -390,6 +390,16 @@ class StormGuard:
                 error_type=type(exc).__name__,
             )
 
+    def trigger_storm(self, reason: str) -> None:
+        """Escalate to STORM state. Less severe than trigger_halt -- used for
+        transient backpressure conditions that may self-resolve."""
+        with self._state_lock:
+            if self.state < StormGuardState.STORM:
+                now = time.monotonic()
+                self._storm_entry_ts = now
+                self._de_escalate_count = 0
+                self._transition(StormGuardState.STORM, reason)
+
     def trigger_halt(self, reason: str) -> None:
         """Manual or Supervisor override to force HALT."""
         fire_callback = False

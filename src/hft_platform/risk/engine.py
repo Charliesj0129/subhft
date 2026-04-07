@@ -114,6 +114,8 @@ class RiskEngine:
         "_rejection_sink",
         "_greeks_validator",
         "_validator0",
+        "_oq_full_consecutive",
+        "_oq_full_halt_threshold",
         "__dict__",
     )
 
@@ -197,6 +199,9 @@ class RiskEngine:
         self._dlq_drain_interval: int = int(os.getenv("HFT_RISK_DLQ_DRAIN_INTERVAL", "50"))
         self._dlq_drain_counter: int = 0
         self._rejection_sink = rejection_sink
+        # Gradual queue-full degradation: STORM first, HALT after N consecutive failures
+        self._oq_full_consecutive: int = 0
+        self._oq_full_halt_threshold: int = int(os.getenv("HFT_ORDER_QUEUE_FULL_HALT_THRESHOLD", "3"))
         self._greeks_validator = None
         if greeks_provider is not None:
             try:
@@ -455,6 +460,7 @@ class RiskEngine:
                     else:
                         try:
                             self.order_queue.put_nowait(cmd)
+                            self._oq_full_consecutive = 0
                         except asyncio.QueueFull:
                             logger.error(
                                 "order_queue_full_in_risk",
@@ -467,7 +473,11 @@ class RiskEngine:
                             if len(self._order_dlq) > self._ORDER_DLQ_MAX:
                                 self._order_dlq.popleft()
                                 self.metrics.risk_dlq_overflow_total.inc()
-                            self.storm_guard.trigger_halt("order_queue_full")
+                            self._oq_full_consecutive += 1
+                            if self._oq_full_consecutive >= self._oq_full_halt_threshold:
+                                self.storm_guard.trigger_halt("order_queue_full_persistent")
+                            else:
+                                self.storm_guard.trigger_storm("order_queue_full")
                 else:
                     logger.warning("Order Rejected by Risk", sid=intent.strategy_id, reason=decision.reason_code)
                     self._emit_reject_metric(intent.strategy_id, decision.reason_code)

@@ -840,7 +840,9 @@ async def test_storm_guard_halt_triggered_on_risk_queue_full(runner_factory):
     with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
         await runner.process_event(event)
 
-    mock_storm_guard.trigger_halt.assert_called_once_with("risk_queue_full")
+    # Gradual degradation: first queue-full triggers STORM, not HALT
+    mock_storm_guard.trigger_storm.assert_called_once_with("risk_queue_full")
+    mock_storm_guard.trigger_halt.assert_not_called()
 
 
 @pytest.mark.asyncio

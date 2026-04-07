@@ -339,6 +339,10 @@ class StrategyRunner:
         # StormGuard reference: set by bootstrap to trigger HALT on persistent risk_queue_full
         self._storm_guard: Any = None
 
+        # Gradual queue-full degradation: STORM first, HALT after N consecutive failures
+        self._queue_full_consecutive: int = 0
+        self._queue_full_halt_threshold: int = int(os.getenv("HFT_QUEUE_FULL_HALT_THRESHOLD", "3"))
+
         # Load initial
         for strat in self.registry.instantiate():
             self.register(strat)
@@ -1143,11 +1147,16 @@ class StrategyRunner:
                         submitted=_d7_submitted,
                         dropped=_d7_dropped,
                     )
-                    # Persistent risk_queue_full is a system-level threat:
-                    # trigger StormGuard HALT (symmetric with order_queue_full
-                    # in risk/engine.py line 449).
+                    # Gradual degradation: STORM first, HALT only after
+                    # consecutive failures exceed threshold.
+                    self._queue_full_consecutive += 1
                     if self._storm_guard is not None:
-                        self._storm_guard.trigger_halt("risk_queue_full")
+                        if self._queue_full_consecutive >= self._queue_full_halt_threshold:
+                            self._storm_guard.trigger_halt("risk_queue_full_persistent")
+                        else:
+                            self._storm_guard.trigger_storm("risk_queue_full")
+                else:
+                    self._queue_full_consecutive = 0
 
     @staticmethod
     def filter_intents_by_phase(intents: list, track_gate: Any, position_store: Any = None) -> list:
