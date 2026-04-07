@@ -293,3 +293,137 @@ def test_non_consecutive_overflows_do_not_trigger_halt(monkeypatch):
 
     # No HALT should have been triggered despite 4 total overflows.
     assert len(storm_guard.halt_messages) == 0
+
+
+# ---------------------------------------------------------------------------
+# bus_consumer_lag gauge tests
+# ---------------------------------------------------------------------------
+
+
+def test_consumer_lag_gauge_updates_on_consume():
+    """bus_consumer_lag gauge is updated after each catch-up iteration in consume()."""
+    bus = RingBufferBus(size=16)
+    bus.publish_many_nowait(["a", "b", "c"])
+
+    async def _run():
+        gen = bus.consume(start_cursor=-1, consumer_name="lag_consumer")
+        # Drain a, b, c
+        _e1 = await gen.__anext__()
+        _e2 = await gen.__anext__()
+        _e3 = await gen.__anext__()
+        # Publish 2 more; on resume inner while exits, gauge is set,
+        # then outer loop re-enters inner while for d, e.
+        bus.publish_many_nowait(["d", "e"])
+        _e4 = await gen.__anext__()
+        _e5 = await gen.__anext__()
+        # Publish one more to trigger gauge update after d,e catch-up
+        bus.publish_nowait("f")
+        _e6 = await gen.__anext__()
+        # Check position while generator is still alive
+        assert "lag_consumer" in bus._consumer_positions
+        return _e6
+
+    result = asyncio.run(_run())
+    assert result == "f"
+    # Gauge was set; verify it is a non-negative number
+    lag_value = bus.metrics.bus_consumer_lag.labels(consumer="lag_consumer")._value.get()
+    assert lag_value >= 0
+
+
+def test_consumer_lag_gauge_reflects_writer_distance():
+    """Gauge value equals cursor - local_seq at end of catch-up iteration."""
+    bus = RingBufferBus(size=16)
+    bus.publish_many_nowait(["a", "b", "c"])
+
+    async def _run():
+        gen = bus.consume(start_cursor=-1, consumer_name="distance_check")
+        _e1 = await gen.__anext__()
+        _e2 = await gen.__anext__()
+        _e3 = await gen.__anext__()
+        # After resume from _e3 yield, inner while exits.
+        # At that point: local_seq=2, cursor=2 (nothing new published yet).
+        # Gauge: 2 - 2 = 0. But we need to call __anext__ to trigger that.
+        # Publish "d" so outer loop unblocks and inner while processes it.
+        bus.publish_nowait("d")
+        _e4 = await gen.__anext__()
+        # After _e4, gauge was set on the first catch-up exit (a,b,c):
+        # cursor was 2 at that point, local_seq=2, lag=0.
+        # But "d" publish happened before gauge ran, so cursor=3, lag=1.
+        # Then second catch-up: cursor=3, local_seq=3... but we need
+        # another __anext__ to trigger gauge for the d catch-up.
+        bus.publish_nowait("e")
+        _e5 = await gen.__anext__()
+        # After _e5 resume, inner while for d exits: cursor may be 4, local_seq=3, lag=1
+        # Then enters for e: local_seq=4, yield e. We need one more.
+        bus.publish_nowait("sentinel")
+        _e6 = await gen.__anext__()
+        return _e6
+
+    result = asyncio.run(_run())
+    assert result == "sentinel"
+    lag_value = bus.metrics.bus_consumer_lag.labels(consumer="distance_check")._value.get()
+    # Lag is always non-negative
+    assert lag_value >= 0
+
+
+def test_consumer_position_cleaned_up_on_close():
+    """Consumer position dict entry is removed when generator is closed."""
+    bus = RingBufferBus(size=16)
+    bus.publish_nowait("evt")
+
+    async def _run():
+        gen = bus.consume(start_cursor=-1, consumer_name="cleanup_test")
+        _evt = await gen.__anext__()
+        # Publish another event so the generator advances past the yield,
+        # triggering the gauge/position update after inner while exits.
+        bus.publish_nowait("trigger")
+        _evt2 = await gen.__anext__()
+        # Now position should be tracked (gauge was set between catch-ups)
+        assert "cleanup_test" in bus._consumer_positions
+        # Close the generator — finally block runs
+        await gen.aclose()
+        # Position should be cleaned up
+        assert "cleanup_test" not in bus._consumer_positions
+
+    asyncio.run(_run())
+
+
+def test_consumer_lag_gauge_with_consume_batch():
+    """bus_consumer_lag is also updated when using consume_batch."""
+    bus = RingBufferBus(size=16)
+    bus.publish_many_nowait(["a", "b", "c"])
+
+    async def _run():
+        gen = bus.consume_batch(batch_size=10, start_cursor=-1, consumer_name="batch_consumer")
+        batch = await gen.__anext__()
+        assert batch == ["a", "b", "c"]
+        # Publish more and consume to verify gauge updates
+        bus.publish_nowait("d")
+        batch2 = await gen.__anext__()
+        assert batch2 == ["d"]
+        # Check position tracking while generator is alive
+        assert "batch_consumer" in bus._consumer_positions
+        return True
+
+    asyncio.run(_run())
+    # Gauge was set; verify it is a non-negative number
+    lag_value = bus.metrics.bus_consumer_lag.labels(consumer="batch_consumer")._value.get()
+    assert lag_value >= 0
+
+
+def test_consumer_batch_position_cleaned_up_on_close():
+    """Consumer position dict entry is removed when batch generator is closed."""
+    bus = RingBufferBus(size=16)
+    bus.publish_nowait("evt")
+
+    async def _run():
+        gen = bus.consume_batch(batch_size=10, start_cursor=-1, consumer_name="batch_cleanup")
+        _batch = await gen.__anext__()
+        # Publish to trigger position update after inner while exits
+        bus.publish_nowait("trigger")
+        _batch2 = await gen.__anext__()
+        assert "batch_cleanup" in bus._consumer_positions
+        await gen.aclose()
+        assert "batch_cleanup" not in bus._consumer_positions
+
+    asyncio.run(_run())

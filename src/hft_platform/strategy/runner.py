@@ -351,12 +351,12 @@ class StrategyRunner:
         try:
             batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
             if batch_size > 1:
-                async for batch in self.bus.consume_batch(batch_size):
+                async for batch in self.bus.consume_batch(batch_size, consumer_name="strategy_runner"):
                     for event in batch:
                         await self.process_event(event)
                     self._consumer_seq = self.bus.cursor
             else:
-                async for event in self.bus.consume():
+                async for event in self.bus.consume(consumer_name="strategy_runner"):
                     await self.process_event(event)
                     self._consumer_seq = self.bus.cursor
         except asyncio.CancelledError:

@@ -330,6 +330,7 @@ class RingBufferBus:
         # Per-consumer signals to avoid lost-wakeup race (DEC-02)
         self.signal = None if _WAIT_MODE == "spin" else asyncio.Event()
         self._consumer_signals: list[asyncio.Event] = []
+        self._consumer_positions: dict[str, int] = {}
         self._notify_every = max(1, int(os.getenv("HFT_BUS_NOTIFY_EVERY", "1")))
         self._notify_counter = 0
         self._spin_sleep = float(os.getenv("HFT_BUS_SPIN_SLEEP", "0"))
@@ -611,7 +612,7 @@ class RingBufferBus:
             if self.signal is not None:
                 self.signal.set()
 
-    async def consume(self, start_cursor: int | None = None):
+    async def consume(self, start_cursor: int | None = None, consumer_name: str = "unknown"):
         """Async generator for consuming events."""
         # If start_cursor is None, join at current (latest).
         # To replay from beginning, pass -1.
@@ -695,6 +696,11 @@ class RingBufferBus:
                     if event is not None:
                         yield event
 
+                # Track consumer position and report lag
+                self._consumer_positions[consumer_name] = local_seq
+                if self.metrics:
+                    self.metrics.bus_consumer_lag.labels(consumer=consumer_name).set(self.cursor - local_seq)
+
                 # Successful catch-up with no overflow — reset counter
                 if self._overflow_count > 0:
                     self._overflow_count = 0
@@ -702,8 +708,9 @@ class RingBufferBus:
             # Unregister per-consumer signal on generator close
             if my_signal is not None and my_signal in self._consumer_signals:
                 self._consumer_signals.remove(my_signal)
+            self._consumer_positions.pop(consumer_name, None)
 
-    async def consume_batch(self, batch_size: int, start_cursor: int | None = None):
+    async def consume_batch(self, batch_size: int, start_cursor: int | None = None, consumer_name: str = "unknown"):
         """Async generator yielding lists of events."""
         batch_size = max(1, batch_size)
         local_seq = self.cursor if start_cursor is None else start_cursor
@@ -785,8 +792,14 @@ class RingBufferBus:
                 if batch:
                     yield batch
 
+                # Track consumer position and report lag
+                self._consumer_positions[consumer_name] = local_seq
+                if self.metrics:
+                    self.metrics.bus_consumer_lag.labels(consumer=consumer_name).set(self.cursor - local_seq)
+
                 if self._overflow_count > 0:
                     self._overflow_count = 0
         finally:
             if my_signal is not None and my_signal in self._consumer_signals:
                 self._consumer_signals.remove(my_signal)
+            self._consumer_positions.pop(consumer_name, None)

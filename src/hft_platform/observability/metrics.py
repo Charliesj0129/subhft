@@ -265,6 +265,8 @@ class MetricsRegistry:
                 # Pipeline health FSM (PipelineHealthTracker)
                 _pn("pipeline_health_state"),
                 _pn("pipeline_degradation_events_total"),
+                # Per-consumer ring buffer lag gauge
+                _pn("bus_consumer_lag"),
             ]
         )
         # Market Data
@@ -277,6 +279,7 @@ class MetricsRegistry:
         )  # 1ms to 500ms
         self.bus_overflow_total = Counter(_pn("bus_overflow_total"), "Event bus overflows")
         self.bus_gap_events_total = Counter(_pn("bus_gap_events_total"), "GapEvents injected on consumer overflow")
+        self.bus_consumer_lag = Gauge(_pn("bus_consumer_lag"), "Consumer lag behind writer cursor", ["consumer"])
         self.normalization_errors_total = Counter(_pn("normalization_errors_total"), "Normalization failures", ["type"])
         self.normalization_skip_total = Counter(_pn("normalization_skip_total"), "Normalization silent skips", ["type", "reason"])
         self.rust_fallback_total = Counter(_pn("rust_fallback_total"), "Rust-to-Python normalizer fallback count", ["type"]
