@@ -23,7 +23,7 @@ async def _push_report(context: Any, session: str) -> None:
     """Push reports for all configured symbols."""
     import hft_platform.bot.app as bot_app
     from hft_platform.bot.app import get_report_symbols
-    from hft_platform.reports.pipeline import build_report, resolve_trading_date
+    from hft_platform.reports.pipeline import build_hybrid_report_async, resolve_trading_date
 
     chat_id = _get_owner_chat_id()
     if not chat_id:
@@ -37,22 +37,24 @@ async def _push_report(context: Any, session: str) -> None:
     sent_any = False
     for symbol in symbols:
         try:
-            composed = build_report(session, date, symbol)
+            result = await build_hybrid_report_async(session, date, symbol)
             bot_app.last_ch_ok = datetime.now(_TZ)
         except Exception as exc:
             _log.error("bot.push_error", session=session, symbol=symbol, exc=str(exc), exc_info=True)
             continue
 
-        if composed is None:
+        if result.composed is None:
             _log.info("bot.push_no_data", session=session, date=date, symbol=symbol)
             continue
+        if result.llm_error:
+            _log.warning("bot.push_llm_fallback", session=session, date=date, symbol=symbol, llm_error=result.llm_error)
 
-        for i, part in enumerate(composed.messages):
+        for i, part in enumerate(result.composed.messages):
             if part.kind == "text":
                 await context.bot.send_message(chat_id=chat_id, text=part.content, parse_mode="HTML")
             elif part.kind == "image" and part.image is not None:
                 await context.bot.send_photo(chat_id=chat_id, photo=io.BytesIO(part.image), caption=part.caption)
-            if i < len(composed.messages) - 1:
+            if i < len(result.composed.messages) - 1:
                 await asyncio.sleep(1.5)
         sent_any = True
 

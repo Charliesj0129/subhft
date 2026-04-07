@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,15 +13,16 @@ from hft_platform.reports.models import ComposedReport, MessagePart
 def _make_composed(msgs: list[str] | None = None) -> ComposedReport:
     if msgs is None:
         msgs = ["msg1", "msg2"]
-    return ComposedReport(
-        messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs]
-    )
+    return ComposedReport(messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs])
 
 
 @pytest.fixture(autouse=True)
 def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("HFT_TELEGRAM_CHAT_ID", "12345")
+    import hft_platform.bot.app as bot_app
+
+    bot_app.latest_manual_report_context = None
 
 
 class TestScheduleJobs:
@@ -65,8 +67,13 @@ class TestPushJob:
         ctx.bot.send_message = AsyncMock()
         ctx.bot.send_photo = AsyncMock()
 
-        with patch("hft_platform.reports.pipeline.build_report") as mock_build:
-            mock_build.return_value = _make_composed(["msg1", "msg2"])
+        with patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock()) as mock_build:
+            mock_build.return_value = SimpleNamespace(
+                composed=_make_composed(["msg1", "msg2"]),
+                dossier=MagicMock(),
+                decision=MagicMock(),
+                llm_error=None,
+            )
             with patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio:
                 mock_asyncio.sleep = AsyncMock()
                 await _push_report(ctx, "day")
@@ -80,8 +87,8 @@ class TestPushJob:
         ctx = MagicMock()
         ctx.bot.send_message = AsyncMock()
 
-        with patch("hft_platform.reports.pipeline.build_report") as mock_build:
-            mock_build.return_value = None
+        with patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock()) as mock_build:
+            mock_build.return_value = SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)
             await _push_report(ctx, "day")
 
         ctx.bot.send_message.assert_not_called()
@@ -110,14 +117,19 @@ class TestMultiSymbolPush:
         ctx.bot.send_photo = AsyncMock()
 
         with (
-            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock()) as mock_build,
             patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
         ):
-            mock_build.return_value = _make_composed(["msg1"])
+            mock_build.return_value = SimpleNamespace(
+                composed=_make_composed(["msg1"]),
+                dossier=MagicMock(),
+                decision=MagicMock(),
+                llm_error=None,
+            )
             mock_asyncio.sleep = AsyncMock()
             await _push_report(ctx, "day")
 
-        # build_report should be called 3 times (one per symbol)
+        # build_hybrid_report_async should be called 3 times (one per symbol)
         assert mock_build.call_count == 3
         symbols_called = [call[0][2] for call in mock_build.call_args_list]
         assert symbols_called == ["TXFD6", "TMFD6", "2330"]
@@ -131,13 +143,18 @@ class TestMultiSymbolPush:
         ctx.bot.send_message = AsyncMock()
         ctx.bot.send_photo = AsyncMock()
 
-        def side_effect(session: str, date: object, symbol: str) -> ComposedReport | None:
+        async def side_effect(session: str, date: object, symbol: str) -> SimpleNamespace:
             if symbol == "NOSYMBOL":
-                return None
-            return _make_composed(["msg1"])
+                return SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)
+            return SimpleNamespace(
+                composed=_make_composed(["msg1"]),
+                dossier=MagicMock(),
+                decision=MagicMock(),
+                llm_error=None,
+            )
 
         with (
-            patch("hft_platform.reports.pipeline.build_report", side_effect=side_effect),
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(side_effect=side_effect)),
             patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
         ):
             mock_asyncio.sleep = AsyncMock()
@@ -158,7 +175,10 @@ class TestPushTimestampTracking:
         ctx = MagicMock()
         ctx.bot.send_message = AsyncMock()
 
-        with patch("hft_platform.reports.pipeline.build_report", return_value=None):
+        with patch(
+            "hft_platform.reports.pipeline.build_hybrid_report_async",
+            new=AsyncMock(return_value=SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)),
+        ):
             await _push_report(ctx, "day")
 
         assert bot_app.last_day_report is None
@@ -174,16 +194,75 @@ class TestPushTimestampTracking:
         ctx.bot.send_message = AsyncMock()
         ctx.bot.send_photo = AsyncMock()
 
-        def side_effect(session: str, date: object, symbol: str) -> ComposedReport | None:
+        async def side_effect(session: str, date: object, symbol: str) -> SimpleNamespace:
             if symbol == "NOSYMBOL":
-                return None
-            return _make_composed(["msg1"])
+                return SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)
+            return SimpleNamespace(
+                composed=_make_composed(["msg1"]),
+                dossier=MagicMock(),
+                decision=MagicMock(),
+                llm_error=None,
+            )
 
         with (
-            patch("hft_platform.reports.pipeline.build_report", side_effect=side_effect),
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(side_effect=side_effect)),
             patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
         ):
             mock_asyncio.sleep = AsyncMock()
             await _push_report(ctx, "day")
 
         assert bot_app.last_day_report is not None
+
+
+class TestHybridPush:
+    @pytest.mark.asyncio
+    async def test_push_uses_hybrid_async_builder(self) -> None:
+        from hft_platform.bot.scheduler import _push_report
+
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+        ctx.bot.send_photo = AsyncMock()
+
+        hybrid_result = SimpleNamespace(
+            composed=_make_composed(["hybrid"]),
+            decision=MagicMock(),
+            dossier=MagicMock(),
+            llm_error=None,
+        )
+
+        with (
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)) as mock_hybrid,
+            patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.sleep = AsyncMock()
+            await _push_report(ctx, "day")
+
+        mock_hybrid.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_push_fallback_does_not_touch_manual_ask_cache(self) -> None:
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.scheduler import _push_report
+
+        existing = MagicMock(symbol="TXFD6")
+        bot_app.latest_manual_report_context = existing
+
+        ctx = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+        ctx.bot.send_photo = AsyncMock()
+
+        hybrid_result = SimpleNamespace(
+            composed=_make_composed(["rule-only"]),
+            decision=None,
+            dossier=None,
+            llm_error="timeout",
+        )
+
+        with (
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)),
+            patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.sleep = AsyncMock()
+            await _push_report(ctx, "day")
+
+        assert bot_app.latest_manual_report_context is existing

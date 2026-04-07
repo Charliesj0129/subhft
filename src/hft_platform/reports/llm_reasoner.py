@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict
 from typing import Any
 
+from hft_platform.reports.llm_client import OpenRouterClient
 from hft_platform.reports.llm_models import EvidenceRef, LLMDecisionReport, LLMDossier, TradePlan
 
-__all__ = ["LLMReportReasoner"]
+__all__ = ["LLMReportReasoner", "answer_followup_question"]
 
 
 def _require_mapping(value: object, field_name: str) -> Mapping[str, object]:
@@ -114,6 +117,36 @@ class LLMReportReasoner:
             f"Evidence JSON: {serialized_dossier}"
         )
 
+    def _build_followup_prompt(
+        self,
+        dossier: LLMDossier,
+        decision: LLMDecisionReport,
+        question: str,
+    ) -> str:
+        serialized_decision = json.dumps(
+            {
+                "market_verdict": decision.market_verdict,
+                "intraday_plan": asdict(decision.intraday_plan),
+                "swing_plan": asdict(decision.swing_plan),
+                "key_levels": list(decision.key_levels),
+                "invalidations": list(decision.invalidations),
+                "counter_case": decision.counter_case,
+                "execution_notes": list(decision.execution_notes),
+                "confidence": decision.confidence,
+                "evidence_refs": [asdict(ref) for ref in decision.evidence_refs],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return (
+            "Answer only from the supplied report context. Do not invent facts.\n"
+            "Return JSON only with keys: answer, evidence_refs.\n"
+            "evidence_refs must be a non-empty array of keys from dossier.evidence.\n"
+            f"Question: {question}\n"
+            f"Evidence: {json.dumps(dict(dossier.evidence), ensure_ascii=False, sort_keys=True)}\n"
+            f"Decision JSON: {serialized_decision}"
+        )
+
     async def generate(self, dossier: LLMDossier) -> LLMDecisionReport:
         dossier.validate()
         prompt = self._build_prompt(dossier)
@@ -137,3 +170,46 @@ class LLMReportReasoner:
             msg = f"unknown evidence refs: {', '.join(unknown_refs)}"
             raise ValueError(msg)
         return report
+
+    async def answer_followup(
+        self,
+        dossier: LLMDossier,
+        decision: LLMDecisionReport,
+        question: str,
+    ) -> str:
+        dossier.validate()
+        decision.validate()
+        question_text = question.strip()
+        if not question_text:
+            msg = "question must be non-empty"
+            raise ValueError(msg)
+
+        payload = _require_mapping(
+            await self._client.complete_json(self._build_followup_prompt(dossier, decision, question_text)),
+            "payload",
+        )
+        answer = _require_text(payload.get("answer"), "answer").strip()
+        if not answer:
+            msg = "answer must be non-empty"
+            raise ValueError(msg)
+        evidence_refs = _coerce_text_tuple(payload.get("evidence_refs"), "evidence_refs")
+        if not evidence_refs:
+            msg = "evidence_refs must be non-empty"
+            raise ValueError(msg)
+        unknown_refs = tuple(ref for ref in evidence_refs if ref not in dossier.evidence)
+        if unknown_refs:
+            msg = f"unknown evidence refs: {', '.join(unknown_refs)}"
+            raise ValueError(msg)
+        return answer
+
+
+async def answer_followup_question(report_context: Any, question: str) -> str:
+    dossier = getattr(report_context, "dossier", None)
+    decision = getattr(report_context, "decision", None)
+    if dossier is None or decision is None:
+        msg = "report context must include dossier and decision"
+        raise ValueError(msg)
+
+    client = OpenRouterClient(model=os.environ.get("HFT_LLM_MODEL", ""))
+    reasoner = LLMReportReasoner(client=client)
+    return await reasoner.answer_followup(dossier, decision, question)
