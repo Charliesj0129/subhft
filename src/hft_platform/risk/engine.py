@@ -512,6 +512,36 @@ class RiskEngine:
                         self.metrics.rejection_sink_overflow_total.inc()
                 self.intent_queue.task_done()
 
+    def _revalidate_for_dlq(self, cmd: OrderCommand) -> bool:
+        """Lightweight position-limit re-check for DLQ replay.
+
+        Returns True if the command is still safe to replay, False if it should
+        be dropped.  Only checks position limits (the most likely thing to change
+        while a command sits in the DLQ due to fills / position updates).
+        """
+        intent = cmd.intent
+        # Cancel / force-flat orders are always safe to replay.
+        if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
+            return True
+
+        # Find the PositionLimitValidator among validators.
+        for v in self._rust_uncovered_validators:
+            if not isinstance(v, PositionLimitValidator):
+                continue
+            ok, reason = v.check(intent)
+            if not ok:
+                logger.warning(
+                    "risk_dlq_revalidation_rejected",
+                    cmd_id=cmd.cmd_id,
+                    strategy_id=intent.strategy_id,
+                    symbol=intent.symbol,
+                    reason=reason,
+                )
+                self.metrics.risk_dlq_revalidation_rejected_total.inc()
+                return False
+            break
+        return True
+
     def _drain_order_dlq(self) -> None:
         """Drain stale-filtered DLQ entries back into order_queue."""
         if not self._order_dlq:
@@ -546,6 +576,11 @@ class RiskEngine:
                 continue
             # Expire commands whose execution deadline has passed
             if cmd.deadline_ns > 0 and now_ns > cmd.deadline_ns:
+                self._order_dlq.popleft()
+                expired += 1
+                continue
+            # Re-validate position limit before replaying
+            if not self._revalidate_for_dlq(cmd):
                 self._order_dlq.popleft()
                 expired += 1
                 continue

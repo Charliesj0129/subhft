@@ -278,3 +278,87 @@ class TestDlqDrainConcurrentHalt:
         # cmd2 and cmd3 were cleared from the DLQ — not pushed to order_queue
         assert len(engine._order_dlq) == 0
         assert engine.order_queue.empty()
+
+
+class TestDlqRevalidation:
+    """Test position-limit re-check before DLQ replay."""
+
+    def test_rejects_when_position_limit_exceeded(self, engine: RiskEngine) -> None:
+        """DLQ replay drops command when position limit would be exceeded."""
+        # Wire a position_provider that reports a position at the limit
+        engine._position_provider = lambda symbol, strategy_id: 1000
+        # Reinit the PositionLimitValidator with the provider so it picks up positions
+        from hft_platform.risk.validators import PositionLimitValidator
+        for v in engine.validators:
+            if isinstance(v, PositionLimitValidator):
+                v._position_provider = engine._current_strategy_symbol_net_position
+                break
+
+        # qty=10 would push abs(1000 + 10) = 1010 > max_position_lots (1000)
+        cmd = engine.create_command(_make_intent(1, qty=10))
+        engine._order_dlq.append((cmd, time.monotonic_ns()))
+
+        before_rejected = engine.metrics.risk_dlq_revalidation_rejected_total._value.get()
+        engine._drain_order_dlq()
+        after_rejected = engine.metrics.risk_dlq_revalidation_rejected_total._value.get()
+
+        # Command should be rejected and NOT pushed to order_queue
+        assert engine.order_queue.empty()
+        assert len(engine._order_dlq) == 0
+        assert after_rejected - before_rejected == 1
+
+    def test_allows_when_position_limit_ok(self, engine: RiskEngine) -> None:
+        """DLQ replay allows command when position limit is fine."""
+        # Position provider reports zero position — plenty of room
+        engine._position_provider = lambda symbol, strategy_id: 0
+        from hft_platform.risk.validators import PositionLimitValidator
+        for v in engine.validators:
+            if isinstance(v, PositionLimitValidator):
+                v._position_provider = engine._current_strategy_symbol_net_position
+                break
+
+        cmd = engine.create_command(_make_intent(1, qty=1))
+        engine._order_dlq.append((cmd, time.monotonic_ns()))
+
+        before_rejected = engine.metrics.risk_dlq_revalidation_rejected_total._value.get()
+        engine._drain_order_dlq()
+        after_rejected = engine.metrics.risk_dlq_revalidation_rejected_total._value.get()
+
+        assert engine.order_queue.qsize() == 1
+        assert len(engine._order_dlq) == 0
+        assert after_rejected - before_rejected == 0
+
+    def test_cancel_orders_bypass_revalidation(self, engine: RiskEngine) -> None:
+        """Cancel/force-flat orders are always replayed regardless of position."""
+        engine._position_provider = lambda symbol, strategy_id: 999_999
+        from hft_platform.risk.validators import PositionLimitValidator
+        for v in engine.validators:
+            if isinstance(v, PositionLimitValidator):
+                v._position_provider = engine._current_strategy_symbol_net_position
+                break
+
+        cancel_intent = OrderIntent(
+            1, "s1", "2330", IntentType.CANCEL, Side.BUY, 100, 1, TIF.ROD, "order-123", 0,
+        )
+        cmd = engine.create_command(cancel_intent)
+        engine._order_dlq.append((cmd, time.monotonic_ns()))
+
+        engine._drain_order_dlq()
+
+        assert engine.order_queue.qsize() == 1
+        assert len(engine._order_dlq) == 0
+
+    def test_existing_ttl_and_storm_behavior_unchanged(self, engine: RiskEngine) -> None:
+        """Regression: TTL expiry and STORM clearing remain unaffected by revalidation."""
+        # TTL-expired entry should still be expired (not revalidated)
+        cmd = engine.create_command(_make_intent(1))
+        old_ts = time.monotonic_ns() - engine._dlq_ttl_ns - 1_000_000_000
+        engine._order_dlq.append((cmd, old_ts))
+
+        before_expired = engine.metrics.risk_dlq_expired_total._value.get()
+        engine._drain_order_dlq()
+        after_expired = engine.metrics.risk_dlq_expired_total._value.get()
+
+        assert engine.order_queue.empty()
+        assert len(engine._order_dlq) == 0
+        assert after_expired - before_expired == 1
