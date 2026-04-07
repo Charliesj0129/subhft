@@ -30,6 +30,12 @@ def _require_text(value: object, field_name: str) -> None:
         raise ValueError(msg)
 
 
+def _require_string(value: object, field_name: str) -> None:
+    if not isinstance(value, str):
+        msg = f"{field_name} must be a string"
+        raise ValueError(msg)
+
+
 def _require_non_empty(value: object, field_name: str) -> None:
     if not value:
         msg = f"{field_name} must be non-empty"
@@ -61,9 +67,21 @@ def _coerce_sequence_items(
     return coerced
 
 
+def _validate_nested_plan(value: object, field_name: str) -> None:
+    validate = getattr(value, "validate", None)
+    if validate is None or not callable(validate):
+        msg = f"{field_name} must be a valid trade plan"
+        raise ValueError(msg)
+    validate()
+
+
 def canonical_level_label(side: str, index: int) -> str:
     """Return the canonical label for a support or resistance level."""
 
+    _require_text(side, "side")
+    if type(index) is not int:
+        msg = "index must be an int"
+        raise ValueError(msg)
     if index < 0:
         msg = f"level index must be non-negative: {index}"
         raise ValueError(msg)
@@ -104,6 +122,10 @@ class TradePlan:
         _require_text(self.premise, "premise")
         _require_text(self.execution_style, "execution_style")
         _require_text(self.risk_note, "risk_note")
+        _require_string(self.trigger, "trigger")
+        _require_string(self.stop, "stop")
+        _require_string(self.target_1, "target_1")
+        _require_string(self.target_2, "target_2")
         if self.stance.strip().lower() == "neutral":
             return
         _require_text(self.trigger, "trigger")
@@ -180,8 +202,8 @@ class LLMDecisionReport:
             if marker in self.market_verdict:
                 msg = "market_verdict contains generic guidance"
                 raise ValueError(msg)
-        self.intraday_plan.validate()
-        self.swing_plan.validate()
+        _validate_nested_plan(self.intraday_plan, "intraday_plan")
+        _validate_nested_plan(self.swing_plan, "swing_plan")
         _require_non_empty(self.key_levels, "key_levels")
         _require_non_empty(self.invalidations, "invalidations")
         _require_text(self.counter_case, "counter_case")

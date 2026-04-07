@@ -77,9 +77,24 @@ def test_canonical_level_label_rejects_invalid_side() -> None:
         canonical_level_label("pivot", 0)
 
 
+def test_canonical_level_label_rejects_non_string_side() -> None:
+    with pytest.raises(ValueError):
+        canonical_level_label(None, 0)  # type: ignore[arg-type]
+
+
 def test_canonical_level_label_rejects_negative_index() -> None:
     with pytest.raises(ValueError):
         canonical_level_label("resistance", -1)
+
+
+def test_canonical_level_label_rejects_non_int_index() -> None:
+    with pytest.raises(ValueError):
+        canonical_level_label("support", "1")  # type: ignore[arg-type]
+
+
+def test_canonical_level_label_rejects_bool_index() -> None:
+    with pytest.raises(ValueError):
+        canonical_level_label("support", True)  # type: ignore[arg-type]
 
 
 def test_trade_plan_can_be_created_with_full_directional_fields() -> None:
@@ -94,6 +109,36 @@ def test_trade_plan_can_be_created_with_full_directional_fields() -> None:
 
 def test_trade_plan_validate_rejects_missing_trigger_for_directional_plan() -> None:
     plan = _directional_plan(trigger="")
+
+    with pytest.raises(ValueError):
+        plan.validate()
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("trigger", None),
+        ("stop", None),
+        ("target_1", None),
+        ("target_2", None),
+    ),
+)
+def test_trade_plan_validate_rejects_non_string_directional_fields_for_neutral_plan(
+    field_name: str,
+    value: None,
+) -> None:
+    kwargs = {
+        "stance": "neutral",
+        "premise": "Wait for clearer structure.",
+        "trigger": "",
+        "execution_style": "wait",
+        "stop": "",
+        "target_1": "",
+        "target_2": "",
+        "risk_note": "No edge yet.",
+    }
+    kwargs[field_name] = value
+    plan = TradePlan(**kwargs)  # type: ignore[arg-type]
 
     with pytest.raises(ValueError):
         plan.validate()
@@ -230,6 +275,28 @@ def test_llm_decision_report_validate_accepts_complete_report() -> None:
     report = _report()
 
     report.validate()
+
+
+@pytest.mark.parametrize(("field_name", "value"), (("intraday_plan", None), ("swing_plan", object())))
+def test_llm_decision_report_validate_rejects_malformed_nested_plan_payloads(
+    field_name: str,
+    value: object,
+) -> None:
+    report = _report()
+    report = LLMDecisionReport(
+        market_verdict=report.market_verdict,
+        intraday_plan=report.intraday_plan if field_name != "intraday_plan" else value,  # type: ignore[arg-type]
+        swing_plan=report.swing_plan if field_name != "swing_plan" else value,  # type: ignore[arg-type]
+        key_levels=report.key_levels,
+        invalidations=report.invalidations,
+        counter_case=report.counter_case,
+        execution_notes=report.execution_notes,
+        confidence=report.confidence,
+        evidence_refs=report.evidence_refs,
+    )
+
+    with pytest.raises(ValueError):
+        report.validate()
 
 
 def test_llm_decision_report_coerces_sequences_to_tuples() -> None:
