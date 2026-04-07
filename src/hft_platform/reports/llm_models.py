@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -21,7 +21,10 @@ _GENERIC_VERDICT_MARKERS = (
 )
 
 
-def _require_text(value: str, field_name: str) -> None:
+def _require_text(value: object, field_name: str) -> None:
+    if not isinstance(value, str):
+        msg = f"{field_name} must be a string"
+        raise ValueError(msg)
     if not value.strip():
         msg = f"{field_name} must be non-empty"
         raise ValueError(msg)
@@ -36,6 +39,26 @@ def _require_non_empty(value: object, field_name: str) -> None:
 def _require_text_items(values: tuple[str, ...], field_name: str) -> None:
     for index, value in enumerate(values):
         _require_text(value, f"{field_name}[{index}]")
+
+
+def _coerce_sequence_items(
+    value: object,
+    field_name: str,
+    *,
+    item_type: type[str] | type["EvidenceRef"],
+) -> tuple[object, ...]:
+    if isinstance(value, (str, bytes)):
+        msg = f"{field_name} must be a sequence, not a scalar string"
+        raise ValueError(msg)
+    if not isinstance(value, Sequence):
+        msg = f"{field_name} must be a sequence"
+        raise ValueError(msg)
+    coerced = tuple(value)
+    for index, item in enumerate(coerced):
+        if not isinstance(item, item_type):
+            msg = f"{field_name}[{index}] must be {item_type.__name__}"
+            raise ValueError(msg)
+    return coerced
 
 
 def canonical_level_label(side: str, index: int) -> str:
@@ -99,7 +122,11 @@ class LLMDossier:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
-        object.__setattr__(self, "narrative", tuple(self.narrative))
+        object.__setattr__(
+            self,
+            "narrative",
+            _coerce_sequence_items(self.narrative, "narrative", item_type=str),
+        )
 
     def validate(self) -> None:
         _require_text(self.symbol, "symbol")
@@ -107,6 +134,9 @@ class LLMDossier:
         _require_text(self.date, "date")
         _require_non_empty(self.evidence, "evidence")
         _require_non_empty(self.narrative, "narrative")
+        for key, value in self.evidence.items():
+            _require_text(key, "evidence key")
+            _require_text(value, f"evidence[{key!r}]")
         _require_text_items(self.narrative, "narrative")
 
 
@@ -123,10 +153,26 @@ class LLMDecisionReport:
     evidence_refs: tuple[EvidenceRef, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "key_levels", tuple(self.key_levels))
-        object.__setattr__(self, "invalidations", tuple(self.invalidations))
-        object.__setattr__(self, "execution_notes", tuple(self.execution_notes))
-        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+        object.__setattr__(
+            self,
+            "key_levels",
+            _coerce_sequence_items(self.key_levels, "key_levels", item_type=str),
+        )
+        object.__setattr__(
+            self,
+            "invalidations",
+            _coerce_sequence_items(self.invalidations, "invalidations", item_type=str),
+        )
+        object.__setattr__(
+            self,
+            "execution_notes",
+            _coerce_sequence_items(self.execution_notes, "execution_notes", item_type=str),
+        )
+        object.__setattr__(
+            self,
+            "evidence_refs",
+            _coerce_sequence_items(self.evidence_refs, "evidence_refs", item_type=EvidenceRef),
+        )
 
     def validate(self) -> None:
         _require_text(self.market_verdict, "market_verdict")
@@ -146,6 +192,9 @@ class LLMDecisionReport:
         _require_text_items(self.execution_notes, "execution_notes")
         for evidence_ref in self.evidence_refs:
             evidence_ref.validate()
+        if type(self.confidence) is not int:
+            msg = "confidence must be an int"
+            raise ValueError(msg)
         if not 0 <= self.confidence <= 100:
             msg = "confidence must be between 0 and 100"
             raise ValueError(msg)

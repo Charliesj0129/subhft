@@ -150,6 +150,17 @@ def test_llm_dossier_coerces_mapping_and_sequence_to_immutable_types() -> None:
         dossier.evidence["new"] = "value"  # type: ignore[index]
 
 
+def test_llm_dossier_rejects_scalar_string_narrative_at_construction() -> None:
+    with pytest.raises(ValueError):
+        LLMDossier(
+            symbol="TXF",
+            session="day",
+            date="2026-04-07",
+            evidence={"flow": "Opening flow stayed net positive."},
+            narrative="single line",  # type: ignore[arg-type]
+        )
+
+
 def test_llm_dossier_validate_accepts_complete_dossier() -> None:
     dossier = _dossier()
 
@@ -184,6 +195,22 @@ def test_llm_dossier_validate_rejects_blank_identity_fields(
 
 def test_llm_dossier_validate_rejects_empty_evidence() -> None:
     dossier = _dossier(evidence={})
+
+    with pytest.raises(ValueError):
+        dossier.validate()
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        {"": "Opening flow stayed net positive."},
+        {"flow": "   "},
+    ),
+)
+def test_llm_dossier_validate_rejects_blank_evidence_entries(
+    evidence: dict[str, str],
+) -> None:
+    dossier = _dossier(evidence=evidence)
 
     with pytest.raises(ValueError):
         dossier.validate()
@@ -234,6 +261,21 @@ def test_llm_decision_report_coerces_sequences_to_tuples() -> None:
     assert report.evidence_refs == (
         EvidenceRef(key="flow", detail="Opening flow stayed net positive."),
     )
+
+
+def test_llm_decision_report_rejects_scalar_string_key_levels_at_construction() -> None:
+    with pytest.raises(ValueError):
+        LLMDecisionReport(
+            market_verdict=_report().market_verdict,
+            intraday_plan=_directional_plan(),
+            swing_plan=_directional_plan(stance="short", trigger="Lose S1 on close"),
+            key_levels="R1 22000",  # type: ignore[arg-type]
+            invalidations=("Lose follow-through after breakout",),
+            counter_case="If sellers fail to press below VWAP, short thesis weakens.",
+            execution_notes=("Wait for confirmation candle",),
+            confidence=72,
+            evidence_refs=(EvidenceRef(key="flow", detail="Opening flow stayed net positive."),),
+        )
 
 
 def test_llm_decision_report_validate_rejects_missing_invalidations() -> None:
@@ -340,6 +382,24 @@ def test_llm_decision_report_validate_rejects_blank_evidence_ref_fields(
         report.validate()
 
 
+def test_llm_decision_report_validate_rejects_non_int_confidence() -> None:
+    report = _report()
+    report = LLMDecisionReport(
+        market_verdict=report.market_verdict,
+        intraday_plan=report.intraday_plan,
+        swing_plan=report.swing_plan,
+        key_levels=report.key_levels,
+        invalidations=report.invalidations,
+        counter_case=report.counter_case,
+        execution_notes=report.execution_notes,
+        confidence=10.5,  # type: ignore[arg-type]
+        evidence_refs=report.evidence_refs,
+    )
+
+    with pytest.raises(ValueError):
+        report.validate()
+
+
 @pytest.mark.parametrize("confidence", (-1, 101))
 def test_llm_decision_report_validate_rejects_out_of_range_confidence(confidence: int) -> None:
     report = _report()
@@ -373,6 +433,24 @@ def test_llm_decision_report_validate_rejects_generic_verdict_text() -> None:
 
 def test_llm_decision_report_validate_rejects_empty_market_verdict() -> None:
     report = _report(market_verdict="")
+
+    with pytest.raises(ValueError):
+        report.validate()
+
+
+def test_llm_decision_report_validate_rejects_non_string_market_verdict_with_value_error() -> None:
+    report = _report()
+    report = LLMDecisionReport(
+        market_verdict=None,  # type: ignore[arg-type]
+        intraday_plan=report.intraday_plan,
+        swing_plan=report.swing_plan,
+        key_levels=report.key_levels,
+        invalidations=report.invalidations,
+        counter_case=report.counter_case,
+        execution_notes=report.execution_notes,
+        confidence=report.confidence,
+        evidence_refs=report.evidence_refs,
+    )
 
     with pytest.raises(ValueError):
         report.validate()
