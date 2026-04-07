@@ -29,6 +29,7 @@ class MarketDataReconnectMixin:
     _pending_reconnect_reason: str | None
     _pending_reconnect_gap: float
     _pending_reconnect_since: float | None
+    _on_reconnect_callbacks: list[Any]
 
     # -- rollover / window checks -------------------------------------------
 
@@ -168,6 +169,14 @@ class MarketDataReconnectMixin:
             fe = getattr(self, "feature_engine", None)
             if fe is not None and hasattr(fe, "reset_all"):
                 fe.reset_all()
+            # Fire post-reconnect callbacks (e.g. invalidate stale live orders)
+            for cb in getattr(self, "_on_reconnect_callbacks", []):
+                try:
+                    result = cb(reason_label)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as cb_exc:
+                    logger.warning("on_reconnect_callback_error", error=str(cb_exc))
         else:
             self._set_state(FeedState.DISCONNECTED)
         return ok
@@ -182,6 +191,17 @@ class MarketDataReconnectMixin:
             self._pending_reconnect_since = timebase.now_s()
 
     # -- public helpers ------------------------------------------------------
+
+    def register_on_reconnect(self: Any, callback: Any) -> None:
+        """Register a callback to invoke after successful reconnect.
+
+        Callbacks receive a single ``reason: str`` argument.  Async
+        callables (coroutines) are awaited automatically.
+        """
+        cbs: list[Any] = getattr(self, "_on_reconnect_callbacks", [])
+        if not hasattr(self, "_on_reconnect_callbacks"):
+            self._on_reconnect_callbacks = cbs
+        cbs.append(callback)
 
     def within_reconnect_window(self: Any) -> bool:
         """Public hook for supervisors."""

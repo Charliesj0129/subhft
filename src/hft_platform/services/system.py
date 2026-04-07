@@ -151,6 +151,12 @@ class HFTSystem:
         self.order_adapter.platform_degrade_controller = self.platform_degrade_controller
         self.order_adapter.position_store = self.position_store
         self.order_adapter._storm_guard = self.storm_guard  # M1: live HALT check
+
+        # Post-reconnect: invalidate stale live orders (they are dead at broker side)
+        if hasattr(self.md_service, "register_on_reconnect"):
+            self.md_service.register_on_reconnect(
+                lambda reason: self.order_adapter.invalidate_live_orders(reason=reason)
+            )
         self.recon_service.platform_degrade_controller = self.platform_degrade_controller
 
         self._mtm_calculator = None

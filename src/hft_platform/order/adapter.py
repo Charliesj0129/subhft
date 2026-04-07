@@ -199,6 +199,25 @@ class OrderAdapter:
         self._metadata = value
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
 
+    async def invalidate_live_orders(self, reason: str = "reconnect") -> int:
+        """Mark all live orders as stale after broker session reset.
+
+        After a broker reconnect, all pending orders are invalidated at the
+        broker side. This clears the local tracking to prevent phantom entries.
+        """
+        async with self._live_orders_lock:
+            count = len(self.live_orders)
+            if count > 0:
+                logger.warning(
+                    "invalidating_live_orders_after_reconnect",
+                    count=count,
+                    reason=reason,
+                    order_keys=list(self.live_orders.keys())[:10],
+                )
+                self.live_orders.clear()
+                self._pending_order_keys.clear()
+            return count
+
     def get_phantom_candidates(self) -> frozenset[str]:
         """Return a frozen copy of phantom order keys for reconciliation."""
         return frozenset(self._phantom_order_keys.keys())
