@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
+
 from hft_platform.reports.llm_dossier import build_llm_dossier
 from hft_platform.reports.models import EnrichedLevel, NarrativeReport
 from tests.unit.test_report_composer import _make_fact_report, _make_reasoning_report
@@ -108,6 +110,5 @@ def test_build_llm_dossier_uses_storyline_only_when_first_entries_are_blank() ->
     )
     reasoning_report = dataclasses.replace(reasoning_report, narrative=narrative)
 
-    dossier = build_llm_dossier(_make_fact_report(), reasoning_report)
-
-    assert dossier.narrative == ("(blank storyline)",)
+    with pytest.raises(ValueError, match="narrative must be non-empty"):
+        build_llm_dossier(_make_fact_report(), reasoning_report)
