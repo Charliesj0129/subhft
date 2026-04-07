@@ -8,7 +8,7 @@ from typing import Any, List
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, RiskFeedback
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.events import GapEvent
@@ -76,6 +76,53 @@ def _typed_intent_type(intent: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _typed_intent_tif(intent: Any) -> int | None:
+    """Extract TIF from typed intent tuple (index 8) or OrderIntent attribute."""
+    if isinstance(intent, tuple) and len(intent) >= 9 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[8])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "tif", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _typed_intent_side(intent: Any) -> int | None:
+    """Extract Side from typed intent tuple (index 5) or OrderIntent attribute."""
+    if isinstance(intent, tuple) and len(intent) >= 6 and intent[0] == "typed_intent_v1":
+        try:
+            return int(intent[5])
+        except (TypeError, ValueError):
+            return None
+    value = getattr(intent, "side", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_symbol_net_qty(position_store: Any, symbol: str) -> int:
+    """Return aggregate net_qty for *symbol* across all accounts/strategies.
+
+    O(n) over the position map, but only called during CLOSE_ONLY phase
+    (not on every tick). Returns 0 if position_store is None or empty.
+    """
+    if position_store is None:
+        return 0
+    positions = getattr(position_store, "positions", None)
+    if not positions:
+        return 0
+    _total = 0
+    for _key, _pos in positions.items():
+        # Key format: "account:strategy:symbol"
+        if _key.endswith(f":{symbol}"):
+            _total += _pos.net_qty
+    return _total
 
 
 class StrategyRunner:
@@ -905,7 +952,9 @@ class StrategyRunner:
 
             # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:
-                intents = StrategyRunner.filter_intents_by_phase(intents, self.track_gate)
+                intents = StrategyRunner.filter_intents_by_phase(
+                    intents, self.track_gate, self.position_store,
+                )
 
             duration = time.perf_counter_ns() - start
 
@@ -1101,11 +1150,22 @@ class StrategyRunner:
                         self._storm_guard.trigger_halt("risk_queue_full")
 
     @staticmethod
-    def filter_intents_by_phase(intents: list, track_gate: Any) -> list:
-        """Filter intents based on session phase from TrackGate."""
+    def filter_intents_by_phase(intents: list, track_gate: Any, position_store: Any = None) -> list:
+        """Filter intents based on session phase from TrackGate.
+
+        During CLOSE_ONLY: allow CANCEL, FORCE_FLAT, and position-reducing IOC orders.
+        During FORCE_FLAT: allow only CANCEL and FORCE_FLAT (position flattener handles exits).
+
+        IOC NEW orders in CLOSE_ONLY are only permitted if they reduce existing exposure:
+        - BUY is allowed only if net_qty < 0 (closing a short)
+        - SELL is allowed only if net_qty > 0 (closing a long)
+        If position_store is None, IOC NEW orders are conservatively blocked.
+        """
         from hft_platform.ops.session_governor import SessionPhase  # noqa: PLC0415
 
         _CLOSE_ONLY_TYPES = (IntentType.CANCEL, IntentType.FORCE_FLAT)
+        _BUY = int(Side.BUY)
+        _SELL = int(Side.SELL)
         _filtered: list = []
         for _intent in intents:
             _intent_symbol = _typed_intent_symbol(_intent)
@@ -1113,7 +1173,23 @@ class StrategyRunner:
             _phase = track_gate.get_phase(_intent_symbol)
             if _phase == SessionPhase.OPEN:
                 _filtered.append(_intent)
-            elif _phase in (SessionPhase.CLOSE_ONLY, SessionPhase.FORCE_FLAT):
+            elif _phase == SessionPhase.CLOSE_ONLY:
+                if _intent_type in _CLOSE_ONLY_TYPES:
+                    _filtered.append(_intent)
+                elif _intent_type == int(IntentType.NEW) and _typed_intent_tif(_intent) == int(TIF.IOC):
+                    # Position-aware check: only allow IOC if it reduces exposure
+                    _side = _typed_intent_side(_intent)
+                    _net_qty = _get_symbol_net_qty(position_store, _intent_symbol)
+                    if (_side == _BUY and _net_qty < 0) or (_side == _SELL and _net_qty > 0):
+                        _filtered.append(_intent)
+                    else:
+                        logger.debug(
+                            "close_only_ioc_blocked_no_exposure",
+                            symbol=_intent_symbol,
+                            side=_side,
+                            net_qty=_net_qty,
+                        )
+            elif _phase == SessionPhase.FORCE_FLAT:
                 if _intent_type in _CLOSE_ONLY_TYPES:
                     _filtered.append(_intent)
         return _filtered
