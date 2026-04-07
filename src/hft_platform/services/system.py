@@ -883,9 +883,30 @@ class HFTSystem:
         if hasattr(self, "recorder") and self.recorder is not None:
             self.recorder.running = False
 
+        # Phase 2b: Wait for recorder to finish its shutdown flush.
+        # The recorder has its own 60s flush timeout (HFT_RECORDER_SHUTDOWN_TIMEOUT_S).
+        # We allow it slightly more to account for the drain phase before flush.
+        recorder_task = self.tasks.get("recorder")
+        if recorder_task and not recorder_task.done():
+            _recorder_timeout = float(os.getenv("HFT_RECORDER_SHUTDOWN_TIMEOUT_S", "60")) + 5.0
+            try:
+                await asyncio.wait_for(recorder_task, timeout=_recorder_timeout)
+                logger.info("Recorder shutdown complete")
+            except asyncio.TimeoutError:
+                logger.warning("Recorder shutdown timeout, cancelling", timeout_s=_recorder_timeout)
+                recorder_task.cancel()
+                try:
+                    await asyncio.wait_for(recorder_task, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("Recorder shutdown error", error=str(exc))
+
         # Phase 3: Cancel and await all remaining tasks.
         for name, task in list(self.tasks.items()):
-            if name == "recorder_bridge":
+            if name in ("recorder_bridge", "recorder"):
                 continue  # Already handled above
             if task and not task.done():
                 task.cancel()
