@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from hft_platform.bot.app import owner_only
+from hft_platform.reports.models import ComposedReport
 
 _log = structlog.get_logger(__name__)
 _TZ = ZoneInfo("Asia/Taipei")
@@ -94,7 +95,9 @@ async def cmd_start(update: Any, context: Any) -> None:
     text = (
         "HFT 市場分析 Bot\n\n"
         "可用指令：\n"
-        "/report [symbol] [day|night] — 完整分析報告\n"
+        "/report [symbol] [day|night] — Hybrid LLM 報告\n"
+        "/report_rule [symbol] [day|night] — 規則版報告\n"
+        "/ask <問題> — 追問最近一次 manual hybrid 報告\n"
         "/levels [symbol] — 支撐壓力位\n"
         "/flow [symbol] — 流向摘要\n"
         "/status — Bot 運行狀態\n\n"
@@ -107,7 +110,7 @@ async def cmd_start(update: Any, context: Any) -> None:
 async def cmd_report(update: Any, context: Any) -> None:
     """Handle /report [symbol] [day|night] command."""
     import hft_platform.bot.app as bot_app
-    from hft_platform.reports.pipeline import build_report, resolve_trading_date
+    from hft_platform.reports.pipeline import build_hybrid_report_async, resolve_trading_date
 
     symbol, session = _parse_report_args(context.args or [])
     if session is None:
@@ -116,12 +119,56 @@ async def cmd_report(update: Any, context: Any) -> None:
 
     date = resolve_trading_date(session)
     await update.message.reply_text(f"產生報告中... ({symbol} {session} {date})")
+    bot_app.latest_manual_report_context = None
 
     try:
-        composed = build_report(session, date, symbol)
+        result = await build_hybrid_report_async(session, date, symbol)
         bot_app.last_ch_ok = datetime.now(_TZ)
     except Exception as exc:
         _log.error("bot.report_error", exc=str(exc), exc_info=True)
+        await update.message.reply_text(f"報告產生失敗：{exc}")
+        return
+
+    if result.composed is None:
+        await update.message.reply_text("該時段無交易資料")
+        return
+
+    if result.decision is not None and result.dossier is not None:
+        bot_app.latest_manual_report_context = bot_app.LatestReportContext(
+            symbol=result.dossier.symbol,
+            session=result.dossier.session,
+            date=result.dossier.date,
+            dossier=result.dossier,
+            decision=result.decision,
+        )
+
+    await _send_composed(update, context, result.composed)
+
+    if session == "day":
+        bot_app.last_day_report = datetime.now(_TZ)
+    else:
+        bot_app.last_night_report = datetime.now(_TZ)
+
+
+@owner_only
+async def cmd_report_rule(update: Any, context: Any) -> None:
+    """Handle /report_rule [symbol] [day|night] command."""
+    import hft_platform.bot.app as bot_app
+    from hft_platform.reports.pipeline import build_report, resolve_trading_date
+
+    symbol, session = _parse_report_args(context.args or [])
+    if session is None:
+        now = datetime.now(_TZ)
+        session = "day" if 7 <= now.hour < 15 else "night"
+
+    date = resolve_trading_date(session)
+    await update.message.reply_text(f"產生規則版報告中... ({symbol} {session} {date})")
+
+    try:
+        composed = await asyncio.to_thread(build_report, session, date, symbol)
+        bot_app.last_ch_ok = datetime.now(_TZ)
+    except Exception as exc:
+        _log.error("bot.report_rule_error", exc=str(exc), exc_info=True)
         await update.message.reply_text(f"報告產生失敗：{exc}")
         return
 
@@ -129,6 +176,44 @@ async def cmd_report(update: Any, context: Any) -> None:
         await update.message.reply_text("該時段無交易資料")
         return
 
+    await _send_composed(update, context, composed)
+
+    if session == "day":
+        bot_app.last_day_report = datetime.now(_TZ)
+    else:
+        bot_app.last_night_report = datetime.now(_TZ)
+
+
+@owner_only
+async def cmd_ask(update: Any, context: Any) -> None:
+    """Handle /ask <question> for the latest manual hybrid report."""
+    import hft_platform.bot.app as bot_app
+
+    latest_context = bot_app.latest_manual_report_context
+    if latest_context is None:
+        await update.message.reply_text("目前沒有可追問的 hybrid 報告，請先執行 /report")
+        return
+    if latest_context.decision is None:
+        await update.message.reply_text("最近一次 /report 沒有成功產生 LLM 判讀，請先重新執行 /report")
+        return
+
+    question = " ".join(context.args or []).strip()
+    if not question:
+        await update.message.reply_text("用法：/ask <問題>")
+        return
+
+    try:
+        from hft_platform.reports.llm_reasoner import answer_followup_question
+    except ImportError:
+        await update.message.reply_text("追問功能尚未啟用")
+        return
+
+    answer = await answer_followup_question(latest_context, question)
+    await update.message.reply_text(answer, parse_mode="HTML")
+
+
+async def _send_composed(update: Any, context: Any, composed: ComposedReport) -> None:
+    """Send a composed report to the current chat with Telegram-safe pacing."""
     chat_id = update.effective_chat.id
     for i, part in enumerate(composed.messages):
         if part.kind == "text":
@@ -137,11 +222,6 @@ async def cmd_report(update: Any, context: Any) -> None:
             await context.bot.send_photo(chat_id=chat_id, photo=io.BytesIO(part.image), caption=part.caption)
         if i < len(composed.messages) - 1:
             await asyncio.sleep(1.5)
-
-    if session == "day":
-        bot_app.last_day_report = datetime.now(_TZ)
-    else:
-        bot_app.last_night_report = datetime.now(_TZ)
 
 
 @owner_only

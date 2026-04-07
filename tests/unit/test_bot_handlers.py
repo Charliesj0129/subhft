@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -21,6 +22,7 @@ def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     import hft_platform.bot.app as bot_app
 
     bot_app._OWNER_CHAT_ID = 0
+    bot_app.latest_manual_report_context = None
 
 
 def _make_update(chat_id: int, text: str = "/start") -> MagicMock:
@@ -43,9 +45,7 @@ def _make_composed(msgs: list[str] | None = None) -> ComposedReport:
     """Build a ComposedReport from a list of text strings (all paid tier)."""
     if msgs is None:
         msgs = ["msg1", "msg2"]
-    return ComposedReport(
-        messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs]
-    )
+    return ComposedReport(messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs])
 
 
 class TestPrevTradingDate:
@@ -150,8 +150,13 @@ class TestReportHandler:
         update = _make_update(chat_id=12345, text="/report day")
         ctx = _make_context()
         ctx.args = ["day"]
-        with patch("hft_platform.reports.pipeline.build_report") as mock_build:
-            mock_build.return_value = _make_composed(["msg1", "msg2"])
+        hybrid_result = SimpleNamespace(
+            composed=_make_composed(["msg1", "msg2"]),
+            dossier=MagicMock(symbol="TXFD6", session="day", date="2026-03-28"),
+            decision=MagicMock(),
+            llm_error=None,
+        )
+        with patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)):
             with patch("hft_platform.bot.handlers.asyncio") as mock_asyncio:
                 mock_asyncio.sleep = AsyncMock()
                 await cmd_report(update, ctx)
@@ -169,8 +174,8 @@ class TestReportHandler:
         update = _make_update(chat_id=12345, text="/report day")
         ctx = _make_context()
         ctx.args = ["day"]
-        with patch("hft_platform.reports.pipeline.build_report") as mock_build:
-            mock_build.return_value = None
+        hybrid_result = SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)
+        with patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)):
             await cmd_report(update, ctx)
         calls = update.message.reply_text.call_args_list
         assert any("無交易資料" in str(c) for c in calls)
@@ -255,14 +260,19 @@ class TestReportArgParsing:
         ctx = _make_context()
         ctx.args = []
         with (
-            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock()) as mock_build,
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
             patch("hft_platform.bot.app.get_report_symbols", return_value=["TXFD6", "TMFD6"]),
         ):
-            mock_build.return_value = _make_composed(["msg1"])
+            mock_build.return_value = SimpleNamespace(
+                composed=_make_composed(["msg1"]),
+                dossier=None,
+                decision=None,
+                llm_error=None,
+            )
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
-            # First positional arg to build_report is session, second is date, third is symbol
+            # First positional arg to build_hybrid_report_async is session, second is date, third is symbol
             assert mock_build.call_args[0][2] == "TXFD6"
 
     @pytest.mark.asyncio
@@ -273,10 +283,15 @@ class TestReportArgParsing:
         ctx = _make_context()
         ctx.args = ["2330"]
         with (
-            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock()) as mock_build,
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
         ):
-            mock_build.return_value = _make_composed(["msg1"])
+            mock_build.return_value = SimpleNamespace(
+                composed=_make_composed(["msg1"]),
+                dossier=None,
+                decision=None,
+                llm_error=None,
+            )
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
             assert mock_build.call_args[0][2] == "2330"
@@ -289,10 +304,15 @@ class TestReportArgParsing:
         ctx = _make_context()
         ctx.args = ["night"]
         with (
-            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock()) as mock_build,
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
         ):
-            mock_build.return_value = _make_composed(["msg1"])
+            mock_build.return_value = SimpleNamespace(
+                composed=_make_composed(["msg1"]),
+                dossier=None,
+                decision=None,
+                llm_error=None,
+            )
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
             assert mock_build.call_args[0][0] == "night"
@@ -305,14 +325,135 @@ class TestReportArgParsing:
         ctx = _make_context()
         ctx.args = ["TMFD6", "night"]
         with (
-            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock()) as mock_build,
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
         ):
-            mock_build.return_value = _make_composed(["msg1"])
+            mock_build.return_value = SimpleNamespace(
+                composed=_make_composed(["msg1"]),
+                dossier=None,
+                decision=None,
+                llm_error=None,
+            )
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
             assert mock_build.call_args[0][0] == "night"
             assert mock_build.call_args[0][2] == "TMFD6"
+
+
+class TestRuleOnlyAndAsk:
+    @pytest.mark.asyncio
+    async def test_report_rule_uses_deterministic_path_only(self) -> None:
+        from hft_platform.bot.handlers import cmd_report_rule
+
+        update = _make_update(chat_id=12345, text="/report_rule day")
+        ctx = _make_context()
+        ctx.args = ["day"]
+
+        with (
+            patch("hft_platform.reports.pipeline.build_report") as mock_build,
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock()) as mock_hybrid,
+            patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.to_thread = AsyncMock(return_value=_make_composed(["rule-only"]))
+            mock_asyncio.sleep = AsyncMock()
+            await cmd_report_rule(update, ctx)
+
+        mock_asyncio.to_thread.assert_awaited_once()
+        assert mock_asyncio.to_thread.await_args.args[0] is mock_build
+        mock_hybrid.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_report_caches_latest_manual_hybrid_context(self) -> None:
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.handlers import cmd_report
+
+        update = _make_update(chat_id=12345, text="/report day")
+        ctx = _make_context()
+        ctx.args = ["day"]
+
+        hybrid_result = SimpleNamespace(
+            composed=_make_composed(["hybrid"]),
+            dossier=SimpleNamespace(symbol="TXFD6", session="day", date="2026-04-07"),
+            decision=MagicMock(),
+            llm_error=None,
+        )
+
+        with (
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)),
+            patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.sleep = AsyncMock()
+            await cmd_report(update, ctx)
+
+        assert bot_app.latest_manual_report_context is not None
+        assert bot_app.latest_manual_report_context.symbol == "TXFD6"
+
+    @pytest.mark.asyncio
+    async def test_report_clears_stale_manual_context_when_latest_run_has_no_decision(self) -> None:
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.handlers import cmd_report
+
+        bot_app.latest_manual_report_context = bot_app.LatestReportContext(
+            symbol="OLD",
+            session="day",
+            date="2026-04-06",
+            dossier=MagicMock(),
+            decision=MagicMock(),
+        )
+        update = _make_update(chat_id=12345, text="/report day")
+        ctx = _make_context()
+        ctx.args = ["day"]
+
+        hybrid_result = SimpleNamespace(
+            composed=_make_composed(["fallback-only"]),
+            dossier=None,
+            decision=None,
+            llm_error="bad llm",
+        )
+
+        with (
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)),
+            patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
+        ):
+            mock_asyncio.sleep = AsyncMock()
+            await cmd_report(update, ctx)
+
+        assert bot_app.latest_manual_report_context is None
+
+    @pytest.mark.asyncio
+    async def test_ask_rejects_when_no_manual_hybrid_context(self) -> None:
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.handlers import cmd_ask
+
+        bot_app.latest_manual_report_context = None
+        update = _make_update(chat_id=12345, text="/ask 現在還能追嗎")
+        ctx = _make_context()
+        ctx.args = ["現在還能追嗎"]
+
+        await cmd_ask(update, ctx)
+
+        update.message.reply_text.assert_called_once()
+        assert "先執行 /report" in update.message.reply_text.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_ask_rejects_when_latest_context_has_no_decision(self) -> None:
+        import hft_platform.bot.app as bot_app
+        from hft_platform.bot.handlers import cmd_ask
+
+        bot_app.latest_manual_report_context = bot_app.LatestReportContext(
+            symbol="TXFD6",
+            session="day",
+            date="2026-04-07",
+            dossier=MagicMock(),
+            decision=None,
+        )
+        update = _make_update(chat_id=12345, text="/ask 還能追嗎")
+        ctx = _make_context()
+        ctx.args = ["還能追嗎"]
+
+        await cmd_ask(update, ctx)
+
+        assert "先重新執行 /report" in update.message.reply_text.call_args[0][0]
 
 
 class TestLevelsWithSymbol:
@@ -380,8 +521,12 @@ class TestReportIntegration:
 
         composed = ComposedReport(
             messages=[
-                MessagePart(kind="text", content="Summary section with enough text to pass threshold check.", min_tier="free"),
-                MessagePart(kind="text", content="Flow analysis section with detailed breakdown data.", min_tier="paid"),
+                MessagePart(
+                    kind="text", content="Summary section with enough text to pass threshold check.", min_tier="free"
+                ),
+                MessagePart(
+                    kind="text", content="Flow analysis section with detailed breakdown data.", min_tier="paid"
+                ),
                 MessagePart(kind="text", content="Level analysis and scenario planning details.", min_tier="paid"),
             ]
         )
@@ -389,9 +534,15 @@ class TestReportIntegration:
         update = _make_update(chat_id=12345, text="/report day")
         ctx = _make_context()
         ctx.args = ["day"]
+        hybrid_result = SimpleNamespace(
+            composed=composed,
+            dossier=SimpleNamespace(symbol="TXFD6", session="day", date="2026-04-07"),
+            decision=MagicMock(),
+            llm_error=None,
+        )
 
         with (
-            patch("hft_platform.reports.pipeline.build_report", return_value=composed),
+            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)),
             patch("hft_platform.bot.handlers.asyncio") as mock_asyncio,
         ):
             mock_asyncio.sleep = AsyncMock()

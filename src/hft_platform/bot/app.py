@@ -6,6 +6,7 @@ import asyncio
 import functools
 import os
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Coroutine
 from zoneinfo import ZoneInfo
@@ -23,6 +24,18 @@ start_time: datetime = datetime.now(_TZ)
 last_day_report: datetime | None = None
 last_night_report: datetime | None = None
 last_ch_ok: datetime | None = None
+
+
+@dataclass(slots=True)
+class LatestReportContext:
+    symbol: str
+    session: str
+    date: str
+    dossier: object
+    decision: object | None
+
+
+latest_manual_report_context: LatestReportContext | None = None
 
 # ---------------------------------------------------------------------------
 # Owner-only access control
@@ -97,7 +110,15 @@ def create_app() -> Any:
     """Build and return a configured telegram.ext.Application."""
     from telegram.ext import Application, CommandHandler
 
-    from hft_platform.bot.handlers import cmd_flow, cmd_levels, cmd_report, cmd_start, cmd_status
+    from hft_platform.bot.handlers import (
+        cmd_ask,
+        cmd_flow,
+        cmd_levels,
+        cmd_report,
+        cmd_report_rule,
+        cmd_start,
+        cmd_status,
+    )
     from hft_platform.bot.scheduler import schedule_jobs
 
     token = os.environ.get("HFT_TELEGRAM_BOT_TOKEN", "")
@@ -108,6 +129,8 @@ def create_app() -> Any:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("report_rule", cmd_report_rule))
+    app.add_handler(CommandHandler("ask", cmd_ask))
     app.add_handler(CommandHandler("levels", cmd_levels))
     app.add_handler(CommandHandler("flow", cmd_flow))
     app.add_handler(CommandHandler("status", cmd_status))
