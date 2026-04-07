@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 __all__ = [
     "EvidenceRef",
@@ -25,9 +27,18 @@ def _require_text(value: str, field_name: str) -> None:
         raise ValueError(msg)
 
 
+def _require_non_empty(value: object, field_name: str) -> None:
+    if not value:
+        msg = f"{field_name} must be non-empty"
+        raise ValueError(msg)
+
+
 def canonical_level_label(side: str, index: int) -> str:
     """Return the canonical label for a support or resistance level."""
 
+    if index < 0:
+        msg = f"level index must be non-negative: {index}"
+        raise ValueError(msg)
     prefix_by_side = {
         "support": "S",
         "resistance": "R",
@@ -58,6 +69,9 @@ class TradePlan:
 
     def validate(self) -> None:
         _require_text(self.stance, "stance")
+        _require_text(self.premise, "premise")
+        _require_text(self.execution_style, "execution_style")
+        _require_text(self.risk_note, "risk_note")
         if self.stance.strip().lower() == "neutral":
             return
         _require_text(self.trigger, "trigger")
@@ -71,8 +85,12 @@ class LLMDossier:
     symbol: str
     session: str
     date: str
-    evidence: dict[str, str]
+    evidence: Mapping[str, str]
     narrative: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
+        object.__setattr__(self, "narrative", tuple(self.narrative))
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +105,12 @@ class LLMDecisionReport:
     confidence: int
     evidence_refs: tuple[EvidenceRef, ...]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "key_levels", tuple(self.key_levels))
+        object.__setattr__(self, "invalidations", tuple(self.invalidations))
+        object.__setattr__(self, "execution_notes", tuple(self.execution_notes))
+        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+
     def validate(self) -> None:
         _require_text(self.market_verdict, "market_verdict")
         for marker in _GENERIC_VERDICT_MARKERS:
@@ -95,9 +119,11 @@ class LLMDecisionReport:
                 raise ValueError(msg)
         self.intraday_plan.validate()
         self.swing_plan.validate()
-        if not self.invalidations:
-            msg = "invalidations must be non-empty"
-            raise ValueError(msg)
+        _require_non_empty(self.key_levels, "key_levels")
+        _require_non_empty(self.invalidations, "invalidations")
+        _require_text(self.counter_case, "counter_case")
+        _require_non_empty(self.execution_notes, "execution_notes")
+        _require_non_empty(self.evidence_refs, "evidence_refs")
         if not 0 <= self.confidence <= 100:
             msg = "confidence must be between 0 and 100"
             raise ValueError(msg)
