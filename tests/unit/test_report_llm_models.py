@@ -321,6 +321,37 @@ def test_llm_decision_report_validate_rejects_fake_nested_plan_object() -> None:
         report.validate()
 
 
+def test_llm_decision_report_validate_rejects_trade_plan_subclass() -> None:
+    class HostileTradePlan(TradePlan):
+        def validate(self) -> None:
+            return None
+
+    report = _report()
+    report = LLMDecisionReport(
+        market_verdict=report.market_verdict,
+        intraday_plan=HostileTradePlan(
+            stance="long",
+            premise="Fake premise",
+            trigger="Fake trigger",
+            execution_style="fake",
+            stop="Fake stop",
+            target_1="Fake target 1",
+            target_2="Fake target 2",
+            risk_note="Fake risk note",
+        ),
+        swing_plan=report.swing_plan,
+        key_levels=report.key_levels,
+        invalidations=report.invalidations,
+        counter_case=report.counter_case,
+        execution_notes=report.execution_notes,
+        confidence=report.confidence,
+        evidence_refs=report.evidence_refs,
+    )
+
+    with pytest.raises(ValueError):
+        report.validate()
+
+
 def test_llm_decision_report_coerces_sequences_to_tuples() -> None:
     key_levels = ["R1 22000", "S1 21800"]
     invalidations = ["Lose follow-through after breakout"]

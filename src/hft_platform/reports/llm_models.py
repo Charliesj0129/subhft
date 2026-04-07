@@ -68,7 +68,7 @@ def _coerce_sequence_items(
 
 
 def _validate_nested_plan(value: object, field_name: str) -> None:
-    if not isinstance(value, TradePlan):
+    if type(value) is not TradePlan:
         msg = f"{field_name} must be a valid trade plan"
         raise ValueError(msg)
     value.validate()
