@@ -622,6 +622,7 @@ class RingBufferBus:
         if self.signal is not None:
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
+        lag_gauge = self.metrics.bus_consumer_lag.labels(consumer=consumer_name) if self.metrics else None
 
         try:
             while True:
@@ -668,6 +669,9 @@ class RingBufferBus:
                     local_seq = current_cursor - self.size
 
                     # Inject GapEvent so downstream strategies can reset stale state
+                    self._consumer_positions[consumer_name] = local_seq
+                    if lag_gauge is not None:
+                        lag_gauge.set(self.cursor - local_seq)
                     self.metrics.bus_gap_events_total.inc()
                     yield GapEvent(
                         missed_count=lag - self.size,
@@ -698,8 +702,8 @@ class RingBufferBus:
 
                 # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
-                if self.metrics:
-                    self.metrics.bus_consumer_lag.labels(consumer=consumer_name).set(self.cursor - local_seq)
+                if lag_gauge is not None:
+                    lag_gauge.set(self.cursor - local_seq)
 
                 # Successful catch-up with no overflow — reset counter
                 if self._overflow_count > 0:
@@ -719,6 +723,7 @@ class RingBufferBus:
         if self.signal is not None:
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
+        lag_gauge = self.metrics.bus_consumer_lag.labels(consumer=consumer_name) if self.metrics else None
 
         try:
             while True:
@@ -759,6 +764,9 @@ class RingBufferBus:
                     local_seq = current_cursor - self.size
 
                     # Inject GapEvent into batch so downstream strategies can reset stale state
+                    self._consumer_positions[consumer_name] = local_seq
+                    if lag_gauge is not None:
+                        lag_gauge.set(self.cursor - local_seq)
                     self.metrics.bus_gap_events_total.inc()
                     gap_event = GapEvent(
                         missed_count=lag - self.size,
@@ -794,8 +802,8 @@ class RingBufferBus:
 
                 # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
-                if self.metrics:
-                    self.metrics.bus_consumer_lag.labels(consumer=consumer_name).set(self.cursor - local_seq)
+                if lag_gauge is not None:
+                    lag_gauge.set(self.cursor - local_seq)
 
                 if self._overflow_count > 0:
                     self._overflow_count = 0
