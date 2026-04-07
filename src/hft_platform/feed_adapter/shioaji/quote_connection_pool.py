@@ -79,6 +79,7 @@ class QuoteConnectionPool:
         "_options_refresh_running",
         "_refresh_lock",
         "_refresh_thread",
+        "_refresh_stop_event",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -99,6 +100,7 @@ class QuoteConnectionPool:
         self._options_refresh_running: bool = False
         self._refresh_lock: threading.Lock = threading.Lock()
         self._refresh_thread: threading.Thread | None = None
+        self._refresh_stop_event: threading.Event = threading.Event()
 
         with open(symbols_path, "r") as f:
             data = yaml.safe_load(f) or {}
@@ -556,26 +558,22 @@ class QuoteConnectionPool:
             interval_s = float(os.getenv("HFT_OPTIONS_REFRESH_S", "3600"))
 
         self._options_refresh_running = True
-
-        # Detect current expiry from the loaded symbols
-        opt_codes = [s["code"] for s in self._all_symbols if s.get("exchange") == "OPT"]
-        if opt_codes:
-            # Extract expiry suffix from first option code (e.g. TXO31000D6)
-            # We'll let the first refresh call set it properly
-            pass
+        self._refresh_stop_event.clear()
 
         def _loop() -> None:
-            # Initial refresh on startup
-            time.sleep(30)  # Wait for login to complete
+            # Initial refresh on startup — wait for login to complete
+            if self._refresh_stop_event.wait(timeout=30):
+                return  # stop requested during initial wait
             try:
                 self.refresh_options_symbols(cb)
             except Exception as exc:
                 logger.warning("options_refresh_initial_failed", error=str(exc))
 
             next_check = time.monotonic() + interval_s
-            while self._options_refresh_running:
-                time.sleep(60)
-                if not self._options_refresh_running:
+            while not self._refresh_stop_event.is_set():
+                # Sleep in short increments via event wait for responsive shutdown
+                self._refresh_stop_event.wait(timeout=60)
+                if self._refresh_stop_event.is_set():
                     break
                 if time.monotonic() >= next_check:
                     try:
@@ -591,6 +589,7 @@ class QuoteConnectionPool:
 
     def stop_options_refresh(self) -> None:
         self._options_refresh_running = False
+        self._refresh_stop_event.set()
         t = self._refresh_thread
         if t is not None:
             t.join(timeout=10)
