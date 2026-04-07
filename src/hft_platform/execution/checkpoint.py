@@ -27,7 +27,7 @@ try:
     import orjson
 
     def _dumps(obj: Any) -> bytes:
-        return orjson.dumps(obj)
+        return orjson.dumps(obj, option=orjson.OPT_SORT_KEYS)
 
     def _loads(data: bytes) -> Any:
         return orjson.loads(data)
@@ -36,7 +36,7 @@ except ImportError:
     import json
 
     def _dumps(obj: Any) -> bytes:
-        return json.dumps(obj, separators=(",", ":")).encode("utf-8")
+        return json.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
     def _loads(data: bytes) -> Any:
         return json.loads(data)

@@ -233,12 +233,19 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
     # EC-2: Strict ordering check
     if svc._strict_order:
         file_ts = extract_file_ts(fname)
-        if file_ts and file_ts < svc._last_processed_ts:
+        with svc._loader_stats_lock:
+            last_ts_snapshot = svc._last_processed_ts
+        if file_ts and file_ts < last_ts_snapshot:
             logger.warning(
-                "WAL file timestamp out of order, skipping (strict mode)",
+                "WAL file timestamp out of order, quarantining (strict mode)",
                 file=fname,
                 file_ts=file_ts,
-                last_ts=svc._last_processed_ts,
+                last_ts=last_ts_snapshot,
+            )
+            svc._quarantine_corrupt_file(
+                fpath,
+                fname,
+                f"out_of_order: file_ts={file_ts} < last_processed_ts={last_ts_snapshot}",
             )
             return False
 
@@ -335,9 +342,10 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
         mark_processed(svc, fpath)
 
         file_ts = extract_file_ts(fname)
-        if file_ts > svc._last_processed_ts:
-            svc._last_processed_ts = file_ts
-        svc._processed_files_total += 1
+        with svc._loader_stats_lock:
+            if file_ts > svc._last_processed_ts:
+                svc._last_processed_ts = file_ts
+            svc._processed_files_total += 1
         return True
     except FileNotFoundError:
         return False

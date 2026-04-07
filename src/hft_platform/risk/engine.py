@@ -28,15 +28,27 @@ from hft_platform.risk.validators import (
     PerSymbolNotionalValidator,
     PositionLimitValidator,
     PriceBandValidator,
+    RiskValidator,
 )
 
 logger = get_logger("risk_engine")
 
-_KNOWN_ERROR_TYPES = frozenset({
-    "ValueError", "TypeError", "KeyError", "AttributeError", "IndexError",
-    "RuntimeError", "TimeoutError", "OSError", "IOError", "ConnectionError",
-    "asyncio.TimeoutError", "Exception",
-})
+_KNOWN_ERROR_TYPES = frozenset(
+    {
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "AttributeError",
+        "IndexError",
+        "RuntimeError",
+        "TimeoutError",
+        "OSError",
+        "IOError",
+        "ConnectionError",
+        "asyncio.TimeoutError",
+        "Exception",
+    }
+)
 
 
 def _cap_error_type(e: Exception) -> str:
@@ -150,7 +162,7 @@ class RiskEngine:
         self._position_provider = position_provider
 
         # Validators
-        self.validators = [
+        self.validators: list[RiskValidator] = [
             PriceBandValidator(self.config, price_scale_provider),
             MaxNotionalValidator(self.config, price_scale_provider),
             PerSymbolNotionalValidator(self.config, price_scale_provider),
@@ -162,9 +174,8 @@ class RiskEngine:
             DailyLossLimitValidator(self.config, price_scale_provider),
         ]
         # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
-        self._rust_uncovered_validators = [
-            v for v in self.validators
-            if isinstance(v, (PositionLimitValidator, DailyLossLimitValidator))
+        self._rust_uncovered_validators: list[RiskValidator] = [
+            v for v in self.validators if isinstance(v, (PositionLimitValidator, DailyLossLimitValidator))
         ]
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
@@ -206,6 +217,7 @@ class RiskEngine:
         if greeks_provider is not None:
             try:
                 from hft_platform.risk.greeks_limit_validator import GreeksLimitValidator
+
                 self._greeks_validator = GreeksLimitValidator(self.config, greeks_provider)
             except ImportError:
                 logger.warning("greeks_limit_validator_unavailable")
@@ -407,13 +419,15 @@ class RiskEngine:
                         self._emit_reject_metric(intent.strategy_id, "TTL_EXPIRED")
                         if self._rejection_sink is not None:
                             try:
-                                self._rejection_sink.put_nowait(RiskFeedback(
-                                    intent_id=intent.intent_id,
-                                    strategy_id=intent.strategy_id,
-                                    symbol=intent.symbol,
-                                    reason_code="TTL_EXPIRED",
-                                    timestamp_ns=timebase.now_ns(),
-                                ))
+                                self._rejection_sink.put_nowait(
+                                    RiskFeedback(
+                                        intent_id=intent.intent_id,
+                                        strategy_id=intent.strategy_id,
+                                        symbol=intent.symbol,
+                                        reason_code="TTL_EXPIRED",
+                                        timestamp_ns=timebase.now_ns(),
+                                    )
+                                )
                             except asyncio.QueueFull:
                                 self.metrics.rejection_sink_overflow_total.inc()
                         self.intent_queue.task_done()
@@ -433,10 +447,10 @@ class RiskEngine:
 
                 if decision.approved:
                     cmd = self.create_command(decision.intent)
-                    _is_safety_order = (
-                        cmd.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
-                        or self._is_halt_exempt(intent.strategy_id)
-                    )
+                    _is_safety_order = cmd.intent.intent_type in (
+                        IntentType.CANCEL,
+                        IntentType.FORCE_FLAT,
+                    ) or self._is_halt_exempt(intent.strategy_id)
                     if self.storm_guard.state == StormGuardState.HALT and not _is_safety_order:
                         logger.warning(
                             "risk_engine_blocked_by_halt",
@@ -448,13 +462,15 @@ class RiskEngine:
                         self._emit_reject_metric(intent.strategy_id, "HALT_BLOCKED_POST_APPROVE")
                         if self._rejection_sink is not None:
                             try:
-                                self._rejection_sink.put_nowait(RiskFeedback(
-                                    intent_id=getattr(intent, "intent_id", 0),
-                                    strategy_id=getattr(intent, "strategy_id", ""),
-                                    symbol=getattr(intent, "symbol", ""),
-                                    reason_code="HALT_BLOCKED_POST_APPROVE",
-                                    timestamp_ns=timebase.now_ns(),
-                                ))
+                                self._rejection_sink.put_nowait(
+                                    RiskFeedback(
+                                        intent_id=getattr(intent, "intent_id", 0),
+                                        strategy_id=getattr(intent, "strategy_id", ""),
+                                        symbol=getattr(intent, "symbol", ""),
+                                        reason_code="HALT_BLOCKED_POST_APPROVE",
+                                        timestamp_ns=timebase.now_ns(),
+                                    )
+                                )
                             except asyncio.QueueFull:
                                 self.metrics.rejection_sink_overflow_total.inc()
                     else:
@@ -484,13 +500,15 @@ class RiskEngine:
                     # In real system: Feedback to strategy via side channel
                     if self._rejection_sink is not None:
                         try:
-                            self._rejection_sink.put_nowait(RiskFeedback(
-                                intent_id=getattr(intent, "intent_id", 0),
-                                strategy_id=getattr(intent, "strategy_id", ""),
-                                symbol=getattr(intent, "symbol", ""),
-                                reason_code=decision.reason_code,
-                                timestamp_ns=timebase.now_ns(),
-                            ))
+                            self._rejection_sink.put_nowait(
+                                RiskFeedback(
+                                    intent_id=getattr(intent, "intent_id", 0),
+                                    strategy_id=getattr(intent, "strategy_id", ""),
+                                    symbol=getattr(intent, "symbol", ""),
+                                    reason_code=decision.reason_code,
+                                    timestamp_ns=timebase.now_ns(),
+                                )
+                            )
                         except asyncio.QueueFull:
                             self.metrics.rejection_sink_overflow_total.inc()
 
@@ -512,33 +530,32 @@ class RiskEngine:
                     pass
                 if self._rejection_sink is not None:
                     try:
-                        self._rejection_sink.put_nowait(RiskFeedback(
-                            intent_id=getattr(intent, "intent_id", 0),
-                            strategy_id=getattr(intent, "strategy_id", ""),
-                            symbol=getattr(intent, "symbol", ""),
-                            reason_code="risk_engine_error",
-                            timestamp_ns=timebase.now_ns(),
-                        ))
+                        self._rejection_sink.put_nowait(
+                            RiskFeedback(
+                                intent_id=getattr(intent, "intent_id", 0),
+                                strategy_id=getattr(intent, "strategy_id", ""),
+                                symbol=getattr(intent, "symbol", ""),
+                                reason_code="risk_engine_error",
+                                timestamp_ns=timebase.now_ns(),
+                            )
+                        )
                     except asyncio.QueueFull:
                         self.metrics.rejection_sink_overflow_total.inc()
                 self.intent_queue.task_done()
 
     def _revalidate_for_dlq(self, cmd: OrderCommand) -> bool:
-        """Lightweight position-limit re-check for DLQ replay.
+        """Full risk re-validation for DLQ replay.
 
         Returns True if the command is still safe to replay, False if it should
-        be dropped.  Only checks position limits (the most likely thing to change
-        while a command sits in the DLQ due to fills / position updates).
+        be dropped.  Runs ALL validators so that price moves, accumulated daily
+        loss, notional limits, etc. are all re-checked against current state.
         """
         intent = cmd.intent
         # Cancel / force-flat orders are always safe to replay.
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True
 
-        # Find the PositionLimitValidator among validators.
         for v in self._rust_uncovered_validators:
-            if not isinstance(v, PositionLimitValidator):
-                continue
             ok, reason = v.check(intent)
             if not ok:
                 logger.warning(
@@ -550,7 +567,6 @@ class RiskEngine:
                 )
                 self.metrics.risk_dlq_revalidation_rejected_total.inc()
                 return False
-            break
         return True
 
     def _drain_order_dlq(self) -> None:

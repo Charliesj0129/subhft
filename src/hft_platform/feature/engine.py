@@ -383,6 +383,7 @@ class FeatureEngine:
         self._rust_kernels.clear()
         self._rust_pipelines.clear()
         self._last_update_ns.clear()
+        self._warmup_ready_symbols.clear()
 
     def get_feature(self, symbol: str, feature_id: str) -> int | float | None:
         state = self._states.get(str(symbol))
@@ -465,9 +466,13 @@ class FeatureEngine:
 
         if fused is not None:
             values, changed_mask, warmup_ready_mask = fused
-            # NaN/Inf guard for Rust path (Rust pipeline has no internal NaN protection)
-            ks = self._lob_kernel_states.get(symbol)
-            if ks is not None and ks.has_nan():
+            # NaN/Inf guard for Rust path — validate output values directly
+            # (_lob_kernel_states is only populated by the Python path, so checking it here is wrong)
+            if any(
+                not math.isfinite(v)
+                for v in values
+                if isinstance(v, float)
+            ):
                 logger.warning("feature_nan_detected", symbol=symbol, backend="rust")
                 self.reset_symbol(symbol)
                 return None

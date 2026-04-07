@@ -218,6 +218,40 @@ class OrderAdapter:
                 self._pending_order_keys.clear()
             return count
 
+    async def _run_blocking_call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run a synchronous broker call off-loop without using the loop's default executor.
+
+        A daemon thread avoids pytest-asyncio teardown hangs when timed-out broker
+        calls are still unwinding in the background.
+        """
+        loop = asyncio.get_running_loop()
+        result_future: asyncio.Future[Any] = loop.create_future()
+
+        def _set_result(value: Any) -> None:
+            if not result_future.done():
+                result_future.set_result(value)
+
+        def _set_exception(exc: BaseException) -> None:
+            if not result_future.done():
+                result_future.set_exception(exc)
+
+        def _worker() -> None:
+            try:
+                result = fn(*args, **kwargs)
+            except BaseException as exc:  # noqa: BLE001
+                try:
+                    loop.call_soon_threadsafe(_set_exception, exc)
+                except RuntimeError:
+                    return
+            else:
+                try:
+                    loop.call_soon_threadsafe(_set_result, result)
+                except RuntimeError:
+                    return
+
+        threading.Thread(target=_worker, name="order-adapter-call", daemon=True).start()
+        return await result_future
+
     def get_phantom_candidates(self) -> frozenset[str]:
         """Return a frozen copy of phantom order keys for reconciliation."""
         return frozenset(self._phantom_order_keys.keys())
@@ -279,9 +313,7 @@ class OrderAdapter:
         operations that intentionally bypass risk evaluation.
         """
         if intent.intent_type not in (IntentType.CANCEL, IntentType.FORCE_FLAT):
-            raise ValueError(
-                f"submit_intent only accepts CANCEL/FORCE_FLAT, got {intent.intent_type!r}"
-            )
+            raise ValueError(f"submit_intent only accepts CANCEL/FORCE_FLAT, got {intent.intent_type!r}")
         await self.execute(self._intent_to_command(intent))
 
     async def run(self) -> None:
@@ -344,7 +376,7 @@ class OrderAdapter:
             if trade is None or trade is _PENDING_SENTINEL or trade is _TERMINAL_BEFORE_REGISTERED:
                 continue
             try:
-                await asyncio.wait_for(asyncio.to_thread(self.client.cancel_order, trade), timeout=timeout_s)
+                await asyncio.wait_for(self._run_blocking_call(self.client.cancel_order, trade), timeout=timeout_s)
                 cancelled += 1
                 logger.info("Drained live order", order_key=key)
             except asyncio.TimeoutError:
@@ -521,7 +553,11 @@ class OrderAdapter:
 
         # R2-01: Track whether we reserved a dedup slot so we can release it on
         # unexpected exception (prevents orphaned slots blocking re-submission).
-        _dedup_key = intent.idempotency_key if (not _safety_exempt and self._dedup_store is not None and intent.idempotency_key) else ""
+        _dedup_key = (
+            intent.idempotency_key
+            if (not _safety_exempt and self._dedup_store is not None and intent.idempotency_key)
+            else ""
+        )
         try:
             # Per-symbol rate limit check (WU-06)
             if not _safety_exempt:
@@ -1019,10 +1055,10 @@ class OrderAdapter:
                     except (KeyError, TypeError, AttributeError) as pt_err:
                         logger.warning("Product type lookup failed", symbol=intent.symbol, error=str(pt_err))
 
-                order_params: Dict[str, Any] = {}
+                force_flat_order_params: Dict[str, Any] = {}
                 if hasattr(meta, "order_params"):
                     try:
-                        order_params = meta.order_params(intent.symbol) or {}
+                        force_flat_order_params = meta.order_params(intent.symbol) or {}
                     except (KeyError, TypeError, AttributeError) as op_err:
                         logger.warning("Order params lookup failed", symbol=intent.symbol, error=str(op_err))
 
@@ -1058,7 +1094,7 @@ class OrderAdapter:
                     product_type=product_type,
                     price_type=price_type,
                     intent=intent,
-                    **order_params,
+                    **force_flat_order_params,
                 )
                 if trade is None or trade is _GUARD_TIMEOUT:
                     async with self._live_orders_lock:
@@ -1096,7 +1132,11 @@ class OrderAdapter:
                     )
                     target_trade = self.live_orders.get(target_key)
 
-                if target_trade and target_trade is not _PENDING_SENTINEL and target_trade is not _TERMINAL_BEFORE_REGISTERED:
+                if (
+                    target_trade
+                    and target_trade is not _PENDING_SENTINEL
+                    and target_trade is not _TERMINAL_BEFORE_REGISTERED
+                ):
                     logger.info("Canceling Order", target=target_key)
                     result = await self._call_api("cancel_order", self.client.cancel_order, target_trade, intent=intent)
                     if result is None or result is _GUARD_TIMEOUT:
@@ -1126,7 +1166,11 @@ class OrderAdapter:
                     )
                     target_trade = self.live_orders.get(target_key)
 
-                if target_trade and target_trade is not _PENDING_SENTINEL and target_trade is not _TERMINAL_BEFORE_REGISTERED:
+                if (
+                    target_trade
+                    and target_trade is not _PENDING_SENTINEL
+                    and target_trade is not _TERMINAL_BEFORE_REGISTERED
+                ):
                     # Descale price
                     price_f = self.price_codec.descale(intent.symbol, intent.price)
 
@@ -1231,14 +1275,18 @@ class OrderAdapter:
 
     async def _api_worker(self) -> None:
         while self.running:
+            current_cmd: OrderCommand | None = None
             try:
                 item = await self._api_queue.get()
             except asyncio.CancelledError:
                 return
             try:
                 cmd: OrderCommand = (
-                    self._materialize_typed_command(item) if _is_typed_order_cmd_frame(item) else cast(OrderCommand, item)
+                    self._materialize_typed_command(item)
+                    if _is_typed_order_cmd_frame(item)
+                    else cast(OrderCommand, item)
                 )
+                current_cmd = cmd
                 if cmd.created_ns:
                     self._record_queue_latency(cmd)
                 self._store_pending(cmd)
@@ -1260,16 +1308,23 @@ class OrderAdapter:
                                 else cast(OrderCommand, item)
                             )
                             self._store_pending(cmd)
+                            # Urgent command arrived — break out immediately so
+                            # CANCEL/FORCE_FLAT is not delayed by coalesce window.
+                            if cmd.intent.intent_type in (
+                                IntentType.CANCEL,
+                                IntentType.FORCE_FLAT,
+                            ):
+                                break
                         except asyncio.TimeoutError:
                             break
 
                 pending = list(self._api_pending.values())
                 self._api_pending.clear()
                 for item in pending:
-                    _exempt = (
-                        item.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
-                        or self._is_strategy_halt_exempt(item.intent.strategy_id)
-                    )
+                    _exempt = item.intent.intent_type in (
+                        IntentType.CANCEL,
+                        IntentType.FORCE_FLAT,
+                    ) or self._is_strategy_halt_exempt(item.intent.strategy_id)
                     _sg_halt = (
                         self._storm_guard is not None
                         and getattr(self._storm_guard, "state", None) == StormGuardState.HALT
@@ -1311,8 +1366,8 @@ class OrderAdapter:
                 self.metrics.order_reject_total.inc()
                 self.circuit_breaker.record_failure()
                 self._update_cb_metric()
-                if item is not None and hasattr(item, "intent") and item.intent is not None:
-                    self.strategy_cb_mgr.record_failure(item.intent.strategy_id)
+                if current_cmd is not None:
+                    self.strategy_cb_mgr.record_failure(current_cmd.intent.strategy_id)
                 self._api_pending.clear()
 
     def _update_cb_metric(self) -> None:
@@ -1390,7 +1445,7 @@ class OrderAdapter:
                 try:
                     start_ns = time.perf_counter_ns()
                     result = await asyncio.wait_for(
-                        asyncio.to_thread(_guarded_call),
+                        self._run_blocking_call(_guarded_call),
                         timeout=self._api_timeout_s,
                     )
                     duration = time.perf_counter_ns() - start_ns
@@ -1452,7 +1507,9 @@ class OrderAdapter:
                             # R2-03: Evict entries older than 1 hour when over capacity
                             if len(self._phantom_order_keys) > self._phantom_order_max:
                                 cutoff = time.monotonic() - 3600.0
-                                self._phantom_order_keys = {k: v for k, v in self._phantom_order_keys.items() if v > cutoff}
+                                self._phantom_order_keys = {
+                                    k: v for k, v in self._phantom_order_keys.items() if v > cutoff
+                                }
                             logger.warning(
                                 "phantom_order_candidate",
                                 strategy_id=intent.strategy_id,

@@ -143,7 +143,7 @@ class ExposureStore:
             ExposureLimitError: if a new symbol entry cannot be admitted even
                 after zero-balance eviction (CE2-12 memory bound).
         """
-        if intent.intent_type == IntentType.CANCEL:
+        if intent.intent_type in (IntentType.CANCEL, IntentType.AMEND):
             return True, "OK"
 
         # Notional = price * qty  (both already scaled integers)
@@ -217,7 +217,7 @@ class ExposureStore:
                 return False, reason
             return True, "OK"
 
-        if int(intent_type) == int(IntentType.CANCEL):
+        if int(intent_type) in (int(IntentType.CANCEL), int(IntentType.AMEND)):
             return True, "OK"
 
         notional = int(price) * int(qty)
@@ -263,7 +263,7 @@ class ExposureStore:
         intent: OrderIntent,
     ) -> None:
         """Reduce exposure on fill/cancel/reject (immutable tuple replacement pattern)."""
-        if intent.intent_type == IntentType.CANCEL:
+        if intent.intent_type in (IntentType.CANCEL, IntentType.AMEND):
             return
 
         notional = intent.price * intent.qty
@@ -286,7 +286,7 @@ class ExposureStore:
         if rs is not None:
             rs.release(key.account, key.strategy_id, key.symbol, int(intent_type), int(price), int(qty))
             return
-        if int(intent_type) == int(IntentType.CANCEL):
+        if int(intent_type) in (int(IntentType.CANCEL), int(IntentType.AMEND)):
             return
         notional = int(price) * int(qty)
         with self._lock:

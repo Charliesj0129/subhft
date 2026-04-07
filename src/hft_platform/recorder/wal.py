@@ -663,6 +663,8 @@ class WALBatchWriter:
     def stop(self) -> None:
         """Stop the background timer and flush remaining data."""
         self._timer_running = False
+        if self._timer_thread is not None:
+            self._timer_thread.join(timeout=5.0)
         # Final sync flush
         with self._lock:
             if (self._buffer or self._columnar_buffer) and self._buffer_rows > 0:
