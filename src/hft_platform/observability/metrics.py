@@ -268,6 +268,8 @@ class MetricsRegistry:
                 _pn("pipeline_degradation_events_total"),
                 # Per-consumer ring buffer lag gauge
                 _pn("bus_consumer_lag"),
+                # Broker-thread callback data loss
+                _pn("md_callback_drop_total"),
             ]
         )
         # Market Data
@@ -794,6 +796,10 @@ class MetricsRegistry:
         self.market_data_callback_parse_total = Counter(_pn("market_data_callback_parse_total"),
             "MarketDataService Shioaji callback parser outcomes",
             ["result"],  # "fast" | "fallback" | "miss"
+        )
+        self.md_callback_drop_total = Counter(_pn("md_callback_drop_total"),
+            "Market data callback drops (broker thread)",
+            ["reason"],  # "parse_miss" | "loop_missing" | "callback_error"
         )
         self.feature_plane_updates_total = Counter(_pn("feature_plane_updates_total"),
             "FeatureEngine runtime update outcomes",

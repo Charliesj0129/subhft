@@ -289,6 +289,17 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             self.metrics_registry.feed_events_total.labels(type="bidask") if self.metrics_registry else None
         )
         self._md_callback_parse_metric_children: dict[str, Any] = {}
+        # Pre-resolve broker-thread drop counter children (thread-safe .inc())
+        _mr = self.metrics_registry
+        self._cb_drop_parse_miss = (
+            _mr.md_callback_drop_total.labels(reason="parse_miss") if _mr and hasattr(_mr, "md_callback_drop_total") else None
+        )
+        self._cb_drop_loop_missing = (
+            _mr.md_callback_drop_total.labels(reason="loop_missing") if _mr and hasattr(_mr, "md_callback_drop_total") else None
+        )
+        self._cb_drop_callback_error = (
+            _mr.md_callback_drop_total.labels(reason="callback_error") if _mr and hasattr(_mr, "md_callback_drop_total") else None
+        )
         self._feature_update_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_quality_flag_metric_children: dict[str, Any] = {}
         self._feature_latency_metric_child = None
@@ -991,15 +1002,21 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 if msg is not None:
                     self.loop.call_soon_threadsafe(self._enqueue_raw, exchange, msg)
                 else:
+                    if self._cb_drop_parse_miss:
+                        self._cb_drop_parse_miss.inc()
                     if self.log_raw:
                         logger.warning(
                             "Could not parse msg from callback args",
                             args_types=[type(a).__name__ for a in args],
                         )
             else:
+                if self._cb_drop_loop_missing:
+                    self._cb_drop_loop_missing.inc()
                 logger.error("Callback loop missing")
 
         except Exception as e:
+            if self._cb_drop_callback_error:
+                self._cb_drop_callback_error.inc()
             self._record_shioaji_crash_signature(str(e), context="md_callback")
             logger.error("shioaji_callback_error", error=str(e))
 
