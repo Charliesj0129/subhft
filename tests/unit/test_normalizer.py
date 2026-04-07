@@ -309,42 +309,61 @@ class TestNormalizationSkipCounter:
     """Verify normalization_skip_total increments for silent None returns."""
 
     def test_tick_missing_symbol_increments_counter(self, normalizer):
-        counter = normalizer._normalization_skip
-        assert counter is not None, "metrics should be available in test"
-        before = counter.labels(type="tick", reason="missing_symbol")._value.get()
+        child = normalizer._skip_tick_missing_symbol
+        assert child is not None, "metrics should be available in test"
+        before = child._value.get()
         result = normalizer.normalize_tick({})
         assert result is None
-        after = counter.labels(type="tick", reason="missing_symbol")._value.get()
+        after = child._value.get()
         assert after == before + 1
 
     def test_tick_zero_price_increments_counter(self, normalizer):
-        counter = normalizer._normalization_skip
-        before = counter.labels(type="tick", reason="negative_price")._value.get()
+        child = normalizer._skip_tick_negative_price
+        before = child._value.get()
         result = normalizer.normalize_tick({"code": "2330", "close": 0})
         assert result is None
-        after = counter.labels(type="tick", reason="negative_price")._value.get()
+        after = child._value.get()
         assert after == before + 1
 
     def test_tick_negative_price_increments_counter(self, normalizer):
-        counter = normalizer._normalization_skip
-        before = counter.labels(type="tick", reason="negative_price")._value.get()
+        child = normalizer._skip_tick_negative_price
+        before = child._value.get()
         result = normalizer.normalize_tick({"code": "2330", "close": -5.0})
         assert result is None
-        after = counter.labels(type="tick", reason="negative_price")._value.get()
+        after = child._value.get()
+        assert after == before + 1
+
+    def test_tick_negative_price_rust_path_increments_counter(self, normalizer, monkeypatch):
+        """Rust fast path returns price=0 for a valid symbol -> skip counter increments."""
+        import hft_platform.feed_adapter.normalizer as norm_mod
+
+        child = normalizer._skip_tick_negative_price
+        assert child is not None
+
+        # Enable Rust path
+        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
+        # Mock Rust normalize to return tuple with negative price
+        rust_result = ("tick", "2330", -1, 100, 100, False, False, 1_000_000)
+        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
+
+        before = child._value.get()
+        result = normalizer.normalize_tick({"code": "2330", "close": -5.0})
+        assert result is None
+        after = child._value.get()
         assert after == before + 1
 
     def test_bidask_missing_symbol_increments_counter(self, normalizer):
-        counter = normalizer._normalization_skip
-        before = counter.labels(type="bidask", reason="missing_symbol")._value.get()
+        child = normalizer._skip_bidask_missing_symbol
+        before = child._value.get()
         result = normalizer.normalize_bidask({})
         assert result is None
-        after = counter.labels(type="bidask", reason="missing_symbol")._value.get()
+        after = child._value.get()
         assert after == before + 1
 
     def test_snapshot_missing_symbol_increments_counter(self, normalizer):
-        counter = normalizer._normalization_skip
-        before = counter.labels(type="snapshot", reason="missing_symbol")._value.get()
+        child = normalizer._skip_snapshot_missing_symbol
+        before = child._value.get()
         result = normalizer.normalize_snapshot({})
         assert result is None
-        after = counter.labels(type="snapshot", reason="missing_symbol")._value.get()
+        after = child._value.get()
         assert after == before + 1

@@ -424,7 +424,10 @@ class MarketDataNormalizer:
         "_latency_metrics_sample_every",
         "_rust_fallback_tick",
         "_rust_fallback_bidask",
-        "_normalization_skip",
+        "_skip_tick_missing_symbol",
+        "_skip_tick_negative_price",
+        "_skip_bidask_missing_symbol",
+        "_skip_snapshot_missing_symbol",
     )
 
     def __init__(self, config_path: str | None = None, metadata: SymbolMetadata | None = None):
@@ -441,9 +444,11 @@ class MarketDataNormalizer:
         self._rust_fallback_bidask = (
             self.metrics.rust_fallback_total.labels(type="bidask") if self.metrics else None
         )
-        self._normalization_skip = (
-            self.metrics.normalization_skip_total if self.metrics else None
-        )
+        _skip = self.metrics.normalization_skip_total if self.metrics else None
+        self._skip_tick_missing_symbol = _skip.labels(type="tick", reason="missing_symbol") if _skip else None
+        self._skip_tick_negative_price = _skip.labels(type="tick", reason="negative_price") if _skip else None
+        self._skip_bidask_missing_symbol = _skip.labels(type="bidask", reason="missing_symbol") if _skip else None
+        self._skip_snapshot_missing_symbol = _skip.labels(type="snapshot", reason="missing_symbol") if _skip else None
         self._last_symbol: str | None = None
         self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
         self._last_local_ts_tick: int = 0
@@ -622,8 +627,8 @@ class MarketDataNormalizer:
                 is_odd_lot = bool(getattr(payload, "intraday_odd", None) or 0)
 
             if not symbol:
-                if self._normalization_skip:
-                    self._normalization_skip.labels(type="tick", reason="missing_symbol").inc()
+                if self._skip_tick_missing_symbol:
+                    self._skip_tick_missing_symbol.inc()
                 return None
 
             exch_ts = _extract_ts_ns(ts_val)
@@ -649,8 +654,8 @@ class MarketDataNormalizer:
                             if price == 0 and close_val:
                                 raise ValueError("rust returned zero price for non-zero close")
                             if price <= 0:
-                                if self._normalization_skip:
-                                    self._normalization_skip.labels(type="tick", reason="negative_price").inc()
+                                if self._skip_tick_negative_price:
+                                    self._skip_tick_negative_price.inc()
                                 return None
                             if exch_ts_py:
                                 exch_ts = exch_ts_py
@@ -686,8 +691,8 @@ class MarketDataNormalizer:
                             self._rust_fallback_tick.inc()
                 price = int(round(float(close_val) * scale))
                 if price <= 0:
-                    if self._normalization_skip:
-                        self._normalization_skip.labels(type="tick", reason="negative_price").inc()
+                    if self._skip_tick_negative_price:
+                        self._skip_tick_negative_price.inc()
                     return None
             else:
                 price = 0
@@ -752,8 +757,8 @@ class MarketDataNormalizer:
                 ap = getattr(payload, "ask_price", None) or []
                 av = getattr(payload, "ask_volume", None) or []
             if not symbol:
-                if self._normalization_skip:
-                    self._normalization_skip.labels(type="bidask", reason="missing_symbol").inc()
+                if self._skip_bidask_missing_symbol:
+                    self._skip_bidask_missing_symbol.inc()
                 return None
 
             exch_ts = _extract_ts_ns(ts_val)
@@ -1181,8 +1186,8 @@ class MarketDataNormalizer:
             sell_volume = getattr(payload, "sell_volume", None)
 
         if not symbol:
-            if self._normalization_skip:
-                self._normalization_skip.labels(type="snapshot", reason="missing_symbol").inc()
+            if self._skip_snapshot_missing_symbol:
+                self._skip_snapshot_missing_symbol.inc()
             return None
 
         exch_ts = _extract_ts_ns(ts_val)
