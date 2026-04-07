@@ -568,6 +568,14 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard update failed", error=str(e))
 
+            # 6. Update per-connection pool metrics (if QuoteConnectionPool)
+            _update_pool_metrics = getattr(self.md_client, "update_metrics", None)
+            if _update_pool_metrics is not None:
+                try:
+                    _update_pool_metrics()
+                except Exception:
+                    pass  # best-effort observability
+
             # Kill-switch file check (async to avoid blocking event loop)
             kill_switch_path = os.getenv("HFT_KILL_SWITCH_PATH", ".runtime/kill_switch")
             loop = asyncio.get_running_loop()
