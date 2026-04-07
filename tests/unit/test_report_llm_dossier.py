@@ -14,6 +14,8 @@ def test_build_llm_dossier_extracts_symbol_and_required_evidence() -> None:
 
     assert dossier.symbol == "TXFD6"
     assert dossier.evidence["flow.session_ud"] == "1.15"
+    assert dossier.evidence["flow.session_net_flow"] == "500"
+    assert dossier.evidence["flow.eod_drift"] == "0.1"
     assert dossier.evidence["chips.net_ratio"] == "0.625"
     assert dossier.evidence["cross_day.trend_direction"] == "up"
     assert dossier.evidence["levels.R1"] == "20,150"
@@ -95,3 +97,17 @@ def test_build_llm_dossier_keeps_compact_three_line_tuple_narrative() -> None:
     assert all(line == line.strip() for line in dossier.narrative)
     assert all("  " not in line for line in dossier.narrative)
     assert all(len(line) < 200 for line in dossier.narrative)
+
+
+def test_build_llm_dossier_uses_storyline_only_when_first_entries_are_blank() -> None:
+    reasoning_report = _make_reasoning_report()
+    narrative = NarrativeReport(
+        storyline=["   ", "\t", "\n", "conclusion must not leak in"],
+        turning_points=reasoning_report.narrative.turning_points,
+        conclusion="this must not be used",
+    )
+    reasoning_report = dataclasses.replace(reasoning_report, narrative=narrative)
+
+    dossier = build_llm_dossier(_make_fact_report(), reasoning_report)
+
+    assert dossier.narrative == ("(blank storyline)",)

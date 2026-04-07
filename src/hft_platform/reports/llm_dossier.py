@@ -8,6 +8,8 @@ from hft_platform.reports.models import EnrichedLevel, FactReport, ReasoningRepo
 
 __all__ = ["build_llm_dossier"]
 
+_BLANK_STORYLINE = "(blank storyline)"
+
 
 def _price_text(price: int) -> str:
     """Format platform-scaled prices as human-readable whole points."""
@@ -47,7 +49,7 @@ def _narrative_lines(reasoning_report: ReasoningReport) -> tuple[str, ...]:
     lines = tuple(_compact_line(line) for line in reasoning_report.narrative.storyline[:3] if line.strip())
     if lines:
         return lines
-    return (_compact_line(reasoning_report.narrative.conclusion),)
+    return (_BLANK_STORYLINE,)
 
 
 def build_llm_dossier(fact_report: FactReport, reasoning_report: ReasoningReport) -> LLMDossier:
