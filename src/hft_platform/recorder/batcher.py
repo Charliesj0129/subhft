@@ -677,13 +677,19 @@ class Batcher:
                 row_count=flush_buf.row_count,
                 msg="PERMANENT DATA LOSS — reinject limit exceeded, dropping rows",
             )
-            from hft_platform.observability.metrics import MetricsRegistry  # lazy import to avoid circular deps
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry  # lazy import to avoid circular deps
 
-            MetricsRegistry.get().recorder_reinject_circuit_breaker_drops_total.labels(
-                table=self.table_name
-            ).inc(flush_buf.row_count)
+                MetricsRegistry.get().recorder_reinject_circuit_breaker_drops_total.labels(table=self.table_name).inc(
+                    flush_buf.row_count
+                )
+            except Exception:
+                pass
             if self._health_tracker:
-                self._health_tracker.record_event("data_loss", table=self.table_name, count=flush_buf.row_count)
+                try:
+                    self._health_tracker.record_event("data_loss", table=self.table_name, count=flush_buf.row_count)
+                except Exception:
+                    pass
             return
 
         try:

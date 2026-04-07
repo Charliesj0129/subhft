@@ -284,12 +284,13 @@ class HFTSystem:
 
             self._start_service("recon", self.recon_service.run())
             self._start_service("strat", self.strategy_runner.run())
-            if hasattr(self.strategy_runner, '_rejection_queue') and self.strategy_runner._rejection_queue is not None:
+            if hasattr(self.strategy_runner, "_rejection_queue") and self.strategy_runner._rejection_queue is not None:
                 self._start_service("rejection_consumer", self.strategy_runner._run_rejection_consumer())
 
             # Start AuditWriter flush tasks (singleton, lazy-created by RiskEngine/StormGuard)
             try:
                 from hft_platform.recorder.audit import get_audit_writer
+
                 self._audit_writer = get_audit_writer()
                 await self._audit_writer.start()
                 logger.info("AuditWriter started")
@@ -528,10 +529,15 @@ class HFTSystem:
                 # 3b. Inform StormGuard of session state to suppress feed-gap noise
                 if self.session_governor is not None:
                     from hft_platform.ops.session_governor import SessionPhase
-                    _ACTIVE_PHASES = frozenset({
-                        SessionPhase.PRE_OPEN, SessionPhase.OPEN,
-                        SessionPhase.CLOSE_ONLY, SessionPhase.FORCE_FLAT,
-                    })
+
+                    _ACTIVE_PHASES = frozenset(
+                        {
+                            SessionPhase.PRE_OPEN,
+                            SessionPhase.OPEN,
+                            SessionPhase.CLOSE_ONLY,
+                            SessionPhase.FORCE_FLAT,
+                        }
+                    )
                     gate = getattr(self.session_governor, "track_gate", None)
                     if gate is not None:
                         phases = gate.track_phases
@@ -650,9 +656,7 @@ class HFTSystem:
             if now_s - self._last_queue_log_s >= self._queue_log_every_s:
                 self._last_queue_log_s = now_s
                 _gateway_intent_depth = (
-                    getattr(self.intent_channel, "qsize", lambda: 0)()
-                    if self.intent_channel is not None
-                    else None
+                    getattr(self.intent_channel, "qsize", lambda: 0)() if self.intent_channel is not None else None
                 )
                 _log_kwargs: dict = dict(
                     raw=self.raw_queue.qsize(),
@@ -712,6 +716,7 @@ class HFTSystem:
                         )
                         try:
                             from hft_platform.observability.metrics import MetricsRegistry
+
                             MetricsRegistry.get().halt_drain_safety_intent_lost_total.inc()
                         except Exception as exc:
                             logger.warning("halt_drain_metric_inc_failed", error=str(exc))
@@ -978,7 +983,7 @@ class HFTSystem:
         # Schedule async cleanup if event loop is available
         loop = getattr(self, "loop", None)
         if loop is not None and loop.is_running():
-            asyncio.create_task(self._cleanup_tasks())
+            asyncio.create_task(self.stop_async())
 
     async def _cleanup_tasks(self):
         """Cancel and await all running tasks."""
@@ -1058,7 +1063,9 @@ class HFTSystem:
         # Start from -1 to capture first event
         batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
         consumer = (
-            self.bus.consume_batch(batch_size, start_cursor=-1, consumer_name="recorder_bridge") if batch_size > 1 else self.bus.consume(start_cursor=-1, consumer_name="recorder_bridge")
+            self.bus.consume_batch(batch_size, start_cursor=-1, consumer_name="recorder_bridge")
+            if batch_size > 1
+            else self.bus.consume(start_cursor=-1, consumer_name="recorder_bridge")
         )
         from hft_platform.contracts.execution import FillEvent, OrderEvent
         from hft_platform.events import BidAskEvent, TickEvent

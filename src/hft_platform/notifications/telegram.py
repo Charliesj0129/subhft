@@ -102,9 +102,7 @@ class TelegramSender:
                 if self._session is None or self._session.closed:
                     self._session = aiohttp.ClientSession()
 
-                async with self._session.post(
-                    url, json=payload, timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
+                async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         self._last_send_ts = time.monotonic()
                         logger.debug("telegram.sent", chat_id=self._chat_id, critical=critical)
@@ -220,13 +218,13 @@ class TelegramCommandPoller:
                 self._offset = update_id + 1
 
                 message = update.get("message", {})
-                from_id = str(message.get("from", {}).get("id", ""))
+                chat_id = str(message.get("chat", {}).get("id", ""))
                 text = message.get("text", "").strip()
 
-                if from_id != self._chat_id:
+                if chat_id != self._chat_id:
                     logger.debug(
-                        "telegram.poller.ignored_unknown_sender",
-                        from_id=from_id,
+                        "telegram.poller.ignored_unknown_chat",
+                        chat_id=chat_id,
                     )
                     continue
 

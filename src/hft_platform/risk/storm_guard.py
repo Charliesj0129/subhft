@@ -2,6 +2,7 @@ import asyncio
 import os
 import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -378,7 +379,7 @@ class StormGuard:
             )
 
     @staticmethod
-    def _halt_callback_done(future: "asyncio.Future[None]") -> None:
+    def _halt_callback_done(future: Future[Any]) -> None:
         """Log errors from fire-and-forget halt callback futures."""
         if future.cancelled():
             return
@@ -433,7 +434,7 @@ class StormGuard:
                     return True, "HALT_EXEMPT"
                 return False, "STORMGUARD_HALT"
             if self.state == StormGuardState.STORM:
-                if intent.intent_type == IntentType.NEW:
+                if intent.intent_type in (IntentType.NEW, IntentType.AMEND):
                     if intent.strategy_id in self._halt_exempt_strategies:
                         logger.warning(
                             "stormguard_storm_exempt_bypass",
@@ -441,7 +442,7 @@ class StormGuard:
                             symbol=intent.symbol,
                         )
                         return True, "STORM_EXEMPT"
-                    return False, "STORMGUARD_STORM_NEW_BLOCKED"
+                    return False, "STORMGUARD_STORM_BLOCKED"
             return True, "OK"
 
     def set_session_active(self, active: bool) -> None:
@@ -479,9 +480,7 @@ class StormGuard:
             consecutive_failures=count,
         )
 
-    _FEATURE_RECOVERY_HOLD_S: float = float(
-        os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5")
-    )
+    _FEATURE_RECOVERY_HOLD_S: float = float(os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5"))
 
     def report_feature_recovery(self) -> None:
         """Clear feature-failure flag after FeatureEngine recovers.

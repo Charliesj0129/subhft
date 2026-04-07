@@ -36,9 +36,6 @@ from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.fubon.quote_runtime")
 
-# Precision Law: all prices are scaled int x10000.
-_PRICE_SCALE: int = 10_000
-
 # Number of order book levels forwarded from the Fubon L5 feed.
 _BOOK_LEVELS: int = 5
 
@@ -184,7 +181,7 @@ class FubonQuoteRuntime:
 
             # Overwrite pre-allocated buffer (no new dict)
             buf["code"] = symbol
-            buf["close"] = _scale_price(price_raw)
+            buf["close"] = price_raw
             buf["volume"] = volume
             buf["ts"] = ts_ns
 
@@ -192,12 +189,14 @@ class FubonQuoteRuntime:
             # Create a fresh snapshot dict so the async consumer receives an
             # independent object.  The workspace buf may be overwritten by the
             # next callback before the event loop dequeues this message.
-            self._on_tick({
-                "code": buf["code"],
-                "close": buf["close"],
-                "volume": buf["volume"],
-                "ts": buf["ts"],
-            })
+            self._on_tick(
+                {
+                    "code": buf["code"],
+                    "close": buf["close"],
+                    "volume": buf["volume"],
+                    "ts": buf["ts"],
+                }
+            )
         except Exception as exc:
             self.log.error("Fubon trade callback error", error=str(exc))
 
@@ -230,9 +229,9 @@ class FubonQuoteRuntime:
             av = buf["ask_volume"]
 
             for i in range(_BOOK_LEVELS):
-                bp[i] = _scale_price(bid_prices_raw[i]) if i < n_bp else 0
+                bp[i] = bid_prices_raw[i] if i < n_bp else 0
                 bv[i] = int(bid_sizes_raw[i]) if i < n_bv else 0
-                ap[i] = _scale_price(ask_prices_raw[i]) if i < n_ap else 0
+                ap[i] = ask_prices_raw[i] if i < n_ap else 0
                 av[i] = int(ask_sizes_raw[i]) if i < n_av else 0
 
             buf["code"] = symbol
@@ -242,14 +241,16 @@ class FubonQuoteRuntime:
             # Create a fresh snapshot dict with copies of the inner lists so
             # the async consumer is fully isolated from the workspace buffer.
             # list(bp) is safe because the elements are ints (immutable).
-            self._on_bidask({
-                "code": buf["code"],
-                "bid_price": list(bp),
-                "bid_volume": list(bv),
-                "ask_price": list(ap),
-                "ask_volume": list(av),
-                "ts": buf["ts"],
-            })
+            self._on_bidask(
+                {
+                    "code": buf["code"],
+                    "bid_price": list(bp),
+                    "bid_volume": list(bv),
+                    "ask_price": list(ap),
+                    "ask_volume": list(av),
+                    "ts": buf["ts"],
+                }
+            )
         except Exception as exc:
             self.log.error("Fubon book callback error", error=str(exc))
 
@@ -326,10 +327,3 @@ def _ts_to_ns(ts_val: Any) -> int:
     if ts_val is None:
         return 0
     return timebase.coerce_ns(ts_val)
-
-
-def _scale_price(price_val: Any) -> int:
-    """Scale Fubon prices to canonical x10000 integer units."""
-    if price_val is None:
-        return 0
-    return int(round(float(price_val) * _PRICE_SCALE))

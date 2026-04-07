@@ -478,6 +478,7 @@ class FeatureEngine:
             if ks is not None and ks.has_nan():
                 logger.warning("feature_nan_detected", symbol=symbol)
                 self.reset_symbol(symbol)
+                return None
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
             warmup_ready_mask = self._compute_warmup_ready_mask(warm_count, symbol)
         qflags = int(self._quality_flags_next.pop(symbol, 0))
