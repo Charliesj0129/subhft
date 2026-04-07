@@ -254,7 +254,15 @@ class OrderAdapter:
         )
 
     async def submit_intent(self, intent: OrderIntent) -> None:
-        """Public async submission API for platform-owned flatteners."""
+        """Public async submission API for platform-owned flatteners.
+
+        Only CANCEL and FORCE_FLAT intents are allowed — these are safety-critical
+        operations that intentionally bypass risk evaluation.
+        """
+        if intent.intent_type not in (IntentType.CANCEL, IntentType.FORCE_FLAT):
+            raise ValueError(
+                f"submit_intent only accepts CANCEL/FORCE_FLAT, got {intent.intent_type!r}"
+            )
         await self.execute(self._intent_to_command(intent))
 
     async def run(self) -> None:
