@@ -1001,6 +1001,14 @@ class HFTSystem:
             loop.call_soon_threadsafe(self._safe_enqueue_exec, event)
         else:
             # I-H4: loop not yet assigned (startup race) — buffer so events aren't dropped
+            if len(self._exec_overflow_buf) >= self._EXEC_OVERFLOW_MAX:
+                self._exec_overflow_evicted += 1
+                logger.critical(
+                    "exec_overflow_buf FULL in broker thread — fill LOST",
+                    evicted_count=self._exec_overflow_evicted,
+                    event_topic=getattr(event, "topic", "?"),
+                )
+                return
             self._exec_overflow_buf.append(event)
 
     async def _recorder_bridge(self):

@@ -216,3 +216,93 @@ class TestHaltDrainRiskQueueSafetyLog:
             mock_logger.critical.assert_called_once()
             call_args = mock_logger.critical.call_args
             assert "risk_queue_full_safety_intent_lost" in call_args.args
+
+
+class TestOnExecOverflowGuard:
+    """Broker-thread _on_exec fallback must not silently evict fills."""
+
+    def _make_stub(self, maxlen: int = 4):
+        """Create a minimal stub with _on_exec behavior."""
+        import collections
+        from types import SimpleNamespace
+
+        stub = SimpleNamespace()
+        stub._exec_overflow_buf = collections.deque(maxlen=maxlen)
+        stub._EXEC_OVERFLOW_MAX = maxlen
+        stub._exec_overflow_evicted = 0
+        stub.running = True
+        stub.loop = None  # force broker-thread fallback path
+        return stub
+
+    def test_append_when_below_capacity(self):
+        """Events append normally when buffer is below capacity."""
+        from hft_platform.services.system import HFTSystem
+
+        stub = self._make_stub(maxlen=4)
+        # Bind the real method to our stub
+        bound = HFTSystem._on_exec.__get__(stub, type(stub))
+
+        bound("test_topic", {"price": 100})
+        assert len(stub._exec_overflow_buf) == 1
+        assert stub._exec_overflow_evicted == 0
+
+    def test_drops_with_critical_log_when_full(self):
+        """When buffer is at capacity, new event is dropped and eviction counter incremented."""
+        from hft_platform.services.system import HFTSystem
+
+        stub = self._make_stub(maxlen=4)
+        bound = HFTSystem._on_exec.__get__(stub, type(stub))
+
+        # Fill buffer to capacity
+        for i in range(4):
+            bound(f"topic_{i}", {"price": i})
+
+        assert len(stub._exec_overflow_buf) == 4
+        assert stub._exec_overflow_evicted == 0
+
+        # Next call should be dropped, not silently evicted
+        with patch("hft_platform.services.system.logger") as mock_logger:
+            bound("overflow_topic", {"price": 999})
+
+        assert len(stub._exec_overflow_buf) == 4, "buffer size must not change"
+        assert stub._exec_overflow_evicted == 1
+        mock_logger.critical.assert_called_once()
+        log_msg = mock_logger.critical.call_args.args[0]
+        assert "FULL" in log_msg
+        assert "broker thread" in log_msg
+
+    def test_eviction_counter_increments_repeatedly(self):
+        """Each overflow attempt increments the eviction counter."""
+        from hft_platform.services.system import HFTSystem
+
+        stub = self._make_stub(maxlen=2)
+        bound = HFTSystem._on_exec.__get__(stub, type(stub))
+
+        # Fill
+        bound("t1", {"p": 1})
+        bound("t2", {"p": 2})
+
+        # 3 overflow attempts
+        with patch("hft_platform.services.system.logger"):
+            bound("t3", {"p": 3})
+            bound("t4", {"p": 4})
+            bound("t5", {"p": 5})
+
+        assert stub._exec_overflow_evicted == 3
+        assert len(stub._exec_overflow_buf) == 2
+
+    def test_original_events_preserved_on_overflow(self):
+        """Overflow must not evict existing events — original fills stay intact."""
+        from hft_platform.services.system import HFTSystem
+
+        stub = self._make_stub(maxlen=2)
+        bound = HFTSystem._on_exec.__get__(stub, type(stub))
+
+        bound("first", {"p": 1})
+        bound("second", {"p": 2})
+
+        with patch("hft_platform.services.system.logger"):
+            bound("overflow", {"p": 999})
+
+        topics = [e.topic for e in stub._exec_overflow_buf]
+        assert topics == ["first", "second"]
