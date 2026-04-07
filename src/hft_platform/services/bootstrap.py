@@ -642,11 +642,13 @@ class SystemBootstrapper:
             """Get bounded queue size from env, enforcing minimum."""
             return max(MIN_QUEUE_SIZE, int(os.getenv(env_key, str(default))))
 
-        raw_queue_size = get_queue_size("HFT_RAW_QUEUE_SIZE", self.DEFAULT_RAW_QUEUE_SIZE)
+        # Scale raw and recorder queues with number of quote connections
+        num_quote_conns = max(1, int(os.getenv("HFT_QUOTE_CONNECTIONS", "1")))
+        raw_queue_size = get_queue_size("HFT_RAW_QUEUE_SIZE", self.DEFAULT_RAW_QUEUE_SIZE * num_quote_conns)
         raw_exec_queue_size = get_queue_size("HFT_RAW_EXEC_QUEUE_SIZE", self.DEFAULT_RAW_EXEC_QUEUE_SIZE)
         risk_queue_size = get_queue_size("HFT_RISK_QUEUE_SIZE", self.DEFAULT_RISK_QUEUE_SIZE)
         order_queue_size = get_queue_size("HFT_ORDER_QUEUE_SIZE", self.DEFAULT_ORDER_QUEUE_SIZE)
-        recorder_queue_size = get_queue_size("HFT_RECORDER_QUEUE_SIZE", self.DEFAULT_RECORDER_QUEUE_SIZE)
+        recorder_queue_size = get_queue_size("HFT_RECORDER_QUEUE_SIZE", self.DEFAULT_RECORDER_QUEUE_SIZE * num_quote_conns)
 
         # All queues are now guaranteed to be bounded
         raw_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_queue_size)

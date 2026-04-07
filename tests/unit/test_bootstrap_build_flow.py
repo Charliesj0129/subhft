@@ -189,6 +189,14 @@ class TestQueueWiring:
         registry = _build_with_mocks()
         assert registry.raw_queue.maxsize == 131072
 
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_queue_scales_with_quote_connections(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """raw_queue and recorder_queue scale with HFT_QUOTE_CONNECTIONS."""
+        monkeypatch.setenv("HFT_QUOTE_CONNECTIONS", "3")
+        registry = _build_with_mocks()
+        assert registry.raw_queue.maxsize == SystemBootstrapper.DEFAULT_RAW_QUEUE_SIZE * 3
+        assert registry.recorder_queue.maxsize == SystemBootstrapper.DEFAULT_RECORDER_QUEUE_SIZE * 3
+
     @pytest.mark.usefixtures("_sim_env")
     def test_raw_queue_passed_to_market_data_service(self, _mock_services: dict) -> None:
         registry = _build_with_mocks()
