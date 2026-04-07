@@ -33,6 +33,11 @@ def _require_non_empty(value: object, field_name: str) -> None:
         raise ValueError(msg)
 
 
+def _require_text_items(values: tuple[str, ...], field_name: str) -> None:
+    for index, value in enumerate(values):
+        _require_text(value, f"{field_name}[{index}]")
+
+
 def canonical_level_label(side: str, index: int) -> str:
     """Return the canonical label for a support or resistance level."""
 
@@ -54,6 +59,10 @@ def canonical_level_label(side: str, index: int) -> str:
 class EvidenceRef:
     key: str
     detail: str
+
+    def validate(self) -> None:
+        _require_text(self.key, "key")
+        _require_text(self.detail, "detail")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +101,14 @@ class LLMDossier:
         object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
         object.__setattr__(self, "narrative", tuple(self.narrative))
 
+    def validate(self) -> None:
+        _require_text(self.symbol, "symbol")
+        _require_text(self.session, "session")
+        _require_text(self.date, "date")
+        _require_non_empty(self.evidence, "evidence")
+        _require_non_empty(self.narrative, "narrative")
+        _require_text_items(self.narrative, "narrative")
+
 
 @dataclass(frozen=True, slots=True)
 class LLMDecisionReport:
@@ -124,6 +141,11 @@ class LLMDecisionReport:
         _require_text(self.counter_case, "counter_case")
         _require_non_empty(self.execution_notes, "execution_notes")
         _require_non_empty(self.evidence_refs, "evidence_refs")
+        _require_text_items(self.key_levels, "key_levels")
+        _require_text_items(self.invalidations, "invalidations")
+        _require_text_items(self.execution_notes, "execution_notes")
+        for evidence_ref in self.evidence_refs:
+            evidence_ref.validate()
         if not 0 <= self.confidence <= 100:
             msg = "confidence must be between 0 and 100"
             raise ValueError(msg)

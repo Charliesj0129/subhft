@@ -47,6 +47,23 @@ def _report(
     )
 
 
+def _dossier(
+    *,
+    symbol: str = "TXF",
+    session: str = "day",
+    date: str = "2026-04-07",
+    evidence: dict[str, str] | None = None,
+    narrative: tuple[str, ...] = ("Opening flow stayed net positive.",),
+) -> LLMDossier:
+    return LLMDossier(
+        symbol=symbol,
+        session=session,
+        date=date,
+        evidence={"flow": "Opening flow stayed net positive."} if evidence is None else evidence,
+        narrative=narrative,
+    )
+
+
 def test_canonical_level_label_for_resistance() -> None:
     assert canonical_level_label("resistance", 0) == "R1"
 
@@ -133,6 +150,55 @@ def test_llm_dossier_coerces_mapping_and_sequence_to_immutable_types() -> None:
         dossier.evidence["new"] = "value"  # type: ignore[index]
 
 
+def test_llm_dossier_validate_accepts_complete_dossier() -> None:
+    dossier = _dossier()
+
+    dossier.validate()
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("symbol", ""),
+        ("session", "   "),
+        ("date", ""),
+    ),
+)
+def test_llm_dossier_validate_rejects_blank_identity_fields(
+    field_name: str,
+    value: str,
+) -> None:
+    kwargs = {
+        "symbol": "TXF",
+        "session": "day",
+        "date": "2026-04-07",
+        "evidence": {"flow": "Opening flow stayed net positive."},
+        "narrative": ("Opening flow stayed net positive.",),
+    }
+    kwargs[field_name] = value
+    dossier = LLMDossier(**kwargs)
+
+    with pytest.raises(ValueError):
+        dossier.validate()
+
+
+def test_llm_dossier_validate_rejects_empty_evidence() -> None:
+    dossier = _dossier(evidence={})
+
+    with pytest.raises(ValueError):
+        dossier.validate()
+
+
+@pytest.mark.parametrize("narrative", ((), ("",), ("Valid", "   ")))
+def test_llm_dossier_validate_rejects_blank_narrative_entries(
+    narrative: tuple[str, ...],
+) -> None:
+    dossier = _dossier(narrative=narrative)
+
+    with pytest.raises(ValueError):
+        dossier.validate()
+
+
 def test_llm_decision_report_validate_accepts_complete_report() -> None:
     report = _report()
 
@@ -212,6 +278,62 @@ def test_llm_decision_report_validate_rejects_missing_required_content(
         execution_notes=report.execution_notes if field_name != "execution_notes" else value,
         confidence=report.confidence,
         evidence_refs=report.evidence_refs if field_name != "evidence_refs" else value,
+    )
+
+    with pytest.raises(ValueError):
+        report.validate()
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("key_levels", ("R1 22000", "")),
+        ("invalidations", ("",)),
+        ("execution_notes", ("   ",)),
+    ),
+)
+def test_llm_decision_report_validate_rejects_blank_sequence_items(
+    field_name: str,
+    value: tuple[str, ...],
+) -> None:
+    report = _report()
+    report = LLMDecisionReport(
+        market_verdict=report.market_verdict,
+        intraday_plan=report.intraday_plan,
+        swing_plan=report.swing_plan,
+        key_levels=report.key_levels if field_name != "key_levels" else value,
+        invalidations=report.invalidations if field_name != "invalidations" else value,
+        counter_case=report.counter_case,
+        execution_notes=report.execution_notes if field_name != "execution_notes" else value,
+        confidence=report.confidence,
+        evidence_refs=report.evidence_refs,
+    )
+
+    with pytest.raises(ValueError):
+        report.validate()
+
+
+@pytest.mark.parametrize(
+    "evidence_ref",
+    (
+        EvidenceRef(key="", detail="Opening flow stayed net positive."),
+        EvidenceRef(key="flow", detail="   "),
+    ),
+)
+def test_llm_decision_report_validate_rejects_blank_evidence_ref_fields(
+    evidence_ref: EvidenceRef,
+) -> None:
+    report = _report()
+    report = LLMDecisionReport(
+        market_verdict=report.market_verdict,
+        intraday_plan=report.intraday_plan,
+        swing_plan=report.swing_plan,
+        key_levels=report.key_levels,
+        invalidations=report.invalidations,
+        counter_case=report.counter_case,
+        execution_notes=report.execution_notes,
+        confidence=report.confidence,
+        evidence_refs=(evidence_ref,),
     )
 
     with pytest.raises(ValueError):
