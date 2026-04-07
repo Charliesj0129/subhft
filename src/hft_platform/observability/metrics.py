@@ -271,6 +271,9 @@ class MetricsRegistry:
                 _pn("bus_consumer_lag"),
                 # Broker-thread callback data loss
                 _pn("md_callback_drop_total"),
+                # Recorder degraded mode
+                _pn("recorder_degraded_mode"),
+                _pn("recorder_degraded_total"),
             ]
         )
         # Market Data
@@ -451,6 +454,12 @@ class MetricsRegistry:
         )
         self.recorder_direct_drops_total = Counter(_pn("recorder_direct_drops_total"),
             "Direct-path recorder queue drops in MarketDataService",
+        )
+        self.recorder_degraded_mode = Gauge(_pn("recorder_degraded_mode"),
+            "Recorder degraded mode active (1=degraded, 0=normal)",
+        )
+        self.recorder_degraded_total = Counter(_pn("recorder_degraded_total"),
+            "Times recorder entered degraded mode",
         )
         # Schema initialization
         self.recorder_schema_init_failed = Gauge(_pn("recorder_schema_init_failed"),

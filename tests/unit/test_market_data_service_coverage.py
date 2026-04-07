@@ -379,6 +379,101 @@ def test_record_direct_event_degraded_stays_if_queue_still_full():
     assert svc._record_degraded_drops == 1
 
 
+def test_recorder_degraded_gauge_set_on_enter():
+    """Gauge goes to 1 when entering degraded mode."""
+    svc, *_ = _make_service()
+    recorder_queue = asyncio.Queue(maxsize=1)
+    svc.recorder_queue = recorder_queue
+    svc._record_direct = True
+    svc._record_drop_on_full = True
+    svc._record_degrade_threshold = 1
+    # Fill the queue
+    recorder_queue.put_nowait({"topic": "tick", "data": {}})
+
+    gauge = MagicMock()
+    counter = MagicMock()
+    svc._recorder_degraded_gauge = gauge
+    svc._recorder_degraded_counter = counter
+
+    event = _make_tick_event()
+    with patch("hft_platform.recorder.mapper.map_event_to_record") as mock_map:
+        mock_map.return_value = ("tick", {"symbol": "2330"})
+        svc._record_direct_event(event)
+
+    assert svc._record_degraded is True
+    gauge.set.assert_called_once_with(1)
+    counter.inc.assert_called_once()
+
+
+def test_recorder_degraded_gauge_cleared_on_recovery():
+    """Gauge goes to 0 when recovering from degraded mode."""
+    svc, *_ = _make_service()
+    recorder_queue = asyncio.Queue(maxsize=100)
+    svc.recorder_queue = recorder_queue
+    svc._record_degraded = True
+    svc._record_degraded_since = time.monotonic() - 60.0
+    svc._record_degraded_drops = 5
+    svc._record_degrade_last_check = time.monotonic() - 100.0
+    svc._record_degrade_check_s = 1.0
+
+    gauge = MagicMock()
+    svc._recorder_degraded_gauge = gauge
+
+    event = _make_tick_event()
+    with patch("hft_platform.recorder.mapper.map_event_to_record") as mock_map:
+        mock_map.return_value = ("tick", {"symbol": "2330"})
+        svc._record_direct_event(event)
+
+    assert svc._record_degraded is False
+    gauge.set.assert_called_once_with(0)
+
+
+def test_recorder_degraded_counter_increments_each_entry():
+    """Counter increments each time degraded mode is entered."""
+    svc, *_ = _make_service()
+    recorder_queue = asyncio.Queue(maxsize=1)
+    svc.recorder_queue = recorder_queue
+    svc._record_direct = True
+    svc._record_drop_on_full = True
+    svc._record_degrade_threshold = 1
+
+    counter = MagicMock()
+    gauge = MagicMock()
+    svc._recorder_degraded_gauge = gauge
+    svc._recorder_degraded_counter = counter
+
+    event = _make_tick_event()
+
+    # First entry into degraded mode
+    recorder_queue.put_nowait({"topic": "tick", "data": {}})
+    with patch("hft_platform.recorder.mapper.map_event_to_record") as mock_map:
+        mock_map.return_value = ("tick", {"symbol": "2330"})
+        svc._record_direct_event(event)
+    assert svc._record_degraded is True
+    assert counter.inc.call_count == 1
+
+    # Recover: empty queue, force check
+    while not recorder_queue.empty():
+        recorder_queue.get_nowait()
+    svc._record_degrade_last_check = time.monotonic() - 100.0
+    svc._record_degrade_check_s = 1.0
+    with patch("hft_platform.recorder.mapper.map_event_to_record") as mock_map:
+        mock_map.return_value = ("tick", {"symbol": "2330"})
+        svc._record_direct_event(event)
+    assert svc._record_degraded is False
+
+    # Second entry into degraded mode — drain queue first (recovery wrote into it)
+    svc._recorder_dropped_count = 0
+    while not recorder_queue.empty():
+        recorder_queue.get_nowait()
+    recorder_queue.put_nowait({"topic": "tick", "data": {}})
+    with patch("hft_platform.recorder.mapper.map_event_to_record") as mock_map:
+        mock_map.return_value = ("tick", {"symbol": "2330"})
+        svc._record_direct_event(event)
+    assert svc._record_degraded is True
+    assert counter.inc.call_count == 2
+
+
 def test_record_direct_event_no_recorder_queue():
     svc, *_ = _make_service()
     svc.recorder_queue = None

@@ -347,6 +347,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._record_degraded_drops = 0
         self._record_degrade_check_s = 10.0
         self._record_degrade_last_check: float = 0.0
+        self._recorder_degraded_gauge = self.metrics_registry.recorder_degraded_mode if self.metrics_registry else None
+        self._recorder_degraded_counter = self.metrics_registry.recorder_degraded_total if self.metrics_registry else None
 
         # Per-symbol feed gap monitoring (bounded by subscribed symbol count)
         self._symbol_last_tick: dict[str, float] = {}
@@ -1386,6 +1388,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     self._record_degraded = False
                     self._record_degraded_drops = 0
                     self._recorder_dropped_count = 0
+                    if self._recorder_degraded_gauge:
+                        self._recorder_degraded_gauge.set(0)
                 else:
                     self._record_degraded_drops += 1
                     return
@@ -1418,6 +1422,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     self._record_degraded_since = time.monotonic()
                     self._record_degrade_last_check = self._record_degraded_since
                     self._record_degraded_drops = 0
+                    if self._recorder_degraded_gauge:
+                        self._recorder_degraded_gauge.set(1)
+                    if self._recorder_degraded_counter:
+                        self._recorder_degraded_counter.inc()
                     logger.warning(
                         "Recorder queue overflow: entering degraded mode",
                         consecutive_drops=self._recorder_dropped_count,
