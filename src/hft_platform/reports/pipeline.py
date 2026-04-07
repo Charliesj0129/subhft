@@ -12,18 +12,37 @@ import argparse
 import asyncio
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
 
+from hft_platform.reports.llm_client import OpenRouterClient
+from hft_platform.reports.llm_dossier import build_llm_dossier
+from hft_platform.reports.llm_reasoner import LLMReportReasoner
 from hft_platform.reports.models import ComposedReport
 
-__all__ = ["resolve_trading_date", "build_report", "run_pipeline", "main"]
+__all__ = [
+    "HybridReportResult",
+    "build_hybrid_report_async",
+    "build_report",
+    "main",
+    "resolve_trading_date",
+    "run_pipeline",
+]
 
 _log = structlog.get_logger(__name__)
 
 _TZ = ZoneInfo("Asia/Taipei")
+
+
+@dataclass(frozen=True, slots=True)
+class HybridReportResult:
+    composed: ComposedReport | None
+    dossier: object | None
+    decision: object | None
+    llm_error: str | None
 
 
 def resolve_trading_date(session: str, *, now: datetime | None = None) -> str:
@@ -87,30 +106,34 @@ def build_report(
         A :class:`ComposedReport` containing tier-aware message parts.
         Returns None when the session has no tick data.
     """
+    _, _, composed = _build_report_components(session, date, symbol)
+    return composed
+
+
+def _build_report_components(
+    session: str,
+    date: str,
+    symbol: str = "TXFD6",
+) -> tuple[object | None, object | None, ComposedReport | None]:
     from hft_platform.reports.collector import DataCollector
-    from hft_platform.reports.composer import ReportComposer
     from hft_platform.reports.facts import extract_all
     from hft_platform.reports.reasoner import reason_all
 
     _log.info("build_report_start", session=session, date=date, symbol=symbol)
 
-    # Stage 1: collect session data
     collector = DataCollector()
     session_data = collector.collect(session, date, symbol)
     _log.info("stage1_complete", ticks=session_data.tick_count, bars=len(session_data.bars_5m))
 
     if session_data.tick_count == 0:
-        _log.warning("build_report_empty_session", session=session, date=date)
-        return None
+        _log.warning("build_report_empty_session", session=session, date=date, symbol=symbol)
+        return None, None, None
 
-    # Stage 1b: cross-day data
     prev_days = collector.collect_cross_day(symbol, session, date)
 
-    # Stage 2: extract facts
     fact_report = extract_all(session_data, prev_days=prev_days)
     _log.info("stage2_facts_complete", segments=len(fact_report.segments))
 
-    # Stage 3: reason
     reasoning_report = reason_all(fact_report)
     _log.info(
         "stage3_reasoning_complete",
@@ -119,10 +142,68 @@ def build_report(
         levels=len(reasoning_report.levels),
     )
 
-    # Stage 4: compose
-    composed = ReportComposer().compose(fact_report, reasoning_report)
+    composed = _compose_report(fact_report, reasoning_report)
     _log.info("stage4_compose_complete", parts=len(composed.messages))
-    return composed
+    return fact_report, reasoning_report, composed
+
+
+def _compose_report(
+    fact_report: object,
+    reasoning_report: object,
+    *,
+    llm_decision: object | None = None,
+) -> ComposedReport:
+    from hft_platform.reports.composer import ReportComposer
+
+    composer = ReportComposer()
+    if llm_decision is not None:
+        return composer.compose(fact_report, reasoning_report, llm_decision=llm_decision)
+    return composer.compose(fact_report, reasoning_report)
+
+
+async def build_hybrid_report_async(
+    session: str,
+    date: str,
+    symbol: str = "TXFD6",
+) -> HybridReportResult:
+    fact_report, reasoning_report, composed = await asyncio.to_thread(
+        _build_report_components,
+        session,
+        date,
+        symbol,
+    )
+    if composed is None:
+        return HybridReportResult(composed=None, dossier=None, decision=None, llm_error=None)
+
+    if os.environ.get("HFT_LLM_ENABLED", "0") != "1":
+        return HybridReportResult(composed=composed, dossier=None, decision=None, llm_error=None)
+
+    try:
+        dossier = build_llm_dossier(fact_report, reasoning_report)
+        client = OpenRouterClient(model=os.environ.get("HFT_LLM_MODEL", ""))
+        decision = await LLMReportReasoner(client=client).generate(dossier)
+        hybrid_composed = _compose_report(fact_report, reasoning_report, llm_decision=decision)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "build_hybrid_report_llm_fallback",
+            session=session,
+            date=date,
+            symbol=symbol,
+            llm_error=str(exc),
+        )
+        return HybridReportResult(
+            composed=composed,
+            dossier=None,
+            decision=None,
+            llm_error=str(exc),
+        )
+
+    return HybridReportResult(
+        composed=hybrid_composed,
+        dossier=dossier,
+        decision=decision,
+        llm_error=None,
+    )
 
 
 async def run_pipeline(
