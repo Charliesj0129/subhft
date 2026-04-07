@@ -6,13 +6,13 @@ from typing import Any, Dict, Optional
 
 from structlog import get_logger
 
+from hft_platform.contracts.strategy import IntentType
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
-from hft_platform.contracts.strategy import IntentType
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.bootstrap import SystemBootstrapper
 from hft_platform.services.heartbeat import write_heartbeat
@@ -28,6 +28,13 @@ def _read_kill_switch_reason(path: str) -> str:
     with open(path, "r") as f:
         data = _json.load(f)
     return data.get("reason", "unknown")
+
+
+def _log_safety_dispatch_error(task: "asyncio.Task[None]") -> None:
+    """done_callback for safety-order dispatch tasks during HALT drain."""
+    exc = task.exception() if not task.cancelled() else None
+    if exc is not None:
+        logger.critical("halt_drain_safety_cmd_execute_failed", error=str(exc))
 
 
 class HFTSystem:
@@ -692,8 +699,8 @@ class HFTSystem:
                         try:
                             from hft_platform.observability.metrics import MetricsRegistry
                             MetricsRegistry.get().halt_drain_safety_intent_lost_total.inc()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning("halt_drain_metric_inc_failed", error=str(exc))
                 if risk_drained > 0:
                     logger.warning("Drained blocked intents from risk_queue during HALT", count=risk_drained)
                 # Drain order queue — preserve safety commands + halt-exempt
@@ -714,9 +721,12 @@ class HFTSystem:
                             drained_count += 1
                     except asyncio.QueueEmpty:
                         break
+                # Safety cmds dispatched directly — execute() handles running=False
+                # via _dispatch_to_api(), bypassing the stopped _api_worker queue.
                 for cmd in _cmd_requeue:
                     try:
-                        asyncio.create_task(self.order_adapter.execute(cmd))
+                        _task = asyncio.create_task(self.order_adapter.execute(cmd))
+                        _task.add_done_callback(_log_safety_dispatch_error)
                         logger.info(
                             "halt_drain_safety_cmd_dispatched",
                             cmd_id=getattr(cmd, "cmd_id", "?"),

@@ -41,13 +41,6 @@ def _make_cmd(intent_type: IntentType, cmd_id: int = 1) -> OrderCommand:
     )
 
 
-class _FakeStormGuard:
-    state = StormGuardState.HALT
-
-    def is_halt_exempt(self, sid: str) -> bool:
-        return False
-
-
 class TestHaltDrainSafetyDispatch:
     """Safety commands in order_queue are dispatched directly, not re-queued."""
 
