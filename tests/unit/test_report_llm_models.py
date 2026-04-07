@@ -299,6 +299,28 @@ def test_llm_decision_report_validate_rejects_malformed_nested_plan_payloads(
         report.validate()
 
 
+def test_llm_decision_report_validate_rejects_fake_nested_plan_object() -> None:
+    class FakePlan:
+        def validate(self) -> None:
+            return None
+
+    report = _report()
+    report = LLMDecisionReport(
+        market_verdict=report.market_verdict,
+        intraday_plan=FakePlan(),  # type: ignore[arg-type]
+        swing_plan=report.swing_plan,
+        key_levels=report.key_levels,
+        invalidations=report.invalidations,
+        counter_case=report.counter_case,
+        execution_notes=report.execution_notes,
+        confidence=report.confidence,
+        evidence_refs=report.evidence_refs,
+    )
+
+    with pytest.raises(ValueError):
+        report.validate()
+
+
 def test_llm_decision_report_coerces_sequences_to_tuples() -> None:
     key_levels = ["R1 22000", "S1 21800"]
     invalidations = ["Lose follow-through after breakout"]

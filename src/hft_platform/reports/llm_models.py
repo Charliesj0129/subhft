@@ -68,11 +68,10 @@ def _coerce_sequence_items(
 
 
 def _validate_nested_plan(value: object, field_name: str) -> None:
-    validate = getattr(value, "validate", None)
-    if validate is None or not callable(validate):
+    if not isinstance(value, TradePlan):
         msg = f"{field_name} must be a valid trade plan"
         raise ValueError(msg)
-    validate()
+    value.validate()
 
 
 def canonical_level_label(side: str, index: int) -> str:
