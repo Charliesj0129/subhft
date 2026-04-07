@@ -71,6 +71,7 @@ class MetricsRegistry:
                 _pn("stormguard_mode"),
                 _pn("stormguard_transitions_total"),
                 _pn("stormguard_halt_exempt_bypass_total"),
+                _pn("halt_drain_safety_intent_lost_total"),
                 _pn("order_actions_total"),
                 _pn("order_reject_total"),
                 _pn("order_halt_skip_total"),
@@ -341,6 +342,10 @@ class MetricsRegistry:
         )
         self.stormguard_halt_exempt_bypass_total = Counter(_pn("stormguard_halt_exempt_bypass_total"),
             "StormGuard halt-exempt bypass events (strategy allowed through HALT)",
+        )
+        self.halt_drain_safety_intent_lost_total = Counter(
+            _pn("halt_drain_safety_intent_lost_total"),
+            "Safety intents (CANCEL/FORCE_FLAT) lost during HALT drain re-queue",
         )
         self.autonomy_mode = Gauge(_pn("autonomy_mode"),
             "Autonomy control-plane mode (0=NORMAL, 1=STRATEGY_QUARANTINED, 2=PLATFORM_REDUCE_ONLY, 3=HALT)",

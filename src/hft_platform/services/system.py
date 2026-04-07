@@ -684,7 +684,16 @@ class HFTSystem:
                     try:
                         self.risk_queue.put_nowait(item)
                     except asyncio.QueueFull:
-                        logger.warning("risk_queue_full_requeue_halt_exempt", strategy_id=getattr(item, "strategy_id", "?"))
+                        logger.critical(
+                            "risk_queue_full_safety_intent_lost",
+                            strategy_id=getattr(item, "strategy_id", "?"),
+                            intent_type=str(getattr(item, "intent_type", "?")),
+                        )
+                        try:
+                            from hft_platform.observability.metrics import MetricsRegistry
+                            MetricsRegistry.get().halt_drain_safety_intent_lost_total.inc()
+                        except Exception:
+                            pass
                 if risk_drained > 0:
                     logger.warning("Drained blocked intents from risk_queue during HALT", count=risk_drained)
                 # Drain order queue — preserve safety commands + halt-exempt
@@ -707,9 +716,18 @@ class HFTSystem:
                         break
                 for cmd in _cmd_requeue:
                     try:
-                        self.order_queue.put_nowait(cmd)
-                    except asyncio.QueueFull:
-                        logger.warning("order_queue_full_requeue_safety", cmd_id=getattr(cmd, "cmd_id", "?"))
+                        asyncio.create_task(self.order_adapter.execute(cmd))
+                        logger.info(
+                            "halt_drain_safety_cmd_dispatched",
+                            cmd_id=getattr(cmd, "cmd_id", "?"),
+                            intent_type=str(getattr(getattr(cmd, "intent", None), "intent_type", "?")),
+                        )
+                    except Exception as exc:
+                        logger.critical(
+                            "halt_drain_safety_cmd_dispatch_failed",
+                            cmd_id=getattr(cmd, "cmd_id", "?"),
+                            error=str(exc),
+                        )
                 if drained_count > 0:
                     logger.warning("Drained blocked orders during HALT", count=drained_count)
                 # Signal order adapter to stop processing
