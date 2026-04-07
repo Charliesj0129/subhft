@@ -300,3 +300,51 @@ def test_fused_path_not_used_when_disabled(normalizer):
     event = normalizer.normalize_bidask(payload)
     assert isinstance(event, BidAskEvent)
     assert event.fused_stats is None
+
+
+# --- normalization_skip_total counter tests ---
+
+
+class TestNormalizationSkipCounter:
+    """Verify normalization_skip_total increments for silent None returns."""
+
+    def test_tick_missing_symbol_increments_counter(self, normalizer):
+        counter = normalizer._normalization_skip
+        assert counter is not None, "metrics should be available in test"
+        before = counter.labels(type="tick", reason="missing_symbol")._value.get()
+        result = normalizer.normalize_tick({})
+        assert result is None
+        after = counter.labels(type="tick", reason="missing_symbol")._value.get()
+        assert after == before + 1
+
+    def test_tick_zero_price_increments_counter(self, normalizer):
+        counter = normalizer._normalization_skip
+        before = counter.labels(type="tick", reason="negative_price")._value.get()
+        result = normalizer.normalize_tick({"code": "2330", "close": 0})
+        assert result is None
+        after = counter.labels(type="tick", reason="negative_price")._value.get()
+        assert after == before + 1
+
+    def test_tick_negative_price_increments_counter(self, normalizer):
+        counter = normalizer._normalization_skip
+        before = counter.labels(type="tick", reason="negative_price")._value.get()
+        result = normalizer.normalize_tick({"code": "2330", "close": -5.0})
+        assert result is None
+        after = counter.labels(type="tick", reason="negative_price")._value.get()
+        assert after == before + 1
+
+    def test_bidask_missing_symbol_increments_counter(self, normalizer):
+        counter = normalizer._normalization_skip
+        before = counter.labels(type="bidask", reason="missing_symbol")._value.get()
+        result = normalizer.normalize_bidask({})
+        assert result is None
+        after = counter.labels(type="bidask", reason="missing_symbol")._value.get()
+        assert after == before + 1
+
+    def test_snapshot_missing_symbol_increments_counter(self, normalizer):
+        counter = normalizer._normalization_skip
+        before = counter.labels(type="snapshot", reason="missing_symbol")._value.get()
+        result = normalizer.normalize_snapshot({})
+        assert result is None
+        after = counter.labels(type="snapshot", reason="missing_symbol")._value.get()
+        assert after == before + 1

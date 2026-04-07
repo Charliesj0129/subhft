@@ -61,6 +61,7 @@ class MetricsRegistry:
                 _pn("bus_overflow_total"),
                 _pn("bus_gap_events_total"),
                 _pn("normalization_errors_total"),
+                _pn("normalization_skip_total"),
                 _pn("lob_updates_total"),
                 _pn("lob_snapshots_total"),
                 _pn("feed_last_event_ts"),
@@ -277,6 +278,7 @@ class MetricsRegistry:
         self.bus_overflow_total = Counter(_pn("bus_overflow_total"), "Event bus overflows")
         self.bus_gap_events_total = Counter(_pn("bus_gap_events_total"), "GapEvents injected on consumer overflow")
         self.normalization_errors_total = Counter(_pn("normalization_errors_total"), "Normalization failures", ["type"])
+        self.normalization_skip_total = Counter(_pn("normalization_skip_total"), "Normalization silent skips", ["type", "reason"])
         self.rust_fallback_total = Counter(_pn("rust_fallback_total"), "Rust-to-Python normalizer fallback count", ["type"]
         )
         self.lob_updates_total = Counter(_pn("lob_updates_total"), "LOB updates applied", ["symbol", "type"])
