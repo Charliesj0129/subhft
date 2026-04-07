@@ -286,3 +286,113 @@ class TestQuoteConnectionPoolMetrics:
 
         pool.update_metrics()
         assert pool._clients[0].subscribed_count == 15
+
+
+class TestQuoteConnectionPoolDuckTypeMethods:
+    """Test duck-type methods: reconnect, resubscribe, fetch_snapshots, reload_symbols."""
+
+    def _make_pool(self, tmp_path, num_conns=2):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        symbols = [
+            {"code": "TXFC0", "exchange": "TAIFEX", "group": 0},
+            {"code": "2330", "exchange": "TSE", "group": 1},
+        ]
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
+        return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
+
+    def test_reconnect_delegates_to_all_facades(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.reconnect.return_value = True
+        f1.reconnect.return_value = True
+        pool._clients = [f0, f1]
+
+        result = pool.reconnect(reason="test", force=True)
+        assert result is True
+        f0.reconnect.assert_called_once_with(reason="test", force=True)
+        f1.reconnect.assert_called_once_with(reason="test", force=True)
+
+    def test_reconnect_returns_false_on_partial_failure(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.reconnect.return_value = True
+        f1.reconnect.return_value = False
+        pool._clients = [f0, f1]
+
+        result = pool.reconnect()
+        assert result is False
+
+    def test_reconnect_handles_exception(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0 = mock.MagicMock()
+        f0.reconnect.side_effect = RuntimeError("conn lost")
+        pool._clients = [f0]
+
+        result = pool.reconnect()
+        assert result is False
+
+    def test_resubscribe_delegates_to_logged_in_facades(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.logged_in = True
+        f0.resubscribe.return_value = True
+        f1.logged_in = False
+        pool._clients = [f0, f1]
+
+        result = pool.resubscribe()
+        assert result is True
+        f0.resubscribe.assert_called_once()
+        f1.resubscribe.assert_not_called()
+
+    def test_resubscribe_returns_false_on_failure(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0 = mock.MagicMock()
+        f0.logged_in = True
+        f0.resubscribe.return_value = False
+        pool._clients = [f0]
+
+        result = pool.resubscribe()
+        assert result is False
+
+    def test_fetch_snapshots_merges_all_connections(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.logged_in = True
+        f0.fetch_snapshots.return_value = [{"code": "TXFC0", "close": 20000}]
+        f1.logged_in = True
+        f1.fetch_snapshots.return_value = [{"code": "2330", "close": 900}]
+        pool._clients = [f0, f1]
+
+        result = pool.fetch_snapshots()
+        assert len(result) == 2
+        assert result[0]["code"] == "TXFC0"
+        assert result[1]["code"] == "2330"
+
+    def test_fetch_snapshots_skips_unconnected(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0 = mock.MagicMock()
+        f0.logged_in = False
+        pool._clients = [f0]
+
+        result = pool.fetch_snapshots()
+        assert result == []
+        f0.fetch_snapshots.assert_not_called()
+
+    def test_reload_symbols_delegates_to_all(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        pool._clients = [f0, f1]
+
+        pool.reload_symbols()
+        f0.reload_symbols.assert_called_once()
+        f1.reload_symbols.assert_called_once()
+
+    def test_reload_symbols_handles_exception(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0 = mock.MagicMock()
+        f0.reload_symbols.side_effect = RuntimeError("fail")
+        pool._clients = [f0]
+
+        pool.reload_symbols()  # should not raise

@@ -197,6 +197,63 @@ class QuoteConnectionPool:
         """Duck-type alias for MarketDataService compatibility."""
         self.subscribe_all(cb)
 
+    def reconnect(self, reason: str = "", force: bool = False) -> bool:
+        """Reconnect all connections. Duck-type for MarketDataService compatibility."""
+        success = True
+        for i, facade in enumerate(self._clients):
+            log = logger.bind(conn_id=i)
+            try:
+                ok = facade.reconnect(reason=reason, force=force)
+                if ok:
+                    log.info("Connection reconnected")
+                else:
+                    log.warning("Connection reconnect returned False")
+                    success = False
+            except Exception as exc:
+                log.error("Connection reconnect failed", error=str(exc))
+                success = False
+        return success
+
+    def resubscribe(self) -> bool:
+        """Resubscribe all connections. Duck-type for MarketDataService compatibility."""
+        success = True
+        for i, facade in enumerate(self._clients):
+            log = logger.bind(conn_id=i)
+            if not facade.logged_in:
+                log.warning("Skipping resubscribe for unconnected facade")
+                continue
+            try:
+                ok = facade.resubscribe()
+                if ok:
+                    log.info("Connection resubscribed")
+                else:
+                    log.warning("Connection resubscribe returned False")
+                    success = False
+            except Exception as exc:
+                log.error("Connection resubscribe failed", error=str(exc))
+                success = False
+        return success
+
+    def fetch_snapshots(self) -> list[Any]:
+        """Fetch snapshots from all connections. Duck-type for MarketDataService compatibility."""
+        result: list[Any] = []
+        for i, facade in enumerate(self._clients):
+            if not facade.logged_in:
+                continue
+            try:
+                result.extend(facade.fetch_snapshots())
+            except Exception as exc:
+                logger.bind(conn_id=i).error("Fetch snapshots failed", error=str(exc))
+        return result
+
+    def reload_symbols(self) -> None:
+        """Reload symbols on all connections. Duck-type for MarketDataService compatibility."""
+        for i, facade in enumerate(self._clients):
+            try:
+                facade.reload_symbols()
+            except Exception as exc:
+                logger.bind(conn_id=i).error("Reload symbols failed", error=str(exc))
+
     def logout(self) -> None:
         """Logout and close all connections."""
         for i, facade in enumerate(self._clients):
