@@ -26,6 +26,21 @@ def _compact_line(text: str) -> str:
     return f"{compact[:196].rstrip()}..."
 
 
+def _flow_bar_text(bar: object) -> str:
+    return (
+        f"{bar.ts}|ud={_float_text(bar.ud_ratio)}|"
+        f"net={bar.net_flow}|vol={bar.total_vol}"
+    )
+
+
+def _segment_text(segment: object) -> str:
+    return f"{segment.dominant_side}|ud={_float_text(segment.ud_ratio)}|net={segment.net_flow}"
+
+
+def _zone_text(zone: tuple[int, int]) -> str:
+    return f"{_price_text(zone[0])}-{_price_text(zone[1])}"
+
+
 def _canonical_levels(levels: list[EnrichedLevel], close_price: int) -> dict[str, str]:
     evidence: dict[str, str] = {}
     resistances = sorted(
@@ -53,11 +68,23 @@ def build_llm_dossier(fact_report: FactReport, reasoning_report: ReasoningReport
         "flow.session_ud": _float_text(fact_report.flow.session_ud),
         "flow.session_net_flow": str(fact_report.flow.session_net_flow),
         "flow.eod_drift": _float_text(fact_report.flow.eod_drift),
+        "flow.strongest_buy_bar": _flow_bar_text(fact_report.flow.strongest_buy_bar),
+        "flow.strongest_sell_bar": _flow_bar_text(fact_report.flow.strongest_sell_bar),
         "chips.net_ratio": _float_text(fact_report.chips.net_ratio),
         "cross_day.trend_direction": fact_report.cross_day.trend_direction,
+        "structure.failed_breakouts": str(len(fact_report.structure.failed_breakouts)),
+        "structure.session_high": _price_text(fact_report.structure.session_high.price),
+        "structure.session_low": _price_text(fact_report.structure.session_low.price),
         "rule.bias": reasoning_report.bias.bias,
         "rule.confidence": _float_text(reasoning_report.bias.confidence),
     }
+    closing_segment = next((segment for segment in fact_report.segments if segment.name == "closing"), None)
+    if closing_segment is not None:
+        evidence["segments.closing"] = _segment_text(closing_segment)
+    if fact_report.chips.buy_zone is not None:
+        evidence["chips.buy_zone"] = _zone_text(fact_report.chips.buy_zone)
+    if fact_report.chips.sell_zone is not None:
+        evidence["chips.sell_zone"] = _zone_text(fact_report.chips.sell_zone)
     evidence.update(_canonical_levels(reasoning_report.levels, session_data.close))
     dossier = LLMDossier(
         symbol=session_data.symbol,
