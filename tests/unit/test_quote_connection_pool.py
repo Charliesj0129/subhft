@@ -418,3 +418,58 @@ class TestQuoteConnectionPoolDuckTypeMethods:
         result = pool.validate_symbols()
         assert result == []
         f0.validate_symbols.assert_not_called()
+
+
+class TestQuoteConnectionPoolThreadSafety:
+    """Test threading.Lock-based synchronization in QuoteConnectionPool."""
+
+    def _make_pool_with_symbols(self, tmp_path, symbols, num_conns):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
+        return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
+
+    def test_refresh_lock_initialized(self, tmp_path):
+        """_refresh_lock must be a real threading.Lock, not None."""
+        import threading
+        symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool = self._make_pool_with_symbols(tmp_path, symbols, 1)
+        assert isinstance(pool._refresh_lock, type(threading.Lock()))
+
+    def test_stop_options_refresh_sets_running_false(self, tmp_path):
+        """stop_options_refresh() must set _options_refresh_running to False."""
+        symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool = self._make_pool_with_symbols(tmp_path, symbols, 1)
+        # Simulate thread started
+        pool._options_refresh_running = True
+        pool.stop_options_refresh()
+        assert pool._options_refresh_running is False
+
+    def test_stop_options_refresh_joins_thread(self, tmp_path):
+        """stop_options_refresh() must call join() on the saved thread reference."""
+        import threading
+        symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool = self._make_pool_with_symbols(tmp_path, symbols, 1)
+        pool._options_refresh_running = True
+
+        mock_thread = mock.MagicMock(spec=threading.Thread)
+        pool._refresh_thread = mock_thread
+
+        pool.stop_options_refresh()
+
+        mock_thread.join.assert_called_once_with(timeout=10)
+        assert pool._refresh_thread is None
+        assert pool._options_refresh_running is False
+
+    def test_close_stops_options_refresh(self, tmp_path):
+        """close() must stop the refresh thread before closing clients."""
+        symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool = self._make_pool_with_symbols(tmp_path, symbols, 1)
+        pool._options_refresh_running = True
+
+        facade = mock.MagicMock()
+        pool._clients = [facade]
+
+        pool.close(logout=False)
+
+        assert pool._options_refresh_running is False

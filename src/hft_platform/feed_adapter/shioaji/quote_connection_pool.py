@@ -78,6 +78,7 @@ class QuoteConnectionPool:
         "_options_expiry",
         "_options_refresh_running",
         "_refresh_lock",
+        "_refresh_thread",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -96,7 +97,8 @@ class QuoteConnectionPool:
         self._login_interval_s = float(os.getenv("HFT_QUOTE_LOGIN_INTERVAL_S", "2"))
         self._options_expiry: str | None = None
         self._options_refresh_running: bool = False
-        self._refresh_lock: threading.Lock | None = None
+        self._refresh_lock: threading.Lock = threading.Lock()
+        self._refresh_thread: threading.Thread | None = None
 
         with open(symbols_path, "r") as f:
             data = yaml.safe_load(f) or {}
@@ -282,6 +284,7 @@ class QuoteConnectionPool:
         self.cleanup_shards()
 
     def close(self, logout: bool = False) -> None:
+        self.stop_options_refresh()
         if logout:
             self.logout()
         else:
@@ -320,10 +323,11 @@ class QuoteConnectionPool:
 
     @property
     def symbols(self) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        for c in self._clients:
-            result.extend(c._client.symbols)
-        return result
+        with self._refresh_lock:
+            result: list[dict[str, Any]] = []
+            for c in self._clients:
+                result.extend(c._client.symbols)
+            return result
 
     def health(self) -> dict[int, dict[str, Any]]:
         return {
@@ -407,134 +411,135 @@ class QuoteConnectionPool:
         if not self._clients:
             return False
 
-        opts = self._load_options_from_cache()
-        if not opts:
-            logger.warning("options_refresh_no_contracts")
-            return False
-
-        # Find nearest expiry
-        dates = sorted(set(str(c.get("delivery_date", "")) for c in opts if c.get("delivery_date")))
-        if not dates:
-            return False
-        nearest_date = dates[0]
-
-        if self._options_expiry == nearest_date:
-            logger.debug("options_refresh_no_change", expiry=nearest_date)
-            return False
-
-        logger.info(
-            "options_expiry_changed",
-            old_expiry=self._options_expiry,
-            new_expiry=nearest_date,
-        )
-
-        nearest = [c for c in opts if str(c.get("delivery_date", "")) == nearest_date]
-
-        # Optional ATM filtering via HFT_OPTIONS_STRIKE_RANGE
-        strike_range = int(os.getenv("HFT_OPTIONS_STRIKE_RANGE", "0"))  # 0 = all
-        if strike_range > 0:
-            # Find ATM from reference prices
-            refs = [float(c["reference"]) for c in nearest if c.get("reference")]
-            if refs:
-                atm = sum(refs) / len(refs)
-                strikes = sorted(set(float(c["strike"]) for c in nearest if c.get("strike")))
-                if strikes:
-                    atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm))
-                    lo = max(atm_idx - strike_range, 0)
-                    hi = min(atm_idx + strike_range, len(strikes) - 1)
-                    allowed = set(strikes[lo:hi + 1])
-                    nearest = [
-                        c for c in nearest
-                        if c.get("strike") is not None and float(c["strike"]) in allowed
-                    ]
-                    logger.info(
-                        "options_strike_filter",
-                        atm=atm,
-                        range=strike_range,
-                        strikes_before=len(strikes),
-                        strikes_after=len(allowed),
-                    )
-
-        calls = sorted(
-            [c for c in nearest if c.get("right") == "C"],
-            key=lambda c: float(c.get("strike", 0)),
-        )
-        puts = sorted(
-            [c for c in nearest if c.get("right") == "P"],
-            key=lambda c: float(c.get("strike", 0)),
-        )
-
-        # Preserve group 0 (non-option symbols)
-        base_symbols = [s for s in self._all_symbols if s.get("group", 0) == 0]
-        symbols: list[dict[str, Any]] = []
-        for s in base_symbols:
-            entry = dict(s)
-            entry["group"] = 0
-            symbols.append(entry)
-        for c in calls:
-            symbols.append({"code": c["code"], "exchange": "OPT", "group": 1})
-        for c in puts:
-            symbols.append({"code": c["code"], "exchange": "OPT", "group": 2})
-
-        # Validate connection limits
-        for g in range(self._num_conns):
-            count = sum(1 for s in symbols if s.get("group") == g)
-            if count > _MAX_SUBSCRIPTIONS_PER_CONN:
-                logger.error(
-                    "options_refresh_group_overflow",
-                    group=g, count=count, limit=_MAX_SUBSCRIPTIONS_PER_CONN,
-                )
+        with self._refresh_lock:
+            opts = self._load_options_from_cache()
+            if not opts:
+                logger.warning("options_refresh_no_contracts")
                 return False
 
-        out_path = os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml")
-        try:
-            with open(out_path, "w") as f:
-                f.write(f"# Auto-refreshed by QuoteConnectionPool\n")
-                f.write(f"# TXO nearest expiry: {nearest_date}\n")
-                f.write(f"# Group 0: Base ({len(base_symbols)})\n")
-                f.write(f"# Group 1: TXO Calls ({len(calls)})\n")
-                f.write(f"# Group 2: TXO Puts ({len(puts)})\n\n")
-                yaml.dump({"symbols": symbols}, f, default_flow_style=False, allow_unicode=True)
-        except Exception as exc:
-            logger.error("options_refresh_write_failed", error=str(exc))
-            return False
+            # Find nearest expiry
+            dates = sorted(set(str(c.get("delivery_date", "")) for c in opts if c.get("delivery_date")))
+            if not dates:
+                return False
+            nearest_date = dates[0]
 
-        self._options_expiry = nearest_date
-        self._all_symbols = symbols
+            if self._options_expiry == nearest_date:
+                logger.debug("options_refresh_no_change", expiry=nearest_date)
+                return False
 
-        # Rebuild shard files and reload each connection's config
-        groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(self._num_conns)}
-        for sym in symbols:
-            g = sym.get("group", 0)
-            if 0 <= g < self._num_conns:
-                groups[g].append(sym)
+            logger.info(
+                "options_expiry_changed",
+                old_expiry=self._options_expiry,
+                new_expiry=nearest_date,
+            )
 
-        for group_id in range(self._num_conns):
-            shard_path = self._shard_paths[group_id] if group_id < len(self._shard_paths) else None
-            if shard_path:
-                with open(shard_path, "w") as f:
-                    yaml.safe_dump({"symbols": groups[group_id]}, f, sort_keys=False)
+            nearest = [c for c in opts if str(c.get("delivery_date", "")) == nearest_date]
 
-        # Reload config and resubscribe each connection
-        resubscribed = 0
-        for i, facade in enumerate(self._clients):
+            # Optional ATM filtering via HFT_OPTIONS_STRIKE_RANGE
+            strike_range = int(os.getenv("HFT_OPTIONS_STRIKE_RANGE", "0"))  # 0 = all
+            if strike_range > 0:
+                # Find ATM from reference prices
+                refs = [float(c["reference"]) for c in nearest if c.get("reference")]
+                if refs:
+                    atm = sum(refs) / len(refs)
+                    strikes = sorted(set(float(c["strike"]) for c in nearest if c.get("strike")))
+                    if strikes:
+                        atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm))
+                        lo = max(atm_idx - strike_range, 0)
+                        hi = min(atm_idx + strike_range, len(strikes) - 1)
+                        allowed = set(strikes[lo:hi + 1])
+                        nearest = [
+                            c for c in nearest
+                            if c.get("strike") is not None and float(c["strike"]) in allowed
+                        ]
+                        logger.info(
+                            "options_strike_filter",
+                            atm=atm,
+                            range=strike_range,
+                            strikes_before=len(strikes),
+                            strikes_after=len(allowed),
+                        )
+
+            calls = sorted(
+                [c for c in nearest if c.get("right") == "C"],
+                key=lambda c: float(c.get("strike", 0)),
+            )
+            puts = sorted(
+                [c for c in nearest if c.get("right") == "P"],
+                key=lambda c: float(c.get("strike", 0)),
+            )
+
+            # Preserve group 0 (non-option symbols)
+            base_symbols = [s for s in self._all_symbols if s.get("group", 0) == 0]
+            symbols: list[dict[str, Any]] = []
+            for s in base_symbols:
+                entry = dict(s)
+                entry["group"] = 0
+                symbols.append(entry)
+            for c in calls:
+                symbols.append({"code": c["code"], "exchange": "OPT", "group": 1})
+            for c in puts:
+                symbols.append({"code": c["code"], "exchange": "OPT", "group": 2})
+
+            # Validate connection limits
+            for g in range(self._num_conns):
+                count = sum(1 for s in symbols if s.get("group") == g)
+                if count > _MAX_SUBSCRIPTIONS_PER_CONN:
+                    logger.error(
+                        "options_refresh_group_overflow",
+                        group=g, count=count, limit=_MAX_SUBSCRIPTIONS_PER_CONN,
+                    )
+                    return False
+
+            out_path = os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml")
             try:
-                facade._client._load_config()
-                if facade.logged_in and cb is not None:
-                    facade.subscribe_basket(cb)
-                    resubscribed += 1
+                with open(out_path, "w") as f:
+                    f.write(f"# Auto-refreshed by QuoteConnectionPool\n")
+                    f.write(f"# TXO nearest expiry: {nearest_date}\n")
+                    f.write(f"# Group 0: Base ({len(base_symbols)})\n")
+                    f.write(f"# Group 1: TXO Calls ({len(calls)})\n")
+                    f.write(f"# Group 2: TXO Puts ({len(puts)})\n\n")
+                    yaml.dump({"symbols": symbols}, f, default_flow_style=False, allow_unicode=True)
             except Exception as exc:
-                logger.error("options_refresh_reload_failed", conn_id=i, error=str(exc))
+                logger.error("options_refresh_write_failed", error=str(exc))
+                return False
 
-        logger.info(
-            "options_refresh_complete",
-            expiry=nearest_date,
-            total_symbols=len(symbols),
-            calls=len(calls),
-            puts=len(puts),
-            resubscribed=resubscribed,
-        )
-        return True
+            self._options_expiry = nearest_date
+            self._all_symbols = symbols
+
+            # Rebuild shard files and reload each connection's config
+            groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(self._num_conns)}
+            for sym in symbols:
+                g = sym.get("group", 0)
+                if 0 <= g < self._num_conns:
+                    groups[g].append(sym)
+
+            for group_id in range(self._num_conns):
+                shard_path = self._shard_paths[group_id] if group_id < len(self._shard_paths) else None
+                if shard_path:
+                    with open(shard_path, "w") as f:
+                        yaml.safe_dump({"symbols": groups[group_id]}, f, sort_keys=False)
+
+            # Reload config and resubscribe each connection
+            resubscribed = 0
+            for i, facade in enumerate(self._clients):
+                try:
+                    facade._client._load_config()
+                    if facade.logged_in and cb is not None:
+                        facade.subscribe_basket(cb)
+                        resubscribed += 1
+                except Exception as exc:
+                    logger.error("options_refresh_reload_failed", conn_id=i, error=str(exc))
+
+            logger.info(
+                "options_refresh_complete",
+                expiry=nearest_date,
+                total_symbols=len(symbols),
+                calls=len(calls),
+                puts=len(puts),
+                resubscribed=resubscribed,
+            )
+            return True
 
     def start_options_refresh_thread(
         self,
@@ -581,7 +586,12 @@ class QuoteConnectionPool:
 
         t = threading.Thread(target=_loop, name="options-expiry-refresh", daemon=True)
         t.start()
+        self._refresh_thread = t
         logger.info("options_refresh_thread_started", interval_s=interval_s)
 
     def stop_options_refresh(self) -> None:
         self._options_refresh_running = False
+        t = self._refresh_thread
+        if t is not None:
+            t.join(timeout=10)
+            self._refresh_thread = None
