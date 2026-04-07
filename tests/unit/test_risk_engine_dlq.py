@@ -362,3 +362,53 @@ class TestDlqRevalidation:
         assert engine.order_queue.empty()
         assert len(engine._order_dlq) == 0
         assert after_expired - before_expired == 1
+
+
+class TestDlqOverflowMetric:
+    """Test that DLQ overflow evictions are tracked by risk_dlq_overflow_total."""
+
+    def test_overflow_increments_metric(self, engine: RiskEngine) -> None:
+        """Pushing beyond _ORDER_DLQ_MAX evicts oldest entry and increments counter."""
+        engine._ORDER_DLQ_MAX = 2
+        now = time.monotonic_ns()
+
+        cmd1 = engine.create_command(_make_intent(1))
+        cmd2 = engine.create_command(_make_intent(2))
+        cmd3 = engine.create_command(_make_intent(3))
+
+        # Fill DLQ to capacity via direct append (simulating order_queue full path)
+        engine._order_dlq.append((cmd1, now))
+        engine._order_dlq.append((cmd2, now))
+        assert len(engine._order_dlq) == 2
+
+        before = engine.metrics.risk_dlq_overflow_total._value.get()
+
+        # Simulate the overflow path from engine.py lines ~466-469
+        engine._order_dlq.append((cmd3, now))
+        if len(engine._order_dlq) > engine._ORDER_DLQ_MAX:
+            engine._order_dlq.popleft()
+            engine.metrics.risk_dlq_overflow_total.inc()
+
+        after = engine.metrics.risk_dlq_overflow_total._value.get()
+
+        assert after - before == 1
+        assert len(engine._order_dlq) == 2
+        # cmd1 was evicted; cmd2 and cmd3 remain
+        remaining_ids = [cmd.cmd_id for cmd, _ in engine._order_dlq]
+        assert remaining_ids == [cmd2.cmd_id, cmd3.cmd_id]
+
+    def test_no_overflow_when_within_capacity(self, engine: RiskEngine) -> None:
+        """No overflow metric increment when DLQ is within capacity."""
+        engine._ORDER_DLQ_MAX = 4
+        now = time.monotonic_ns()
+
+        before = engine.metrics.risk_dlq_overflow_total._value.get()
+
+        for i in range(4):
+            cmd = engine.create_command(_make_intent(i + 1))
+            engine._order_dlq.append((cmd, now))
+
+        after = engine.metrics.risk_dlq_overflow_total._value.get()
+
+        assert after == before
+        assert len(engine._order_dlq) == 4

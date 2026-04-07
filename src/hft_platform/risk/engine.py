@@ -466,6 +466,7 @@ class RiskEngine:
                             self._order_dlq.append((cmd, time.monotonic_ns()))
                             if len(self._order_dlq) > self._ORDER_DLQ_MAX:
                                 self._order_dlq.popleft()
+                                self.metrics.risk_dlq_overflow_total.inc()
                             self.storm_guard.trigger_halt("order_queue_full")
                 else:
                     logger.warning("Order Rejected by Risk", sid=intent.strategy_id, reason=decision.reason_code)

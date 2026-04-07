@@ -225,6 +225,7 @@ class MetricsRegistry:
                 _pn("risk_dlq_drained_total"),
                 _pn("risk_dlq_expired_total"),
                 _pn("risk_dlq_revalidation_rejected_total"),
+                _pn("risk_dlq_overflow_total"),
                 _pn("intent_queue_full_total"),
                 _pn("risk_engine_error_total"),
                 # rejection_sink overflow
@@ -930,6 +931,9 @@ class MetricsRegistry:
         )
         self.risk_dlq_revalidation_rejected_total = Counter(_pn("risk_dlq_revalidation_rejected_total"),
             "DLQ entries rejected during replay due to position-limit re-check",
+        )
+        self.risk_dlq_overflow_total = Counter(_pn("risk_dlq_overflow_total"),
+            "Risk DLQ overflow evictions (oldest entry dropped)",
         )
         self.intent_queue_full_total = Counter(_pn("intent_queue_full_total"),
             "Intents dropped due to QueueFull in StrategyRunner submit loop",
