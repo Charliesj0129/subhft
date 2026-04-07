@@ -77,6 +77,7 @@ class QuoteConnectionPool:
         "_login_interval_s",
         "_options_expiry",
         "_options_refresh_running",
+        "_refresh_lock",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -95,6 +96,7 @@ class QuoteConnectionPool:
         self._login_interval_s = float(os.getenv("HFT_QUOTE_LOGIN_INTERVAL_S", "2"))
         self._options_expiry: str | None = None
         self._options_refresh_running: bool = False
+        self._refresh_lock: threading.Lock | None = None
 
         with open(symbols_path, "r") as f:
             data = yaml.safe_load(f) or {}
@@ -253,6 +255,21 @@ class QuoteConnectionPool:
                 facade.reload_symbols()
             except Exception as exc:
                 logger.bind(conn_id=i).error("Reload symbols failed", error=str(exc))
+
+    def validate_symbols(self) -> list[str]:
+        """Return merged list of invalid symbols across all logged-in connections.
+
+        Duck-type for MarketDataService compatibility (mirrors ShioajiClientFacade).
+        """
+        result: list[str] = []
+        for i, facade in enumerate(self._clients):
+            if not facade.logged_in:
+                continue
+            try:
+                result.extend(facade.validate_symbols())
+            except Exception as exc:
+                logger.bind(conn_id=i).error("Validate symbols failed", error=str(exc))
+        return result
 
     def logout(self) -> None:
         """Logout and close all connections."""

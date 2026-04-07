@@ -396,3 +396,25 @@ class TestQuoteConnectionPoolDuckTypeMethods:
         pool._clients = [f0]
 
         pool.reload_symbols()  # should not raise
+
+    def test_validate_symbols_merges_all_connections(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0, f1 = mock.MagicMock(), mock.MagicMock()
+        f0.logged_in = True
+        f0.validate_symbols.return_value = ["BAD1"]
+        f1.logged_in = True
+        f1.validate_symbols.return_value = ["BAD2"]
+        pool._clients = [f0, f1]
+
+        result = pool.validate_symbols()
+        assert result == ["BAD1", "BAD2"]
+
+    def test_validate_symbols_skips_unconnected(self, tmp_path):
+        pool = self._make_pool(tmp_path)
+        f0 = mock.MagicMock()
+        f0.logged_in = False
+        pool._clients = [f0]
+
+        result = pool.validate_symbols()
+        assert result == []
+        f0.validate_symbols.assert_not_called()
