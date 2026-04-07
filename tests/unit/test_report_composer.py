@@ -15,6 +15,7 @@ from hft_platform.reports.composer import (
     _split_message,
     _stars,
 )
+from hft_platform.reports.llm_models import EvidenceRef, LLMDecisionReport, TradePlan
 from hft_platform.reports.models import (
     Bar5m,
     BiasJudgment,
@@ -41,6 +42,7 @@ from hft_platform.reports.models import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def _make_flow_bar(
     ts: str = "2026-03-28 09:00:00",
@@ -104,21 +106,42 @@ def _make_fact_report(*, with_cross_day: bool = True) -> FactReport:
 
     segments = [
         SegmentFact(
-            name="opening", time_range="08:45-09:30",
-            ud_ratio=1.2, net_flow=100, volume=5000, volume_pct=0.30,
-            large_buy_count=2, large_sell_count=1, high=201_000_000, low=199_500_000,
+            name="opening",
+            time_range="08:45-09:30",
+            ud_ratio=1.2,
+            net_flow=100,
+            volume=5000,
+            volume_pct=0.30,
+            large_buy_count=2,
+            large_sell_count=1,
+            high=201_000_000,
+            low=199_500_000,
             dominant_side="bull",
         ),
         SegmentFact(
-            name="midday", time_range="09:30-12:00",
-            ud_ratio=0.9, net_flow=-20, volume=8000, volume_pct=0.40,
-            large_buy_count=1, large_sell_count=2, high=200_800_000, low=199_200_000,
+            name="midday",
+            time_range="09:30-12:00",
+            ud_ratio=0.9,
+            net_flow=-20,
+            volume=8000,
+            volume_pct=0.40,
+            large_buy_count=1,
+            large_sell_count=2,
+            high=200_800_000,
+            low=199_200_000,
             dominant_side="neutral",
         ),
         SegmentFact(
-            name="closing", time_range="12:00-13:45",
-            ud_ratio=1.1, net_flow=30, volume=6000, volume_pct=0.30,
-            large_buy_count=1, large_sell_count=0, high=200_600_000, low=199_800_000,
+            name="closing",
+            time_range="12:00-13:45",
+            ud_ratio=1.1,
+            net_flow=30,
+            volume=6000,
+            volume_pct=0.30,
+            large_buy_count=1,
+            large_sell_count=0,
+            high=200_600_000,
+            low=199_800_000,
             dominant_side="bull",
         ),
     ]
@@ -176,14 +199,26 @@ def _make_fact_report(*, with_cross_day: bool = True) -> FactReport:
     if with_cross_day:
         prev_days = [
             DaySnapshot(
-                date="2026-03-27", session="day",
-                open=199_000_000, high=200_500_000, low=198_500_000,
-                close=200_000_000, volume=30000, ud_ratio=1.05, net_flow=200,
+                date="2026-03-27",
+                session="day",
+                open=199_000_000,
+                high=200_500_000,
+                low=198_500_000,
+                close=200_000_000,
+                volume=30000,
+                ud_ratio=1.05,
+                net_flow=200,
             ),
             DaySnapshot(
-                date="2026-03-26", session="day",
-                open=198_000_000, high=199_500_000, low=197_500_000,
-                close=199_000_000, volume=28000, ud_ratio=1.10, net_flow=300,
+                date="2026-03-26",
+                session="day",
+                open=198_000_000,
+                high=199_500_000,
+                low=197_500_000,
+                close=199_000_000,
+                volume=28000,
+                ud_ratio=1.10,
+                net_flow=300,
             ),
         ]
 
@@ -221,20 +256,30 @@ def _make_reasoning_report() -> ReasoningReport:
     )
 
     levels = [
-        EnrichedLevel(price=201_500_000, side="resistance", strength=0.9, sources=["session high", "整數關卡"], confluence_count=2),
+        EnrichedLevel(
+            price=201_500_000, side="resistance", strength=0.9, sources=["session high", "整數關卡"], confluence_count=2
+        ),
         EnrichedLevel(price=200_000_000, side="pivot", strength=0.7, sources=["整數關卡 20000"], confluence_count=1),
-        EnrichedLevel(price=199_000_000, side="support", strength=0.8, sources=["session low", "大單群聚"], confluence_count=2),
+        EnrichedLevel(
+            price=199_000_000, side="support", strength=0.8, sources=["session low", "大單群聚"], confluence_count=2
+        ),
     ]
 
     scenarios = [
         Scenario(
-            id="hold_bounce", label="守支撐反彈", probability="中",
-            condition="守住支撐 199000000", target=201_500_000,
+            id="hold_bounce",
+            label="守支撐反彈",
+            probability="中",
+            condition="守住支撐 199000000",
+            target=201_500_000,
             description="支撐守住後反彈，目標 201500000，停損 198800000。",
         ),
         Scenario(
-            id="break_below", label="破底加速", probability="低",
-            condition="跌破支撐 199000000", target=198_000_000,
+            id="break_below",
+            label="破底加速",
+            probability="低",
+            condition="跌破支撐 199000000",
+            target=198_000_000,
             description="若跌破 S1 支撐，目標 198000000，停損 199200000。",
         ),
     ]
@@ -255,6 +300,40 @@ def _make_reasoning_report() -> ReasoningReport:
         scenarios=scenarios,
         narrative=narrative,
     )
+
+
+def _make_llm_decision() -> LLMDecisionReport:
+    decision = LLMDecisionReport(
+        market_verdict="偏多延續",
+        intraday_plan=TradePlan(
+            "bullish",
+            "closing flow held",
+            "hold above S1",
+            "buy pullback",
+            "lose S1",
+            "R1",
+            "R2",
+            "avoid chasing",
+        ),
+        swing_plan=TradePlan(
+            "bullish",
+            "trend remains up",
+            "daily close above R1",
+            "hold partial",
+            "close below S1",
+            "R2",
+            "R3",
+            "cut ahead of event risk",
+        ),
+        key_levels=("S1 22,300", "R1 22,440"),
+        invalidations=("lose S1 with expanding sell flow",),
+        counter_case="opening rejection and failed reclaim turns thesis wrong",
+        execution_notes=("only buy pullbacks",),
+        confidence=72,
+        evidence_refs=(EvidenceRef(key="flow.session_ud", detail="1.18"),),
+    )
+    decision.validate()
+    return decision
 
 
 # ---------------------------------------------------------------------------
@@ -336,33 +415,48 @@ class TestReportComposer:
         return _make_reasoning_report()
 
     def test_compose_returns_composed_report(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         assert isinstance(result, ComposedReport)
 
     def test_compose_has_at_least_7_messages(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         # 6 text + disclaimer = 7 minimum (heatmap may or may not be present)
         assert len(result.messages) >= 7
 
     def test_summary_is_free_tier(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         summary = result.messages[0]
         assert summary.min_tier == "free"
 
     def test_summary_contains_symbol(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         assert "TXFD6" in result.messages[0].content
 
     def test_summary_contains_bias(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         content = result.messages[0].content
@@ -370,7 +464,10 @@ class TestReportComposer:
         assert "65%" in content
 
     def test_summary_contains_cross_day_info(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         content = result.messages[0].content
@@ -378,7 +475,9 @@ class TestReportComposer:
         assert "vs 前 3 日" in content
 
     def test_summary_skips_cross_day_when_no_prev_days(
-        self, composer: ReportComposer, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        rr: ReasoningReport,
     ) -> None:
         fr_no_cd = _make_fact_report(with_cross_day=False)
         result = composer.compose(fr_no_cd, rr)
@@ -386,7 +485,10 @@ class TestReportComposer:
         assert "vs 前日" not in content
 
     def test_disclaimer_is_free_tier(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         disclaimer = result.messages[-1]
@@ -394,14 +496,20 @@ class TestReportComposer:
         assert "⚠️" in disclaimer.content
 
     def test_paid_messages_present(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         paid = [m for m in result.messages if m.min_tier == "paid"]
         assert len(paid) >= 5
 
     def test_no_message_exceeds_telegram_limit(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         for msg in result.messages:
@@ -411,7 +519,10 @@ class TestReportComposer:
                 )
 
     def test_narrative_message_contains_storyline(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         # Narrative is the second message (index 1)
@@ -420,7 +531,10 @@ class TestReportComposer:
         assert "opening" in narr.content
 
     def test_flow_message_contains_ud(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         # Flow is the third message (index 2)
@@ -429,15 +543,95 @@ class TestReportComposer:
         assert "U/D" in flow_msg.content
 
     def test_chips_message_present(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         chips_msg = result.messages[3]
         assert "🏦 籌碼結構" in chips_msg.content
         assert "買" in chips_msg.content
 
+
+class TestComposeWithLLM:
+    @pytest.fixture()
+    def composer(self) -> ReportComposer:
+        return ReportComposer()
+
+    @pytest.fixture()
+    def fr(self) -> FactReport:
+        return _make_fact_report(with_cross_day=True)
+
+    @pytest.fixture()
+    def rr(self) -> ReasoningReport:
+        return _make_reasoning_report()
+
+    def test_inserts_llm_sections_before_disclaimer(self) -> None:
+        report = ReportComposer().compose(
+            _make_fact_report(),
+            _make_reasoning_report(),
+            llm_decision=_make_llm_decision(),
+        )
+
+        text_parts = [message.content for message in report.messages if message.kind == "text"]
+        joined = "\n".join(text_parts)
+
+        assert "LLM 市場裁決" in joined
+        assert "當日交易計畫" in joined
+        assert "1-3 日波段觀點" in joined
+        assert "失效條件" in joined
+        assert joined.index("LLM 市場裁決") < joined.index("⚠️")
+
+    def test_works_without_llm_decision(self) -> None:
+        report = ReportComposer().compose(
+            _make_fact_report(),
+            _make_reasoning_report(),
+            llm_decision=None,
+        )
+
+        text_parts = [message.content for message in report.messages if message.kind == "text"]
+        joined = "\n".join(text_parts)
+        assert "LLM 市場裁決" not in joined
+
+    def test_localizes_trade_plan_stance_labels(self) -> None:
+        report = ReportComposer().compose(
+            _make_fact_report(),
+            _make_reasoning_report(),
+            llm_decision=_make_llm_decision(),
+        )
+
+        joined = "\n".join(message.content for message in report.messages if message.kind == "text")
+        assert "方向：偏多" in joined
+        assert "方向：bullish" not in joined
+
+    def test_splits_large_llm_block_within_telegram_limit(self) -> None:
+        decision = dataclasses.replace(
+            _make_llm_decision(),
+            execution_notes=tuple(f"note-{index} " + ("x" * 240) for index in range(30)),
+        )
+        decision.validate()
+
+        report = ReportComposer().compose(
+            _make_fact_report(),
+            _make_reasoning_report(),
+            llm_decision=decision,
+        )
+
+        llm_start = next(i for i, message in enumerate(report.messages) if "LLM 市場裁決" in message.content)
+        narrative_start = next(i for i, message in enumerate(report.messages) if "📖 時段敘事" in message.content)
+        llm_parts = report.messages[llm_start:narrative_start]
+
+        assert len(llm_parts) >= 2
+        for message in llm_parts:
+            assert message.kind == "text"
+            assert len(message.content) <= TELEGRAM_MAX_LEN
+
     def test_levels_message_groups_by_side(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         levels_msg = result.messages[4]
@@ -446,7 +640,10 @@ class TestReportComposer:
         assert "支撐" in levels_msg.content
 
     def test_scenarios_message_format(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         scenarios_msg = result.messages[5]
@@ -455,7 +652,10 @@ class TestReportComposer:
         assert "情境 B" in scenarios_msg.content
 
     def test_all_text_messages_have_kind_text(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         for msg in result.messages:
@@ -464,13 +664,18 @@ class TestReportComposer:
                 assert len(msg.content) > 0
 
     def test_session_label_day(
-        self, composer: ReportComposer, fr: FactReport, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        fr: FactReport,
+        rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
         assert "日盤報告" in result.messages[0].content
 
     def test_session_label_night(
-        self, composer: ReportComposer, rr: ReasoningReport,
+        self,
+        composer: ReportComposer,
+        rr: ReasoningReport,
     ) -> None:
         fr = _make_fact_report(with_cross_day=True)
         night_sd = dataclasses.replace(fr.session_data, session="night")
