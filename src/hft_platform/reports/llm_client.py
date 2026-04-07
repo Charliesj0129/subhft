@@ -22,6 +22,13 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
+def _transient_exception_types() -> tuple[type[BaseException], ...]:
+    transient: list[type[BaseException]] = [asyncio.TimeoutError, ConnectionError, OSError]
+    if aiohttp is not None:
+        transient.append(aiohttp.ClientError)
+    return tuple(dict.fromkeys(transient))
+
+
 class OpenRouterClient:
     """Minimal async client for JSON completions via OpenRouter."""
 
@@ -58,27 +65,43 @@ class OpenRouterClient:
     ) -> dict[str, object]:
         url = f"{self._base_url}/chat/completions"
         headers = self._headers()
+        transient_errors = _transient_exception_types()
 
         for attempt in range(self._max_retries + 1):
             try:
                 async with session.post(url, json=payload, headers=headers, timeout=self._timeout_s) as response:
-                    body = await response.json()
+                    if response.status in _RETRYABLE_STATUSES:
+                        if attempt < self._max_retries:
+                            await asyncio.sleep(2**attempt)
+                            continue
+                        msg = f"OpenRouter request failed with retryable status {response.status}"
+                        raise RuntimeError(msg)
+
+                    if not 200 <= response.status < 300:
+                        msg = f"OpenRouter request failed with status {response.status}"
+                        raise RuntimeError(msg)
+
+                    try:
+                        body = await response.json()
+                    except Exception as exc:  # noqa: BLE001
+                        msg = "OpenRouter response body was not valid JSON"
+                        raise RuntimeError(msg) from exc
+            except RuntimeError:
+                raise
+            except transient_errors as exc:
+                if attempt < self._max_retries:
+                    await asyncio.sleep(2**attempt)
+                    continue
+                msg = "OpenRouter transport failed after retries"
+                raise RuntimeError(msg) from exc
             except Exception as exc:  # noqa: BLE001
-                msg = "OpenRouter request failed"
+                msg = "OpenRouter request failed before receiving a response"
                 raise RuntimeError(msg) from exc
 
-            if 200 <= response.status < 300:
-                if not isinstance(body, dict):
-                    msg = "OpenRouter response body must be an object"
-                    raise RuntimeError(msg)
-                return body
-
-            if response.status in _RETRYABLE_STATUSES and attempt < self._max_retries:
-                await asyncio.sleep(2**attempt)
-                continue
-
-            msg = f"OpenRouter request failed with status {response.status}"
-            raise RuntimeError(msg)
+            if not isinstance(body, dict):
+                msg = "OpenRouter response body must be an object"
+                raise RuntimeError(msg)
+            return body
 
         msg = "OpenRouter request exhausted retries"
         raise RuntimeError(msg)
