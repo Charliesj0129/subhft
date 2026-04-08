@@ -130,6 +130,13 @@ class TelegramSender:
                     return False
 
             except Exception as exc:  # noqa: BLE001
+                # H15: Close broken session so a fresh one is created on retry
+                if self._session is not None:
+                    try:
+                        await self._session.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._session = None
                 if critical and attempt < max_attempts - 1:
                     delay = self._RETRY_BACKOFF_S * (2**attempt)
                     logger.warning(

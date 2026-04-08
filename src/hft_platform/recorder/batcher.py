@@ -204,7 +204,12 @@ class GlobalMemoryGuard:
         """Check if adding rows would exceed budget.
 
         Returns number of rows allowed (may be less than requested).
-        If budget exceeded, drops from lowest-priority batchers first.
+        If budget exceeded, schedules deferred eviction on lowest-priority
+        batchers via ``_pending_eviction_count``.  Each batcher applies its
+        own eviction under its own lock in ``apply_pending_eviction()``.
+
+        This avoids mutating another batcher's ``_active`` buffer without
+        holding that batcher's lock (C3 fix).
         """
         drop_events: list[tuple[str, int, int]] = []
         with self._state_lock:
@@ -229,7 +234,8 @@ class GlobalMemoryGuard:
                 if available <= 0:
                     continue
                 drop = min(excess, available)
-                batcher._active.drop_oldest(drop)
+                # Defer eviction: batcher applies under its own lock
+                batcher._pending_eviction_count += drop
                 batcher.dropped_count += drop
                 self._total_rows = max(0, self._total_rows - drop)
                 excess -= drop
@@ -343,6 +349,9 @@ class Batcher:
         self._reinject_consecutive_failures = 0
         self._reinject_max_failures = int(os.getenv("HFT_BATCHER_REINJECT_MAX", "3"))
 
+        # Deferred eviction from GlobalMemoryGuard (C3 fix)
+        self._pending_eviction_count: int = 0
+
         # Legacy compat: buffer property
         # (tests may access batcher.buffer directly)
 
@@ -393,6 +402,15 @@ class Batcher:
         elif isinstance(extracted, (list, tuple)):
             self._active.append_values(extracted)
 
+    def _apply_pending_eviction_locked(self) -> None:
+        """Apply deferred eviction under our own lock (C3 fix)."""
+        pending = self._pending_eviction_count
+        if pending > 0:
+            self._pending_eviction_count = 0
+            actual_drop = min(pending, self._active.row_count)
+            if actual_drop > 0:
+                self._active.drop_oldest(actual_drop)
+
     async def add(self, row: Any):
         extracted = self._extract_row(row)
         if extracted is None:
@@ -400,6 +418,7 @@ class Batcher:
 
         flush_buf: ColumnarBuffer | None = None
         async with self.lock:
+            self._apply_pending_eviction_locked()
             self.total_count += 1
 
             # EC-1: Check global memory budget
@@ -439,6 +458,7 @@ class Batcher:
 
         flush_buf: ColumnarBuffer | None = None
         async with self.lock:
+            self._apply_pending_eviction_locked()
             self.total_count += len(extracted_list)
 
             # EC-1: Check global memory budget

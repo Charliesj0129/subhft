@@ -981,20 +981,22 @@ class HFTSystem:
         if getattr(self, "gateway_service", None) is not None:
             self.gateway_service.running = False
 
-        for cn in ("md_client", "order_client"):
-            self._close_broker_client(cn)
-        self._teardown_bootstrap()
-        self.evidence_writer.record_transition(
-            scope="platform",
-            mode="CLOSED",
-            reason="system_stop",
-            manual_rearm_required=False,
-        )
-
-        # Schedule async cleanup if event loop is available
+        # Schedule async cleanup if event loop is available.
+        # H13: When the loop is running, defer broker close and bootstrap
+        # teardown to stop_async() so recorder can drain first.
         loop = getattr(self, "loop", None)
         if loop is not None and loop.is_running():
             asyncio.create_task(self.stop_async())
+        else:
+            for cn in ("md_client", "order_client"):
+                self._close_broker_client(cn)
+            self._teardown_bootstrap()
+            self.evidence_writer.record_transition(
+                scope="platform",
+                mode="CLOSED",
+                reason="system_stop",
+                manual_rearm_required=False,
+            )
 
     async def _cleanup_tasks(self):
         """Cancel and await all running tasks."""

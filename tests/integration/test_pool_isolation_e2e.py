@@ -28,6 +28,7 @@ class TestSingleFacadeFailureIsolation:
             facade.logged_in = True
             facade.reconnect.return_value = True
             slot = FacadeSlot(conn_id=str(i), facade=facade)
+            slot.state = FacadeState.CONNECTED  # simulate post-subscribe
             slot.symbols = {f"SYM_{i}_A", f"SYM_{i}_B"}
             slot.last_data_mono = time.monotonic()
             slots.append(slot)

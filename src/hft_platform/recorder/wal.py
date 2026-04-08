@@ -1,5 +1,6 @@
 import asyncio
 import fcntl
+import itertools
 import os
 import tempfile
 import threading
@@ -34,6 +35,9 @@ from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("recorder.wal")
+
+
+_file_seq = itertools.count()
 
 
 class WALWriter:
@@ -170,7 +174,8 @@ class WALWriter:
             return self._handle_disk_pressure_skip(table, len(data), writer="wal")
 
         ts = int(timebase.now_ns())
-        filename = f"{self.wal_dir}/{table}_{ts}.jsonl"
+        seq = next(_file_seq)
+        filename = f"{self.wal_dir}/{table}_{ts}_{seq}.jsonl"
 
         loop = asyncio.get_running_loop()
         try:
@@ -502,8 +507,9 @@ class WALBatchWriter:
             nonlocal current_bytes, current_lines, file_count
             if not current_lines:
                 return
-            ts = int(timebase.now_ns()) + file_count
-            filename = f"{dir_path}/batch_{ts}.jsonl"
+            ts = int(timebase.now_ns())
+            seq = next(_file_seq)
+            filename = f"{dir_path}/batch_{ts}_{seq}.jsonl"
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=dir_path)
             try:
                 with os.fdopen(fd, "wb") as f:
@@ -743,9 +749,11 @@ class WALReplayer:
         logger.info("Found WAL files", count=len(files))
 
         for fpath in files:
-            # Parse table name from filename provided it matches table_timestamp.jsonl
+            # Parse table name from filename: table_timestamp_seq.jsonl or table_timestamp.jsonl
             fname = os.path.basename(fpath)
-            table = fname.rsplit("_", 1)[0]
+            stem = fname.rsplit(".", 1)[0]  # strip .jsonl
+            parts = stem.rsplit("_", 2)
+            table = parts[0] if len(parts) >= 2 else stem
 
             try:
                 data = []

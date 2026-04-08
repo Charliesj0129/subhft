@@ -43,7 +43,9 @@ def format_alert_message(payload: dict[str, Any]) -> str:
         description = annotations.get("description", "")
 
         icon = "\u26a0\ufe0f" if status == "FIRING" else "\u2705"
-        lines.append(f"{icon} <b>[{escape(status)}] {escape(name)}</b>\n  Severity: {escape(severity)}\n  {escape(summary)}")
+        lines.append(
+            f"{icon} <b>[{escape(status)}] {escape(name)}</b>\n  Severity: {escape(severity)}\n  {escape(summary)}"
+        )
         if description:
             lines.append(f"  {escape(description)}")
 
@@ -98,7 +100,7 @@ class AlertmanagerBridge:
             _MAX_BODY = 1_048_576  # 1 MB
             body = b""
             if content_length > _MAX_BODY:
-                self._send_response(writer, 413, b'{"error":"payload_too_large"}')
+                await self._send_response(writer, 413, b'{"error":"payload_too_large"}')
                 return
             if content_length > 0:
                 body = await asyncio.wait_for(reader.readexactly(content_length), timeout=5.0)
@@ -106,16 +108,16 @@ class AlertmanagerBridge:
             if method == "POST" and path == "/webhook/alertmanager":
                 await self._handle_webhook(body, writer)
             elif method == "GET" and path == "/healthz":
-                self._send_response(writer, 200, b'{"status":"ok"}')
+                await self._send_response(writer, 200, b'{"status":"ok"}')
             else:
-                self._send_response(writer, 404, b'{"error":"not_found"}')
+                await self._send_response(writer, 404, b'{"error":"not_found"}')
 
         except (asyncio.TimeoutError, ConnectionResetError, asyncio.IncompleteReadError):
             pass
         except Exception:
             logger.exception("alertmanager_bridge_handle_error")
             try:
-                self._send_response(writer, 500, b'{"error":"internal_server_error"}')
+                await self._send_response(writer, 500, b'{"error":"internal_server_error"}')
             except Exception:  # noqa: BLE001
                 pass
         finally:
@@ -130,7 +132,7 @@ class AlertmanagerBridge:
         try:
             payload = json.loads(body)
         except (json.JSONDecodeError, ValueError):
-            self._send_response(writer, 400, b'{"error":"invalid_json"}')
+            await self._send_response(writer, 400, b'{"error":"invalid_json"}')
             return
 
         msg = format_alert_message(payload)
@@ -142,15 +144,16 @@ class AlertmanagerBridge:
                 alert_count=len(payload.get("alerts", [])),
                 sent=sent,
             )
-        self._send_response(writer, 200, b'{"status":"accepted"}')
+        await self._send_response(writer, 200, b'{"status":"accepted"}')
 
     @staticmethod
-    def _send_response(writer: asyncio.StreamWriter, status: int, body: bytes) -> None:
+    async def _send_response(writer: asyncio.StreamWriter, status: int, body: bytes) -> None:
         """Write a minimal HTTP/1.1 response."""
         reasons = {
             200: "OK",
             400: "Bad Request",
             404: "Not Found",
+            413: "Payload Too Large",
             500: "Internal Server Error",
         }
         reason = reasons.get(status, "Unknown")
@@ -162,6 +165,7 @@ class AlertmanagerBridge:
             f"\r\n"
         )
         writer.write(header.encode("utf-8") + body)
+        await writer.drain()
 
     # -- Lifecycle -----------------------------------------------------------
 

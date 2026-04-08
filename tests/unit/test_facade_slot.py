@@ -62,9 +62,10 @@ class TestFacadeStateIsHealthy:
 class TestFacadeSlotDefaults:
     """FacadeSlot initializes with correct default values."""
 
-    def test_state_defaults_to_connected(self) -> None:
+    def test_state_defaults_to_recovering(self) -> None:
+        """Initial state is RECOVERING until subscribe_all completes (H3 fix)."""
         slot = FacadeSlot(conn_id="c0", facade=MagicMock())
-        assert slot.state is FacadeState.CONNECTED
+        assert slot.state is FacadeState.RECOVERING
 
     def test_reconnect_failures_defaults_to_zero(self) -> None:
         slot = FacadeSlot(conn_id="c0", facade=MagicMock())

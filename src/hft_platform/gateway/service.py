@@ -261,7 +261,9 @@ class GatewayService:
         _strategy_id = str(getattr(intent, "strategy_id", ""))
         if is_typed_view and hasattr(self._policy, "gate_typed"):
             allowed, reason = self._policy.gate_typed(
-                intent_type_value, sg_state, strategy_id=_strategy_id,
+                intent_type_value,
+                sg_state,
+                strategy_id=_strategy_id,
             )
         else:
             allowed, reason = self._policy.gate(intent, sg_state)
@@ -340,10 +342,24 @@ class GatewayService:
                 return
 
         # Step 4: Risk evaluate (synchronous, CPU-only)
-        if typed_frame is not None and hasattr(self._risk_engine, "evaluate_typed_frame"):
-            decision = self._risk_engine.evaluate_typed_frame(typed_frame, intent_view=intent)
-        else:
-            decision = self._risk_engine.evaluate(intent)
+        try:
+            if typed_frame is not None and hasattr(self._risk_engine, "evaluate_typed_frame"):
+                decision = self._risk_engine.evaluate_typed_frame(typed_frame, intent_view=intent)
+            else:
+                decision = self._risk_engine.evaluate(intent)
+        except Exception:
+            # Release exposure reserved in step 3 before re-raising
+            if intent_type_value != int(IntentType.CANCEL):
+                if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
+                    self._exposure.release_exposure_typed(
+                        exp_key,
+                        intent_type=intent_type_value,
+                        price=int(intent.price),
+                        qty=int(intent.qty),
+                    )
+                else:
+                    self._exposure.release_exposure(exp_key, intent)
+            raise
 
         if decision.approved and not self._is_dispatch_leader():
             self._rejected += 1

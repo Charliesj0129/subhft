@@ -219,11 +219,20 @@ class QuoteConnectionPool:
         self.login_all()
         return self.partial_login
 
+    @staticmethod
+    def _make_callback_wrapper(slot: FacadeSlot, original_cb: Callable[..., Any]) -> Callable[..., Any]:
+        """Wrap a market data callback to update the slot's last_data_mono timestamp."""
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            slot.last_data_mono = time.monotonic()
+            return original_cb(*args, **kwargs)
+        return wrapper
+
     def subscribe_all(self, cb: Callable[..., Any]) -> None:
         """Subscribe each logged-in connection's symbol basket.
 
         Wraps the callback to update each slot's ``last_data_mono`` timestamp
         on every market data event, enabling per-facade feed-gap detection.
+        After successful subscription, transitions slot from RECOVERING to CONNECTED.
         """
         for i, facade in enumerate(self._clients):
             log = logger.bind(conn_id=i)
@@ -232,15 +241,12 @@ class QuoteConnectionPool:
                 continue
             slot = self._slots[i] if i < len(self._slots) else None
 
-            def _make_wrapper(s: FacadeSlot, original_cb: Callable[..., Any]) -> Callable[..., Any]:
-                def wrapper(*args: Any, **kwargs: Any) -> Any:
-                    s.last_data_mono = time.monotonic()
-                    return original_cb(*args, **kwargs)
-                return wrapper
-
             try:
-                wrapped_cb = _make_wrapper(slot, cb) if slot is not None else cb
+                wrapped_cb = self._make_callback_wrapper(slot, cb) if slot is not None else cb
                 facade.subscribe_basket(wrapped_cb)
+                if slot is not None:
+                    slot.state = FacadeState.CONNECTED
+                    slot.last_data_mono = time.monotonic()
                 log.info("Subscribed", count=facade.subscribed_count)
             except Exception as exc:
                 log.error("Subscribe failed", error=str(exc))
@@ -259,6 +265,10 @@ class QuoteConnectionPool:
         When ``force=True``, all facades are reconnected regardless of state.
         Otherwise, only facades not in CONNECTED state are targeted.
         Returns True if at least one facade reconnected successfully.
+
+        Note: warmup resets are deferred via ``_pending_warmup_reset`` and applied
+        on the event loop thread by ``_apply_pending_resets()`` to avoid thread-safety
+        issues with LOBEngine.books and FeatureEngine dicts (C2 fix).
         """
         targets = [s for s in self._slots if force or s.state != FacadeState.CONNECTED]
         if not targets:
@@ -274,7 +284,7 @@ class QuoteConnectionPool:
                     slot.state = FacadeState.CONNECTED
                     slot.reconnect_failures = 0
                     slot.last_data_mono = time.monotonic()
-                    self._notify_warmup_reset(slot.conn_id)
+                    slot._pending_warmup_reset = True
                     any_ok = True
                     log.info("facade_reconnected")
                 else:
@@ -297,7 +307,13 @@ class QuoteConnectionPool:
         return get_healthy_feed_gap_s(self._slots)
 
     def check_facade_health(self) -> None:
-        """Evaluate per-facade health and drive FSM state transitions."""
+        """Evaluate per-facade health and drive FSM state transitions.
+
+        Also applies any pending warmup resets from background reconnect threads.
+        This method runs on the event loop thread (called from supervisor), so
+        LOB/FE mutations are safe here.
+        """
+        self._apply_pending_resets()
         check_facade_health(
             self._slots,
             degraded_threshold_s=self._degraded_threshold_s,
@@ -305,13 +321,24 @@ class QuoteConnectionPool:
             schedule_fn=self._schedule_reconnect,
         )
 
+    def _apply_pending_resets(self) -> None:
+        """Apply deferred warmup resets on the event loop thread.
+
+        Must be called from the event loop thread to ensure thread-safe
+        mutation of LOBEngine.books and FeatureEngine state dicts.
+        """
+        for slot in self._slots:
+            if slot._pending_warmup_reset:
+                slot._pending_warmup_reset = False
+                self._notify_warmup_reset(slot.conn_id)
+
     def _schedule_reconnect(self, conn_id: str) -> None:
         """Schedule a reconnect for the given connection slot.
 
-        If the slot is already RECOVERING, this is a no-op to avoid duplicate
-        reconnect attempts.
+        Spawns a daemon thread that performs the actual reconnect for this
+        single facade. On success, marks the slot for pending warmup reset
+        (applied on the event loop by ``_apply_pending_resets``).
         """
-        # Find slot by conn_id
         slot: FacadeSlot | None = None
         for s in self._slots:
             if s.conn_id == conn_id:
@@ -325,6 +352,32 @@ class QuoteConnectionPool:
         slot.state = FacadeState.RECOVERING
         slot.last_reconnect_mono = time.monotonic()
         logger.warning("facade_reconnect_scheduled", conn_id=conn_id)
+
+        def _do_reconnect() -> None:
+            log = logger.bind(conn_id=conn_id)
+            try:
+                ok = slot.facade.reconnect(reason="health_check", force=False)
+                if ok:
+                    slot.state = FacadeState.CONNECTED
+                    slot.reconnect_failures = 0
+                    slot.last_data_mono = time.monotonic()
+                    slot._pending_warmup_reset = True
+                    log.info("facade_reconnected_via_health_check")
+                else:
+                    slot.reconnect_failures += 1
+                    slot.state = FacadeState.DISCONNECTED
+                    log.warning("facade_health_reconnect_failed")
+            except Exception as exc:
+                slot.reconnect_failures += 1
+                slot.state = FacadeState.DISCONNECTED
+                log.error("facade_health_reconnect_exception", error=str(exc))
+
+        t = threading.Thread(
+            target=_do_reconnect,
+            name=f"facade-reconnect-{conn_id}",
+            daemon=True,
+        )
+        t.start()
 
     def _notify_warmup_reset(self, conn_id: str) -> None:
         """Reset LOB books and feature engine state for symbols on a reconnected facade."""
@@ -641,13 +694,23 @@ class QuoteConnectionPool:
                     with open(shard_path, "w") as f:
                         yaml.safe_dump({"symbols": groups[group_id]}, f, sort_keys=False)
 
-            # Reload config and resubscribe each connection
+            # Update FacadeSlot symbol sets to reflect new option symbols
+            for group_id in range(self._num_conns):
+                if group_id < len(self._slots):
+                    new_codes = {str(s.get("code", "")) for s in groups.get(group_id, []) if s.get("code")}
+                    self._slots[group_id].symbols = new_codes
+
+            # Reload config and resubscribe each connection (with callback wrapper)
             resubscribed = 0
             for i, facade in enumerate(self._clients):
                 try:
                     facade._client._load_config()
                     if facade.logged_in and cb is not None:
-                        facade.subscribe_basket(cb)
+                        slot = self._slots[i] if i < len(self._slots) else None
+                        wrapped_cb = self._make_callback_wrapper(slot, cb) if slot is not None else cb
+                        facade.subscribe_basket(wrapped_cb)
+                        if slot is not None:
+                            slot.last_data_mono = time.monotonic()
                         resubscribed += 1
                 except Exception as exc:
                     logger.error("options_refresh_reload_failed", conn_id=i, error=str(exc))

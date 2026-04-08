@@ -401,8 +401,10 @@ class RiskEngine:
         logger.info("RiskEngine started")
 
         while self.running:
+            intent_dequeued = False
             try:
                 intent: OrderIntent = await self.intent_queue.get()
+                intent_dequeued = True
 
                 # TTL expiry check — reject stale intents before evaluation
                 if intent.ttl_ns > 0 and intent.timestamp_ns > 0:
@@ -431,6 +433,7 @@ class RiskEngine:
                             except asyncio.QueueFull:
                                 self.metrics.rejection_sink_overflow_total.inc()
                         self.intent_queue.task_done()
+                        intent_dequeued = False
                         continue
 
                 start_ns = time.perf_counter_ns()
@@ -513,6 +516,7 @@ class RiskEngine:
                             self.metrics.rejection_sink_overflow_total.inc()
 
                 self.intent_queue.task_done()
+                intent_dequeued = False
 
                 # Periodic DLQ drain
                 self._dlq_drain_counter += 1
@@ -520,6 +524,8 @@ class RiskEngine:
                     self._dlq_drain_counter = 0
                     self._drain_order_dlq()
             except asyncio.CancelledError:
+                if intent_dequeued:
+                    self.intent_queue.task_done()
                 logger.info("RiskEngine stopped")
                 break
             except Exception as e:  # noqa: BLE001 — wraps external risk validators
@@ -555,7 +561,7 @@ class RiskEngine:
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True
 
-        for v in self._rust_uncovered_validators:
+        for v in self.validators:
             ok, reason = v.check(intent)
             if not ok:
                 logger.warning(

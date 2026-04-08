@@ -1210,9 +1210,10 @@ class OrderAdapter:
             self.strategy_cb_mgr.record_failure(intent.strategy_id)
             self._emit_trace("order_dispatch_error", intent, {"cmd_id": int(cmd.cmd_id), "error": str(e)})
             # Clean up sentinel to prevent permanent slot occupation (D2 rollback)
-            if order_key in self.live_orders and self.live_orders.get(order_key) is _PENDING_SENTINEL:
-                del self.live_orders[order_key]
-                self._pending_order_keys.discard(order_key)
+            async with self._live_orders_lock:
+                if order_key in self.live_orders and self.live_orders.get(order_key) is _PENDING_SENTINEL:
+                    del self.live_orders[order_key]
+                    self._pending_order_keys.discard(order_key)
         else:
             self._emit_trace("order_dispatch_ok", intent, {"cmd_id": int(cmd.cmd_id)})
 

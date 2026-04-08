@@ -70,17 +70,21 @@ class FacadeSlot:
         "last_reconnect_mono",
         "reconnect_failures",
         "degraded_since_mono",
+        "_pending_warmup_reset",
     )
 
     def __init__(self, conn_id: str, facade: Any) -> None:
         self.conn_id: str = conn_id
         self.facade: Any = facade
-        self.state: FacadeState = FacadeState.CONNECTED
+        # Start in RECOVERING — transitions to CONNECTED after first data arrives
+        # via subscribe_all(). Prevents premature DEGRADED transitions during startup.
+        self.state: FacadeState = FacadeState.RECOVERING
         self.symbols: set[str] = set()
         self.last_data_mono: float = time.monotonic()
         self.last_reconnect_mono: float = time.monotonic()
         self.reconnect_failures: int = 0
         self.degraded_since_mono: float | None = None
+        self._pending_warmup_reset: bool = False
 
     def feed_gap_s(self) -> float:
         """Return elapsed seconds since the last market data callback.

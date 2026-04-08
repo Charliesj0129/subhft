@@ -157,10 +157,13 @@ class MarketDataReconnectMixin:
                 ).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False
-        # Per-facade LOB/Feature reset is handled by QuoteConnectionPool._notify_warmup_reset.
-        # Only fall back to global reset for single-client mode.
+        # Per-facade LOB/Feature reset is deferred via _pending_warmup_reset.
+        # Apply it now on the event loop thread for thread-safe dict mutation.
         client = getattr(self, "client", None)
-        if not hasattr(client, "get_healthy_feed_gap_s"):
+        if hasattr(client, "_apply_pending_resets"):
+            client._apply_pending_resets()
+        elif not hasattr(client, "get_healthy_feed_gap_s"):
+            # Single-client mode: global reset on event loop (already safe).
             lob = getattr(self, "lob", None)
             if lob is not None and hasattr(lob, "reset_books"):
                 lob.reset_books()
