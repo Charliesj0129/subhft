@@ -35,8 +35,13 @@ def apply_schema(client, schema_path: str | None = None) -> None:
         result = client.query("SELECT version FROM hft.schema_migrations")
         applied_versions = {row[0] for row in result.result_rows}
     except Exception as exc:
-        logger.warning("Failed to query schema_migrations", error=str(exc))
-        applied_versions = set()
+        logger.critical(
+            "Failed to query schema_migrations — refusing to proceed to avoid re-running destructive migrations",
+            error=str(exc),
+        )
+        raise RuntimeError(
+            "Cannot determine applied migrations; aborting to prevent data loss"
+        ) from exc
 
     # Find migration files
     if not os.path.exists(MIGRATIONS_DIR):
@@ -76,11 +81,18 @@ def apply_schema(client, schema_path: str | None = None) -> None:
 
         # Extract individual statements
         statements = [stmt.strip() for stmt in up_content.split(";") if stmt.strip()]
-        for stmt in statements:
+        total = len(statements)
+        for idx, stmt in enumerate(statements):
             try:
                 client.command(stmt)
             except Exception as exc:
-                logger.error("Migration statement failed", version=version, statement=stmt[:160], error=str(exc))
+                logger.error(
+                    "Migration statement failed — schema may be partially applied",
+                    version=version,
+                    statement_index=f"{idx + 1}/{total}",
+                    statement=stmt[:160],
+                    error=str(exc),
+                )
                 raise
 
         # Record successful migration

@@ -962,7 +962,12 @@ class FeatureEngine:
             int(l1_bid_qty),
             int(l1_ask_qty),
         )
-        return tuple(out) if not isinstance(out, tuple) else out
+        values = tuple(out) if not isinstance(out, tuple) else out
+        # Pad V1 kernel output (16 features) to match current schema (v2=22, v3=27)
+        expected = len(self._feature_ids)
+        if len(values) < expected:
+            values = values + (0,) * (expected - len(values))
+        return values
 
     def _get_rust_pipeline(self, symbol: str) -> Any:
         """Get or create a RustFeaturePipelineV1 for the given symbol."""

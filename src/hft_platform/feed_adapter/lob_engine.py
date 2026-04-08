@@ -527,10 +527,7 @@ class LOBEngine:
             return 0
         self._eviction_last_run_ns = now_ns
         cutoff_ns = now_ns - self._eviction_ttl_ns
-        stale = [
-            sym for sym, book in self.books.items()
-            if book.exch_ts > 0 and book.exch_ts < cutoff_ns
-        ]
+        stale = [sym for sym, book in self.books.items() if book.exch_ts > 0 and book.exch_ts < cutoff_ns]
         for sym in stale:
             del self.books[sym]
         if stale:
@@ -637,7 +634,7 @@ class LOBEngine:
                     self._record_lob_metrics(symbol, bool(is_snapshot))
                 return self._emit_stats(book)
             if event[0] == "tick":
-                _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts = event
+                _, symbol, price, volume, _total_volume, _is_simtrade, _is_odd_lot, exch_ts, *_rest = event
                 book = self.get_book(symbol)
                 if book is None:
                     return None

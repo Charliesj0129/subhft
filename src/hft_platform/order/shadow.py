@@ -72,9 +72,10 @@ class ShadowOrderSink:
         metrics = _get_metrics()
         if metrics and hasattr(metrics, "shadow_orders_total"):
             side_str = str(intent.side.name if hasattr(intent.side, "name") else intent.side)
+            capped_sym = metrics.cap_symbol(intent.symbol) if hasattr(metrics, "cap_symbol") else intent.symbol
             metrics.shadow_orders_total.labels(
                 strategy=intent.strategy_id,
-                symbol=intent.symbol,
+                symbol=capped_sym,
                 side=side_str,
             ).inc()
         if self._writer is not None:

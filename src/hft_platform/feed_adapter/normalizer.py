@@ -438,12 +438,8 @@ class MarketDataNormalizer:
         self.metadata = metadata or SymbolMetadata(config_path)
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
-        self._rust_fallback_tick = (
-            self.metrics.rust_fallback_total.labels(type="tick") if self.metrics else None
-        )
-        self._rust_fallback_bidask = (
-            self.metrics.rust_fallback_total.labels(type="bidask") if self.metrics else None
-        )
+        self._rust_fallback_tick = self.metrics.rust_fallback_total.labels(type="tick") if self.metrics else None
+        self._rust_fallback_bidask = self.metrics.rust_fallback_total.labels(type="bidask") if self.metrics else None
         _skip = self.metrics.normalization_skip_total if self.metrics else None
         self._skip_tick_missing_symbol = _skip.labels(type="tick", reason="missing_symbol") if _skip else None
         self._skip_tick_negative_price = _skip.labels(type="tick", reason="negative_price") if _skip else None
@@ -455,9 +451,7 @@ class MarketDataNormalizer:
         self._last_local_ts_bidask: int = 0
         self._last_local_ts_snapshot: int = 0
         self._latency_metrics_counter: int = 0
-        self._latency_metrics_sample_every: int = max(
-            1, int(os.getenv("HFT_NORMALIZER_METRICS_SAMPLE_EVERY", "4"))
-        )
+        self._latency_metrics_sample_every: int = max(1, int(os.getenv("HFT_NORMALIZER_METRICS_SAMPLE_EVERY", "4")))
         self._last_skew_log_ns = 0
         self._trade_classifier = TradeClassifier()
         self._fused: Any = None
@@ -1109,7 +1103,8 @@ class MarketDataNormalizer:
                         bids_final = None
                 if bids_final is None:
                     bids_final = [
-                        [int(round(float(price) * scale)), int(volume)] for price, volume in zip(bp, bv) if price and volume
+                        [int(round(float(price) * scale)), int(volume)]
+                        for price, volume in zip(bp, bv)
                     ]
 
             if asks_final is None:
@@ -1123,7 +1118,8 @@ class MarketDataNormalizer:
                         asks_final = None
                 if asks_final is None:
                     asks_final = [
-                        [int(round(float(price) * scale)), int(volume)] for price, volume in zip(ap, av) if price and volume
+                        [int(round(float(price) * scale)), int(volume)]
+                        for price, volume in zip(ap, av)
                     ]
 
             if not synthesized:

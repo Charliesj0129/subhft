@@ -165,6 +165,7 @@ class PositionStore:
         "_fill_lock",
         "_peak_equity_scaled",
         "_total_realized_pnl_scaled",
+        "_evicted_realized_pnl_scaled",
         "_recovery_positions",
         "_recovery_rpnl_offsets",
         "_recovery_fees_offsets",
@@ -194,6 +195,7 @@ class PositionStore:
         # Portfolio-level tracking for StormGuard drawdown
         self._peak_equity_scaled: int = 0  # High watermark of total realized PnL
         self._total_realized_pnl_scaled: int = 0  # Sum across all positions
+        self._evicted_realized_pnl_scaled: int = 0  # Accumulated PnL from evicted flat positions
 
     @property
     def total_pnl(self) -> int:
@@ -208,8 +210,13 @@ class PositionStore:
         (i.e., _peak_equity_scaled > 0).
         """
         if self._peak_equity_scaled <= 0:
-            # No positive peak yet — cannot compute meaningful drawdown %
-            return 0.0
+            # No positive peak yet — report loss-based drawdown from zero baseline
+            current = self._total_realized_pnl_scaled
+            if current >= 0:
+                return 0.0
+            # Use absolute loss as fraction of base capital (fallback to 1 to avoid div-by-zero)
+            base = getattr(self, "_base_capital_scaled", 0) or 1
+            return min(1.0, abs(current) / base)
         current = self._total_realized_pnl_scaled
         if current >= self._peak_equity_scaled:
             return 0.0
@@ -225,7 +232,10 @@ class PositionStore:
         if pnl_delta != 0:
             self._total_realized_pnl_scaled += pnl_delta
         else:
-            self._total_realized_pnl_scaled = sum(p.realized_pnl_scaled for p in self.positions.values())
+            self._total_realized_pnl_scaled = (
+                sum(p.realized_pnl_scaled for p in self.positions.values())
+                + self._evicted_realized_pnl_scaled
+            )
         if self._total_realized_pnl_scaled > self._peak_equity_scaled:
             self._peak_equity_scaled = self._total_realized_pnl_scaled
 
@@ -468,5 +478,7 @@ class PositionStore:
             flat_keys.sort(key=lambda k: self.positions[k].last_update_ts)
             evict_count = min(len(flat_keys), max(1, len(self.positions) // 10))
             for k in flat_keys[:evict_count]:
+                # Preserve realized PnL from evicted positions for portfolio aggregates
+                self._evicted_realized_pnl_scaled += self.positions[k].realized_pnl_scaled
                 del self.positions[k]
             logger.info("Evicted flat positions", count=evict_count, remaining=len(self.positions))

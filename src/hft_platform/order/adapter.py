@@ -1348,6 +1348,15 @@ class OrderAdapter:
                             halt_exempt_blocked=self._is_strategy_halt_exempt(item.intent.strategy_id),
                         )
                         continue
+                    if item.deadline_ns and time.monotonic_ns() > item.deadline_ns:
+                        logger.warning(
+                            "api_worker_deadline_expired",
+                            cmd_id=item.cmd_id,
+                            symbol=item.intent.symbol,
+                            strategy_id=item.intent.strategy_id,
+                        )
+                        self.metrics.order_reject_total.inc()
+                        continue
                     try:
                         await self._dispatch_to_api(item)
                     except Exception:

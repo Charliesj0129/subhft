@@ -135,14 +135,16 @@ class CanaryMetricsQuery:
             return 0.0
 
         pnl_series = [float(row[0]) for row in rows]
-        peak = max(pnl_series)
-        final = pnl_series[-1]
-
-        if peak == 0.0:
-            return 0.0
-
-        drawdown = (peak - final) / abs(peak)
-        return max(0.0, drawdown)
+        running_peak = pnl_series[0]
+        max_dd = 0.0
+        for v in pnl_series:
+            if v > running_peak:
+                running_peak = v
+            if running_peak > 0:
+                dd = (running_peak - v) / abs(running_peak)
+                if dd > max_dd:
+                    max_dd = dd
+        return max_dd
 
     def _query_error_rate(self, client: Any, strategy_id: str, since_ns: int) -> float:
         """Fraction of rejected orders over total orders."""
