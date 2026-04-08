@@ -648,7 +648,9 @@ class SystemBootstrapper:
         raw_exec_queue_size = get_queue_size("HFT_RAW_EXEC_QUEUE_SIZE", self.DEFAULT_RAW_EXEC_QUEUE_SIZE)
         risk_queue_size = get_queue_size("HFT_RISK_QUEUE_SIZE", self.DEFAULT_RISK_QUEUE_SIZE)
         order_queue_size = get_queue_size("HFT_ORDER_QUEUE_SIZE", self.DEFAULT_ORDER_QUEUE_SIZE)
-        recorder_queue_size = get_queue_size("HFT_RECORDER_QUEUE_SIZE", self.DEFAULT_RECORDER_QUEUE_SIZE * num_quote_conns)
+        recorder_queue_size = get_queue_size(
+            "HFT_RECORDER_QUEUE_SIZE", self.DEFAULT_RECORDER_QUEUE_SIZE * num_quote_conns
+        )
 
         # All queues are now guaranteed to be bounded
         raw_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_queue_size)
@@ -825,7 +827,11 @@ class SystemBootstrapper:
             return 0
 
         order_adapter = OrderAdapter(
-            adapter_path, order_queue, order_client, order_id_map, broker_codec=_broker_codec,
+            adapter_path,
+            order_queue,
+            order_client,
+            order_id_map,
+            broker_codec=_broker_codec,
             cmd_created_ns_map=cmd_created_ns_map,
             cmd_tca_map=cmd_tca_map,
             mid_price_fn=_get_mid_price,
@@ -859,6 +865,7 @@ class SystemBootstrapper:
                 # X2-H1: Missing fee config → PnL tracking excludes fees/tax
                 try:
                     from hft_platform.observability.metrics import MetricsRegistry
+
                     _m = MetricsRegistry.get()
                     if hasattr(_m, "startup_warnings_total"):
                         _m.startup_warnings_total.labels(component="fee_calculator").inc()
@@ -950,19 +957,19 @@ class SystemBootstrapper:
         except Exception as exc:
             logger.warning("phase3_queue_init_failed", error=str(exc))
 
-        if _rejection_queue is not None and hasattr(risk_engine, '_rejection_sink'):
+        if _rejection_queue is not None and hasattr(risk_engine, "_rejection_sink"):
             risk_engine._rejection_sink = _rejection_queue
 
-        if _rejection_queue is not None and hasattr(strategy_runner, '_rejection_sink'):
+        if _rejection_queue is not None and hasattr(strategy_runner, "_rejection_sink"):
             strategy_runner._rejection_sink = _rejection_queue
 
-        if _rejection_queue is not None and hasattr(strategy_runner, '_rejection_queue'):
+        if _rejection_queue is not None and hasattr(strategy_runner, "_rejection_queue"):
             strategy_runner._rejection_queue = _rejection_queue
 
-        if hasattr(strategy_runner, '_storm_guard'):
+        if hasattr(strategy_runner, "_storm_guard"):
             strategy_runner._storm_guard = storm_guard
 
-        if _publish_queue is not None and hasattr(strategy_runner, '_publish_sink'):
+        if _publish_queue is not None and hasattr(strategy_runner, "_publish_sink"):
             strategy_runner._publish_sink = lambda ch, payload: _publish_queue.put_nowait((ch, payload))
 
         recorder = RecorderService(recorder_queue)
@@ -1094,6 +1101,13 @@ class SystemBootstrapper:
             logger.info("alertmanager_bridge_scheduled")
         except Exception:  # noqa: BLE001
             logger.warning("alertmanager_bridge_start_failed", exc_info=True)
+
+        # Inject LOB + FeatureEngine into Pool for targeted warmup reset
+        if hasattr(md_client, "set_reset_targets"):
+            md_client.set_reset_targets(
+                lob=md_service.lob,
+                feature_engine=feature_engine,
+            )
 
         return ServiceRegistry(
             settings=self.settings,

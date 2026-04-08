@@ -43,6 +43,13 @@ class HFTSystem:
     @staticmethod
     def _get_max_feed_gap_s(md_service: Any) -> float:
         """Return max feed gap from market data service, or 0.0 if unavailable."""
+        client = getattr(md_service, "client", None)
+        if client is not None and hasattr(client, "get_healthy_feed_gap_s"):
+            gap = client.get_healthy_feed_gap_s()
+            within_fn = getattr(md_service, "within_reconnect_window", None)
+            if within_fn is not None and not within_fn():
+                return 0.0
+            return float(gap)
         fn = getattr(md_service, "get_max_feed_gap_s", None)
         if fn is None:
             return 0.0
@@ -639,6 +646,10 @@ class HFTSystem:
 
             # Update Metrics — offload blocking psutil calls off the event loop
             await loop.run_in_executor(None, metrics.update_system_metrics)
+            # Per-facade health check (QuoteConnectionPool isolation)
+            client = getattr(self.md_service, "client", None)
+            if client is not None and hasattr(client, "check_facade_health"):
+                client.check_facade_health()
             if metrics:
                 exec_task = self.tasks.get("exec_router")
                 gateway_task = self.tasks.get("exec_gateway")
