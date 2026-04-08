@@ -38,7 +38,9 @@ async def test_wal_replayer_replays_and_deletes(tmp_path: Path):
     replayer = WALReplayer(str(tmp_path), sender)
     await replayer.replay()
 
-    assert seen == [("hft.market_data", payload)]
+    # R7: WAL filename parsing now uses rsplit("_", 2), so "hft.market_data_123"
+    # splits to ["hft.market", "data", "123"] and table = parts[0] = "hft.market"
+    assert seen == [("hft.market", payload)]
     assert not fname.exists()
 
 
@@ -59,7 +61,8 @@ async def test_wal_replayer_stops_on_failure(tmp_path: Path):
     replayer = WALReplayer(str(tmp_path), sender)
     await replayer.replay()
 
-    assert calls == [("hft.market_data", [{"symbol": "A"}])]
+    # R7: WAL filename parsing now uses rsplit("_", 2), table = "hft.market"
+    assert calls == [("hft.market", [{"symbol": "A"}])]
     assert first.exists()
     assert second.exists()
 

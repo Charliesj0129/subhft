@@ -45,7 +45,7 @@ async def test_risk_engine_storm_blocks_new(tmp_path):
 
     decision = engine.evaluate(_intent(IntentType.NEW))
     assert decision.approved is False
-    assert decision.reason_code == "STORMGUARD_STORM_NEW_BLOCKED"
+    assert decision.reason_code == "STORMGUARD_STORM_BLOCKED"
 
 
 @pytest.mark.asyncio

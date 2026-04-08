@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Shared helper — matches the pattern in test_system_service_behavior.py
 # ---------------------------------------------------------------------------
@@ -52,9 +51,12 @@ def _make_system():
             sys_obj._recorder_seen_tick = False
             sys_obj._recorder_seen_bidask = False
             sys_obj._md_record_direct = True
+            sys_obj._fill_record_direct = True
+            sys_obj._order_record_direct = True
             sys_obj.bootstrapper = MagicMock()
             sys_obj.registry = mock_reg
             sys_obj.bus = mock_reg.bus
+            sys_obj.bus.cursor = -1  # int so stop_async comparison works
             sys_obj.raw_queue = mock_reg.raw_queue
             sys_obj.raw_exec_queue = mock_reg.raw_exec_queue
             sys_obj.risk_queue = mock_reg.risk_queue
@@ -413,10 +415,10 @@ async def test_start_service_exec_router_sets_metric():
     # Clean up the created task
     if "exec_router" in sys_obj.tasks and sys_obj.tasks["exec_router"]:
         sys_obj.tasks["exec_router"].cancel()
-        try:
-            await asyncio.gather(sys_obj.tasks["exec_router"], return_exceptions=True)
-        except Exception:
-            pass
+        result = await asyncio.gather(sys_obj.tasks["exec_router"], return_exceptions=True)
+        assert len(result) == 1
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert sys_obj.tasks["exec_router"].done()
 
 
 @pytest.mark.asyncio
@@ -437,10 +439,10 @@ async def test_start_service_exec_gateway_sets_metric():
     mock_metrics.execution_gateway_alive.set.assert_called_once_with(1)
     if "exec_gateway" in sys_obj.tasks and sys_obj.tasks["exec_gateway"]:
         sys_obj.tasks["exec_gateway"].cancel()
-        try:
-            await asyncio.gather(sys_obj.tasks["exec_gateway"], return_exceptions=True)
-        except Exception:
-            pass
+        result = await asyncio.gather(sys_obj.tasks["exec_gateway"], return_exceptions=True)
+        assert len(result) == 1
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert sys_obj.tasks["exec_gateway"].done()
 
 
 @pytest.mark.asyncio
@@ -457,10 +459,10 @@ async def test_start_service_generic():
     assert "recorder" in sys_obj.tasks
     if sys_obj.tasks["recorder"]:
         sys_obj.tasks["recorder"].cancel()
-        try:
-            await asyncio.gather(sys_obj.tasks["recorder"], return_exceptions=True)
-        except Exception:
-            pass
+        result = await asyncio.gather(sys_obj.tasks["recorder"], return_exceptions=True)
+        assert len(result) == 1
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert sys_obj.tasks["recorder"].done()
 
 
 # ---------------------------------------------------------------------------

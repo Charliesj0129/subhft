@@ -47,6 +47,8 @@ def _make_system():
             sys_obj._recorder_seen_tick = False
             sys_obj._recorder_seen_bidask = False
             sys_obj._md_record_direct = True
+            sys_obj._fill_record_direct = True
+            sys_obj._order_record_direct = True
             sys_obj.bootstrapper = MagicMock()
             sys_obj.registry = mock_reg
             sys_obj.bus = mock_reg.bus
@@ -305,14 +307,14 @@ async def test_run_early_exception_does_not_trip_gc_cleanup():
     sys_obj.autonomy_monitor = None
     sys_obj.startup_verifier = None
     sys_obj.checkpoint_writer = None
-    sys_obj.stop = MagicMock()
+    sys_obj.stop_async = AsyncMock()
 
     from hft_platform.services.system import HFTSystem
 
     with pytest.raises(RuntimeError, match="boom"):
         await HFTSystem.run(sys_obj)
 
-    sys_obj.stop.assert_called_once_with()
+    sys_obj.stop_async.assert_awaited_once()
 
 
 def test_iter_supervised_services_no_gateway():
@@ -435,9 +437,7 @@ async def test_recorder_bridge_drop_increments_prometheus_counter():
     mock_counter = MagicMock()
     mock_metrics.recorder_bridge_drops_total.labels.return_value = mock_counter
 
-    with patch(
-        "hft_platform.observability.metrics.MetricsRegistry"
-    ) as MockMR:
+    with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
         MockMR.get.return_value = mock_metrics
 
         # map_event_to_record must return a (topic, payload) tuple

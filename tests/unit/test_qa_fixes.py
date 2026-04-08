@@ -1,3 +1,8 @@
+import tempfile
+from pathlib import Path
+
+import yaml
+
 from hft_platform.execution.normalizer import ExecutionNormalizer, OrderStatus
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
@@ -18,19 +23,16 @@ def test_normalizer_status_mapping():
     assert n._map_status("F Pending") == OrderStatus.PENDING_SUBMIT
 
 
-def test_shioaji_client_mode():
-    # Test initialization without shioaji installed (Sim Mode)
-    # We assume 'sj' is None in test env if not mocked,
-    # or if we mock it, we control it.
-    # The file has: try: import shioaji ... except: sj = None.
-    # We can inspect instance.
+def test_shioaji_client_mode(tmp_path):
+    # R7: config/symbols.yaml now exceeds MAX_SUBSCRIPTIONS (200).
+    # Create a temporary config with a small symbol list to avoid ValueError.
+    config_path = tmp_path / "symbols.yaml"
+    config_path.write_text(yaml.dump({"symbols": [{"code": "2330"}]}))
 
-    c = ShioajiClient()
+    c = ShioajiClient(config_path=str(config_path))
     # Should default to "simulation" if import fails
     # OR "real" if import succeeds (but api is object).
 
-    # In this environment, shioaji might be missing in docker env?
-    # Let's check attribute existence
     assert hasattr(c, "mode")
     assert c.mode in ["real", "simulation"]
 

@@ -350,7 +350,8 @@ def test_process_single_file_strict_order_skips(tmp_path):
 
     processed = loader._process_single_file(str(fpath), force=True)
     assert processed is False
-    assert fpath.exists()
+    # R7: out-of-order files are now quarantined (moved to corrupt/ dir), not kept in place
+    assert not fpath.exists()
 
 
 def test_process_single_file_unknown_table_skips(tmp_path):

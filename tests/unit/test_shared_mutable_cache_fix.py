@@ -16,7 +16,6 @@ from hft_platform.events import LOBStatsEvent
 from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feed_adapter.lob_engine import BookState
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -67,24 +66,23 @@ class TestBookStateGetStatsObjectIdentity:
         )
 
     def test_mutation_of_returned_object_does_not_affect_next_call(self):
-        """Mutating a returned LOBStatsEvent must not affect the next get_stats() result."""
+        """LOBStatsEvent is now frozen — mutation raises FrozenInstanceError, preventing cross-consumer corruption."""
+        import dataclasses
+
         bs = _make_book_state()
         first = bs.get_stats()
-        original_ts = first.ts
 
-        # Simulate a consumer holding and mutating the returned object
-        first.ts = 999_999_999_999
+        # R8: LOBStatsEvent is now frozen=True, so mutation is structurally impossible
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            first.ts = 999_999_999_999
 
         # The next tick updates the book state timestamp
         bs.exch_ts = 2_000_000_000
         second = bs.get_stats()
 
         assert second.ts == 2_000_000_000, (
-            "next get_stats() returned stale/corrupted ts; "
-            "the prior consumer's mutation bled through."
+            "next get_stats() returned stale/corrupted ts."
         )
-        # The first object should still hold the consumer's mutation (not rolled back)
-        assert first.ts == 999_999_999_999
 
     def test_returned_event_fields_match_book_state(self):
         """get_stats() fields must reflect the current BookState values."""
@@ -153,8 +151,7 @@ class TestFeatureEngineObjectIdentity:
         assert second is not None
 
         assert second.ts == 2_000, (
-            "next FeatureUpdateEvent has corrupted ts; "
-            "consumer mutation of the first event bled through."
+            "next FeatureUpdateEvent has corrupted ts; consumer mutation of the first event bled through."
         )
         # First event retains the consumer's mutation
         assert first.ts == 999_999
@@ -177,18 +174,14 @@ class TestFeatureEngineObjectIdentity:
     def test_same_symbol_consecutive_ticks_are_independent_objects(self):
         """The same symbol on consecutive ticks must produce independent event objects."""
         eng = FeatureEngine()
-        events = [
-            eng.process_lob_stats(_lob_stats(ts=i * 1000), local_ts_ns=i * 1000)
-            for i in range(1, 4)
-        ]
+        events = [eng.process_lob_stats(_lob_stats(ts=i * 1000), local_ts_ns=i * 1000) for i in range(1, 4)]
         # All events must be non-None
         assert all(e is not None for e in events)
         # All events must be distinct objects
         for i in range(len(events)):
             for j in range(i + 1, len(events)):
                 assert events[i] is not events[j], (
-                    f"events[{i}] and events[{j}] are the same object; "
-                    "shared mutable ref detected."
+                    f"events[{i}] and events[{j}] are the same object; shared mutable ref detected."
                 )
 
     def test_event_cache_retains_last_event_for_debugging(self):
@@ -199,6 +192,5 @@ class TestFeatureEngineObjectIdentity:
         # The cache should hold the last emitted event for this symbol
         cached = eng._event_cache.get("2330")
         assert cached is last, (
-            "_event_cache should store (not replace with a fresh copy) "
-            "the last emitted event for debugging purposes."
+            "_event_cache should store (not replace with a fresh copy) the last emitted event for debugging purposes."
         )

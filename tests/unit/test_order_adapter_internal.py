@@ -146,10 +146,12 @@ async def test_submit_typed_command_nowait_materialized_by_worker(tmp_path, monk
         called.append(cmd)
 
     monkeypatch.setattr(adapter, "_dispatch_to_api", _capture_dispatch)
+    # R7: deadline_ns must be in the future to avoid expiration in _api_worker
+    future_deadline_ns = time.monotonic_ns() + 10_000_000_000  # 10 seconds from now
     frame = (
         "typed_order_cmd_v1",
         77,
-        123456789,
+        future_deadline_ns,
         int(StormGuardState.NORMAL),
         111,
         (
@@ -232,14 +234,10 @@ def test_intent_to_command_deadline_uses_monotonic_domain(tmp_path):
     # Deadline must be reachable from the monotonic clock (not epoch ~1.7e18)
     # Epoch wall-clock is ~1.7e18 ns; monotonic is ~1e12 ns on a typical system
     EPOCH_THRESHOLD_NS = 10**15  # 1e15 ns = ~11.5 days since boot vs ~54 years since epoch
-    assert cmd.deadline_ns < EPOCH_THRESHOLD_NS, (
-        f"deadline_ns={cmd.deadline_ns} looks like epoch time, not monotonic"
-    )
+    assert cmd.deadline_ns < EPOCH_THRESHOLD_NS, f"deadline_ns={cmd.deadline_ns} looks like epoch time, not monotonic"
 
     # Deadline must be after the current monotonic time (not yet expired)
-    assert time.monotonic_ns() <= cmd.deadline_ns, (
-        "deadline_ns is already in the past — order would expire immediately"
-    )
+    assert time.monotonic_ns() <= cmd.deadline_ns, "deadline_ns is already in the past — order would expire immediately"
 
     # deadline_ns must be at least mono_before + ttl (minus small tolerance for execution time)
     assert cmd.deadline_ns >= before_mono + intent.ttl_ns - 1_000_000  # 1ms tolerance

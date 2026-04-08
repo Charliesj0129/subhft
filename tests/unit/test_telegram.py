@@ -57,6 +57,7 @@ def _make_update(
         "update_id": update_id,
         "message": {
             "from": {"id": from_id},
+            "chat": {"id": from_id},
             "text": text,
         },
     }

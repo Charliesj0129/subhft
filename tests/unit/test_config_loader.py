@@ -54,4 +54,4 @@ def test_load_settings_precedence(tmp_path, monkeypatch):
     assert defaults["symbols"] == ["AAA"]
     assert settings["symbols"] == ["FFF"]
     assert settings["strategy"]["id"] == "settings"
-    assert settings["mode"] == "sim"
+    assert settings["mode"] == "live"

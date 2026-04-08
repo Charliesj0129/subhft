@@ -84,7 +84,7 @@ def test_iter_supervised_services_covers_critical_components():
         system = HFTSystem({})
 
     names = {name for name, _component, _factory in system._iter_supervised_services()}
-    expected = {"md", "exec_router", "order", "exec_gateway", "recon", "strat", "recorder", "recorder_bridge", "risk"}
+    expected = {"md", "exec_router", "order", "exec_gateway", "recon", "strat", "recorder", "pnl_exporter", "risk"}
     assert expected.issubset(names)
     assert "gateway" not in names
 

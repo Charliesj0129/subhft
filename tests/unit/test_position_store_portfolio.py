@@ -176,7 +176,7 @@ def test_peak_equity_tracking(store):
 
 
 def test_peak_equity_never_negative_start(store):
-    """If first trades are losing, peak stays 0 and drawdown returns 0.0."""
+    """If first trades are losing, peak stays 0 and drawdown reports loss-based fraction."""
     # Buy @ 1_010_000 and sell @ 1_000_000: immediate loss
     store.on_fill(_make_fill(Side.BUY, 10, 1_010_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_000_000))
@@ -184,8 +184,9 @@ def test_peak_equity_never_negative_start(store):
     assert store.total_pnl == -100_000
     # No positive peak was ever established
     assert store._peak_equity_scaled == 0
-    # get_drawdown_pct returns 0.0 because peak <= 0 (system.py uses total_pnl fallback)
-    assert store.get_drawdown_pct() == 0.0
+    # R8: get_drawdown_pct now returns loss-based drawdown (abs(loss)/base, capped at 1.0)
+    # With no _base_capital_scaled set, fallback base=1 → min(1.0, 100000/1) = 1.0
+    assert store.get_drawdown_pct() == 1.0
 
 
 # ---------------------------------------------------------------------------

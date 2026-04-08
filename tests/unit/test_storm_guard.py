@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
-from hft_platform.risk.storm_guard import RiskThresholds, StormGuard, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
+from hft_platform.risk.storm_guard import StormGuard, StormGuardState
 
 
 class TestStormGuard(unittest.TestCase):
@@ -218,9 +218,9 @@ def test_de_escalation_allowed_after_storm_cooldown(guard):
     guard._de_escalate_threshold = 2
     guard.update(latency_us=25000)  # enter STORM
     assert guard.state == StormGuardState.STORM
-    guard.update(latency_us=0)   # count = 1, not yet threshold
+    guard.update(latency_us=0)  # count = 1, not yet threshold
     assert guard.state == StormGuardState.STORM
-    guard.update(latency_us=0)   # count = 2 → transition
+    guard.update(latency_us=0)  # count = 2 → transition
     assert guard.state == StormGuardState.NORMAL
 
 
@@ -275,7 +275,7 @@ def test_validate_new_order_blocked_during_storm(guard):
     assert guard.state == StormGuardState.STORM
     ok, reason = guard.validate(_make_intent(IntentType.NEW))
     assert not ok
-    assert reason == "STORMGUARD_STORM_NEW_BLOCKED"
+    assert reason == "STORMGUARD_STORM_BLOCKED"
 
 
 def test_validate_cancel_allowed_during_storm(guard):
@@ -317,6 +317,7 @@ def test_halt_callback_exception_does_not_propagate(guard):
 
 def test_halt_callback_coroutine_no_running_loop(guard):
     """Coroutine callback when no event loop is running logs warning, does not crash."""
+
     async def async_cb():
         pass  # pragma: no cover
 
@@ -431,9 +432,7 @@ def test_exempt_strategy_bypasses_halt(exempt_guard):
     """Exempt strategy can place NEW orders during HALT."""
     exempt_guard.trigger_halt("drift_burst")
     assert exempt_guard.state == StormGuardState.HALT
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "spike_fader"))
     assert ok
     assert reason == "HALT_EXEMPT"
 
@@ -441,9 +440,7 @@ def test_exempt_strategy_bypasses_halt(exempt_guard):
 def test_non_exempt_strategy_still_blocked_during_halt(exempt_guard):
     """Non-exempt strategy is still blocked during HALT."""
     exempt_guard.trigger_halt("drift_burst")
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "cbs_tmfd6")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "cbs_tmfd6"))
     assert not ok
     assert reason == "STORMGUARD_HALT"
 
@@ -452,9 +449,7 @@ def test_exempt_strategy_bypasses_storm(exempt_guard):
     """Exempt strategy can place NEW orders during STORM."""
     exempt_guard.update(latency_us=25000)
     assert exempt_guard.state == StormGuardState.STORM
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "spike_fader"))
     assert ok
     assert reason == "STORM_EXEMPT"
 
@@ -462,28 +457,22 @@ def test_exempt_strategy_bypasses_storm(exempt_guard):
 def test_non_exempt_strategy_still_blocked_during_storm(exempt_guard):
     """Non-exempt strategy is still blocked during STORM."""
     exempt_guard.update(latency_us=25000)
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "cbs_tmfd6")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "cbs_tmfd6"))
     assert not ok
-    assert reason == "STORMGUARD_STORM_NEW_BLOCKED"
+    assert reason == "STORMGUARD_STORM_BLOCKED"
 
 
 def test_exempt_strategy_cancel_still_allowed_during_halt(exempt_guard):
     """CANCEL always allowed regardless of exemption."""
     exempt_guard.trigger_halt("test")
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.CANCEL, "spike_fader")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.CANCEL, "spike_fader"))
     assert ok
     assert reason == "OK"
 
 
 def test_exempt_strategy_normal_state_returns_ok(exempt_guard):
     """In NORMAL state, exempt strategies get OK (not HALT_EXEMPT)."""
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "spike_fader"))
     assert ok
     assert reason == "OK"
 
@@ -542,9 +531,7 @@ def test_revoke_halt_exemption_blocks_previously_exempt_orders(exempt_guard):
     """After revocation, previously exempt strategy is blocked during HALT."""
     exempt_guard.trigger_halt("test")
     # Before revocation: exempt
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "spike_fader"))
     assert ok
     assert reason == "HALT_EXEMPT"
 
@@ -552,9 +539,7 @@ def test_revoke_halt_exemption_blocks_previously_exempt_orders(exempt_guard):
     exempt_guard.revoke_halt_exemption("spike_fader")
 
     # After revocation: blocked
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "spike_fader"))
     assert not ok
     assert reason == "STORMGUARD_HALT"
 
@@ -566,9 +551,7 @@ def test_grant_halt_exemption_adds_strategy(guard):
     """Granting exemption allows strategy through HALT."""
     guard.trigger_halt("test")
     # Before grant: blocked
-    ok, _ = guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "new_mm")
-    )
+    ok, _ = guard.validate(_make_intent_with_strategy(IntentType.NEW, "new_mm"))
     assert not ok
 
     # Grant
@@ -577,9 +560,7 @@ def test_grant_halt_exemption_adds_strategy(guard):
     assert guard.is_halt_exempt("new_mm") is True
 
     # After grant: allowed
-    ok, reason = guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "new_mm")
-    )
+    ok, reason = guard.validate(_make_intent_with_strategy(IntentType.NEW, "new_mm"))
     assert ok
     assert reason == "HALT_EXEMPT"
 
@@ -600,9 +581,7 @@ def test_halt_exempt_bypass_increments_dedicated_counter(exempt_guard):
     from FSM state transitions."""
     exempt_guard.trigger_halt("drift_burst")
 
-    ok, reason = exempt_guard.validate(
-        _make_intent_with_strategy(IntentType.NEW, "spike_fader")
-    )
+    ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "spike_fader"))
     assert ok
     assert reason == "HALT_EXEMPT"
 

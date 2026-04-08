@@ -119,8 +119,8 @@ class TestNormalizeFill:
         data = {"price": 100.0, "action": "Buy", "code": "2330"}
         raw = _make_raw("deal", data)
         fill = norm.normalize_fill(raw)
-        assert fill is not None
-        assert fill.qty == 0
+        # R8: zero/missing qty now returns None (reject instead of default)
+        assert fill is None
 
     def test_fill_with_contract_dict_for_symbol(self) -> None:
         norm = ExecutionNormalizer()

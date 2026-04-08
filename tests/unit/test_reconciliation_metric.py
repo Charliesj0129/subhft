@@ -8,9 +8,10 @@ from hft_platform.risk.storm_guard import StormGuard
 
 
 class MockPosition:
-    def __init__(self, symbol: str, net_qty: int) -> None:
+    def __init__(self, symbol: str, net_qty: int, strategy_id: str = "default") -> None:
         self.symbol = symbol
         self.net_qty = net_qty
+        self.strategy_id = strategy_id
 
 
 @pytest.mark.asyncio

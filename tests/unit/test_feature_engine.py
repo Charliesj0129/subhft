@@ -3,7 +3,12 @@ import pytest
 
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData
 from hft_platform.feature.boundary import event_to_typed_frame, typed_frame_to_event
-from hft_platform.feature.engine import QUALITY_FLAG_OUT_OF_ORDER, QUALITY_FLAG_STATE_RESET, FeatureEngine, _LobKernelState
+from hft_platform.feature.engine import (
+    QUALITY_FLAG_OUT_OF_ORDER,
+    QUALITY_FLAG_STATE_RESET,
+    FeatureEngine,
+    _LobKernelState,
+)
 from hft_platform.feature.registry import (
     build_default_lob_feature_set_v1,
     build_default_lob_feature_set_v2,
@@ -750,7 +755,7 @@ class TestSymbolCardinalityGuard:
         assert result.seq == 3
 
     def test_cardinality_warning_logged(self):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         eng = FeatureEngine()
         eng._max_symbols = 0  # reject all new symbols
@@ -872,7 +877,7 @@ class TestLobKernelStateHasNan:
 
     def test_engine_resets_symbol_on_nan_in_new_field(self):
         """Integration: engine resets state when a previously-unguarded field goes NaN."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         eng = FeatureEngine()
         eng.process_lob_stats(_stats(), local_ts_ns=1)
@@ -902,7 +907,10 @@ def test_nan_guard_runs_on_rust_fused_path():
     ks.ofi_l1_ema8 = float("nan")
 
     # Patch at the class level and set the instance backend flag
-    fake_fused = (tuple([0] * 27), 0, 0)
+    # R8: NaN guard now checks fused output values directly, so inject NaN into the output tuple
+    nan_values = list([0] * 27)
+    nan_values[0] = float("nan")
+    fake_fused = (tuple(nan_values), 0, 0)
     mock_logger = MagicMock()
 
     with (

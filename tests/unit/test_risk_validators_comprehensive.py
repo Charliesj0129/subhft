@@ -92,6 +92,7 @@ class TestPriceBandValidator:
 
     def test_lob_band_within_passes(self):
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = (0, 0, 0, 10_000_000)
         v = self._make_validator(lob=lob)
         intent = make_intent(price=5_001_000)
@@ -101,6 +102,7 @@ class TestPriceBandValidator:
 
     def test_lob_band_outside_rejected(self):
         lob = MagicMock()
+        lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = (0, 0, 0, 10_000_000)
         v = self._make_validator(lob=lob)
         intent = make_intent(price=5_010_000)

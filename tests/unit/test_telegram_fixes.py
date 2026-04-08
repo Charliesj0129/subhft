@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Minimal aiohttp stub (same approach as test_telegram.py)
 # ---------------------------------------------------------------------------
@@ -60,6 +59,7 @@ def _make_update(
         "update_id": update_id,
         "message": {
             "from": {"id": from_id},
+            "chat": {"id": from_id},
             "text": text,
         },
     }
@@ -146,9 +146,7 @@ class TestT1SenderTimeout:
 
         assert result is True
         assert captured_timeout is not None, "timeout kwarg was not passed to session.post()"
-        assert captured_timeout.total == 10, (
-            f"Expected ClientTimeout(total=10), got total={captured_timeout.total}"
-        )
+        assert captured_timeout.total == 10, f"Expected ClientTimeout(total=10), got total={captured_timeout.total}"
 
     @pytest.mark.asyncio
     async def test_post_timeout_kwarg_present_on_failed_send(self):
