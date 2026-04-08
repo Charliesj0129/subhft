@@ -14,10 +14,15 @@ logger = structlog.get_logger("position_flattener")
 
 @dataclass(slots=True)
 class FlattenResult:
-    fully_closed: int = 0
+    submitted: int = 0
     partially_closed: int = 0
     failed: int = 0
     failed_symbols: list[str] = field(default_factory=list)
+
+    @property
+    def fully_closed(self) -> int:
+        """Backwards-compatible alias. Note: these are submitted, not confirmed fills."""
+        return self.submitted
 
 
 class PositionFlattener:
@@ -93,7 +98,7 @@ class PositionFlattener:
                 for symbol in symbols:
                     qty = positions.get(symbol, 0)
                     if qty == 0:
-                        result.fully_closed += 1
+                        result.submitted += 1
                         continue
 
                     close_side = Side.SELL if qty > 0 else Side.BUY
@@ -113,7 +118,7 @@ class PositionFlattener:
                             timestamp_ns=timebase.now_ns(),
                         )
                         await self._submit_intent(intent)
-                        result.fully_closed += 1
+                        result.submitted += 1
                     except Exception as e:
                         logger.error("flatten_symbol_failed", symbol=symbol, error=str(e))
                         # Retry once
@@ -128,7 +133,7 @@ class PositionFlattener:
         except TimeoutError:
             logger.error("flatten_timeout", deadline_s=self._flatten_deadline_s)
             # Count remaining unflatten symbols as failed
-            remaining = len(symbols) - result.fully_closed - result.partially_closed - result.failed
+            remaining = len(symbols) - result.submitted - result.partially_closed - result.failed
             result.failed += remaining
 
         return result

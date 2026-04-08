@@ -127,8 +127,8 @@ class BookState:
     def apply_update(self, bids: Union[np.ndarray, list], asks: Union[np.ndarray, list], exch_ts: int):
         """Atomic update (Snapshot style full-replace for Top-N streams)."""
         with self.lock:
-            if exch_ts < self.exch_ts:
-                # Late packet
+            if exch_ts > 0 and exch_ts < self.exch_ts:
+                # Late packet (skip guard when exch_ts=0 means "unavailable")
                 return
 
             if _FORCE_NUMPY and _RUST_ENABLED:
@@ -192,7 +192,7 @@ class BookState:
 
     def update_tick(self, price: int, volume: int, exch_ts: int):
         with self.lock:
-            if exch_ts < self.exch_ts:
+            if exch_ts > 0 and exch_ts < self.exch_ts:
                 return
 
             self.exch_ts = exch_ts
@@ -376,7 +376,7 @@ class BookState:
         imbalance: float,
     ) -> None:
         with self.lock:
-            if exch_ts < self.exch_ts:
+            if exch_ts > 0 and exch_ts < self.exch_ts:
                 return
 
             if _FORCE_NUMPY and _RUST_ENABLED:

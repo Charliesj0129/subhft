@@ -76,9 +76,9 @@ class ExecutionOptimizer:
         "_fill_score_threshold_x1000",
         "_limit_timeout_ns",
         "_enabled",
-        "_state",
-        "_pending_side",
-        "_pending_start_ns",
+        "_states",
+        "_pending_sides",
+        "_pending_start_times",
     )
 
     def __init__(
@@ -93,9 +93,9 @@ class ExecutionOptimizer:
         self._fill_score_threshold_x1000: int = int(fill_score_threshold * 1000)
         self._limit_timeout_ns: int = limit_timeout_ns
         self._enabled: bool = enabled
-        self._state: _OptimizerState = _OptimizerState.IDLE
-        self._pending_side: int = 0  # +1 = buy, -1 = sell
-        self._pending_start_ns: int = 0
+        self._states: dict[str, _OptimizerState] = {}
+        self._pending_sides: dict[str, int] = {}
+        self._pending_start_times: dict[str, int] = {}
 
     def decide(
         self,
@@ -107,6 +107,7 @@ class ExecutionOptimizer:
         ts_ns: int,
         urgent: bool = False,
         regime: Regime = Regime.NEUTRAL,
+        symbol: str = "",
     ) -> OrderType:
         """Decide whether to use LIMIT or MARKET order.
 
@@ -176,19 +177,21 @@ class ExecutionOptimizer:
             return OrderType.MARKET
 
         # All conditions met -> LIMIT
-        self._state = _OptimizerState.PENDING_LIMIT
-        self._pending_side = side
-        self._pending_start_ns = ts_ns
+        self._states[symbol] = _OptimizerState.PENDING_LIMIT
+        self._pending_sides[symbol] = side
+        self._pending_start_times[symbol] = ts_ns
 
         return OrderType.LIMIT
 
-    def check_timeout(self, ts_ns: int) -> bool:
+    def check_timeout(self, ts_ns: int, symbol: str = "") -> bool:
         """Check if pending limit order has timed out.
 
         Parameters
         ----------
         ts_ns : int
             Current timestamp in nanoseconds.
+        symbol : str
+            Symbol to check timeout for.
 
         Returns
         -------
@@ -196,38 +199,43 @@ class ExecutionOptimizer:
             True if the pending limit order should be cancelled
             and replaced with a market order.
         """
-        if self._state != _OptimizerState.PENDING_LIMIT:
+        if self._states.get(symbol, _OptimizerState.IDLE) != _OptimizerState.PENDING_LIMIT:
             return False
 
-        elapsed = ts_ns - self._pending_start_ns
+        elapsed = ts_ns - self._pending_start_times.get(symbol, 0)
         if elapsed >= self._limit_timeout_ns:
             logger.info(
                 "execution_optimizer.limit_timeout",
                 elapsed_ns=elapsed,
-                side=self._pending_side,
+                side=self._pending_sides.get(symbol, 0),
+                symbol=symbol,
             )
             return True
 
         return False
 
-    def on_fill(self) -> None:
-        """Called when pending limit order fills.  Resets state."""
-        self._state = _OptimizerState.IDLE
-        self._pending_side = 0
-        self._pending_start_ns = 0
+    def on_fill(self, symbol: str = "") -> None:
+        """Called when pending limit order fills.  Resets state for symbol."""
+        self._states.pop(symbol, None)
+        self._pending_sides.pop(symbol, None)
+        self._pending_start_times.pop(symbol, None)
 
-    def on_cancel(self) -> None:
-        """Called when pending limit order is cancelled.  Resets state."""
-        self._state = _OptimizerState.IDLE
-        self._pending_side = 0
-        self._pending_start_ns = 0
+    def on_cancel(self, symbol: str = "") -> None:
+        """Called when pending limit order is cancelled.  Resets state for symbol."""
+        self._states.pop(symbol, None)
+        self._pending_sides.pop(symbol, None)
+        self._pending_start_times.pop(symbol, None)
 
     # --- Properties ---
 
+    def is_pending_for(self, symbol: str = "") -> bool:
+        """True if a limit order decision is pending fill/cancel for symbol."""
+        return self._states.get(symbol, _OptimizerState.IDLE) == _OptimizerState.PENDING_LIMIT
+
     @property
     def is_pending(self) -> bool:
-        """True if a limit order decision is pending fill/cancel."""
-        return self._state == _OptimizerState.PENDING_LIMIT
+        """True if any symbol has a pending limit order."""
+        return any(s == _OptimizerState.PENDING_LIMIT for s in self._states.values())
 
     @property
     def enabled(self) -> bool:
@@ -237,4 +245,6 @@ class ExecutionOptimizer:
     def enabled(self, value: bool) -> None:
         self._enabled = value
         if not value:
-            self._state = _OptimizerState.IDLE
+            self._states.clear()
+            self._pending_sides.clear()
+            self._pending_start_times.clear()

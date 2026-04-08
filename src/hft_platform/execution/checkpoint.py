@@ -12,7 +12,7 @@ import asyncio
 import hashlib
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 from zoneinfo import ZoneInfo
 
@@ -44,6 +44,20 @@ except ImportError:
 
 logger = get_logger("execution.checkpoint")
 
+_TZ_TPE = ZoneInfo("Asia/Taipei")
+
+
+def _taifex_trading_date() -> str:
+    """Return TAIFEX trading date (YYYYMMDD).
+
+    Futures night session (15:00-05:00) belongs to the PREVIOUS calendar date.
+    If current Taipei time is between 00:00 and 05:00, use D-1.
+    """
+    now = datetime.now(tz=_TZ_TPE)
+    if now.hour < 5:
+        now = now - timedelta(days=1)
+    return now.strftime("%Y%m%d")
+
 
 class PositionCheckpointWriter:
     """Periodically serialize PositionStore to JSON with atomic write + SHA-256."""
@@ -69,9 +83,7 @@ class PositionCheckpointWriter:
             ".runtime/position_checkpoint.json",
         )
         self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60"))  # type: ignore[arg-type]
-        self._trading_date_provider: Callable[[], str] = trading_date_provider or (
-            lambda: datetime.now(tz=ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
-        )
+        self._trading_date_provider: Callable[[], str] = trading_date_provider or _taifex_trading_date
         self.running = False
 
     # ------------------------------------------------------------------

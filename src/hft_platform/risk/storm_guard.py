@@ -220,6 +220,8 @@ class StormGuard:
                     if self._de_escalate_count >= self._de_escalate_threshold:
                         old_for_log = self.state
                         self._de_escalate_count = 0
+                        # Reset storm entry timestamp so next STORM gets fresh cooldown
+                        self._storm_entry_ts = 0.0
                         _, fire_callback = self._transition(new_state, "Recovery")
                         logger.info(
                             "StormGuard de-escalated after hysteresis",

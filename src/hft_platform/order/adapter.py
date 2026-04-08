@@ -812,8 +812,10 @@ class OrderAdapter:
             ref_price = scale * 1000
 
         if close_side == Side.BUY:
-            return max(ref_price * 2, ref_price + scale)
-        return max(scale, ref_price // 2)
+            # Cap at +7% above reference to stay within exchange daily price limits (±10%).
+            # Previous 2x multiplier exceeded TAIFEX limits, causing HALT evacuation failure.
+            return max(ref_price + scale, int(ref_price * 1.07))
+        return max(scale, int(ref_price * 0.93))
 
     async def _dispatch_to_api(self, cmd: OrderCommand) -> None:
         intent = cmd.intent

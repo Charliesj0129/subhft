@@ -1191,6 +1191,16 @@ class MarketDataNormalizer:
                 self._skip_snapshot_missing_symbol.inc()
             return None
 
+        # Guard: broker SDK may return list-typed fields for multi-level snapshots
+        if isinstance(buy_price, (list, tuple)):
+            buy_price = buy_price[0] if buy_price else 0
+        if isinstance(sell_price, (list, tuple)):
+            sell_price = sell_price[0] if sell_price else 0
+        if isinstance(buy_volume, (list, tuple)):
+            buy_volume = buy_volume[0] if buy_volume else 0
+        if isinstance(sell_volume, (list, tuple)):
+            sell_volume = sell_volume[0] if sell_volume else 0
+
         exch_ts = _extract_ts_ns(ts_val)
 
         scale = self._get_scale(symbol)

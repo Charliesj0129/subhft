@@ -83,8 +83,13 @@ class _PyFastTickRingBuffer:
     ) -> None:
         # Skip redundant coercions — normalizer already guarantees correct types
         self.buffer[int(idx) % self.size] = (
-            symbol, price, volume, total_volume,
-            is_simtrade, is_odd_lot, exch_ts,
+            symbol,
+            price,
+            volume,
+            total_volume,
+            is_simtrade,
+            is_odd_lot,
+            exch_ts,
         )
 
     def get(self, idx: int) -> Any | None:
@@ -359,14 +364,9 @@ class RingBufferBus:
         cutoff = now - self._overflow_window_s
         while self._overflow_timestamps and self._overflow_timestamps[0] < cutoff:
             self._overflow_timestamps.popleft()
-        if (
-            len(self._overflow_timestamps) >= self._overflow_rate_threshold
-            and self._storm_guard is not None
-        ):
+        if len(self._overflow_timestamps) >= self._overflow_rate_threshold and self._storm_guard is not None:
             rate_count = len(self._overflow_timestamps)
-            self._storm_guard.trigger_halt(
-                f"EventBus overflow rate: {rate_count} in {self._overflow_window_s}s"
-            )
+            self._storm_guard.trigger_halt(f"EventBus overflow rate: {rate_count} in {self._overflow_window_s}s")
             logger.critical(
                 "StormGuard HALT triggered due to EventBus overflow rate",
                 overflow_rate=rate_count,
@@ -529,11 +529,11 @@ class RingBufferBus:
             self._use_typed_book_rings
             and self._lobstats_ring is not None
             and isinstance(event, tuple)
-            and len(event) == 9
+            and len(event) == 10
             and isinstance(event[0], str)
         ):
             try:
-                symbol, ts, mid_x2, spread, imbalance, best_bid, best_ask, bid_depth, ask_depth = event
+                _tag, symbol, ts, mid_x2, spread, imbalance, best_bid, best_ask, bid_depth, ask_depth = event
                 self._lobstats_ring.set_stats(
                     next_seq,
                     symbol,
