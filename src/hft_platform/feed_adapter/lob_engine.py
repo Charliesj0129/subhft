@@ -513,6 +513,13 @@ class LOBEngine:
         self._last_book = None
         logger.info("lob_books_reset", reason="reconnect")
 
+    def reset_books_for_symbols(self, symbols: set[str]) -> None:
+        for sym in symbols:
+            self.books.pop(sym, None)
+        if self._last_symbol in symbols:
+            self._last_symbol = None
+            self._last_book = None
+
     def evict_stale_symbols(self) -> int:
         """Remove symbols whose last exchange timestamp is older than TTL.
 

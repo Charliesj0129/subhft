@@ -385,6 +385,10 @@ class FeatureEngine:
         self._last_update_ns.clear()
         self._warmup_ready_symbols.clear()
 
+    def reset_symbols(self, symbols: set[str]) -> None:
+        for sym in symbols:
+            self.reset_symbol(sym)
+
     def get_feature(self, symbol: str, feature_id: str) -> int | float | None:
         state = self._states.get(str(symbol))
         if state is None:
