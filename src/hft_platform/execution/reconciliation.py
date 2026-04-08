@@ -162,6 +162,7 @@ class ReconciliationService:
                 await self.sync_portfolio()
                 # Reset on success (WU-04)
                 self._consecutive_failures = 0
+                self._halt_triggered = False
                 self._update_failure_gauge()
             except Exception as e:
                 self._consecutive_failures += 1

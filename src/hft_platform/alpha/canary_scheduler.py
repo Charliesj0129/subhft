@@ -103,6 +103,7 @@ class CanaryAutoScheduler:
             logger.warning("canary_auto_scheduler_already_running")
             return
         self._task = asyncio.ensure_future(self._run_loop())
+        self._task.add_done_callback(self._task_done_callback)
         logger.info(
             "canary_auto_scheduler_started",
             interval_s=self._interval,
@@ -115,6 +116,19 @@ class CanaryAutoScheduler:
             self._task.cancel()
         self._task = None
         logger.info("canary_auto_scheduler_stopped")
+
+    @staticmethod
+    def _task_done_callback(task: asyncio.Task[None]) -> None:
+        """Log if the background task finished with an unexpected exception."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "canary_auto_scheduler_task_died",
+                error=str(exc),
+                exc_type=type(exc).__name__,
+            )
 
     # ------------------------------------------------------------------
     # Internal loop

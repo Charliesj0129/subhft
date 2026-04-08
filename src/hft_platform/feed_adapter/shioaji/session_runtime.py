@@ -223,6 +223,7 @@ class SessionRuntime:
                                 logger.error("CA activation failed", error=str(exc))
                     c.logged_in = True
                     c._last_session_refresh_ts = timebase.now_s()
+                    c._release_session_lock()
                     return True
 
                 if attempt < attempts_total:

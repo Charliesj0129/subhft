@@ -215,6 +215,9 @@ def process_single_file(svc: Any, fpath: str, force: bool = False) -> bool:
 
     try:
         return _process_single_file_inner(svc, fpath, fname, force)
+    except ConnectionError:
+        logger.error("WAL file processing failed due to ClickHouse connection error", file=fname)
+        return False
     finally:
         svc._claim_registry.release_claim(fname)
 

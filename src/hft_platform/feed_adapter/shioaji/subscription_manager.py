@@ -221,6 +221,7 @@ class SubscriptionManager:
         c._last_resubscribe_ts = now  # type: ignore[attr-defined]
         c.subscribed_codes = set()
         c.subscribed_count = 0
+        failed: list[dict[str, Any]] = []
         for sym in c.symbols:
             if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                 logger.error("Subscription limit reached during resubscribe", limit=c.MAX_SUBSCRIPTIONS)
@@ -230,7 +231,17 @@ class SubscriptionManager:
                 if code:
                     c.subscribed_codes.add(code)
                 c.subscribed_count = len(c.subscribed_codes)
+            else:
+                failed.append(sym)
         c._refresh_quote_routes()
+        if failed:
+            c._failed_sub_symbols = failed
+            logger.warning(
+                "Resubscribe had failures, queuing retry",
+                count=len(failed),
+                codes=[s.get("code") for s in failed[:10]],
+            )
+            c._start_sub_retry_thread(c.tick_callback)
 
     def resubscribe(self) -> bool:
         """User-facing resubscribe with metrics tracking."""

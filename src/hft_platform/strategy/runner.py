@@ -419,11 +419,7 @@ class StrategyRunner:
 
             local_seq += 1
             # Read the event directly from the bus buffer (same logic as consume())
-            kind = (
-                self.bus._kind_ring[local_seq % size]
-                if self.bus._kind_ring is not None
-                else 0
-            )
+            kind = self.bus._kind_ring[local_seq % size] if self.bus._kind_ring is not None else 0
             if kind == 1 and self.bus._tick_ring is not None:
                 event = self.bus._tick_ring.get(local_seq)
             elif kind == 2 and self.bus._bidask_ring is not None:
@@ -768,6 +764,7 @@ class StrategyRunner:
             executors_iter = self._strat_executors
 
         # Use cached executors
+        _event_had_drops = False
         for strategy, ctx, lat_m, int_m, alpha_intent_m, alpha_flat_m, alpha_last_ts_g in executors_iter:
             if not strategy.enabled:
                 # S4: Check if halted strategy is eligible for cooldown recovery
@@ -823,7 +820,9 @@ class StrategyRunner:
                     self._timeout_consecutive[sid_for_timeout] = 0
                     if self.metrics:
                         try:
-                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid_for_timeout}").set(0)  # normal
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid_for_timeout}").set(
+                                0
+                            )  # normal
                         except Exception:  # noqa: BLE001
                             pass
                     logger.info("Strategy timeout circuit breaker recovered", id=sid_for_timeout)
@@ -957,7 +956,9 @@ class StrategyRunner:
             # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:
                 intents = StrategyRunner.filter_intents_by_phase(
-                    intents, self.track_gate, self.position_store,
+                    intents,
+                    self.track_gate,
+                    self.position_store,
                 )
 
             duration = time.perf_counter_ns() - start
@@ -989,7 +990,9 @@ class StrategyRunner:
                         if _cb_m is not None:
                             _cb_m.labels(strategy_name=_timeout_sid).inc()
                         try:
-                            self.metrics.circuit_breaker_state.labels(component=f"runner:{_timeout_sid}").set(2)  # halted
+                            self.metrics.circuit_breaker_state.labels(component=f"runner:{_timeout_sid}").set(
+                                2
+                            )  # halted
                         except Exception:  # noqa: BLE001
                             pass
                     logger.warning(
@@ -1079,7 +1082,11 @@ class StrategyRunner:
                 for intent in intents:
                     # Populate decision prices from LOB L1 data
                     if self._lob_l1_source is not None:
-                        _event_symbol = getattr(intent, "symbol", None) if isinstance(intent, OrderIntent) else (intent[3] if isinstance(intent, tuple) and len(intent) > 3 else None)
+                        _event_symbol = (
+                            getattr(intent, "symbol", None)
+                            if isinstance(intent, OrderIntent)
+                            else (intent[3] if isinstance(intent, tuple) and len(intent) > 3 else None)
+                        )
                         if _event_symbol:
                             _l1 = self._lob_l1_source(_event_symbol)
                             if _l1 is not None:
@@ -1088,7 +1095,11 @@ class StrategyRunner:
                                     if isinstance(intent, OrderIntent):
                                         intent.decision_mid = _mid  # deprecated: use decision_price
                                         intent.decision_price = _mid
-                                    elif isinstance(intent, tuple) and len(intent) >= 17 and intent[0] == "typed_intent_v1":
+                                    elif (
+                                        isinstance(intent, tuple)
+                                        and len(intent) >= 17
+                                        and intent[0] == "typed_intent_v1"
+                                    ):
                                         # Typed intent tuple: position 16 is decision_price
                                         intent = (*intent[:16], _mid)
 
@@ -1126,13 +1137,15 @@ class StrategyRunner:
                         )
                         if self._rejection_sink is not None:
                             try:
-                                self._rejection_sink.put_nowait(RiskFeedback(
-                                    intent_id=getattr(intent, "intent_id", 0),
-                                    strategy_id=getattr(intent, "strategy_id", ""),
-                                    symbol=getattr(intent, "symbol", ""),
-                                    reason_code="risk_queue_full",
-                                    timestamp_ns=timebase.now_ns(),
-                                ))
+                                self._rejection_sink.put_nowait(
+                                    RiskFeedback(
+                                        intent_id=getattr(intent, "intent_id", 0),
+                                        strategy_id=getattr(intent, "strategy_id", ""),
+                                        symbol=getattr(intent, "symbol", ""),
+                                        reason_code="risk_queue_full",
+                                        timestamp_ns=timebase.now_ns(),
+                                    )
+                                )
                             except asyncio.QueueFull:
                                 self.metrics.rejection_sink_overflow_total.inc()
                 if _d7_dropped > 0:
@@ -1147,16 +1160,19 @@ class StrategyRunner:
                         submitted=_d7_submitted,
                         dropped=_d7_dropped,
                     )
-                    # Gradual degradation: STORM first, HALT only after
-                    # consecutive failures exceed threshold.
-                    self._queue_full_consecutive += 1
-                    if self._storm_guard is not None:
-                        if self._queue_full_consecutive >= self._queue_full_halt_threshold:
-                            self._storm_guard.trigger_halt("risk_queue_full_persistent")
-                        else:
-                            self._storm_guard.trigger_storm("risk_queue_full")
+                    _event_had_drops = True
+
+        # Gradual degradation: track per-event (not per-strategy) to avoid
+        # non-dropping strategies resetting the counter mid-event.
+        if _event_had_drops:
+            self._queue_full_consecutive += 1
+            if self._storm_guard is not None:
+                if self._queue_full_consecutive >= self._queue_full_halt_threshold:
+                    self._storm_guard.trigger_halt("risk_queue_full_persistent")
                 else:
-                    self._queue_full_consecutive = 0
+                    self._storm_guard.trigger_storm("risk_queue_full")
+        else:
+            self._queue_full_consecutive = 0
 
     @staticmethod
     def filter_intents_by_phase(intents: list, track_gate: Any, position_store: Any = None) -> list:
@@ -1213,6 +1229,9 @@ class StrategyRunner:
             logger.debug("trace_emit_failed", error=str(exc))
             return
 
+    # Tuple timestamp index by tag for _extract_event_trace
+    _TUPLE_TS_INDEX: dict[str, int] = {"tick": 7, "bidask": 4, "lobstats": 2}
+
     def _extract_event_trace(self, event: Any) -> tuple[int, str]:
         source_ts_ns = 0
         trace_id = ""
@@ -1223,6 +1242,13 @@ class StrategyRunner:
             topic = getattr(meta, "topic", "event")
             if seq is not None:
                 trace_id = f"{topic}:{seq}"
+        elif isinstance(event, tuple) and len(event) > 2 and isinstance(event[0], str):
+            ts_idx = self._TUPLE_TS_INDEX.get(event[0])
+            if ts_idx is not None and len(event) > ts_idx:
+                try:
+                    source_ts_ns = int(event[ts_idx] or 0)
+                except (TypeError, ValueError):
+                    source_ts_ns = 0
         elif hasattr(event, "ts"):
             try:
                 source_ts_ns = int(getattr(event, "ts") or 0)

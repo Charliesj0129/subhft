@@ -143,7 +143,7 @@ class ExposureStore:
             ExposureLimitError: if a new symbol entry cannot be admitted even
                 after zero-balance eviction (CE2-12 memory bound).
         """
-        if intent.intent_type in (IntentType.CANCEL, IntentType.AMEND):
+        if intent.intent_type in (IntentType.CANCEL, IntentType.AMEND, IntentType.FORCE_FLAT):
             return True, "OK"
 
         # Notional = price * qty  (both already scaled integers)
@@ -217,7 +217,7 @@ class ExposureStore:
                 return False, reason
             return True, "OK"
 
-        if int(intent_type) in (int(IntentType.CANCEL), int(IntentType.AMEND)):
+        if int(intent_type) in (int(IntentType.CANCEL), int(IntentType.AMEND), int(IntentType.FORCE_FLAT)):
             return True, "OK"
 
         notional = int(price) * int(qty)

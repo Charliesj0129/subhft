@@ -289,7 +289,7 @@ class GatewayService:
             strategy_id=intent.strategy_id,
             symbol=intent.symbol,
         )
-        if intent_type_value != int(IntentType.CANCEL):
+        if intent_type_value not in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
             try:
                 if is_typed_view and hasattr(self._exposure, "check_and_update_typed"):
                     exp_ok, exp_reason = self._exposure.check_and_update_typed(

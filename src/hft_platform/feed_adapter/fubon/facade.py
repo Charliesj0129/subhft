@@ -296,10 +296,10 @@ class FubonClientFacade:
     def update_order(
         self,
         trade: Any,
-        price: float | None = None,
+        price: int | None = None,
         qty: int | None = None,
     ) -> Any:
-        return self._order_gateway.update_order(trade, price=int(price) if price is not None else None, qty=qty)
+        return self._order_gateway.update_order(trade, price=price, qty=qty)
 
     # ------------------------------------------------------------------ #
     # Account
