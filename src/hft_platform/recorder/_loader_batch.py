@@ -9,6 +9,14 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from hft_platform.recorder._loader_common import (
+    _TS_MAX_FUTURE_NS,
+    _dumps,
+    _to_scaled,
+    logger,
+    timebase,
+)
+
 _EPOCH = date(1970, 1, 1)
 
 
@@ -23,13 +31,6 @@ def _to_date(value: object) -> date:
             pass
     return _EPOCH
 
-from hft_platform.recorder._loader_common import (
-    _TS_MAX_FUTURE_NS,
-    _dumps,
-    _to_scaled,
-    logger,
-    timebase,
-)
 
 # ---------------------------------------------------------------------------
 # market_data
@@ -184,14 +185,14 @@ _ORDERS_COLS: list[str] = [
     "order_id",
     "strategy_id",
     "symbol",
-    "exchange",
     "side",
     "price_scaled",
     "qty",
-    "order_type",
     "status",
-    "exch_ts",
     "ingest_ts",
+    "latency_us",
+    "instrument_type",
+    "oc_type",
 ]
 
 
@@ -206,21 +207,20 @@ def format_orders(
             price_float = r.get("price")
             price = _to_scaled(price_float) if price_float is not None else 0
 
-        exch_ts = int(r.get("exch_ts") or r.get("ts") or r.get("timestamp") or 0)
         ingest_ts = int(r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
 
         row_data = [
             str(r.get("order_id", "")),
             str(r.get("strategy_id", "")),
             str(r.get("symbol", "")),
-            str(r.get("exchange", r.get("exch", ""))),
             str(r.get("side", r.get("action", ""))),
             int(price),
             int(r.get("qty", r.get("quantity", 0)) or 0),
-            str(r.get("order_type", r.get("type", ""))),
             str(r.get("status", "")),
-            exch_ts,
             ingest_ts,
+            int(r.get("latency_us", 0) or 0),
+            str(r.get("instrument_type", "")),
+            str(r.get("oc_type", "")),
         ]
         data.append(row_data)
 
@@ -291,7 +291,11 @@ _FILLS_COLS: list[str] = [
     "price_scaled",
     "fee_scaled",
     "tax_scaled",
+    "decision_price",
+    "arrival_price",
     "source",
+    "instrument_type",
+    "oc_type",
 ]
 
 
@@ -306,12 +310,8 @@ def format_fills(
             price_float = r.get("price")
             price = _to_scaled(price_float) if price_float is not None else 0
 
-        ts_exchange = int(
-            r.get("ts_exchange") or r.get("match_ts") or r.get("exch_ts") or r.get("ts") or 0
-        )
-        ts_local = int(
-            r.get("ts_local") or r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns()
-        )
+        ts_exchange = int(r.get("ts_exchange") or r.get("match_ts") or r.get("exch_ts") or r.get("ts") or 0)
+        ts_local = int(r.get("ts_local") or r.get("ingest_ts") or r.get("recv_ts") or timebase.now_ns())
 
         row_data = [
             ts_exchange,
@@ -326,7 +326,11 @@ def format_fills(
             int(price),
             int(r.get("fee_scaled", 0) or 0),
             int(r.get("tax_scaled", 0) or 0),
+            int(r.get("decision_price", 0) or 0),
+            int(r.get("arrival_price", 0) or 0),
             str(r.get("source", "")),
+            str(r.get("instrument_type", "")),
+            str(r.get("oc_type", "")),
         ]
         data.append(row_data)
 

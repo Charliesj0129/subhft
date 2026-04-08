@@ -56,12 +56,14 @@ class TestQuoteConnectionPoolValidation:
 
     def test_rejects_too_many_connections(self, tmp_path):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
         sym_path = self._make_symbols_yaml([], tmp_path)
         with pytest.raises(ValueError, match="exceeds Shioaji limit of 5"):
             QuoteConnectionPool(sym_path, {}, num_conns=5)
 
     def test_rejects_group_exceeding_200(self, tmp_path):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
         symbols = [{"code": f"SYM{i}", "exchange": "TSE", "group": 0} for i in range(201)]
         sym_path = self._make_symbols_yaml(symbols, tmp_path)
         with pytest.raises(ValueError, match="Group 0 has 201 symbols"):
@@ -69,6 +71,7 @@ class TestQuoteConnectionPoolValidation:
 
     def test_rejects_group_out_of_range(self, tmp_path):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
         symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 3}]
         sym_path = self._make_symbols_yaml(symbols, tmp_path)
         with pytest.raises(ValueError, match="group=3 but only 2 connections"):
@@ -76,6 +79,7 @@ class TestQuoteConnectionPoolValidation:
 
     def test_default_group_zero_when_omitted(self, tmp_path):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
         symbols = [{"code": "TXFC0", "exchange": "TAIFEX"}]
         sym_path = self._make_symbols_yaml(symbols, tmp_path)
         pool = QuoteConnectionPool(sym_path, {}, num_conns=1)
@@ -83,6 +87,7 @@ class TestQuoteConnectionPoolValidation:
 
     def test_shard_files_created(self, tmp_path):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
         symbols = [
             {"code": "TXFC0", "exchange": "TAIFEX", "group": 0},
             {"code": "2330", "exchange": "TSE", "group": 1},
@@ -102,6 +107,7 @@ class TestQuoteConnectionPoolLifecycle:
 
     def _make_pool_with_symbols(self, tmp_path, symbols, num_conns):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
         sym_path = tmp_path / "symbols.yaml"
         sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
         return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
@@ -112,9 +118,7 @@ class TestQuoteConnectionPoolLifecycle:
             {"code": "2330", "exchange": "TSE", "group": 1},
         ]
         pool = self._make_pool_with_symbols(tmp_path, symbols, 2)
-        with mock.patch(
-            "hft_platform.feed_adapter.shioaji.quote_connection_pool.ShioajiClientFacade"
-        ) as MockFacade:
+        with mock.patch("hft_platform.feed_adapter.shioaji.quote_connection_pool.ShioajiClientFacade") as MockFacade:
             MockFacade.return_value = mock.MagicMock()
             pool.create_facades()
             assert MockFacade.call_count == 2
@@ -123,9 +127,7 @@ class TestQuoteConnectionPoolLifecycle:
     def test_create_facades_injects_lock_suffix(self, tmp_path):
         symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
         pool = self._make_pool_with_symbols(tmp_path, symbols, 1)
-        with mock.patch(
-            "hft_platform.feed_adapter.shioaji.quote_connection_pool.ShioajiClientFacade"
-        ) as MockFacade:
+        with mock.patch("hft_platform.feed_adapter.shioaji.quote_connection_pool.ShioajiClientFacade") as MockFacade:
             MockFacade.return_value = mock.MagicMock()
             pool.create_facades()
             call_kwargs = MockFacade.call_args_list[0][1]
@@ -202,6 +204,7 @@ class TestQuoteConnectionPoolProperties:
 
     def _make_pool(self, tmp_path, num_conns=2):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
         symbols = [
             {"code": "TXFC0", "exchange": "TAIFEX", "group": 0},
             {"code": "2330", "exchange": "TSE", "group": 1},
@@ -303,11 +306,20 @@ class TestQuoteConnectionPoolDuckTypeMethods:
         return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
 
     def test_reconnect_delegates_to_all_facades(self, tmp_path):
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
+
         pool = self._make_pool(tmp_path)
         f0, f1 = mock.MagicMock(), mock.MagicMock()
         f0.reconnect.return_value = True
         f1.reconnect.return_value = True
         pool._clients = [f0, f1]
+        # H9 fix: reconnect() targets slots, not _clients directly.
+        # Create slots in CONNECTED state; force=True overrides the state filter.
+        slot0 = FacadeSlot(conn_id="0", facade=f0)
+        slot0.state = FacadeState.CONNECTED
+        slot1 = FacadeSlot(conn_id="1", facade=f1)
+        slot1.state = FacadeState.CONNECTED
+        pool._slots = [slot0, slot1]
 
         result = pool.reconnect(reason="test", force=True)
         assert result is True
@@ -315,20 +327,36 @@ class TestQuoteConnectionPoolDuckTypeMethods:
         f1.reconnect.assert_called_once_with(reason="test", force=True)
 
     def test_reconnect_returns_false_on_partial_failure(self, tmp_path):
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
+
         pool = self._make_pool(tmp_path)
         f0, f1 = mock.MagicMock(), mock.MagicMock()
-        f0.reconnect.return_value = True
+        f0.reconnect.return_value = False
         f1.reconnect.return_value = False
         pool._clients = [f0, f1]
+        # H9 fix: slots must be non-CONNECTED so they are targeted without force=True.
+        # reconnect() returns True only if at least one facade succeeds (any_ok).
+        # With all facades failing, any_ok stays False.
+        slot0 = FacadeSlot(conn_id="0", facade=f0)
+        slot0.state = FacadeState.RECOVERING
+        slot1 = FacadeSlot(conn_id="1", facade=f1)
+        slot1.state = FacadeState.RECOVERING
+        pool._slots = [slot0, slot1]
 
         result = pool.reconnect()
         assert result is False
 
     def test_reconnect_handles_exception(self, tmp_path):
+        from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
+
         pool = self._make_pool(tmp_path)
         f0 = mock.MagicMock()
         f0.reconnect.side_effect = RuntimeError("conn lost")
         pool._clients = [f0]
+        # H9 fix: slot must be non-CONNECTED to be targeted by reconnect().
+        slot0 = FacadeSlot(conn_id="0", facade=f0)
+        slot0.state = FacadeState.RECOVERING
+        pool._slots = [slot0]
 
         result = pool.reconnect()
         assert result is False
@@ -395,7 +423,8 @@ class TestQuoteConnectionPoolDuckTypeMethods:
         f0.reload_symbols.side_effect = RuntimeError("fail")
         pool._clients = [f0]
 
-        pool.reload_symbols()  # should not raise
+        assert pool.reload_symbols() is None
+        f0.reload_symbols.assert_called_once()
 
     def test_validate_symbols_merges_all_connections(self, tmp_path):
         pool = self._make_pool(tmp_path)
@@ -425,6 +454,7 @@ class TestQuoteConnectionPoolThreadSafety:
 
     def _make_pool_with_symbols(self, tmp_path, symbols, num_conns):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
         sym_path = tmp_path / "symbols.yaml"
         sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
         return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
@@ -432,6 +462,7 @@ class TestQuoteConnectionPoolThreadSafety:
     def test_refresh_lock_initialized(self, tmp_path):
         """_refresh_lock must be a real threading.Lock, not None."""
         import threading
+
         symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
         pool = self._make_pool_with_symbols(tmp_path, symbols, 1)
         assert isinstance(pool._refresh_lock, type(threading.Lock()))
@@ -448,6 +479,7 @@ class TestQuoteConnectionPoolThreadSafety:
     def test_stop_options_refresh_joins_thread(self, tmp_path):
         """stop_options_refresh() must call join() on the saved thread reference."""
         import threading
+
         symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
         pool = self._make_pool_with_symbols(tmp_path, symbols, 1)
         pool._options_refresh_running = True

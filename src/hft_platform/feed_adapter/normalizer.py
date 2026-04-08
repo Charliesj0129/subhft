@@ -691,6 +691,11 @@ class MarketDataNormalizer:
             else:
                 price = 0
 
+            if price <= 0:
+                if self._skip_tick_negative_price:
+                    self._skip_tick_negative_price.inc()
+                return None
+
             volume = int(vol_val) if vol_val is not None else 0
 
             if _RETURN_TUPLE:

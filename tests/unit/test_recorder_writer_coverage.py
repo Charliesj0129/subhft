@@ -7,12 +7,11 @@ _sanitize_timestamps, _sanitize_columnar, heartbeat, shutdown, get_status.
 
 import asyncio
 import warnings
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from hft_platform.recorder.writer import DataWriter
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -506,9 +505,7 @@ def test_get_wal_batch_writer_returns_none_when_disabled(writer):
 def test_get_wal_batch_writer_lazy_init_when_enabled(writer):
     writer._wal_batch_enabled = True
     bw = writer._get_wal_batch_writer()
-    # May return None if WALBatchWriter is not available, that's OK
-    # Just verify it doesn't raise
-    assert bw is None or bw is not None
+    assert writer._get_wal_batch_writer() is bw
 
 
 # ---------------------------------------------------------------------------
@@ -554,14 +551,17 @@ async def test_write_falls_back_to_wal_when_not_connected(writer):
 
 @pytest.mark.asyncio
 async def test_write_logs_data_loss_when_both_ch_and_wal_fail(connected_writer):
+    from hft_platform.recorder.writer import WriterDoubleFaultError
+
     mock_wal = AsyncMock(return_value=False)
     connected_writer.wal.write = mock_wal
     connected_writer._wal_batch_enabled = False
 
     loop = asyncio.get_event_loop()
     with patch.object(loop, "run_in_executor", new=AsyncMock(side_effect=RuntimeError("ch fail"))):
-        # Should not raise even on dual failure
-        await connected_writer.write("t", [{"exch_ts": 100}])
+        # WriterDoubleFaultError is raised when both CH and WAL fail
+        with pytest.raises(WriterDoubleFaultError):
+            await connected_writer.write("t", [{"exch_ts": 100}])
 
     mock_wal.assert_called_once()
 
@@ -667,6 +667,8 @@ async def test_write_health_tracker_notified_on_ch_error(connected_writer):
 
 @pytest.mark.asyncio
 async def test_write_health_tracker_notified_on_data_loss(connected_writer):
+    from hft_platform.recorder.writer import WriterDoubleFaultError
+
     tracker = MagicMock()
     connected_writer.set_health_tracker(tracker)
     connected_writer._wal_batch_enabled = False
@@ -675,7 +677,9 @@ async def test_write_health_tracker_notified_on_data_loss(connected_writer):
 
     loop = asyncio.get_event_loop()
     with patch.object(loop, "run_in_executor", new=AsyncMock(side_effect=RuntimeError("fail"))):
-        await connected_writer.write("t", [{"exch_ts": 100}])
+        # WriterDoubleFaultError is raised after data_loss is recorded on health tracker
+        with pytest.raises(WriterDoubleFaultError):
+            await connected_writer.write("t", [{"exch_ts": 100}])
 
     tracker.record_event.assert_any_call("data_loss", table="t", count=1)
 

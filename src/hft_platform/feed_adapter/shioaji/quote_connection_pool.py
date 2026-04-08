@@ -97,6 +97,7 @@ class QuoteConnectionPool:
         "_degraded_threshold_s",
         "_reconnect_trigger_s",
         "_per_facade_timeout_s",
+        "_user_callback",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -121,6 +122,7 @@ class QuoteConnectionPool:
         self._feature_engine: Any = None
         self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "3"))
         self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
+        self._user_callback: Callable[..., Any] | None = None
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
 
         with open(symbols_path, "r") as f:
@@ -234,6 +236,7 @@ class QuoteConnectionPool:
         on every market data event, enabling per-facade feed-gap detection.
         After successful subscription, transitions slot from RECOVERING to CONNECTED.
         """
+        self._user_callback = cb
         for i, facade in enumerate(self._clients):
             log = logger.bind(conn_id=i)
             if not facade.logged_in:
@@ -577,6 +580,10 @@ class QuoteConnectionPool:
     def refresh_options_symbols(self, cb: Callable[..., Any] | None = None) -> bool:
         """Regenerate the options YAML if the nearest TXO expiry has changed.
 
+        Uses ``self._user_callback`` (set by ``subscribe_all``) for resubscription.
+        The ``cb`` parameter is accepted for backward compatibility but ignored
+        in favor of the instance-level callback to avoid stale closure captures.
+
         Reads from contract cache first (no API call needed), falls back
         to live API.  Uses ``reference`` price to compute ATM and filters
         strikes to ATM ± ``HFT_OPTIONS_STRIKE_RANGE`` (default: all).
@@ -701,13 +708,14 @@ class QuoteConnectionPool:
                     self._slots[group_id].symbols = new_codes
 
             # Reload config and resubscribe each connection (with callback wrapper)
+            active_cb = self._user_callback
             resubscribed = 0
             for i, facade in enumerate(self._clients):
                 try:
                     facade._client._load_config()
-                    if facade.logged_in and cb is not None:
+                    if facade.logged_in and active_cb is not None:
                         slot = self._slots[i] if i < len(self._slots) else None
-                        wrapped_cb = self._make_callback_wrapper(slot, cb) if slot is not None else cb
+                        wrapped_cb = self._make_callback_wrapper(slot, active_cb) if slot is not None else active_cb
                         facade.subscribe_basket(wrapped_cb)
                         if slot is not None:
                             slot.last_data_mono = time.monotonic()
@@ -747,7 +755,7 @@ class QuoteConnectionPool:
             if self._refresh_stop_event.wait(timeout=30):
                 return  # stop requested during initial wait
             try:
-                self.refresh_options_symbols(cb)
+                self.refresh_options_symbols()
             except Exception as exc:
                 logger.warning("options_refresh_initial_failed", error=str(exc))
 
@@ -759,7 +767,7 @@ class QuoteConnectionPool:
                     break
                 if time.monotonic() >= next_check:
                     try:
-                        self.refresh_options_symbols(cb)
+                        self.refresh_options_symbols()
                     except Exception as exc:
                         logger.warning("options_refresh_failed", error=str(exc))
                     next_check = time.monotonic() + interval_s

@@ -638,6 +638,7 @@ class Batcher:
                 wal_ok = self._wal_emergency_dump(flush_buf)
                 if not wal_ok:
                     await self._reinject_failed_buffer(flush_buf)
+                    flush_buf.clear()  # Release standby reference to prevent memory leak
                     return
             except ConnectionError as e:
                 logger.error(
@@ -649,6 +650,7 @@ class Batcher:
                 wal_ok = self._wal_emergency_dump(flush_buf)
                 if not wal_ok:
                     await self._reinject_failed_buffer(flush_buf)
+                    flush_buf.clear()
                     return
             except Exception as e:
                 logger.error(
@@ -661,6 +663,7 @@ class Batcher:
                 wal_ok = self._wal_emergency_dump(flush_buf)
                 if not wal_ok:
                     await self._reinject_failed_buffer(flush_buf)
+                    flush_buf.clear()
                     return
         # Successful write (or WAL fallback succeeded) — reset reinject counter
         self._reinject_consecutive_failures = 0

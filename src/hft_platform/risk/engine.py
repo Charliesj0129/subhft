@@ -547,7 +547,8 @@ class RiskEngine:
                         )
                     except asyncio.QueueFull:
                         self.metrics.rejection_sink_overflow_total.inc()
-                self.intent_queue.task_done()
+                if intent_dequeued:
+                    self.intent_queue.task_done()
 
     def _revalidate_for_dlq(self, cmd: OrderCommand) -> bool:
         """Full risk re-validation for DLQ replay.

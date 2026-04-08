@@ -551,8 +551,10 @@ class HFTSystem:
                         any_open = any(p in _ACTIVE_PHASES for p in phases.values())
                         self.storm_guard.set_session_active(any_open)
 
-                # 4. Update StormGuard state (convert drawdown % to bps at boundary)
-                drawdown_bps = int(drawdown_pct * 10_000)
+                # 4. Update StormGuard state (convert drawdown % to negative bps at boundary)
+                # StormGuard thresholds are negative (e.g., -200 for 2% drawdown).
+                # get_drawdown_pct() returns positive fraction → negate here.
+                drawdown_bps = -int(drawdown_pct * 10_000)
                 self.storm_guard.update(
                     drawdown_bps=drawdown_bps,
                     latency_us=latency_us,

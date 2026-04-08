@@ -39,12 +39,11 @@ def test_normalize_tick_success(normalizer):
 
 
 def test_normalize_tick_missing_fields(normalizer):
-    # Minimum payload
+    # Minimum payload without close field — treated as zero/missing price, returns None (H4 fix)
     payload = {"code": "2330"}
     event = normalizer.normalize_tick(payload)
 
-    assert event.symbol == "2330"
-    assert event.price == 0
+    assert event is None
 
 
 def test_normalize_tick_invalid_symbol(normalizer):
@@ -64,12 +63,12 @@ def test_normalize_tick_string_values(normalizer):
 @pytest.mark.parametrize(
     "price_float,expected_scaled",
     [
-        (100.15, 1001500),   # IEEE 754: float(100.15)*10000 = 1001499.999...
-        (100.05, 1000500),   # float(100.05)*10000 = 1000499.999...
-        (99.95, 999500),     # float(99.95)*10000  = 999499.999...
-        (0.1, 1000),         # float(0.1)*10000 = 999.999...
-        (100.0, 1000000),    # exact
-        (500.5, 5005000),    # exact
+        (100.15, 1001500),  # IEEE 754: float(100.15)*10000 = 1001499.999...
+        (100.05, 1000500),  # float(100.05)*10000 = 1000499.999...
+        (99.95, 999500),  # float(99.95)*10000  = 999499.999...
+        (0.1, 1000),  # float(0.1)*10000 = 999.999...
+        (100.0, 1000000),  # exact
+        (500.5, 5005000),  # exact
     ],
 )
 def test_normalize_tick_ieee754_precision(normalizer, price_float, expected_scaled):

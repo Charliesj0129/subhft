@@ -537,15 +537,25 @@ class RecorderService:
             while not self.queue.empty():
                 try:
                     item = self.queue.get_nowait()
-                    topic = item.get("topic")
-                    data = item.get("data")
-                    if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
-                        rows = [data] if not isinstance(data, list) else data
-                        await self._wal_first_writer.write(topic, rows)
-                        drained += 1
-                    elif topic in self.batchers:
-                        await self.batchers[topic].add(data)
-                        drained += 1
+                    try:
+                        topic = item.get("topic") if isinstance(item, dict) else None
+                        data = item.get("data") if isinstance(item, dict) else None
+                        if topic is None:
+                            self.queue.task_done()
+                            continue
+                        if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
+                            rows = [data] if not isinstance(data, list) else data
+                            await self._wal_first_writer.write(topic, rows)
+                            drained += 1
+                        elif topic in self.batchers:
+                            await self.batchers[topic].add(data)
+                            drained += 1
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(
+                            "recorder_shutdown_drain_item_error",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
                     self.queue.task_done()
                 except asyncio.QueueEmpty:
                     break

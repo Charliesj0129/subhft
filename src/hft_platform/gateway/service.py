@@ -442,7 +442,20 @@ class GatewayService:
                     else:
                         self._exposure.release_exposure(exp_key, intent)
             else:
-                # Step 7: Commit dedup as approved only after successful dispatch
+                # Step 7: Release exposure after successful dispatch (pre-trade
+                # check served its purpose; gateway does not receive fill events,
+                # so holding exposure post-dispatch is a leak — H1 fix).
+                if intent_type_value != int(IntentType.CANCEL):
+                    if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
+                        self._exposure.release_exposure_typed(
+                            exp_key,
+                            intent_type=intent_type_value,
+                            price=int(intent.price),
+                            qty=int(intent.qty),
+                        )
+                    else:
+                        self._exposure.release_exposure(exp_key, intent)
+                # Commit dedup as approved only after successful dispatch
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):
                     self._dedup.commit_typed(key, True, "OK", cmd_id_for_commit)
                 else:

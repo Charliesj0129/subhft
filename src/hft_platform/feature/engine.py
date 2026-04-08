@@ -373,6 +373,7 @@ class FeatureEngine:
                     reset()
             except Exception as _exc:  # noqa: BLE001
                 pass
+        self._event_cache.pop(symbol, None)
         self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
 
     def reset_all(self) -> None:
@@ -384,6 +385,7 @@ class FeatureEngine:
         self._rust_pipelines.clear()
         self._last_update_ns.clear()
         self._warmup_ready_symbols.clear()
+        self._event_cache.clear()
 
     def reset_symbols(self, symbols: set[str]) -> None:
         for sym in symbols:
@@ -926,7 +928,8 @@ class FeatureEngine:
 
         ks = self._lob_kernel_states.get(symbol)
         if ks is None:
-            return
+            ks = _LobKernelState()
+            self._lob_kernel_states[symbol] = ks
 
         # EMA alpha for ~50 tick window
         alpha = 0.04  # 2/(50+1) ≈ 0.039

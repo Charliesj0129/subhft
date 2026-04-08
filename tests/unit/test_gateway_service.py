@@ -206,21 +206,20 @@ async def test_order_queue_full_rejects_and_commits_dedup():
 
 @pytest.mark.asyncio
 async def test_exposure_symbol_limit_commits_dedup():
-    """D2: ExposureLimitError is caught and dedup records EXPOSURE_SYMBOL_LIMIT."""
+    """D2: ExposureLimitError is caught and dedup records EXPOSURE_SYMBOL_LIMIT.
+
+    H1 fix: exposure is released after successful dispatch, so zero-balance entries
+    are evicted by _evict_zeroes(). To reliably trigger ExposureLimitError we
+    pre-populate the ExposureStore with a non-zero notional entry that cannot be
+    evicted, consuming the single available symbol slot before svc2 runs.
+    """
     exposure = ExposureStore(max_symbols=1)
-    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
-    svc, api_queue = _make_service(channel=ch, exposure_store=exposure)
 
-    # First symbol fills the one slot
-    ch.submit_nowait(_make_intent(1, "k1", symbol="TSE:SYM_A"))
-    task = asyncio.create_task(svc.run())
-    await asyncio.sleep(0.05)
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
-
-    # First intent should have dispatched successfully
-    assert svc._dispatched == 1
+    # Directly inject a non-zero entry so eviction cannot free the slot
+    with exposure._lock:
+        exposure._exposure.setdefault("", {}).setdefault("s1", {})["TSE:SYM_A"] = 1_000_000
+        exposure._symbol_count = 1
+        exposure._global_notional = 1_000_000
 
     # Second intent with a new symbol should hit ExposureLimitError
     ch2 = LocalIntentChannel(maxsize=64, ttl_ms=0)
@@ -344,6 +343,7 @@ async def test_service_typed_intent_path_uses_typed_adapter_submit_when_availabl
 
 
 # ── P1-A: set_halt / set_normal delegation ───────────────────────────────────
+
 
 def test_set_halt_transitions_policy_to_halt():
     """GatewayService.set_halt() must delegate to policy and set mode to HALT."""
