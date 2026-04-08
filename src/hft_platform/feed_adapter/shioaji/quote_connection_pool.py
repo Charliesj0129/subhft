@@ -12,11 +12,16 @@ import shutil
 import tempfile
 import threading
 import time
-from pathlib import Path
 from typing import Any, Callable
 
 import yaml
 from structlog import get_logger
+
+from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
+from hft_platform.feed_adapter.shioaji.pool_health import (
+    check_facade_health,
+    get_healthy_feed_gap_s,
+)
 
 try:
     from prometheus_client import Gauge
@@ -33,10 +38,11 @@ logger = get_logger("feed_adapter.quote_connection_pool")
 _METRIC_SUBSCRIBED = None
 _METRIC_LOGGED_IN = None
 _METRIC_LAST_DATA_AGE = None
+_METRIC_CONN_STATE = None
 
 
 def _ensure_metrics() -> None:
-    global _METRIC_SUBSCRIBED, _METRIC_LOGGED_IN, _METRIC_LAST_DATA_AGE
+    global _METRIC_SUBSCRIBED, _METRIC_LOGGED_IN, _METRIC_LAST_DATA_AGE, _METRIC_CONN_STATE
     if Gauge is None or _METRIC_SUBSCRIBED is not None:
         return
     _METRIC_SUBSCRIBED = Gauge(
@@ -52,6 +58,11 @@ def _ensure_metrics() -> None:
     _METRIC_LAST_DATA_AGE = Gauge(
         "hft_quote_conn_last_data_age_s",
         "Seconds since last quote data per connection",
+        ["conn_id"],
+    )
+    _METRIC_CONN_STATE = Gauge(
+        "hft_quote_conn_state",
+        "Connection state per quote connection (0=connected, 1=degraded, 2=recovering, 3=disconnected)",
         ["conn_id"],
     )
 
@@ -80,6 +91,12 @@ class QuoteConnectionPool:
         "_refresh_lock",
         "_refresh_thread",
         "_refresh_stop_event",
+        "_slots",
+        "_lob",
+        "_feature_engine",
+        "_degraded_threshold_s",
+        "_reconnect_trigger_s",
+        "_per_facade_timeout_s",
     )
 
     def __init__(self, symbols_path: str, shioaji_cfg: dict[str, Any], num_conns: int) -> None:
@@ -89,9 +106,7 @@ class QuoteConnectionPool:
                 f"exceeds Shioaji limit of {_SHIOAJI_MAX_CONNECTIONS}"
             )
         if num_conns > _MAX_QUOTE_CONNECTIONS:
-            raise ValueError(
-                f"num_conns={num_conns} exceeds max quote connections {_MAX_QUOTE_CONNECTIONS}"
-            )
+            raise ValueError(f"num_conns={num_conns} exceeds max quote connections {_MAX_QUOTE_CONNECTIONS}")
 
         self._num_conns = num_conns
         self._config = shioaji_cfg
@@ -101,6 +116,12 @@ class QuoteConnectionPool:
         self._refresh_lock: threading.Lock = threading.Lock()
         self._refresh_thread: threading.Thread | None = None
         self._refresh_stop_event: threading.Event = threading.Event()
+        self._slots: list[FacadeSlot] = []
+        self._lob: Any = None
+        self._feature_engine: Any = None
+        self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "3"))
+        self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
+        self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
 
         with open(symbols_path, "r") as f:
             data = yaml.safe_load(f) or {}
@@ -118,9 +139,7 @@ class QuoteConnectionPool:
 
         for g, syms in groups.items():
             if len(syms) > _MAX_SUBSCRIPTIONS_PER_CONN:
-                raise ValueError(
-                    f"Group {g} has {len(syms)} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN} limit"
-                )
+                raise ValueError(f"Group {g} has {len(syms)} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN} limit")
             if not syms:
                 logger.warning("Empty symbol group", group=g, num_conns=num_conns)
 
@@ -151,8 +170,9 @@ class QuoteConnectionPool:
             self._shard_dir = ""
 
     def create_facades(self) -> None:
-        """Create a ShioajiClientFacade for each connection group."""
+        """Create a ShioajiClientFacade and FacadeSlot for each connection group."""
         self._clients = []
+        self._slots = []
         for group_id in range(self._num_conns):
             per_conn_cfg = dict(self._config)
             per_conn_cfg["session_lock_suffix"] = f"_conn{group_id}"
@@ -161,7 +181,24 @@ class QuoteConnectionPool:
                 shioaji_config=per_conn_cfg,
             )
             self._clients.append(facade)
-            logger.info("Created facade for group", conn_id=group_id)
+
+            # Read shard YAML to extract symbol codes for the slot
+            shard_path = self._shard_paths[group_id]
+            symbol_codes: set[str] = set()
+            try:
+                with open(shard_path, "r") as f:
+                    shard_data = yaml.safe_load(f) or {}
+                for sym in shard_data.get("symbols", []):
+                    code = sym.get("code")
+                    if code:
+                        symbol_codes.add(str(code))
+            except Exception as exc:
+                logger.warning("facade_slot_symbol_read_failed", conn_id=group_id, error=str(exc))
+
+            slot = FacadeSlot(conn_id=str(group_id), facade=facade)
+            slot.symbols = symbol_codes
+            self._slots.append(slot)
+            logger.info("Created facade for group", conn_id=group_id, symbols=len(symbol_codes))
 
     def login_all(self) -> None:
         """Sequentially login each connection with a configurable interval."""
@@ -183,14 +220,27 @@ class QuoteConnectionPool:
         return self.partial_login
 
     def subscribe_all(self, cb: Callable[..., Any]) -> None:
-        """Subscribe each logged-in connection's symbol basket."""
+        """Subscribe each logged-in connection's symbol basket.
+
+        Wraps the callback to update each slot's ``last_data_mono`` timestamp
+        on every market data event, enabling per-facade feed-gap detection.
+        """
         for i, facade in enumerate(self._clients):
             log = logger.bind(conn_id=i)
             if not facade.logged_in:
                 log.warning("Skipping subscribe for unconnected facade")
                 continue
+            slot = self._slots[i] if i < len(self._slots) else None
+
+            def _make_wrapper(s: FacadeSlot, original_cb: Callable[..., Any]) -> Callable[..., Any]:
+                def wrapper(*args: Any, **kwargs: Any) -> Any:
+                    s.last_data_mono = time.monotonic()
+                    return original_cb(*args, **kwargs)
+                return wrapper
+
             try:
-                facade.subscribe_basket(cb)
+                wrapped_cb = _make_wrapper(slot, cb) if slot is not None else cb
+                facade.subscribe_basket(wrapped_cb)
                 log.info("Subscribed", count=facade.subscribed_count)
             except Exception as exc:
                 log.error("Subscribe failed", error=str(exc))
@@ -204,21 +254,93 @@ class QuoteConnectionPool:
         self.subscribe_all(cb)
 
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
-        """Reconnect all connections. Duck-type for MarketDataService compatibility."""
-        success = True
-        for i, facade in enumerate(self._clients):
-            log = logger.bind(conn_id=i)
+        """Reconnect non-CONNECTED facades. Duck-type for MarketDataService compatibility.
+
+        When ``force=True``, all facades are reconnected regardless of state.
+        Otherwise, only facades not in CONNECTED state are targeted.
+        Returns True if at least one facade reconnected successfully.
+        """
+        targets = [s for s in self._slots if force or s.state != FacadeState.CONNECTED]
+        if not targets:
+            return True
+        any_ok = False
+        for slot in targets:
+            slot.state = FacadeState.RECOVERING
+            slot.last_reconnect_mono = time.monotonic()
+            log = logger.bind(conn_id=slot.conn_id)
             try:
-                ok = facade.reconnect(reason=reason, force=force)
+                ok = slot.facade.reconnect(reason=reason, force=force)
                 if ok:
-                    log.info("Connection reconnected")
+                    slot.state = FacadeState.CONNECTED
+                    slot.reconnect_failures = 0
+                    slot.last_data_mono = time.monotonic()
+                    self._notify_warmup_reset(slot.conn_id)
+                    any_ok = True
+                    log.info("facade_reconnected")
                 else:
-                    log.warning("Connection reconnect returned False")
-                    success = False
+                    slot.reconnect_failures += 1
+                    slot.state = FacadeState.DISCONNECTED
+                    log.warning("facade_reconnect_failed")
             except Exception as exc:
-                log.error("Connection reconnect failed", error=str(exc))
-                success = False
-        return success
+                slot.reconnect_failures += 1
+                slot.state = FacadeState.DISCONNECTED
+                log.error("facade_reconnect_exception", error=str(exc))
+        return any_ok
+
+    def set_reset_targets(self, lob: Any, feature_engine: Any) -> None:
+        """Register LOB and FeatureEngine instances for per-facade warmup resets."""
+        self._lob = lob
+        self._feature_engine = feature_engine
+
+    def get_healthy_feed_gap_s(self) -> float:
+        """Return the maximum feed gap across all CONNECTED facades."""
+        return get_healthy_feed_gap_s(self._slots)
+
+    def check_facade_health(self) -> None:
+        """Evaluate per-facade health and drive FSM state transitions."""
+        check_facade_health(
+            self._slots,
+            degraded_threshold_s=self._degraded_threshold_s,
+            reconnect_trigger_s=self._reconnect_trigger_s,
+            schedule_fn=self._schedule_reconnect,
+        )
+
+    def _schedule_reconnect(self, conn_id: str) -> None:
+        """Schedule a reconnect for the given connection slot.
+
+        If the slot is already RECOVERING, this is a no-op to avoid duplicate
+        reconnect attempts.
+        """
+        # Find slot by conn_id
+        slot: FacadeSlot | None = None
+        for s in self._slots:
+            if s.conn_id == conn_id:
+                slot = s
+                break
+        if slot is None:
+            logger.warning("schedule_reconnect_unknown_conn_id", conn_id=conn_id)
+            return
+        if slot.state == FacadeState.RECOVERING:
+            return
+        slot.state = FacadeState.RECOVERING
+        slot.last_reconnect_mono = time.monotonic()
+        logger.warning("facade_reconnect_scheduled", conn_id=conn_id)
+
+    def _notify_warmup_reset(self, conn_id: str) -> None:
+        """Reset LOB books and feature engine state for symbols on a reconnected facade."""
+        slot: FacadeSlot | None = None
+        for s in self._slots:
+            if s.conn_id == conn_id:
+                slot = s
+                break
+        if slot is None:
+            return
+        symbols = slot.symbols
+        if self._lob is not None and hasattr(self._lob, "reset_books_for_symbols"):
+            self._lob.reset_books_for_symbols(symbols)
+        if self._feature_engine is not None and hasattr(self._feature_engine, "reset_symbols"):
+            self._feature_engine.reset_symbols(symbols)
+        logger.info("facade_warmup_reset", conn_id=conn_id, symbols=len(symbols))
 
     def resubscribe(self) -> bool:
         """Resubscribe all connections. Duck-type for MarketDataService compatibility."""
@@ -344,18 +466,19 @@ class QuoteConnectionPool:
     def update_metrics(self) -> None:
         """Push per-connection metrics to Prometheus gauges."""
         _ensure_metrics()
-        if _METRIC_SUBSCRIBED is None:
-            return
-        from hft_platform.core import timebase
-
-        now_s = timebase.now_s()
-        for i, c in enumerate(self._clients):
-            label = str(i)
-            _METRIC_SUBSCRIBED.labels(conn_id=label).set(getattr(c, "subscribed_count", 0))
-            _METRIC_LOGGED_IN.labels(conn_id=label).set(1 if c.logged_in else 0)
-            last_ts = getattr(c._client, "_last_quote_data_ts", 0.0)
-            age = now_s - last_ts if last_ts > 0 else -1
-            _METRIC_LAST_DATA_AGE.labels(conn_id=label).set(age)
+        now = time.monotonic()
+        for slot in self._slots:
+            cid = str(slot.conn_id)
+            if _METRIC_SUBSCRIBED is not None:
+                _METRIC_SUBSCRIBED.labels(conn_id=cid).set(
+                    getattr(slot.facade, "subscribed_count", 0)
+                )
+            if _METRIC_LOGGED_IN is not None:
+                _METRIC_LOGGED_IN.labels(conn_id=cid).set(1 if slot.facade.logged_in else 0)
+            if _METRIC_LAST_DATA_AGE is not None:
+                _METRIC_LAST_DATA_AGE.labels(conn_id=cid).set(now - slot.last_data_mono)
+            if _METRIC_CONN_STATE is not None:
+                _METRIC_CONN_STATE.labels(conn_id=cid).set(int(slot.state))
 
     # ── Options auto-refresh ─────────────────────────────────────────────
 
@@ -371,10 +494,7 @@ class QuoteConnectionPool:
             with open(cache_path) as f:
                 data = json.load(f)
             contracts = data.get("contracts", [])
-            opts = [
-                c for c in contracts
-                if c.get("type") == "option" and c.get("root") == "TXO"
-            ]
+            opts = [c for c in contracts if c.get("type") == "option" and c.get("root") == "TXO"]
             if opts:
                 logger.debug("options_loaded_from_cache", count=len(opts))
                 return opts
@@ -449,11 +569,8 @@ class QuoteConnectionPool:
                         atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm))
                         lo = max(atm_idx - strike_range, 0)
                         hi = min(atm_idx + strike_range, len(strikes) - 1)
-                        allowed = set(strikes[lo:hi + 1])
-                        nearest = [
-                            c for c in nearest
-                            if c.get("strike") is not None and float(c["strike"]) in allowed
-                        ]
+                        allowed = set(strikes[lo : hi + 1])
+                        nearest = [c for c in nearest if c.get("strike") is not None and float(c["strike"]) in allowed]
                         logger.info(
                             "options_strike_filter",
                             atm=atm,
@@ -489,14 +606,16 @@ class QuoteConnectionPool:
                 if count > _MAX_SUBSCRIPTIONS_PER_CONN:
                     logger.error(
                         "options_refresh_group_overflow",
-                        group=g, count=count, limit=_MAX_SUBSCRIPTIONS_PER_CONN,
+                        group=g,
+                        count=count,
+                        limit=_MAX_SUBSCRIPTIONS_PER_CONN,
                     )
                     return False
 
             out_path = os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml")
             try:
                 with open(out_path, "w") as f:
-                    f.write(f"# Auto-refreshed by QuoteConnectionPool\n")
+                    f.write("# Auto-refreshed by QuoteConnectionPool\n")
                     f.write(f"# TXO nearest expiry: {nearest_date}\n")
                     f.write(f"# Group 0: Base ({len(base_symbols)})\n")
                     f.write(f"# Group 1: TXO Calls ({len(calls)})\n")
