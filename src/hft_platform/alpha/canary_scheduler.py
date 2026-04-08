@@ -160,19 +160,23 @@ class CanaryAutoScheduler:
             try:
                 # Try CK metrics first, fall back to YAML-based _build_metrics
                 live_metrics = None
+                _ck_actually_used = False
                 if self._metrics_query is not None:
                     strategy_id = canary.get("strategy_id", str(alpha_id))
                     since_ns = int(canary.get("promoted_at_ns", 0))
                     live_metrics = self._metrics_query.fetch(
-                        str(alpha_id), str(strategy_id), since_ns,
+                        str(alpha_id),
+                        str(strategy_id),
+                        since_ns,
                     )
+                    _ck_actually_used = live_metrics is not None
                 if live_metrics is None:
                     live_metrics = self._build_metrics(canary)
 
                 status = self._monitor.evaluate(str(alpha_id), live_metrics)
                 results.append(status)
 
-                _ck_used = self._metrics_query is not None and live_metrics is not None
+                _ck_used = _ck_actually_used
                 logger.info(
                     "canary_auto_evaluated",
                     alpha_id=alpha_id,

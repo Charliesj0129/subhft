@@ -157,18 +157,20 @@ class MarketDataReconnectMixin:
                 ).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False
+        # Always clear stale LOB/feature state after any reconnect attempt —
+        # even partial success leaves some facades with fresh data flowing into
+        # stale BookState objects.
+        lob = getattr(self, "lob", None)
+        if lob is not None and hasattr(lob, "reset_books"):
+            lob.reset_books()
+        fe = getattr(self, "feature_engine", None)
+        if fe is not None and hasattr(fe, "reset_all"):
+            fe.reset_all()
         if ok:
             self._set_state(FeedState.CONNECTED)
             self.last_event_ts = timebase.now_s()
             self.last_event_mono = time.monotonic()
             self._resubscribe_attempts = 0
-            # Clear stale LOB/feature state to prevent carry-over from previous session
-            lob = getattr(self, "lob", None)
-            if lob is not None and hasattr(lob, "reset_books"):
-                lob.reset_books()
-            fe = getattr(self, "feature_engine", None)
-            if fe is not None and hasattr(fe, "reset_all"):
-                fe.reset_all()
             # Fire post-reconnect callbacks (e.g. invalidate stale live orders)
             for cb in getattr(self, "_on_reconnect_callbacks", []):
                 try:

@@ -136,8 +136,7 @@ class ExecutionNormalizer:
 
             contract = d.get("contract", {}) if isinstance(d.get("contract"), dict) else {}
             symbol = (
-                contract.get("full_code") or contract.get("code")
-                or d.get("full_code") or d.get("code") or "UNKNOWN"
+                contract.get("full_code") or contract.get("code") or d.get("full_code") or d.get("code") or "UNKNOWN"
             )
             price_val = order.get("price") or 0
             price = self.price_codec.scale(symbol, price_val)
@@ -149,7 +148,8 @@ class ExecutionNormalizer:
                 status=status,
                 submitted_qty=int(order.get("quantity") or 0),
                 filled_qty=int(order.get("deal_quantity") or order.get("cum_qty") or 0),
-                remaining_qty=int(order.get("quantity") or 0) - int(order.get("deal_quantity") or order.get("cum_qty") or 0),
+                remaining_qty=int(order.get("quantity") or 0)
+                - int(order.get("deal_quantity") or order.get("cum_qty") or 0),
                 price=price,
                 side=Side.BUY if "buy" in str(order.get("action", "")).lower() else Side.SELL,
                 ingest_ts_ns=raw.ingest_ts_ns,
@@ -170,12 +170,15 @@ class ExecutionNormalizer:
 
         try:
             qty = int(get("quantity") or get("qty") or get("volume") or 0)
+            if qty <= 0:
+                logger.warning("normalize_fill_zero_qty", raw_keys=list(d.keys()) if isinstance(d, dict) else str(type(d)))
+                return None
             price_value = get("price") or 0
 
             # Map action/side
             action = get("action")
             side = Side.BUY
-            if action:
+            if action is not None:
                 s = str(action).lower()
                 if "sell" in s or action == -1:  # Shioaji might use Int or String
                     side = Side.SELL

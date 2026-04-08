@@ -97,43 +97,39 @@ class CanaryMetricsQuery:
     # Private query methods
     # ------------------------------------------------------------------
 
-    def _query_slippage(
-        self, client: Any, strategy_id: str, since_ns: int
-    ) -> float:
+    def _query_slippage(self, client: Any, strategy_id: str, since_ns: int) -> float:
         """Average absolute slippage in basis points (fills JOIN orders)."""
-        sql = f"""
+        sql = """
             SELECT avg(abs(f.price_scaled - o.price_scaled) / o.price_scaled * 10000)
             FROM hft.fills AS f
             INNER JOIN hft.orders AS o ON f.client_order_id = o.order_id
-            WHERE f.strategy_id = '{strategy_id}'
-              AND f.ts_exchange >= {since_ns}
+            WHERE f.strategy_id = {strategy_id:String}
+              AND f.ts_exchange >= {since_ns:Int64}
               AND o.price_scaled > 0
         """
-        result = client.query(sql)
+        result = client.query(sql, parameters={"strategy_id": strategy_id, "since_ns": since_ns})
         rows = result.result_rows
         if not rows or rows[0][0] is None:
             return 0.0
         return float(rows[0][0])
 
-    def _query_drawdown(
-        self, client: Any, strategy_id: str, since_ns: int
-    ) -> float:
+    def _query_drawdown(self, client: Any, strategy_id: str, since_ns: int) -> float:
         """Maximum drawdown computed from running cumulative PnL.
 
         Uses a window-function subquery to build the running PnL series,
         then derives peak and final values in Python to avoid complex nested
         ClickHouse syntax differences across versions.
         """
-        sql = f"""
+        sql = """
             SELECT
                 sum((f.price_scaled * f.qty * (CASE WHEN f.side = 'SELL' THEN 1 ELSE -1 END))
                     - f.fee_scaled) OVER (ORDER BY f.ts_exchange) AS running_pnl
             FROM hft.fills AS f
-            WHERE f.strategy_id = '{strategy_id}'
-              AND f.ts_exchange >= {since_ns}
+            WHERE f.strategy_id = {strategy_id:String}
+              AND f.ts_exchange >= {since_ns:Int64}
             ORDER BY f.ts_exchange
         """
-        result = client.query(sql)
+        result = client.query(sql, parameters={"strategy_id": strategy_id, "since_ns": since_ns})
         rows = result.result_rows
         if not rows:
             return 0.0
@@ -148,17 +144,15 @@ class CanaryMetricsQuery:
         drawdown = (peak - final) / abs(peak)
         return max(0.0, drawdown)
 
-    def _query_error_rate(
-        self, client: Any, strategy_id: str, since_ns: int
-    ) -> float:
+    def _query_error_rate(self, client: Any, strategy_id: str, since_ns: int) -> float:
         """Fraction of rejected orders over total orders."""
-        sql = f"""
+        sql = """
             SELECT countIf(status = 'REJECTED') / count(*) AS error_rate
             FROM hft.orders
-            WHERE strategy_id = '{strategy_id}'
-              AND ingest_ts >= {since_ns}
+            WHERE strategy_id = {strategy_id:String}
+              AND ingest_ts >= {since_ns:Int64}
         """
-        result = client.query(sql)
+        result = client.query(sql, parameters={"strategy_id": strategy_id, "since_ns": since_ns})
         rows = result.result_rows
         if not rows or rows[0][0] is None:
             return 0.0
@@ -169,17 +163,15 @@ class CanaryMetricsQuery:
         except (TypeError, ValueError):
             return 0.0
 
-    def _query_sessions(
-        self, client: Any, strategy_id: str, since_ns: int
-    ) -> int:
+    def _query_sessions(self, client: Any, strategy_id: str, since_ns: int) -> int:
         """Number of distinct trading days with fills."""
-        sql = f"""
+        sql = """
             SELECT count(distinct toDate(toDateTime(ts_exchange / 1000000000)))
             FROM hft.fills
-            WHERE strategy_id = '{strategy_id}'
-              AND ts_exchange >= {since_ns}
+            WHERE strategy_id = {strategy_id:String}
+              AND ts_exchange >= {since_ns:Int64}
         """
-        result = client.query(sql)
+        result = client.query(sql, parameters={"strategy_id": strategy_id, "since_ns": since_ns})
         rows = result.result_rows
         if not rows or rows[0][0] is None:
             return 0

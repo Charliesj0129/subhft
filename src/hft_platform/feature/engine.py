@@ -448,6 +448,11 @@ class FeatureEngine:
         seq = self._seq
         local_ts_ns = int(source_ts_ns if local_ts_ns is None else local_ts_ns)
 
+        # Skip crossed-book events (mid_price_x2=0) to prevent EMA contamination
+        mid_price_x2 = getattr(stats_resolved, "mid_price_x2", None)
+        if mid_price_x2 is not None and mid_price_x2 == 0:
+            return None
+
         prev = self._states.get(symbol)
         if prev is None and len(self._states) >= self._max_symbols:
             logger.warning(

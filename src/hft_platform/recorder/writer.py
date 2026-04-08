@@ -558,9 +558,7 @@ class DataWriter:
                 )
                 if self._health_tracker:
                     self._health_tracker.record_event("data_loss", table=table, count=row_count)
-                raise WriterDoubleFaultError(
-                    f"Both CH and WAL failed for table={table}, rows={row_count}"
-                )
+                raise WriterDoubleFaultError(f"Both CH and WAL failed for table={table}, rows={row_count}")
 
     def _ch_insert_columnar(
         self,
@@ -716,9 +714,7 @@ class DataWriter:
                 )
                 if self._health_tracker:
                     self._health_tracker.record_event("data_loss", table=table, count=len(data))
-                raise WriterDoubleFaultError(
-                    f"Both CH and WAL failed for table={table}, rows={len(data)}"
-                )
+                raise WriterDoubleFaultError(f"Both CH and WAL failed for table={table}, rows={len(data)}")
 
     def _ch_insert(self, table, data):
         # Infer columns from first row assuming consistent dicts
@@ -833,6 +829,10 @@ class DataWriter:
 
         if exch_idx is None and ingest_idx is None:
             return column_data, row_count
+
+        # Copy mutable columns to avoid mutating shared references (I-H1)
+        if ingest_idx is not None:
+            column_data[ingest_idx] = list(column_data[ingest_idx])
 
         now_ns = timebase.now_ns()
         max_future = self._ts_max_future_ns
