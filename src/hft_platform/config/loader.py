@@ -143,9 +143,11 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
     # 5. CLI Overrides
     settings = _merge(settings, cli_overrides)
 
-    # Ensure mode is synced if overridden
-    if "mode" in settings:
-        settings["mode"] = mode if os.getenv("HFT_MODE") else settings["mode"]
+    # Ensure mode reflects CLI override (highest priority) or env var
+    if "mode" in cli_overrides:
+        settings["mode"] = cli_overrides["mode"]
+    elif os.getenv("HFT_MODE"):
+        settings["mode"] = mode
 
     # 6. Validate merged config (fail-fast unless bypassed)
     skip_validation = (

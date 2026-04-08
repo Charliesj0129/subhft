@@ -150,6 +150,10 @@ class ShioajiClientFacade:
     def list_profit_loss_detail(self, account: Any = None, detail_id: int = 0, unit: str | None = None) -> Any:
         return self.account_gateway.list_profit_loss_detail(account=account, detail_id=detail_id, unit=unit)
 
+    def is_connected(self) -> bool:
+        """Return True if the underlying Shioaji API session is alive."""
+        return bool(self._client.logged_in) and self._client.api is not None
+
     def validate_symbols(self) -> list[str]:
         return self.contracts_runtime.validate_symbols()
 

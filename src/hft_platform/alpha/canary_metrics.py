@@ -140,7 +140,7 @@ class CanaryMetricsQuery:
         for v in pnl_series:
             if v > running_peak:
                 running_peak = v
-            if running_peak > 0:
+            if running_peak != 0.0:
                 dd = (running_peak - v) / abs(running_peak)
                 if dd > max_dd:
                     max_dd = dd
