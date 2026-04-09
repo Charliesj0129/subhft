@@ -115,6 +115,7 @@ async def test_drain_no_op_when_already_caught_up():
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(20)
 async def test_drain_timeout_returns_skipped_count():
     """drain_to_cursor should return skipped > 0 when timeout expires."""
     events = [("tick", "TSMC", i, 1, 1, False, False, i) for i in range(100)]
