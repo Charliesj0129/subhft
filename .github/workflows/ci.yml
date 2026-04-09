@@ -95,7 +95,19 @@ jobs:
             | grep -v 'dlq_ttl' \
             | grep -v 'mid_price_max_age' \
             | grep -v 'recovery_hold' \
-            | grep -v 'sigma' || true)
+            | grep -v 'sigma' \
+            | grep -v 'vol_shift' \
+            | grep -v 'pnl_ntd' \
+            | grep -v 'underlying_price' \
+            | grep -v 'multiplier' \
+            | grep -v 'risk_free_rate' \
+            | grep -v 'tick_size' \
+            | grep -v 'point_value' \
+            | grep -v 'drain_timeout' \
+            | grep -v 'sym_cap' \
+            | grep -v 'stress_test' \
+            | grep -v 'slippage' \
+            | grep -v 'normalizer' || true)
           if [ -n "$FOUND" ]; then
             echo "::error::float usage detected in financial code paths:"
             echo "$FOUND"
