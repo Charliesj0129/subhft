@@ -168,3 +168,73 @@ class TestQuoteEventHandler:
         assert s3.reason == "event_12"
         assert s3.ts == 30.0
         assert handler.current_reason == "event_12"
+
+
+class TestSubRetryCapacityAwareness:
+    """Verify retry thread stops when subscription capacity is reached."""
+
+    def test_retry_stops_at_capacity(self) -> None:
+        """Retry loop should break immediately when subscribed_count >= MAX_SUBSCRIPTIONS."""
+        import unittest.mock as mock
+
+        from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
+
+        client = mock.MagicMock()
+        client.MAX_SUBSCRIPTIONS = 120
+        client.subscribed_count = 120
+        # Must be False initially so start_sub_retry_thread doesn't early-return
+        client._sub_retry_running = False
+        client._failed_sub_symbols = [
+            {"code": "TXO35050D6", "exchange": "OPT"},
+            {"code": "TXO35100D6", "exchange": "OPT"},
+        ]
+        client._contract_retry_s = 0.01
+        client.logged_in = True
+        client._callbacks_registered = True
+        client._event_callback_registered = True
+        client._quote_api.return_value = mock.MagicMock()
+        client._set_thread_alive_metric = mock.MagicMock()
+
+        runtime = QuoteRuntime(client)
+        runtime.start_sub_retry_thread(mock.MagicMock())
+
+        if client._sub_retry_thread and client._sub_retry_thread.is_alive():
+            client._sub_retry_thread.join(timeout=2.0)
+
+        assert client._sub_retry_running is False
+        client._subscribe_symbol.assert_not_called()
+
+    def test_retry_proceeds_when_under_capacity(self) -> None:
+        """Retry loop should attempt resubscription when under capacity."""
+        import unittest.mock as mock
+
+        from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
+
+        client = mock.MagicMock()
+        client.MAX_SUBSCRIPTIONS = 120
+        client.subscribed_count = 100
+        client._sub_retry_running = False
+        client._failed_sub_symbols = [
+            {"code": "TXO35050D6", "exchange": "OPT"},
+        ]
+        client._contract_retry_s = 0.01
+        client.logged_in = True
+        client._callbacks_registered = True
+        client._event_callback_registered = True
+        client._quote_api.return_value = mock.MagicMock()
+        client._set_thread_alive_metric = mock.MagicMock()
+
+        def subscribe_and_succeed(sym: object, cb: object) -> bool:
+            client.subscribed_count += 1
+            return True
+
+        client._subscribe_symbol = mock.MagicMock(side_effect=subscribe_and_succeed)
+
+        runtime = QuoteRuntime(client)
+        runtime.start_sub_retry_thread(mock.MagicMock())
+
+        if client._sub_retry_thread and client._sub_retry_thread.is_alive():
+            client._sub_retry_thread.join(timeout=2.0)
+
+        assert client._subscribe_symbol.call_count >= 1
+        assert client._sub_retry_running is False

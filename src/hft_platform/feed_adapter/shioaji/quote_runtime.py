@@ -765,9 +765,23 @@ class QuoteRuntime:
                 if quote_api is None or not hasattr(quote_api, "subscribe"):
                     logger.warning("Subscription retry waiting for quote API availability")
                     continue
+                # Check capacity before retrying — if at limit, stop the loop
+                # to avoid infinite retries against a permanent broker limit.
+                if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
+                    logger.warning(
+                        "Subscription retry aborted: at capacity",
+                        subscribed=c.subscribed_count,
+                        limit=c.MAX_SUBSCRIPTIONS,
+                        dropped=len(c._failed_sub_symbols),
+                        codes=[s.get("code") for s in c._failed_sub_symbols[:10]],
+                    )
+                    break
                 remaining: list[dict[str, Any]] = []
                 for sym in list(c._failed_sub_symbols):
                     if not c._sub_retry_running:
+                        remaining.append(sym)
+                        continue
+                    if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                         remaining.append(sym)
                         continue
                     if c._subscribe_symbol(sym, cb):
@@ -781,6 +795,15 @@ class QuoteRuntime:
                 c._failed_sub_symbols = remaining
                 if not c._failed_sub_symbols:
                     logger.info("All failed subscriptions resolved")
+                    break
+                # If all remaining failures are due to capacity, stop retrying
+                if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
+                    logger.warning(
+                        "Subscription retry stopped: capacity reached",
+                        subscribed=c.subscribed_count,
+                        limit=c.MAX_SUBSCRIPTIONS,
+                        remaining=len(c._failed_sub_symbols),
+                    )
                     break
                 logger.warning(
                     "Subscription retry: still pending",

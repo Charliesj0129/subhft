@@ -61,12 +61,16 @@ class TestQuoteConnectionPoolValidation:
         with pytest.raises(ValueError, match="exceeds Shioaji limit of 5"):
             QuoteConnectionPool(sym_path, {}, num_conns=5)
 
-    def test_rejects_group_exceeding_200(self, tmp_path):
-        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+    def test_rejects_group_exceeding_limit(self, tmp_path):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import (
+            QuoteConnectionPool,
+            _MAX_SUBSCRIPTIONS_PER_CONN,
+        )
 
-        symbols = [{"code": f"SYM{i}", "exchange": "TSE", "group": 0} for i in range(201)]
+        count = _MAX_SUBSCRIPTIONS_PER_CONN + 1
+        symbols = [{"code": f"SYM{i}", "exchange": "TSE", "group": 0} for i in range(count)]
         sym_path = self._make_symbols_yaml(symbols, tmp_path)
-        with pytest.raises(ValueError, match="Group 0 has 201 symbols"):
+        with pytest.raises(ValueError, match=f"Group 0 has {count} symbols"):
             QuoteConnectionPool(sym_path, {}, num_conns=1)
 
     def test_rejects_group_out_of_range(self, tmp_path):
@@ -505,3 +509,194 @@ class TestQuoteConnectionPoolThreadSafety:
         pool.close(logout=False)
 
         assert pool._options_refresh_running is False
+
+
+class TestSubscriptionLimitConstant:
+    """Verify _MAX_SUBSCRIPTIONS_PER_CONN reflects real Shioaji SDK topic limit."""
+
+    def test_limit_is_120(self):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
+
+        # 128 real broker limit (256 topics / 2 topics per symbol), minus safety margin
+        assert _MAX_SUBSCRIPTIONS_PER_CONN == 120
+
+    def test_client_default_matches_pool_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SHIOAJI_API_KEY", "TESTKEY123")
+        monkeypatch.setenv("SHIOAJI_SECRET_KEY", "SECRET")
+        monkeypatch.setenv("HFT_MODE", "sim")
+        monkeypatch.setenv("HFT_SHIOAJI_SESSION_LOCK_DIR", str(tmp_path))
+
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text("symbols: []")
+
+        with mock.patch("hft_platform.feed_adapter.shioaji.client._sdk", return_value=None):
+            from hft_platform.feed_adapter.shioaji.client import ShioajiClient
+
+            client = ShioajiClient(config_path=str(sym_path))
+            assert client.MAX_SUBSCRIPTIONS == 120
+
+
+class TestOptionsRoundRobinSharding:
+    """Verify options are distributed round-robin across groups by strike."""
+
+    def _make_pool(self, tmp_path, num_conns):
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+        symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        sym_path = tmp_path / "symbols.yaml"
+        sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
+        return QuoteConnectionPool(str(sym_path), {}, num_conns=num_conns)
+
+    def test_round_robin_distributes_evenly_across_3_groups(self, tmp_path, monkeypatch):
+        """With 60 calls + 60 puts across 30 strikes, 3 option groups should each get ~40."""
+        pool = self._make_pool(tmp_path, num_conns=4)  # group 0=base, 1/2/3=options
+        pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool._clients = [mock.MagicMock() for _ in range(4)]
+        for c in pool._clients:
+            c.logged_in = False
+
+        # Mock contract fetching to return synthetic options
+        strikes = list(range(20000, 20000 + 30 * 50, 50))  # 30 strikes
+        opts = []
+        for s in strikes:
+            opts.append({"code": f"TXO{s}D6", "right": "C", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+            opts.append({"code": f"TXO{s}P6", "right": "P", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+
+        out_path = str(tmp_path / "live_with_options.yaml")
+        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+
+        with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
+            result = pool.refresh_options_symbols()
+
+        assert result is True
+        # Read the generated YAML
+        with open(out_path) as f:
+            data = yaml.safe_load(f)
+        syms = data["symbols"]
+        group_counts = {}
+        for s in syms:
+            g = s.get("group", 0)
+            group_counts[g] = group_counts.get(g, 0) + 1
+
+        # group 0 has 1 base symbol
+        assert group_counts[0] == 1
+        # 60 options spread across 3 groups: 20 each
+        assert group_counts[1] == 20
+        assert group_counts[2] == 20
+        assert group_counts[3] == 20
+
+    def test_round_robin_auto_trims_on_overflow(self, tmp_path, monkeypatch):
+        """If total options exceed per-group capacity, auto-trim to fit."""
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
+
+        pool = self._make_pool(tmp_path, num_conns=2)  # group 0=base, 1=options
+        pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool._clients = [mock.MagicMock() for _ in range(2)]
+        for c in pool._clients:
+            c.logged_in = False
+
+        # 200 calls + 200 puts = 400 options on 1 group -> exceeds 120 limit
+        strikes = list(range(20000, 20000 + 200 * 50, 50))
+        opts = []
+        for s in strikes:
+            opts.append({"code": f"TXO{s}D6", "right": "C", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+            opts.append({"code": f"TXO{s}P6", "right": "P", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+
+        out_path = str(tmp_path / "live_with_options.yaml")
+        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+
+        with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
+            result = pool.refresh_options_symbols()
+
+        # Auto-trim should succeed (not reject)
+        assert result is True
+
+        # Verify trimmed YAML respects per-group limit
+        with open(out_path) as f:
+            data = yaml.safe_load(f)
+        for g in range(2):
+            count = sum(1 for s in data["symbols"] if s.get("group") == g)
+            assert count <= _MAX_SUBSCRIPTIONS_PER_CONN, (
+                f"Group {g} has {count} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN}"
+            )
+
+        # Total options should be less than original 400
+        opt_count = sum(1 for s in data["symbols"] if s.get("exchange") == "OPT")
+        assert opt_count < 400
+        assert opt_count > 0  # not empty
+
+    def test_round_robin_interleaves_call_put_pairs_across_3_groups(self, tmp_path, monkeypatch):
+        """With 3+ option groups, each group should have a mix of calls and puts."""
+        pool = self._make_pool(tmp_path, num_conns=4)  # groups 1,2,3 for options
+        pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool._clients = [mock.MagicMock() for _ in range(4)]
+        for c in pool._clients:
+            c.logged_in = False
+
+        strikes = list(range(20000, 20000 + 10 * 50, 50))  # 10 strikes
+        opts = []
+        for s in strikes:
+            opts.append({"code": f"TXO{s}D6", "right": "C", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+            opts.append({"code": f"TXO{s}P6", "right": "P", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+
+        out_path = str(tmp_path / "live_with_options.yaml")
+        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+
+        with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
+            result = pool.refresh_options_symbols()
+
+        assert result is True
+        with open(out_path) as f:
+            data = yaml.safe_load(f)
+
+        # With 3 option groups and strike-interleaved round-robin,
+        # at least 2 of the 3 groups must have both calls and puts
+        mixed_count = 0
+        for g in [1, 2, 3]:
+            group_syms = [s for s in data["symbols"] if s.get("group") == g]
+            codes = [s["code"] for s in group_syms]
+            has_call = any("D6" in c for c in codes)
+            has_put = any("P6" in c for c in codes)
+            if has_call and has_put:
+                mixed_count += 1
+        assert mixed_count >= 2, "At least 2 of 3 option groups should have both calls and puts"
+
+    def test_production_scenario_3_conns_194_per_side(self, tmp_path, monkeypatch):
+        """Regression test: 3 conns, 194 calls + 194 puts must auto-trim, not reject."""
+        from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
+
+        pool = self._make_pool(tmp_path, num_conns=3)  # group 0=base, 1/2=options
+        pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool._clients = [mock.MagicMock() for _ in range(3)]
+        for c in pool._clients:
+            c.logged_in = False
+
+        # Reproduce exact production config: 194 calls + 194 puts
+        strikes = list(range(26500, 26500 + 194 * 50, 50))
+        opts = []
+        for s in strikes:
+            opts.append({"code": f"TXO{s}D6", "right": "C", "strike": str(s), "delivery_date": "2026/04/16", "reference": "33000"})
+            opts.append({"code": f"TXO{s}P6", "right": "P", "strike": str(s), "delivery_date": "2026/04/16", "reference": "33000"})
+
+        out_path = str(tmp_path / "live_with_options.yaml")
+        monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
+
+        with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
+            result = pool.refresh_options_symbols()
+
+        # Must succeed (auto-trim), not reject
+        assert result is True
+
+        with open(out_path) as f:
+            data = yaml.safe_load(f)
+
+        # Every group must respect limit
+        for g in range(3):
+            count = sum(1 for s in data["symbols"] if s.get("group") == g)
+            assert count <= _MAX_SUBSCRIPTIONS_PER_CONN, (
+                f"Group {g} has {count} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN}"
+            )
+
+        # Options should be trimmed but non-empty
+        opt_count = sum(1 for s in data["symbols"] if s.get("exchange") == "OPT")
+        assert 200 <= opt_count <= 240, f"Expected 200-240 options after trim, got {opt_count}"
