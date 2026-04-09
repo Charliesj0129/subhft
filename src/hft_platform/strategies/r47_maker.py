@@ -234,7 +234,7 @@ class _MFGState:
 
     __slots__ = (
         "_ema_alpha", "_signed_flow_ema", "_flow_std_ema",
-        "_quote_skew_ema", "_capitulation_z",
+        "_capitulation_z",
         "_update_count", "_warmed_up",
     )
 
@@ -242,7 +242,6 @@ class _MFGState:
         self._ema_alpha = ema_alpha
         self._signed_flow_ema: float = 0.0
         self._flow_std_ema: float = 1.0  # avoid div-by-zero
-        self._quote_skew_ema: float = 0.0
         self._capitulation_z: float = 0.0
         self._update_count = 0
         self._warmed_up = False
@@ -261,14 +260,6 @@ class _MFGState:
         self._flow_std_ema = alpha * dev_sq + (1 - alpha) * self._flow_std_ema
         std = max(math.sqrt(self._flow_std_ema), 1e-6)
         self._capitulation_z = abs(self._signed_flow_ema) / std
-
-    def update_quote_skew(self, bid_qty: int, ask_qty: int) -> None:
-        """Update quote skew from L1 quantities."""
-        total = bid_qty + ask_qty
-        if total > 0:
-            skew = (ask_qty - bid_qty) / total  # positive = more ask = MM is long
-            alpha = self._ema_alpha * 5  # faster EMA for skew
-            self._quote_skew_ema = alpha * skew + (1 - alpha) * self._quote_skew_ema
 
     @property
     def capitulation_z(self) -> float:
@@ -296,9 +287,6 @@ class R47MakerStrategy(SimpleMarketMaker):
 
     Parameters
     ----------
-    pe_safe_threshold : float
-        PE entropy H above which market is "safe" to quote aggressively.
-        Gate 0 finding: median H = 0.724, so 0.85 captures top ~10%.
     pe_danger_threshold : float
         PE entropy H below which market is too structured (trending).
         Quote very conservatively or pull.
@@ -316,7 +304,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         self,
         strategy_id: str = "r47_maker",
         # D1: PE
-        pe_safe_threshold: float = 0.85,
         pe_danger_threshold: float = 0.55,
         pe_window: int = 100,
         # D2: Queue
@@ -336,7 +323,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._trade_symbol = trade_symbol
 
         # D1
-        self._pe_safe = pe_safe_threshold
         self._pe_danger = pe_danger_threshold
         self._pe_states: dict[str, _PEState] = {}
         self._pe_window = pe_window
@@ -373,7 +359,6 @@ class R47MakerStrategy(SimpleMarketMaker):
 
         logger.info(
             "R47MakerStrategy initialized",
-            pe_safe=pe_safe_threshold,
             pe_danger=pe_danger_threshold,
             queue_cancel=queue_cancel_threshold,
             mfg_z=mfg_skew_z_threshold,
@@ -434,10 +419,6 @@ class R47MakerStrategy(SimpleMarketMaker):
             queue = self._get_queue(symbol)
             queue.update(bid_qty, ask_qty)
 
-            # D3: Update quote skew from L1
-            mfg = self._get_mfg(symbol)
-            mfg.update_quote_skew(bid_qty, ask_qty)
-
             # D2: Set quote suppression flags for on_stats()
             # Since BaseStrategy.buy/sell don't return order IDs,
             # we suppress the NEXT quote placement instead of cancelling.
@@ -447,9 +428,9 @@ class R47MakerStrategy(SimpleMarketMaker):
             if queue.warmed_up:
                 if queue.p_depl_bid > self._queue_cancel_thresh:
                     self._suppress_bid = True
-                    self._queue_suppressed += 1
                 if queue.p_depl_ask > self._queue_cancel_thresh:
                     self._suppress_ask = True
+                if self._suppress_bid or self._suppress_ask:
                     self._queue_suppressed += 1
 
     def on_stats(self, event: LOBStatsEvent) -> None:
