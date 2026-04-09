@@ -193,7 +193,7 @@ class SessionRuntime:
 
                 if ok:
                     logger.info("Login successful (API Key)", attempt=attempt)
-                    if not login_fetch_contract:
+                    if not login_fetch_contract and c.fetch_contract:
                         c._ensure_contracts()
                     # Verify contracts regardless of which login path was used.
                     contracts_ok = c.contracts_ready

@@ -19,6 +19,7 @@ import yaml
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.core.rate_limiter import RateLimiter
 from hft_platform.feed_adapter.shioaji import router as _router
 from hft_platform.feed_adapter.shioaji._infra import (
     cache_get as _cache_get_impl,
@@ -55,7 +56,6 @@ from hft_platform.feed_adapter.shioaji._infra import (
 )
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 from hft_platform.observability.metrics import MetricsRegistry
-from hft_platform.core.rate_limiter import RateLimiter
 
 try:
     import shioaji as sj
@@ -137,7 +137,11 @@ class ShioajiClient:
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None):
         self.MAX_SUBSCRIPTIONS = int((shioaji_config or {}).get("max_subscriptions", 200))
         self.contracts_timeout = int(os.getenv("SHIOAJI_CONTRACTS_TIMEOUT", "10000"))
-        self.fetch_contract = os.getenv("SHIOAJI_FETCH_CONTRACT", "1") != "0"
+        _cfg_fetch = (shioaji_config or {}).get("fetch_contract")
+        self.fetch_contract = (
+            str(_cfg_fetch) != "0" if _cfg_fetch is not None
+            else os.getenv("SHIOAJI_FETCH_CONTRACT", "1") != "0"
+        )
         self.subscribe_trade = os.getenv("SHIOAJI_SUBSCRIBE_TRADE", "1") != "0"
         self.allow_symbol_fallback = os.getenv("HFT_ALLOW_SYMBOL_FALLBACK") == "1"
         self.allow_synthetic_contracts = os.getenv("HFT_ALLOW_SYNTHETIC_CONTRACTS") == "1"

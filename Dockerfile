@@ -116,6 +116,9 @@ EXPOSE 9090
 
 # Set python path
 ENV PYTHONPATH="${PYTHONPATH}:/app/src"
+# Limit glibc malloc arenas to prevent multi-thread memory fragmentation.
+# Default (8*cores) causes hundreds of MB of wasted anonymous segments.
+ENV MALLOC_ARENA_MAX=2
 
 # Entrypoint default (overridden by command)
 CMD ["python", "-m", "hft_platform", "run"]

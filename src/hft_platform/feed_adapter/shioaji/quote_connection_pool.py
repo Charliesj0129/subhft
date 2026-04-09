@@ -172,12 +172,19 @@ class QuoteConnectionPool:
             self._shard_dir = ""
 
     def create_facades(self) -> None:
-        """Create a ShioajiClientFacade and FacadeSlot for each connection group."""
+        """Create a ShioajiClientFacade and FacadeSlot for each connection group.
+
+        Only the first facade fetches the full contract universe (~55k contracts).
+        Subsequent facades skip contract download to prevent 3x memory duplication.
+        """
         self._clients = []
         self._slots = []
         for group_id in range(self._num_conns):
             per_conn_cfg = dict(self._config)
             per_conn_cfg["session_lock_suffix"] = f"_conn{group_id}"
+            # Only first facade downloads contracts; others skip to save ~27MB each
+            if group_id > 0:
+                per_conn_cfg["fetch_contract"] = "0"
             facade = ShioajiClientFacade(
                 config_path=self._shard_paths[group_id],
                 shioaji_config=per_conn_cfg,

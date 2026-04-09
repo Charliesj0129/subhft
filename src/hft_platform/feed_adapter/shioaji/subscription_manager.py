@@ -83,7 +83,8 @@ class SubscriptionManager:
             c._start_session_refresh_thread()
             return
 
-        c._start_contract_refresh_thread()
+        if c.fetch_contract:
+            c._start_contract_refresh_thread()
         if c._last_quote_data_ts <= 0:
             c._last_quote_data_ts = timebase.now_s()
 

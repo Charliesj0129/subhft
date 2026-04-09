@@ -21,6 +21,7 @@ _AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset(
     {
         "feed_reconnect_unhealthy",
         "feed_gap_exceeded",
+        "rss_unhealthy",
     }
 )
 

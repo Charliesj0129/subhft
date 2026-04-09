@@ -308,7 +308,7 @@ class SystemBootstrapper:
             ),
             reconnect_flap_budget=_env_int("HFT_PLATFORM_REDUCE_ONLY_RECONNECT_FLAP_BUDGET", 5, min_value=0),
             queue_depth_threshold=_env_int("HFT_PLATFORM_REDUCE_ONLY_QUEUE_DEPTH", 5000, min_value=1),
-            rss_threshold_mb=_env_int("HFT_PLATFORM_REDUCE_ONLY_RSS_MB", 2048, min_value=1),
+            rss_threshold_mb=_env_int("HFT_PLATFORM_REDUCE_ONLY_RSS_MB", 3072, min_value=1),
             wal_backlog_files_threshold=_env_int("HFT_PLATFORM_REDUCE_ONLY_WAL_BACKLOG_FILES", 200, min_value=1),
         )
         return inputs
