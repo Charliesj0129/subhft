@@ -135,7 +135,7 @@ def dispatch_tick_cb(*args, **kwargs):
 
 class ShioajiClient:
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None):
-        self.MAX_SUBSCRIPTIONS = int((shioaji_config or {}).get("max_subscriptions", 120))
+        self.MAX_SUBSCRIPTIONS = int((shioaji_config or {}).get("max_subscriptions", 200))
         self.contracts_timeout = int(os.getenv("SHIOAJI_CONTRACTS_TIMEOUT", "10000"))
         _cfg_fetch = (shioaji_config or {}).get("fetch_contract")
         self.fetch_contract = (
