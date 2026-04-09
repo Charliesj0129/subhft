@@ -242,9 +242,7 @@ class StartupPositionVerifier:
         from hft_platform.execution.checkpoint import PositionCheckpointWriter
 
         if trading_date is None:
-            trading_date = datetime.fromtimestamp(
-                timebase.now_s(), tz=ZoneInfo("Asia/Taipei")
-            ).strftime("%Y%m%d")
+            trading_date = datetime.fromtimestamp(timebase.now_s(), tz=ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
 
         logger.info("position_recovery: starting", trading_date=trading_date)
 
