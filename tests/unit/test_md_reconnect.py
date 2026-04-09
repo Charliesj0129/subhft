@@ -370,6 +370,7 @@ class TestTriggerReconnect:
         assert md.state == FeedState.DISCONNECTED
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(20)
     async def test_timeout_sets_disconnected(self, md: _FakeMD) -> None:
         now_ts = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp()
         md._last_reconnect_ts = 0.0
