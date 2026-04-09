@@ -1,9 +1,8 @@
 """Tests for _VALID_STAGES allowlist in LatencyRecorder."""
+
 from unittest.mock import MagicMock
 
-import pytest
-
-from hft_platform.observability.latency import LatencyRecorder, _VALID_STAGES
+from hft_platform.observability.latency import _VALID_STAGES, LatencyRecorder
 
 
 class TestValidStagesAllowlist:
@@ -18,10 +17,15 @@ class TestValidStagesAllowlist:
             "strategy",
             "risk",
             "order",
+            "order_queue",
             "execution",
             "gateway",
             "record",
             "bus_publish",
+            "api_place_order",
+            "api_update_order",
+            "api_cancel_order",
+            "e2e_order",
         }
         assert _VALID_STAGES == expected
 

@@ -30,9 +30,7 @@ def _directional_plan(*, stance: str = "long", trigger: str = "Break above R1") 
 
 def _report(
     *,
-    market_verdict: str = (
-        "\u504f\u591a\uff0c\u4f46\u9700\u7ad9\u7a69 R1 \u624d\u80fd\u5ef6\u7e8c\u3002"
-    ),
+    market_verdict: str = ("\u504f\u591a\uff0c\u4f46\u9700\u7ad9\u7a69 R1 \u624d\u80fd\u5ef6\u7e8c\u3002"),
 ) -> LLMDecisionReport:
     return LLMDecisionReport(
         market_verdict=market_verdict,
@@ -210,6 +208,7 @@ def test_llm_dossier_validate_accepts_complete_dossier() -> None:
     dossier = _dossier()
 
     dossier.validate()
+    assert dossier.symbol != ""
 
 
 @pytest.mark.parametrize(
@@ -275,6 +274,7 @@ def test_llm_decision_report_validate_accepts_complete_report() -> None:
     report = _report()
 
     report.validate()
+    assert report.market_verdict is not None
 
 
 @pytest.mark.parametrize(("field_name", "value"), (("intraday_plan", None), ("swing_plan", object())))
@@ -378,9 +378,7 @@ def test_llm_decision_report_coerces_sequences_to_tuples() -> None:
     assert report.key_levels == ("R1 22000", "S1 21800")
     assert report.invalidations == ("Lose follow-through after breakout",)
     assert report.execution_notes == ("Wait for confirmation candle",)
-    assert report.evidence_refs == (
-        EvidenceRef(key="flow", detail="Opening flow stayed net positive."),
-    )
+    assert report.evidence_refs == (EvidenceRef(key="flow", detail="Opening flow stayed net positive."),)
 
 
 def test_llm_decision_report_rejects_scalar_string_key_levels_at_construction() -> None:
@@ -541,10 +539,7 @@ def test_llm_decision_report_validate_rejects_out_of_range_confidence(confidence
 
 def test_llm_decision_report_validate_rejects_generic_verdict_text() -> None:
     report = _report(
-        market_verdict=(
-            "\u5e02\u5834\u6709\u6f32\u6709\u8dcc\uff0c"
-            "\u8acb\u81ea\u884c\u5224\u65b7\u98a8\u96aa"
-        )
+        market_verdict=("\u5e02\u5834\u6709\u6f32\u6709\u8dcc\uff0c\u8acb\u81ea\u884c\u5224\u65b7\u98a8\u96aa")
     )
 
     with pytest.raises(ValueError):

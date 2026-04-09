@@ -159,19 +159,7 @@ class MarketDataReconnectMixin:
                 ).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False
-        # Per-facade LOB/Feature reset is deferred via _pending_warmup_reset.
-        # Apply it now on the event loop thread for thread-safe dict mutation.
-        client = getattr(self, "client", None)
-        if hasattr(client, "_apply_pending_resets"):
-            client._apply_pending_resets()
-        elif not hasattr(client, "get_healthy_feed_gap_s"):
-            # Single-client mode: global reset on event loop (already safe).
-            lob = getattr(self, "lob", None)
-            if lob is not None and hasattr(lob, "reset_books"):
-                lob.reset_books()
-            fe = getattr(self, "feature_engine", None)
-            if fe is not None and hasattr(fe, "reset_all"):
-                fe.reset_all()
+        self._apply_post_reconnect_resets()
         if ok:
             self._set_state(FeedState.CONNECTED)
             self.last_event_ts = timebase.now_s()
@@ -188,6 +176,19 @@ class MarketDataReconnectMixin:
         else:
             self._set_state(FeedState.DISCONNECTED)
         return ok
+
+    def _apply_post_reconnect_resets(self: Any) -> None:
+        """Apply deferred LOB/Feature resets after reconnect (thread-safe on event loop)."""
+        client: Any = getattr(self, "client", None)
+        if hasattr(client, "_apply_pending_resets"):
+            client._apply_pending_resets()
+        elif not hasattr(client, "get_healthy_feed_gap_s"):
+            lob = getattr(self, "lob", None)
+            if lob is not None and hasattr(lob, "reset_books"):
+                lob.reset_books()
+            fe = getattr(self, "feature_engine", None)
+            if fe is not None and hasattr(fe, "reset_all"):
+                fe.reset_all()
 
     def _mark_pending_reconnect(self: Any, gap: float, reason: str | None = None) -> None:
         reason_label = reason or "heartbeat_gap"

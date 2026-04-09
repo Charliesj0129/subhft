@@ -16,7 +16,6 @@ import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 import yaml
 
 from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
@@ -281,6 +280,7 @@ class TestScheduleReconnect:
             pool._schedule_reconnect("0")
             # Wait for background thread to complete
             import threading
+
             for t in threading.enumerate():
                 if t.name == "facade-reconnect-0":
                     t.join(timeout=5)
@@ -333,6 +333,7 @@ class TestNotifyWarmupReset:
             pool.create_facades()
             # Should not raise when lob/feature_engine are None
             pool._notify_warmup_reset("0")
+            assert pool._clients is not None
         finally:
             pool.cleanup_shards()
             os.unlink(path)
