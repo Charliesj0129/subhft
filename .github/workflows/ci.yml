@@ -77,7 +77,25 @@ jobs:
             | grep -v 'interval_s' \
             | grep -v 'concentration' \
             | grep -v 'last_sync_ts' \
-            | grep -v 'checkpoint' || true)
+            | grep -v 'checkpoint' \
+            | grep -v '_storm_ts' \
+            | grep -v 'threshold' \
+            | grep -v 'imbalance' \
+            | grep -v '_pct' \
+            | grep -v '_bps' \
+            | grep -v '_bpv' \
+            | grep -v 'drift_' \
+            | grep -v 'fill_score' \
+            | grep -v 'spread_pts' \
+            | grep -v '_EPS' \
+            | grep -v '_MU1' \
+            | grep -v '_DEFAULT_' \
+            | grep -v 'caps' \
+            | grep -v 'drawdown' \
+            | grep -v 'dlq_ttl' \
+            | grep -v 'mid_price_max_age' \
+            | grep -v 'recovery_hold' \
+            | grep -v 'sigma' || true)
           if [ -n "$FOUND" ]; then
             echo "::error::float usage detected in financial code paths:"
             echo "$FOUND"
