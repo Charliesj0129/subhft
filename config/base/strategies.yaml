@@ -117,7 +117,7 @@ strategies:
       mfg_ema_alpha: 0.01
       spread_threshold_pts: 5       # 5 pts > 4.0 RT (1.0 pt edge). Reduce to 4 if comm < 1.0
       toxicity_max: 9999            # Disabled
-      max_pos: 1                    # Conservative start: 1 lot only
+      max_pos: 2                    # Verified: per-fill edge unchanged at +0.64 pts
       trade_symbol: "TMFD6"         # Cross-instrument: trade 微台 using 大台 signals
 
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
