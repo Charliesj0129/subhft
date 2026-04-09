@@ -220,6 +220,16 @@ class SubscriptionManager:
         if now - last < cooldown:
             return
         c._last_resubscribe_ts = now  # type: ignore[attr-defined]
+        # Unsubscribe existing symbols from broker SDK before re-subscribing
+        # to prevent subscription count accumulation on soft recovery.
+        old_codes = set(c.subscribed_codes)
+        for sym in c.symbols:
+            code = sym.get("code")
+            if code and code in old_codes:
+                try:
+                    self._unsubscribe_symbol(sym)
+                except Exception as exc:
+                    logger.debug("unsubscribe_before_resubscribe_failed", code=code, error=str(exc))
         c.subscribed_codes = set()
         c.subscribed_count = 0
         failed: list[dict[str, Any]] = []

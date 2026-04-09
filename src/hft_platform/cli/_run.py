@@ -65,7 +65,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     from prometheus_client import start_http_server
 
     from hft_platform.main import HFTSystem
+    from hft_platform.observability.metrics import MetricsRegistry
 
+    MetricsRegistry.get()  # fully populate REGISTRY before scrape thread starts
     start_http_server(settings.get("prometheus_port", 9090))
     print(f"Prometheus metrics started on :{settings.get('prometheus_port', 9090)}")
 

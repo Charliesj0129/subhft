@@ -714,11 +714,23 @@ class QuoteConnectionPool:
                     new_codes = {str(s.get("code", "")) for s in groups.get(group_id, []) if s.get("code")}
                     self._slots[group_id].symbols = new_codes
 
-            # Reload config and resubscribe each connection (with callback wrapper)
+            # Reload config and resubscribe each connection (with callback wrapper).
+            # Unsubscribe old symbols first to prevent broker-side subscription leak.
             active_cb = self._user_callback
             resubscribed = 0
             for i, facade in enumerate(self._clients):
                 try:
+                    # Unsubscribe old symbols before reloading config
+                    if facade.logged_in:
+                        sub_mgr = facade._client._subscriptions()
+                        old_codes = set(facade._client.subscribed_codes)
+                        for sym in facade._client.symbols:
+                            code = sym.get("code")
+                            if code and code in old_codes:
+                                try:
+                                    sub_mgr._unsubscribe_symbol(sym)
+                                except Exception:
+                                    pass
                     facade._client._load_config()
                     if facade.logged_in and active_cb is not None:
                         slot = self._slots[i] if i < len(self._slots) else None

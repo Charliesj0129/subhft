@@ -5,6 +5,7 @@ import signal
 from prometheus_client import start_http_server
 from structlog import get_logger
 
+from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.services.system import HFTSystem
 
 # Configure structlog globally? HFTSystem does it.
@@ -12,6 +13,11 @@ logger = get_logger("launcher")
 
 
 async def main():
+    # Ensure MetricsRegistry is fully constructed BEFORE the Prometheus
+    # scrape thread starts, preventing race conditions where a scrape
+    # sees a partially-populated REGISTRY during __init__ re-registration.
+    MetricsRegistry.get()
+
     prom_port_raw = os.getenv("HFT_PROM_PORT", "9090")
     try:
         prom_port = int(prom_port_raw)

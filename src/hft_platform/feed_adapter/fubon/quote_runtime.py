@@ -38,6 +38,7 @@ logger = get_logger("feed_adapter.fubon.quote_runtime")
 
 # Number of order book levels forwarded from the Fubon L5 feed.
 _BOOK_LEVELS: int = 5
+PRICE_SCALE: int = 10_000
 
 
 class FubonQuoteRuntime:
@@ -173,6 +174,7 @@ class FubonQuoteRuntime:
             price_raw = _get(data, "close", None)
             if price_raw is None:
                 price_raw = _get(data, "price", 0)
+            price_scaled = _scale_price(price_raw)
             volume = int(_get(data, "volume", 0))
             ts_raw = _get(data, "datetime", None)
 
@@ -181,7 +183,7 @@ class FubonQuoteRuntime:
 
             # Overwrite pre-allocated buffer (no new dict)
             buf["code"] = symbol
-            buf["close"] = price_raw
+            buf["close"] = price_scaled
             buf["volume"] = volume
             buf["ts"] = ts_ns
 
@@ -229,9 +231,9 @@ class FubonQuoteRuntime:
             av = buf["ask_volume"]
 
             for i in range(_BOOK_LEVELS):
-                bp[i] = bid_prices_raw[i] if i < n_bp else 0
+                bp[i] = _scale_price(bid_prices_raw[i]) if i < n_bp else 0
                 bv[i] = int(bid_sizes_raw[i]) if i < n_bv else 0
-                ap[i] = ask_prices_raw[i] if i < n_ap else 0
+                ap[i] = _scale_price(ask_prices_raw[i]) if i < n_ap else 0
                 av[i] = int(ask_sizes_raw[i]) if i < n_av else 0
 
             buf["code"] = symbol
@@ -327,3 +329,10 @@ def _ts_to_ns(ts_val: Any) -> int:
     if ts_val is None:
         return 0
     return timebase.coerce_ns(ts_val)
+
+
+def _scale_price(raw: Any) -> int:
+    """Convert a raw Fubon quote price to canonical x10000 scaled int."""
+    if raw is None:
+        return 0
+    return int(float(raw) * PRICE_SCALE)

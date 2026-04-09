@@ -10,20 +10,27 @@ from hft_platform.observability.metrics import MetricsRegistry
 
 logger = structlog.get_logger("observability.latency")
 
-_VALID_STAGES: frozenset[str] = frozenset({
-    "normalize",
-    "lob",
-    "lob_only",
-    "lob_process",
-    "feature",
-    "strategy",
-    "risk",
-    "order",
-    "execution",
-    "gateway",
-    "record",
-    "bus_publish",
-})
+_VALID_STAGES: frozenset[str] = frozenset(
+    {
+        "normalize",
+        "lob",
+        "lob_only",
+        "lob_process",
+        "feature",
+        "strategy",
+        "risk",
+        "order",
+        "order_queue",
+        "execution",
+        "gateway",
+        "record",
+        "bus_publish",
+        "api_place_order",
+        "api_cancel_order",
+        "api_update_order",
+        "e2e_order",
+    }
+)
 
 
 def _bool_env(value: Any, default: bool = False) -> bool:

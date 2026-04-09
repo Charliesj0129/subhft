@@ -158,7 +158,7 @@ class GatewayService:
             default_dedup_every,
         )
         self._metrics_enabled = not (
-            policy == "minimal" and _bool_env(os.getenv("HFT_GATEWAY_METRICS", "1"), default=True) is False
+            obs_policy == "minimal" and _bool_env(os.getenv("HFT_GATEWAY_METRICS", "1"), default=True) is False
         )
         self._metrics_enabled = _bool_env(os.getenv("HFT_GATEWAY_METRICS", "1"), default=self._metrics_enabled)
         self._refresh_metrics_registry()
