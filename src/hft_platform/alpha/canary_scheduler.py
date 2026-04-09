@@ -63,6 +63,7 @@ class CanaryAutoScheduler:
         interval_s: float | None = None,
         dry_run: bool | None = None,
         metrics_query: Any | None = None,
+        notification_dispatcher: Any | None = None,
     ) -> None:
         self._monitor = monitor
 
@@ -73,6 +74,7 @@ class CanaryAutoScheduler:
         self._dry_run: bool = dry_run if dry_run is not None else env_dry_run
 
         self._metrics_query: Any | None = metrics_query
+        self._notification_dispatcher: Any | None = notification_dispatcher
 
         self._task: asyncio.Task[None] | None = None
 
@@ -207,6 +209,22 @@ class CanaryAutoScheduler:
                         alpha_id=alpha_id,
                         state=status.state,
                     )
+                    # Notify on rollback or graduation
+                    if status.state in ("rolled_back", "graduated") and self._notification_dispatcher is not None:
+                        try:
+                            asyncio.create_task(
+                                self._notification_dispatcher.notify_canary_action(
+                                    alpha_id=str(alpha_id),
+                                    action=status.state,
+                                    reason=status.reason,
+                                )
+                            )
+                        except Exception as _notify_exc:  # noqa: BLE001
+                            logger.warning(
+                                "canary_auto_notify_failed",
+                                alpha_id=alpha_id,
+                                error=str(_notify_exc),
+                            )
             except Exception as _exc:  # noqa: BLE001
                 logger.error(
                     "canary_auto_evaluate_error",

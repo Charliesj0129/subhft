@@ -531,3 +531,19 @@ def render_position_recovery_failed(
         lines.append(f"  {symbol}: ckpt={ckpt_qty} broker={broker_qty}")
     lines.append("請手動確認部位後重啟")
     return "\n".join(lines)
+
+
+def render_canary_action(alpha_id: str, action: str, reason: str) -> str:
+    """Canary rollback or graduation notification.
+
+    Args:
+        alpha_id: Alpha identifier.
+        action: Action taken ("rolled_back" or "graduated").
+        reason: Human-readable reason.
+
+    Returns:
+        Formatted canary action alert string.
+    """
+    icon = "🔴" if action == "rolled_back" else "🟢"
+    label = "ROLLBACK" if action == "rolled_back" else "GRADUATED"
+    return f"{icon} Canary {label}: {escape(alpha_id)}\n{escape(reason)}"

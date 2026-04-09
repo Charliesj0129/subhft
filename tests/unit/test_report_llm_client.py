@@ -31,7 +31,7 @@ class _FakeSession:
         self._responses = list(responses)
         self.calls: list[dict[str, object]] = []
 
-    def post(self, url: str, *, json: object, headers: dict[str, str], timeout: float) -> _FakeResponse:
+    def post(self, url: str, *, json: object, headers: dict[str, str], timeout: object = None) -> _FakeResponse:
         self.calls.append(
             {
                 "url": url,

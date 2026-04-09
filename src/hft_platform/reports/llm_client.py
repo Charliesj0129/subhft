@@ -69,7 +69,8 @@ class OpenRouterClient:
 
         for attempt in range(self._max_retries + 1):
             try:
-                async with session.post(url, json=payload, headers=headers, timeout=self._timeout_s) as response:
+                _timeout = aiohttp.ClientTimeout(total=self._timeout_s) if aiohttp is not None else self._timeout_s
+                async with session.post(url, json=payload, headers=headers, timeout=_timeout) as response:
                     if response.status in _RETRYABLE_STATUSES:
                         if attempt < self._max_retries:
                             await asyncio.sleep(2**attempt)

@@ -138,9 +138,11 @@ class ReconnectOrchestrator:
             if c.metrics:
                 c.metrics.feed_reconnect_total.labels(result="exception").inc()
                 try:
+                    from hft_platform.observability.metrics import cap_exception_type  # noqa: PLC0415
+
                     c.metrics.feed_reconnect_exception_total.labels(
                         reason=reason or "unknown",
-                        exception_type=type(exc).__name__,
+                        exception_type=cap_exception_type(exc),
                     ).inc()
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))

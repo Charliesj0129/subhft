@@ -83,7 +83,8 @@ class NotificationDispatcher:
         """
         msg = templates.render_stormguard_change(old=old, new=new, reason=reason)
         logger.info("dispatcher.notify_stormguard_change", old=old, new=new, reason=reason)
-        await self._sender.send(msg, critical=False)
+        is_critical = new in ("HALT", "STORM")
+        await self._sender.send(msg, critical=is_critical)
 
     async def notify_pre_market_pass(self) -> None:
         """Notify operator that the pre-market health check passed."""
@@ -517,6 +518,19 @@ class NotificationDispatcher:
         )
         logger.info("dispatcher.notify_position_recovery", source=source, loaded=loaded)
         await self._sender.send(msg, critical=False)
+
+    async def notify_canary_action(self, *, alpha_id: str, action: str, reason: str) -> None:
+        """Notify operator of a canary rollback or graduation.
+
+        Args:
+            alpha_id: Alpha identifier.
+            action: "rolled_back" or "graduated".
+            reason: Human-readable reason for the action.
+        """
+        msg = templates.render_canary_action(alpha_id=alpha_id, action=action, reason=reason)
+        logger.warning("dispatcher.notify_canary_action", alpha_id=alpha_id, action=action)
+        is_critical = action == "rolled_back"
+        await self._sender.send(msg, critical=is_critical)
 
     async def notify_tca_pnl_supplement(self, *, tca_section: str, pnl_section: str) -> None:
         """Send the TCA and PnL supplement for the daily report.

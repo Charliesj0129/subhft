@@ -63,6 +63,8 @@ class TelegramSender:
         self._last_send_ts: float = 0.0
         self._session: _AiohttpClientSession | None = None
 
+    _MAX_MESSAGE_LEN: int = 4096
+
     async def send(self, text: str, *, critical: bool = False) -> bool:
         """Send a message to the configured chat.
 
@@ -76,6 +78,37 @@ class TelegramSender:
         if not self._enabled:
             return False
 
+        # Split oversized messages into <=4096-char chunks on newline boundaries
+        if len(text) > self._MAX_MESSAGE_LEN:
+            chunks = self._split_text(text, self._MAX_MESSAGE_LEN)
+            all_ok = True
+            for chunk in chunks:
+                ok = await self._send_single(chunk, critical=critical)
+                if not ok:
+                    all_ok = False
+            return all_ok
+
+        return await self._send_single(text, critical=critical)
+
+    @staticmethod
+    def _split_text(text: str, max_len: int) -> list[str]:
+        """Split *text* into chunks of at most *max_len* chars on newline boundaries."""
+        chunks: list[str] = []
+        while text:
+            if len(text) <= max_len:
+                chunks.append(text)
+                break
+            # Find the last newline within the limit
+            split_at = text.rfind("\n", 0, max_len)
+            if split_at <= 0:
+                # No newline found; hard-split at max_len
+                split_at = max_len
+            chunks.append(text[:split_at])
+            text = text[split_at:].lstrip("\n")
+        return chunks
+
+    async def _send_single(self, text: str, *, critical: bool = False) -> bool:
+        """Send a single <=4096-char message to the configured chat."""
         now = time.monotonic()
         if not critical and (now - self._last_send_ts) < self._rate_limit_s:
             logger.debug(

@@ -233,7 +233,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             logger.debug("operation_fallback", error=str(exc))
             pass
         # Cache feature engine method ref to avoid per-tick getattr (DATA-09)
-        self._fe_process_lob_update = getattr(self.feature_engine, "process_lob_update", None) if self.feature_engine else None
+        self._fe_process_lob_update = (
+            getattr(self.feature_engine, "process_lob_update", None) if self.feature_engine else None
+        )
         self._feature_shadow_engine: FeatureEngine | None = None
         self._shm_publisher: ShmSnapshotWriter | None = None
         self._shm_symbol_index: dict[str, int] = {}
@@ -292,13 +294,19 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # Pre-resolve broker-thread drop counter children (thread-safe .inc())
         _mr = self.metrics_registry
         self._cb_drop_parse_miss = (
-            _mr.md_callback_drop_total.labels(reason="parse_miss") if _mr and hasattr(_mr, "md_callback_drop_total") else None
+            _mr.md_callback_drop_total.labels(reason="parse_miss")
+            if _mr and hasattr(_mr, "md_callback_drop_total")
+            else None
         )
         self._cb_drop_loop_missing = (
-            _mr.md_callback_drop_total.labels(reason="loop_missing") if _mr and hasattr(_mr, "md_callback_drop_total") else None
+            _mr.md_callback_drop_total.labels(reason="loop_missing")
+            if _mr and hasattr(_mr, "md_callback_drop_total")
+            else None
         )
         self._cb_drop_callback_error = (
-            _mr.md_callback_drop_total.labels(reason="callback_error") if _mr and hasattr(_mr, "md_callback_drop_total") else None
+            _mr.md_callback_drop_total.labels(reason="callback_error")
+            if _mr and hasattr(_mr, "md_callback_drop_total")
+            else None
         )
         self._feature_update_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_quality_flag_metric_children: dict[str, Any] = {}
@@ -329,6 +337,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         if self._record_direct:
             try:
                 from hft_platform.recorder.mapper import map_event_to_record
+
                 self._map_event_to_record = map_event_to_record
             except Exception:
                 pass
@@ -348,7 +357,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._record_degrade_check_s = 10.0
         self._record_degrade_last_check: float = 0.0
         self._recorder_degraded_gauge = self.metrics_registry.recorder_degraded_mode if self.metrics_registry else None
-        self._recorder_degraded_counter = self.metrics_registry.recorder_degraded_total if self.metrics_registry else None
+        self._recorder_degraded_counter = (
+            self.metrics_registry.recorder_degraded_total if self.metrics_registry else None
+        )
 
         # Per-symbol feed gap monitoring (bounded by subscribed symbol count)
         self._symbol_last_tick: dict[str, float] = {}
@@ -1401,6 +1412,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             map_fn = self._map_event_to_record
             if map_fn is None:
                 from hft_platform.recorder.mapper import map_event_to_record
+
                 self._map_event_to_record = map_event_to_record
                 map_fn = map_event_to_record
             mapped = map_fn(event, self.symbol_metadata, self.normalizer.price_codec)
@@ -1442,8 +1454,12 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
     async def _record_put_with_tracking(self, topic: str, payload: Any) -> None:
         """Await recorder queue put with pending counter tracking."""
+        queue = self.recorder_queue
+        if queue is None:
+            self._record_pending_puts -= 1
+            return
         try:
-            await self.recorder_queue.put({"topic": topic, "data": payload})
+            await queue.put({"topic": topic, "data": payload})
         finally:
             self._record_pending_puts -= 1
 
@@ -1523,9 +1539,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         except Exception as exc:
             logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
             if self.metrics_registry and hasattr(self.metrics_registry, "feed_reconnect_exception_total"):
+                from hft_platform.observability.metrics import cap_exception_type  # noqa: PLC0415
+
                 self.metrics_registry.feed_reconnect_exception_total.labels(
                     reason=reason_label,
-                    exception_type=type(exc).__name__,
+                    exception_type=cap_exception_type(exc),
                 ).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False

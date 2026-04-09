@@ -610,6 +610,17 @@ class HFTSystem:
                     self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
                     logger.critical("Kill switch file detected", path=kill_switch_path, reason=_ks_reason)
 
+            # R11-C4: Telegram /stop emergency halt via Redis key
+            _redis_halt = getattr(self, "_redis_client", None)
+            if _redis_halt is not None and self.storm_guard.state != StormGuardState.HALT:
+                try:
+                    _halt_val = await loop.run_in_executor(None, _redis_halt.get, "hft:emergency_halt")
+                    if _halt_val and str(_halt_val) not in ("0", "b'0'", "None"):
+                        self.storm_guard.trigger_halt("TELEGRAM_EMERGENCY_HALT")
+                        logger.critical("Telegram /stop emergency halt activated")
+                except Exception:
+                    pass  # Redis unavailable — fall back to file-based kill switch
+
             t_gateway = self.tasks.get("exec_gateway")
             # Check Health for all critical services
             for name, component, coro_factory in self._iter_supervised_services():

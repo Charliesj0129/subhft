@@ -151,9 +151,11 @@ class MarketDataReconnectMixin:
         except Exception as exc:
             logger.error("Reconnect raised exception", reason=reason_label, error=str(exc))
             if metrics_registry and hasattr(metrics_registry, "feed_reconnect_exception_total"):
+                from hft_platform.observability.metrics import cap_exception_type  # noqa: PLC0415
+
                 metrics_registry.feed_reconnect_exception_total.labels(
                     reason=reason_label,
-                    exception_type=type(exc).__name__,
+                    exception_type=cap_exception_type(exc),
                 ).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False

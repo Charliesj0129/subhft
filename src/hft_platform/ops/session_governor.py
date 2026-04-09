@@ -258,9 +258,9 @@ class SessionGovernor:
                 except RuntimeError:
                     logger.warning("session_force_flat_without_running_loop", track=track_name)
                 else:
-                    task = loop.create_task(
-                        self._position_flattener.flatten_track(track_name, list(track_cfg.symbols))
-                    )
+                    task = loop.create_task(self._position_flattener.flatten_track(track_name, list(track_cfg.symbols)))
+                    task._flatten_retry_count = 0  # type: ignore[attr-defined]
+                    task._flatten_track_name = track_name  # type: ignore[attr-defined]
                     task.add_done_callback(self._on_flatten_task_done)
         for cb in self._phase_callbacks:
             try:
@@ -268,18 +268,58 @@ class SessionGovernor:
             except Exception as exc:  # noqa: BLE001
                 logger.error("session_phase_callback_error", error=str(exc))
 
+    _MAX_FLATTEN_RETRIES: int = 2
+
     def _on_flatten_task_done(self, task: asyncio.Task) -> None:  # type: ignore[type-arg]
-        """Log errors from fire-and-forget flatten tasks."""
+        """Log errors from fire-and-forget flatten tasks; retry up to _MAX_FLATTEN_RETRIES times."""
         if task.cancelled():
             logger.warning("session_flatten_task_cancelled")
             return
         exc = task.exception()
         if exc is not None:
+            retry_count = getattr(task, "_flatten_retry_count", 0)
+            track_name = getattr(task, "_flatten_track_name", "unknown")
             logger.critical(
                 "session_flatten_task_failed",
                 error=str(exc),
                 error_type=type(exc).__name__,
+                retry=retry_count,
+                track=track_name,
             )
+            # Send notification if dispatcher available
+            if self._notification_dispatcher is not None:
+                try:
+                    asyncio.ensure_future(
+                        self._notification_dispatcher.notify_flatten_result(
+                            scope=track_name,
+                            fully_closed=0,
+                            partially_closed=0,
+                            failed=1,
+                            failed_symbols=[f"flatten_exception: {type(exc).__name__}"],
+                        )
+                    )
+                except Exception as _notify_exc:  # noqa: BLE001
+                    logger.warning("session_flatten_notify_failed", error=str(_notify_exc))
+
+            # Retry if under limit
+            if retry_count < self._MAX_FLATTEN_RETRIES and self._position_flattener is not None:
+                track_cfg = self._tracks.get(track_name)
+                if track_cfg is not None:
+                    logger.warning(
+                        "session_flatten_task_retry",
+                        track=track_name,
+                        retry=retry_count + 1,
+                    )
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        return
+                    new_task = loop.create_task(
+                        self._position_flattener.flatten_track(track_name, list(track_cfg.symbols))
+                    )
+                    new_task._flatten_retry_count = retry_count + 1  # type: ignore[attr-defined]
+                    new_task._flatten_track_name = track_name  # type: ignore[attr-defined]
+                    new_task.add_done_callback(self._on_flatten_task_done)
 
     def get_phase(self, symbol: str) -> SessionPhase:
         """Return current phase for a symbol."""

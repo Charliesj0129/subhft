@@ -1058,6 +1058,29 @@ class SystemBootstrapper:
                         risk_engine._notification_dispatcher = notification_dispatcher
                         logger.info("RiskEngine notification_dispatcher wired")
 
+                    # R11-C1+C2: Wire StormGuard halt callback + state transition notifications
+                    import asyncio as _asyncio
+
+                    _disp = notification_dispatcher
+
+                    def _on_halt_cb() -> None:
+                        try:
+                            loop = _asyncio.get_event_loop()
+                            if loop.is_running():
+                                loop.create_task(_disp.notify_halt("StormGuard HALT triggered"))
+                        except Exception:
+                            pass
+
+                    storm_guard._on_halt_callback = _on_halt_cb
+                    logger.info("StormGuard on_halt_callback wired to NotificationDispatcher")
+
+                    # R11-C3: Late-bind dispatcher + flattener into AutonomyMonitor
+                    if autonomy_monitor is not None:
+                        autonomy_monitor._notification_dispatcher = notification_dispatcher
+                        if hasattr(self, "_position_flattener"):
+                            autonomy_monitor._position_flattener = self._position_flattener
+                        logger.info("AutonomyMonitor notification_dispatcher wired")
+
                     daily_report_service = DailyReportService(
                         ch_client=ch_client,
                         notification_dispatcher=notification_dispatcher,
