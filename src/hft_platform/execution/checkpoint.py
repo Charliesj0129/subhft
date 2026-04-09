@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
 from hft_platform.core.timebase import now_ns
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ def _taifex_trading_date() -> str:
     Futures night session (15:00-05:00) belongs to the PREVIOUS calendar date.
     If current Taipei time is between 00:00 and 05:00, use D-1.
     """
-    now = datetime.now(tz=_TZ_TPE)
+    now = datetime.fromtimestamp(timebase.now_s(), tz=_TZ_TPE)
     if now.hour < 5:
         now = now - timedelta(days=1)
     return now.strftime("%Y%m%d")
