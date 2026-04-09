@@ -25,9 +25,7 @@ import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -613,8 +611,6 @@ def test_maybe_update_features_happy_path_process_lob_update():
 
 
 def test_maybe_update_features_happy_path_fallback_process_lob_stats():
-    from hft_platform.events import LOBStatsEvent
-
     svc, *_ = _make_service()
 
     feature_engine = MagicMock()
@@ -758,8 +754,9 @@ def test_process_raw_tick_publishes_event():
 def test_process_raw_bidask_publishes_event():
     svc, bus, *_ = _make_service()
 
-    from hft_platform.events import BidAskEvent
     import numpy as np
+
+    from hft_platform.events import BidAskEvent
 
     bids = np.array([[5000000, 10]], dtype=np.int64)
     asks = np.array([[5001000, 5]], dtype=np.int64)
@@ -870,14 +867,10 @@ def test_within_reconnect_window_inside_hours():
     svc.reconnect_hours_2 = ""
     svc._reconnect_tzinfo = ZoneInfo("UTC")
 
-    # Patch to a time inside the window
-    fake_now = dt.datetime(2025, 1, 6, 10, 30, 0, tzinfo=dt.timezone.utc)  # Monday 10:30
-    with patch("hft_platform.services.market_data.dt") as mock_dt:
-        mock_dt.datetime = MagicMock()
-        mock_dt.datetime.now = MagicMock(return_value=fake_now)
-        mock_dt.time = dt.time
-        mock_dt.date = dt.date
-        mock_dt.UTC = dt.UTC
+    # Monday 10:30 UTC — inside window
+    fake_ts = dt.datetime(2025, 1, 6, 10, 30, 0, tzinfo=dt.timezone.utc).timestamp()
+    with patch("hft_platform.services.market_data.timebase") as mock_tb:
+        mock_tb.now_s.return_value = fake_ts
         with patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}):
             result = svc._within_reconnect_window()
     assert result is True
@@ -893,14 +886,10 @@ def test_within_reconnect_window_outside_hours():
     svc.reconnect_hours_2 = ""
     svc._reconnect_tzinfo = ZoneInfo("UTC")
 
-    # Patch to a time outside the window (15:30 UTC)
-    fake_now = dt.datetime(2025, 1, 6, 15, 30, 0, tzinfo=dt.timezone.utc)
-    with patch("hft_platform.services.market_data.dt") as mock_dt:
-        mock_dt.datetime = MagicMock()
-        mock_dt.datetime.now = MagicMock(return_value=fake_now)
-        mock_dt.time = dt.time
-        mock_dt.date = dt.date
-        mock_dt.UTC = dt.UTC
+    # Monday 15:30 UTC — outside window
+    fake_ts = dt.datetime(2025, 1, 6, 15, 30, 0, tzinfo=dt.timezone.utc).timestamp()
+    with patch("hft_platform.services.market_data.timebase") as mock_tb:
+        mock_tb.now_s.return_value = fake_ts
         with patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}):
             result = svc._within_reconnect_window()
     assert result is False
@@ -1029,8 +1018,9 @@ def test_log_first_tick_event_only_once():
 
 
 def test_log_first_bidask_event():
-    from hft_platform.events import BidAskEvent
     import numpy as np
+
+    from hft_platform.events import BidAskEvent
 
     svc, *_ = _make_service()
     svc._first_bidask_event = False
@@ -1127,7 +1117,9 @@ def test_on_shioaji_event_with_loop_enqueues():
 def test_on_shioaji_event_exception_is_handled():
     svc, *_ = _make_service()
     # Make try_fast_extract_callback_payload raise
-    with patch("hft_platform.services._md_ingestion.try_fast_extract_callback_payload", side_effect=RuntimeError("oops")):
+    with patch(
+        "hft_platform.services._md_ingestion.try_fast_extract_callback_payload", side_effect=RuntimeError("oops")
+    ):
         # Should not raise
         svc._on_shioaji_event({"code": "2330"})
     assert svc.raw_queue.qsize() == 0

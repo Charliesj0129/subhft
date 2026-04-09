@@ -4,6 +4,7 @@ from datetime import date
 
 from structlog import get_logger
 
+from hft_platform.core import timebase
 from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
 from hft_platform.recorder.health import PipelineHealthTracker
 from hft_platform.recorder.mode import RecorderMode, get_recorder_mode
@@ -315,6 +316,9 @@ class RecorderService:
     def __init__(self, queue: asyncio.Queue, _clickhouse_client=None):
         self.queue = queue
         self.running = False
+        # Health attributes for health endpoint probes
+        self.healthy: bool = True
+        self.last_write_ok: int = 0  # nanosecond timestamp of last successful write
 
         # CE3-01: Recorder mode
         self._mode = get_recorder_mode()
@@ -492,7 +496,10 @@ class RecorderService:
                         else:
                             rows = [data]
                         ok = await self._wal_first_writer.write(topic, rows)
-                        if not ok:
+                        if ok:
+                            self.last_write_ok = timebase.now_ns()
+                        else:
+                            self.healthy = False
                             self.health_tracker.record_event("data_loss")
                             try:
                                 from hft_platform.observability.metrics import MetricsRegistry
@@ -502,6 +509,7 @@ class RecorderService:
                                 logger.debug("operation_failed", error=str(exc))
                     elif topic in self.batchers:
                         await self.batchers[topic].add(data)
+                        self.last_write_ok = timebase.now_ns()
                     else:
                         self._unknown_topic_drops += 1
                         try:
@@ -518,6 +526,15 @@ class RecorderService:
                     raise  # Must propagate for shutdown
                 except Exception as exc:
                     self._process_errors += 1
+                    self.healthy = False
+                    try:
+                        from hft_platform.observability.metrics import MetricsRegistry
+
+                        m = MetricsRegistry.get()
+                        if m and hasattr(m, "recorder_process_errors_total"):
+                            m.recorder_process_errors_total.inc()
+                    except Exception:
+                        pass
                     logger.error(
                         "recorder_process_error",
                         topic=topic,

@@ -332,7 +332,7 @@ class MarketDataReconnectMixin:
                     )
 
                 min_stale = getattr(self, "_symbol_gap_min_stale_count", 5)
-                ratio_threshold = getattr(self, "_symbol_gap_stale_ratio_threshold", 0.85)
+                ratio_threshold = getattr(self, "_symbol_gap_stale_ratio_threshold", 0.30)
                 severe_gap = getattr(self, "_symbol_gap_severe_gap_s", 30.0)
                 consec_cycles = getattr(self, "_symbol_gap_consecutive_cycles", 5)
                 cooldown = getattr(self, "_symbol_gap_resubscribe_cooldown_s", 120.0)

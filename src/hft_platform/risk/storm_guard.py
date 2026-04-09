@@ -325,7 +325,10 @@ class StormGuard:
         logger.warning("StormGuard Transition", old=old_state.name, new=new_state.name, reason=reason)
 
         # Update Metric
-        self.metrics.stormguard_mode.labels(strategy="system").set(int(new_state))
+        try:
+            self.metrics.stormguard_mode.labels(strategy="system").set(int(new_state))
+        except Exception:
+            pass
 
         # Count transition direction
         direction = "escalation" if int(new_state) > int(old_state) else "de_escalation"

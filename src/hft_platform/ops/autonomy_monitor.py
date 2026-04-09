@@ -287,14 +287,19 @@ class AutonomyMonitor:
         except Exception:
             reasons = []
 
+        _INFRA_REASON_MAP: dict[str, str] = {
+            "rss_unhealthy": "rss_unhealthy",
+            "wal_backlog_unhealthy": "persistence_failure",
+            "clickhouse_unhealthy": "clickhouse_unhealthy",
+            "redis_unhealthy": "redis_unhealthy",
+            "feed_reconnect_unhealthy": "feed_gap_majority",
+            "feed_reconnect_pending": "feed_gap_majority",
+            "feed_reconnect_flapping": "feed_gap_majority",
+            "queue_depth_exceeded": "queue_depth_exceeded",
+        }
         for reason in reasons:
-            if reason in (
-                "rss_unhealthy",
-                "wal_backlog_unhealthy",
-                "clickhouse_unhealthy",
-                "redis_unhealthy",
-            ):
-                rule_name = reason if reason != "wal_backlog_unhealthy" else "persistence_failure"
+            rule_name = _INFRA_REASON_MAP.get(reason)
+            if rule_name is not None:
                 if not self._is_on_cooldown(rule_name, now_ns):
                     decisions.append(
                         MonitorDecision(
@@ -355,11 +360,7 @@ class AutonomyMonitor:
                             failed_symbols=result.failed_symbols,
                         )
                 except Exception as exc:
-                    backoff_ns = int(
-                        self._interval_s
-                        * 1_000_000_000
-                        * (2 ** (self._halt_flatten_attempts - 1))
-                    )
+                    backoff_ns = int(self._interval_s * 1_000_000_000 * (2 ** (self._halt_flatten_attempts - 1)))
                     self._halt_next_retry_ns = timebase.now_ns() + backoff_ns
                     logger.error(
                         "flatten_all_failed",

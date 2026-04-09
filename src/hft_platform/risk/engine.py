@@ -461,7 +461,10 @@ class RiskEngine:
                             strategy_id=intent.strategy_id,
                             symbol=intent.symbol,
                         )
-                        self.metrics.risk_halt_blocked_total.inc()
+                        try:
+                            self.metrics.risk_halt_blocked_total.inc()
+                        except Exception:
+                            pass
                         self._emit_reject_metric(intent.strategy_id, "HALT_BLOCKED_POST_APPROVE")
                         if self._rejection_sink is not None:
                             try:
@@ -546,7 +549,10 @@ class RiskEngine:
                             )
                         )
                     except asyncio.QueueFull:
-                        self.metrics.rejection_sink_overflow_total.inc()
+                        try:
+                            self.metrics.rejection_sink_overflow_total.inc()
+                        except Exception:
+                            pass
                 if intent_dequeued:
                     self.intent_queue.task_done()
 

@@ -569,6 +569,10 @@ class MetricsRegistry:
             "WAL disk space circuit breaker state (1=active, 0=inactive)",
             ["writer"],
         )
+        self.recorder_process_errors_total = Counter(
+            _pn("recorder_process_errors_total"),
+            "Recorder main loop processing errors",
+        )
         # Pipeline health FSM (PipelineHealthTracker)
         self.pipeline_health_state = Gauge(
             _pn("pipeline_health_state"),
@@ -580,6 +584,11 @@ class MetricsRegistry:
         )
         self.queue_depth = Gauge(_pn("queue_depth"), "Queue depth by type", ["queue"])
         self.event_loop_lag_ms = Gauge(_pn("event_loop_lag_ms"), "Event loop lag (ms)")
+        self.startup_warnings_total = Counter(
+            _pn("startup_warnings_total"),
+            "Startup warnings by component",
+            ["component"],
+        )
 
         # Phase 5: Advanced Robustness Metrics
         # Circuit breaker state (0=closed/healthy, 1=open/tripped)

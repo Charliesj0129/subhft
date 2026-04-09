@@ -258,15 +258,18 @@ class SubscriptionManager:
         """User-facing resubscribe with metrics tracking."""
         c = self._client
         if not c.api or not c.logged_in or not c.tick_callback:
-            c.metrics.feed_resubscribe_total.labels(result="skip").inc()
+            if c.metrics:
+                c.metrics.feed_resubscribe_total.labels(result="skip").inc()
             return False
         try:
             self._resubscribe_all()
-            c.metrics.feed_resubscribe_total.labels(result="ok").inc()
+            if c.metrics:
+                c.metrics.feed_resubscribe_total.labels(result="ok").inc()
             return True
         except Exception as exc:
             logger.error("Resubscribe failed", error=str(exc))
-            c.metrics.feed_resubscribe_total.labels(result="error").inc()
+            if c.metrics:
+                c.metrics.feed_resubscribe_total.labels(result="error").inc()
             return False
 
     def set_execution_callbacks(self, on_order: Callable[..., Any], on_deal: Callable[..., Any]) -> None:

@@ -1547,17 +1547,38 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 ).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False
+        # Per-facade LOB/Feature reset via deferred _pending_warmup_reset.
+        if hasattr(self.client, "_apply_pending_resets"):
+            self.client._apply_pending_resets()
+        else:
+            # Single-client mode: global reset on event loop (thread-safe).
+            if self.lob is not None and hasattr(self.lob, "reset_books"):
+                self.lob.reset_books()
+            fe = getattr(self, "feature_engine", None)
+            if fe is not None and hasattr(fe, "reset_all"):
+                fe.reset_all()
         if ok:
             self._set_state(FeedState.CONNECTED)
             self.last_event_ts = timebase.now_s()
             self.last_event_mono = time.monotonic()
             self._resubscribe_attempts = 0
+            # Clear stale per-symbol timestamps so symbols that fail to
+            # re-subscribe don't permanently inflate feed gap metrics.
+            self._symbol_last_tick = {}
+            # Fire post-reconnect callbacks (e.g. invalidate stale live orders)
+            for cb in getattr(self, "_on_reconnect_callbacks", []):
+                try:
+                    result = cb(reason_label)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as cb_exc:
+                    logger.warning("on_reconnect_callback_error", error=str(cb_exc))
         else:
             self._set_state(FeedState.DISCONNECTED)
         return ok
 
     def _should_rollover_reconnect(self) -> bool:
-        now_dt = dt.datetime.now(tz=self._reconnect_tzinfo)
+        now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._reconnect_tzinfo)
         last_event_dt = dt.datetime.fromtimestamp(self.last_event_ts, tz=self._reconnect_tzinfo)
         if last_event_dt.date() == now_dt.date():
             return False
@@ -1569,7 +1590,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     def _within_reconnect_window(self) -> bool:
         if not self.reconnect_days and not self.reconnect_hours and not self.reconnect_hours_2:
             return True
-        now = dt.datetime.now(tz=self._reconnect_tzinfo)
+        now = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._reconnect_tzinfo)
         if os.getenv("HFT_RECONNECT_USE_CALENDAR", "1").lower() not in {"0", "false", "no", "off"}:
             try:
                 from hft_platform.core.market_calendar import get_calendar
@@ -1577,7 +1598,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 calendar = get_calendar()
                 if calendar.available and calendar.days_until_trading(now.date()) > 1:
                     return False
-            except ImportError:
+            except Exception:
                 pass
         weekday = now.strftime("%a").lower()
         if self.reconnect_days and weekday not in self.reconnect_days:
