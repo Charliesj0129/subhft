@@ -231,9 +231,11 @@ class QuoteConnectionPool:
     @staticmethod
     def _make_callback_wrapper(slot: FacadeSlot, original_cb: Callable[..., Any]) -> Callable[..., Any]:
         """Wrap a market data callback to update the slot's last_data_mono timestamp."""
+
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             slot.last_data_mono = time.monotonic()
             return original_cb(*args, **kwargs)
+
         return wrapper
 
     def subscribe_all(self, cb: Callable[..., Any]) -> None:
@@ -533,9 +535,7 @@ class QuoteConnectionPool:
         for slot in self._slots:
             cid = str(slot.conn_id)
             if _METRIC_SUBSCRIBED is not None:
-                _METRIC_SUBSCRIBED.labels(conn_id=cid).set(
-                    getattr(slot.facade, "subscribed_count", 0)
-                )
+                _METRIC_SUBSCRIBED.labels(conn_id=cid).set(getattr(slot.facade, "subscribed_count", 0))
             if _METRIC_LOGGED_IN is not None:
                 _METRIC_LOGGED_IN.labels(conn_id=cid).set(1 if slot.facade.logged_in else 0)
             if _METRIC_LAST_DATA_AGE is not None:
