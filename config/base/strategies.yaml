@@ -107,7 +107,7 @@ strategies:
   - id: "R47_MAKER_TXFD6"
     module: "hft_platform.strategies.r47_maker"
     class: "R47MakerStrategy"
-    enabled: false                   # Disabled: margin insufficient (43K < 46K per lot)
+    enabled: true                    # Shadow mode: HFT_ORDER_MODE=sim
     product_type: "FUT"
     symbols: ["TXFD6"]              # Single-instrument: signal + execution both on 大台
     params:
