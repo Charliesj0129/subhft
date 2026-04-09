@@ -43,7 +43,7 @@ _BLOCK_ENV = "HFT_STARTUP_RECON_BLOCK"
 _CHECKPOINT_PATH_ENV = "HFT_POSITION_CHECKPOINT_PATH"
 
 
-@dataclass
+@dataclass(slots=True)
 class RecoveryResult:
     """Outcome of startup position recovery."""
 
