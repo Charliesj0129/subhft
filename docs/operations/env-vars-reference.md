@@ -252,6 +252,8 @@ Shadow deployment note:
 | `HFT_QUOTE_FLAP_THRESHOLD` | `5` | 報價閃爍偵測：窗口內最大閃爍次數 | 超過則暫停訂閱 |
 | `HFT_QUOTE_FLAP_WINDOW_S` | `60` | 報價閃爍偵測窗口（秒） | 配合 threshold |
 | `HFT_QUOTE_FLAP_COOLDOWN_S` | `300` | 報價閃爍冷卻（秒） | 冷卻後自動重新訂閱 |
+
+> `HFT_QUOTE_FLAP_*` 系列變數共同控制報價閃爍偵測行為。
 | `HFT_STORMGUARD_FEED_GAP_HALT_S` | `30` | 行情斷流觸發 HALT 門檻（秒） | 超過此值進入 HALT |
 | `HFT_DIAG_TRACE_ENABLED` | `0` | `1` = 啟用事件決策 trace 採樣 | 僅事故期間啟用 |
 | `HFT_DIAG_TRACE_SAMPLE_EVERY` | `100` | 每 N 事件採樣一筆決策 trace | 流量大時可提高 |
@@ -291,6 +293,25 @@ Shadow deployment note:
 |---|---|---|---|
 | `HFT_ENGINE_IMAGE` | `hft-engine:latest` | Docker image for hft-engine（含 tag/SHA） | 部署時指定已知穩定版本 |
 | `HFT_AUTO_FLATTEN_DISABLED` | `0` | `1` = 禁用 HALT 自動平倉（手動介入模式） | 事故排查時暫時設為 `1` |
+| `HFT_LIVE_CONFIRM` | `0` | `1` = 確認 live 模式啟動（防止誤操作） | 生產環境設 `1` |
+| `HFT_SESSION_GOVERNOR_ENABLED` | `0` | `1` = 啟用 session governor 自動管理 | 多帳號場景使用 |
+
+---
+
+## 13. Position Checkpoint
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_CHECKPOINT_PATH` | `.runtime/position_checkpoint.json` | Position checkpoint 檔案路徑 | Docker volume mount |
+| `HFT_POSITION_CHECKPOINT_PATH` | — | 備用 checkpoint 路徑（優先於 `HFT_CHECKPOINT_PATH`） | 向後相容 |
+
+---
+
+## 14. ClickHouse Data
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_CH_DATA_ROOT` | `/var/lib/clickhouse` | ClickHouse 資料根目錄 | Docker volume mount 路徑 |
 
 ---
 
