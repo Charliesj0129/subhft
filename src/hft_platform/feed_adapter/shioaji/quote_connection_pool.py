@@ -69,10 +69,7 @@ def _ensure_metrics() -> None:
 
 _SHIOAJI_MAX_CONNECTIONS = 5
 _MAX_QUOTE_CONNECTIONS = _SHIOAJI_MAX_CONNECTIONS - 1
-# Shioaji SDK actual limit: ~256 topics per connection.
-# Each symbol subscribes to Tick + BidAsk = 2 topics, so max ~128 symbols.
-# Use 120 as conservative safety margin.
-_MAX_SUBSCRIPTIONS_PER_CONN = 120
+_MAX_SUBSCRIPTIONS_PER_CONN = 200
 
 
 class QuoteConnectionPool:
@@ -234,11 +231,9 @@ class QuoteConnectionPool:
     @staticmethod
     def _make_callback_wrapper(slot: FacadeSlot, original_cb: Callable[..., Any]) -> Callable[..., Any]:
         """Wrap a market data callback to update the slot's last_data_mono timestamp."""
-
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             slot.last_data_mono = time.monotonic()
             return original_cb(*args, **kwargs)
-
         return wrapper
 
     def subscribe_all(self, cb: Callable[..., Any]) -> None:
@@ -538,7 +533,9 @@ class QuoteConnectionPool:
         for slot in self._slots:
             cid = str(slot.conn_id)
             if _METRIC_SUBSCRIBED is not None:
-                _METRIC_SUBSCRIBED.labels(conn_id=cid).set(getattr(slot.facade, "subscribed_count", 0))
+                _METRIC_SUBSCRIBED.labels(conn_id=cid).set(
+                    getattr(slot.facade, "subscribed_count", 0)
+                )
             if _METRIC_LOGGED_IN is not None:
                 _METRIC_LOGGED_IN.labels(conn_id=cid).set(1 if slot.facade.logged_in else 0)
             if _METRIC_LAST_DATA_AGE is not None:
@@ -665,109 +662,31 @@ class QuoteConnectionPool:
                 entry = dict(s)
                 entry["group"] = 0
                 symbols.append(entry)
+            for c in calls:
+                symbols.append({"code": c["code"], "exchange": "OPT", "group": 1})
+            for c in puts:
+                symbols.append({"code": c["code"], "exchange": "OPT", "group": 2})
 
-            # Round-robin options across all non-zero groups by strike.
-            # Interleave call/put pairs per strike for balanced coverage.
-            option_groups = list(range(1, self._num_conns))
-            if not option_groups:
-                option_groups = [0]  # fallback: single connection
-            all_options_by_strike: list[dict[str, Any]] = []
-            # Use string keys to avoid float equality hazards (safe: TAIFEX strikes are integers)
-            calls_by_strike: dict[str, list[dict[str, Any]]] = {}
-            for opt in calls:
-                k = str(opt.get("strike", "0"))
-                calls_by_strike.setdefault(k, []).append(opt)
-            puts_by_strike: dict[str, list[dict[str, Any]]] = {}
-            for opt in puts:
-                k = str(opt.get("strike", "0"))
-                puts_by_strike.setdefault(k, []).append(opt)
-            all_strike_keys = set(calls_by_strike.keys()) | set(puts_by_strike.keys())
-            strike_keys = sorted(all_strike_keys, key=lambda s: float(s))
-            for sk in strike_keys:
-                all_options_by_strike.extend(calls_by_strike.get(sk, []))
-                all_options_by_strike.extend(puts_by_strike.get(sk, []))
-            group_counts: dict[int, int] = {g: 0 for g in option_groups}
-            for i, opt in enumerate(all_options_by_strike):
-                g = option_groups[i % len(option_groups)]
-                symbols.append({"code": opt["code"], "exchange": "OPT", "group": g})
-                group_counts[g] = group_counts.get(g, 0) + 1
-
-            # Validate connection limits — auto-trim if overflow
-            overflow = False
+            # Validate connection limits
             for g in range(self._num_conns):
                 count = sum(1 for s in symbols if s.get("group") == g)
                 if count > _MAX_SUBSCRIPTIONS_PER_CONN:
-                    overflow = True
-                    break
-
-            if overflow:
-                # Auto-trim: compute max options that fit, then re-slice from ATM outward
-                n_option_groups = max(len(option_groups), 1)
-                max_options_total = n_option_groups * _MAX_SUBSCRIPTIONS_PER_CONN
-                n_strikes_total = len(strike_keys)
-                # Each strike produces up to 2 options (call + put)
-                max_strikes = max_options_total // 2
-                if max_strikes < n_strikes_total and max_strikes > 0:
-                    # Find ATM index among sorted strikes
-                    refs = [float(c["reference"]) for c in nearest if c.get("reference")]
-                    atm = sum(refs) / len(refs) if refs else float(strike_keys[len(strike_keys) // 2])
-                    atm_idx = min(range(n_strikes_total), key=lambda i: abs(float(strike_keys[i]) - atm))
-                    half = max_strikes // 2
-                    lo = max(atm_idx - half, 0)
-                    hi = min(lo + max_strikes, n_strikes_total)
-                    if hi == n_strikes_total:
-                        lo = max(n_strikes_total - max_strikes, 0)
-                    trimmed_keys = set(strike_keys[lo:hi])
-
-                    logger.warning(
-                        "options_auto_trim",
-                        original_strikes=n_strikes_total,
-                        trimmed_strikes=len(trimmed_keys),
-                        max_per_group=_MAX_SUBSCRIPTIONS_PER_CONN,
-                        n_option_groups=n_option_groups,
-                        atm=atm,
+                    logger.error(
+                        "options_refresh_group_overflow",
+                        group=g,
+                        count=count,
+                        limit=_MAX_SUBSCRIPTIONS_PER_CONN,
                     )
+                    return False
 
-                    # Rebuild options list with trimmed strikes
-                    all_options_by_strike = []
-                    for sk in strike_keys:
-                        if sk in trimmed_keys:
-                            all_options_by_strike.extend(calls_by_strike.get(sk, []))
-                            all_options_by_strike.extend(puts_by_strike.get(sk, []))
-
-                    # Rebuild symbols with round-robin
-                    symbols = [s for s in symbols if s.get("exchange") != "OPT"]
-                    group_counts = {g: 0 for g in option_groups}
-                    for i, opt in enumerate(all_options_by_strike):
-                        g = option_groups[i % len(option_groups)]
-                        symbols.append({"code": opt["code"], "exchange": "OPT", "group": g})
-                        group_counts[g] = group_counts.get(g, 0) + 1
-
-                    # Final validation after trim
-                    for g in range(self._num_conns):
-                        count = sum(1 for s in symbols if s.get("group") == g)
-                        if count > _MAX_SUBSCRIPTIONS_PER_CONN:
-                            logger.error(
-                                "options_refresh_group_overflow_after_trim",
-                                group=g,
-                                count=count,
-                                limit=_MAX_SUBSCRIPTIONS_PER_CONN,
-                            )
-                            return False
-
-            total_options = len(all_options_by_strike)
             out_path = os.getenv("SYMBOLS_CONFIG", "data/live_with_options.yaml")
             try:
                 with open(out_path, "w") as f:
                     f.write("# Auto-refreshed by QuoteConnectionPool\n")
                     f.write(f"# TXO nearest expiry: {nearest_date}\n")
                     f.write(f"# Group 0: Base ({len(base_symbols)})\n")
-                    for g in option_groups:
-                        f.write(f"# Group {g}: TXO Options ({group_counts.get(g, 0)})\n")
-                    f.write(
-                        f"# Total options: {total_options} across"
-                        f" {len(option_groups)} groups (round-robin by strike)\n\n"
-                    )
+                    f.write(f"# Group 1: TXO Calls ({len(calls)})\n")
+                    f.write(f"# Group 2: TXO Puts ({len(puts)})\n\n")
                     yaml.dump({"symbols": symbols}, f, default_flow_style=False, allow_unicode=True)
             except Exception as exc:
                 logger.error("options_refresh_write_failed", error=str(exc))
