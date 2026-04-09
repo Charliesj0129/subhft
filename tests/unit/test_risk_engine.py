@@ -123,7 +123,6 @@ async def test_rejection_feedback_sent_on_unexpected_exception(engine):
 @pytest.mark.asyncio
 async def test_rejection_sink_overflow_increments_metric(engine):
     """When rejection_sink is full, rejection_sink_overflow_total must be incremented."""
-    from unittest.mock import patch
 
     # Assign a maxsize=1 rejection_sink so the second write overflows
     rejection_sink = asyncio.Queue(maxsize=1)
@@ -147,9 +146,7 @@ async def test_rejection_sink_overflow_increments_metric(engine):
 
     # The sink holds 1 feedback; the second triggered an overflow
     overflow_count = engine.metrics.rejection_sink_overflow_total._value.get()
-    assert overflow_count >= 1, (
-        f"Expected rejection_sink_overflow_total >= 1, got {overflow_count}"
-    )
+    assert overflow_count >= 1, f"Expected rejection_sink_overflow_total >= 1, got {overflow_count}"
 
 
 def test_cap_error_type_known_exceptions_pass_through():

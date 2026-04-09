@@ -9,17 +9,16 @@ Verifies:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
+from hft_platform.feature.engine import _StatsTupleProxy
 from hft_platform.feed_adapter import lob_engine as lob_mod
 from hft_platform.feed_adapter.lob_engine import BookState
-from hft_platform.feature.engine import _StatsTupleProxy
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.strategy.runner import _KNOWN_TUPLE_TAGS
-
 
 # ---------------------------------------------------------------------------
 # 1. BookState.get_stats_tuple() tag

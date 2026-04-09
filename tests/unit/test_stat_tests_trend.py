@@ -1,4 +1,5 @@
 """Tests for _evaluate_trend_contamination in alpha._stat_tests."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -8,6 +9,7 @@ from hft_platform.alpha._stat_tests import _evaluate_trend_contamination
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_trending_signal(n: int = 2000, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
     """Create a signal that tracks a smooth trend (should FAIL trend check).
@@ -48,6 +50,7 @@ def _make_mean_reverting_signal(n: int = 2000, seed: int = 42) -> tuple[np.ndarr
 # Check A: Monotonic IC
 # ---------------------------------------------------------------------------
 
+
 class TestMonotonicIC:
     def test_trending_signal_detected_as_monotonic(self) -> None:
         signal, mid = _make_trending_signal(n=3000)
@@ -74,6 +77,7 @@ class TestMonotonicIC:
 # ---------------------------------------------------------------------------
 # Check B: Detrended IC
 # ---------------------------------------------------------------------------
+
 
 class TestDetrendedIC:
     def test_trending_signal_detrended_ic_fails(self) -> None:
@@ -105,6 +109,7 @@ class TestDetrendedIC:
 # Overall gate
 # ---------------------------------------------------------------------------
 
+
 class TestOverallGate:
     def test_trending_signal_fails_gate(self) -> None:
         signal, mid = _make_trending_signal(n=3000)
@@ -131,6 +136,7 @@ class TestOverallGate:
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestEdgeCases:
     def test_short_arrays_pass_by_default(self) -> None:
@@ -169,6 +175,7 @@ class TestEdgeCases:
 # Non-overlapping IC (advisory)
 # ---------------------------------------------------------------------------
 
+
 class TestNonOverlappingIC:
     def test_non_overlapping_is_non_blocking(self) -> None:
         signal, mid = _make_trending_signal(n=3000)
@@ -186,6 +193,7 @@ class TestNonOverlappingIC:
 # ---------------------------------------------------------------------------
 # Custom parameters
 # ---------------------------------------------------------------------------
+
 
 class TestCustomParams:
     def test_custom_horizons(self) -> None:

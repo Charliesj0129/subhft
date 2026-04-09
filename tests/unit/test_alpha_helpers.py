@@ -8,15 +8,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from hft_platform.alpha.promotion import (
-    PromotionChecklist,
-    PromotionChecklistItem,
-    PromotionConfig,
-    PromotionResult,
-    _resolve_scorecard_path,
-    _to_float,
-    build_promotion_checklist,
-)
 from hft_platform.alpha._validation_helpers import (
     _dataset_metadata_candidates,
     _dataset_row_count,
@@ -30,6 +21,15 @@ from hft_platform.alpha._validation_types import (
     GateReport,
     ValidationConfig,
     ValidationResult,
+)
+from hft_platform.alpha.promotion import (
+    PromotionChecklist,
+    PromotionChecklistItem,
+    PromotionConfig,
+    PromotionResult,
+    _resolve_scorecard_path,
+    _to_float,
+    build_promotion_checklist,
 )
 
 # ---------------------------------------------------------------------------

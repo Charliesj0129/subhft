@@ -1,4 +1,5 @@
 """Tests for RiskEngine TTL expiry check on OrderIntent."""
+
 import asyncio
 import os
 from unittest.mock import MagicMock, patch
@@ -199,6 +200,4 @@ class TestStrategyRunnerDefaultTtl:
         )
 
         assert isinstance(intent, OrderIntent), "Expected OrderIntent on non-fastpath"
-        assert intent.ttl_ns == expected_ttl_ns, (
-            f"intent.ttl_ns should be {expected_ttl_ns}, got {intent.ttl_ns}"
-        )
+        assert intent.ttl_ns == expected_ttl_ns, f"intent.ttl_ns should be {expected_ttl_ns}, got {intent.ttl_ns}"

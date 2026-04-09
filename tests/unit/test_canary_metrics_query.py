@@ -104,9 +104,8 @@ def test_slippage_query_filters_by_strategy() -> None:
     q = CanaryMetricsQuery(client_factory=factory)
     q.fetch(alpha_id="alpha_001", strategy_id="my_strategy_42", since_ns=0)
 
-    # At least one query call should mention the strategy_id
-    all_sqls = " ".join(call.args[0] for call in client.query.call_args_list)
-    assert "my_strategy_42" in all_sqls
+    all_parameters = [call.kwargs.get("parameters", {}) for call in client.query.call_args_list]
+    assert any(params.get("strategy_id") == "my_strategy_42" for params in all_parameters)
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +116,13 @@ def test_slippage_query_filters_by_strategy() -> None:
 def test_since_ns_filter_applied() -> None:
     client = _make_client()
     factory = MagicMock(return_value=client)
+    since_ns = 1700000000000000000
 
     q = CanaryMetricsQuery(client_factory=factory)
-    q.fetch(alpha_id="alpha_001", strategy_id="strat_01", since_ns=1700000000000000000)
+    q.fetch(alpha_id="alpha_001", strategy_id="strat_01", since_ns=since_ns)
 
-    all_sqls = " ".join(call.args[0] for call in client.query.call_args_list)
-    assert "1700000000000000000" in all_sqls
+    all_parameters = [call.kwargs.get("parameters", {}) for call in client.query.call_args_list]
+    assert any(params.get("since_ns") == since_ns for params in all_parameters)
 
 
 # ---------------------------------------------------------------------------

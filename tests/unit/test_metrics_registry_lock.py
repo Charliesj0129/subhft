@@ -2,8 +2,6 @@
 
 import threading
 
-import pytest
-
 
 class TestMetricsRegistryLock:
     def setup_method(self):

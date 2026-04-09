@@ -23,12 +23,17 @@ def _make_position(symbol: str, net_qty: int, avg_price: int, pnl: int) -> Magic
     pos.net_qty = net_qty
     pos.avg_price_scaled = avg_price
     pos.realized_pnl_scaled = pnl
+    pos.fees_scaled = 0
     return pos
 
 
 def _make_store(positions: dict | None = None) -> MagicMock:
     store = MagicMock()
-    store.positions = positions or {}
+    snapshot = positions or {}
+    store.positions = snapshot
+    store.snapshot_positions.return_value = snapshot
+    store._peak_equity_scaled = 0
+    store._total_realized_pnl_scaled = sum(pos.realized_pnl_scaled for pos in snapshot.values())
     return store
 
 

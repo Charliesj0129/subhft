@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers / stubs (mirror test_strategy_runner_timeout.py conventions)
 # ---------------------------------------------------------------------------
@@ -155,6 +154,4 @@ async def test_queue_full_does_not_increment_failure_counts(make_runner, mock_me
     for _ in range(5):
         await runner.process_event(_make_event())
 
-    assert runner._failure_counts.get("strat_b", 0) == 0, (
-        "failure_counts must not be incremented for QueueFull drops"
-    )
+    assert runner._failure_counts.get("strat_b", 0) == 0, "failure_counts must not be incremented for QueueFull drops"

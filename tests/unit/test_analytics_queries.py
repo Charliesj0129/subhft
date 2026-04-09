@@ -1,9 +1,8 @@
 """Unit tests for hft_platform.analytics.queries."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
-
-import pytest
 
 from hft_platform.analytics.queries import (
     query_daily_pnl,

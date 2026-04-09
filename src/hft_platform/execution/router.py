@@ -327,7 +327,9 @@ class ExecutionRouter:
                             if hasattr(self.position_store, "on_fill"):
                                 _pre_realized_sd = 0
                                 if self._risk_engine is not None:
-                                    _pos_key_sd = f"{fill_event.account_id}:{fill_event.strategy_id}:{fill_event.symbol}"
+                                    _pos_key_sd = (
+                                        f"{fill_event.account_id}:{fill_event.strategy_id}:{fill_event.symbol}"
+                                    )
                                     _pre_pos_sd = self.position_store.positions.get(_pos_key_sd)
                                     if _pre_pos_sd is not None:
                                         _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
@@ -469,7 +471,7 @@ class ExecutionRouter:
                 _wal_fallback.labels(topic=topic).inc()
             task = asyncio.ensure_future(self._wal_writer.write(topic, [payload]))
 
-            def _on_wal_done(fut: asyncio.Future) -> None:  # type: ignore[type-arg]
+            def _on_wal_done(fut: asyncio.Future[Any]) -> None:
                 if fut.cancelled():
                     return
                 exc = fut.exception()

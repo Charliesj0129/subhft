@@ -486,6 +486,7 @@ async def test_api_worker_halt_skip_sends_dlq_and_metric(tmp_config):
     # Set StormGuard to HALT
     sg = MagicMock()
     sg.state = StormGuardState.HALT
+    sg.is_halt_exempt.return_value = False
     adapter._storm_guard = sg
 
     # Disable coalesce window to keep the test fast
@@ -512,7 +513,8 @@ async def test_api_worker_halt_skip_sends_dlq_and_metric(tmp_config):
         pass
 
     # Dedicated metric incremented
-    metrics_mock.order_halt_skip_total.inc.assert_called_once()
+    metrics_mock.order_halt_skip_total.labels.assert_called_once_with(strategy_id="strat_halt")
+    metrics_mock.order_halt_skip_total.labels.return_value.inc.assert_called_once()
     # Backward-compat reject metric also incremented
     metrics_mock.order_reject_total.inc.assert_called_once()
     # DLQ received the entry

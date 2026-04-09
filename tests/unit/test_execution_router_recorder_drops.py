@@ -10,7 +10,6 @@ import pytest
 from hft_platform.execution.normalizer import RawExecEvent
 from hft_platform.execution.router import ExecutionRouter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

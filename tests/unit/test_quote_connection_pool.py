@@ -63,8 +63,8 @@ class TestQuoteConnectionPoolValidation:
 
     def test_rejects_group_exceeding_limit(self, tmp_path):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import (
-            QuoteConnectionPool,
             _MAX_SUBSCRIPTIONS_PER_CONN,
+            QuoteConnectionPool,
         )
 
         count = _MAX_SUBSCRIPTIONS_PER_CONN + 1
@@ -559,8 +559,24 @@ class TestOptionsRoundRobinSharding:
         strikes = list(range(20000, 20000 + 30 * 50, 50))  # 30 strikes
         opts = []
         for s in strikes:
-            opts.append({"code": f"TXO{s}D6", "right": "C", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
-            opts.append({"code": f"TXO{s}P6", "right": "P", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+            opts.append(
+                {
+                    "code": f"TXO{s}D6",
+                    "right": "C",
+                    "strike": str(s),
+                    "delivery_date": "2026/04/16",
+                    "reference": "20500",
+                }
+            )
+            opts.append(
+                {
+                    "code": f"TXO{s}P6",
+                    "right": "P",
+                    "strike": str(s),
+                    "delivery_date": "2026/04/16",
+                    "reference": "20500",
+                }
+            )
 
         out_path = str(tmp_path / "live_with_options.yaml")
         monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
@@ -599,8 +615,24 @@ class TestOptionsRoundRobinSharding:
         strikes = list(range(20000, 20000 + 200 * 50, 50))
         opts = []
         for s in strikes:
-            opts.append({"code": f"TXO{s}D6", "right": "C", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
-            opts.append({"code": f"TXO{s}P6", "right": "P", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+            opts.append(
+                {
+                    "code": f"TXO{s}D6",
+                    "right": "C",
+                    "strike": str(s),
+                    "delivery_date": "2026/04/16",
+                    "reference": "20500",
+                }
+            )
+            opts.append(
+                {
+                    "code": f"TXO{s}P6",
+                    "right": "P",
+                    "strike": str(s),
+                    "delivery_date": "2026/04/16",
+                    "reference": "20500",
+                }
+            )
 
         out_path = str(tmp_path / "live_with_options.yaml")
         monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
@@ -636,8 +668,24 @@ class TestOptionsRoundRobinSharding:
         strikes = list(range(20000, 20000 + 10 * 50, 50))  # 10 strikes
         opts = []
         for s in strikes:
-            opts.append({"code": f"TXO{s}D6", "right": "C", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
-            opts.append({"code": f"TXO{s}P6", "right": "P", "strike": str(s), "delivery_date": "2026/04/16", "reference": "20500"})
+            opts.append(
+                {
+                    "code": f"TXO{s}D6",
+                    "right": "C",
+                    "strike": str(s),
+                    "delivery_date": "2026/04/16",
+                    "reference": "20500",
+                }
+            )
+            opts.append(
+                {
+                    "code": f"TXO{s}P6",
+                    "right": "P",
+                    "strike": str(s),
+                    "delivery_date": "2026/04/16",
+                    "reference": "20500",
+                }
+            )
 
         out_path = str(tmp_path / "live_with_options.yaml")
         monkeypatch.setenv("SYMBOLS_CONFIG", out_path)
@@ -675,8 +723,24 @@ class TestOptionsRoundRobinSharding:
         strikes = list(range(26500, 26500 + 194 * 50, 50))
         opts = []
         for s in strikes:
-            opts.append({"code": f"TXO{s}D6", "right": "C", "strike": str(s), "delivery_date": "2026/04/16", "reference": "33000"})
-            opts.append({"code": f"TXO{s}P6", "right": "P", "strike": str(s), "delivery_date": "2026/04/16", "reference": "33000"})
+            opts.append(
+                {
+                    "code": f"TXO{s}D6",
+                    "right": "C",
+                    "strike": str(s),
+                    "delivery_date": "2026/04/16",
+                    "reference": "33000",
+                }
+            )
+            opts.append(
+                {
+                    "code": f"TXO{s}P6",
+                    "right": "P",
+                    "strike": str(s),
+                    "delivery_date": "2026/04/16",
+                    "reference": "33000",
+                }
+            )
 
         out_path = str(tmp_path / "live_with_options.yaml")
         monkeypatch.setenv("SYMBOLS_CONFIG", out_path)

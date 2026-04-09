@@ -3,12 +3,10 @@
 Covers: SymbolBuildResult, FilterSpec, derive_root, parse_date_key,
 expiry_key, contract_dte_days, ContractIndex.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import patch
-
-import pytest
 
 from hft_platform.config._symbols_types import (
     ContractIndex,
@@ -19,7 +17,6 @@ from hft_platform.config._symbols_types import (
     expiry_key,
     parse_date_key,
 )
-
 
 # ---------------------------------------------------------------------------
 # SymbolBuildResult

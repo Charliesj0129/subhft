@@ -1,10 +1,8 @@
 """Unit tests for LOBEngine stale symbol eviction."""
+
 from unittest.mock import patch
 
-import pytest
-
 from hft_platform.feed_adapter.lob_engine import LOBEngine
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -114,7 +112,7 @@ class TestEvictStaleSymbolsRateLimited:
         ):
             second = engine.evict_stale_symbols()
 
-        assert first == 1   # first call evicted the stale book
+        assert first == 1  # first call evicted the stale book
         assert second == 0  # second call was rate-limited
         assert "STALE2" in engine.books  # not touched
 

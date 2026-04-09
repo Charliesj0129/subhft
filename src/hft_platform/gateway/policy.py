@@ -64,7 +64,9 @@ class GatewayPolicy:
         sg_state: StormGuardState,
     ) -> tuple[bool, str]:
         return self._gate_by_intent_type(
-            int(intent.intent_type), sg_state, strategy_id=intent.strategy_id,
+            int(intent.intent_type),
+            sg_state,
+            strategy_id=intent.strategy_id,
         )
 
     def gate_typed(

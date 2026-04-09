@@ -1,4 +1,5 @@
 """Tests that audit.py passes Int64 nanoseconds (not datetime) to ClickHouse for ts column."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -42,10 +43,6 @@ def test_log_gate_result_ts_is_int_nanoseconds() -> None:
     row = captured_rows[0]
     ts_value = row[0]  # ts is first column
 
-    assert isinstance(ts_value, int), (
-        f"ts must be int for ClickHouse Int64, got {type(ts_value).__name__}"
-    )
+    assert isinstance(ts_value, int), f"ts must be int for ClickHouse Int64, got {type(ts_value).__name__}"
     # Nanosecond epoch for 2020-01-01 is ~1.577e18; sanity-check lower bound
-    assert ts_value > 1_577_836_800_000_000_000, (
-        f"ts value {ts_value} is too small to be a nanosecond epoch"
-    )
+    assert ts_value > 1_577_836_800_000_000_000, f"ts value {ts_value} is too small to be a nanosecond epoch"

@@ -1,7 +1,7 @@
 """Test P2-4: OrderAdapter re-enabled after HALT recovery in _supervise()."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

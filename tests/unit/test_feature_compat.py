@@ -5,6 +5,7 @@ Covers:
 - check_feature_profile_compat (unknown feature set, schema too new, ema_window validation)
 - check_runtime_feature_engine_compat (None engine, missing callables, valid engine)
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -17,8 +18,7 @@ from hft_platform.feature.compat import (
     check_runtime_feature_engine_compat,
 )
 from hft_platform.feature.profile import FeatureProfile
-from hft_platform.feature.registry import FeatureRegistry, build_default_lob_feature_set_v3, default_feature_registry
-
+from hft_platform.feature.registry import FeatureRegistry, default_feature_registry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -271,6 +271,7 @@ class TestCheckFeatureProfileCompatCombined:
         # Registry only has v1
         reg = FeatureRegistry()
         from hft_platform.feature.registry import build_default_lob_feature_set_v1
+
         reg.register(build_default_lob_feature_set_v1())
         profile = _profile(feature_set_id="lob_shared_v1", schema_version=99)
         issues = check_feature_profile_compat(profile, reg)

@@ -12,17 +12,16 @@ Targets:
 - verify_restore: success, mismatch, temp-DB cleanup
 - list_backups: empty dir, mixed entries
 """
+
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hft_platform.ops.backup import BackupError, BackupManager, _BACKUP_NAME_RE
-
+from hft_platform.ops.backup import _BACKUP_NAME_RE, BackupError, BackupManager
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -524,11 +523,11 @@ def test_verify_restore_success(monkeypatch: pytest.MonkeyPatch) -> None:
     # Per-table count queries
     client.execute.side_effect = [
         table_list,  # SELECT name FROM system.tables
-        [(1000,)],   # orig count market_data
-        [(1000,)],   # restored count market_data
-        [(500,)],    # orig count orders
-        [(500,)],    # restored count orders
-        None,        # DROP DATABASE
+        [(1000,)],  # orig count market_data
+        [(1000,)],  # restored count market_data
+        [(500,)],  # orig count orders
+        [(500,)],  # restored count orders
+        None,  # DROP DATABASE
     ]
 
     monkeypatch.setattr(BackupManager, "restore", lambda self, name, target_db: None)
@@ -546,10 +545,10 @@ def test_verify_restore_mismatch_raises(monkeypatch: pytest.MonkeyPatch) -> None
 
     table_list = [("market_data",)]
     client.execute.side_effect = [
-        table_list,   # SELECT name FROM system.tables
-        [(1000,)],    # orig count
-        [(900,)],     # restored count — mismatch!
-        None,         # DROP DATABASE
+        table_list,  # SELECT name FROM system.tables
+        [(1000,)],  # orig count
+        [(900,)],  # restored count — mismatch!
+        None,  # DROP DATABASE
     ]
 
     monkeypatch.setattr(BackupManager, "restore", lambda self, name, target_db: None)

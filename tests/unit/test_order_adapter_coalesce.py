@@ -7,7 +7,6 @@ silently dropped by the coalesce window (X-C2 fix).
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -69,9 +68,13 @@ def _make_adapter(tmp_config: str) -> OrderAdapter:
     return OrderAdapter(config_path=tmp_config, order_queue=order_q, broker_client=client)
 
 
-def _make_cmd(intent_id: int, intent_type: IntentType = IntentType.NEW,
-              symbol: str = "2330", strategy_id: str = "s1",
-              target_order_id: str = "") -> OrderCommand:
+def _make_cmd(
+    intent_id: int,
+    intent_type: IntentType = IntentType.NEW,
+    symbol: str = "2330",
+    strategy_id: str = "s1",
+    target_order_id: str = "",
+) -> OrderCommand:
     intent = OrderIntent(
         intent_id=intent_id,
         strategy_id=strategy_id,
@@ -82,8 +85,9 @@ def _make_cmd(intent_id: int, intent_type: IntentType = IntentType.NEW,
         qty=10,
         target_order_id=target_order_id,
     )
-    return OrderCommand(cmd_id=intent_id, intent=intent, deadline_ns=0,
-                        storm_guard_state=StormGuardState.NORMAL, created_ns=0)
+    return OrderCommand(
+        cmd_id=intent_id, intent=intent, deadline_ns=0, storm_guard_state=StormGuardState.NORMAL, created_ns=0
+    )
 
 
 def test_new_orders_with_different_intent_id_not_coalesced(tmp_config):
@@ -105,10 +109,8 @@ def test_new_orders_with_different_intent_id_not_coalesced(tmp_config):
 def test_cancel_orders_for_same_target_do_coalesce(tmp_config):
     """Two CANCEL orders for the same target_order_id SHOULD coalesce (last wins)."""
     adapter = _make_adapter(tmp_config)
-    cmd1 = _make_cmd(intent_id=10, intent_type=IntentType.CANCEL,
-                     target_order_id="ORD-001")
-    cmd2 = _make_cmd(intent_id=11, intent_type=IntentType.CANCEL,
-                     target_order_id="ORD-001")
+    cmd1 = _make_cmd(intent_id=10, intent_type=IntentType.CANCEL, target_order_id="ORD-001")
+    cmd2 = _make_cmd(intent_id=11, intent_type=IntentType.CANCEL, target_order_id="ORD-001")
 
     adapter._store_pending(cmd1)
     adapter._store_pending(cmd2)

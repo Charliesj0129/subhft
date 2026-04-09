@@ -26,7 +26,6 @@ from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.order.circuit_breaker import CircuitBreaker
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -73,9 +72,7 @@ def _make_adapter(tmp_path: Any, client: Any = None) -> OrderAdapter:
     )
     if client is None:
         client = MagicMock()
-        client.place_order = MagicMock(
-            return_value=MagicMock(seq_no="S1", ord_no="O1", id="X1", order=None)
-        )
+        client.place_order = MagicMock(return_value=MagicMock(seq_no="S1", ord_no="O1", id="X1", order=None))
         client.cancel_order = MagicMock()
         client.get_exchange = MagicMock(return_value="TSE")
     queue: asyncio.Queue[OrderCommand] = asyncio.Queue()
@@ -184,9 +181,7 @@ async def test_cb_metric_set_to_0_after_timeout_reset(tmp_path):
     adapter.circuit_breaker.record_failure()
     adapter.circuit_breaker.record_failure()
     # CB is now open; with timeout_s=0 it should immediately allow next check
-    assert adapter.circuit_breaker.is_open() is False, (
-        "CB with timeout_s=0 should auto-close after calling is_open()"
-    )
+    assert adapter.circuit_breaker.is_open() is False, "CB with timeout_s=0 should auto-close after calling is_open()"
 
     # Wire the metric mock
     gauge_label_mock = MagicMock()

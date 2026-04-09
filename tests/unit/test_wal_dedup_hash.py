@@ -6,17 +6,15 @@ Verifies:
 3. Hash uses sorted keys for dict ordering consistency
 4. Fallback to json.dumps works when orjson unavailable
 """
+
 import hashlib
 import sys
-import types
 from unittest.mock import MagicMock, patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _compute_hash_via_insert_with_dedup(rows: list) -> str:
     """Exercise the hash computation path in insert_with_dedup and return the hash."""
@@ -45,13 +43,12 @@ def _compute_hash_via_insert_with_dedup(rows: list) -> str:
 # Tests
 # ---------------------------------------------------------------------------
 
+
 def test_hash_is_full_sha256_length():
     """Hash must be exactly 64 hex characters (full SHA-256), not truncated."""
     rows = [{"symbol": "TXFD6", "price": 17500, "qty": 1}]
     content_hash = _compute_hash_via_insert_with_dedup(rows)
-    assert len(content_hash) == 64, (
-        f"Expected 64-char SHA-256 hex digest, got {len(content_hash)}: {content_hash!r}"
-    )
+    assert len(content_hash) == 64, f"Expected 64-char SHA-256 hex digest, got {len(content_hash)}: {content_hash!r}"
 
 
 def test_hash_is_deterministic():
@@ -71,9 +68,7 @@ def test_hash_uses_sorted_keys_for_dict_ordering():
     rows_b = [{"a": 1, "b": 2}]
     hash_a = _compute_hash_via_insert_with_dedup(rows_a)
     hash_b = _compute_hash_via_insert_with_dedup(rows_b)
-    assert hash_a == hash_b, (
-        f"Key ordering should not affect hash: {hash_a!r} != {hash_b!r}"
-    )
+    assert hash_a == hash_b, f"Key ordering should not affect hash: {hash_a!r} != {hash_b!r}"
 
 
 def test_different_data_produces_different_hash():
@@ -101,9 +96,7 @@ def test_hash_fallback_when_orjson_unavailable():
     with patch.dict(sys.modules, {"orjson": None}):
         result_hash = _compute_hash_via_insert_with_dedup(rows)
 
-    assert result_hash == expected_hash, (
-        f"Fallback hash mismatch: {result_hash!r} != {expected_hash!r}"
-    )
+    assert result_hash == expected_hash, f"Fallback hash mismatch: {result_hash!r} != {expected_hash!r}"
     assert len(result_hash) == 64
 
 
@@ -116,9 +109,7 @@ def test_hash_fallback_sorted_keys_consistency():
         hash_a = _compute_hash_via_insert_with_dedup(rows_a)
         hash_b = _compute_hash_via_insert_with_dedup(rows_b)
 
-    assert hash_a == hash_b, (
-        f"Fallback key ordering should not affect hash: {hash_a!r} != {hash_b!r}"
-    )
+    assert hash_a == hash_b, f"Fallback key ordering should not affect hash: {hash_a!r} != {hash_b!r}"
 
 
 def test_empty_rows_returns_true_without_hashing():

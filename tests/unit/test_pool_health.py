@@ -1,4 +1,5 @@
 """Tests for pool_health: get_healthy_feed_gap_s and check_facade_health."""
+
 from __future__ import annotations
 
 import time
@@ -13,6 +14,7 @@ from hft_platform.feed_adapter.shioaji.pool_health import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_slot(
     conn_id: str = "conn-0",
@@ -37,6 +39,7 @@ def _make_slot(
 # ---------------------------------------------------------------------------
 # get_healthy_feed_gap_s
 # ---------------------------------------------------------------------------
+
 
 class TestGetHealthyFeedGapS:
     def test_returns_inf_when_no_slots(self) -> None:
@@ -83,6 +86,7 @@ class TestGetHealthyFeedGapS:
 # check_facade_health — CONNECTED → DEGRADED transition
 # ---------------------------------------------------------------------------
 
+
 class TestCheckFacadeHealthConnectedToDegraded:
     def test_connected_stays_connected_within_threshold(self) -> None:
         slot = _make_slot("conn-0", FacadeState.CONNECTED, last_data_offset_s=1.0)
@@ -123,6 +127,7 @@ class TestCheckFacadeHealthConnectedToDegraded:
 # ---------------------------------------------------------------------------
 # check_facade_health — DEGRADED → CONNECTED recovery
 # ---------------------------------------------------------------------------
+
 
 class TestCheckFacadeHealthDegradedRecovery:
     def test_degraded_recovers_to_connected_when_gap_below_threshold(self) -> None:
@@ -176,6 +181,7 @@ class TestCheckFacadeHealthDegradedRecovery:
 # ---------------------------------------------------------------------------
 # check_facade_health — DISCONNECTED backoff trigger
 # ---------------------------------------------------------------------------
+
 
 class TestCheckFacadeHealthDisconnected:
     def test_disconnected_triggers_schedule_when_backoff_elapsed(self) -> None:
@@ -240,6 +246,7 @@ class TestCheckFacadeHealthDisconnected:
 # check_facade_health — RECOVERING slots are skipped
 # ---------------------------------------------------------------------------
 
+
 class TestCheckFacadeHealthRecovering:
     def test_recovering_slot_is_not_touched(self) -> None:
         slot = _make_slot(
@@ -256,6 +263,7 @@ class TestCheckFacadeHealthRecovering:
 # ---------------------------------------------------------------------------
 # check_facade_health — multiple slots processed independently
 # ---------------------------------------------------------------------------
+
 
 class TestCheckFacadeHealthMultipleSlots:
     def test_processes_all_slots_independently(self) -> None:

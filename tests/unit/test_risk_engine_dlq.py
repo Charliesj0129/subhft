@@ -1,4 +1,5 @@
 """Tests for RiskEngine DLQ drain/retry mechanism."""
+
 import asyncio
 import time
 from unittest.mock import PropertyMock, patch
@@ -208,6 +209,7 @@ class TestDlqHaltGuard:
         cmd = engine.create_command(_make_intent(1))
         # Override deadline to be in the past
         import dataclasses
+
         cmd = dataclasses.replace(cmd, deadline_ns=time.monotonic_ns() - 1_000_000)
 
         engine._order_dlq.append((cmd, time.monotonic_ns()))
@@ -289,6 +291,7 @@ class TestDlqRevalidation:
         engine._position_provider = lambda symbol, strategy_id: 1000
         # Reinit the PositionLimitValidator with the provider so it picks up positions
         from hft_platform.risk.validators import PositionLimitValidator
+
         for v in engine.validators:
             if isinstance(v, PositionLimitValidator):
                 v._position_provider = engine._current_strategy_symbol_net_position
@@ -312,6 +315,7 @@ class TestDlqRevalidation:
         # Position provider reports zero position — plenty of room
         engine._position_provider = lambda symbol, strategy_id: 0
         from hft_platform.risk.validators import PositionLimitValidator
+
         for v in engine.validators:
             if isinstance(v, PositionLimitValidator):
                 v._position_provider = engine._current_strategy_symbol_net_position
@@ -332,13 +336,23 @@ class TestDlqRevalidation:
         """Cancel/force-flat orders are always replayed regardless of position."""
         engine._position_provider = lambda symbol, strategy_id: 999_999
         from hft_platform.risk.validators import PositionLimitValidator
+
         for v in engine.validators:
             if isinstance(v, PositionLimitValidator):
                 v._position_provider = engine._current_strategy_symbol_net_position
                 break
 
         cancel_intent = OrderIntent(
-            1, "s1", "2330", IntentType.CANCEL, Side.BUY, 100, 1, TIF.ROD, "order-123", 0,
+            1,
+            "s1",
+            "2330",
+            IntentType.CANCEL,
+            Side.BUY,
+            100,
+            1,
+            TIF.ROD,
+            "order-123",
+            0,
         )
         cmd = engine.create_command(cancel_intent)
         engine._order_dlq.append((cmd, time.monotonic_ns()))

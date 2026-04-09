@@ -73,9 +73,7 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
                 pass
 
         # Queue should be fully drained (task_done called for each item)
-        assert queue._unfinished_tasks == 0, (
-            f"Expected 0 unfinished tasks, got {queue._unfinished_tasks}"
-        )
+        assert queue._unfinished_tasks == 0, f"Expected 0 unfinished tasks, got {queue._unfinished_tasks}"
 
     async def test_batcher_exception_does_not_crash_recorder(self):
         """An exception from batcher.add() should be caught, logged, and loop continues."""
@@ -115,13 +113,9 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
                 pass
 
         # All 3 items must have had task_done() called
-        assert queue._unfinished_tasks == 0, (
-            f"Expected 0 unfinished tasks, got {queue._unfinished_tasks}"
-        )
+        assert queue._unfinished_tasks == 0, f"Expected 0 unfinished tasks, got {queue._unfinished_tasks}"
         # Error counter should have been incremented for each failure
-        assert worker._process_errors >= 2, (
-            f"Expected at least 2 process errors, got {worker._process_errors}"
-        )
+        assert worker._process_errors >= 2, f"Expected at least 2 process errors, got {worker._process_errors}"
 
     async def test_task_done_called_even_on_exception(self):
         """task_done() must be called even when processing raises."""
@@ -157,9 +151,7 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
                 pass
 
         # queue.join() would hang if task_done() was not called
-        assert queue._unfinished_tasks == 0, (
-            "task_done() was not called after exception — queue.join() would hang"
-        )
+        assert queue._unfinished_tasks == 0, "task_done() was not called after exception — queue.join() would hang"
 
     async def test_cancelled_error_propagates_for_shutdown(self):
         """CancelledError must propagate so the service shuts down cleanly."""

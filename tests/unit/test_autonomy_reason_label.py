@@ -12,10 +12,10 @@ import pytest
 
 from hft_platform.ops.autonomy import (
     _ALLOWED_REASON_CODES,
-    _reason_code_for_metrics,
-    _scope_code_for_metrics,
     AutonomyMode,
     AutonomyTransition,
+    _reason_code_for_metrics,
+    _scope_code_for_metrics,
 )
 
 

@@ -5,16 +5,18 @@ from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
 _METRICS_PREFIX = os.getenv("HFT_METRICS_PREFIX", "")
 
-_KNOWN_EXCEPTION_TYPES: frozenset[str] = frozenset({
-    "ConnectionError",
-    "TimeoutError",
-    "OSError",
-    "RuntimeError",
-    "asyncio.TimeoutError",
-    "ConnectionResetError",
-    "ConnectionRefusedError",
-    "BrokenPipeError",
-})
+_KNOWN_EXCEPTION_TYPES: frozenset[str] = frozenset(
+    {
+        "ConnectionError",
+        "TimeoutError",
+        "OSError",
+        "RuntimeError",
+        "asyncio.TimeoutError",
+        "ConnectionResetError",
+        "ConnectionRefusedError",
+        "BrokenPipeError",
+    }
+)
 
 
 def cap_exception_type(exc: BaseException) -> str:

@@ -441,8 +441,14 @@ class TestChannelConfig:
 
 def _make_flow_bar(**overrides: object) -> FlowBar:
     defaults: dict[str, object] = dict(
-        ts="09:00", ticks=100, total_vol=5000, uptick_vol=3000,
-        downtick_vol=2000, flat_vol=0, ud_ratio=1.5, net_flow=1000,
+        ts="09:00",
+        ticks=100,
+        total_vol=5000,
+        uptick_vol=3000,
+        downtick_vol=2000,
+        flat_vol=0,
+        ud_ratio=1.5,
+        net_flow=1000,
     )
     defaults.update(overrides)
     return FlowBar(**defaults)  # type: ignore[arg-type]
@@ -456,18 +462,30 @@ def _make_price_level(**overrides: object) -> PriceLevel:
 
 def _make_session_data_simple() -> SessionData:
     return SessionData(
-        session="day", symbol="TXFD6", date="2026-03-29",
-        open=220000, high=221000, low=219000, close=220500,
-        volume=50000, tick_count=10000,
-        bars_5m=[], flow_5m=[], large_trades=[],
-        spread_dist={}, depth_imbalance=[],
+        session="day",
+        symbol="TXFD6",
+        date="2026-03-29",
+        open=220000,
+        high=221000,
+        low=219000,
+        close=220500,
+        volume=50000,
+        tick_count=10000,
+        bars_5m=[],
+        flow_5m=[],
+        large_trades=[],
+        spread_dist={},
+        depth_imbalance=[],
     )
 
 
 def _make_scenario_simple(**overrides: object) -> Scenario:
     defaults: dict[str, object] = dict(
-        id="s1", label="bullish", probability="60%",
-        condition="break above 221000", target=222000,
+        id="s1",
+        label="bullish",
+        probability="60%",
+        condition="break above 221000",
+        target=222000,
         description="continuation",
     )
     defaults.update(overrides)
@@ -482,10 +500,17 @@ def _make_scenario_simple(**overrides: object) -> Scenario:
 class TestSegmentFact:
     def test_construction(self) -> None:
         sf = SegmentFact(
-            name="opening", time_range="09:00-09:30", ud_ratio=1.2,
-            net_flow=500, volume=10000, volume_pct=0.25,
-            large_buy_count=3, large_sell_count=1,
-            high=221000, low=219500, dominant_side="bull",
+            name="opening",
+            time_range="09:00-09:30",
+            ud_ratio=1.2,
+            net_flow=500,
+            volume=10000,
+            volume_pct=0.25,
+            large_buy_count=3,
+            large_sell_count=1,
+            high=221000,
+            low=219500,
+            dominant_side="bull",
         )
         assert sf.name == "opening"
         assert sf.dominant_side == "bull"
@@ -493,10 +518,17 @@ class TestSegmentFact:
 
     def test_slots(self) -> None:
         sf = SegmentFact(
-            name="closing", time_range="13:00-13:30", ud_ratio=0.8,
-            net_flow=-200, volume=8000, volume_pct=0.15,
-            large_buy_count=1, large_sell_count=2,
-            high=220500, low=219800, dominant_side="bear",
+            name="closing",
+            time_range="13:00-13:30",
+            ud_ratio=0.8,
+            net_flow=-200,
+            volume=8000,
+            volume_pct=0.15,
+            large_buy_count=1,
+            large_sell_count=2,
+            high=220500,
+            low=219800,
+            dominant_side="bear",
         )
         assert hasattr(sf, "__slots__")
         with pytest.raises((AttributeError, TypeError)):
@@ -506,9 +538,14 @@ class TestSegmentFact:
 class TestChipCluster:
     def test_construction(self) -> None:
         cc = ChipCluster(
-            price_center=220000, price_range=(219500, 220500),
-            buy_volume=3000, sell_volume=1000, trade_count=15,
-            dominant_side="bull", first_ts="09:05", last_ts="09:20",
+            price_center=220000,
+            price_range=(219500, 220500),
+            buy_volume=3000,
+            sell_volume=1000,
+            trade_count=15,
+            dominant_side="bull",
+            first_ts="09:05",
+            last_ts="09:20",
             time_range="09:05-09:20",
         )
         assert cc.price_center == 220000
@@ -517,9 +554,14 @@ class TestChipCluster:
 
     def test_slots(self) -> None:
         cc = ChipCluster(
-            price_center=220000, price_range=(219500, 220500),
-            buy_volume=3000, sell_volume=1000, trade_count=15,
-            dominant_side="bull", first_ts="09:05", last_ts="09:20",
+            price_center=220000,
+            price_range=(219500, 220500),
+            buy_volume=3000,
+            sell_volume=1000,
+            trade_count=15,
+            dominant_side="bull",
+            first_ts="09:05",
+            last_ts="09:20",
             time_range="09:05-09:20",
         )
         with pytest.raises((AttributeError, TypeError)):
@@ -529,9 +571,14 @@ class TestChipCluster:
 class TestChipFacts:
     def test_construction(self) -> None:
         cluster = ChipCluster(
-            price_center=220000, price_range=(219500, 220500),
-            buy_volume=3000, sell_volume=1000, trade_count=15,
-            dominant_side="bull", first_ts="09:05", last_ts="09:20",
+            price_center=220000,
+            price_range=(219500, 220500),
+            buy_volume=3000,
+            sell_volume=1000,
+            trade_count=15,
+            dominant_side="bull",
+            first_ts="09:05",
+            last_ts="09:20",
             time_range="09:05-09:20",
         )
         cf = ChipFacts(
@@ -549,8 +596,13 @@ class TestChipFacts:
 
     def test_none_zones(self) -> None:
         cf = ChipFacts(
-            clusters=[], vap_peaks=[], buy_zone=None, sell_zone=None,
-            total_buy_volume=0, total_sell_volume=0, net_ratio=0.0,
+            clusters=[],
+            vap_peaks=[],
+            buy_zone=None,
+            sell_zone=None,
+            total_buy_volume=0,
+            total_sell_volume=0,
+            net_ratio=0.0,
         )
         assert cf.buy_zone is None
         assert cf.sell_zone is None
@@ -559,12 +611,14 @@ class TestChipFacts:
 class TestFlowFacts:
     def test_construction(self) -> None:
         ff = FlowFacts(
-            session_ud=1.3, session_net_flow=2000,
+            session_ud=1.3,
+            session_net_flow=2000,
             strongest_buy_bar=_make_flow_bar(ud_ratio=2.0),
             strongest_sell_bar=_make_flow_bar(ud_ratio=0.5),
             sustained_runs=[("bull", 3, "09:00-09:15")],
             volume_spikes=[(_make_flow_bar(), 2.5)],
-            eod_ud=1.1, eod_drift=0.05,
+            eod_ud=1.1,
+            eod_drift=0.05,
         )
         assert ff.session_ud == 1.3
         assert len(ff.sustained_runs) == 1
@@ -575,8 +629,10 @@ class TestStructureFacts:
     def test_construction(self) -> None:
         level = _make_price_level()
         sf = StructureFacts(
-            double_bottoms=[level], double_tops=[],
-            failed_breakouts=[], round_numbers=[level],
+            double_bottoms=[level],
+            double_tops=[],
+            failed_breakouts=[],
+            round_numbers=[level],
             session_high=_make_price_level(price=221000),
             session_low=_make_price_level(price=219000),
         )
@@ -587,8 +643,10 @@ class TestStructureFacts:
 class TestVolatilityFacts:
     def test_construction(self) -> None:
         vf = VolatilityFacts(
-            atr_5m=500, session_range=2000,
-            range_atr_ratio=4.0, atr_session=1800,
+            atr_5m=500,
+            session_range=2000,
+            range_atr_ratio=4.0,
+            atr_session=1800,
         )
         assert vf.atr_5m == 500
         assert vf.range_atr_ratio == 4.0
@@ -597,18 +655,30 @@ class TestVolatilityFacts:
 class TestDaySnapshot:
     def test_construction(self) -> None:
         ds = DaySnapshot(
-            date="2026-03-28", session="day",
-            open=219000, high=220500, low=218500, close=220000,
-            volume=45000, ud_ratio=1.1, net_flow=500,
+            date="2026-03-28",
+            session="day",
+            open=219000,
+            high=220500,
+            low=218500,
+            close=220000,
+            volume=45000,
+            ud_ratio=1.1,
+            net_flow=500,
         )
         assert ds.date == "2026-03-28"
         assert ds.close == 220000
 
     def test_slots(self) -> None:
         ds = DaySnapshot(
-            date="2026-03-28", session="day",
-            open=219000, high=220500, low=218500, close=220000,
-            volume=45000, ud_ratio=1.1, net_flow=500,
+            date="2026-03-28",
+            session="day",
+            open=219000,
+            high=220500,
+            low=218500,
+            close=220000,
+            volume=45000,
+            ud_ratio=1.1,
+            net_flow=500,
         )
         with pytest.raises((AttributeError, TypeError)):
             ds.extra = 1  # type: ignore[attr-defined]
@@ -617,9 +687,15 @@ class TestDaySnapshot:
 class TestCrossDayFacts:
     def test_construction(self) -> None:
         snap = DaySnapshot(
-            date="2026-03-28", session="day",
-            open=219000, high=220500, low=218500, close=220000,
-            volume=45000, ud_ratio=1.1, net_flow=500,
+            date="2026-03-28",
+            session="day",
+            open=219000,
+            high=220500,
+            low=218500,
+            close=220000,
+            volume=45000,
+            ud_ratio=1.1,
+            net_flow=500,
         )
         cdf = CrossDayFacts(
             prev_days=[snap],
@@ -636,41 +712,66 @@ class TestCrossDayFacts:
 class TestFactReport:
     def test_construction(self) -> None:
         seg = SegmentFact(
-            name="opening", time_range="09:00-09:30", ud_ratio=1.2,
-            net_flow=500, volume=10000, volume_pct=0.25,
-            large_buy_count=3, large_sell_count=1,
-            high=221000, low=219500, dominant_side="bull",
+            name="opening",
+            time_range="09:00-09:30",
+            ud_ratio=1.2,
+            net_flow=500,
+            volume=10000,
+            volume_pct=0.25,
+            large_buy_count=3,
+            large_sell_count=1,
+            high=221000,
+            low=219500,
+            dominant_side="bull",
         )
         chips = ChipFacts(
-            clusters=[], vap_peaks=[], buy_zone=None, sell_zone=None,
-            total_buy_volume=0, total_sell_volume=0, net_ratio=0.0,
+            clusters=[],
+            vap_peaks=[],
+            buy_zone=None,
+            sell_zone=None,
+            total_buy_volume=0,
+            total_sell_volume=0,
+            net_ratio=0.0,
         )
         flow = FlowFacts(
-            session_ud=1.3, session_net_flow=2000,
+            session_ud=1.3,
+            session_net_flow=2000,
             strongest_buy_bar=_make_flow_bar(),
             strongest_sell_bar=_make_flow_bar(),
-            sustained_runs=[], volume_spikes=[],
-            eod_ud=1.1, eod_drift=0.05,
+            sustained_runs=[],
+            volume_spikes=[],
+            eod_ud=1.1,
+            eod_drift=0.05,
         )
         structure = StructureFacts(
-            double_bottoms=[], double_tops=[],
-            failed_breakouts=[], round_numbers=[],
+            double_bottoms=[],
+            double_tops=[],
+            failed_breakouts=[],
+            round_numbers=[],
             session_high=_make_price_level(price=221000),
             session_low=_make_price_level(price=219000),
         )
         vol = VolatilityFacts(
-            atr_5m=500, session_range=2000,
-            range_atr_ratio=4.0, atr_session=1800,
+            atr_5m=500,
+            session_range=2000,
+            range_atr_ratio=4.0,
+            atr_session=1800,
         )
         cross = CrossDayFacts(
-            prev_days=[], volume_change_pct=0.0,
+            prev_days=[],
+            volume_change_pct=0.0,
             price_position="at_prev_close",
-            trend_direction="flat", flow_reversal=False,
+            trend_direction="flat",
+            flow_reversal=False,
         )
         fr = FactReport(
             session_data=_make_session_data_simple(),
-            segments=[seg], chips=chips, flow=flow,
-            structure=structure, volatility=vol, cross_day=cross,
+            segments=[seg],
+            chips=chips,
+            flow=flow,
+            structure=structure,
+            volatility=vol,
+            cross_day=cross,
         )
         assert fr.session_data.symbol == "TXFD6"
         assert len(fr.segments) == 1
@@ -684,16 +785,20 @@ class TestFactReport:
 class TestEvidence:
     def test_construction(self) -> None:
         e = Evidence(
-            source="flow", fact_value="ud_ratio=1.5",
-            direction="bull", weight=0.8,
+            source="flow",
+            fact_value="ud_ratio=1.5",
+            direction="bull",
+            weight=0.8,
         )
         assert e.source == "flow"
         assert e.weight == 0.8
 
     def test_slots(self) -> None:
         e = Evidence(
-            source="flow", fact_value="ud_ratio=1.5",
-            direction="bull", weight=0.8,
+            source="flow",
+            fact_value="ud_ratio=1.5",
+            direction="bull",
+            weight=0.8,
         )
         with pytest.raises((AttributeError, TypeError)):
             e.extra = 1  # type: ignore[attr-defined]
@@ -702,12 +807,16 @@ class TestEvidence:
 class TestBiasJudgment:
     def test_construction(self) -> None:
         ev = Evidence(
-            source="flow", fact_value="ud_ratio=1.5",
-            direction="bull", weight=0.8,
+            source="flow",
+            fact_value="ud_ratio=1.5",
+            direction="bull",
+            weight=0.8,
         )
         bj = BiasJudgment(
-            bias="bullish", confidence=0.75,
-            evidences=[ev], summary="Flow supports bullish bias.",
+            bias="bullish",
+            confidence=0.75,
+            evidences=[ev],
+            summary="Flow supports bullish bias.",
         )
         assert bj.bias == "bullish"
         assert bj.confidence == 0.75
@@ -717,8 +826,11 @@ class TestBiasJudgment:
 class TestEnrichedLevel:
     def test_construction(self) -> None:
         el = EnrichedLevel(
-            price=220000, side="support", strength=0.9,
-            sources=["vap", "round_number"], confluence_count=2,
+            price=220000,
+            side="support",
+            strength=0.9,
+            sources=["vap", "round_number"],
+            confluence_count=2,
         )
         assert el.price == 220000
         assert el.confluence_count == 2
@@ -740,21 +852,29 @@ class TestReasoningReport:
     def test_construction(self) -> None:
         ev = Evidence(source="flow", fact_value="1.5", direction="bull", weight=0.8)
         bias = BiasJudgment(
-            bias="bullish", confidence=0.75,
-            evidences=[ev], summary="Bullish.",
+            bias="bullish",
+            confidence=0.75,
+            evidences=[ev],
+            summary="Bullish.",
         )
         level = EnrichedLevel(
-            price=220000, side="support", strength=0.9,
-            sources=["vap"], confluence_count=1,
+            price=220000,
+            side="support",
+            strength=0.9,
+            sources=["vap"],
+            confluence_count=1,
         )
         scenario = _make_scenario_simple()
         narrative = NarrativeReport(
             storyline=["Bullish opening."],
-            turning_points=[], conclusion="Bullish.",
+            turning_points=[],
+            conclusion="Bullish.",
         )
         rr = ReasoningReport(
-            bias=bias, levels=[level],
-            scenarios=[scenario], narrative=narrative,
+            bias=bias,
+            levels=[level],
+            scenarios=[scenario],
+            narrative=narrative,
         )
         assert rr.bias.bias == "bullish"
         assert len(rr.levels) == 1
@@ -775,8 +895,11 @@ class TestMessagePart:
 
     def test_with_image(self) -> None:
         mp = MessagePart(
-            kind="image", content="", image=b"\x89PNG",
-            caption="Chart", min_tier="premium",
+            kind="image",
+            content="",
+            image=b"\x89PNG",
+            caption="Chart",
+            min_tier="premium",
         )
         assert mp.image == b"\x89PNG"
         assert mp.min_tier == "premium"
@@ -811,11 +934,23 @@ class TestComposedReport:
 class TestThreeLayerAllExports:
     def test_new_models_in_all(self) -> None:
         from hft_platform.reports import models
+
         expected = {
-            "SegmentFact", "ChipCluster", "ChipFacts", "FlowFacts",
-            "StructureFacts", "VolatilityFacts", "DaySnapshot",
-            "CrossDayFacts", "FactReport", "Evidence", "BiasJudgment",
-            "EnrichedLevel", "NarrativeReport", "ReasoningReport",
-            "MessagePart", "ComposedReport",
+            "SegmentFact",
+            "ChipCluster",
+            "ChipFacts",
+            "FlowFacts",
+            "StructureFacts",
+            "VolatilityFacts",
+            "DaySnapshot",
+            "CrossDayFacts",
+            "FactReport",
+            "Evidence",
+            "BiasJudgment",
+            "EnrichedLevel",
+            "NarrativeReport",
+            "ReasoningReport",
+            "MessagePart",
+            "ComposedReport",
         }
         assert expected.issubset(set(models.__all__))

@@ -12,7 +12,6 @@ import os
 import sys
 from unittest.mock import patch
 
-
 # ---------------------------------------------------------------------------
 # Helpers: import the module under test
 # ---------------------------------------------------------------------------

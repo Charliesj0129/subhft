@@ -17,6 +17,7 @@ from hft_platform.strategy.base import BaseStrategy
 # Mocks
 # ---------------------------------------------------------------------------
 
+
 class _Depth:
     """Minimal depth mock returning float prices like real hftbacktest."""
 
@@ -93,6 +94,7 @@ def _patch(monkeypatch, depth: _Depth | None = None) -> None:
 # _build_l1_bidask_event rescaling
 # ---------------------------------------------------------------------------
 
+
 def test_build_l1_bidask_event_rescales_to_x10000(monkeypatch):
     """_build_l1_bidask_event must store prices as scaled ints (x10000)."""
     depth = _Depth(best_bid=100.5, best_ask=100.6, bid_qty=10, ask_qty=8)
@@ -106,8 +108,8 @@ def test_build_l1_bidask_event_rescales_to_x10000(monkeypatch):
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=1_000_000)
 
-    assert event.bids[0, 0] == 1_005_000   # 100.5 * 10000
-    assert event.asks[0, 0] == 1_006_000   # 100.6 * 10000
+    assert event.bids[0, 0] == 1_005_000  # 100.5 * 10000
+    assert event.asks[0, 0] == 1_006_000  # 100.6 * 10000
 
 
 def test_build_l1_bidask_event_zero_price(monkeypatch):
@@ -167,6 +169,7 @@ def test_build_l1_bidask_event_qty_unaffected(monkeypatch):
 # get_mid_price_x2 rescaling
 # ---------------------------------------------------------------------------
 
+
 def test_get_mid_price_x2_rescales(monkeypatch):
     """get_mid_price_x2 returns sum of both prices scaled by x10000."""
     depth = _Depth(best_bid=1.0, best_ask=1.001)
@@ -200,6 +203,7 @@ def test_get_mid_price_x2_is_int(monkeypatch):
 # Rounding — no truncation on fractional float prices
 # ---------------------------------------------------------------------------
 
+
 def test_no_truncation_on_fractional_price(monkeypatch):
     """int(round(...)) must not truncate fractional float prices.
 
@@ -226,6 +230,7 @@ def test_no_truncation_on_fractional_price(monkeypatch):
 # ---------------------------------------------------------------------------
 # Dtype integrity
 # ---------------------------------------------------------------------------
+
 
 def test_build_l1_bidask_event_arrays_are_int64(monkeypatch):
     """BidAskEvent arrays must be int64 per platform convention."""

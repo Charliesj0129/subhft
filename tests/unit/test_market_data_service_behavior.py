@@ -686,7 +686,7 @@ def test_norm_failure_increments_counter(mds_factory):
 
 
 def test_norm_failure_escalates_to_storm_guard(mds_factory):
-    """After N consecutive normalization failures, storm_guard.report_feature_failure() is called."""
+    """After N consecutive normalization failures, storm_guard.report_norm_failure() is called."""
     svc = mds_factory()
     svc.metrics_registry = None
     svc._NORM_FAILURE_ESCALATE = 3
@@ -698,11 +698,11 @@ def test_norm_failure_escalates_to_storm_guard(mds_factory):
     # Two failures — should NOT escalate yet
     svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
     svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
-    mock_sg.report_feature_failure.assert_not_called()
+    mock_sg.report_norm_failure.assert_not_called()
 
     # Third failure — should escalate
     svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
-    mock_sg.report_feature_failure.assert_called_once_with(3)
+    mock_sg.report_norm_failure.assert_called_once_with(3)
 
 
 def test_norm_success_resets_counter(mds_factory):
@@ -733,7 +733,7 @@ def test_norm_success_resets_counter(mds_factory):
 
 
 def test_norm_recovery_calls_storm_guard_after_escalation(mds_factory):
-    """After escalation (>= threshold failures), recovery calls report_feature_recovery()."""
+    """After escalation (>= threshold failures), recovery calls report_norm_recovery()."""
     from hft_platform.events import MetaData, TickEvent
 
     svc = mds_factory()
@@ -758,7 +758,7 @@ def test_norm_recovery_calls_storm_guard_after_escalation(mds_factory):
 
     svc._process_raw({"code": "2330", "close": 100.0, "volume": 1})
 
-    mock_sg.report_feature_recovery.assert_called_once()
+    mock_sg.report_norm_recovery.assert_called_once()
     assert svc._norm_consecutive_failures == 0
 
 

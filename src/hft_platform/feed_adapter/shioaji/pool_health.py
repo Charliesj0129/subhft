@@ -10,6 +10,7 @@ Provides two public functions:
   (CONNECTED → DEGRADED → reconnect trigger, DISCONNECTED backoff trigger).
   RECOVERING slots are never touched because a reconnect is already in flight.
 """
+
 from __future__ import annotations
 
 import time

@@ -11,10 +11,11 @@ Focuses on branches not covered by existing tests:
 - LOBEngine.get_book_snapshot
 - LOBEngine metrics paths
 """
+
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -23,10 +24,10 @@ import hft_platform.feed_adapter.lob_engine as lob_mod
 from hft_platform.events import BidAskEvent, FusedBookStats, LOBStatsEvent, MetaData, TickEvent
 from hft_platform.feed_adapter.lob_engine import BookState, LOBEngine, _NoopLock
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_bids_np():
     return np.array([[1000000, 10], [999000, 5]], dtype=np.int64)
@@ -65,6 +66,7 @@ def _make_tick_event(symbol="2330", price=1_000_000, volume=5, ts=1_000_000_000)
 # _NoopLock
 # ---------------------------------------------------------------------------
 
+
 class TestNoopLock:
     def test_noop_lock_exit_returns_false(self):
         lock = _NoopLock()
@@ -82,6 +84,7 @@ class TestNoopLock:
 # ---------------------------------------------------------------------------
 # BookState — pure Python _recompute (Rust disabled)
 # ---------------------------------------------------------------------------
+
 
 class TestBookStatePureRecompute:
     @pytest.fixture
@@ -146,6 +149,7 @@ class TestBookStatePureRecompute:
 # BookState — get_stats, get_stats_tuple
 # ---------------------------------------------------------------------------
 
+
 class TestBookStateStats:
     @pytest.fixture
     def book(self, monkeypatch):
@@ -198,6 +202,7 @@ class TestBookStateStats:
 # BookState — apply_update_with_stats_fields
 # ---------------------------------------------------------------------------
 
+
 class TestApplyUpdateWithStats:
     def test_apply_update_with_stats(self, monkeypatch):
         monkeypatch.setattr(lob_mod, "_RustBookState", None)
@@ -246,6 +251,7 @@ class TestApplyUpdateWithStats:
 # LOBEngine — tuple fast-paths in process_event
 # ---------------------------------------------------------------------------
 
+
 class TestLOBEngineTupleFastPath:
     def test_process_bidask_tuple_6_fields(self, monkeypatch):
         monkeypatch.setattr(lob_mod, "_STATS_NONE", False)
@@ -264,8 +270,19 @@ class TestLOBEngineTupleFastPath:
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1001000, 8]], dtype=np.int64)
         event_tuple = (
-            "bidask", "2330", bids, asks, 1_000_000_000, False,
-            1000000, 1001000, 10, 8, 1000500.0, 1000.0, 0.111,
+            "bidask",
+            "2330",
+            bids,
+            asks,
+            1_000_000_000,
+            False,
+            1000000,
+            1001000,
+            10,
+            8,
+            1000500.0,
+            1000.0,
+            0.111,
         )
         result = engine.process_event(event_tuple)
         assert isinstance(result, LOBStatsEvent)
@@ -312,6 +329,7 @@ class TestLOBEngineTupleFastPath:
 # ---------------------------------------------------------------------------
 # LOBEngine — BidAskEvent with stats and fused bypass
 # ---------------------------------------------------------------------------
+
 
 class TestLOBEngineEventDispatch:
     def test_process_bidask_event_with_stats(self, monkeypatch):
@@ -386,6 +404,7 @@ class TestLOBEngineEventDispatch:
 # LOBEngine — get_book_snapshot
 # ---------------------------------------------------------------------------
 
+
 class TestGetBookSnapshot:
     def test_missing_symbol_returns_none(self):
         engine = LOBEngine()
@@ -431,6 +450,7 @@ class TestGetBookSnapshot:
 # ---------------------------------------------------------------------------
 # LOBEngine — get_l1_scaled
 # ---------------------------------------------------------------------------
+
 
 class TestGetL1Scaled:
     def test_missing_symbol_returns_none(self):
@@ -478,6 +498,7 @@ class TestGetL1Scaled:
 # ---------------------------------------------------------------------------
 # LOBEngine — metrics
 # ---------------------------------------------------------------------------
+
 
 class TestLOBEngineMetrics:
     def test_record_lob_metrics_no_metrics_enabled(self):
@@ -543,7 +564,5 @@ class TestLOBEngineMetrics:
         # cap_symbol must have been called for both emission points
         assert mock_metrics.cap_symbol.call_count == 2
         # The label passed to Prometheus must be the capped value, not the raw symbol
-        mock_metrics.lob_updates_total.labels.assert_called_once_with(
-            symbol="_other", type="bid"
-        )
+        mock_metrics.lob_updates_total.labels.assert_called_once_with(symbol="_other", type="bid")
         mock_metrics.lob_snapshots_total.labels.assert_called_once_with(symbol="_other")

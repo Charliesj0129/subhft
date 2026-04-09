@@ -9,11 +9,11 @@ Focuses on branches not covered by existing tests:
   normalize_bidask _RETURN_TUPLE path, normalize_snapshot _RETURN_TUPLE path,
   _record_latency_metrics interarrival, _validate_and_sync_timestamp clamping
 """
+
 from __future__ import annotations
 
 import textwrap
-from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,15 +21,16 @@ import hft_platform.feed_adapter.normalizer as norm_mod
 from hft_platform.events import BidAskEvent, TickEvent
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def symbols_yaml(tmp_path):
     cfg = tmp_path / "symbols.yaml"
-    cfg.write_text(textwrap.dedent("""\
+    cfg.write_text(
+        textwrap.dedent("""\
         symbols:
           - code: "2330"
             exchange: "TSE"
@@ -63,7 +64,8 @@ def symbols_yaml(tmp_path):
             strike: 19000
             right: "P"
             expiry: "bad-date"
-    """))
+    """)
+    )
     return str(cfg)
 
 
@@ -80,6 +82,7 @@ def normalizer(symbols_yaml):
 # ---------------------------------------------------------------------------
 # SymbolMetadata — reload_if_changed
 # ---------------------------------------------------------------------------
+
 
 class TestSymbolMetadataReloadIfChanged:
     def test_reload_if_changed_returns_false_when_unchanged(self, meta):
@@ -103,6 +106,7 @@ class TestSymbolMetadataReloadIfChanged:
 # ---------------------------------------------------------------------------
 # SymbolMetadata — symbols_for_tags
 # ---------------------------------------------------------------------------
+
 
 class TestSymbolsForTags:
     def test_symbols_for_tags_found(self, meta):
@@ -129,6 +133,7 @@ class TestSymbolsForTags:
 # ---------------------------------------------------------------------------
 # SymbolMetadata — price_scale fallbacks
 # ---------------------------------------------------------------------------
+
 
 class TestPriceScale:
     def test_price_scale_from_tick_size(self, tmp_path):
@@ -172,6 +177,7 @@ class TestPriceScale:
 # SymbolMetadata — contract_multiplier
 # ---------------------------------------------------------------------------
 
+
 class TestContractMultiplier:
     def test_contract_multiplier_future(self, meta):
         assert meta.contract_multiplier("TMFD6") == 10
@@ -186,6 +192,7 @@ class TestContractMultiplier:
 # ---------------------------------------------------------------------------
 # SymbolMetadata — product_type exchange-based inference
 # ---------------------------------------------------------------------------
+
 
 class TestProductTypeExchangeInference:
     def test_tse_exchange_infers_stock(self, meta):
@@ -225,6 +232,7 @@ class TestProductTypeExchangeInference:
 # SymbolMetadata — order_params
 # ---------------------------------------------------------------------------
 
+
 class TestOrderParams:
     def test_order_params_unknown_symbol(self, meta):
         params = meta.order_params("UNKNOWN")
@@ -232,13 +240,15 @@ class TestOrderParams:
 
     def test_order_params_extracts_known_keys(self, tmp_path):
         cfg = tmp_path / "order.yaml"
-        cfg.write_text(textwrap.dedent("""\
+        cfg.write_text(
+            textwrap.dedent("""\
             symbols:
               - code: "2330"
                 exchange: "TSE"
                 order_cond: "Cash"
                 order_lot: "Common"
-        """))
+        """)
+        )
         m = SymbolMetadata(str(cfg))
         params = m.order_params("2330")
         assert params.get("order_cond") == "Cash"
@@ -249,11 +259,13 @@ class TestOrderParams:
 # SymbolMetadata — _populate_registry option type
 # ---------------------------------------------------------------------------
 
+
 class TestPopulateRegistryOption:
     def test_option_strike_and_call_right(self, meta):
         profile = meta.registry.get("TXO20000C202506")
         assert profile is not None
         from hft_platform.core.instrument_registry import InstrumentType, OptionRight
+
         assert profile.instrument_type == InstrumentType.OPTION
         assert profile.option_right == OptionRight.CALL
         assert profile.strike_scaled == 20000
@@ -262,6 +274,7 @@ class TestPopulateRegistryOption:
         profile = meta.registry.get("PUTTEST")
         assert profile is not None
         from hft_platform.core.instrument_registry import OptionRight
+
         assert profile.option_right == OptionRight.PUT
 
     def test_option_expiry_bad_date_ignored(self, meta):
@@ -273,6 +286,7 @@ class TestPopulateRegistryOption:
 # ---------------------------------------------------------------------------
 # MarketDataNormalizer — _maybe_synthesize_side
 # ---------------------------------------------------------------------------
+
 
 class TestMaybeSynthesizeSide:
     @pytest.fixture
@@ -339,6 +353,7 @@ class TestMaybeSynthesizeSide:
 
     def test_synthesis_numpy_asks(self, synth_normalizer):
         import numpy as np
+
         bids = []
         asks = np.array([[1001000, 8]], dtype=np.int64)
         out_bids, out_asks, synthesized = synth_normalizer._maybe_synthesize_side("2330", bids, asks, 10000)
@@ -348,6 +363,7 @@ class TestMaybeSynthesizeSide:
 # ---------------------------------------------------------------------------
 # MarketDataNormalizer — normalize_tick attribute-based payload
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeTickObjectPayload:
     def test_normalize_tick_object_payload(self, normalizer):
@@ -388,6 +404,7 @@ class TestNormalizeTickObjectPayload:
 # ---------------------------------------------------------------------------
 # MarketDataNormalizer — normalize_bidask _RETURN_TUPLE
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeBidAskReturnTuple:
     def test_return_tuple_with_stats(self, normalizer, monkeypatch):
@@ -441,6 +458,7 @@ class TestNormalizeBidAskReturnTuple:
 # ---------------------------------------------------------------------------
 # MarketDataNormalizer — normalize_snapshot
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeSnapshot:
     def test_snapshot_dict_with_buy_sell(self, normalizer, monkeypatch):
@@ -543,6 +561,7 @@ class TestNormalizeSnapshot:
 # MarketDataNormalizer — _record_latency_metrics interarrival
 # ---------------------------------------------------------------------------
 
+
 class TestRecordLatencyMetrics:
     def test_interarrival_metric_on_second_call(self, normalizer):
         """Call normalize_tick twice; second call exercises interarrival branch."""
@@ -579,6 +598,7 @@ class TestRecordLatencyMetrics:
 # MarketDataNormalizer — _validate_and_sync_timestamp
 # ---------------------------------------------------------------------------
 
+
 class TestValidateAndSyncTimestamp:
     def test_future_ts_clamped_to_now(self, normalizer, monkeypatch):
         monkeypatch.setattr(norm_mod, "_TS_MAX_FUTURE_NS", 1_000_000_000)  # 1 second
@@ -611,6 +631,7 @@ class TestValidateAndSyncTimestamp:
 # ---------------------------------------------------------------------------
 # MarketDataNormalizer — normalize_tick _RETURN_TUPLE path (Python fallback)
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeTickReturnTuple:
     def test_normalize_tick_return_tuple_python_path(self, normalizer, monkeypatch):

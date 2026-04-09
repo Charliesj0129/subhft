@@ -1,7 +1,6 @@
 """Tests for XB-03: sliding-window overflow rate tracker in RingBufferBus."""
 
 import asyncio
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest

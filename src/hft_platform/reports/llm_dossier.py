@@ -27,10 +27,7 @@ def _compact_line(text: str) -> str:
 
 
 def _flow_bar_text(bar: object) -> str:
-    return (
-        f"{bar.ts}|ud={_float_text(bar.ud_ratio)}|"
-        f"net={bar.net_flow}|vol={bar.total_vol}"
-    )
+    return f"{bar.ts}|ud={_float_text(bar.ud_ratio)}|net={bar.net_flow}|vol={bar.total_vol}"
 
 
 def _segment_text(segment: object) -> str:

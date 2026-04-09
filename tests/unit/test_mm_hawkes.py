@@ -7,14 +7,12 @@ Note: mm_hawkes is a research/backtest-only strategy module (hftbacktest
 simulation framework). Float prices are acceptable here per CLAUDE.md Rule 11
 (float permitted in strategy research modules outside live accounting paths).
 """
+
 from __future__ import annotations
 
 import math
 
-import pytest
-
 from hft_platform.strategies.mm_hawkes import HawkesTracker, PropagatorTracker
-
 
 # ---------------------------------------------------------------------------
 # HawkesTracker

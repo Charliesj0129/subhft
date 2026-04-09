@@ -103,7 +103,6 @@ class TestReportFeatureRecovery:
         # But feature flag should be cleared
         assert guard._feature_failure_active is False
 
-
     def test_dual_cause_storm_recovery_preserves_other_cause(self, guard):
         """If latency AND feature failure both cause STORM, feature recovery
         clears the flag but state remains STORM (latency still active)."""

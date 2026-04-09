@@ -7,11 +7,10 @@ that exceed rollback thresholds, triggering rollback when data is missing.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import yaml
 
-from hft_platform.alpha.canary import CanaryMonitor, CanaryStatus
+from hft_platform.alpha.canary import CanaryMonitor
 from hft_platform.alpha.canary_scheduler import CanaryAutoScheduler
 
 
@@ -88,7 +87,6 @@ class TestCanaryFailsafeMissingLiveMetrics:
         assert metrics["slippage_bps"] == 999.0
         assert metrics["drawdown_contribution"] == 1.0
         assert metrics["execution_error_rate"] == 1.0
-
 
     def test_explicit_null_values_use_failsafe(self) -> None:
         """YAML ``slippage_bps: null`` must not crash with float(None)."""

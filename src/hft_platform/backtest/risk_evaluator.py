@@ -1,4 +1,5 @@
 """Synchronous risk evaluator for backtest — reuses live validator classes."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

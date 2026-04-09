@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from scipy import stats
@@ -283,9 +283,7 @@ def _check_monotonic_ic(
     finite_ics = [ic for ic in horizon_ics if np.isfinite(ic)]
     is_monotonic = False
     if len(finite_ics) >= 3:
-        strictly_increasing = all(
-            finite_ics[i] < finite_ics[i + 1] for i in range(len(finite_ics) - 1)
-        )
+        strictly_increasing = all(finite_ics[i] < finite_ics[i + 1] for i in range(len(finite_ics) - 1))
         ic_range = max(finite_ics) - min(finite_ics)
         max_abs_ic = max(abs(ic) for ic in finite_ics)
         # Require meaningful range and magnitude (pure noise < 0.03 abs)
@@ -385,12 +383,18 @@ def _trend_skip_result(horizons: list[int], detail: str) -> dict[str, Any]:
         "detail": detail,
         "monotonic_ic": {"horizons": horizons, "ics": [], "is_monotonic": False, "pass": True},
         "detrended_ic": {
-            "raw_ic": 0.0, "detrended_ic": 0.0,
-            "sign_flipped": False, "below_threshold": False, "pass": True,
+            "raw_ic": 0.0,
+            "detrended_ic": 0.0,
+            "sign_flipped": False,
+            "below_threshold": False,
+            "pass": True,
         },
         "non_overlapping_ic": {
-            "overlapping_ic": 0.0, "non_overlapping_ic": 0.0,
-            "drop_pct": 0.0, "warn": False, "blocking": False,
+            "overlapping_ic": 0.0,
+            "non_overlapping_ic": 0.0,
+            "drop_pct": 0.0,
+            "warn": False,
+            "blocking": False,
         },
     }
 
@@ -428,13 +432,11 @@ def _evaluate_trend_contamination(
 
     min_len = max(horizons) + detrend_window + 1
     if sig.size < min_len or mid.size < min_len:
-        return _trend_skip_result(
-            horizons, f"insufficient_data (need {min_len}, got sig={sig.size} mid={mid.size})"
-        )
+        return _trend_skip_result(horizons, f"insufficient_data (need {min_len}, got sig={sig.size} mid={mid.size})")
 
     n = min(sig.size, mid.size)
-    sig = sig[:n]
-    mid = mid[:n]
+    sig = cast(np.ndarray[Any, Any], sig[:n])
+    mid = cast(np.ndarray[Any, Any], mid[:n])
 
     mid_std = float(np.std(mid))
     if mid_std < 1e-10 or not np.isfinite(mid_std):
@@ -452,13 +454,11 @@ def _evaluate_trend_contamination(
     if not detrended["pass"]:
         if detrended["sign_flipped"]:
             detail_parts.append(
-                f"detrended IC sign flipped (raw={detrended['raw_ic']:.4f}, "
-                f"detrended={detrended['detrended_ic']:.4f})"
+                f"detrended IC sign flipped (raw={detrended['raw_ic']:.4f}, detrended={detrended['detrended_ic']:.4f})"
             )
         if detrended["below_threshold"]:
             detail_parts.append(
-                f"detrended IC below threshold (|{detrended['detrended_ic']:.4f}| "
-                f"< {detrended_ic_threshold})"
+                f"detrended IC below threshold (|{detrended['detrended_ic']:.4f}| < {detrended_ic_threshold})"
             )
     if non_overlap["warn"]:
         detail_parts.append(f"non-overlapping IC drop {non_overlap['drop_pct']:.1%} (advisory)")

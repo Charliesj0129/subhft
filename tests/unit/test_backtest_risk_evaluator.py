@@ -2,6 +2,7 @@
 
 Tests are written FIRST (red phase) to drive implementation.
 """
+
 from __future__ import annotations
 
 import yaml
@@ -11,6 +12,7 @@ from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_intent(
     *,
@@ -39,6 +41,7 @@ def _write_risk_yaml(tmp_path, overrides: dict | None = None) -> str:
         "global_defaults": {
             "max_price_cap": 5000.0,
             "max_price_cap_futures": 50000.0,
+            "max_price_cap_TMFD6": 50000.0,
             "max_notional": 500_000_000,
             "per_symbol_max_notional": 5_000_000_000,
             "max_position_lots": 3,
@@ -60,6 +63,7 @@ def _position_provider_zero(symbol: str, strategy_id: str) -> int:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestBacktestRiskEvaluatorApprove:
     def test_approve_valid_intent(self, tmp_path):

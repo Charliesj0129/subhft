@@ -375,15 +375,9 @@ def _verify_gate_c_passed(scorecard_path: Path) -> None:
     meta = json.loads(meta_path.read_text())
     gate_status = meta.get("gate_status")
     if gate_status is None:
-        raise ValueError(
-            f"Gate C has not passed for this scorecard: {scorecard_path}. "
-            "Run validate_alpha() first."
-        )
+        raise ValueError(f"Gate C has not passed for this scorecard: {scorecard_path}. Run validate_alpha() first.")
     if not gate_status.get("gate_c", False):
-        raise ValueError(
-            f"Gate C has not passed for this scorecard: {scorecard_path}. "
-            "Run validate_alpha() first."
-        )
+        raise ValueError(f"Gate C has not passed for this scorecard: {scorecard_path}. Run validate_alpha() first.")
 
 
 def _latest_scorecard_from_runs(root: Path, alpha_id: str) -> Path | None:

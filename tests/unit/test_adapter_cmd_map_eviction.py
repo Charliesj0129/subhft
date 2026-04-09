@@ -11,14 +11,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
-
-import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderCommand, OrderIntent, Side, StormGuardState
 from hft_platform.order.adapter import OrderAdapter
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -7,10 +7,8 @@ periodic log message.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-from unittest.mock import MagicMock, patch
-
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # Source-level structural tests (fast, no asyncio needed)
@@ -22,9 +20,7 @@ def test_supervise_tracks_gateway_intent_queue_depth():
     from hft_platform.services.system import HFTSystem
 
     source = inspect.getsource(HFTSystem._supervise)
-    assert "gateway_intent" in source, (
-        "_supervise() must emit queue_depth metric with queue='gateway_intent'"
-    )
+    assert "gateway_intent" in source, "_supervise() must emit queue_depth metric with queue='gateway_intent'"
 
 
 def test_supervise_checks_intent_channel_before_metric():
@@ -32,9 +28,7 @@ def test_supervise_checks_intent_channel_before_metric():
     from hft_platform.services.system import HFTSystem
 
     source = inspect.getsource(HFTSystem._supervise)
-    assert "intent_channel" in source, (
-        "_supervise() must reference intent_channel for gateway depth tracking"
-    )
+    assert "intent_channel" in source, "_supervise() must reference intent_channel for gateway depth tracking"
     # Guard pattern: None check must be present
     assert "intent_channel is not None" in source, (
         "_supervise() must guard intent_channel with 'is not None' before calling qsize()"
@@ -47,9 +41,7 @@ def test_supervise_log_includes_gateway_intent_field():
 
     source = inspect.getsource(HFTSystem._supervise)
     # The log kwargs dict should include gateway_intent when channel is present
-    assert "gateway_intent" in source, (
-        "_supervise() must log gateway_intent depth in the periodic queue log"
-    )
+    assert "gateway_intent" in source, "_supervise() must log gateway_intent depth in the periodic queue log"
 
 
 def test_hftsystem_exposes_intent_channel_attribute():
@@ -57,9 +49,7 @@ def test_hftsystem_exposes_intent_channel_attribute():
     from hft_platform.services.system import HFTSystem
 
     source = inspect.getsource(HFTSystem.__init__)
-    assert "self.intent_channel" in source, (
-        "HFTSystem.__init__ must assign self.intent_channel from the registry"
-    )
+    assert "self.intent_channel" in source, "HFTSystem.__init__ must assign self.intent_channel from the registry"
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +109,7 @@ def test_gateway_intent_depth_tracked_when_available():
         depth = getattr(sys_mock.intent_channel, "qsize", lambda: 0)()
         metrics.queue_depth.labels(queue="gateway_intent").set(depth)
 
-    assert "gateway_intent" in label_calls, (
-        "gateway_intent label must be emitted when intent_channel is present"
-    )
+    assert "gateway_intent" in label_calls, "gateway_intent label must be emitted when intent_channel is present"
     assert depth_values.get("gateway_intent") == 7, (
         "gateway_intent depth must equal intent_channel.qsize() return value"
     )
@@ -150,9 +138,7 @@ def test_gateway_intent_depth_skipped_when_no_channel():
         depth = getattr(sys_mock.intent_channel, "qsize", lambda: 0)()
         metrics.queue_depth.labels(queue="gateway_intent").set(depth)
 
-    assert "gateway_intent" not in label_calls, (
-        "gateway_intent label must NOT be emitted when intent_channel is None"
-    )
+    assert "gateway_intent" not in label_calls, "gateway_intent label must NOT be emitted when intent_channel is None"
 
 
 def test_gateway_intent_absent_from_log_when_no_channel():
@@ -160,9 +146,7 @@ def test_gateway_intent_absent_from_log_when_no_channel():
     sys_mock = _make_minimal_mock_system(with_intent_channel=False)
 
     _gateway_intent_depth = (
-        getattr(sys_mock.intent_channel, "qsize", lambda: 0)()
-        if sys_mock.intent_channel is not None
-        else None
+        getattr(sys_mock.intent_channel, "qsize", lambda: 0)() if sys_mock.intent_channel is not None else None
     )
     _log_kwargs: dict = dict(
         raw=sys_mock.raw_queue.qsize(),
@@ -182,9 +166,7 @@ def test_gateway_intent_present_in_log_when_channel_available():
     sys_mock = _make_minimal_mock_system(with_intent_channel=True)
 
     _gateway_intent_depth = (
-        getattr(sys_mock.intent_channel, "qsize", lambda: 0)()
-        if sys_mock.intent_channel is not None
-        else None
+        getattr(sys_mock.intent_channel, "qsize", lambda: 0)() if sys_mock.intent_channel is not None else None
     )
     _log_kwargs: dict = dict(
         raw=sys_mock.raw_queue.qsize(),

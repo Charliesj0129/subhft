@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.risk.storm_guard import StormGuard, StormGuardState
+from hft_platform.risk.storm_guard import StormGuard
 
 
 @pytest.fixture()

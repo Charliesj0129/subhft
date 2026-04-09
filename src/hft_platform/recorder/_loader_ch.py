@@ -230,10 +230,12 @@ def insert_with_dedup(svc: Any, target_table: str, rows: list, fname: str) -> bo
 
         try:
             import orjson
+
             raw = b"".join(orjson.dumps(r, option=orjson.OPT_SORT_KEYS) for r in rows)
         except (ImportError, TypeError):
             # Fallback: use json with sorted keys for determinism
             import json
+
             raw = "".join(json.dumps(r, sort_keys=True, default=str) for r in rows).encode()
         content_hash = hashlib.sha256(raw).hexdigest()
         if svc._is_duplicate(target_table, content_hash):

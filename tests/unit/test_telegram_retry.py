@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Inject a minimal aiohttp stub so the module can be imported without the
 # real dependency.  Mirror the approach in test_telegram.py.

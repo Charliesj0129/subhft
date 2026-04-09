@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hft_platform.reports.llm_client import OpenRouterClient
 from hft_platform.reports.composer import ReportComposer
 from hft_platform.reports.facts import extract_all
+from hft_platform.reports.llm_client import OpenRouterClient
 from hft_platform.reports.models import (
     Bar5m,
     ComposedReport,

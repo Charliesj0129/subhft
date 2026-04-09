@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from hft_platform.strategies.tx_tmf_leadlag import TxTmfLeadLagStrategy
 
 _ONE_SEC_NS = 1_000_000_000

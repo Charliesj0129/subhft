@@ -44,6 +44,7 @@ def load_point_value_config(yaml_path: str) -> tuple[dict[str, int], dict[str, s
     sym_map: dict[str, str] = data.get("symbol_map", {})
     return pv_map, sym_map
 
+
 _DAILY_QUERY = """\
 SELECT
     strategy_id,

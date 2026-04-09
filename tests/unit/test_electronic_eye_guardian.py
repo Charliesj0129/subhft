@@ -1,4 +1,5 @@
 """Tests for Guardian state machine in Electronic Eye strategy."""
+
 from hft_platform.strategies.electronic_eye import EyeState, Guardian
 
 

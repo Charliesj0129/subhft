@@ -48,7 +48,7 @@ class TestStormGuardTransitionMetric:
         """Each escalation step (NORMAL→WARM, WARM→STORM, STORM→HALT) is counted."""
         sg, mock_metrics = _make_guard()
 
-        sg.update(drawdown_bps=-60)   # NORMAL → WARM
+        sg.update(drawdown_bps=-60)  # NORMAL → WARM
         sg.update(drawdown_bps=-110)  # WARM → STORM
         sg.update(drawdown_bps=-210)  # STORM → HALT
 

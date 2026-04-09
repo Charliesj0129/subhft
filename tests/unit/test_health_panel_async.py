@@ -98,10 +98,7 @@ class TestPollHealthAsyncNonBlocking:
             )
 
         # The no-op coroutine must finish well under the 100ms sleep.
-        assert t_noop < 0.05, (
-            f"Event loop was blocked: no-op coroutine took {t_noop:.3f}s "
-            "(expected < 0.05s)"
-        )
+        assert t_noop < 0.05, f"Event loop was blocked: no-op coroutine took {t_noop:.3f}s (expected < 0.05s)"
 
     @pytest.mark.asyncio
     async def test_uses_to_thread_not_direct_call(self) -> None:
@@ -115,17 +112,14 @@ class TestPollHealthAsyncNonBlocking:
             # will NOT be the main thread.
             import threading
 
-            called_from_thread.append(
-                threading.current_thread() is not threading.main_thread()
-            )
+            called_from_thread.append(threading.current_thread() is not threading.main_thread())
             return HealthState()
 
         with mock.patch.object(hp, "_fetch_from_prometheus", side_effect=_capture_thread):
             await poll_health_async()
 
         assert called_from_thread == [True], (
-            "_fetch_from_prometheus was not run in a worker thread; "
-            "poll_health_async is still blocking the event loop"
+            "_fetch_from_prometheus was not run in a worker thread; poll_health_async is still blocking the event loop"
         )
 
 
@@ -137,10 +131,7 @@ class TestPollHealthAsyncNonBlocking:
 class TestFetchTimestamp:
     def test_last_fetch_ts_uses_monotonic(self) -> None:
         """last_fetch_ts must be set with time.monotonic(), not time.time()."""
-        raw_metrics = (
-            "# HELP stormguard_mode StormGuard state\n"
-            'stormguard_mode{strategy="system"} 0\n'
-        )
+        raw_metrics = '# HELP stormguard_mode StormGuard state\nstormguard_mode{strategy="system"} 0\n'
         fake_resp = mock.MagicMock()
         fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
         fake_resp.__exit__ = mock.Mock(return_value=False)

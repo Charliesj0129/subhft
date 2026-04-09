@@ -46,7 +46,7 @@ def test_r2_alias_resolves():
 def test_non_r1r2_code_unaffected():
     runtime, _, _ = _make_runtime_with_r1r2()
     contract = runtime._get_contract("FUT", "TXFD6", product_type="future")
-    assert contract is None or contract is not None  # just no exception
+    assert contract is None
 
 
 def test_get_contract_ensures_contracts_when_api_lacks_contracts():

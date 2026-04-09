@@ -139,8 +139,7 @@ class ShioajiClient:
         self.contracts_timeout = int(os.getenv("SHIOAJI_CONTRACTS_TIMEOUT", "10000"))
         _cfg_fetch = (shioaji_config or {}).get("fetch_contract")
         self.fetch_contract = (
-            str(_cfg_fetch) != "0" if _cfg_fetch is not None
-            else os.getenv("SHIOAJI_FETCH_CONTRACT", "1") != "0"
+            str(_cfg_fetch) != "0" if _cfg_fetch is not None else os.getenv("SHIOAJI_FETCH_CONTRACT", "1") != "0"
         )
         self.subscribe_trade = os.getenv("SHIOAJI_SUBSCRIBE_TRADE", "1") != "0"
         self.allow_symbol_fallback = os.getenv("HFT_ALLOW_SYMBOL_FALLBACK") == "1"

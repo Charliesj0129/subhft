@@ -6,8 +6,6 @@ before being interpolated into Telegram HTML templates (R2-3, R2-4).
 
 from __future__ import annotations
 
-import pytest
-
 from hft_platform.notifications.alertmanager_bridge import format_alert_message
 from hft_platform.notifications.templates import (
     render_backup_failed,
@@ -17,7 +15,6 @@ from hft_platform.notifications.templates import (
     render_reconnect_alert,
     render_stormguard_change,
 )
-
 
 # ---------------------------------------------------------------------------
 # R2-3: alertmanager_bridge

@@ -1,5 +1,4 @@
 """Tests for negative/zero price filtering in normalize_tick."""
-from unittest.mock import patch
 
 import pytest
 
@@ -10,9 +9,7 @@ from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
 @pytest.fixture
 def normalizer(tmp_path):
     cfg = tmp_path / "test_symbols.yaml"
-    cfg.write_text(
-        "symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n"
-    )
+    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
     return MarketDataNormalizer(str(cfg))
 
 
@@ -52,6 +49,7 @@ def test_negative_close_rust_path_returns_none(normalizer):
     """Rust fast path must also filter negative prices."""
     try:
         import hft_platform.rust_core as rc  # noqa: F401
+
         rust_available = True
     except ImportError:
         rust_available = False

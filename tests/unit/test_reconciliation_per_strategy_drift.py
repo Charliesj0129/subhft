@@ -58,11 +58,7 @@ async def test_per_strategy_breakdown_logged_at_debug_no_discrepancy():
     assert "Portfolio Sync: Per-strategy position breakdown" in debug_messages
 
     # Verify the breakdown content has the right strategy
-    debug_kwargs = {
-        c[0][0]: c[1]
-        for c in mock_logger.debug.call_args_list
-        if c[0]
-    }
+    debug_kwargs = {c[0][0]: c[1] for c in mock_logger.debug.call_args_list if c[0]}
     breakdown_kwargs = debug_kwargs.get("Portfolio Sync: Per-strategy position breakdown", {})
     assert "strat_a" in breakdown_kwargs.get("strategies", [])
 
@@ -73,16 +69,20 @@ async def test_per_strategy_breakdown_contains_all_strategies():
     client = MagicMock()
     client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=20, direction="Action.Buy")]
 
-    store = _make_store_with_positions([
-        ("acc1", "strat_a", "2330", 12),
-        ("acc1", "strat_b", "2330", 8),
-    ])
+    store = _make_store_with_positions(
+        [
+            ("acc1", "strat_a", "2330", 12),
+            ("acc1", "strat_b", "2330", 8),
+        ]
+    )
     service = _make_service(client, store)
 
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()
 
-    debug_calls = [c for c in mock_logger.debug.call_args_list if c[0][0] == "Portfolio Sync: Per-strategy position breakdown"]
+    debug_calls = [
+        c for c in mock_logger.debug.call_args_list if c[0][0] == "Portfolio Sync: Per-strategy position breakdown"
+    ]
     assert debug_calls, "Expected per-strategy breakdown DEBUG log"
     strategies = debug_calls[0][1].get("strategies", [])
     assert "strat_a" in strategies
@@ -101,10 +101,12 @@ async def test_drift_attribution_logged_at_warning_when_discrepancy():
     # Broker: 2330=5, local: 2330=10 (strat_a=7, strat_b=3)
     client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=5, direction="Action.Buy")]
 
-    store = _make_store_with_positions([
-        ("acc1", "strat_a", "2330", 7),
-        ("acc1", "strat_b", "2330", 3),
-    ])
+    store = _make_store_with_positions(
+        [
+            ("acc1", "strat_a", "2330", 7),
+            ("acc1", "strat_b", "2330", 3),
+        ]
+    )
     service = _make_service(client, store)
 
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
@@ -116,10 +118,7 @@ async def test_drift_attribution_logged_at_warning_when_discrepancy():
     )
 
     # Validate attribution content includes drifting symbol
-    drift_call = next(
-        c for c in mock_logger.warning.call_args_list
-        if c[0][0] == "Per-strategy drift attribution"
-    )
+    drift_call = next(c for c in mock_logger.warning.call_args_list if c[0][0] == "Per-strategy drift attribution")
     assert "2330" in drift_call[1].get("drifting_symbols", [])
 
 
@@ -130,18 +129,19 @@ async def test_drift_attribution_identifies_contributing_strategies():
     # Broker: 2330=0, local: 2330=15 (strat_mm=10, strat_arb=5)
     client.get_positions.return_value = []
 
-    store = _make_store_with_positions([
-        ("acc1", "strat_mm", "2330", 10),
-        ("acc1", "strat_arb", "2330", 5),
-    ])
+    store = _make_store_with_positions(
+        [
+            ("acc1", "strat_mm", "2330", 10),
+            ("acc1", "strat_arb", "2330", 5),
+        ]
+    )
     service = _make_service(client, store)
 
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()
 
     drift_call = next(
-        (c for c in mock_logger.warning.call_args_list
-         if c[0][0] == "Per-strategy drift attribution"),
+        (c for c in mock_logger.warning.call_args_list if c[0][0] == "Per-strategy drift attribution"),
         None,
     )
     assert drift_call is not None, "Expected per-strategy drift attribution WARNING"
@@ -187,18 +187,19 @@ async def test_attribution_excludes_zero_position_strategies():
     # Broker: 2330=0; local: 2330=5 (strat_a=5, strat_b=0)
     client.get_positions.return_value = []
 
-    store = _make_store_with_positions([
-        ("acc1", "strat_a", "2330", 5),
-        ("acc1", "strat_b", "2330", 0),
-    ])
+    store = _make_store_with_positions(
+        [
+            ("acc1", "strat_a", "2330", 5),
+            ("acc1", "strat_b", "2330", 0),
+        ]
+    )
     service = _make_service(client, store)
 
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()
 
     drift_call = next(
-        (c for c in mock_logger.warning.call_args_list
-         if c[0][0] == "Per-strategy drift attribution"),
+        (c for c in mock_logger.warning.call_args_list if c[0][0] == "Per-strategy drift attribution"),
         None,
     )
     assert drift_call is not None

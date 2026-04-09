@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import os
 from typing import Any
-from unittest.mock import MagicMock, call, mock_open, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-from hft_platform.recorder.batcher import Batcher, ColumnarBuffer, GlobalMemoryGuard
-
+from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -133,7 +130,5 @@ class TestEmergencyWalFsync:
                 batcher._wal_emergency_dump(batcher._active)
 
         assert len(captured_fds) == 1
-        assert isinstance(captured_fds[0], int), (
-            f"Expected int fd, got {type(captured_fds[0])}"
-        )
+        assert isinstance(captured_fds[0], int), f"Expected int fd, got {type(captured_fds[0])}"
         assert captured_fds[0] > 0, "File descriptor must be a positive integer"

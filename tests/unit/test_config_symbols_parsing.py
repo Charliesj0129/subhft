@@ -20,7 +20,6 @@ from hft_platform.config._symbols_parsing import (
 )
 from hft_platform.config._symbols_types import FilterSpec, SymbolBuildResult
 
-
 # ---------------------------------------------------------------------------
 # parse_bool_value
 # ---------------------------------------------------------------------------

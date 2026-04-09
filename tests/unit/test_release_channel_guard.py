@@ -75,7 +75,8 @@ def _prepare_artifacts(
 
     # Rollback drill artifact (looked up via output_dir.parent / "reliability" / "drills")
     # Use a recent date (within 30 days of test run) so drill freshness check passes
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+
     recent_ts = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
     recent_file_ts = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y%m%dT%H%M%SZ")
     reliability_dir = root / "outputs" / "reliability" / "drills"

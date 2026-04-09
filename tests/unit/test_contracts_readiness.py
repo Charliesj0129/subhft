@@ -100,6 +100,7 @@ class TestEnsureContracts:
 
     def test_returns_true_when_fetch_succeeds_and_contracts_loaded(self, client_no_contracts):
         """After a successful fetch_contracts call, Contracts is available."""
+
         # Simulate the SDK setting Contracts after fetch
         def _side_effect(**kwargs):
             client_no_contracts.api.Contracts = MagicMock()

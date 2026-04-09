@@ -13,7 +13,6 @@ Tests cover:
 
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,7 +20,6 @@ import pytest
 
 from hft_platform.services._md_ingestion import FeedState
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
-
 
 # ---------------------------------------------------------------------------
 # Helper: a minimal concrete class that mixes in MarketDataReconnectMixin
@@ -143,8 +141,9 @@ class TestWithinReconnectWindow:
         # Pick a time inside the window
         now = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_hours = "08:00-13:00"
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
             assert md._within_reconnect_window() is True
@@ -152,8 +151,9 @@ class TestWithinReconnectWindow:
     def test_respects_reconnect_hours_window_outside(self, md: _FakeMD) -> None:
         now = dt.datetime(2024, 1, 15, 6, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_hours = "08:00-13:00"
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
             assert md._within_reconnect_window() is False
@@ -162,8 +162,9 @@ class TestWithinReconnectWindow:
         # Window 22:00 – 02:00 (wraps midnight)
         now_after_midnight = dt.datetime(2024, 1, 15, 1, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_hours = "22:00-02:00"
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_after_midnight.timestamp()
             assert md._within_reconnect_window() is True
@@ -172,8 +173,9 @@ class TestWithinReconnectWindow:
         # Tuesday (strftime %a.lower() = 'tue'), only allow 'mon'
         now = dt.datetime(2024, 1, 16, 9, 0, 0, tzinfo=dt.timezone.utc)  # Tuesday
         md.reconnect_days = {"mon"}
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
             assert md._within_reconnect_window() is False
@@ -181,8 +183,9 @@ class TestWithinReconnectWindow:
     def test_weekday_filter_allows_correct_day(self, md: _FakeMD) -> None:
         now = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc)  # Monday
         md.reconnect_days = {"mon"}
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
             assert md._within_reconnect_window() is True
@@ -191,8 +194,9 @@ class TestWithinReconnectWindow:
         now = dt.datetime(2024, 1, 15, 15, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_hours = "08:00-13:00"
         md.reconnect_hours_2 = "14:00-16:00"
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
             assert md._within_reconnect_window() is True
@@ -214,8 +218,9 @@ class TestAttemptResubscribe:
         md.reconnect_hours = "08:00-13:00"
         client = MagicMock()
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
             await md._attempt_resubscribe(30.0, reason="heartbeat_gap")
@@ -228,8 +233,9 @@ class TestAttemptResubscribe:
         md.resubscribe_cooldown_s = 15.0
         client = MagicMock()
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             await md._attempt_resubscribe(30.0)
@@ -242,8 +248,9 @@ class TestAttemptResubscribe:
         client = MagicMock()
         client.resubscribe.return_value = True
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             await md._attempt_resubscribe(30.0, reason="heartbeat_gap")
@@ -258,8 +265,9 @@ class TestAttemptResubscribe:
         client = MagicMock()
         client.resubscribe.return_value = False
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             await md._attempt_resubscribe(30.0, reason="heartbeat_gap")
@@ -274,8 +282,9 @@ class TestAttemptResubscribe:
         client = MagicMock()
         client.resubscribe.return_value = True
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             await md._attempt_resubscribe(30.0, reason="symbol_gap")
@@ -292,8 +301,9 @@ class TestTriggerReconnect:
     async def test_returns_false_when_within_cooldown(self, md: _FakeMD) -> None:
         now_ts = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp()
         md._last_reconnect_ts = now_ts - 10.0  # well within 60s cooldown
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             result = await md._trigger_reconnect(30.0)
@@ -304,8 +314,9 @@ class TestTriggerReconnect:
         now = dt.datetime(2024, 1, 15, 6, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_hours = "08:00-13:00"
         md._last_reconnect_ts = 0.0
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
             result = await md._trigger_reconnect(30.0)
@@ -316,8 +327,9 @@ class TestTriggerReconnect:
         now_ts = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp()
         md._last_reconnect_ts = 0.0
         md.client = None
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             result = await md._trigger_reconnect(30.0)
@@ -331,8 +343,9 @@ class TestTriggerReconnect:
         client = MagicMock()
         client.reconnect.return_value = True
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             result = await md._trigger_reconnect(30.0)
@@ -347,8 +360,9 @@ class TestTriggerReconnect:
         client = MagicMock()
         client.reconnect.return_value = False
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             result = await md._trigger_reconnect(30.0)
@@ -370,8 +384,9 @@ class TestTriggerReconnect:
 
         client.reconnect.side_effect = slow_reconnect
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             result = await md._trigger_reconnect(30.0)
@@ -385,8 +400,9 @@ class TestTriggerReconnect:
         client = MagicMock()
         client.reconnect.side_effect = RuntimeError("boom")
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             result = await md._trigger_reconnect(30.0)
@@ -400,8 +416,9 @@ class TestTriggerReconnect:
         client = MagicMock()
         client.reconnect.return_value = True
         md.client = client
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now_ts
             await md._trigger_reconnect(30.0, reason="session_rollover")
@@ -459,8 +476,9 @@ class TestRequestReconnect:
     @pytest.mark.asyncio
     async def test_marks_pending_when_outside_window(self, md: _FakeMD) -> None:
         md._trigger_reconnect = AsyncMock()
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.object(
-            md, "_within_reconnect_window", return_value=False
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.object(md, "_within_reconnect_window", return_value=False),
         ):
             tb.now_s.return_value = 1700000000.0
             await md._request_reconnect(30.0, reason="heartbeat_gap")
@@ -477,11 +495,13 @@ class TestIsTradingHours:
     def test_weekday_within_hours(self, md: _FakeMD) -> None:
         # Mon 09:00 UTC+8 → 01:00 UTC; map to a fixed UTC+8 aware timestamp
         aware_dt = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch.dict(
-            "os.environ", {"HFT_WATCHDOG_PRODUCT_TYPE": "future"}
-        ), patch(
-            "hft_platform.services._md_reconnect.MarketDataReconnectMixin._is_trading_hours",
-            return_value=True,
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch.dict("os.environ", {"HFT_WATCHDOG_PRODUCT_TYPE": "future"}),
+            patch(
+                "hft_platform.services._md_reconnect.MarketDataReconnectMixin._is_trading_hours",
+                return_value=True,
+            ),
         ):
             tb.now_s.return_value = aware_dt.timestamp()
             assert md._is_trading_hours() is True
@@ -489,8 +509,9 @@ class TestIsTradingHours:
     def test_fallback_weekend_returns_false(self, md: _FakeMD) -> None:
         # Saturday UTC+8 = weekday()=5
         sat = dt.datetime(2024, 1, 20, 10, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
-        with patch("hft_platform.services._md_reconnect.timebase") as tb, patch(
-            "hft_platform.core.market_calendar.get_calendar", side_effect=ImportError
+        with (
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+            patch("hft_platform.core.market_calendar.get_calendar", side_effect=ImportError),
         ):
             tb.now_s.return_value = sat.timestamp()
             # Force calendar import to fail so the fallback runs
@@ -511,9 +532,10 @@ class TestRunMonitorReconnectChecks:
         md._pending_reconnect_reason = "heartbeat_gap"
         md._pending_reconnect_gap = 40.0
         md._trigger_reconnect = AsyncMock(return_value=True)
-        with patch.object(md, "_within_reconnect_window", return_value=True), patch(
-            "hft_platform.services._md_reconnect.timebase"
-        ) as tb:
+        with (
+            patch.object(md, "_within_reconnect_window", return_value=True),
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+        ):
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._trigger_reconnect.assert_awaited()
@@ -527,9 +549,10 @@ class TestRunMonitorReconnectChecks:
         md._pending_reconnect_reason = "heartbeat_gap"
         md._pending_reconnect_gap = 40.0
         md._trigger_reconnect = AsyncMock(return_value=False)
-        with patch.object(md, "_within_reconnect_window", return_value=False), patch(
-            "hft_platform.services._md_reconnect.timebase"
-        ) as tb:
+        with (
+            patch.object(md, "_within_reconnect_window", return_value=False),
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+        ):
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._trigger_reconnect.assert_not_awaited()
@@ -540,9 +563,10 @@ class TestRunMonitorReconnectChecks:
         md.state = FeedState.CONNECTED
         md._attempt_resubscribe = AsyncMock()
         md._request_reconnect = AsyncMock()
-        with patch.object(md, "_within_reconnect_window", return_value=True), patch(
-            "hft_platform.services._md_reconnect.timebase"
-        ) as tb:
+        with (
+            patch.object(md, "_within_reconnect_window", return_value=True),
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+        ):
             tb.now_s.return_value = 1700000000.0
             # gap > resubscribe_gap_s (15), < reconnect_gap_s (60)
             await md._run_monitor_reconnect_checks(20.0)
@@ -554,9 +578,10 @@ class TestRunMonitorReconnectChecks:
         md.state = FeedState.CONNECTED
         md._attempt_resubscribe = AsyncMock()
         md._request_reconnect = AsyncMock()
-        with patch.object(md, "_within_reconnect_window", return_value=True), patch(
-            "hft_platform.services._md_reconnect.timebase"
-        ) as tb:
+        with (
+            patch.object(md, "_within_reconnect_window", return_value=True),
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+        ):
             tb.now_s.return_value = 1700000000.0
             # gap > force_reconnect_gap_s (300)
             await md._run_monitor_reconnect_checks(350.0)
@@ -567,9 +592,10 @@ class TestRunMonitorReconnectChecks:
     async def test_requests_reconnect_when_disconnected(self, md: _FakeMD) -> None:
         md.state = FeedState.DISCONNECTED
         md._request_reconnect = AsyncMock()
-        with patch.object(md, "_within_reconnect_window", return_value=True), patch(
-            "hft_platform.services._md_reconnect.timebase"
-        ) as tb:
+        with (
+            patch.object(md, "_within_reconnect_window", return_value=True),
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+        ):
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._request_reconnect.assert_awaited()
@@ -579,9 +605,10 @@ class TestRunMonitorReconnectChecks:
     async def test_requests_reconnect_when_recovering(self, md: _FakeMD) -> None:
         md.state = FeedState.RECOVERING
         md._request_reconnect = AsyncMock()
-        with patch.object(md, "_within_reconnect_window", return_value=True), patch(
-            "hft_platform.services._md_reconnect.timebase"
-        ) as tb:
+        with (
+            patch.object(md, "_within_reconnect_window", return_value=True),
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+        ):
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._request_reconnect.assert_awaited()
@@ -592,9 +619,11 @@ class TestRunMonitorReconnectChecks:
         md.state = FeedState.CONNECTED
         md._attempt_resubscribe = AsyncMock()
         md._request_reconnect = AsyncMock()
-        with patch.object(md, "_within_reconnect_window", return_value=True), patch.object(
-            md, "_should_rollover_reconnect", return_value=True
-        ), patch("hft_platform.services._md_reconnect.timebase") as tb:
+        with (
+            patch.object(md, "_within_reconnect_window", return_value=True),
+            patch.object(md, "_should_rollover_reconnect", return_value=True),
+            patch("hft_platform.services._md_reconnect.timebase") as tb,
+        ):
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._request_reconnect.assert_awaited_with(0.0, reason="session_rollover")

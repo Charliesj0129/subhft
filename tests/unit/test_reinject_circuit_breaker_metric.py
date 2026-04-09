@@ -3,7 +3,6 @@ through MetricsRegistry and appears in the Prometheus registry after init."""
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -79,6 +78,4 @@ async def test_reinject_circuit_breaker_increments_registry_counter():
     await b._reinject_failed_buffer(flush_buf)
     after = counter.labels(table="hft.test_table")._value.get()
 
-    assert after == before + 1, (
-        f"Expected counter to increment by 1 (rows dropped), got {after - before}"
-    )
+    assert after == before + 1, f"Expected counter to increment by 1 (rows dropped), got {after - before}"

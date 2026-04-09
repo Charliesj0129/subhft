@@ -1,8 +1,5 @@
 """Tests for DeadLetterQueue Prometheus metrics wiring."""
 
-import asyncio
-import tempfile
-
 import pytest
 
 from hft_platform.observability.metrics import MetricsRegistry

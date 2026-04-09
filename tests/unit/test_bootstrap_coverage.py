@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import threading
-import time
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Module-level helpers: _env_float / _env_int
@@ -225,6 +220,12 @@ def test_check_session_ownership_owner_matches(monkeypatch):
 
     monkeypatch.setenv("HFT_RUNTIME_INSTANCE_ID", "myhost:1234")
     monkeypatch.setenv("HFT_FEED_SESSION_OWNER_KEY", "feed:session:owner")
+    monkeypatch.setenv("HFT_REDIS_HOST", "redis")
+    monkeypatch.setenv("HFT_REDIS_PORT", "6379")
+    monkeypatch.delenv("HFT_REDIS_PASSWORD", raising=False)
+    monkeypatch.setenv("HFT_FEED_SESSION_OWNER_TTL_S", "300")
+    monkeypatch.setenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.5")
+    monkeypatch.delenv("HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S", raising=False)
 
     bs = SystemBootstrapper(settings={})
 
@@ -267,6 +268,12 @@ def test_check_session_ownership_connection_failure(monkeypatch):
     from hft_platform.services.bootstrap import SystemBootstrapper
 
     monkeypatch.setenv("HFT_RUNTIME_INSTANCE_ID", "myhost:1234")
+    monkeypatch.setenv("HFT_REDIS_HOST", "redis")
+    monkeypatch.setenv("HFT_REDIS_PORT", "6379")
+    monkeypatch.delenv("HFT_REDIS_PASSWORD", raising=False)
+    monkeypatch.setenv("HFT_FEED_SESSION_OWNER_TTL_S", "300")
+    monkeypatch.setenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.5")
+    monkeypatch.delenv("HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S", raising=False)
     bs = SystemBootstrapper(settings={})
 
     with patch("socket.create_connection", side_effect=ConnectionRefusedError("refused")):

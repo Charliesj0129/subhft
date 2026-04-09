@@ -48,7 +48,7 @@ def black76_price(F: float, K: float, T: float, sigma: float, r: float, cp: str)
 
     sqrt_T = math.sqrt(T)
     vol_sqrt_T = sigma * sqrt_T
-    d1 = (math.log(F / K) + 0.5 * sigma ** 2 * T) / vol_sqrt_T
+    d1 = (math.log(F / K) + 0.5 * sigma**2 * T) / vol_sqrt_T
     d2 = d1 - vol_sqrt_T
 
     if cp == "C":
@@ -69,7 +69,7 @@ def _vega_b76(F: float, K: float, T: float, sigma: float, r: float) -> float:
     disc = math.exp(-r * T)
     sqrt_T = math.sqrt(T)
     vol_sqrt_T = sigma * sqrt_T
-    d1 = (math.log(F / K) + 0.5 * sigma ** 2 * T) / vol_sqrt_T
+    d1 = (math.log(F / K) + 0.5 * sigma**2 * T) / vol_sqrt_T
     # vega = disc * F * n(d1) * sqrt(T)
     return disc * F * norm.pdf(d1) * sqrt_T
 

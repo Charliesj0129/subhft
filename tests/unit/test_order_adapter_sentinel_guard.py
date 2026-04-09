@@ -21,9 +21,9 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.core import timebase
 from hft_platform.order.adapter import (
-    OrderAdapter,
     _PENDING_SENTINEL,
     _TERMINAL_BEFORE_REGISTERED,
+    OrderAdapter,
 )
 
 

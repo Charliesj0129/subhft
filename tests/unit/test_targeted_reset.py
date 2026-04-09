@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
-
-import pytest
-
 
 class TestLOBEngineResetBooksForSymbols:
     def _make_engine(self):
@@ -15,8 +11,6 @@ class TestLOBEngineResetBooksForSymbols:
         return engine
 
     def test_removes_specified_symbols_keeps_others(self):
-        from hft_platform.feed_adapter.lob_engine import LOBEngine
-
         engine = self._make_engine()
         engine.reset_books_for_symbols({"A", "C"})
         assert "A" not in engine.books
@@ -24,8 +18,6 @@ class TestLOBEngineResetBooksForSymbols:
         assert "B" in engine.books
 
     def test_clears_cache_when_cached_symbol_in_reset_set(self):
-        from hft_platform.feed_adapter.lob_engine import LOBEngine
-
         engine = self._make_engine()
         engine._last_symbol = "A"
         engine._last_book = engine.books["A"]
@@ -34,8 +26,6 @@ class TestLOBEngineResetBooksForSymbols:
         assert engine._last_book is None
 
     def test_preserves_cache_when_cached_symbol_not_in_reset_set(self):
-        from hft_platform.feed_adapter.lob_engine import LOBEngine
-
         engine = self._make_engine()
         book_b = engine.books["B"]
         engine._last_symbol = "B"
@@ -45,15 +35,11 @@ class TestLOBEngineResetBooksForSymbols:
         assert engine._last_book is book_b
 
     def test_empty_set_removes_nothing(self):
-        from hft_platform.feed_adapter.lob_engine import LOBEngine
-
         engine = self._make_engine()
         engine.reset_books_for_symbols(set())
         assert set(engine.books.keys()) == {"A", "B", "C"}
 
     def test_symbol_not_present_is_ignored(self):
-        from hft_platform.feed_adapter.lob_engine import LOBEngine
-
         engine = self._make_engine()
         engine.reset_books_for_symbols({"X", "Y"})
         assert set(engine.books.keys()) == {"A", "B", "C"}

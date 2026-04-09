@@ -1,4 +1,5 @@
 """Tests for GreeksLimitValidator."""
+
 from unittest.mock import MagicMock
 
 

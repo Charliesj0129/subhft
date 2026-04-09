@@ -4,6 +4,7 @@ Covers: _compute_oos_returns, _evaluate_oos_statistical_tests,
 _run_bds_independence_test, _bds_correlation_delta, _bh_correction,
 _extract_stat_test_pvalues, _extract_bds_pvalue.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -18,7 +19,6 @@ from hft_platform.alpha._stat_tests import (
     _extract_stat_test_pvalues,
     _run_bds_independence_test,
 )
-
 
 # ---------------------------------------------------------------------------
 # _compute_oos_returns

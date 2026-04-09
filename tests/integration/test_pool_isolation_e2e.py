@@ -7,12 +7,11 @@ Simulates production failure scenario: 1 of 4 connections drops, and verifies:
 4. When ALL facades drop, feed gap returns inf (safety net for HALT)
 5. Reconnect only targets the failed facade, not healthy ones
 """
+
 from __future__ import annotations
 
 import time
 from unittest.mock import MagicMock
-
-import pytest
 
 from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
 from hft_platform.feed_adapter.shioaji.pool_health import check_facade_health, get_healthy_feed_gap_s
@@ -70,7 +69,9 @@ class TestSingleFacadeFailureIsolation:
         slots[1].last_data_mono = time.monotonic() - 15.0
 
         scheduled: list = []
-        check_facade_health(slots, degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=lambda cid: scheduled.append(cid))
+        check_facade_health(
+            slots, degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=lambda cid: scheduled.append(cid)
+        )
 
         assert scheduled == [slots[1].conn_id]
 

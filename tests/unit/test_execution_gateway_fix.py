@@ -5,6 +5,7 @@ Root cause: ExecutionGateway.run() previously called adapter.run(), creating
 two concurrent consumers on the same order_queue / _api_queue.  The fix turns
 ExecutionGateway.run() into a heartbeat-only monitor loop.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -14,10 +15,10 @@ import pytest
 
 from hft_platform.execution.gateway import ExecutionGateway
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_adapter(running: bool = True) -> MagicMock:
     """Return a mock OrderAdapter with the minimal surface used by gateway."""
@@ -54,6 +55,7 @@ def _make_gateway(adapter: MagicMock | None = None) -> tuple[ExecutionGateway, M
 # Test: run() must NOT call adapter.run()
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_run_does_not_call_adapter_run() -> None:
     """ExecutionGateway.run() must be a heartbeat loop, not a delegate to adapter.run()."""
@@ -88,6 +90,7 @@ async def test_run_does_not_call_adapter_run() -> None:
 # Test: heartbeat loop updates metrics on each iteration
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_run_updates_heartbeat_metric() -> None:
     """run() must call execution_gateway_heartbeat_ts.set() on every iteration."""
@@ -97,6 +100,7 @@ async def test_run_updates_heartbeat_metric() -> None:
     iteration_count = 0
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+
         async def _sleep_side_effect(delay: float) -> None:
             nonlocal iteration_count
             iteration_count += 1
@@ -114,12 +118,14 @@ async def test_run_updates_heartbeat_metric() -> None:
 # Test: run() sets alive metric on entry and clears on exit
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_run_sets_alive_metric() -> None:
     adapter = _make_adapter(running=True)
     gw, metrics = _make_gateway(adapter)
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+
         async def _sleep_side_effect(delay: float) -> None:
             gw.running = False
 
@@ -137,6 +143,7 @@ async def test_run_sets_alive_metric() -> None:
 # Test: run() exits when adapter.running becomes False
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_run_exits_when_adapter_stops() -> None:
     """Heartbeat loop must exit if adapter.running goes False even if gw.running is True."""
@@ -146,6 +153,7 @@ async def test_run_exits_when_adapter_stops() -> None:
     call_count = 0
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+
         async def _sleep_side_effect(delay: float) -> None:
             nonlocal call_count
             call_count += 1
@@ -163,6 +171,7 @@ async def test_run_exits_when_adapter_stops() -> None:
 # Test: stop() sets running=False on both gateway and adapter
 # ---------------------------------------------------------------------------
 
+
 def test_stop_sets_running_false_on_both() -> None:
     adapter = _make_adapter(running=True)
     gw, _ = _make_gateway(adapter)
@@ -177,6 +186,7 @@ def test_stop_sets_running_false_on_both() -> None:
 # ---------------------------------------------------------------------------
 # Test: stop() before run() leaves gateway in a clean state
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_run_exits_immediately_if_stopped_before_start() -> None:

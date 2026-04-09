@@ -15,6 +15,7 @@ from hft_platform.alpha.canary import CanaryMonitor, CanaryStatus
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_canary_yaml(tmp_path: Path, alpha_id: str, weight: float, extra: dict[str, Any] | None = None) -> Path:
     """Write a minimal canary YAML and return its path."""
     payload: dict[str, Any] = {
@@ -49,6 +50,7 @@ def _make_status(alpha_id: str, state: str) -> CanaryStatus:
 # ---------------------------------------------------------------------------
 # Immutability tests
 # ---------------------------------------------------------------------------
+
 
 class TestApplyDecisionImmutability:
     """Original canary dict returned by _find_canary must not be mutated."""
@@ -101,6 +103,7 @@ class TestApplyDecisionImmutability:
 # ---------------------------------------------------------------------------
 # Atomic write tests
 # ---------------------------------------------------------------------------
+
 
 class TestApplyDecisionAtomicWrite:
     """YAML must be written atomically (temp file → rename)."""
@@ -191,6 +194,7 @@ class TestApplyDecisionAtomicWrite:
 # ---------------------------------------------------------------------------
 # No-op / hold state
 # ---------------------------------------------------------------------------
+
 
 class TestApplyDecisionHold:
     def test_hold_state_no_file_change(self, tmp_path: Path) -> None:

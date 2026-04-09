@@ -125,10 +125,13 @@ def test_dedup_load_skips_malformed_json_lines():
         with open(path, "wb") as f:
             # Write a valid line, a malformed line, and a blank line
             import json
+
             f.write(json.dumps({"key": "good", "approved": True, "reason_code": "OK", "cmd_id": 1}).encode() + b"\n")
             f.write(b"NOT_VALID_JSON!!!\n")
             f.write(b"\n")  # blank line
-            f.write(json.dumps({"key": "also-good", "approved": False, "reason_code": "X", "cmd_id": 2}).encode() + b"\n")
+            f.write(
+                json.dumps({"key": "also-good", "approved": False, "reason_code": "X", "cmd_id": 2}).encode() + b"\n"
+            )
         store = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
         store.load()
         assert store.size() == 2
@@ -144,6 +147,7 @@ def test_dedup_load_skips_non_dict_json():
         path = os.path.join(tmpdir, "dedup.jsonl")
         with open(path, "wb") as f:
             import json
+
             f.write(json.dumps([1, 2, 3]).encode() + b"\n")
             f.write(json.dumps("plain-string").encode() + b"\n")
             f.write(json.dumps({"key": "valid", "approved": True, "reason_code": "OK", "cmd_id": 5}).encode() + b"\n")
@@ -160,8 +164,11 @@ def test_dedup_load_skips_records_with_empty_key():
         path = os.path.join(tmpdir, "dedup.jsonl")
         with open(path, "wb") as f:
             import json
+
             f.write(json.dumps({"key": "", "approved": True, "reason_code": "OK", "cmd_id": 1}).encode() + b"\n")
-            f.write(json.dumps({"key": "real-key", "approved": True, "reason_code": "OK", "cmd_id": 2}).encode() + b"\n")
+            f.write(
+                json.dumps({"key": "real-key", "approved": True, "reason_code": "OK", "cmd_id": 2}).encode() + b"\n"
+            )
         store = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
         store.load()
         # Empty key records must be skipped
@@ -173,6 +180,7 @@ def test_dedup_load_when_persist_disabled_does_nothing():
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "dedup.jsonl")
         import json
+
         with open(path, "wb") as f:
             f.write(json.dumps({"key": "k1", "approved": True, "reason_code": "OK", "cmd_id": 1}).encode() + b"\n")
         store = IdempotencyStore(window_size=100, persist_enabled=False, persist_path=path)
@@ -313,9 +321,12 @@ def test_dedup_load_enforces_window_size():
         path = os.path.join(tmpdir, "dedup.jsonl")
         # Write 5 records
         import json
+
         with open(path, "wb") as f:
             for i in range(5):
-                f.write(json.dumps({"key": f"k{i}", "approved": True, "reason_code": "OK", "cmd_id": i}).encode() + b"\n")
+                f.write(
+                    json.dumps({"key": f"k{i}", "approved": True, "reason_code": "OK", "cmd_id": i}).encode() + b"\n"
+                )
 
         # Load into a store with window_size=3 — should evict oldest 2
         store = IdempotencyStore(window_size=3, persist_enabled=True, persist_path=path)

@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from hft_platform.services._md_observability import MarketDataObservabilityMixin
-
 
 # ---------------------------------------------------------------------------
 # Helpers / Stub
@@ -77,7 +74,12 @@ def _make_stats(best_bid: int = 850_0000, best_ask: int = 851_0000) -> MagicMock
     return stats
 
 
-def _make_feature_update(feature_set_id: str = "lob_shared_v3", values: tuple = (1.0, 2.0), feature_ids: tuple = ("f1", "f2"), quality_flags: int = 0) -> MagicMock:
+def _make_feature_update(
+    feature_set_id: str = "lob_shared_v3",
+    values: tuple = (1.0, 2.0),
+    feature_ids: tuple = ("f1", "f2"),
+    quality_flags: int = 0,
+) -> MagicMock:
     fu = MagicMock()
     fu.feature_set_id = feature_set_id
     fu.values = list(values)

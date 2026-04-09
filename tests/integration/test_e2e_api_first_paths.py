@@ -17,11 +17,11 @@ from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.normalizer import RawExecEvent
 from hft_platform.execution.positions import PositionStore
+from hft_platform.execution.router import ExecutionRouter as ExecutionService
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.recorder.loader import WALLoaderService
 from hft_platform.recorder.writer import DataWriter
 from hft_platform.risk.engine import RiskEngine
-from hft_platform.execution.router import ExecutionRouter as ExecutionService
 
 ROOT = Path(__file__).resolve().parents[2]
 

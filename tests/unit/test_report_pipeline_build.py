@@ -180,7 +180,9 @@ class TestBuildHybridReport:
         mock_composer_inst.compose.side_effect = compose
 
         with (
-            patch(_PATCH_TO_THREAD, new=AsyncMock(return_value=(mock_fact_report, mock_reasoning_report, composed))) as mock_to_thread,
+            patch(
+                _PATCH_TO_THREAD, new=AsyncMock(return_value=(mock_fact_report, mock_reasoning_report, composed))
+            ) as mock_to_thread,
             patch(_PATCH_COMPOSER, return_value=mock_composer_inst),
             patch("hft_platform.reports.pipeline.build_llm_dossier", return_value=fake_dossier) as mock_dossier,
             patch("hft_platform.reports.pipeline.LLMReportReasoner") as MockReasoner,

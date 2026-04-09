@@ -97,12 +97,16 @@ async def test_mutating_timeout_adds_phantom_candidate(tmp_config):
     # Broker call that hangs forever
     def _hang(*a, **kw):
         import time
+
         time.sleep(5)
 
     intent = _make_intent()
 
     result = await adapter._call_api(
-        "place_order", _hang, intent=intent, max_retries=0,
+        "place_order",
+        _hang,
+        intent=intent,
+        max_retries=0,
     )
 
     assert result is None
@@ -120,12 +124,16 @@ async def test_non_mutating_timeout_does_not_add_phantom(tmp_config):
 
     def _hang(*a, **kw):
         import time
+
         time.sleep(5)
 
     intent = _make_intent()
 
     result = await adapter._call_api(
-        "get_order_status", _hang, intent=intent, max_retries=0,
+        "get_order_status",
+        _hang,
+        intent=intent,
+        max_retries=0,
     )
 
     assert result is None
@@ -141,10 +149,14 @@ async def test_mutating_timeout_without_intent_no_phantom(tmp_config):
 
     def _hang(*a, **kw):
         import time
+
         time.sleep(5)
 
     result = await adapter._call_api(
-        "place_order", _hang, intent=None, max_retries=0,
+        "place_order",
+        _hang,
+        intent=None,
+        max_retries=0,
     )
 
     assert result is None
@@ -156,6 +168,7 @@ def test_get_phantom_candidates_returns_frozenset(tmp_config):
     """get_phantom_candidates returns a frozenset copy of tracked keys."""
     adapter = _make_adapter(tmp_config)
     import time
+
     now = time.monotonic()
     adapter._phantom_order_keys["s1:1"] = now
     adapter._phantom_order_keys["s2:2"] = now
@@ -172,6 +185,7 @@ def test_clear_phantom_candidate_removes_key(tmp_config):
     """clear_phantom_candidate removes the specified key."""
     adapter = _make_adapter(tmp_config)
     import time
+
     now = time.monotonic()
     adapter._phantom_order_keys["s1:1"] = now
     adapter._phantom_order_keys["s2:2"] = now
@@ -186,6 +200,7 @@ def test_clear_phantom_candidate_missing_key_noop(tmp_config):
     """clear_phantom_candidate on a nonexistent key is a no-op."""
     adapter = _make_adapter(tmp_config)
     import time
+
     adapter._phantom_order_keys["s1:1"] = time.monotonic()
 
     adapter.clear_phantom_candidate("nonexistent:key:0")
@@ -198,6 +213,7 @@ def test_phantom_key_format_is_two_part(tmp_config):
     """R2-02: Phantom key must use 2-part format matching order_key convention."""
     adapter = _make_adapter(tmp_config)
     import time
+
     adapter._phantom_order_keys["s1:42"] = time.monotonic()
 
     candidates = adapter.get_phantom_candidates()
@@ -248,6 +264,7 @@ async def test_phantom_set_eviction_at_max_size(tmp_config):
 
     # Pre-fill with old entries (simulate timestamps from 2 hours ago)
     import time
+
     old_ts = time.monotonic() - 7200.0  # 2 hours ago
     for i in range(6):
         adapter._phantom_order_keys[f"old_strat:{i}"] = old_ts

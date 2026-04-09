@@ -80,9 +80,7 @@ class TestBookStateGetStatsObjectIdentity:
         bs.exch_ts = 2_000_000_000
         second = bs.get_stats()
 
-        assert second.ts == 2_000_000_000, (
-            "next get_stats() returned stale/corrupted ts."
-        )
+        assert second.ts == 2_000_000_000, "next get_stats() returned stale/corrupted ts."
 
     def test_returned_event_fields_match_book_state(self):
         """get_stats() fields must reflect the current BookState values."""

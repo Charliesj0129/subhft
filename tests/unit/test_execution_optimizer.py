@@ -441,8 +441,12 @@ def test_adverse_regime_forces_market() -> None:
     opt = ExecutionOptimizer(spread_threshold_pts=2, fill_score_threshold=1.0)
     # Without regime, this would return LIMIT
     result_neutral = opt.decide(
-        spread_pts=5, near_depth=1, opp_depth=20,
-        imbalance_ppm=0, side=+1, ts_ns=0,
+        spread_pts=5,
+        near_depth=1,
+        opp_depth=20,
+        imbalance_ppm=0,
+        side=+1,
+        ts_ns=0,
     )
     assert result_neutral == OrderType.LIMIT
 
@@ -450,8 +454,12 @@ def test_adverse_regime_forces_market() -> None:
 
     # With ADVERSE, forced to MARKET
     result_adverse = opt.decide(
-        spread_pts=5, near_depth=1, opp_depth=20,
-        imbalance_ppm=0, side=+1, ts_ns=0,
+        spread_pts=5,
+        near_depth=1,
+        opp_depth=20,
+        imbalance_ppm=0,
+        side=+1,
+        ts_ns=0,
         regime=Regime.ADVERSE,
     )
     assert result_adverse == OrderType.MARKET
@@ -462,15 +470,23 @@ def test_favorable_regime_relaxes_spread_threshold() -> None:
     opt = ExecutionOptimizer(spread_threshold_pts=3, fill_score_threshold=1.0)
     # spread=2 is below threshold (3) in NEUTRAL
     result_neutral = opt.decide(
-        spread_pts=2, near_depth=1, opp_depth=20,
-        imbalance_ppm=0, side=+1, ts_ns=0,
+        spread_pts=2,
+        near_depth=1,
+        opp_depth=20,
+        imbalance_ppm=0,
+        side=+1,
+        ts_ns=0,
     )
     assert result_neutral == OrderType.MARKET
 
     # In FAVORABLE, threshold becomes 2, so spread=2 passes
     result_favorable = opt.decide(
-        spread_pts=2, near_depth=1, opp_depth=20,
-        imbalance_ppm=0, side=+1, ts_ns=0,
+        spread_pts=2,
+        near_depth=1,
+        opp_depth=20,
+        imbalance_ppm=0,
+        side=+1,
+        ts_ns=0,
         regime=Regime.FAVORABLE,
     )
     assert result_favorable == OrderType.LIMIT
@@ -481,15 +497,23 @@ def test_favorable_regime_relaxes_fill_score() -> None:
     opt = ExecutionOptimizer(spread_threshold_pts=2, fill_score_threshold=1.5)
     # near=5, opp=7 -> fill_score = 7/5 = 1.4, below 1.5 threshold
     result_neutral = opt.decide(
-        spread_pts=3, near_depth=5, opp_depth=7,
-        imbalance_ppm=0, side=+1, ts_ns=0,
+        spread_pts=3,
+        near_depth=5,
+        opp_depth=7,
+        imbalance_ppm=0,
+        side=+1,
+        ts_ns=0,
     )
     assert result_neutral == OrderType.MARKET
 
     # In FAVORABLE, threshold becomes 1.0, so 1.4 passes
     result_favorable = opt.decide(
-        spread_pts=3, near_depth=5, opp_depth=7,
-        imbalance_ppm=0, side=+1, ts_ns=0,
+        spread_pts=3,
+        near_depth=5,
+        opp_depth=7,
+        imbalance_ppm=0,
+        side=+1,
+        ts_ns=0,
         regime=Regime.FAVORABLE,
     )
     assert result_favorable == OrderType.LIMIT
@@ -499,8 +523,12 @@ def test_neutral_regime_uses_original_heuristic() -> None:
     """NEUTRAL regime should behave identically to original heuristic."""
     opt = ExecutionOptimizer(spread_threshold_pts=2, fill_score_threshold=1.5)
     result = opt.decide(
-        spread_pts=3, near_depth=5, opp_depth=10,
-        imbalance_ppm=0, side=+1, ts_ns=0,
+        spread_pts=3,
+        near_depth=5,
+        opp_depth=10,
+        imbalance_ppm=0,
+        side=+1,
+        ts_ns=0,
         regime=Regime.NEUTRAL,
     )
     # fill_score = 10/5 = 2.0 >= 1.5 -> LIMIT
@@ -511,8 +539,13 @@ def test_adverse_overrides_urgent() -> None:
     """Both ADVERSE and urgent force MARKET (no conflict)."""
     opt = ExecutionOptimizer(spread_threshold_pts=2, fill_score_threshold=1.0)
     result = opt.decide(
-        spread_pts=5, near_depth=1, opp_depth=20,
-        imbalance_ppm=0, side=+1, ts_ns=0,
-        urgent=True, regime=Regime.ADVERSE,
+        spread_pts=5,
+        near_depth=1,
+        opp_depth=20,
+        imbalance_ppm=0,
+        side=+1,
+        ts_ns=0,
+        urgent=True,
+        regime=Regime.ADVERSE,
     )
     assert result == OrderType.MARKET

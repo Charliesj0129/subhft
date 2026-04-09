@@ -156,7 +156,9 @@ class TestReportHandler:
             decision=MagicMock(),
             llm_error=None,
         )
-        with patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)):
+        with patch(
+            "hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)
+        ):
             with patch("hft_platform.bot.handlers.asyncio") as mock_asyncio:
                 mock_asyncio.sleep = AsyncMock()
                 await cmd_report(update, ctx)
@@ -175,7 +177,9 @@ class TestReportHandler:
         ctx = _make_context()
         ctx.args = ["day"]
         hybrid_result = SimpleNamespace(composed=None, dossier=None, decision=None, llm_error=None)
-        with patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)):
+        with patch(
+            "hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)
+        ):
             await cmd_report(update, ctx)
         calls = update.message.reply_text.call_args_list
         assert any("無交易資料" in str(c) for c in calls)

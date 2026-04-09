@@ -3,16 +3,15 @@
 Tests validate the truncation logic in isolation without requiring a full
 StrategyRunner instantiation.
 """
+
 import os
 from unittest.mock import MagicMock, patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers — replicate the truncation logic extracted from runner.py so tests
 # remain fast and isolated.
 # ---------------------------------------------------------------------------
+
 
 def _apply_intent_cap(intents, max_intents_per_event, strategy_id, logger_fn):
     """Mirror of the cap logic in StrategyRunner._process_event."""
@@ -30,6 +29,7 @@ def _apply_intent_cap(intents, max_intents_per_event, strategy_id, logger_fn):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestIntentCapLogic:
     """Tests for the intent flood cap truncation logic."""

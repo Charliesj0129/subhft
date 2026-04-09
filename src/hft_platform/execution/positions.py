@@ -233,8 +233,7 @@ class PositionStore:
             self._total_realized_pnl_scaled += pnl_delta
         else:
             self._total_realized_pnl_scaled = (
-                sum(p.realized_pnl_scaled for p in self.positions.values())
-                + self._evicted_realized_pnl_scaled
+                sum(p.realized_pnl_scaled for p in self.positions.values()) + self._evicted_realized_pnl_scaled
             )
         if self._total_realized_pnl_scaled > self._peak_equity_scaled:
             self._peak_equity_scaled = self._total_realized_pnl_scaled

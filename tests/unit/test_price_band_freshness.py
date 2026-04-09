@@ -3,8 +3,6 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from hft_platform.risk.validators import PriceBandValidator
 
 SCALE = 10_000

@@ -64,13 +64,10 @@ async def test_flush_failure_merges_data_back_into_buffer(
 
     # Data must still be accessible — not lost
     assert batch_writer._buffer_rows == 5, (
-        "Rows must be merged back into buffer after flush failure; "
-        f"got {batch_writer._buffer_rows}"
+        f"Rows must be merged back into buffer after flush failure; got {batch_writer._buffer_rows}"
     )
     assert "orders" in batch_writer._buffer, "Table key must be present in recovered buffer"
-    assert len(batch_writer._buffer["orders"]) == 5, (
-        "All 5 rows must be recoverable after flush failure"
-    )
+    assert len(batch_writer._buffer["orders"]) == 5, "All 5 rows must be recoverable after flush failure"
 
     recovered_ids = {row["order_id"] for row in batch_writer._buffer["orders"]}
     expected_ids = {f"O{i}" for i in range(5)}
@@ -126,12 +123,8 @@ async def test_flush_recovers_columnar_data_on_failure(
         result = await batch_writer.flush()
 
     assert result is False
-    assert batch_writer._buffer_rows == 2, (
-        "Columnar rows must be merged back into buffer after flush failure"
-    )
-    assert "hft.market_data" in batch_writer._columnar_buffer, (
-        "Columnar table key must be present after recovery"
-    )
+    assert batch_writer._buffer_rows == 2, "Columnar rows must be merged back into buffer after flush failure"
+    assert "hft.market_data" in batch_writer._columnar_buffer, "Columnar table key must be present after recovery"
     assert len(batch_writer._columnar_buffer["hft.market_data"]) >= 1, (
         "At least one columnar segment must be recoverable"
     )
@@ -205,9 +198,7 @@ async def test_circuit_breaker_drops_data_after_max_failures(
         f"Circuit breaker must drop data after {max_failures} consecutive failures; "
         f"got {rows_after_trip} rows still buffered"
     )
-    assert batch_writer._merge_back_consecutive_failures == 0, (
-        "Failure counter must reset after circuit breaker trips"
-    )
+    assert batch_writer._merge_back_consecutive_failures == 0, "Failure counter must reset after circuit breaker trips"
 
 
 @pytest.mark.asyncio
@@ -244,9 +235,5 @@ async def test_circuit_breaker_merges_back_below_threshold(
         # First failure — counter becomes 1 (below threshold 3)
         _run_timer_flush_once(batch_writer)
 
-    assert batch_writer._buffer_rows == 1, (
-        "Data must be merged back on first failure (below threshold)"
-    )
-    assert batch_writer._merge_back_consecutive_failures == 1, (
-        "Failure counter must be 1 after first failure"
-    )
+    assert batch_writer._buffer_rows == 1, "Data must be merged back on first failure (below threshold)"
+    assert batch_writer._merge_back_consecutive_failures == 1, "Failure counter must be 1 after first failure"

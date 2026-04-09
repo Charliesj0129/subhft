@@ -73,9 +73,7 @@ class TestWriteFallback:
         assert json.loads(lines[0])["alpha_id"] == "x1"
         assert json.loads(lines[1])["alpha_id"] == "x2"
 
-    def test_includes_failed_at_iso_timestamp(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_includes_failed_at_iso_timestamp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
 
         _write_fallback("alpha_canary_log", {"action": "hold"})
@@ -84,9 +82,7 @@ class TestWriteFallback:
         # Should be a valid ISO string — just check it's non-empty and contains 'T'
         assert "T" in line["_failed_at"]
 
-    def test_does_not_raise_when_write_fails(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_does_not_raise_when_write_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """_write_fallback must swallow its own errors."""
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
 
@@ -98,9 +94,7 @@ class TestWriteFallback:
         # _write_fallback swallows exceptions and always returns None
         assert result is None
 
-    def test_uses_separate_files_per_table(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_uses_separate_files_per_table(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
 
         _write_fallback("alpha_gate_log", {"gate": "A"})
@@ -118,9 +112,7 @@ class TestWriteFallback:
 
 
 class TestLogGateResultFallback:
-    def test_fallback_written_on_ch_failure(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_fallback_written_on_ch_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
         monkeypatch.setattr(audit_mod, "_ENABLED", True)
 
@@ -145,9 +137,7 @@ class TestLogGateResultFallback:
         assert row["config_hash"] == "abc123"
         assert "_failed_at" in row
 
-    def test_no_fallback_on_success(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_no_fallback_on_success(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
         monkeypatch.setattr(audit_mod, "_ENABLED", True)
 
@@ -164,9 +154,7 @@ class TestLogGateResultFallback:
 
         assert not (tmp_path / "alpha_gate_log.jsonl").exists()
 
-    def test_no_fallback_when_disabled(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_no_fallback_when_disabled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
         monkeypatch.setattr(audit_mod, "_ENABLED", False)
 
@@ -181,9 +169,7 @@ class TestLogGateResultFallback:
 
 
 class TestLogPromotionResultFallback:
-    def test_fallback_written_on_ch_failure(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_fallback_written_on_ch_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
         monkeypatch.setattr(audit_mod, "_ENABLED", True)
 
@@ -208,9 +194,7 @@ class TestLogPromotionResultFallback:
 
 
 class TestLogCanaryActionFallback:
-    def test_fallback_written_on_ch_failure(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_fallback_written_on_ch_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
         monkeypatch.setattr(audit_mod, "_ENABLED", True)
 

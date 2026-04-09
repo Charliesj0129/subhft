@@ -29,6 +29,7 @@ def _mock_services():
     """Patch heavy service constructors so build() never touches real infra."""
     patches = [
         patch("hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade"),
+        patch("hft_platform.feed_adapter.shioaji.quote_connection_pool.QuoteConnectionPool"),
         patch("hft_platform.services.bootstrap.MarketDataService"),
         patch("hft_platform.services.bootstrap.OrderAdapter"),
         patch("hft_platform.services.bootstrap.ExecutionGateway"),

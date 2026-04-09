@@ -4,15 +4,13 @@ import json
 import os
 from unittest.mock import patch
 
-import pytest
-
 from hft_platform.diagnostics.replay import build_timeline, filter_traces, render_timeline_markdown, summarize_trace
 from hft_platform.diagnostics.trace import DecisionTraceSampler, get_trace_sampler
-
 
 # ---------------------------------------------------------------------------
 # Existing integration test (kept as-is)
 # ---------------------------------------------------------------------------
+
 
 def test_trace_sampler_writes_and_replays(tmp_path):
     sampler = DecisionTraceSampler(enabled=True, sample_every=1, out_dir=str(tmp_path), max_bytes_per_file=1000000)
@@ -38,6 +36,7 @@ def test_trace_sampler_writes_and_replays(tmp_path):
 # ---------------------------------------------------------------------------
 # DecisionTraceSampler construction
 # ---------------------------------------------------------------------------
+
 
 def test_sampler_disabled_emits_nothing(tmp_path):
     sampler = DecisionTraceSampler(enabled=False, sample_every=1, out_dir=str(tmp_path), max_bytes_per_file=1_000_000)
@@ -101,7 +100,9 @@ def test_sampler_empty_trace_id_handled(tmp_path):
 
 def test_sampler_emit_suppresses_exceptions(tmp_path):
     # Even if the file write fails, emit must not raise
-    sampler = DecisionTraceSampler(enabled=True, sample_every=1, out_dir="/nonexistent_root/bad/path", max_bytes_per_file=1_000_000)
+    sampler = DecisionTraceSampler(
+        enabled=True, sample_every=1, out_dir="/nonexistent_root/bad/path", max_bytes_per_file=1_000_000
+    )
     # Should not raise even though directory creation will fail on read-only root
     result = sampler.emit(stage="s", trace_id="t", payload={})
     assert result is None
@@ -110,6 +111,7 @@ def test_sampler_emit_suppresses_exceptions(tmp_path):
 # ---------------------------------------------------------------------------
 # from_env constructor
 # ---------------------------------------------------------------------------
+
 
 def test_from_env_defaults():
     env = {
@@ -167,8 +169,10 @@ def test_from_env_custom_dir():
 # get_trace_sampler singleton
 # ---------------------------------------------------------------------------
 
+
 def test_get_trace_sampler_returns_sampler_instance():
     import hft_platform.diagnostics.trace as trace_module
+
     # Reset module-level singleton for isolation
     original = trace_module._SAMPLER
     trace_module._SAMPLER = None
@@ -181,6 +185,7 @@ def test_get_trace_sampler_returns_sampler_instance():
 
 def test_get_trace_sampler_returns_same_instance():
     import hft_platform.diagnostics.trace as trace_module
+
     original = trace_module._SAMPLER
     trace_module._SAMPLER = None
     try:
@@ -195,9 +200,10 @@ def test_get_trace_sampler_returns_same_instance():
 # _rollover_path edge cases
 # ---------------------------------------------------------------------------
 
+
 def test_rollover_path_returns_first_nonexistent_candidate(tmp_path):
     sampler = DecisionTraceSampler(enabled=True, sample_every=1, out_dir=str(tmp_path), max_bytes_per_file=1_000_000)
-    from pathlib import Path
+
     base = tmp_path / "20260405.jsonl"
     base.write_text("x")
     result = sampler._rollover_path(base)
@@ -206,7 +212,7 @@ def test_rollover_path_returns_first_nonexistent_candidate(tmp_path):
 
 def test_rollover_path_returns_overflow_when_all_candidates_full(tmp_path):
     sampler = DecisionTraceSampler(enabled=True, sample_every=1, out_dir=str(tmp_path), max_bytes_per_file=1)
-    from pathlib import Path
+
     base = tmp_path / "20260405.jsonl"
     # Create all 999 candidates with content > max_bytes_per_file
     for i in range(1, 1000):

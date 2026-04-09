@@ -23,6 +23,7 @@ class _Counter:
 class _Metrics:
     def __init__(self):
         self.normalization_errors_total = _Counter()
+        self.normalization_skip_total = _Counter()
         self.rust_fallback_total = _Counter()
 
 

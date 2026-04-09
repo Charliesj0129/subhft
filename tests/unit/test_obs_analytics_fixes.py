@@ -19,7 +19,6 @@ import unittest.mock as mock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # T3: distributor.py — get_running_loop() usage
 # ---------------------------------------------------------------------------
@@ -53,9 +52,7 @@ def test_latency_recorder_singleton_has_instance_lock() -> None:
     from hft_platform.observability.latency import LatencyRecorder
 
     assert hasattr(LatencyRecorder, "_instance_lock"), "_instance_lock attribute missing"
-    assert isinstance(LatencyRecorder._instance_lock, type(threading.Lock())), (
-        "_instance_lock must be a threading.Lock"
-    )
+    assert isinstance(LatencyRecorder._instance_lock, type(threading.Lock())), "_instance_lock must be a threading.Lock"
 
 
 def test_latency_recorder_get_returns_same_instance() -> None:
@@ -241,9 +238,7 @@ def test_render_heartbeat_pnl_not_raw_scaled_value() -> None:
         feed_status="ok",
     )
     # The raw scaled value (50000) must not appear in the output
-    assert "50000" not in result, (
-        f"Raw pnl_scaled value must not appear in output, got: {result!r}"
-    )
+    assert "50000" not in result, f"Raw pnl_scaled value must not appear in output, got: {result!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -256,9 +251,7 @@ def test_alertmanager_bridge_max_body_constant_is_one_mb() -> None:
     import hft_platform.notifications.alertmanager_bridge as bridge_module
 
     source = inspect.getsource(bridge_module.AlertmanagerBridge._handle_connection)
-    assert "1_048_576" in source or "1048576" in source, (
-        "_handle_connection must define a 1 MB body cap constant"
-    )
+    assert "1_048_576" in source or "1048576" in source, "_handle_connection must define a 1 MB body cap constant"
 
 
 def test_alertmanager_bridge_returns_413_on_oversized_content_length() -> None:
@@ -280,11 +273,7 @@ def test_alertmanager_bridge_returns_413_on_oversized_content_length() -> None:
             pass
 
     oversized = 1_048_577  # 1 byte over the 1 MB cap
-    request = (
-        f"POST /webhook/alertmanager HTTP/1.1\r\n"
-        f"Content-Length: {oversized}\r\n"
-        f"\r\n"
-    ).encode("utf-8")
+    request = (f"POST /webhook/alertmanager HTTP/1.1\r\nContent-Length: {oversized}\r\n\r\n").encode("utf-8")
 
     async def run() -> None:
         reader = asyncio.StreamReader()
@@ -319,12 +308,8 @@ def test_latency_recorder_uses_integer_division_for_microseconds(monkeypatch) ->
 
     item = queue.get_nowait()
     latency_us = item["data"]["latency_us"]
-    assert latency_us == 5, (
-        f"Expected latency_us=5 (integer division 5500//1000), got {latency_us!r}"
-    )
-    assert isinstance(latency_us, int), (
-        f"latency_us must be int, not float; got {type(latency_us)}"
-    )
+    assert latency_us == 5, f"Expected latency_us=5 (integer division 5500//1000), got {latency_us!r}"
+    assert isinstance(latency_us, int), f"latency_us must be int, not float; got {type(latency_us)}"
 
 
 def test_latency_recorder_integer_division_does_not_round(monkeypatch) -> None:
@@ -342,9 +327,7 @@ def test_latency_recorder_integer_division_does_not_round(monkeypatch) -> None:
 
     item = queue.get_nowait()
     latency_us = item["data"]["latency_us"]
-    assert latency_us == 0, (
-        f"999 ns // 1000 must yield 0 µs (truncation), got {latency_us!r}"
-    )
+    assert latency_us == 0, f"999 ns // 1000 must yield 0 µs (truncation), got {latency_us!r}"
 
 
 def test_latency_recorder_source_uses_floor_division() -> None:
@@ -355,9 +338,7 @@ def test_latency_recorder_source_uses_floor_division() -> None:
     assert "// 1000" in source, "record() must use integer floor division (// 1000)"
     # Verify no float division idiom like `/ 1000`
     # We look for the specific assignment pattern
-    assert "latency_ns / 1000" not in source, (
-        "record() must not use float division (/ 1000) for latency_us"
-    )
+    assert "latency_ns / 1000" not in source, "record() must not use float division (/ 1000) for latency_us"
 
 
 # ---------------------------------------------------------------------------
@@ -378,9 +359,7 @@ def test_slippage_decomposer_commission_is_zero_when_fee_equals_tax() -> None:
         fee_ntd=50,
         tax_ntd=50,  # fee == tax → commission should be 0
     )
-    assert result.commission_bps == 0.0, (
-        f"When fee_ntd == tax_ntd, commission must be 0.0, got {result.commission_bps}"
-    )
+    assert result.commission_bps == 0.0, f"When fee_ntd == tax_ntd, commission must be 0.0, got {result.commission_bps}"
 
 
 def test_slippage_decomposer_commission_is_zero_when_fee_less_than_tax() -> None:
@@ -396,9 +375,7 @@ def test_slippage_decomposer_commission_is_zero_when_fee_less_than_tax() -> None
         fee_ntd=30,
         tax_ntd=50,  # fee < tax → commission must not be fee_ntd (30), must be 0
     )
-    assert result.commission_bps == 0.0, (
-        f"When fee_ntd < tax_ntd, commission must be 0.0, got {result.commission_bps}"
-    )
+    assert result.commission_bps == 0.0, f"When fee_ntd < tax_ntd, commission must be 0.0, got {result.commission_bps}"
     assert result.commission_bps >= 0.0, "commission_bps must never be negative"
 
 

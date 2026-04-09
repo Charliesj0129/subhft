@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -121,9 +121,7 @@ class TestRecorderBridgeShortCircuit:
             (False, False, False),
         ],
     )
-    def test_iter_supervised_services_includes_bridge_when_any_direct_disabled(
-        self, md: bool, fill: bool, order: bool
-    ):
+    def test_iter_supervised_services_includes_bridge_when_any_direct_disabled(self, md: bool, fill: bool, order: bool):
         """_iter_supervised_services should include recorder_bridge when any direct flag is False."""
         sys_obj = _make_system(md_record_direct=md, fill_record_direct=fill, order_record_direct=order)
         services = sys_obj._iter_supervised_services()
@@ -159,4 +157,3 @@ class TestRecorderBridgeShortCircuit:
             await sys_obj._recorder_bridge()
 
         sys_obj.bus.consume.assert_called_once()
-

@@ -272,11 +272,7 @@ class TxTmfLeadLagStrategy(BaseStrategy):
             pnl_scaled = pos.direction * (mark_price - entry_price)
             elapsed_ns = now_ns - pos.entry_ts_ns
 
-            should_exit = (
-                pnl_scaled <= -(self._sl_pts * _PTS_SCALE)
-                or elapsed_ns >= self._max_hold_ns
-                or eod_force
-            )
+            should_exit = pnl_scaled <= -(self._sl_pts * _PTS_SCALE) or elapsed_ns >= self._max_hold_ns or eod_force
             if not should_exit:
                 continue
 
@@ -348,11 +344,7 @@ class TxTmfLeadLagStrategy(BaseStrategy):
             pnl_scaled = pos.direction * (mark_price - entry_price)
             elapsed_ns = now_ns - pos.entry_ts_ns
 
-            should_exit = (
-                pnl_scaled <= -(self._sl_pts * _PTS_SCALE)
-                or elapsed_ns >= self._max_hold_ns
-                or eod_force
-            )
+            should_exit = pnl_scaled <= -(self._sl_pts * _PTS_SCALE) or elapsed_ns >= self._max_hold_ns or eod_force
             if not should_exit:
                 continue
 
@@ -380,9 +372,7 @@ class TxTmfLeadLagStrategy(BaseStrategy):
 
             self._emit_aggressive_exit(pos, best_bid, best_ask)
 
-    def _emit_aggressive_exit(
-        self, pos: _OpenPosition, best_bid: int, best_ask: int
-    ) -> None:
+    def _emit_aggressive_exit(self, pos: _OpenPosition, best_bid: int, best_ask: int) -> None:
         if pos.aggressive_exit_inflight:
             return
         if pos.direction > 0:
@@ -463,11 +453,7 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         # Entry order rejection/cancellation
         if self._awaiting_entry != 0:
             entry_side = Side.BUY if self._awaiting_entry > 0 else Side.SELL
-            if (
-                event.side == entry_side
-                and event.status in _TERMINAL_ORDER_STATUSES
-                and event.filled_qty == 0
-            ):
+            if event.side == entry_side and event.status in _TERMINAL_ORDER_STATUSES and event.filled_qty == 0:
                 self._awaiting_entry = 0
                 return
 
@@ -486,10 +472,7 @@ class TxTmfLeadLagStrategy(BaseStrategy):
                     pos.exit_order_id = event.order_id
                     pos.awaiting_exit = False
                     return
-                if (
-                    event.status in _TERMINAL_ORDER_STATUSES
-                    and event.filled_qty == 0
-                ):
+                if event.status in _TERMINAL_ORDER_STATUSES and event.filled_qty == 0:
                     pos.aggressive_exit_inflight = False
                     pos.awaiting_exit = False
                     pos.pending_force_close = True

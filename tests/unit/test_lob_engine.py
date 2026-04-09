@@ -387,7 +387,7 @@ def test_fusedbookstats_named_field_access():
     assert fs.spread_scaled == 5000
     assert fs.imbalance == pytest.approx(-0.333)
     # Backward-compat index access
-    assert fs[2] == 10   # bid_depth
+    assert fs[2] == 10  # bid_depth
     assert fs[4] == 2005000  # mid_price_x2
     assert fs[5] == 5000  # spread_scaled
     # Unpacking still works
@@ -438,20 +438,16 @@ class TestSymbolCardinalityGuard:
         # Fill the single slot
         bids = np.array([[5000000, 10]], dtype=np.int64)
         asks = np.array([[5010000, 20]], dtype=np.int64)
-        event1 = BidAskEvent(
-            meta=make_meta(1000), symbol="SYM_A", bids=bids, asks=asks, is_snapshot=True
-        )
+        event1 = BidAskEvent(meta=make_meta(1000), symbol="SYM_A", bids=bids, asks=asks, is_snapshot=True)
         result = engine.process_event(event1)
         assert result is not None
         # Second symbol should be silently skipped
-        event2 = BidAskEvent(
-            meta=make_meta(2000), symbol="SYM_B", bids=bids, asks=asks, is_snapshot=True
-        )
+        event2 = BidAskEvent(meta=make_meta(2000), symbol="SYM_B", bids=bids, asks=asks, is_snapshot=True)
         result = engine.process_event(event2)
         assert result is None
 
     def test_cardinality_warning_logged(self):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         engine = LOBEngine()
         engine._max_symbols = 0  # reject all new symbols
@@ -482,10 +478,16 @@ class TestApplyUpdateWithStatsFieldsCrossedBookGuard:
         asks = np.array([[5000000, 20]], dtype=np.int64)
         # best_bid (5010000) > best_ask (5000000) — crossed book
         book.apply_update_with_stats_fields(
-            bids, asks, exch_ts=1000,
-            best_bid=5010000, best_ask=5000000,
-            bid_depth=10, ask_depth=20,
-            _mid_price=0.0, _spread=0.0, imbalance=0.5,
+            bids,
+            asks,
+            exch_ts=1000,
+            best_bid=5010000,
+            best_ask=5000000,
+            bid_depth=10,
+            ask_depth=20,
+            _mid_price=0.0,
+            _spread=0.0,
+            imbalance=0.5,
         )
         assert book.mid_price_x2 == 0
         assert book.spread == 0
@@ -496,10 +498,16 @@ class TestApplyUpdateWithStatsFieldsCrossedBookGuard:
         bids = np.array([], dtype=np.int64).reshape(0, 2)
         asks = np.array([[5000000, 20]], dtype=np.int64)
         book.apply_update_with_stats_fields(
-            bids, asks, exch_ts=1000,
-            best_bid=0, best_ask=5000000,
-            bid_depth=0, ask_depth=20,
-            _mid_price=0.0, _spread=0.0, imbalance=0.0,
+            bids,
+            asks,
+            exch_ts=1000,
+            best_bid=0,
+            best_ask=5000000,
+            bid_depth=0,
+            ask_depth=20,
+            _mid_price=0.0,
+            _spread=0.0,
+            imbalance=0.0,
         )
         assert book.mid_price_x2 == 0
         assert book.spread == 0
@@ -510,10 +518,16 @@ class TestApplyUpdateWithStatsFieldsCrossedBookGuard:
         bids = np.array([[5000000, 10]], dtype=np.int64)
         asks = np.array([[5010000, 20]], dtype=np.int64)
         book.apply_update_with_stats_fields(
-            bids, asks, exch_ts=1000,
-            best_bid=5000000, best_ask=5010000,
-            bid_depth=10, ask_depth=20,
-            _mid_price=5005000.0, _spread=10000.0, imbalance=-0.333,
+            bids,
+            asks,
+            exch_ts=1000,
+            best_bid=5000000,
+            best_ask=5010000,
+            bid_depth=10,
+            ask_depth=20,
+            _mid_price=5005000.0,
+            _spread=10000.0,
+            imbalance=-0.333,
         )
         assert book.mid_price_x2 == 10010000
         assert book.spread == 10000

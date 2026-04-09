@@ -39,9 +39,7 @@ def apply_schema(client, schema_path: str | None = None) -> None:
             "Failed to query schema_migrations — refusing to proceed to avoid re-running destructive migrations",
             error=str(exc),
         )
-        raise RuntimeError(
-            "Cannot determine applied migrations; aborting to prevent data loss"
-        ) from exc
+        raise RuntimeError("Cannot determine applied migrations; aborting to prevent data loss") from exc
 
     # Find migration files
     if not os.path.exists(MIGRATIONS_DIR):

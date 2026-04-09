@@ -12,12 +12,8 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
-import time
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -231,11 +227,13 @@ class TestProcessRawLobOnlyMetric:
 
         # Intercept latency recorder
         mock_latency = MagicMock()
+
         def record_side_effect(stage, duration, **_kw):
             if stage == "lob_only":
                 observed_only.append(duration)
             elif stage == "lob_process":
                 observed_combined.append(duration)
+
         mock_latency.record.side_effect = record_side_effect
         svc.latency = mock_latency
 
@@ -289,10 +287,9 @@ class TestProcessRawLobOnlyMetric:
 class TestFeatureLatencySamplingAlignment:
     def test_feature_latency_uses_md_latency_counter(self) -> None:
         """feature_plane_latency_ns must be observed when _md_latency_counter aligns."""
-        from hft_platform.events import BidAskEvent
-        from hft_platform.events import LOBStatsEvent
-
         import numpy as np
+
+        from hft_platform.events import BidAskEvent, LOBStatsEvent
 
         svc, bus = _make_service()
 

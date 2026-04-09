@@ -15,8 +15,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
-from collections import deque
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,7 +24,6 @@ from hft_platform.ops.platform_inputs import (
     _metric_sample_value,
     _read_rss_bytes,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers to build a default PlatformDegradeInputs
@@ -318,9 +315,7 @@ class TestWalBacklogFiles:
     def test_reads_from_event_counts_wal_fallback(self) -> None:
         inp = _make_inputs()
         inp.recorder = self._recorder_no_attr()
-        inp.recorder.get_health.return_value = {
-            "event_counts": {"wal_fallback": 77}
-        }
+        inp.recorder.get_health.return_value = {"event_counts": {"wal_fallback": 77}}
         assert inp._wal_backlog_files() == 77.0
 
     def test_returns_none_when_get_health_not_callable(self) -> None:

@@ -7,11 +7,10 @@ Tests cover run_elapse() behavior including:
 - feature event dispatch
 - empty loop (hbt.elapse returns non-zero immediately)
 """
+
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from hft_platform.backtest._elapse_loop import run_elapse
 from hft_platform.events import LOBStatsEvent

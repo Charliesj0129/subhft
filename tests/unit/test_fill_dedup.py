@@ -206,7 +206,10 @@ class TestFillDedup:
         async def _run_until_empty() -> None:
             router.running = True
             while not router.raw_queue.empty():
-                await asyncio.wait_for(router.run.__wrapped__(router) if hasattr(router.run, "__wrapped__") else _process_one(router), timeout=1.0)  # type: ignore[attr-defined]
+                await asyncio.wait_for(
+                    router.run.__wrapped__(router) if hasattr(router.run, "__wrapped__") else _process_one(router),
+                    timeout=1.0,
+                )  # type: ignore[attr-defined]
 
         async def _process_two(r: ExecutionRouter) -> None:
             """Drive the router's run loop for exactly 2 events."""
@@ -322,9 +325,7 @@ class TestFillDedup:
     # ---------------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_dlq_retry_dedup(
-        self, bus: MagicMock, position_store: MagicMock, stub_metrics: MagicMock
-    ) -> None:
+    async def test_dlq_retry_dedup(self, bus: MagicMock, position_store: MagicMock, stub_metrics: MagicMock) -> None:
         """Fill that was already applied via the main path must be skipped in DLQ retry."""
         router = _make_router(bus, position_store)
         fill = _make_fill_event(fill_id="F-DLQ-001", strategy_id="UNKNOWN")
@@ -384,9 +385,9 @@ class TestFillDedup:
     def test_seen_fill_ids_is_ordered_dict(self, bus: MagicMock, position_store: MagicMock) -> None:
         """_seen_fill_ids must be an OrderedDict for O(1) lookup + FIFO eviction."""
         router = _make_router(bus, position_store)
-        assert isinstance(
-            router._seen_fill_ids, collections.OrderedDict
-        ), f"Expected OrderedDict, got {type(router._seen_fill_ids)}"
+        assert isinstance(router._seen_fill_ids, collections.OrderedDict), (
+            f"Expected OrderedDict, got {type(router._seen_fill_ids)}"
+        )
 
     # ---------------------------------------------------------------------------
     # 7. fill_dedup_max_size env var
@@ -402,6 +403,7 @@ class TestFillDedup:
         with patch.dict("os.environ", {}, clear=False):
             # Remove the key if present, then build router without specifying size
             import os as _os
+
             _os.environ.pop("HFT_FILL_DEDUP_MAX_SIZE", None)
             raw_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
             router = ExecutionRouter(

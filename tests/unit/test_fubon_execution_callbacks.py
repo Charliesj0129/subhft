@@ -271,9 +271,7 @@ class TestOnSdkDeal:
 
 
 class TestBugFixRegressions:
-    def test_deal_callback_uses_canonical_price_key(
-        self, adapter: FubonExecutionCallbackAdapter
-    ) -> None:
+    def test_deal_callback_uses_canonical_price_key(self, adapter: FubonExecutionCallbackAdapter) -> None:
         """_on_sdk_deal output must have 'price' key, not 'deal_price'."""
         received: list[dict[str, Any]] = []
         adapter.register(on_order=MagicMock(), on_deal=lambda d: received.append(dict(d)))
@@ -286,9 +284,7 @@ class TestBugFixRegressions:
         # Raw unscaled value (normalizer does the scaling)
         assert msg["price"] == "100.5"
 
-    def test_deal_callback_uses_canonical_qty_key(
-        self, adapter: FubonExecutionCallbackAdapter
-    ) -> None:
+    def test_deal_callback_uses_canonical_qty_key(self, adapter: FubonExecutionCallbackAdapter) -> None:
         """_on_sdk_deal output must have 'qty' key, not 'deal_qty'."""
         received: list[dict[str, Any]] = []
         adapter.register(on_order=MagicMock(), on_deal=lambda d: received.append(dict(d)))
@@ -300,9 +296,7 @@ class TestBugFixRegressions:
         assert "deal_qty" not in msg, "'deal_qty' key must NOT be present"
         assert msg["qty"] == 10
 
-    def test_deal_callback_timestamp_uses_epoch_ns(
-        self, adapter: FubonExecutionCallbackAdapter
-    ) -> None:
+    def test_deal_callback_timestamp_uses_epoch_ns(self, adapter: FubonExecutionCallbackAdapter) -> None:
         """ts_ns must be in epoch nanoseconds domain (>1e15), not perf_counter domain (~1e12)."""
         received: list[dict[str, Any]] = []
         adapter.register(on_order=MagicMock(), on_deal=lambda d: received.append(dict(d)))
@@ -313,13 +307,10 @@ class TestBugFixRegressions:
         # Epoch nanoseconds are ~1.7e18. perf_counter_ns values are ~1e12.
         # A value > 1e15 unambiguously identifies the epoch domain.
         assert ts > 1_000_000_000_000_000, (
-            f"ts_ns={ts} looks like perf_counter_ns (not epoch ns); "
-            "use timebase.now_ns() not time.perf_counter_ns()"
+            f"ts_ns={ts} looks like perf_counter_ns (not epoch ns); use timebase.now_ns() not time.perf_counter_ns()"
         )
 
-    def test_order_callback_price_not_prescaled(
-        self, adapter: FubonExecutionCallbackAdapter
-    ) -> None:
+    def test_order_callback_price_not_prescaled(self, adapter: FubonExecutionCallbackAdapter) -> None:
         """_on_sdk_order must pass raw price, not pre-scaled (x10000) value."""
         received: list[dict[str, Any]] = []
         adapter.register(on_order=lambda d: received.append(dict(d)), on_deal=MagicMock())
@@ -328,9 +319,7 @@ class TestBugFixRegressions:
         msg = received[0]
 
         # If price were pre-scaled it would be 5_950_000; raw value is 595.0.
-        assert msg["price"] == 595.0, (
-            f"price={msg['price']} looks pre-scaled; adapter must not call _scale_price"
-        )
+        assert msg["price"] == 595.0, f"price={msg['price']} looks pre-scaled; adapter must not call _scale_price"
 
 
 # ------------------------------------------------------------------ #

@@ -231,7 +231,9 @@ class TestHybridPush:
         )
 
         with (
-            patch("hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)) as mock_hybrid,
+            patch(
+                "hft_platform.reports.pipeline.build_hybrid_report_async", new=AsyncMock(return_value=hybrid_result)
+            ) as mock_hybrid,
             patch("hft_platform.bot.scheduler.asyncio") as mock_asyncio,
         ):
             mock_asyncio.sleep = AsyncMock()

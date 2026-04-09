@@ -43,7 +43,7 @@ class TestStormGuardMonotonic:
         assert sg.state != StormGuardState.HALT
 
     def test_last_state_change_uses_monotonic(self):
-        from hft_platform.risk.storm_guard import StormGuard, StormGuardState
+        from hft_platform.risk.storm_guard import StormGuard
 
         sg = StormGuard()
         sg.metrics = MagicMock()

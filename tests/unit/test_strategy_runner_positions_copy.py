@@ -9,11 +9,9 @@ Verifies that:
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers / stubs
@@ -156,12 +154,8 @@ async def test_mutation_does_not_corrupt_positions_cache():
     # The strategy mutated ctx.positions — the cache should still be pristine
     cached = runner._positions_cache
     wildcard_positions = cached.get("*", {})
-    assert "__injected__" not in wildcard_positions, (
-        "_positions_cache was corrupted by strategy mutation"
-    )
-    assert wildcard_positions.get("2330") == 10, (
-        "cache lost original position value after strategy mutation"
-    )
+    assert "__injected__" not in wildcard_positions, "_positions_cache was corrupted by strategy mutation"
+    assert wildcard_positions.get("2330") == 10, "cache lost original position value after strategy mutation"
 
 
 @pytest.mark.asyncio
@@ -184,9 +178,5 @@ async def test_each_strategy_receives_independent_copy():
     for i, strat in enumerate(strategies):
         assert len(strat.seen_positions) == 1, f"strat_{i} not called"
         positions_at_entry = strat.seen_positions[0]
-        assert "__injected__" not in positions_at_entry, (
-            f"strat_{i} saw a key injected by a previous strategy"
-        )
-        assert positions_at_entry.get("2330") == 7, (
-            f"strat_{i} did not see the original position value"
-        )
+        assert "__injected__" not in positions_at_entry, f"strat_{i} saw a key injected by a previous strategy"
+        assert positions_at_entry.get("2330") == 7, f"strat_{i} did not see the original position value"

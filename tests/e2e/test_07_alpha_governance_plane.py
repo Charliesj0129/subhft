@@ -10,6 +10,7 @@ Tests cover:
 - Promotion rollback
 - Gate C fail blocks promotion
 """
+
 from __future__ import annotations
 
 import json
@@ -21,10 +22,10 @@ import numpy as np
 import pytest
 import yaml
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_npz_with_fields(path: Path, fields: list[str]) -> str:
     """Create a .npz file with a structured array that has the given field names."""
@@ -66,6 +67,7 @@ def _make_canary_yaml(promotions_dir: Path, alpha_id: str, **overrides: Any) -> 
 # ===========================================================================
 # TestChain — sequential gate tests
 # ===========================================================================
+
 
 @pytest.mark.e2e_chain
 class TestChain:
@@ -170,8 +172,7 @@ class TestChain:
         # Every check key in Gate D must be present in our scorecard
         for key in checks:
             assert key in scorecard, (
-                f"Gate D checks '{key}' but scorecard contract is missing it — "
-                "update the scorecard schema"
+                f"Gate D checks '{key}' but scorecard contract is missing it — update the scorecard schema"
             )
 
     def test_gate_d_threshold_evaluation(self) -> None:
@@ -180,8 +181,8 @@ class TestChain:
 
         scorecard: dict[str, Any] = {
             "sharpe_oos": 1.5,
-            "max_drawdown": -0.1,   # >= -0.2 threshold
-            "turnover": 1.0,        # <= 2.0 threshold
+            "max_drawdown": -0.1,  # >= -0.2 threshold
+            "turnover": 1.0,  # <= 2.0 threshold
             "correlation_pool_max": 0.3,  # <= 0.7 threshold
             "latency_profile": {
                 "latency_profile_id": "sim_p95_v2026-02-26",
@@ -210,9 +211,9 @@ class TestChain:
         from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_d
 
         scorecard: dict[str, Any] = {
-            "sharpe_oos": 0.3,      # below min_sharpe_oos=1.0
-            "max_drawdown": -0.5,   # below max_abs_drawdown=0.2
-            "turnover": 3.0,        # above max_turnover=2.0
+            "sharpe_oos": 0.3,  # below min_sharpe_oos=1.0
+            "max_drawdown": -0.5,  # below max_abs_drawdown=0.2
+            "turnover": 3.0,  # above max_turnover=2.0
             "correlation_pool_max": 0.8,  # above max_correlation=0.7
             "latency_profile": None,  # missing
         }
@@ -266,14 +267,13 @@ class TestChain:
         passed, checks = result
         assert isinstance(passed, bool)
         assert isinstance(checks, dict)
-        assert passed is True, (
-            f"Gate E should pass with valid shadow session inputs; checks: {checks}"
-        )
+        assert passed is True, f"Gate E should pass with valid shadow session inputs; checks: {checks}"
 
 
 # ===========================================================================
 # TestIntegration — async integration tests
 # ===========================================================================
+
 
 @pytest.mark.e2e_integration
 class TestIntegration:
@@ -315,7 +315,7 @@ class TestIntegration:
         monitor = CanaryMonitor(promotions_dir=str(promotions_dir))
 
         bad_metrics = {
-            "slippage_bps": 10.0,   # exceeds max 3.0
+            "slippage_bps": 10.0,  # exceeds max 3.0
             "drawdown_contribution": 0.1,  # exceeds max 0.02
             "execution_error_rate": 0.001,
             "sessions_live": 3,

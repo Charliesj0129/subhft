@@ -196,6 +196,7 @@ def test_overflow_count_resets_after_successful_consume():
 
     result = asyncio.run(_run())
     from hft_platform.events import GapEvent
+
     assert isinstance(result[0], GapEvent)
     assert result[3] == "probe"
     # Counter was reset after the first catch-up completed.
@@ -220,6 +221,7 @@ def test_overflow_count_resets_after_successful_consume_batch():
 
     result = asyncio.run(_run())
     from hft_platform.events import GapEvent
+
     assert any(isinstance(e, GapEvent) for e in result[0])
     assert "probe" in result[2]
     assert bus._overflow_count == 0

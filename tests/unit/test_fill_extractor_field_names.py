@@ -8,10 +8,7 @@ that use the _scaled convention.
 from dataclasses import dataclass
 from enum import IntEnum
 
-import pytest
-
 from hft_platform.recorder.worker import _extract_fill_values, _getattr_scaled
-
 
 # ---------------------------------------------------------------------------
 # Minimal FillEvent-like fixture matching contracts/execution.py

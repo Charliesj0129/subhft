@@ -8,6 +8,7 @@ Covers:
   - Risk-queue async pipeline
   - Gateway path: LocalIntentChannel → GatewayService → RiskEngine → order_queue
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +18,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hft_platform.contracts.strategy import (
-    IntentType,
     OrderIntent,
     Side,
 )
@@ -26,7 +26,6 @@ from hft_platform.strategy.base import BaseStrategy
 from tests.e2e.conftest import (
     DEFAULT_PRICE,
     DEFAULT_SYMBOL,
-    DEFAULT_TS_NS,
     make_intent,
     make_lob_stats,
 )

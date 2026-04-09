@@ -1,11 +1,11 @@
 """Tests for threading.Lock protection in StormGuard FSM."""
-import asyncio
+
 import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.risk.storm_guard import StormGuard, StormGuardState
 
 
@@ -35,9 +35,7 @@ def _make_intent(intent_type: IntentType = IntentType.NEW) -> OrderIntent:
 
 def test_state_lock_exists(guard):
     assert hasattr(guard, "_state_lock"), "_state_lock attribute must exist"
-    assert isinstance(guard._state_lock, type(threading.Lock())), (
-        "_state_lock must be a threading.Lock instance"
-    )
+    assert isinstance(guard._state_lock, type(threading.Lock())), "_state_lock must be a threading.Lock instance"
 
 
 # ---------------------------------------------------------------------------
@@ -67,9 +65,7 @@ def test_concurrent_update_no_corruption(guard):
 
     assert not errors, f"Exceptions in worker threads: {errors}"
     # Final state must be HALT (all threads sent halt-level drawdown)
-    assert guard.state == StormGuardState.HALT, (
-        f"Expected HALT after concurrent halt-level updates, got {guard.state}"
-    )
+    assert guard.state == StormGuardState.HALT, f"Expected HALT after concurrent halt-level updates, got {guard.state}"
 
 
 # ---------------------------------------------------------------------------

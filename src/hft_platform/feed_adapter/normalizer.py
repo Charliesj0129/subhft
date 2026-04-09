@@ -1107,10 +1107,7 @@ class MarketDataNormalizer:
                             self._rust_fallback_bidask.inc()
                         bids_final = None
                 if bids_final is None:
-                    bids_final = [
-                        [int(round(float(price) * scale)), int(volume)]
-                        for price, volume in zip(bp, bv)
-                    ]
+                    bids_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(bp, bv)]
 
             if asks_final is None:
                 if use_rust and _RUST_SCALE_BOOK_SEQ:
@@ -1122,10 +1119,7 @@ class MarketDataNormalizer:
                             self._rust_fallback_bidask.inc()
                         asks_final = None
                 if asks_final is None:
-                    asks_final = [
-                        [int(round(float(price) * scale)), int(volume)]
-                        for price, volume in zip(ap, av)
-                    ]
+                    asks_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(ap, av)]
 
             if not synthesized:
                 bids_final, asks_final, synthesized = self._maybe_synthesize_side(symbol, bids_final, asks_final, scale)

@@ -574,9 +574,7 @@ class TestEvaluateOosStatisticalTests:
         from hft_platform.alpha.validation import _evaluate_oos_statistical_tests
 
         few = np.array([0.01] * 10, dtype=np.float64)
-        result = _evaluate_oos_statistical_tests(
-            few, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100
-        )
+        result = _evaluate_oos_statistical_tests(few, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100)
         assert result["passed"] is False
         assert result["reason"] == "insufficient_oos_returns"
         assert result["sample_count"] == 10
@@ -599,9 +597,7 @@ class TestEvaluateOosStatisticalTests:
 
         rng = np.random.default_rng(99)
         arr = rng.normal(0.0, 0.05, size=60)
-        result = _evaluate_oos_statistical_tests(
-            arr, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100
-        )
+        result = _evaluate_oos_statistical_tests(arr, pvalue_threshold=0.05, min_tests_pass=2, bootstrap_samples=100)
         tests = result["tests"]
         for key in ("ttest_mean_gt_zero", "wilcoxon_gt_zero", "sign_test_gt_half", "bootstrap_ci_mean"):
             assert key in tests, f"Missing test key: {key}"
@@ -773,9 +769,7 @@ class TestUpdateManifestStatus:
         impl_dir = tmp_path / "research" / "alphas" / alpha_id
         impl_dir.mkdir(parents=True)
         impl_file = impl_dir / "impl.py"
-        impl_file.write_text(
-            "manifest = AlphaManifest(status=AlphaStatus.RESEARCH)\n"
-        )
+        impl_file.write_text("manifest = AlphaManifest(status=AlphaStatus.RESEARCH)\n")
 
         result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
         assert result is True
@@ -789,9 +783,7 @@ class TestUpdateManifestStatus:
         impl_dir = tmp_path / "research" / "alphas" / alpha_id
         impl_dir.mkdir(parents=True)
         impl_file = impl_dir / "impl.py"
-        impl_file.write_text(
-            "manifest = AlphaManifest(status=AlphaStatus.GATE_A)\n"
-        )
+        impl_file.write_text("manifest = AlphaManifest(status=AlphaStatus.GATE_A)\n")
 
         result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
         assert result is False

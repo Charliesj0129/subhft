@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from hft_platform.execution.positions import Position, PositionStore
 
 SCALE = 10_000  # price scale factor
@@ -201,7 +199,7 @@ class TestMarkToMarketMixed:
         _set_multiplier(store, "TMF", 10)
 
         mid_prices = {
-            "STOCK": 55 * SCALE,   # +5 per share
+            "STOCK": 55 * SCALE,  # +5 per share
             "TMF": 19_100 * SCALE,  # +100 per contract
         }
 

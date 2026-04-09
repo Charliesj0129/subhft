@@ -6,8 +6,6 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from hft_platform.execution.router import ExecutionRouter
 
 
@@ -75,9 +73,7 @@ class TestWalFallbackEscalation:
             # Need a running event loop for ensure_future
             loop = asyncio.new_event_loop()
             try:
-                loop.run_until_complete(
-                    asyncio.ensure_future(_run_wal_fallback(router, "fills", payload), loop=loop)
-                )
+                loop.run_until_complete(asyncio.ensure_future(_run_wal_fallback(router, "fills", payload), loop=loop))
             finally:
                 loop.close()
 
@@ -96,7 +92,5 @@ class TestWalFallbackEscalation:
         assert mock_logger.critical.call_args[1]["symbol"] is None
 
 
-async def _run_wal_fallback(
-    router: ExecutionRouter, topic: str, payload: object
-) -> None:
+async def _run_wal_fallback(router: ExecutionRouter, topic: str, payload: object) -> None:
     router._wal_fallback_write(topic, payload)

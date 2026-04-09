@@ -61,9 +61,7 @@ def test_verify_gate_c_passes_when_gate_c_true(tmp_path: Path) -> None:
     assert result is None
 
 
-def test_verify_gate_c_warns_and_proceeds_when_no_meta(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_verify_gate_c_warns_and_proceeds_when_no_meta(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Legacy scorecard with no meta.json should proceed with a WARNING.
 
     structlog writes to stdout by default in non-configured environments, so

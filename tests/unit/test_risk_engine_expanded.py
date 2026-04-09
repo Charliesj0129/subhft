@@ -238,6 +238,7 @@ class TestEvaluateRustValidator:
     def test_rust_uncovered_validators_populated_on_init(self, engine: RiskEngine) -> None:
         """Verify _rust_uncovered_validators contains PositionLimit and DailyLossLimit."""
         from hft_platform.risk.validators import DailyLossLimitValidator, PositionLimitValidator
+
         types = {type(v) for v in engine._rust_uncovered_validators}
         assert PositionLimitValidator in types
         assert DailyLossLimitValidator in types

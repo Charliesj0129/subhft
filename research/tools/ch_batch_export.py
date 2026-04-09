@@ -332,6 +332,17 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
     # Build events
     events: list[tuple] = []
     snapshot_written = False
+    # Track ALL known price levels in the hftbacktest LOB to clear them before
+    # each new snapshot.  Without explicit qty=0 events the HashMap LOB
+    # accumulates phantom levels as the market moves, compressing the spread
+    # towards 1 tick.
+    known_bid_prices: set[float] = set()
+    known_ask_prices: set[float] = set()
+
+    ev_bid_depth = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
+    ev_ask_depth = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
+    ev_bid_snap = int(DEPTH_SNAPSHOT_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
+    ev_ask_snap = int(DEPTH_SNAPSHOT_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
 
     for row in deduped:
         row_type, ts, bids_price, asks_price, bids_vol, asks_vol, px, vol = row
@@ -346,28 +357,46 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
             if n_levels == 0:
                 continue
 
+            cur_bid_prices: set[float] = set()
+            cur_ask_prices: set[float] = set()
+
+            # Collect current levels
+            cur_levels: list[tuple[float, float, float, float]] = []
             for i in range(n_levels):
                 bp = float(bp_list[i]) / price_scale
                 bq = float(bv_list[i]) if i < len(bv_list) else 0.0
                 ap = float(ap_list[i]) / price_scale
                 aq = float(av_list[i]) if i < len(av_list) else 0.0
-
+                cur_levels.append((bp, bq, ap, aq))
                 if bp > 0:
-                    if not snapshot_written:
-                        ev = int(DEPTH_SNAPSHOT_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
-                    else:
-                        ev = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
-                    events.append(_build_hbt_event(ev, ts_int, ts_int, bp, bq))
-
+                    cur_bid_prices.add(bp)
                 if ap > 0:
-                    if not snapshot_written:
-                        ev = int(DEPTH_SNAPSHOT_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
-                    else:
-                        ev = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
-                    events.append(_build_hbt_event(ev, ts_int, ts_int, ap, aq))
+                    cur_ask_prices.add(ap)
 
-            if not snapshot_written and n_levels > 0:
+            if not snapshot_written:
+                # First snapshot: use DEPTH_SNAPSHOT_EVENT
+                for bp, bq, ap, aq in cur_levels:
+                    if bp > 0:
+                        events.append(_build_hbt_event(ev_bid_snap, ts_int, ts_int, bp, bq))
+                    if ap > 0:
+                        events.append(_build_hbt_event(ev_ask_snap, ts_int, ts_int, ap, aq))
                 snapshot_written = True
+            else:
+                # Subsequent updates: clear ALL stale levels, then set new levels.
+                # Stale = any previously known price not in current snapshot.
+                for old_bp in known_bid_prices - cur_bid_prices:
+                    events.append(_build_hbt_event(ev_bid_depth, ts_int, ts_int, old_bp, 0.0))
+                for old_ap in known_ask_prices - cur_ask_prices:
+                    events.append(_build_hbt_event(ev_ask_depth, ts_int, ts_int, old_ap, 0.0))
+                # Set current levels (updates existing + adds new)
+                for bp, bq, ap, aq in cur_levels:
+                    if bp > 0:
+                        events.append(_build_hbt_event(ev_bid_depth, ts_int, ts_int, bp, bq))
+                    if ap > 0:
+                        events.append(_build_hbt_event(ev_ask_depth, ts_int, ts_int, ap, aq))
+
+            known_bid_prices = cur_bid_prices
+            known_ask_prices = cur_ask_prices
 
         elif row_type == "Tick" and snapshot_written:
             price_raw = px if px else 0

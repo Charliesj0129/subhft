@@ -5,6 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from hft_platform.recorder.worker import (
+    FILL_COLUMNS,
+    MARKET_DATA_COLUMNS,
+    ORDER_COLUMNS,
+    PNL_SNAPSHOT_COLUMNS,
     RecorderService,
     _extract_fill,
     _extract_fill_values,
@@ -14,10 +18,6 @@ from hft_platform.recorder.worker import (
     _extract_order_values,
     _extract_pnl_snapshot_values,
     _values_to_dict,
-    MARKET_DATA_COLUMNS,
-    ORDER_COLUMNS,
-    FILL_COLUMNS,
-    PNL_SNAPSHOT_COLUMNS,
 )
 
 
@@ -649,8 +649,6 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_wal_first_mode_routes_to_wal_writer(self):
         """WAL_FIRST write path (lines 414-429) — patch inline imports via sys.modules."""
-        import sys
-        from hft_platform.recorder.mode import RecorderMode
 
         queue = asyncio.Queue()
 
@@ -778,7 +776,6 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_wal_first_mode_list_data_routes_to_wal_writer(self):
         """List data in WAL_FIRST mode is passed through directly."""
-        import sys
 
         queue = asyncio.Queue()
 

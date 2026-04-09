@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
-import pytest_asyncio
 
 # Skip module if rust_core is unavailable.
 rc = pytest.importorskip("hft_platform.rust_core")
@@ -112,9 +111,7 @@ class TestChain:
         result = normalizer.normalize_tick(_raw_tick())
 
         assert isinstance(result, TickEvent), f"Expected TickEvent, got {type(result)}"
-        assert result.price == _EXPECTED_PRICE, (
-            f"Expected {_EXPECTED_PRICE}, got {result.price}"
-        )
+        assert result.price == _EXPECTED_PRICE, f"Expected {_EXPECTED_PRICE}, got {result.price}"
         assert result.symbol == "2330"
 
     def test_bidask_normalization_book_shape(self, tmp_path) -> None:
@@ -129,9 +126,7 @@ class TestChain:
         assert result.bids.shape == (5, 2), f"Expected (5,2), got {result.bids.shape}"
         assert result.bids.dtype == np.int64, f"Expected int64, got {result.bids.dtype}"
         # First bid price == 500 * 10_000
-        assert result.bids[0, 0] == _EXPECTED_PRICE, (
-            f"Expected {_EXPECTED_PRICE}, got {result.bids[0, 0]}"
-        )
+        assert result.bids[0, 0] == _EXPECTED_PRICE, f"Expected {_EXPECTED_PRICE}, got {result.bids[0, 0]}"
 
     def test_lob_engine_stats_computation(self, tmp_path) -> None:
         """BidAskEvent → LOBEngine → LOBStatsEvent with valid mid-price and spread."""
@@ -145,9 +140,7 @@ class TestChain:
         lob = LOBEngine()
         result = lob.process_event(bidask_event)
 
-        assert isinstance(result, LOBStatsEvent), (
-            f"Expected LOBStatsEvent, got {type(result)}"
-        )
+        assert isinstance(result, LOBStatsEvent), f"Expected LOBStatsEvent, got {type(result)}"
         assert result.mid_price_x2 > 0, "mid_price_x2 should be positive"
         assert result.spread_scaled > 0, "spread_scaled should be positive"
 
@@ -172,9 +165,7 @@ class TestChain:
             if isinstance(stats, LOBStatsEvent):
                 feature_engine.process_lob_stats(stats)
 
-        assert feature_engine.has_symbol("2330"), (
-            "FeatureEngine should track symbol '2330' after 5 updates"
-        )
+        assert feature_engine.has_symbol("2330"), "FeatureEngine should track symbol '2330' after 5 updates"
 
 
 # ---------------------------------------------------------------------------
@@ -304,12 +295,8 @@ class TestIntegration:
                 if asyncio.get_event_loop().time() > deadline:
                     break
 
-            assert any(isinstance(e, BidAskEvent) for e in events), (
-                "No BidAskEvent arrived on the bus"
-            )
-            assert any(isinstance(e, LOBStatsEvent) for e in events), (
-                "No LOBStatsEvent arrived on the bus"
-            )
+            assert any(isinstance(e, BidAskEvent) for e in events), "No BidAskEvent arrived on the bus"
+            assert any(isinstance(e, LOBStatsEvent) for e in events), "No LOBStatsEvent arrived on the bus"
         finally:
             task.cancel()
             try:
@@ -364,9 +351,7 @@ class TestIntegration:
             except asyncio.TimeoutError:
                 pass
 
-            assert record is not None, (
-                "recorder_queue did not receive a record after injecting a tick"
-            )
+            assert record is not None, "recorder_queue did not receive a record after injecting a tick"
         finally:
             task.cancel()
             try:

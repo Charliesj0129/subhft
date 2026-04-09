@@ -13,9 +13,7 @@ from hft_platform.notifications.telegram import TelegramSender
 
 
 class TestTelegramSenderEnabled:
-    def test_enabled_true_with_env_vars_activates_sender(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_enabled_true_with_env_vars_activates_sender(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token-123")
         monkeypatch.setenv("HFT_TELEGRAM_CHAT_ID", "99999")
 
@@ -23,9 +21,7 @@ class TestTelegramSenderEnabled:
 
         assert sender._enabled is True
 
-    def test_enabled_false_default_disables_sender_even_with_env_vars(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_enabled_false_default_disables_sender_even_with_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token-123")
         monkeypatch.setenv("HFT_TELEGRAM_CHAT_ID", "99999")
 
@@ -33,9 +29,7 @@ class TestTelegramSenderEnabled:
 
         assert sender._enabled is False
 
-    def test_enabled_true_without_token_stays_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_enabled_true_without_token_stays_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HFT_TELEGRAM_BOT_TOKEN", raising=False)
         monkeypatch.delenv("HFT_TELEGRAM_CHAT_ID", raising=False)
 
@@ -43,9 +37,7 @@ class TestTelegramSenderEnabled:
 
         assert sender._enabled is False
 
-    def test_enabled_true_without_chat_id_stays_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_enabled_true_without_chat_id_stays_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token-123")
         monkeypatch.delenv("HFT_TELEGRAM_CHAT_ID", raising=False)
 

@@ -7,9 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hft_platform.execution.router import ExecutionRouter, _synthesize_dedup_key
 from hft_platform.execution.normalizer import RawExecEvent
-
+from hft_platform.execution.router import ExecutionRouter, _synthesize_dedup_key
 
 # ---------------------------------------------------------------------------
 # Helpers

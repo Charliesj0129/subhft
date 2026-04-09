@@ -1,9 +1,10 @@
 """Tests for hot-reload domain validation (C-04)."""
+
 from __future__ import annotations
 
-import yaml
-import pytest
 from typing import Any, Dict
+
+import yaml
 
 
 def _write_yaml(path: Any, data: Dict[str, Any]) -> None:
@@ -17,10 +18,13 @@ def test_hot_reload_rejects_invalid_domain_values(tmp_path: Any) -> None:
 
     config_file = tmp_path / "limits.yaml"
     # Write valid initial config
-    _write_yaml(config_file, {
-        "mode": "sim",
-        "symbols": ["2330"],
-    })
+    _write_yaml(
+        config_file,
+        {
+            "mode": "sim",
+            "symbols": ["2330"],
+        },
+    )
 
     watcher = ConfigWatcher(str(config_file))
     # Initial load
@@ -30,16 +34,17 @@ def test_hot_reload_rejects_invalid_domain_values(tmp_path: Any) -> None:
     assert initial_config["symbols"] == ["2330"]
 
     # Write invalid config: empty symbols list fails _semantic_checks
-    _write_yaml(config_file, {
-        "mode": "sim",
-        "symbols": [],
-    })
+    _write_yaml(
+        config_file,
+        {
+            "mode": "sim",
+            "symbols": [],
+        },
+    )
 
     # Reload should reject and keep previous config
     watcher._load_and_notify(watcher._last_mtime + 10.0)
-    assert watcher.current_config == initial_config, (
-        "Config should not have changed after domain-invalid reload"
-    )
+    assert watcher.current_config == initial_config, "Config should not have changed after domain-invalid reload"
 
 
 def test_hot_reload_rejects_invalid_mode(tmp_path: Any) -> None:
@@ -47,25 +52,29 @@ def test_hot_reload_rejects_invalid_mode(tmp_path: Any) -> None:
     from hft_platform.config.hot_reload import ConfigWatcher
 
     config_file = tmp_path / "limits.yaml"
-    _write_yaml(config_file, {
-        "mode": "sim",
-        "symbols": ["2330"],
-    })
+    _write_yaml(
+        config_file,
+        {
+            "mode": "sim",
+            "symbols": ["2330"],
+        },
+    )
 
     watcher = ConfigWatcher(str(config_file))
     watcher._load_and_store()
     initial_config = watcher.current_config
 
     # Write config with invalid mode
-    _write_yaml(config_file, {
-        "mode": "bogus",
-        "symbols": ["2330"],
-    })
+    _write_yaml(
+        config_file,
+        {
+            "mode": "bogus",
+            "symbols": ["2330"],
+        },
+    )
 
     watcher._load_and_notify(watcher._last_mtime + 10.0)
-    assert watcher.current_config == initial_config, (
-        "Config should not have changed after invalid mode reload"
-    )
+    assert watcher.current_config == initial_config, "Config should not have changed after invalid mode reload"
 
 
 def test_hot_reload_accepts_valid_domain_change(tmp_path: Any) -> None:
@@ -73,10 +82,13 @@ def test_hot_reload_accepts_valid_domain_change(tmp_path: Any) -> None:
     from hft_platform.config.hot_reload import ConfigWatcher
 
     config_file = tmp_path / "limits.yaml"
-    _write_yaml(config_file, {
-        "mode": "sim",
-        "symbols": ["2330"],
-    })
+    _write_yaml(
+        config_file,
+        {
+            "mode": "sim",
+            "symbols": ["2330"],
+        },
+    )
 
     watcher = ConfigWatcher(str(config_file))
     watcher._load_and_store()
@@ -85,10 +97,13 @@ def test_hot_reload_accepts_valid_domain_change(tmp_path: Any) -> None:
     watcher.register(lambda c: received.append(c))
 
     # Write valid updated config
-    _write_yaml(config_file, {
-        "mode": "sim",
-        "symbols": ["2330", "2317"],
-    })
+    _write_yaml(
+        config_file,
+        {
+            "mode": "sim",
+            "symbols": ["2330", "2317"],
+        },
+    )
 
     watcher._load_and_notify(watcher._last_mtime + 10.0)
     assert watcher.current_config["symbols"] == ["2330", "2317"]

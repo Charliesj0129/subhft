@@ -551,9 +551,7 @@ async def test_create_task_with_error_handling_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_e2e_latency_observed_when_cmd_created_ns_known(
-    bus: MagicMock, position_store: MagicMock
-) -> None:
+async def test_e2e_latency_observed_when_cmd_created_ns_known(bus: MagicMock, position_store: MagicMock) -> None:
     """When cmd_created_ns_map contains the order_key for a fill, latency is observed."""
     q: asyncio.Queue = asyncio.Queue()
     order_id_map: dict[str, str] = {"ORD001": "strat1:42"}
@@ -578,9 +576,7 @@ async def test_e2e_latency_observed_when_cmd_created_ns_known(
 
 
 @pytest.mark.asyncio
-async def test_e2e_latency_not_observed_when_order_key_missing(
-    bus: MagicMock, position_store: MagicMock
-) -> None:
+async def test_e2e_latency_not_observed_when_order_key_missing(bus: MagicMock, position_store: MagicMock) -> None:
     """When order_id_map has no entry for fill.order_id, no latency is observed."""
     q: asyncio.Queue = asyncio.Queue()
     order_id_map: dict[str, str] = {}  # no mapping
@@ -649,9 +645,7 @@ async def test_order_event_recorded_directly_to_recorder_queue(bus: MagicMock, p
 
 
 @pytest.mark.asyncio
-async def test_dlq_retry_uses_on_fill_async(
-    router: ExecutionRouter, position_store: MagicMock, bus: MagicMock
-) -> None:
+async def test_dlq_retry_uses_on_fill_async(router: ExecutionRouter, position_store: MagicMock, bus: MagicMock) -> None:
     """_retry_orphaned_fills must use on_fill_async, not blocking on_fill."""
     from unittest.mock import patch
 
@@ -687,10 +681,9 @@ async def test_dlq_retry_uses_on_fill_async(
     position_store.on_fill_async.assert_awaited_once_with(fake_fill)
     position_store.on_fill.assert_not_called()
 
+
 @pytest.mark.asyncio
-async def test_e2e_latency_not_observed_when_created_ns_zero(
-    bus: MagicMock, position_store: MagicMock
-) -> None:
+async def test_e2e_latency_not_observed_when_created_ns_zero(bus: MagicMock, position_store: MagicMock) -> None:
     """When cmd_created_ns is 0 (unset), no latency is observed."""
     q: asyncio.Queue = asyncio.Queue()
     order_id_map: dict[str, str] = {"ORD001": "strat1:42"}

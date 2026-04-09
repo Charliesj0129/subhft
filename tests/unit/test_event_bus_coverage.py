@@ -6,19 +6,16 @@ multi-writer publish_many, and Python-buffer consume paths.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from hft_platform.engine import event_bus as event_bus_mod
 from hft_platform.engine.event_bus import (
     RingBufferBus,
+    _pack_book_levels,
     _PyFastBidAskRingBuffer,
     _PyFastLOBStatsRingBuffer,
     _PyFastTickRingBuffer,
-    _pack_book_levels,
 )
-
 
 # ---------------------------------------------------------------------------
 # _pack_book_levels edge cases
@@ -387,6 +384,7 @@ def test_rust_typed_publish_path(monkeypatch):
     assert len(bus._typed_ring.calls) == 1
     kind, price, qty = bus._typed_ring.calls[0]
     from hft_platform.engine.event_bus import _KIND_TICK
+
     assert kind == _KIND_TICK
     assert price == 10000
 
@@ -395,6 +393,7 @@ def test_rust_typed_publish_path(monkeypatch):
     bus.publish_nowait(bidask)
     assert len(bus._typed_ring.calls) == 2
     from hft_platform.engine.event_bus import _KIND_BIDASK
+
     assert bus._typed_ring.calls[1][0] == _KIND_BIDASK
 
     # Publish a trade event
@@ -402,6 +401,7 @@ def test_rust_typed_publish_path(monkeypatch):
     bus.publish_nowait(trade)
     assert len(bus._typed_ring.calls) == 3
     from hft_platform.engine.event_bus import _KIND_TRADE
+
     assert bus._typed_ring.calls[2][0] == _KIND_TRADE
 
     # Publish a non-classified event
@@ -409,6 +409,7 @@ def test_rust_typed_publish_path(monkeypatch):
     bus.publish_nowait(other)
     assert len(bus._typed_ring.calls) == 4
     from hft_platform.engine.event_bus import _KIND_OTHER
+
     assert bus._typed_ring.calls[3][0] == _KIND_OTHER
 
 
@@ -433,6 +434,7 @@ def test_rust_typed_publish_short_bidask_tuple(monkeypatch):
     bidask = ("bidask", "2330", [[10000, 1]], [[10010, 1]], 999, False)
     bus.publish_nowait(bidask)
     from hft_platform.engine.event_bus import _KIND_BIDASK
+
     assert bus._typed_ring.calls[0] == _KIND_BIDASK
 
 

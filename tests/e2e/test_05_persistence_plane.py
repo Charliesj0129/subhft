@@ -9,10 +9,10 @@ Covers:
   - WAL-first mode end-to-end
   - Drop on full queue (QueueFull exception)
 """
+
 from __future__ import annotations
 
 import asyncio
-import os
 from asyncio import QueueFull
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -154,9 +154,7 @@ class TestIntegration:
             except asyncio.CancelledError:
                 pass
 
-        assert recorder_queue.empty(), (
-            f"Expected queue to be empty, but size={recorder_queue.qsize()}"
-        )
+        assert recorder_queue.empty(), f"Expected queue to be empty, but size={recorder_queue.qsize()}"
 
     async def test_wal_first_mode_end_to_end(self, tmp_path: Path) -> None:
         """WALWriter in wal_first mode writes records to WAL files."""

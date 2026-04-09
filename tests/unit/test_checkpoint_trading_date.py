@@ -69,7 +69,7 @@ def test_checkpoint_backward_compat_no_trading_date(tmp_path):
 
     # Write old-format checkpoint (no trading_date)
     body = {"timestamp_ns": 123456, "positions": {}}
-    body_bytes = json.dumps(body, separators=(",", ":")).encode()
+    body_bytes = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
     sha = hashlib.sha256(body_bytes).hexdigest()
     body["sha256"] = sha
     with open(path, "w") as f:
@@ -136,9 +136,7 @@ def test_checkpoint_includes_fees_scaled(tmp_path):
     store = _make_store_with_positions({"acc:strat:TMFD6": pos})
 
     path = str(tmp_path / "ckpt.json")
-    writer = PositionCheckpointWriter(
-        store=store, path=path, trading_date_provider=lambda: "20260405"
-    )
+    writer = PositionCheckpointWriter(store=store, path=path, trading_date_provider=lambda: "20260405")
     writer.write_checkpoint()
 
     data = PositionCheckpointWriter.load_checkpoint(path)
@@ -155,9 +153,7 @@ def test_checkpoint_fees_scaled_zero_preserved(tmp_path):
     store = _make_store_with_positions({"acc:strat:TXFD6": pos})
 
     path = str(tmp_path / "ckpt.json")
-    writer = PositionCheckpointWriter(
-        store=store, path=path, trading_date_provider=lambda: "20260405"
-    )
+    writer = PositionCheckpointWriter(store=store, path=path, trading_date_provider=lambda: "20260405")
     writer.write_checkpoint()
 
     data = PositionCheckpointWriter.load_checkpoint(path)
@@ -181,9 +177,7 @@ def test_checkpoint_includes_portfolio_aggregates(tmp_path):
     store._total_realized_pnl_scaled = 850000
 
     path = str(tmp_path / "ckpt.json")
-    writer = PositionCheckpointWriter(
-        store=store, path=path, trading_date_provider=lambda: "20260405"
-    )
+    writer = PositionCheckpointWriter(store=store, path=path, trading_date_provider=lambda: "20260405")
     writer.write_checkpoint()
 
     data = PositionCheckpointWriter.load_checkpoint(path)
@@ -201,9 +195,7 @@ def test_checkpoint_portfolio_aggregates_zero_written(tmp_path):
     store._total_realized_pnl_scaled = 0
 
     path = str(tmp_path / "ckpt.json")
-    writer = PositionCheckpointWriter(
-        store=store, path=path, trading_date_provider=lambda: "20260405"
-    )
+    writer = PositionCheckpointWriter(store=store, path=path, trading_date_provider=lambda: "20260405")
     writer.write_checkpoint()
 
     data = PositionCheckpointWriter.load_checkpoint(path)
@@ -223,9 +215,7 @@ def test_checkpoint_uses_snapshot_positions(tmp_path):
 
     store = _make_store_with_positions()
     path = str(tmp_path / "ckpt.json")
-    writer = PositionCheckpointWriter(
-        store=store, path=path, trading_date_provider=lambda: "20260405"
-    )
+    writer = PositionCheckpointWriter(store=store, path=path, trading_date_provider=lambda: "20260405")
     writer.write_checkpoint()
 
     # snapshot_positions() must have been called to ensure lock-protected read
@@ -244,9 +234,7 @@ def test_checkpoint_snapshot_positions_called_not_direct_access(tmp_path):
     store.positions = {}
 
     path = str(tmp_path / "ckpt.json")
-    writer = PositionCheckpointWriter(
-        store=store, path=path, trading_date_provider=lambda: "20260405"
-    )
+    writer = PositionCheckpointWriter(store=store, path=path, trading_date_provider=lambda: "20260405")
     writer.write_checkpoint()
 
     data = PositionCheckpointWriter.load_checkpoint(path)

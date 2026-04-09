@@ -1,4 +1,5 @@
 """Unit tests for the NaN/Inf guard in FeatureEngine (_safe_int_round helper)."""
+
 from __future__ import annotations
 
 from hft_platform.feature.engine import _safe_int_round

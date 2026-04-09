@@ -40,6 +40,7 @@ def patched_conv(monkeypatch):
 # Original test (kept intact)
 # ---------------------------------------------------------------------------
 
+
 def test_convert_jsonl_to_npz(tmp_path, monkeypatch):
     monkeypatch.setattr(conv, "event_dtype", _EVENT_DTYPE)
     monkeypatch.setattr(conv, "DEPTH_EVENT", 1)
@@ -80,6 +81,7 @@ def test_convert_jsonl_to_npz(tmp_path, monkeypatch):
 # _build_event helper
 # ---------------------------------------------------------------------------
 
+
 class TestBuildEvent:
     def test_returns_eight_tuple(self):
         result = conv._build_event(5, 1000, 2000, 1.23, 10.0)
@@ -114,9 +116,9 @@ class TestBuildEvent:
 # convert_jsonl_to_npz — hftbacktest not installed guard
 # ---------------------------------------------------------------------------
 
+
 class TestConvertHftbacktestNotInstalled:
     def test_raises_runtime_error_when_event_dtype_none(self, monkeypatch):
-        import importlib
         monkeypatch.setattr(conv, "event_dtype", None)
         monkeypatch.setattr(conv, "_import_error", ImportError("hftbacktest not installed"))
         with pytest.raises(RuntimeError, match="hftbacktest not installed"):
@@ -126,6 +128,7 @@ class TestConvertHftbacktestNotInstalled:
 # ---------------------------------------------------------------------------
 # convert_jsonl_to_npz — event type handling
 # ---------------------------------------------------------------------------
+
 
 class TestConvertEventTypes:
     def test_bidask_only_bids_creates_one_event(self, patched_conv, tmp_path):
@@ -205,6 +208,7 @@ class TestConvertEventTypes:
 # ---------------------------------------------------------------------------
 # convert_jsonl_to_npz — error / edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestConvertEdgeCases:
     def test_empty_file_raises_value_error(self, patched_conv, tmp_path):

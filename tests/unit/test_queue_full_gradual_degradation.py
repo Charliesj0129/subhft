@@ -6,9 +6,9 @@ Verifies that:
 - Successful submit resets the counter
 - trigger_storm() method works correctly on StormGuard
 """
+
 import asyncio
-import time
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,10 +22,10 @@ from hft_platform.contracts.strategy import (
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.storm_guard import StormGuard
 
-
 # ---------------------------------------------------------------------------
 # StormGuard.trigger_storm() tests
 # ---------------------------------------------------------------------------
+
 
 class TestTriggerStorm:
     """Verify trigger_storm() escalates to STORM but not HALT."""
@@ -73,6 +73,7 @@ class TestTriggerStorm:
 # ---------------------------------------------------------------------------
 # RiskEngine gradual degradation tests
 # ---------------------------------------------------------------------------
+
 
 def _make_intent(intent_id: int = 1, price: int = 100, qty: int = 1) -> OrderIntent:
     return OrderIntent(intent_id, "s1", "2330", IntentType.NEW, Side.BUY, price, qty, TIF.ROD, None, 0)
@@ -151,6 +152,7 @@ class TestRiskEngineGradualDegradation:
 # ---------------------------------------------------------------------------
 # StrategyRunner gradual degradation tests
 # ---------------------------------------------------------------------------
+
 
 class TestStrategyRunnerGradualDegradation:
     """StrategyRunner risk_queue_full should escalate STORM then HALT."""

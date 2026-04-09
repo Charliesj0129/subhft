@@ -36,6 +36,7 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
 
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.dates as mdates  # noqa: E402
         import matplotlib.pyplot as plt  # noqa: E402
@@ -100,7 +101,7 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
     ax.set_xlabel("Time")
 
     session_label = _SESSION_LABEL.get(sd.session, sd.session)
-    ax.set_title(f"{sd.symbol} {session_label}\u76E4 {sd.date} \u6D41\u5411\u71B1\u529B\u5716")
+    ax.set_title(f"{sd.symbol} {session_label}\u76e4 {sd.date} \u6d41\u5411\u71b1\u529b\u5716")
 
     fig.tight_layout()
 

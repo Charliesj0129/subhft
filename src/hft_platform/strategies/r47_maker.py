@@ -45,13 +45,21 @@ _LOG_INTERVAL = 500
 
 # ── D1: Permutation Entropy ──────────────────────────────────────────────
 
+
 class _PEState:
     """Sliding-window Permutation Entropy on QI_1 (D=4, pre-allocated)."""
 
     __slots__ = (
-        "_d", "_n_patterns", "_h_max", "_window_size",
-        "_qi_buf", "_qi_len", "_pattern_counts", "_pat_deque",
-        "_h", "_warmup_done",
+        "_d",
+        "_n_patterns",
+        "_h_max",
+        "_window_size",
+        "_qi_buf",
+        "_qi_len",
+        "_pattern_counts",
+        "_pat_deque",
+        "_h",
+        "_warmup_done",
     )
 
     def __init__(self, d: int = 4, window: int = 100) -> None:
@@ -127,7 +135,7 @@ class _PEState:
         f = 1
         for i in range(d - 1, -1, -1):
             factorials[i] = f
-            f *= (d - i)
+            f *= d - i
         for i in range(d):
             # Count inversions: how many ranks[j] < ranks[i] for j > i
             count = 0
@@ -148,15 +156,22 @@ class _PEState:
 
 # ── D2: Queue Survival ───────────────────────────────────────────────────
 
+
 class _QueueState:
     """M/M/1 queue survival estimation from L1 snapshot diffs."""
 
     __slots__ = (
         "_ema_alpha",
-        "_lambda_bid", "_mu_bid", "_lambda_ask", "_mu_ask",
-        "_prev_bv", "_prev_av",
-        "_p_depl_bid", "_p_depl_ask",
-        "_warmed_up", "_update_count",
+        "_lambda_bid",
+        "_mu_bid",
+        "_lambda_ask",
+        "_mu_ask",
+        "_prev_bv",
+        "_prev_av",
+        "_p_depl_bid",
+        "_p_depl_ask",
+        "_warmed_up",
+        "_update_count",
     )
 
     def __init__(self, ema_alpha: float = 0.05) -> None:
@@ -207,8 +222,8 @@ class _QueueState:
         rho_ask = self._mu_ask / max(self._lambda_ask, 1e-6)
 
         # P(depletion) = min(1, (mu/lambda)^q) — clamped
-        self._p_depl_bid = min(1.0, rho_bid ** q_bid) if rho_bid > 0 else 0.0
-        self._p_depl_ask = min(1.0, rho_ask ** q_ask) if rho_ask > 0 else 0.0
+        self._p_depl_bid = min(1.0, rho_bid**q_bid) if rho_bid > 0 else 0.0
+        self._p_depl_ask = min(1.0, rho_ask**q_ask) if rho_ask > 0 else 0.0
 
         self._prev_bv = bid_qty
         self._prev_av = ask_qty
@@ -229,13 +244,17 @@ class _QueueState:
 
 # ── D3: MFG Inventory Proxy ──────────────────────────────────────────────
 
+
 class _MFGState:
     """Cumulative signed flow proxy for MM inventory estimation."""
 
     __slots__ = (
-        "_ema_alpha", "_signed_flow_ema", "_flow_std_ema",
+        "_ema_alpha",
+        "_signed_flow_ema",
+        "_flow_std_ema",
         "_capitulation_z",
-        "_update_count", "_warmed_up",
+        "_update_count",
+        "_warmed_up",
     )
 
     def __init__(self, ema_alpha: float = 0.01) -> None:
@@ -280,6 +299,7 @@ class _MFGState:
 
 
 # ── R47 Strategy ─────────────────────────────────────────────────────────
+
 
 class R47MakerStrategy(SimpleMarketMaker):
     """Three-layer maker strategy with PE regime gate, queue survival
@@ -386,6 +406,10 @@ class R47MakerStrategy(SimpleMarketMaker):
             self._mfg_states[symbol] = state
         return state
 
+    def _exec_symbol(self, signal_symbol: str) -> str:
+        """Return the symbol to use for order placement and position tracking."""
+        return self._trade_symbol if self._trade_symbol else signal_symbol
+
     # ── Event Handlers ────────────────────────────────────────────────
 
     def on_tick(self, event: TickEvent) -> None:
@@ -422,10 +446,12 @@ class R47MakerStrategy(SimpleMarketMaker):
             # D2: Set quote suppression flags for on_stats()
             # Since BaseStrategy.buy/sell don't return order IDs,
             # we suppress the NEXT quote placement instead of cancelling.
-            # This is the same effective pattern as OpMM's spread gate.
+            # Disable semantics: threshold >= 1.0 means "never suppress"
+            # (p_depl is always in [0, 1], so > 1.0 is never true).
+            # WARNING: threshold=0.0 means "always suppress" (any p_depl > 0).
             self._suppress_bid = False
             self._suppress_ask = False
-            if queue.warmed_up:
+            if queue.warmed_up and self._queue_cancel_thresh < 1.0:
                 if queue.p_depl_bid > self._queue_cancel_thresh:
                     self._suppress_bid = True
                 if queue.p_depl_ask > self._queue_cancel_thresh:
@@ -439,8 +465,12 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._stats_count += 1
 
         # ── Validity guard ────────────────────────────────────────────
-        if (event.mid_price_x2 is None or event.spread_scaled is None
-                or event.mid_price_x2 <= 0 or event.spread_scaled <= 0):
+        if (
+            event.mid_price_x2 is None
+            or event.spread_scaled is None
+            or event.mid_price_x2 <= 0
+            or event.spread_scaled <= 0
+        ):
             return
 
         # ── Spread gate (hard floor) ──────────────────────────────────
@@ -469,10 +499,6 @@ class R47MakerStrategy(SimpleMarketMaker):
 
         # ── Generate and place quotes ─────────────────────────────────
         self._generate_quotes(symbol, event, pe)
-
-    def _exec_symbol(self, signal_symbol: str) -> str:
-        """Return the symbol to use for order placement and position tracking."""
-        return self._trade_symbol if self._trade_symbol else signal_symbol
 
     def _generate_quotes(self, symbol: str, event: LOBStatsEvent, pe: _PEState) -> None:
         """Compute quote prices and place orders with D3 widening + D2 suppression."""
@@ -527,8 +553,7 @@ class R47MakerStrategy(SimpleMarketMaker):
             return widen, 0  # widen bid
         return 0, 0
 
-    def _log_stats(self, symbol: str, pe: _PEState, mfg: _MFGState,
-                   spread_scaled: int, pos: int) -> None:
+    def _log_stats(self, symbol: str, pe: _PEState, mfg: _MFGState, spread_scaled: int, pos: int) -> None:
         logger.info(
             "r47_stats",
             symbol=symbol,

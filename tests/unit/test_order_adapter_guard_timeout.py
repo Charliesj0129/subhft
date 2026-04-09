@@ -18,7 +18,7 @@ from hft_platform.contracts.strategy import (
     OrderIntent,
     Side,
 )
-from hft_platform.order.adapter import OrderAdapter, _GUARD_TIMEOUT
+from hft_platform.order.adapter import _GUARD_TIMEOUT, OrderAdapter
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -108,7 +108,10 @@ async def test_guard_timeout_returns_sentinel_not_none(tmp_config):
     _exhaust_semaphore(adapter)
 
     result = await adapter._call_api(
-        "place_order", lambda: None, intent=_make_intent(), max_retries=0,
+        "place_order",
+        lambda: None,
+        intent=_make_intent(),
+        max_retries=0,
     )
 
     assert result is _GUARD_TIMEOUT
@@ -123,7 +126,10 @@ async def test_guard_timeout_does_not_call_circuit_breaker_record_failure(tmp_co
     _exhaust_semaphore(adapter)
 
     await adapter._call_api(
-        "place_order", lambda: None, intent=_make_intent(), max_retries=0,
+        "place_order",
+        lambda: None,
+        intent=_make_intent(),
+        max_retries=0,
     )
 
     adapter.circuit_breaker.record_failure.assert_not_called()
@@ -139,7 +145,10 @@ async def test_actual_broker_failure_calls_circuit_breaker_record_failure(tmp_co
         raise ValueError("broker exploded")
 
     result = await adapter._call_api(
-        "place_order", _raise, intent=_make_intent(), max_retries=0,
+        "place_order",
+        _raise,
+        intent=_make_intent(),
+        max_retries=0,
     )
 
     assert result is None
@@ -154,7 +163,10 @@ async def test_guard_timeout_increments_api_guard_timeout_metric(tmp_config):
     _exhaust_semaphore(adapter)
 
     await adapter._call_api(
-        "place_order", lambda: None, intent=_make_intent(), max_retries=0,
+        "place_order",
+        lambda: None,
+        intent=_make_intent(),
+        max_retries=0,
     )
 
     adapter.metrics.api_guard_timeout_total.inc.assert_called_once()
@@ -171,7 +183,10 @@ async def test_guard_timeout_does_not_track_phantom(tmp_config):
 
     intent = _make_intent()
     await adapter._call_api(
-        "place_order", lambda: None, intent=intent, max_retries=0,
+        "place_order",
+        lambda: None,
+        intent=intent,
+        max_retries=0,
     )
 
     assert len(adapter._phantom_order_keys) == 0

@@ -8,7 +8,7 @@ All timestamps are nanoseconds.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable
 
 import numpy as np
 import pytest
@@ -42,9 +42,7 @@ DEFAULT_TS_NS: int = 1_700_000_000_000_000_000
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "e2e: end-to-end tests covering full runtime planes")
     config.addinivalue_line("markers", "e2e_chain: multi-step chained E2E scenarios")
-    config.addinivalue_line(
-        "markers", "e2e_integration: E2E tests requiring external services (ClickHouse, Redis)"
-    )
+    config.addinivalue_line("markers", "e2e_integration: E2E tests requiring external services (ClickHouse, Redis)")
 
 
 # ---------------------------------------------------------------------------

@@ -11,22 +11,21 @@ Covers:
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from hft_platform.contracts.strategy import (
+    TIF,
     IntentType,
     OrderCommand,
     OrderIntent,
     Side,
     StormGuardState,
-    TIF,
 )
 from hft_platform.core import timebase
 from hft_platform.gateway.policy import GatewayPolicy, GatewayPolicyMode
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -123,7 +122,9 @@ class TestGatewayPolicyHaltExempt:
         policy = GatewayPolicy(storm_guard=sg)
         policy.set_halt()
         ok, reason = policy.gate_typed(
-            int(IntentType.NEW), StormGuardState.HALT, strategy_id="exempt_strat",
+            int(IntentType.NEW),
+            StormGuardState.HALT,
+            strategy_id="exempt_strat",
         )
         assert ok is True
         assert reason == "HALT_EXEMPT"
@@ -133,7 +134,8 @@ class TestGatewayPolicyHaltExempt:
         policy = GatewayPolicy(storm_guard=sg)
         policy.set_halt()
         ok, reason = policy.gate_typed(
-            int(IntentType.NEW), StormGuardState.HALT,
+            int(IntentType.NEW),
+            StormGuardState.HALT,
         )
         assert ok is False
 
@@ -220,7 +222,8 @@ class TestOrderAdapterHaltExempt:
 
         adapter = MagicMock(spec=OrderAdapter)
         adapter._storm_guard = _make_storm_guard(
-            StormGuardState.HALT, frozenset({"exempt_strat"}),
+            StormGuardState.HALT,
+            frozenset({"exempt_strat"}),
         )
         # Call the real method
         result = OrderAdapter._is_strategy_halt_exempt(adapter, "exempt_strat")
@@ -239,7 +242,8 @@ class TestOrderAdapterHaltExempt:
 
         adapter = MagicMock(spec=OrderAdapter)
         adapter._storm_guard = _make_storm_guard(
-            StormGuardState.HALT, frozenset({"other_strat"}),
+            StormGuardState.HALT,
+            frozenset({"other_strat"}),
         )
         result = OrderAdapter._is_strategy_halt_exempt(adapter, "regular_strat")
         assert result is False
@@ -257,7 +261,8 @@ class TestHaltFlattenSpoofPrevention:
 
         adapter = MagicMock(spec=OrderAdapter)
         adapter._storm_guard = _make_storm_guard(
-            StormGuardState.HALT, frozenset(),  # no exempt strategies
+            StormGuardState.HALT,
+            frozenset(),  # no exempt strategies
         )
         adapter._is_strategy_halt_exempt = OrderAdapter._is_strategy_halt_exempt.__get__(adapter)
 
@@ -283,7 +288,8 @@ class TestHaltFlattenSpoofPrevention:
 
         adapter = MagicMock(spec=OrderAdapter)
         adapter._storm_guard = _make_storm_guard(
-            StormGuardState.HALT, frozenset(),
+            StormGuardState.HALT,
+            frozenset(),
         )
         adapter._is_strategy_halt_exempt = OrderAdapter._is_strategy_halt_exempt.__get__(adapter)
 

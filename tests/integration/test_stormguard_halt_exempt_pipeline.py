@@ -5,7 +5,6 @@ and that non-exempt strategies are correctly blocked. Also tests runtime
 kill switch, GatewayPolicy recovery, and feature recovery edge cases.
 """
 
-import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,10 +15,8 @@ from hft_platform.contracts.strategy import (
     OrderIntent,
     Side,
     StormGuardState,
-    TIF,
 )
-from hft_platform.risk.storm_guard import RiskThresholds, StormGuard
-
+from hft_platform.risk.storm_guard import StormGuard
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -191,7 +188,7 @@ class TestGatewayPolicyHaltExempt:
 class TestDLQHaltExemptFlag:
     @pytest.mark.asyncio
     async def test_dlq_entry_records_halt_exempt_flag(self):
-        from hft_platform.order.deadletter import DeadLetterEntry, DeadLetterQueue
+        from hft_platform.order.deadletter import DeadLetterQueue
 
         dlq = DeadLetterQueue(dlq_dir="/tmp/test_dlq_halt_exempt")
         await dlq.add(
@@ -348,10 +345,8 @@ class TestOrderHaltSkipMetricLabel:
 
         source = inspect.getsource(MetricsRegistry.__init__)
         # Find the Counter(...) definition, not the __slots__ reference
-        idx = source.find('self.order_halt_skip_total')
+        idx = source.find("self.order_halt_skip_total")
         assert idx != -1, "self.order_halt_skip_total not found in MetricsRegistry.__init__"
         # Check that strategy_id label appears in the nearby Counter definition
         snippet = source[idx : idx + 200]
-        assert "strategy_id" in snippet, (
-            f"strategy_id label not found near order_halt_skip_total definition: {snippet}"
-        )
+        assert "strategy_id" in snippet, f"strategy_id label not found near order_halt_skip_total definition: {snippet}"

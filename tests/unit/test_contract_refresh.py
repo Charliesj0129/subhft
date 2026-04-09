@@ -30,6 +30,7 @@ def _bare_client() -> mod.ShioajiClient:
     client.metrics = MagicMock()
     client.metrics.stormguard_mode = MagicMock()
     client.allow_synthetic_contracts = False
+    client.MAX_SUBSCRIPTIONS = 200
     client.subscribed_codes: set[str] = set()
     client.subscribed_count = 0
     client._failed_sub_symbols: list = []

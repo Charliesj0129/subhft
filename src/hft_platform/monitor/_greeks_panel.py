@@ -1,4 +1,5 @@
 """Portfolio Greeks panel for the Signal Monitor TUI."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

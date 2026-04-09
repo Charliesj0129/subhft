@@ -6,7 +6,7 @@ Covers PositionDiscrepancy, _compute_backoff_delay, and ReconciliationService.
 from __future__ import annotations
 
 import random
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -163,6 +163,7 @@ class TestReconciliationService:
         local_pos = MagicMock()
         local_pos.symbol = "2330"
         local_pos.net_qty = 100
+        local_pos.strategy_id = "default"
 
         broker_pos = MagicMock()
         broker_pos.code = "2330"
@@ -174,7 +175,13 @@ class TestReconciliationService:
             broker_positions=[broker_pos],
         )
 
-        with patch.object(svc, "_metrics") as mock_metrics:
+        with (
+            patch.object(svc, "_metrics") as mock_metrics,
+            patch(
+                "hft_platform.execution.reconciliation.asyncio.to_thread",
+                new=AsyncMock(return_value=[broker_pos]),
+            ),
+        ):
             mock_registry = MagicMock()
             mock_metrics.return_value = mock_registry
             await svc.sync_portfolio()

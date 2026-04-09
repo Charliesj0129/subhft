@@ -215,9 +215,7 @@ class TestFlattenTaskDoneCallback:
         await asyncio.sleep(0.05)
 
         captured = capsys.readouterr()
-        assert "session_flatten_task_failed" not in captured.out, (
-            "Unexpected flatten failure log: " + captured.out
-        )
+        assert "session_flatten_task_failed" not in captured.out, "Unexpected flatten failure log: " + captured.out
 
     @pytest.mark.asyncio
     async def test_flatten_task_cancelled_logs_warning(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:

@@ -164,6 +164,7 @@ def _seed_tx_baseline(strat: TxTmfLeadLagStrategy, ctx: StrategyContext) -> None
 # Signal Generation Tests
 # =====================================================================
 
+
 class TestSignalGeneration:
     def test_large_dvol_with_dp_generates_buy_signal(self) -> None:
         strat = _make_strategy()
@@ -274,6 +275,7 @@ class TestSignalGeneration:
 # Entry Fill Tests
 # =====================================================================
 
+
 class TestEntryFill:
     def test_fill_creates_open_position(self) -> None:
         strat = _make_strategy()
@@ -316,6 +318,7 @@ class TestEntryFill:
 # =====================================================================
 # Exit Tests: SL and Time-Kill
 # =====================================================================
+
 
 class TestExitConditions:
     def _enter_long(self, strat, ctx) -> None:
@@ -391,6 +394,7 @@ class TestExitConditions:
 # Exit Fill and IOC Rejection
 # =====================================================================
 
+
 class TestExitFill:
     def _enter_and_trigger_sl(self, strat, ctx):
         _seed_tx_baseline(strat, ctx)
@@ -464,6 +468,7 @@ class TestExitFill:
 # Multi-Position Tests
 # =====================================================================
 
+
 class TestMultiPosition:
     def test_multiple_positions_tracked_independently(self) -> None:
         strat = _make_strategy(max_position_lots=3, cooldown_ns=0)
@@ -517,6 +522,7 @@ class TestMultiPosition:
 # Day Boundary Tests
 # =====================================================================
 
+
 class TestDayBoundary:
     def test_volume_reset_on_new_day(self) -> None:
         strat = _make_strategy()
@@ -548,6 +554,7 @@ class TestDayBoundary:
 # =====================================================================
 # Session Gate Tests
 # =====================================================================
+
 
 class TestSessionGate:
     def test_no_entry_outside_session(self) -> None:
@@ -594,6 +601,7 @@ class TestSessionGate:
 # =====================================================================
 # EOD Force-Close Tests
 # =====================================================================
+
 
 class TestEodForceClose:
     def test_eod_force_close_triggers(self) -> None:

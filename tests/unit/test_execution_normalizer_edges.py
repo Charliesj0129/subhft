@@ -222,14 +222,14 @@ def test_normalize_fill_order_id_map_shapes(tmp_path, monkeypatch, mapping, expe
 @pytest.mark.parametrize(
     ("action", "expected_side"),
     [
-        ("Buy", Side.BUY),       # original exact-match case
-        ("buy", Side.BUY),       # lowercase
-        ("BUY", Side.BUY),       # uppercase
+        ("Buy", Side.BUY),  # original exact-match case
+        ("buy", Side.BUY),  # lowercase
+        ("BUY", Side.BUY),  # uppercase
         ("Sell", Side.SELL),
         ("sell", Side.SELL),
         ("SELL", Side.SELL),
-        ("", Side.SELL),         # empty → default SELL
-        (None, Side.SELL),       # missing → default SELL
+        ("", Side.SELL),  # empty → default SELL
+        (None, Side.SELL),  # missing → default SELL
     ],
 )
 def test_normalize_order_side_case_insensitive(tmp_path, monkeypatch, action, expected_side):

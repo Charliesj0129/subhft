@@ -7,16 +7,14 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_writer(monkeypatch, *, wal_ok: bool = True, ch_ok: bool = False, health_tracker=None):
     """Build a DataWriter with controlled CH/WAL behavior."""
@@ -107,7 +105,6 @@ class TestWriterDoubleFaultRaise:
     @pytest.mark.asyncio
     async def test_write_columnar_no_raise_when_wal_succeeds(self, monkeypatch):
         """When CH fails but WAL succeeds, write_columnar returns normally."""
-        from hft_platform.recorder.writer import WriterDoubleFaultError
 
         writer = _make_writer(monkeypatch, ch_ok=False, wal_ok=True)
 
@@ -160,9 +157,7 @@ class TestReinjectHealthTracker:
 
         await batcher._reinject_failed_buffer(flush_buf)
 
-        ht.record_event.assert_called_once_with(
-            "data_loss", table="hft.test_table", count=flush_buf.row_count
-        )
+        ht.record_event.assert_called_once_with("data_loss", table="hft.test_table", count=flush_buf.row_count)
 
     @pytest.mark.asyncio
     async def test_reinject_failure_calls_health_tracker(self, monkeypatch):

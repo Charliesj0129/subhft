@@ -125,9 +125,7 @@ class FeeCalculator:
         # Tax: apply based on tax_side (sell, buy, or both), pure integer arithmetic
         tax = 0
         apply_tax = (
-            tax_side == "both"
-            or (tax_side == "sell" and side == "SELL")
-            or (tax_side == "buy" and side == "BUY")
+            tax_side == "both" or (tax_side == "sell" and side == "SELL") or (tax_side == "buy" and side == "BUY")
         )
         if apply_tax:
             if tax_per_contract > 0:

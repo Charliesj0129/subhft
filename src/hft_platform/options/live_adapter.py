@@ -8,6 +8,7 @@ computation in portfolio_greeks is float-based (options analytics). This
 adapter is the explicit boundary: it receives floats and converts them to
 int (lots) or bool before returning values to the live trading path.
 """
+
 from __future__ import annotations
 
 from typing import Any

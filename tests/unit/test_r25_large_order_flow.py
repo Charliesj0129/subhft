@@ -47,6 +47,7 @@ def _make_features(
 # Protocol & Manifest Tests
 # ---------------------------------------------------------------------------
 
+
 class TestManifest:
     def test_alpha_id(self) -> None:
         assert _MANIFEST.alpha_id == "r25_large_order_flow"
@@ -71,6 +72,7 @@ class TestManifest:
 # ---------------------------------------------------------------------------
 # Warmup Tests
 # ---------------------------------------------------------------------------
+
 
 class TestWarmup:
     def test_returns_zero_during_warmup(self) -> None:
@@ -97,6 +99,7 @@ class TestWarmup:
 # ---------------------------------------------------------------------------
 # Sweep Detection Tests
 # ---------------------------------------------------------------------------
+
 
 class TestSweepDetection:
     def _warmup(self, alpha: LargeOrderFlowAlpha, mid_x2: int, base_ts: int) -> int:
@@ -244,6 +247,7 @@ class TestSweepDetection:
 # Cooldown Tests
 # ---------------------------------------------------------------------------
 
+
 class TestCooldown:
     def test_cooldown_prevents_rapid_signals(self) -> None:
         alpha = LargeOrderFlowAlpha(sweep_min_ticks=2, ofi_threshold=50)
@@ -292,6 +296,7 @@ class TestCooldown:
 # ---------------------------------------------------------------------------
 # State Management Tests
 # ---------------------------------------------------------------------------
+
 
 class TestStateManagement:
     def test_reset_clears_all_state(self) -> None:

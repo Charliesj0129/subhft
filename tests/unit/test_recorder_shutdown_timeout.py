@@ -94,8 +94,9 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
 
             svc._shutdown_flush = _slow_shutdown_flush  # type: ignore[method-assign]
 
-            with patch("hft_platform.recorder.worker.logger") as mock_logger, patch.dict(
-                os.environ, {"HFT_RECORDER_SHUTDOWN_TIMEOUT_S": "0.05"}
+            with (
+                patch("hft_platform.recorder.worker.logger") as mock_logger,
+                patch.dict(os.environ, {"HFT_RECORDER_SHUTDOWN_TIMEOUT_S": "0.05"}),
             ):
                 task = asyncio.create_task(svc.run())
                 await asyncio.sleep(0.02)
@@ -107,7 +108,8 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
 
                 # The timeout error log should have been emitted
                 error_calls = [
-                    c for c in mock_logger.error.call_args_list
+                    c
+                    for c in mock_logger.error.call_args_list
                     if c.args and c.args[0] == "recorder_shutdown_flush_timeout"
                 ]
                 assert error_calls, "Expected recorder_shutdown_flush_timeout to be logged"

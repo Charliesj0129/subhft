@@ -7,7 +7,7 @@ is raised — not AssertionError — so the monitor process never crashes in pro
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

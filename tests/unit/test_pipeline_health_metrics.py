@@ -71,9 +71,7 @@ class TestPipelineHealthTrackerUpdatesMetrics:
         tracker.record_event("data_loss")
 
         gauge_value = registry.pipeline_health_state._value.get()
-        assert gauge_value == 3.0, (
-            f"Expected gauge=3 (DATA_LOSS) after data_loss event, got {gauge_value}"
-        )
+        assert gauge_value == 3.0, f"Expected gauge=3 (DATA_LOSS) after data_loss event, got {gauge_value}"
 
     def test_state_transition_increments_counter(self):
         """Each state transition must increment pipeline_degradation_events_total."""
@@ -94,8 +92,7 @@ class TestPipelineHealthTrackerUpdatesMetrics:
         after = registry.pipeline_degradation_events_total._value.get()
 
         assert after == before + 1, (
-            f"Expected counter to increment by 1 on state transition, "
-            f"got before={before} after={after}"
+            f"Expected counter to increment by 1 on state transition, got before={before} after={after}"
         )
 
     def test_no_transition_does_not_increment_counter(self):
@@ -118,6 +115,4 @@ class TestPipelineHealthTrackerUpdatesMetrics:
         tracker.record_event("wal_fallback")
         after_second = registry.pipeline_degradation_events_total._value.get()
 
-        assert after_first == after_second, (
-            "Counter must not increment when state does not change"
-        )
+        assert after_first == after_second, "Counter must not increment when state does not change"

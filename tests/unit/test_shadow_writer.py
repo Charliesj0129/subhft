@@ -132,9 +132,7 @@ class TestGetChClient:
             else:
                 sys.modules["clickhouse_driver"] = original
 
-        mock_client_cls.assert_called_once_with(
-            host="ch-host", port=9001, user="hft_user", password="s3cret"
-        )
+        mock_client_cls.assert_called_once_with(host="ch-host", port=9001, user="hft_user", password="s3cret")
 
 
 class TestShadowOrderWriterEnabledFromEnv:

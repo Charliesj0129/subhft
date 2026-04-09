@@ -36,9 +36,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("alpha_audit")
 
-_FALLBACK_DIR: Path = Path(
-    os.getenv("HFT_ALPHA_AUDIT_FALLBACK_DIR", "research/experiments/.audit_fallback")
-)
+_FALLBACK_DIR: Path = Path(os.getenv("HFT_ALPHA_AUDIT_FALLBACK_DIR", "research/experiments/.audit_fallback"))
 
 
 def _write_fallback(table: str, row: dict[str, Any]) -> None:

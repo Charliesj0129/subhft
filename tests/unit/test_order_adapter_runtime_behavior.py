@@ -26,7 +26,7 @@ from hft_platform.contracts.strategy import (
     StormGuardState,
 )
 from hft_platform.core import timebase
-from hft_platform.order.adapter import OrderAdapter, _is_typed_order_cmd_frame
+from hft_platform.order.adapter import _GUARD_TIMEOUT, OrderAdapter, _is_typed_order_cmd_frame
 from hft_platform.order.deadletter import RejectionReason
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
@@ -606,7 +606,7 @@ async def test_call_api_semaphore_timeout(tmp_config):
         await adapter._api_semaphore.acquire()
 
     result = await adapter._call_api("test_op", MagicMock())
-    assert result is None
+    assert result is _GUARD_TIMEOUT
 
     for _ in range(adapter._api_max_inflight):
         adapter._api_semaphore.release()

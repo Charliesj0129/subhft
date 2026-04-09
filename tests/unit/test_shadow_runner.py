@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any, Sequence
+from typing import Any
 
 import pytest
 
@@ -15,10 +14,10 @@ from hft_platform.testing.shadow_runner import (
     run,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_intent(
     price: Any = 150_000,
@@ -41,6 +40,7 @@ def _make_intent(
 # ShadowResult dataclass
 # ---------------------------------------------------------------------------
 
+
 def test_shadow_result_default_values():
     result = ShadowResult()
     assert result.commands == []
@@ -59,13 +59,11 @@ def test_shadow_result_fields_are_independent():
 # RecordingOrderAdapter
 # ---------------------------------------------------------------------------
 
+
 def test_recording_adapter_submit_stores_command():
     adapter = RecordingOrderAdapter()
     intent = _make_intent()
-    cmd = OrderCommand(
-        cmd_id=1, intent=intent, deadline_ns=0,
-        storm_guard_state=StormGuardState.NORMAL, created_ns=0
-    )
+    cmd = OrderCommand(cmd_id=1, intent=intent, deadline_ns=0, storm_guard_state=StormGuardState.NORMAL, created_ns=0)
     adapter.submit(cmd)
     assert len(adapter.commands) == 1
     assert adapter.commands[0] is cmd
@@ -75,10 +73,7 @@ def test_recording_adapter_submit_accumulates_multiple():
     adapter = RecordingOrderAdapter()
     for i in range(5):
         intent = _make_intent(intent_id=i)
-        cmd = OrderCommand(
-            cmd_id=i, intent=intent, deadline_ns=0,
-            storm_guard_state=StormGuardState.NORMAL
-        )
+        cmd = OrderCommand(cmd_id=i, intent=intent, deadline_ns=0, storm_guard_state=StormGuardState.NORMAL)
         adapter.submit(cmd)
     assert len(adapter.commands) == 5
 
@@ -87,10 +82,7 @@ def test_recording_adapter_submit_accumulates_multiple():
 async def test_recording_adapter_execute_stores_command():
     adapter = RecordingOrderAdapter()
     intent = _make_intent()
-    cmd = OrderCommand(
-        cmd_id=99, intent=intent, deadline_ns=0,
-        storm_guard_state=StormGuardState.NORMAL
-    )
+    cmd = OrderCommand(cmd_id=99, intent=intent, deadline_ns=0, storm_guard_state=StormGuardState.NORMAL)
     await adapter.execute(cmd)
     assert len(adapter.commands) == 1
     assert adapter.commands[0].cmd_id == 99
@@ -110,6 +102,7 @@ async def test_recording_adapter_execute_and_submit_share_list():
 # ---------------------------------------------------------------------------
 # _check_precision
 # ---------------------------------------------------------------------------
+
 
 def test_check_precision_valid_int_price_and_qty():
     intent = _make_intent(price=150_000, qty=10)
@@ -148,6 +141,7 @@ def test_check_precision_string_price_detected():
 # ---------------------------------------------------------------------------
 # run() — main async function
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_run_empty_events_returns_empty_result():

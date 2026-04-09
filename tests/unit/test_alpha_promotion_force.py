@@ -49,9 +49,7 @@ def test_force_true_whitespace_only_reason_raises(tmp_path: Path) -> None:
 
 
 def test_force_true_valid_reason_succeeds(tmp_path: Path) -> None:
-    config = _base_config(
-        tmp_path, force=True, force_reason="emergency prod deploy approved by CTO"
-    )
+    config = _base_config(tmp_path, force=True, force_reason="emergency prod deploy approved by CTO")
     result = promote_alpha(config)
     assert result.approved
     assert result.forced

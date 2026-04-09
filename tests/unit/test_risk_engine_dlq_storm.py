@@ -1,4 +1,5 @@
 """Tests for DLQ STORM state check (H3) and numpy float price guard (M2)."""
+
 import asyncio
 import time
 from unittest.mock import PropertyMock, patch
@@ -43,7 +44,9 @@ class TestDlqStormStateCheck:
         engine._order_dlq.append((cmd1, now))
         engine._order_dlq.append((cmd2, now))
 
-        with patch.object(type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.STORM):
+        with patch.object(
+            type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.STORM
+        ):
             engine._drain_order_dlq()
 
         assert len(engine._order_dlq) == 0
@@ -54,7 +57,9 @@ class TestDlqStormStateCheck:
         cmd = engine.create_command(_make_intent(1))
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
-        with patch.object(type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.HALT):
+        with patch.object(
+            type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.HALT
+        ):
             engine._drain_order_dlq()
 
         assert len(engine._order_dlq) == 0
@@ -69,7 +74,9 @@ class TestDlqStormStateCheck:
             engine._order_dlq.append((cmd, now))
 
         before = engine.metrics.risk_dlq_expired_total._value.get()
-        with patch.object(type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.STORM):
+        with patch.object(
+            type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.STORM
+        ):
             engine._drain_order_dlq()
         after = engine.metrics.risk_dlq_expired_total._value.get()
 
@@ -79,7 +86,9 @@ class TestDlqStormStateCheck:
         cmd = engine.create_command(_make_intent(1))
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
-        with patch.object(type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.NORMAL):
+        with patch.object(
+            type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.NORMAL
+        ):
             engine._drain_order_dlq()
 
         assert len(engine._order_dlq) == 0
@@ -89,7 +98,9 @@ class TestDlqStormStateCheck:
         cmd = engine.create_command(_make_intent(1))
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
-        with patch.object(type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.WARM):
+        with patch.object(
+            type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.WARM
+        ):
             engine._drain_order_dlq()
 
         assert len(engine._order_dlq) == 0
@@ -102,7 +113,9 @@ class TestDlqStormStateCheck:
         cmd = engine.create_command(_make_intent(1))
         engine._order_dlq.append((cmd, now))
 
-        with patch.object(type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.STORM):
+        with patch.object(
+            type(engine.storm_guard), "state", new_callable=PropertyMock, return_value=StormGuardState.STORM
+        ):
             engine._drain_order_dlq()
 
         assert len(engine._order_dlq) == 0

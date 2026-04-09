@@ -1,4 +1,5 @@
 """Electronic Eye: automated TXO options market-making with delta-neutral hedging."""
+
 from __future__ import annotations
 
 import enum
@@ -204,8 +205,14 @@ class ElectronicEye(BaseStrategy):
     """Automated TXO options market-making with delta-neutral hedging."""
 
     __slots__ = (
-        "_quoter_cfg", "_hedger_cfg", "_guardian_cfg", "_publish_cfg",
-        "guardian", "_hedger", "_quoter_state", "_last_publish_ns",
+        "_quoter_cfg",
+        "_hedger_cfg",
+        "_guardian_cfg",
+        "_publish_cfg",
+        "guardian",
+        "_hedger",
+        "_quoter_state",
+        "_last_publish_ns",
     )
 
     def __init__(
@@ -270,8 +277,11 @@ class ElectronicEye(BaseStrategy):
         channel = self._publish_cfg.get("channel", "monitor:portfolio:greeks")
         payload = {
             "ts": now_ns,
-            "net_delta_lots": 0.0, "net_gamma_lots": 0.0,
-            "net_theta_ntd": 0.0, "net_vega_ntd": 0.0,
-            "worst_pnl_ntd": 0.0, "eye_state": self.guardian.state.name,
+            "net_delta_lots": 0.0,
+            "net_gamma_lots": 0.0,
+            "net_theta_ntd": 0.0,
+            "net_vega_ntd": 0.0,
+            "worst_pnl_ntd": 0.0,
+            "eye_state": self.guardian.state.name,
         }
         self.ctx.publish_state(channel, payload)

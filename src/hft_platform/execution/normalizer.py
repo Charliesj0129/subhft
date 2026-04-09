@@ -148,8 +148,9 @@ class ExecutionNormalizer:
                 status=status,
                 submitted_qty=int(order.get("quantity") or 0),
                 filled_qty=int(order.get("deal_quantity") or order.get("cum_qty") or 0),
-                remaining_qty=max(0, int(order.get("quantity") or 0)
-                - int(order.get("deal_quantity") or order.get("cum_qty") or 0)),
+                remaining_qty=max(
+                    0, int(order.get("quantity") or 0) - int(order.get("deal_quantity") or order.get("cum_qty") or 0)
+                ),
                 price=price,
                 side=Side.BUY if "buy" in str(order.get("action", "")).lower() else Side.SELL,
                 ingest_ts_ns=raw.ingest_ts_ns,
@@ -171,7 +172,9 @@ class ExecutionNormalizer:
         try:
             qty = int(get("quantity") or get("qty") or get("volume") or 0)
             if qty <= 0:
-                logger.warning("normalize_fill_zero_qty", raw_keys=list(d.keys()) if isinstance(d, dict) else str(type(d)))
+                logger.warning(
+                    "normalize_fill_zero_qty", raw_keys=list(d.keys()) if isinstance(d, dict) else str(type(d))
+                )
                 return None
             price_value = get("price") or 0
 

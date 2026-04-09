@@ -178,7 +178,16 @@ class TestFacadeSlotSlots:
         assert hasattr(FacadeSlot, "__slots__")
 
     def test_slots_contains_expected_fields(self) -> None:
-        expected = {"conn_id", "facade", "state", "symbols", "last_data_mono", "last_reconnect_mono", "reconnect_failures", "degraded_since_mono"}
+        expected = {
+            "conn_id",
+            "facade",
+            "state",
+            "symbols",
+            "last_data_mono",
+            "last_reconnect_mono",
+            "reconnect_failures",
+            "degraded_since_mono",
+        }
         assert expected.issubset(set(FacadeSlot.__slots__))
 
     def test_no_dict_attribute(self) -> None:

@@ -479,11 +479,7 @@ class FeatureEngine:
             values, changed_mask, warmup_ready_mask = fused
             # NaN/Inf guard for Rust path — validate output values directly
             # (_lob_kernel_states is only populated by the Python path, so checking it here is wrong)
-            if any(
-                not math.isfinite(v)
-                for v in values
-                if isinstance(v, float)
-            ):
+            if any(not math.isfinite(v) for v in values if isinstance(v, float)):
                 logger.warning("feature_nan_detected", symbol=symbol, backend="rust")
                 self.reset_symbol(symbol)
                 return None

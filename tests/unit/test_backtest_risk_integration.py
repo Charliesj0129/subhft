@@ -1,4 +1,5 @@
 """Integration tests for risk evaluator wired into backtest dispatch."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -73,10 +74,7 @@ class TestDispatchStrategyRiskGate:
     def test_position_provider_reflects_fills(self, tmp_path):
         cfg_file = tmp_path / "risk.yaml"
         cfg_file.write_text(
-            "global_defaults:\n"
-            "  max_position_lots: 3\n"
-            "  max_price_cap: 99999\n"
-            "  max_notional: 999999999\n"
+            "global_defaults:\n  max_position_lots: 3\n  max_price_cap: 99999\n  max_notional: 999999999\n"
         )
         positions = {"2330": 3}
         config = BacktestRiskConfig(config_path=str(cfg_file))

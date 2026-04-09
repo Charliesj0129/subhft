@@ -103,11 +103,11 @@ def test_rust_compute_stats_crossed_book_zeroes_stats(engine: LOBEngine) -> None
     crossed_rust_return = (
         5000000,  # best_bid
         4990000,  # best_ask (< best_bid → crossed)
-        100,      # bid_depth_total
-        80,       # ask_depth_total
-        0,        # mid_price (ignored after guard)
-        -10000,   # spread (negative — the bug this guards against)
-        0.5,      # imbalance
+        100,  # bid_depth_total
+        80,  # ask_depth_total
+        0,  # mid_price (ignored after guard)
+        -10000,  # spread (negative — the bug this guards against)
+        0.5,  # imbalance
     )
     event = make_event(bids_price=5000000, asks_price=4990000)
     # Ensure book exists then null out RustBookState to reach _recompute()
@@ -130,8 +130,8 @@ def test_rust_compute_stats_depth_totals_unconditional(engine: LOBEngine) -> Non
     crossed_rust_return = (
         5000000,  # best_bid
         4990000,  # best_ask (crossed)
-        120,      # bid_depth_total
-        90,       # ask_depth_total
+        120,  # bid_depth_total
+        90,  # ask_depth_total
         0,
         -10000,
         0.4,

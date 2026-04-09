@@ -2,6 +2,7 @@
 
 Offline analytics module — float arithmetic is permitted (not a live trading path).
 """
+
 from __future__ import annotations
 
 from datetime import date
@@ -114,13 +115,9 @@ class VolSurface:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _sorted_for_expiry(
-        self, expiry_date: date
-    ) -> tuple[list[int], list[float]]:
+    def _sorted_for_expiry(self, expiry_date: date) -> tuple[list[int], list[float]]:
         """Return *(strikes, ivs)* sorted ascending by strike for *expiry_date*."""
-        pairs = [
-            (k[1], v) for k, v in self._grid.items() if k[0] == expiry_date
-        ]
+        pairs = [(k[1], v) for k, v in self._grid.items() if k[0] == expiry_date]
         pairs.sort(key=lambda x: x[0])
         if not pairs:
             return [], []

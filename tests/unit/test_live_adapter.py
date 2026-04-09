@@ -1,4 +1,5 @@
 """Tests for OptionsLiveAdapter (float→int boundary)."""
+
 from unittest.mock import MagicMock
 
 from hft_platform.contracts.strategy import Side as StrategySide
@@ -8,8 +9,14 @@ def _make_adapter(net_delta=5.0, net_gamma=2.0):
     from hft_platform.options.greeks import GreeksResult, PositionGreeks
     from hft_platform.options.live_adapter import OptionsLiveAdapter
     from hft_platform.options.surface import VolSurface
-    positions = [PositionGreeks(symbol="TXO20000D6", qty=10,
-        greeks=GreeksResult(delta=net_delta/10, gamma=net_gamma/10, theta=-50.0, vega=100.0, rho=-0.5))]
+
+    positions = [
+        PositionGreeks(
+            symbol="TXO20000D6",
+            qty=10,
+            greeks=GreeksResult(delta=net_delta / 10, gamma=net_gamma / 10, theta=-50.0, vega=100.0, rho=-0.5),
+        )
+    ]
     return OptionsLiveAdapter(positions=positions, surface=VolSurface(), multiplier=50.0)
 
 

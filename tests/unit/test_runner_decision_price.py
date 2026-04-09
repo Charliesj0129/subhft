@@ -11,12 +11,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, TIF
-
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_bus(events=None):
     bus = MagicMock()
@@ -72,28 +72,29 @@ def _make_typed_intent(price: int = 1000_0000, qty: int = 1) -> tuple:
     """Build a 17-element typed intent tuple matching _intent_factory output."""
     return (
         "typed_intent_v1",
-        1,          # intent_id
+        1,  # intent_id
         "test_strat",  # strategy_id
-        "2330",     # symbol
+        "2330",  # symbol
         int(IntentType.NEW),  # intent_type
         int(Side.BUY),  # side
-        price,      # price
-        qty,        # qty
+        price,  # price
+        qty,  # qty
         int(TIF.LIMIT),  # tif
-        "",         # target_order_id
+        "",  # target_order_id
         123_000_000_000,  # timestamp_ns
         100_000_000_000,  # source_ts_ns
-        "",         # reason
+        "",  # reason
         "trace-1",  # trace_id
-        "",         # idempotency_key
-        0,          # ttl_ns
-        0,          # decision_price (should be populated by runner)
+        "",  # idempotency_key
+        0,  # ttl_ns
+        0,  # decision_price (should be populated by runner)
     )
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _patch_env(tmp_path, monkeypatch):
@@ -353,10 +354,22 @@ class TestTypedFrameViewDecisionPrice:
 
         # Legacy 16-element frame (no decision_price)
         frame = (
-            "typed_intent_v1", 1, "strat", "2330",
-            int(IntentType.NEW), int(Side.BUY), 1000_0000, 1,
-            int(TIF.LIMIT), "", 123_000_000_000, 100_000_000_000,
-            "", "trace-1", "", 0,
+            "typed_intent_v1",
+            1,
+            "strat",
+            "2330",
+            int(IntentType.NEW),
+            int(Side.BUY),
+            1000_0000,
+            1,
+            int(TIF.LIMIT),
+            "",
+            123_000_000_000,
+            100_000_000_000,
+            "",
+            "trace-1",
+            "",
+            0,
         )
         assert len(frame) == 16
 

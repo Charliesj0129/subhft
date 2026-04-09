@@ -10,6 +10,7 @@ Covers:
   - Cancel order flow
   - Broker reject → DLQ (no crash)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,11 +21,9 @@ import pytest
 
 from hft_platform.contracts.execution import FillEvent, PositionDelta
 from hft_platform.contracts.strategy import (
-    TIF,
     IntentType,
     OrderCommand,
     Side,
-    StormGuardState,
 )
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore

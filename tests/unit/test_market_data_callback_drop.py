@@ -136,9 +136,7 @@ class TestMdCallbackDropCallbackError:
         ):
             service._on_shioaji_event("TSE", MagicMock())
 
-        service._record_shioaji_crash_signature.assert_called_once_with(
-            "test_boom", context="md_callback"
-        )
+        service._record_shioaji_crash_signature.assert_called_once_with("test_boom", context="md_callback")
 
 
 class TestMdCallbackDropMetricExists:

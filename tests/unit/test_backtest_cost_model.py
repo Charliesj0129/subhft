@@ -2,10 +2,10 @@
 
 Unit tests for the asymmetric TAIFEX fee model in _compute_equity_curve.
 """
+
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from research.backtest.types import BacktestConfig
 
@@ -103,8 +103,7 @@ def test_zero_sell_tax_matches_symmetric_model():
     pnl_short = eq_short[-1] - eq_short[0]
 
     assert abs(pnl_long - pnl_short) < 1e-12, (
-        f"With sell_tax_bps=0 both directions should have equal fees, "
-        f"but long={pnl_long:.8f} short={pnl_short:.8f}"
+        f"With sell_tax_bps=0 both directions should have equal fees, but long={pnl_long:.8f} short={pnl_short:.8f}"
     )
 
 

@@ -26,7 +26,6 @@ from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.order.circuit_breaker import StrategyCircuitBreakerManager
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -85,6 +84,7 @@ def _make_adapter(tmp_path: Any, client: Any = None) -> OrderAdapter:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def mock_deps():
     with (
@@ -110,6 +110,7 @@ def mock_deps():
 # ---------------------------------------------------------------------------
 # Test 1: broker error on NEW order → record_failure called on strategy CB
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_broker_error_calls_strategy_cb_record_failure(tmp_path):
@@ -144,6 +145,7 @@ async def test_broker_error_calls_strategy_cb_record_failure(tmp_path):
 # ---------------------------------------------------------------------------
 # Test 2: successful NEW order → record_success called on strategy CB
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_successful_new_order_calls_strategy_cb_record_success(tmp_path):
@@ -184,6 +186,7 @@ async def test_successful_new_order_calls_strategy_cb_record_success(tmp_path):
 # ---------------------------------------------------------------------------
 # Test 3: after enough failures, is_open returns True and order is rejected
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_strategy_cb_open_blocks_new_order(tmp_path):

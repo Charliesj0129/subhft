@@ -9,9 +9,9 @@ from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.normalizer import RawExecEvent
 from hft_platform.execution.positions import PositionStore
+from hft_platform.execution.router import ExecutionRouter as ExecutionService
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.risk.engine import RiskEngine
-from hft_platform.execution.router import ExecutionRouter as ExecutionService
 
 
 async def _wait_for(predicate, timeout=1.0, step=0.01):

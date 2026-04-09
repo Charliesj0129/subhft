@@ -290,6 +290,7 @@ async def test_live_stormguard_halt_rejects_even_if_cmd_stamped_normal(tmp_path)
     # Simulate live StormGuard in HALT state
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
+    mock_sg.is_halt_exempt.return_value = False
     adapter._storm_guard = mock_sg
 
     intent = _make_intent()
@@ -311,15 +312,18 @@ async def test_live_stormguard_halt_allows_halt_flatten(tmp_path):
 
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
+    mock_sg.is_halt_exempt.return_value = False
     adapter._storm_guard = mock_sg
 
-    intent = _make_intent(reason="halt_flatten")
+    intent = _make_intent(intent_type=IntentType.FORCE_FLAT, reason="halt_flatten")
     cmd = _make_cmd(intent)
 
     dlq_size_before = len(adapter._dlq._buffer) if hasattr(adapter._dlq, "_buffer") else 0
     # Mock the dispatch path to prevent actual broker call
     from unittest.mock import AsyncMock
-    adapter._enqueue_api = AsyncMock()
+
+    adapter.running = True
+    adapter._enqueue_api = AsyncMock(return_value=True)
     await adapter.execute(cmd)
 
     # Should NOT be DLQ'd
@@ -345,7 +349,8 @@ async def test_cancel_bypasses_per_symbol_rate_limiter(tmp_path):
     mock_ps_limiter = MagicMock()
     mock_ps_limiter.check = MagicMock(return_value=PerSymbolRateResult.HARD)
     adapter.per_symbol_rate_limiter = mock_ps_limiter
-    adapter._enqueue_api = AsyncMock()
+    adapter.running = True
+    adapter._enqueue_api = AsyncMock(return_value=True)
 
     intent = _make_intent(intent_type=IntentType.CANCEL, symbol="")
     cmd = _make_cmd(intent)
@@ -371,7 +376,8 @@ async def test_force_flat_bypasses_per_symbol_rate_limiter(tmp_path):
     mock_ps_limiter = MagicMock()
     mock_ps_limiter.check = MagicMock(return_value=PerSymbolRateResult.HARD)
     adapter.per_symbol_rate_limiter = mock_ps_limiter
-    adapter._enqueue_api = AsyncMock()
+    adapter.running = True
+    adapter._enqueue_api = AsyncMock(return_value=True)
 
     intent = _make_intent(intent_type=IntentType.FORCE_FLAT)
     cmd = _make_cmd(intent)
@@ -390,7 +396,8 @@ async def test_cancel_bypasses_circuit_breaker(tmp_path):
     from unittest.mock import AsyncMock
 
     adapter = _make_adapter(tmp_path)
-    adapter._enqueue_api = AsyncMock()
+    adapter.running = True
+    adapter._enqueue_api = AsyncMock(return_value=True)
 
     # Force circuit breaker open
     for _ in range(adapter.circuit_breaker.threshold):
@@ -413,7 +420,8 @@ async def test_cancel_bypasses_global_rate_limiter(tmp_path):
     from unittest.mock import AsyncMock
 
     adapter = _make_adapter(tmp_path)
-    adapter._enqueue_api = AsyncMock()
+    adapter.running = True
+    adapter._enqueue_api = AsyncMock(return_value=True)
 
     # Fill global rate limiter past hard cap
     for _ in range(260):
@@ -461,6 +469,7 @@ async def test_api_worker_skips_new_orders_during_halt(tmp_path):
 
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
+    mock_sg.is_halt_exempt.return_value = False
     adapter._storm_guard = mock_sg
 
     dispatched = []
@@ -492,6 +501,7 @@ async def test_api_worker_allows_cancel_during_halt(tmp_path):
 
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
+    mock_sg.is_halt_exempt.return_value = False
     adapter._storm_guard = mock_sg
 
     dispatched = []
@@ -522,6 +532,7 @@ async def test_api_worker_allows_force_flat_during_halt(tmp_path):
 
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
+    mock_sg.is_halt_exempt.return_value = False
     adapter._storm_guard = mock_sg
 
     dispatched = []

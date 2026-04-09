@@ -22,7 +22,7 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.gateway.channel import LocalIntentChannel
 from hft_platform.gateway.dedup import IdempotencyStore
-from hft_platform.gateway.exposure import ExposureKey, ExposureLimits, ExposureStore
+from hft_platform.gateway.exposure import ExposureKey, ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
 

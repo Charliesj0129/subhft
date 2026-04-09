@@ -51,8 +51,7 @@ def _require_int(value: object, field_name: str) -> int:
 
 def _coerce_text_tuple(value: object, field_name: str) -> tuple[str, ...]:
     return tuple(
-        _require_text(item, f"{field_name}[{index}]")
-        for index, item in enumerate(_require_sequence(value, field_name))
+        _require_text(item, f"{field_name}[{index}]") for index, item in enumerate(_require_sequence(value, field_name))
     )
 
 
@@ -163,9 +162,7 @@ class LLMReportReasoner:
             evidence_refs=_coerce_evidence_refs(payload.get("evidence_refs")),
         )
         report.validate()
-        unknown_refs = tuple(
-            ref.key for ref in report.evidence_refs if ref.key not in dossier.evidence
-        )
+        unknown_refs = tuple(ref.key for ref in report.evidence_refs if ref.key not in dossier.evidence)
         if unknown_refs:
             msg = f"unknown evidence refs: {', '.join(unknown_refs)}"
             raise ValueError(msg)

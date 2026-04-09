@@ -11,6 +11,7 @@ Covers:
   - Feed gap triggers STORM escalation
   - Queue depth gauge reflects actual queue size
 """
+
 from __future__ import annotations
 
 import asyncio

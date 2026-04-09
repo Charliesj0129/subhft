@@ -6,9 +6,7 @@ from hft_platform.observability.metrics import MetricsRegistry
 def test_rust_fallback_total_exists_on_registry():
     registry = MetricsRegistry.get()
     assert registry is not None
-    assert hasattr(registry, "rust_fallback_total"), (
-        "MetricsRegistry must expose rust_fallback_total counter"
-    )
+    assert hasattr(registry, "rust_fallback_total"), "MetricsRegistry must expose rust_fallback_total counter"
 
 
 def test_rust_fallback_total_tick_label_increment():
@@ -40,6 +38,4 @@ def test_rust_fallback_total_tick_and_bidask_are_independent():
     tick.inc()
 
     assert tick._value.get() == tick_before + 1.0
-    assert bidask._value.get() == bidask_before, (
-        "Incrementing tick counter must not affect bidask counter"
-    )
+    assert bidask._value.get() == bidask_before, "Incrementing tick counter must not affect bidask counter"
