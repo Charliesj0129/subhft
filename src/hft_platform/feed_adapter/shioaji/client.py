@@ -54,6 +54,7 @@ from hft_platform.feed_adapter.shioaji._infra import (
 from hft_platform.feed_adapter.shioaji._infra import (
     update_quote_pending_metrics as _update_quote_pending_metrics_impl,
 )
+from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
 from hft_platform.feed_adapter.shioaji.tick_dispatcher import TickDispatcher
 from hft_platform.observability.metrics import MetricsRegistry
 
@@ -135,7 +136,9 @@ def dispatch_tick_cb(*args, **kwargs):
 
 class ShioajiClient:
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None):
-        self.MAX_SUBSCRIPTIONS = int((shioaji_config or {}).get("max_subscriptions", 200))
+        self.MAX_SUBSCRIPTIONS = int(
+            (shioaji_config or {}).get("max_subscriptions", DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN)
+        )
         self.contracts_timeout = int(os.getenv("SHIOAJI_CONTRACTS_TIMEOUT", "10000"))
         _cfg_fetch = (shioaji_config or {}).get("fetch_contract")
         self.fetch_contract = (

@@ -18,6 +18,7 @@ import yaml
 from structlog import get_logger
 
 from hft_platform.feed_adapter.shioaji.facade_slot import FacadeSlot, FacadeState
+from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
 from hft_platform.feed_adapter.shioaji.pool_health import (
     check_facade_health,
     get_healthy_feed_gap_s,
@@ -69,7 +70,15 @@ def _ensure_metrics() -> None:
 
 _SHIOAJI_MAX_CONNECTIONS = 5
 _MAX_QUOTE_CONNECTIONS = _SHIOAJI_MAX_CONNECTIONS - 1
-_MAX_SUBSCRIPTIONS_PER_CONN = 200
+_MAX_SUBSCRIPTIONS_PER_CONN = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
+
+
+def _clamp_max_subscriptions(config: dict[str, Any]) -> int:
+    raw = config.get("max_subscriptions", _MAX_SUBSCRIPTIONS_PER_CONN)
+    try:
+        return max(1, min(int(raw), _MAX_SUBSCRIPTIONS_PER_CONN))
+    except (TypeError, ValueError):
+        return _MAX_SUBSCRIPTIONS_PER_CONN
 
 
 class QuoteConnectionPool:
@@ -182,6 +191,7 @@ class QuoteConnectionPool:
         for group_id in range(self._num_conns):
             per_conn_cfg = dict(self._config)
             per_conn_cfg["session_lock_suffix"] = f"_conn{group_id}"
+            per_conn_cfg["max_subscriptions"] = _clamp_max_subscriptions(per_conn_cfg)
             # Only first facade downloads contracts; others skip to save ~27MB each
             if group_id > 0:
                 per_conn_cfg["fetch_contract"] = "0"
@@ -584,6 +594,55 @@ class QuoteConnectionPool:
                 logger.warning("options_api_fallback_failed", error=str(exc))
         return []
 
+    def _option_target_groups(self) -> list[int]:
+        groups = list(range(1, self._num_conns))
+        return groups or [0]
+
+    def _build_option_symbols(
+        self,
+        base_symbols: list[dict[str, Any]],
+        calls: list[dict[str, Any]],
+        puts: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int]:
+        symbols: list[dict[str, Any]] = []
+        for s in base_symbols:
+            entry = dict(s)
+            entry["group"] = 0
+            symbols.append(entry)
+
+        group_capacity = {g: _MAX_SUBSCRIPTIONS_PER_CONN for g in range(self._num_conns)}
+        if 0 in group_capacity:
+            group_capacity[0] -= len(base_symbols)
+            if group_capacity[0] < 0:
+                raise ValueError(
+                    f"Group 0 has {len(base_symbols)} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN} limit"
+                )
+
+        calls_by_strike = {float(c.get("strike", 0)): c for c in calls if c.get("strike") is not None}
+        puts_by_strike = {float(c.get("strike", 0)): c for c in puts if c.get("strike") is not None}
+        strikes = sorted(set(calls_by_strike) | set(puts_by_strike))
+        target_groups = self._option_target_groups()
+        trimmed = 0
+
+        for idx, strike in enumerate(strikes):
+            target_group = target_groups[idx % len(target_groups)]
+            entries: list[dict[str, Any]] = []
+            call = calls_by_strike.get(strike)
+            put = puts_by_strike.get(strike)
+            if call is not None:
+                entries.append({"code": call["code"], "exchange": "OPT", "group": target_group})
+            if put is not None:
+                entries.append({"code": put["code"], "exchange": "OPT", "group": target_group})
+            if not entries:
+                continue
+            if group_capacity[target_group] < len(entries):
+                trimmed += len(entries)
+                continue
+            symbols.extend(entries)
+            group_capacity[target_group] -= len(entries)
+
+        return symbols, trimmed
+
     def refresh_options_symbols(self, cb: Callable[..., Any] | None = None) -> bool:
         """Regenerate the options YAML if the nearest TXO expiry has changed.
 
@@ -655,17 +714,15 @@ class QuoteConnectionPool:
                 key=lambda c: float(c.get("strike", 0)),
             )
 
-            # Preserve group 0 (non-option symbols)
+            # Preserve group 0 (non-option symbols) and spread option strike pairs
+            # across the remaining quote connections. Each strike keeps its call/put
+            # pair on the same group so individual groups stay mixed and balanced.
             base_symbols = [s for s in self._all_symbols if s.get("group", 0) == 0]
-            symbols: list[dict[str, Any]] = []
-            for s in base_symbols:
-                entry = dict(s)
-                entry["group"] = 0
-                symbols.append(entry)
-            for c in calls:
-                symbols.append({"code": c["code"], "exchange": "OPT", "group": 1})
-            for c in puts:
-                symbols.append({"code": c["code"], "exchange": "OPT", "group": 2})
+            try:
+                symbols, trimmed = self._build_option_symbols(base_symbols, calls, puts)
+            except ValueError as exc:
+                logger.error("options_refresh_group_overflow", error=str(exc))
+                return False
 
             # Validate connection limits
             for g in range(self._num_conns):
@@ -685,8 +742,9 @@ class QuoteConnectionPool:
                     f.write("# Auto-refreshed by QuoteConnectionPool\n")
                     f.write(f"# TXO nearest expiry: {nearest_date}\n")
                     f.write(f"# Group 0: Base ({len(base_symbols)})\n")
-                    f.write(f"# Group 1: TXO Calls ({len(calls)})\n")
-                    f.write(f"# Group 2: TXO Puts ({len(puts)})\n\n")
+                    option_groups = self._option_target_groups()
+                    f.write(f"# Option groups: {option_groups}\n")
+                    f.write(f"# Trimmed options: {trimmed}\n\n")
                     yaml.dump({"symbols": symbols}, f, default_flow_style=False, allow_unicode=True)
             except Exception as exc:
                 logger.error("options_refresh_write_failed", error=str(exc))
@@ -748,6 +806,7 @@ class QuoteConnectionPool:
                 total_symbols=len(symbols),
                 calls=len(calls),
                 puts=len(puts),
+                trimmed=trimmed,
                 resubscribed=resubscribed,
             )
             return True

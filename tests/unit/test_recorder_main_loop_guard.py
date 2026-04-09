@@ -13,7 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
     def _make_worker(self, queue):
         """Create a RecorderService with mocked DataWriter."""
-        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+        with (
+            patch.dict("os.environ", {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False),
+            patch("hft_platform.recorder.worker.DataWriter") as MockWriter,
+        ):
             mock_writer_inst = MockWriter.return_value
             mock_writer_inst.active = True
             mock_writer_inst.connect_async = AsyncMock()
@@ -25,6 +28,7 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             from hft_platform.recorder.worker import RecorderService
 
             worker = RecorderService(queue)
+            worker.recover_wal = AsyncMock()
             # Keep a reference to mock so tests can inspect it
             worker._mock_writer = mock_writer_inst
             return worker
@@ -45,7 +49,10 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
         """A non-dict item should be logged and skipped, not crash the service."""
         queue: asyncio.Queue = asyncio.Queue()
 
-        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+        with (
+            patch.dict("os.environ", {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False),
+            patch("hft_platform.recorder.worker.DataWriter") as MockWriter,
+        ):
             mock_writer_inst = MockWriter.return_value
             mock_writer_inst.active = True
             mock_writer_inst.connect_async = AsyncMock()
@@ -57,6 +64,7 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             from hft_platform.recorder.worker import RecorderService
 
             worker = RecorderService(queue)
+            worker.recover_wal = AsyncMock()
 
             # Put a non-dict item (e.g., a plain string)
             await queue.put("not_a_dict")
@@ -79,7 +87,10 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
         """An exception from batcher.add() should be caught, logged, and loop continues."""
         queue: asyncio.Queue = asyncio.Queue()
 
-        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+        with (
+            patch.dict("os.environ", {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False),
+            patch("hft_platform.recorder.worker.DataWriter") as MockWriter,
+        ):
             mock_writer_inst = MockWriter.return_value
             mock_writer_inst.active = True
             mock_writer_inst.connect_async = AsyncMock()
@@ -91,6 +102,7 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             from hft_platform.recorder.worker import RecorderService
 
             worker = RecorderService(queue)
+            worker.recover_wal = AsyncMock()
 
             # Patch one batcher to raise on add
             faulty_batcher = MagicMock()
@@ -121,7 +133,10 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
         """task_done() must be called even when processing raises."""
         queue: asyncio.Queue = asyncio.Queue()
 
-        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+        with (
+            patch.dict("os.environ", {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False),
+            patch("hft_platform.recorder.worker.DataWriter") as MockWriter,
+        ):
             mock_writer_inst = MockWriter.return_value
             mock_writer_inst.active = True
             mock_writer_inst.connect_async = AsyncMock()
@@ -133,6 +148,7 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             from hft_platform.recorder.worker import RecorderService
 
             worker = RecorderService(queue)
+            worker.recover_wal = AsyncMock()
 
             # Patch batcher to raise
             boom_batcher = MagicMock()

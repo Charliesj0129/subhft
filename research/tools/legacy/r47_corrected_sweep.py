@@ -21,7 +21,7 @@ import numpy as np
 
 os.environ.setdefault("HFT_STRICT_PRICE_MODE", "0")
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 import structlog
@@ -279,9 +279,9 @@ def main():
 
     # Phase 2: PE × Queue × max_pos sweep at best spread
     print(f"\n=== Phase 2: PE × Queue × MaxPos at spread={best_spr} ===")
-    pe_vals = [0.0, 0.45, 0.55, 0.65]     # 0.0 = disabled (H never < 0)
-    q_vals = [1.0, 0.5, 0.7, 0.9]          # 1.0 = disabled
-    mp_vals = [1, 2, 3, 5]
+    pe_vals = [0.0, 0.55]                  # 0.0 = disabled, 0.55 = research
+    q_vals = [1.0, 0.7]                     # 1.0 = disabled, 0.7 = research
+    mp_vals = [1, 3, 5]
 
     print(f"{'PE':>5} {'Queue':>6} {'MP':>3} {'PnL':>10} {'fills':>6} {'pnl/fill':>9} {'win':>5} {'dd':>8}")
     print("-" * 60)

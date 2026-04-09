@@ -14,7 +14,10 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
         from hft_platform.recorder.worker import RecorderService
 
         queue = asyncio.Queue()
-        with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
+        with (
+            patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False),
+            patch("hft_platform.recorder.worker.DataWriter") as MockWriter,
+        ):
             inst = MockWriter.return_value
             inst.active = True
             inst.connect_async = AsyncMock()
@@ -24,6 +27,7 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
             inst.set_health_tracker = MagicMock()
             svc = RecorderService(queue)
             svc.writer = inst  # keep reference
+            svc.recover_wal = AsyncMock()
         return svc
 
     async def test_shutdown_flush_completes_within_timeout(self):
@@ -88,6 +92,7 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
             inst.set_health_tracker = MagicMock()
 
             svc = RecorderService(queue)
+            svc.recover_wal = AsyncMock()
 
             async def _slow_shutdown_flush():
                 await asyncio.sleep(999)

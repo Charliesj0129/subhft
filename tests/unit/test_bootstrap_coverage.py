@@ -199,6 +199,7 @@ def test_build_broker_clients_engine_shioaji(monkeypatch):
     """_build_broker_clients engine role + shioaji returns ShioajiClientFacade mocks."""
     from hft_platform.services.bootstrap import SystemBootstrapper
 
+    monkeypatch.setenv("HFT_QUOTE_CONNECTIONS", "1")
     bs = SystemBootstrapper(settings={})
     mock_facade = MagicMock()
 
@@ -223,6 +224,8 @@ def test_check_session_ownership_owner_matches(monkeypatch):
     monkeypatch.setenv("HFT_REDIS_HOST", "redis")
     monkeypatch.setenv("HFT_REDIS_PORT", "6379")
     monkeypatch.delenv("HFT_REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_PASS", raising=False)
     monkeypatch.setenv("HFT_FEED_SESSION_OWNER_TTL_S", "300")
     monkeypatch.setenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.5")
     monkeypatch.delenv("HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S", raising=False)
