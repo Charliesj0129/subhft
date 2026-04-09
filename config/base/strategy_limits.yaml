@@ -28,6 +28,12 @@ strategies:
   CBS_TMFD6:
     max_position_lots: 1             # Conservative single lot
     max_order_qty: 1                 # 1 lot per order
+  MOMENTUM_BOUNCE_TMFD6:
+    max_position_lots: 1             # Conservative single lot (shadow mode)
+    max_order_qty: 1                 # 1 lot per order
+  R47_MAKER_TXFD6:
+    max_position_lots: 5             # Max 5 lots inventory (trades TMFD6 = 10 NTD/pt)
+    max_order_qty: 1                 # 1 lot per quote side
 
 intraday_pnl:
   scope: global

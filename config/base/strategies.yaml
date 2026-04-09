@@ -98,6 +98,30 @@ strategies:
       session_start_sec: 2700         # 00:45 UTC = 08:45 TWN
       session_end_sec: 20700          # 05:45 UTC = 13:45 TWN
 
+  # --- R47 Maker (TXFD6) — Three-Layer MM — SHADOW MODE ---
+  # D1: PE entropy regime gate, D2: Queue survival suppression, D3: MFG asymmetric widening
+  # Research: R47 maker pivot. Gate 0 validated, Stage 4 backtested.
+  # Queue-based backtest: +1.48 pts/fill naive, +1.63 pts/fill gated (77-79% profitable)
+  # RT cost = 60 NTD = 0.30 pts (trivially met by any spread >= 1 pt)
+  - id: "R47_MAKER_TXFD6"
+    module: "hft_platform.strategies.r47_maker"
+    class: "R47MakerStrategy"
+    enabled: true
+    product_type: "FUT"
+    symbols: ["TXFD6"]              # Signal source: 大台 (better liquidity + depth)
+    params:
+      pe_safe_threshold: 0.85
+      pe_danger_threshold: 0.55
+      pe_window: 100
+      queue_cancel_threshold: 0.7
+      queue_ema_alpha: 0.05
+      mfg_skew_z_threshold: 2.0
+      mfg_ema_alpha: 0.01
+      spread_threshold_pts: 5       # TMFD6: RT 40 NTD = 4 pts, threshold 5 pts (1 pt edge)
+      toxicity_max: 700
+      max_pos: 5                    # Conservative: max 5 lots inventory
+      trade_symbol: "TMFD6"         # Cross-instrument: trade 微台 using 大台 signals
+
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
   # Phase 3: Automated options market-making with delta-neutral hedging.
   # Enable for shadow: set enabled=true, run with HFT_ORDER_MODE=sim
