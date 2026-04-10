@@ -528,6 +528,11 @@ class R47MakerStrategy(SimpleMarketMaker):
         bid_price_scaled = (fair_value_x2 - (base_width + mfg_widen_bid) * 2) // 2
         ask_price_scaled = (fair_value_x2 + (base_width + mfg_widen_ask) * 2) // 2
 
+        # Snap to tick grid: TMFD6/TXFD6 tick = 1 pt = 10000 scaled.
+        # Bid rounds DOWN, ask rounds UP to avoid crossing the spread.
+        bid_price_scaled = (bid_price_scaled // _PRICE_SCALE) * _PRICE_SCALE
+        ask_price_scaled = -(-ask_price_scaled // _PRICE_SCALE) * _PRICE_SCALE
+
         # Execution with D2 quote suppression — use exec_sym for orders
         max_pos = self._max_pos
         if pos < max_pos and not self._suppress_bid:
