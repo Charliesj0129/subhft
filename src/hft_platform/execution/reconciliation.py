@@ -35,6 +35,7 @@ class PositionDiscrepancy:
     local_qty: int
     broker_qty: int
     diff: int
+    is_futures: bool = False
 
     @property
     def is_critical(self) -> bool:
@@ -44,7 +45,10 @@ class PositionDiscrepancy:
         # Sign mismatch is always critical
         if (self.local_qty > 0 and self.broker_qty < 0) or (self.local_qty < 0 and self.broker_qty > 0):
             return True
-        # Large absolute diff is critical (threshold: 100 shares or 10% of position)
+        # Futures: any lot discrepancy is critical — stock threshold is too wide
+        if self.is_futures:
+            return abs(self.diff) >= 1
+        # Stocks: large absolute diff is critical (threshold: 100 shares or 10% of position)
         threshold = max(100, abs(self.local_qty) // 10) if self.local_qty != 0 else 100
         return abs(self.diff) > threshold
 
@@ -211,13 +215,20 @@ class ReconciliationService:
             # 1. Fetch positions from broker
             raw_positions = await asyncio.to_thread(self.client.get_positions)
 
+            # None means the query itself failed — treat as an unhealthy sync cycle.
+            # Do NOT build broker_map from None; that would silently mask real positions.
+            if raw_positions is None:
+                raise RuntimeError("get_positions() returned None — broker query unhealthy")
+
             # 2. Build broker position map {symbol: qty}
             broker_map: Dict[str, int] = {}
             for pos in raw_positions:
                 code = getattr(pos, "code", None) or (pos.get("code") if isinstance(pos, dict) else None)
                 qty = getattr(pos, "quantity", None) or (pos.get("quantity", 0) if isinstance(pos, dict) else 0)
                 direction = getattr(pos, "direction", "")
-                if str(direction) == "Action.Sell":
+                # Shioaji futures positions use "Short"/"Long"; stock positions use
+                # "Action.Sell"/"Action.Buy". Accept both forms.
+                if str(direction) in ("Action.Sell", "Short"):
                     qty = -qty
                 if code:
                     broker_map[code] = int(qty)
@@ -337,10 +348,19 @@ class ReconciliationService:
         overlapping_symbols = set(previous_signature) & set(current_signature)
         return bool(overlapping_symbols)
 
+    @staticmethod
+    def _is_futures(symbol: str) -> bool:
+        """Heuristic: futures symbols contain common TAIFEX prefixes."""
+        return any(c in symbol.upper() for c in ("FD", "FX", "TX", "MX", "TE", "TF"))
+
     def _compute_discrepancies(
         self, local_map: Dict[str, int], broker_map: Dict[str, int]
     ) -> List[PositionDiscrepancy]:
-        """Compare local and broker positions, return list of discrepancies."""
+        """Compare local and broker positions, return list of discrepancies.
+
+        NOTE: startup_recon.py calls this as ReconciliationService._compute_discrepancies(None, ...)
+        so this method must not use `self` — use the class-level static method directly.
+        """
         discrepancies: List[PositionDiscrepancy] = []
         all_symbols = set(local_map.keys()) | set(broker_map.keys())
 
@@ -356,6 +376,7 @@ class ReconciliationService:
                         local_qty=local_qty,
                         broker_qty=broker_qty,
                         diff=diff,
+                        is_futures=ReconciliationService._is_futures(symbol),
                     )
                 )
 

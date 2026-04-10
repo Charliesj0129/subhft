@@ -22,6 +22,8 @@ from collections import deque
 
 from structlog import get_logger
 
+from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
+from hft_platform.contracts.strategy import Side
 from hft_platform.events import (
     FeatureUpdateEvent,
     LOBStatsEvent,
@@ -303,7 +305,7 @@ class _MFGState:
 
 class R47MakerStrategy(SimpleMarketMaker):
     """Three-layer maker strategy with PE regime gate, queue survival
-    cancel trigger, and MFG inventory skew.
+    cancel trigger, MFG inventory skew, and D4 QI adverse-selection skew.
 
     Parameters
     ----------
@@ -318,6 +320,14 @@ class R47MakerStrategy(SimpleMarketMaker):
         Minimum spread in points to quote (inherited from OpMM concept).
     toxicity_max : int
         Maximum toxicity x1000 to allow quoting.
+    qi_skew_threshold : float
+        L1 queue imbalance |QI| above which to widen the adverse side.
+        QI = (bid_qty - ask_qty) / (bid_qty + ask_qty).
+        When QI > threshold (buying pressure), widen ask by qi_widen_ticks.
+        When QI < -threshold (selling pressure), widen bid.
+        Set to 1.0 to disable (|QI| never exceeds 1.0).
+    qi_widen_ticks : int
+        Number of ticks to widen the adverse side when QI threshold is hit.
     """
 
     def __init__(
@@ -335,6 +345,9 @@ class R47MakerStrategy(SimpleMarketMaker):
         # Gates
         spread_threshold_pts: int = 5,  # TMFD6: breakeven 4 pts (RT 40 NTD / 10 NTD per pt)
         toxicity_max: int = 700,
+        # D4: QI adverse-selection skew
+        qi_skew_threshold: float = 1.0,  # 1.0 = disabled; 0.10 = optimized for TMFD6
+        qi_widen_ticks: int = 1,
         # Cross-instrument execution
         trade_symbol: str = "",  # if set, place orders on this symbol instead of signal symbol
         **kwargs: object,
@@ -361,6 +374,10 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._spread_thresh_scaled = spread_threshold_pts * _PRICE_SCALE
         self._toxicity_max = toxicity_max
 
+        # D4: QI skew
+        self._qi_skew_thresh = qi_skew_threshold
+        self._qi_widen_ticks = qi_widen_ticks
+
         # Feature cache
         self._feature_cache: dict[str, tuple[int | float, ...]] = {}
 
@@ -369,6 +386,7 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._pe_blocked = 0
         self._queue_suppressed = 0
         self._mfg_skewed = 0
+        self._qi_widened = 0
         self._spread_blocked = 0
         self._toxicity_blocked = 0
         self._quotes_sent = 0
@@ -377,12 +395,36 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._suppress_bid: bool = False
         self._suppress_ask: bool = False
 
+        # D4 QI skew widening (set in on_features, read in _generate_quotes)
+        self._qi_widen_bid: int = 0
+        self._qi_widen_ask: int = 0
+
+        # Local position tracker — bypasses stale StrategyContext cache.
+        # StrategyRunner's _positions_dirty flag can lag behind fills,
+        # causing self.position() to return stale values (e.g. 0) while
+        # actual position is non-zero. This dict is updated directly in
+        # on_fill() and is authoritative for max_pos enforcement.
+        self._local_pos: dict[str, int] = {}
+
+        # Pending order counters — incremented when buy()/sell() is called,
+        # decremented on fill or cancel/reject (on_order). Prevents sending
+        # more orders than max_pos allows when multiple ROD orders are resting.
+        self._pending_buy: dict[str, int] = {}
+        self._pending_sell: dict[str, int] = {}
+
+        # Last quoted prices per symbol — suppress requotes when price hasn't moved.
+        # ROD orders rest at exchange; sending the same price again just stacks orders.
+        self._last_bid: dict[str, int] = {}
+        self._last_ask: dict[str, int] = {}
+
         logger.info(
             "R47MakerStrategy initialized",
             pe_danger=pe_danger_threshold,
             queue_cancel=queue_cancel_threshold,
             mfg_z=mfg_skew_z_threshold,
             spread_pts=spread_threshold_pts,
+            qi_skew=qi_skew_threshold,
+            qi_widen=qi_widen_ticks,
         )
 
     def _get_pe(self, symbol: str) -> _PEState:
@@ -459,6 +501,83 @@ class R47MakerStrategy(SimpleMarketMaker):
                 if self._suppress_bid or self._suppress_ask:
                     self._queue_suppressed += 1
 
+            # D4: QI adverse-selection skew — widen the side under pressure
+            # QI > 0 = buying pressure → asks likely to be adversely filled → widen ask
+            # QI < 0 = selling pressure → bids likely to be adversely filled → widen bid
+            self._qi_widen_bid = 0
+            self._qi_widen_ask = 0
+            if self._qi_skew_thresh < 1.0:
+                total_qty = bid_qty + ask_qty
+                if total_qty > 0:
+                    qi = (bid_qty - ask_qty) / total_qty
+                    if qi > self._qi_skew_thresh:
+                        self._qi_widen_ask = self._qi_widen_ticks
+                        self._qi_widened += 1
+                    elif qi < -self._qi_skew_thresh:
+                        self._qi_widen_bid = self._qi_widen_ticks
+                        self._qi_widened += 1
+
+    def on_fill(self, event: FillEvent) -> None:
+        """Track position locally to avoid stale StrategyContext cache."""
+        sym = event.symbol
+        delta = event.qty if event.side == Side.BUY else -event.qty
+        self._local_pos[sym] = self._local_pos.get(sym, 0) + delta
+        # Each fill consumes one pending slot
+        if event.side == Side.BUY:
+            self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - event.qty)
+        else:
+            self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - event.qty)
+        logger.info(
+            "r47_fill",
+            symbol=sym,
+            side=event.side.name,
+            qty=event.qty,
+            price=event.price,
+            local_pos=self._local_pos[sym],
+            ctx_pos=self.position(sym),
+        )
+
+    def on_order(self, event: OrderEvent) -> None:
+        """Release pending slot when an order is cancelled or rejected."""
+        if event.status not in (OrderStatus.CANCELLED, OrderStatus.FAILED):
+            return
+        sym = event.symbol
+        remaining = event.remaining_qty if event.remaining_qty > 0 else 1
+        if event.side == Side.BUY:
+            self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - remaining)
+        else:
+            self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - remaining)
+        logger.debug(
+            "r47_order_terminal",
+            symbol=sym,
+            status=event.status.name,
+            side=event.side.name,
+            remaining=remaining,
+        )
+
+    def seed_local_pos(self, positions: dict[str, int]) -> None:
+        """Explicitly seed local position state (call after startup reconciliation).
+
+        Only seeds symbols not already tracked — safe to call multiple times.
+        """
+        for sym, qty in positions.items():
+            if sym not in self._local_pos:
+                self._local_pos[sym] = qty
+                logger.info("r47_local_pos_seeded", symbol=sym, pos=qty, source="explicit")
+
+    def _local_position(self, symbol: str) -> int:
+        """Return local fill-tracked position (authoritative for max_pos).
+
+        Lazily seeds from StrategyContext on first access so a restart with
+        open broker positions doesn't treat the strategy as flat.
+        """
+        if symbol not in self._local_pos:
+            ctx_pos = self.position(symbol)
+            if ctx_pos != 0:
+                self._local_pos[symbol] = ctx_pos
+                logger.info("r47_local_pos_seeded", symbol=symbol, pos=ctx_pos, source="ctx")
+        return self._local_pos.get(symbol, 0)
+
     def on_stats(self, event: LOBStatsEvent) -> None:
         """Main quoting logic with 3-layer gating."""
         symbol = event.symbol
@@ -508,7 +627,7 @@ class R47MakerStrategy(SimpleMarketMaker):
         mid_price_x2 = event.mid_price_x2
         spread_scaled = event.spread_scaled
         exec_sym = self._exec_symbol(symbol)
-        pos = self.position(exec_sym)
+        pos = self._local_position(exec_sym)
 
         # Micro price with imbalance
         imbalance_adj = int(event.imbalance * spread_scaled * 20 * 2 // 100)
@@ -524,21 +643,36 @@ class R47MakerStrategy(SimpleMarketMaker):
         pe_width_mult = 2 if (pe.warmed_up and pe.h < 0.70) else 1
         base_width = max(tick_size_scaled, half_spread_scaled) * pe_width_mult
 
-        # D3: Asymmetric spread widening
-        bid_price_scaled = (fair_value_x2 - (base_width + mfg_widen_bid) * 2) // 2
-        ask_price_scaled = (fair_value_x2 + (base_width + mfg_widen_ask) * 2) // 2
+        # D3: Asymmetric spread widening (MFG inventory)
+        # D4: QI adverse-selection skew (widen side under pressure)
+        qi_widen_bid_scaled = self._qi_widen_bid * _PRICE_SCALE
+        qi_widen_ask_scaled = self._qi_widen_ask * _PRICE_SCALE
+        bid_price_scaled = (fair_value_x2 - (base_width + mfg_widen_bid + qi_widen_bid_scaled) * 2) // 2
+        ask_price_scaled = (fair_value_x2 + (base_width + mfg_widen_ask + qi_widen_ask_scaled) * 2) // 2
 
         # Snap to tick grid: TMFD6/TXFD6 tick = 1 pt = 10000 scaled.
         # Bid rounds DOWN, ask rounds UP to avoid crossing the spread.
         bid_price_scaled = (bid_price_scaled // _PRICE_SCALE) * _PRICE_SCALE
         ask_price_scaled = -(-ask_price_scaled // _PRICE_SCALE) * _PRICE_SCALE
 
-        # Execution with D2 quote suppression — use exec_sym for orders
+        # Execution with D2 quote suppression — use exec_sym for orders.
+        # Price-gate: only send a new ROD if the price has moved by >= 1 tick
+        # from the last quoted price. ROD orders rest at the exchange; resending
+        # the same price just stacks redundant orders.
+        # Also gate on pending orders so resting RODs can't exceed max_pos.
         max_pos = self._max_pos
-        if pos < max_pos and not self._suppress_bid:
+        pending_buy = self._pending_buy.get(exec_sym, 0)
+        pending_sell = self._pending_sell.get(exec_sym, 0)
+        bid_moved = bid_price_scaled != self._last_bid.get(exec_sym, -1)
+        ask_moved = ask_price_scaled != self._last_ask.get(exec_sym, -1)
+        if pos + pending_buy < max_pos and not self._suppress_bid and bid_moved:
             self.buy(exec_sym, bid_price_scaled, 1)
-        if pos > -max_pos and not self._suppress_ask:
+            self._pending_buy[exec_sym] = pending_buy + 1
+            self._last_bid[exec_sym] = bid_price_scaled
+        if pos - pending_sell > -max_pos and not self._suppress_ask and ask_moved:
             self.sell(exec_sym, ask_price_scaled, 1)
+            self._pending_sell[exec_sym] = pending_sell + 1
+            self._last_ask[exec_sym] = ask_price_scaled
         self._quotes_sent += 1
 
         if self._stats_count % _LOG_INTERVAL == 1:
@@ -574,6 +708,7 @@ class R47MakerStrategy(SimpleMarketMaker):
             mfg_skew=self._mfg_skewed,
             spr_blk=self._spread_blocked,
             tox_blk=self._toxicity_blocked,
+            qi_wdn=self._qi_widened,
         )
 
     # Note: cancel-by-order-id is not possible because BaseStrategy.buy()/sell()

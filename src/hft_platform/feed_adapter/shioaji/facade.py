@@ -125,7 +125,7 @@ class ShioajiClientFacade:
     ) -> Any:
         return self.order_gateway.update_order(trade, price=price, qty=qty, timeout=timeout, cb=cb)
 
-    def get_positions(self) -> list[Any]:
+    def get_positions(self) -> list[Any] | None:
         return self.account_gateway.get_positions()
 
     def get_account_balance(self, account: Any = None) -> Any:

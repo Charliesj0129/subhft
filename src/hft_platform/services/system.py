@@ -527,6 +527,9 @@ class HFTSystem:
                         base_capital = self.settings.get("base_capital", 10_000_000)
                         if base_capital > 0 and unrealized < 0:
                             drawdown_pct = drawdown_pct + unrealized / base_capital
+                        # Feed unrealized PnL into DailyLossLimitValidator so it can
+                        # gate new orders on floating losses, not just realized losses.
+                        self.risk_engine.update_unrealized_pnl(int(unrealized))
                     except Exception:
                         pass
 

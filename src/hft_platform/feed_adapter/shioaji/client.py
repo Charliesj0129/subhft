@@ -995,7 +995,7 @@ class ShioajiClient:
     def get_usage(self):
         return self._accounts().get_usage()
 
-    def get_positions(self) -> List[Any]:
+    def get_positions(self) -> List[Any] | None:
         return self._accounts().get_positions()
 
     def fetch_snapshots(self):
