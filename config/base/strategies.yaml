@@ -98,28 +98,30 @@ strategies:
       session_start_sec: 2700         # 00:45 UTC = 08:45 TWN
       session_end_sec: 20700          # 05:45 UTC = 13:45 TWN
 
-  # --- R47 Maker (TXFD6) — Three-Layer MM — SHADOW MODE ---
-  # D1: PE entropy regime gate, D2: Queue survival suppression, D3: GLT inventory skew
-  # Research: R47 maker pivot. Gate 0 validated, Stage 4 backtested.
-  # hftbacktest 12-day: +4,534 pts gross, ~+560K NTD net (after ~346K cost)
-  # Cross-instrument TMFD6 KILLED: TMFD6 queue dynamics incompatible (-109K NTD)
-  # TXFD6 direct: RT cost ~1.18 pts << +1.548 pts/fill gross edge
-  - id: "R47_MAKER_TXFD6"
+  # --- R47 Maker (TMFD6) — Spread-Filtered MM ---
+  # Compromise backtest (12 days, CK-direct with queue model):
+  #   spr4_mid_mp3: +60,844 pts, 91,536 fills, t=3.49, 12/12 winning days
+  #   spr4_back_mp1 (most conservative): +9,912 pts, t=3.21, 12/12 winning
+  # Cost: 手續費 1.3 + 稅 0.7 = 2.0 pts/side = 4.0 pts RT (TMFD6, 1pt=10 NTD)
+  # Edge: half_spread ~2 pts > adverse_selection 1.6 pts → net +0.4 pts/fill
+  # CRITICAL: spread_threshold=4 is the profitability boundary (spr3 = loss)
+  # Export bug fix 2026-04-10: delta encoding, spread=3 (was 1 due to DEPTH_EVENT accumulation)
+  - id: "R47_MAKER_TMFD6"
     module: "hft_platform.strategies.r47_maker"
     class: "R47MakerStrategy"
-    enabled: true                    # Shadow mode: HFT_ORDER_MODE=sim
+    enabled: true
     product_type: "FUT"
-    symbols: ["TXFD6"]              # Single-instrument: signal + execution both on 大台
+    symbols: ["TMFD6"]              # 微台: 本金門檻低, 1pt=10NTD
     params:
-      pe_danger_threshold: 0.55     # D1: Research-validated PE gate
+      pe_danger_threshold: 0.0     # Disabled for initial deployment (compromise backtest baseline)
       pe_window: 100
-      queue_cancel_threshold: 0.7   # D2: Research-validated queue gate
+      queue_cancel_threshold: 1.0  # Disabled (1.0 = never suppress). 0.7 over-suppresses on thin TMFD6 book.
       queue_ema_alpha: 0.05
-      glt_gamma: 0.0               # D3: Disabled (fixed skew fallback)
-      glt_sigma2_alpha: 0.01
-      spread_threshold_pts: 1      # 1 pt = min tick. TXFD6 spread ~1 pt always.
-      toxicity_max: 700            # Research default
-      max_pos: 3                   # Research-validated. max_pos<3 is net-negative.
+      mfg_skew_z_threshold: 100.0  # Disabled
+      mfg_ema_alpha: 0.01
+      spread_threshold_pts: 4      # CRITICAL: spr>=4 profitable, spr<4 losing. Do NOT lower.
+      toxicity_max: 9999           # Disabled
+      max_pos: 3                   # Backtest-validated: t=3.49, best config
 
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
   # Phase 3: Automated options market-making with delta-neutral hedging.

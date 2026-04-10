@@ -377,12 +377,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._suppress_bid: bool = False
         self._suppress_ask: bool = False
 
-        # C3b-B: Stale quote suppression — skip buy()/sell() when price unchanged
-        # Preserves queue position instead of cancel-and-reinsert at same price
-        self._last_bid_price: int = 0
-        self._last_ask_price: int = 0
-        self._stale_suppressed: int = 0
-
         logger.info(
             "R47MakerStrategy initialized",
             pe_danger=pe_danger_threshold,
@@ -460,10 +454,8 @@ class R47MakerStrategy(SimpleMarketMaker):
             if queue.warmed_up and self._queue_cancel_thresh < 1.0:
                 if queue.p_depl_bid > self._queue_cancel_thresh:
                     self._suppress_bid = True
-                    self._last_bid_price = 0  # reset: order effectively pulled
                 if queue.p_depl_ask > self._queue_cancel_thresh:
                     self._suppress_ask = True
-                    self._last_ask_price = 0  # reset: order effectively pulled
                 if self._suppress_bid or self._suppress_ask:
                     self._queue_suppressed += 1
 
@@ -484,8 +476,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         # ── Spread gate (hard floor) ──────────────────────────────────
         if event.spread_scaled < self._spread_thresh_scaled:
             self._spread_blocked += 1
-            self._last_bid_price = 0  # C3b-B: no quote resting
-            self._last_ask_price = 0
             return  # suppress all quotes this tick
 
         # ── Toxicity gate ─────────────────────────────────────────────
@@ -494,8 +484,6 @@ class R47MakerStrategy(SimpleMarketMaker):
             toxicity = int(features[_IDX_TOXICITY_EMA50_X1000])
             if toxicity > self._toxicity_max:
                 self._toxicity_blocked += 1
-                self._last_bid_price = 0  # C3b-B: no quote resting
-                self._last_ask_price = 0
                 return  # suppress all quotes this tick
 
         # ── D1: PE Regime Gate ────────────────────────────────────────
@@ -505,8 +493,6 @@ class R47MakerStrategy(SimpleMarketMaker):
             if h < self._pe_danger:
                 # Market too structured (trending) — do NOT quote
                 self._pe_blocked += 1
-                self._last_bid_price = 0  # C3b-B: no quote resting
-                self._last_ask_price = 0
                 if self._stats_count % _LOG_INTERVAL == 1:
                     logger.debug("r47_pe_blocked", symbol=symbol, h=round(h, 4))
                 return  # suppress all quotes this tick
@@ -543,26 +529,12 @@ class R47MakerStrategy(SimpleMarketMaker):
         ask_price_scaled = (fair_value_x2 + (base_width + mfg_widen_ask) * 2) // 2
 
         # Execution with D2 quote suppression — use exec_sym for orders
-        # C3b-B: Skip buy()/sell() when price unchanged — preserves queue position
         max_pos = self._max_pos
-        bid_sent = False
-        ask_sent = False
         if pos < max_pos and not self._suppress_bid:
-            if bid_price_scaled != self._last_bid_price:
-                self.buy(exec_sym, bid_price_scaled, 1)
-                self._last_bid_price = bid_price_scaled
-                bid_sent = True
-            else:
-                self._stale_suppressed += 1
+            self.buy(exec_sym, bid_price_scaled, 1)
         if pos > -max_pos and not self._suppress_ask:
-            if ask_price_scaled != self._last_ask_price:
-                self.sell(exec_sym, ask_price_scaled, 1)
-                self._last_ask_price = ask_price_scaled
-                ask_sent = True
-            else:
-                self._stale_suppressed += 1
-        if bid_sent or ask_sent:
-            self._quotes_sent += 1
+            self.sell(exec_sym, ask_price_scaled, 1)
+        self._quotes_sent += 1
 
         if self._stats_count % _LOG_INTERVAL == 1:
             self._log_stats(symbol, pe, mfg, event.spread_scaled, pos)
@@ -597,7 +569,6 @@ class R47MakerStrategy(SimpleMarketMaker):
             mfg_skew=self._mfg_skewed,
             spr_blk=self._spread_blocked,
             tox_blk=self._toxicity_blocked,
-            stale_skip=self._stale_suppressed,
         )
 
     # Note: cancel-by-order-id is not possible because BaseStrategy.buy()/sell()

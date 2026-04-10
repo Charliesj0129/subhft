@@ -34,6 +34,9 @@ strategies:
   R47_MAKER_TXFD6:
     max_position_lots: 5             # Max 5 lots inventory (trades TMFD6 = 10 NTD/pt)
     max_order_qty: 1                 # 1 lot per quote side
+  R47_MAKER_TMFD6:
+    max_position_lots: 5             # Max 5 lots (strategy max_pos=3, headroom for slippage)
+    max_order_qty: 1                 # 1 lot per quote side
 
 intraday_pnl:
   scope: global
