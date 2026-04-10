@@ -40,8 +40,8 @@ class ExecutionNormalizer:
         self.order_id_map = order_id_map if order_id_map is not None else {}
         self.order_id_resolver = OrderIdResolver(self.order_id_map)
         self.strategy_id_resolvers = strategy_id_resolvers or [
-            self._resolve_from_custom_field,
             self._resolve_from_order_id_map,
+            self._resolve_from_custom_field,
         ]
         self._fee_calculator = fee_calculator
 

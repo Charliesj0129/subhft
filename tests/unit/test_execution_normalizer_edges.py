@@ -42,7 +42,7 @@ def test_normalize_order_status_mapping(tmp_path, monkeypatch, status, expected)
     assert event.status == expected
 
 
-def test_normalize_order_seqno_custom_field_precedence(tmp_path, monkeypatch):
+def test_normalize_order_seqno_map_precedence_over_custom_field(tmp_path, monkeypatch):
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
     norm = ExecutionNormalizer(order_id_map={"S1": "strat:1"})
 
@@ -60,7 +60,7 @@ def test_normalize_order_seqno_custom_field_precedence(tmp_path, monkeypatch):
 
     event = norm.normalize_order(raw)
     assert event.order_id == "S1"
-    assert event.strategy_id == "custom"
+    assert event.strategy_id == "strat"
     assert event.price == 123
 
 
