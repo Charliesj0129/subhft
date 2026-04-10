@@ -75,6 +75,9 @@ class TestExtractFileTs:
     def test_valid_filename(self):
         assert extract_file_ts("market_data_1234567890.jsonl") == 1234567890
 
+    def test_batch_writer_filename_uses_middle_timestamp_not_sequence(self):
+        assert extract_file_ts("batch_1775792429113485521_3813.jsonl") == 1775792429113485521
+
     def test_underscore_in_table_name(self):
         assert extract_file_ts("risk_log_9999.jsonl") == 9999
 

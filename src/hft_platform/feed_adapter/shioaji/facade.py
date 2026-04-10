@@ -69,6 +69,10 @@ class ShioajiClientFacade:
         self._client.logged_in = bool(value)
 
     @property
+    def subscribed_count(self) -> int:
+        return int(getattr(self._client, "subscribed_count", 0))
+
+    @property
     def tick_callback(self) -> Any:
         return self._client.tick_callback
 

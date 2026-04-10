@@ -120,11 +120,18 @@ def _get_new_files(self: WALLoaderService) -> list[str]:
 def _extract_file_ts(fname: str) -> int:
     """Extract nanosecond timestamp from WAL filename (EC-2).
 
-    Filename format: {table}_{nanosecond_ts}.jsonl
+    Filename formats:
+    - {table}_{nanosecond_ts}.jsonl
+    - batch_{nanosecond_ts}_{sequence}.jsonl
+
     Returns 0 if parsing fails.
     """
     try:
         base = fname.rsplit(".", 1)[0]  # strip .jsonl
+        if base.startswith("batch_"):
+            parts = base.split("_")
+            if len(parts) >= 3:
+                return int(parts[1])
         ts_str = base.rsplit("_", 1)[-1]
         return int(ts_str)
     except (ValueError, IndexError):

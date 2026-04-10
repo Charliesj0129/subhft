@@ -297,6 +297,7 @@ def test_manifest_load_removes_stuck_entries(tmp_path):
 
 def test_extract_file_ts_handles_invalid_names():
     assert WALLoaderService._extract_file_ts("market_data_123.jsonl") == 123
+    assert WALLoaderService._extract_file_ts("batch_1775792429113485521_3813.jsonl") == 1775792429113485521
     assert WALLoaderService._extract_file_ts("market_data_bad.jsonl") == 0
     assert WALLoaderService._extract_file_ts("market_data.jsonl") == 0
 
