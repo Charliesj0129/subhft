@@ -105,6 +105,7 @@ class HFTSystem:
         self._EXEC_OVERFLOW_MAX: int = 4096
         self._exec_overflow_counter: int = 0
         self._exec_overflow_evicted: int = 0
+        self._exec_startup_overflow_lost: bool = False
         self.risk_queue = self.registry.risk_queue
         self.order_queue = self.registry.order_queue
         self.recorder_queue = self.registry.recorder_queue
@@ -206,6 +207,14 @@ class HFTSystem:
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
+        # Check for fills lost during startup race (before loop was assigned)
+        if self._exec_startup_overflow_lost:
+            logger.critical(
+                "exec_startup_overflow_halt",
+                msg="Fills were LOST during startup race — triggering HALT",
+                evicted_count=self._exec_overflow_evicted,
+            )
+            self.storm_guard.trigger_halt("exec_overflow_startup_race")
         _gc_disabled = False
 
         import signal
@@ -253,6 +262,9 @@ class HFTSystem:
             # Recorder MUST start before exec_router to prevent fill recording gaps
             # during startup (fills can arrive as soon as execution callbacks are wired).
             self._start_service("recorder", self.recorder.run())
+            # Save bus cursor BEFORE MarketDataService starts publishing events.
+            # StrategyRunner will replay from this cursor to avoid missing startup-window events.
+            pre_md_cursor = self.bus.cursor
             self._start_service("md", self.md_service.run())
             self._start_service("exec_router", self.exec_service.run())
             # CE-M2: start GatewayService when enabled; otherwise start RiskEngine standalone
@@ -290,6 +302,8 @@ class HFTSystem:
                 self._start_service("checkpoint_writer", self.checkpoint_writer.run())
 
             self._start_service("recon", self.recon_service.run())
+            # Pass saved pre-MD cursor so StrategyRunner replays events published during startup
+            self.strategy_runner.set_start_cursor(pre_md_cursor)
             self._start_service("strat", self.strategy_runner.run())
             if hasattr(self.strategy_runner, "_rejection_queue") and self.strategy_runner._rejection_queue is not None:
                 self._start_service("rejection_consumer", self.strategy_runner._run_rejection_consumer())
@@ -301,8 +315,11 @@ class HFTSystem:
                 self._audit_writer = get_audit_writer()
                 await self._audit_writer.start()
                 logger.info("AuditWriter started")
+                # Inject audit writer into OrderAdapter for order lifecycle logging
+                if hasattr(self.order_adapter, "set_audit_writer"):
+                    self.order_adapter.set_audit_writer(self._audit_writer)
             except Exception as exc:
-                logger.warning("AuditWriter start failed", error=str(exc))
+                logger.error("AuditWriter start failed — audit trail unavailable", error=str(exc))
                 self._audit_writer = None
             if self._md_record_direct and self._fill_record_direct and self._order_record_direct:
                 logger.info(
@@ -526,7 +543,9 @@ class HFTSystem:
                         unrealized = self._mtm_calculator.total_unrealized_pnl()
                         base_capital = self.settings.get("base_capital", 10_000_000)
                         if base_capital > 0 and unrealized < 0:
-                            drawdown_pct = drawdown_pct + unrealized / base_capital
+                            # unrealized is negative for losses; subtract to INCREASE
+                            # drawdown_pct (positive = more drawdown).
+                            drawdown_pct = drawdown_pct - unrealized / base_capital
                         # Feed unrealized PnL into DailyLossLimitValidator so it can
                         # gate new orders on floating losses, not just realized losses.
                         self.risk_engine.update_unrealized_pnl(int(unrealized))
@@ -872,6 +891,20 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("ExecutionRouter drain failed", error=str(exc))
 
+        # Persist fill dedup window for restart-safe exactly-once fills
+        try:
+            self.exec_service.persist_fill_dedup()
+        except Exception as exc:
+            logger.warning("fill_dedup_persist_failed_shutdown", error=str(exc))
+
+        # Persist orphaned fill DLQ so orphaned fills survive restart
+        try:
+            from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
+
+            get_orphaned_fill_dlq().persist()
+        except Exception as exc:
+            logger.warning("fill_dlq_persist_failed_shutdown", error=str(exc))
+
         # H1: Drain in-flight orders and checkpoint positions before shutdown
         try:
             await asyncio.wait_for(self.order_adapter.drain_and_cancel(), timeout=10.0)
@@ -879,6 +912,12 @@ class HFTSystem:
             logger.warning("Order drain timeout during shutdown")
         except Exception as exc:
             logger.warning("Order drain failed during shutdown", error=str(exc))
+
+        # Persist order_id_map for restart-safe strategy resolution
+        try:
+            self.order_adapter.persist_order_id_map()
+        except Exception as exc:
+            logger.warning("order_id_map_persist_failed_shutdown", error=str(exc))
 
         if self.checkpoint_writer is not None:
             try:
@@ -1061,22 +1100,42 @@ class HFTSystem:
         # This callback runs in Shioaji thread.
         # We must schedule work on the main loop.
         loop = getattr(self, "loop", None)
-        if not self.running:
-            return
         from hft_platform.execution.normalizer import RawExecEvent
 
         event = RawExecEvent(topic, data, timebase.now_ns())
+        if not self.running:
+            # Buffer for later drain instead of dropping — broker can send callbacks
+            # before run() sets self.running = True.
+            if len(self._exec_overflow_buf) < self._EXEC_OVERFLOW_MAX:
+                self._exec_overflow_buf.append(event)
+            else:
+                self._exec_overflow_evicted += 1
+                logger.critical(
+                    "exec_overflow_buf_full_pre_start",
+                    evicted_count=self._exec_overflow_evicted,
+                    event_topic=topic,
+                )
+                self._exec_startup_overflow_lost = True
+            return
         if loop is not None:
             loop.call_soon_threadsafe(self._safe_enqueue_exec, event)
         else:
             # I-H4: loop not yet assigned (startup race) — buffer so events aren't dropped
             if len(self._exec_overflow_buf) >= self._EXEC_OVERFLOW_MAX:
                 self._exec_overflow_evicted += 1
+                try:
+                    from hft_platform.observability.metrics import MetricsRegistry
+
+                    MetricsRegistry.get().exec_overflow_evicted_total.inc()
+                except Exception:
+                    pass  # metrics may not be ready during early startup
                 logger.critical(
                     "exec_overflow_buf FULL in broker thread — fill LOST",
                     evicted_count=self._exec_overflow_evicted,
                     event_topic=getattr(event, "topic", "?"),
                 )
+                # Flag for deferred halt — checked when loop becomes available
+                self._exec_startup_overflow_lost = True
                 return
             self._exec_overflow_buf.append(event)
 

@@ -462,13 +462,21 @@ class TestReduceOnlyReasons:
             reasons = inp.reduce_only_reasons()
         assert "wal_backlog_unhealthy" not in reasons
 
-    @pytest.mark.parametrize("state", ["DEGRADED", "CRITICAL", "DATA_LOSS"])
+    @pytest.mark.parametrize("state", ["DEGRADED", "CRITICAL"])
     def test_clickhouse_unhealthy_triggers_reason(self, state: str) -> None:
         inp = _make_inputs(recorder_state=state)
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = self._now()
             reasons = inp.reduce_only_reasons()
         assert "clickhouse_unhealthy" in reasons
+
+    def test_data_loss_triggers_recorder_data_loss_reason(self) -> None:
+        inp = _make_inputs(recorder_state="DATA_LOSS")
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = self._now()
+            reasons = inp.reduce_only_reasons()
+        assert "recorder_data_loss" in reasons
+        assert "clickhouse_unhealthy" not in reasons
 
     def test_clickhouse_healthy_does_not_trigger(self) -> None:
         inp = _make_inputs(recorder_state="OK")

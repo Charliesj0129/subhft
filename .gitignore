@@ -60,6 +60,15 @@ deployment/.env.*
 .state/
 claude.json
 
+# Runtime & build artifacts (local only)
+.runtime/
+.import_linter_cache/
+.dlq/
+.reports/
+.uv-cache/
+openblas_install/
+openblas_local/
+
 # Project Specific
 reports/
 !src/hft_platform/reports/

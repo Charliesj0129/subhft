@@ -117,7 +117,9 @@ class PlatformDegradeInputs:
                 reasons.append("wal_backlog_unhealthy")
 
         recorder_state = self._recorder_state()
-        if recorder_state in {"DEGRADED", "CRITICAL", "DATA_LOSS"}:
+        if recorder_state == "DATA_LOSS":
+            reasons.append("recorder_data_loss")
+        elif recorder_state in {"DEGRADED", "CRITICAL"}:
             reasons.append("clickhouse_unhealthy")
 
         # Preserve first-cause ordering while preventing duplicates.

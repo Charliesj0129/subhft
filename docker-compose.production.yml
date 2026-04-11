@@ -1,8 +1,16 @@
-# docker-compose.production.yml — Production hardening overlay
+# docker-compose.production.yml — Production SECURITY hardening overlay
 # Usage: docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
 #
-# Applies: no-new-privileges, read_only where safe, 127.0.0.1 port binding,
-# internal bridge network, tmpfs for ephemeral dirs.
+# Purpose: Security-focused hardening (no resource changes)
+# - no-new-privileges for all services
+# - read_only filesystem where safe
+# - 127.0.0.1 port binding (block external access)
+# - Internal bridge network isolation
+# - tmpfs for ephemeral dirs
+#
+# NOTE: For RESOURCE tuning (CPU/memory limits, env config),
+#       see docker-compose.prod.yml instead.
+# Full production: docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.production.yml up -d
 
 networks:
   hft-internal:

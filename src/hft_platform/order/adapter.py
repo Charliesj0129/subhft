@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -107,6 +108,7 @@ class OrderAdapter:
         "_dedup_store",
         "_phantom_order_keys",
         "_phantom_order_max",
+        "_audit_writer",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -137,6 +139,10 @@ class OrderAdapter:
         self._mid_price_fn: Callable[[str], int] | None = mid_price_fn
         self._storm_guard: Any = None  # Set post-init to close TOCTOU gap (M1)
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
+        self._order_id_map_persist_path: str = os.getenv(
+            "HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl"
+        )
+        self._load_order_id_map()
         self._cmd_map_max_size = int(os.getenv("HFT_CMD_MAP_MAX_SIZE", "10000"))
         self.running = False
         self.metrics = MetricsRegistry.get()
@@ -188,6 +194,9 @@ class OrderAdapter:
         self._phantom_order_keys: dict[str, float] = {}  # key -> monotonic timestamp
         self._phantom_order_max: int = 1000
 
+        # Audit writer for order lifecycle logging (optional, injected post-init)
+        self._audit_writer: Any = None
+
         self.load_config()
 
     @property
@@ -198,6 +207,18 @@ class OrderAdapter:
     def metadata(self, value: SymbolMetadata) -> None:
         self._metadata = value
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
+
+    def set_audit_writer(self, writer: Any) -> None:
+        """Inject audit writer for order lifecycle logging."""
+        self._audit_writer = writer
+
+    def _audit_log_order(self, order_data: dict) -> None:
+        """Non-blocking audit log for order lifecycle events. Skips silently if no writer."""
+        if self._audit_writer is not None:
+            try:
+                self._audit_writer.log_order(order_data)
+            except Exception:  # noqa: BLE001
+                pass  # audit must never block or crash order dispatch
 
     async def invalidate_live_orders(self, reason: str = "reconnect") -> int:
         """Mark all live orders as stale after broker session reset.
@@ -359,6 +380,64 @@ class OrderAdapter:
         """Sliding window check."""
         return self.rate_limiter.check()
 
+    def _load_order_id_map(self) -> None:
+        """Load order_id_map from disk on startup (restart-safe strategy resolution)."""
+        path = self._order_id_map_persist_path
+        if not os.path.exists(path):
+            return
+        try:
+            import orjson
+
+            loaded = 0
+            with open(path, "rb") as f:
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        obj = orjson.loads(raw)
+                        if isinstance(obj, dict) and "k" in obj and "v" in obj:
+                            self.order_id_map[str(obj["k"])] = str(obj["v"])
+                            loaded += 1
+                    except Exception:
+                        continue
+            # Enforce max size
+            while len(self.order_id_map) > self._order_id_map_max_size:
+                first_key = next(iter(self.order_id_map))
+                del self.order_id_map[first_key]
+            logger.info("order_id_map_loaded", count=loaded, path=path)
+        except Exception as exc:
+            logger.warning("order_id_map_load_failed", error=str(exc), path=path)
+
+    def persist_order_id_map(self) -> None:
+        """Persist order_id_map to disk atomically (temp+fsync+rename).
+
+        Called during graceful shutdown. Safe to call from thread pool.
+        """
+        path = self._order_id_map_persist_path
+        # Snapshot under CPython GIL atomicity
+        snapshot = list(self.order_id_map.items())
+        try:
+            import orjson
+
+            persist_dir = os.path.dirname(path) or "."
+            os.makedirs(persist_dir, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    for k, v in snapshot:
+                        f.write(orjson.dumps({"k": k, "v": v}) + b"\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.rename(tmp_path, path)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
+            logger.info("order_id_map_persisted", count=len(snapshot), path=path)
+        except Exception as exc:
+            logger.warning("order_id_map_persist_failed", error=str(exc), path=path)
+
     async def drain_and_cancel(self, timeout_s: float = 5.0) -> int:  # precision-ok
         """Drain pending orders and cancel all live orders."""
         cancelled = 0
@@ -405,6 +484,14 @@ class OrderAdapter:
             # Check if any order for this strategy is in-flight
             has_pending = any(k.startswith(f"{strategy_id}:") for k in self._pending_order_keys)
             if has_pending:
+                if len(self._deferred_terminals) == self._deferred_terminals.maxlen:
+                    self.metrics.deferred_terminal_overflow_total.inc()
+                    logger.error(
+                        "deferred_terminal_overflow",
+                        strategy_id=strategy_id,
+                        broker_order_id=order_id,
+                        msg="Oldest deferred terminal silently evicted — stale live_orders risk",
+                    )
                 self._deferred_terminals.append((strategy_id, order_id, time.monotonic()))
                 self.metrics.terminal_before_registration_total.inc()
                 logger.warning(
@@ -623,6 +710,11 @@ class OrderAdapter:
         """Commit dedup result if store is active and key is non-empty."""
         if self._dedup_store is not None and key:
             self._dedup_store.commit(key, approved, reason_code, cmd_id)
+
+    def _dedup_release(self, key: str) -> None:
+        """Release a dedup slot so the same key can be resubmitted on dispatch failure."""
+        if self._dedup_store is not None and key:
+            self._dedup_store.release(key)
 
     def _is_strategy_halt_exempt(self, strategy_id: str) -> bool:
         """Check if a strategy is halt-exempt via StormGuard."""
@@ -1025,6 +1117,17 @@ class OrderAdapter:
                 self.circuit_breaker.record_success()
                 self._update_cb_metric()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
+                self._audit_log_order({
+                    "event": "dispatched",
+                    "intent_type": "NEW",
+                    "order_key": order_key,
+                    "symbol": intent.symbol,
+                    "side": str(intent.side),
+                    "price": intent.price,
+                    "qty": intent.qty,
+                    "strategy_id": intent.strategy_id,
+                    "cmd_id": int(cmd.cmd_id),
+                })
 
             elif intent.intent_type == IntentType.FORCE_FLAT:
                 if self._broker_codec is None:
@@ -1126,6 +1229,16 @@ class OrderAdapter:
                 self.circuit_breaker.record_success()
                 self._update_cb_metric()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
+                self._audit_log_order({
+                    "event": "dispatched",
+                    "intent_type": "FORCE_FLAT",
+                    "order_key": order_key,
+                    "symbol": intent.symbol,
+                    "side": str(close_side),
+                    "qty": close_qty,
+                    "strategy_id": intent.strategy_id,
+                    "cmd_id": int(cmd.cmd_id),
+                })
 
             elif intent.intent_type == IntentType.CANCEL:
                 async with self._live_orders_lock:
@@ -1146,6 +1259,15 @@ class OrderAdapter:
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
                     self.per_symbol_rate_limiter.record(intent.symbol)
+                    self._audit_log_order({
+                        "event": "dispatched",
+                        "intent_type": "CANCEL",
+                        "order_key": f"{intent.strategy_id}:{intent.intent_id}",
+                        "target_key": target_key,
+                        "symbol": intent.symbol,
+                        "strategy_id": intent.strategy_id,
+                        "cmd_id": int(cmd.cmd_id),
+                    })
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Cancel target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
@@ -1189,6 +1311,16 @@ class OrderAdapter:
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
                     self.per_symbol_rate_limiter.record(intent.symbol)
+                    self._audit_log_order({
+                        "event": "dispatched",
+                        "intent_type": "AMEND",
+                        "order_key": f"{intent.strategy_id}:{intent.intent_id}",
+                        "target_key": target_key,
+                        "symbol": intent.symbol,
+                        "new_price": intent.price,
+                        "strategy_id": intent.strategy_id,
+                        "cmd_id": int(cmd.cmd_id),
+                    })
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Amend target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
@@ -1211,6 +1343,15 @@ class OrderAdapter:
             self._update_cb_metric()
             self.strategy_cb_mgr.record_failure(intent.strategy_id)
             self._emit_trace("order_dispatch_error", intent, {"cmd_id": int(cmd.cmd_id), "error": str(e)})
+            self._audit_log_order({
+                "event": "dispatch_failed",
+                "intent_type": str(intent.intent_type),
+                "order_key": order_key,
+                "symbol": intent.symbol,
+                "strategy_id": intent.strategy_id,
+                "cmd_id": int(cmd.cmd_id),
+                "error": str(e),
+            })
             # Clean up sentinel to prevent permanent slot occupation (D2 rollback)
             async with self._live_orders_lock:
                 if order_key in self.live_orders and self.live_orders.get(order_key) is _PENDING_SENTINEL:
@@ -1327,6 +1468,9 @@ class OrderAdapter:
 
                 pending = list(self._api_pending.values())
                 self._api_pending.clear()
+                # Prioritize urgent intents (CANCEL, FORCE_FLAT) ahead of NEWs
+                # to ensure risk-reducing orders execute before risk-increasing ones.
+                pending.sort(key=lambda c: 0 if c.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT) else 1)
                 for item in pending:
                     _exempt = item.intent.intent_type in (
                         IntentType.CANCEL,
@@ -1362,10 +1506,14 @@ class OrderAdapter:
                             symbol=item.intent.symbol,
                             strategy_id=item.intent.strategy_id,
                         )
+                        self._dedup_release(item.intent.idempotency_key)
                         self.metrics.order_reject_total.inc()
                         continue
                     try:
                         await self._dispatch_to_api(item)
+                        self._dedup_commit(
+                            item.intent.idempotency_key, True, "dispatched", item.cmd_id
+                        )
                     except Exception:
                         logger.error(
                             "_api_worker: dispatch failed for single order",
@@ -1373,6 +1521,8 @@ class OrderAdapter:
                             symbol=item.intent.symbol,
                             exc_info=True,
                         )
+                        # Release dedup slot so strategy can retry with same key
+                        self._dedup_release(item.intent.idempotency_key)
                         self.metrics.order_reject_total.inc()
                         self.circuit_breaker.record_failure()
                         self._update_cb_metric()

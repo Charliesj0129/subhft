@@ -247,6 +247,9 @@ class MetricsRegistry:
                 _pn("risk_dlq_expired_total"),
                 _pn("risk_dlq_revalidation_rejected_total"),
                 _pn("risk_dlq_overflow_total"),
+                _pn("fill_dlq_overflow_total"),
+                _pn("deferred_terminal_overflow_total"),
+                _pn("audit_dropped_total"),
                 _pn("intent_queue_full_total"),
                 _pn("risk_engine_error_total"),
                 # rejection_sink overflow
@@ -1134,6 +1137,19 @@ class MetricsRegistry:
         self.risk_dlq_overflow_total = Counter(
             _pn("risk_dlq_overflow_total"),
             "Risk DLQ overflow evictions (oldest entry dropped)",
+        )
+        self.fill_dlq_overflow_total = Counter(
+            _pn("fill_dlq_overflow_total"),
+            "Orphaned fill DLQ overflow evictions (oldest fill silently dropped)",
+        )
+        self.deferred_terminal_overflow_total = Counter(
+            _pn("deferred_terminal_overflow_total"),
+            "Deferred terminal deque overflow (oldest terminal silently dropped)",
+        )
+        self.audit_dropped_total = Counter(
+            _pn("audit_dropped_total"),
+            "Audit events dropped due to queue full",
+            ["table"],
         )
         self.intent_queue_full_total = Counter(
             _pn("intent_queue_full_total"),

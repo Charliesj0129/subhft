@@ -135,6 +135,12 @@ class AuditWriter:
             self._queues[table].put_nowait(data)
         except asyncio.QueueFull:
             self._dropped[table] = self._dropped.get(table, 0) + 1
+            try:
+                from hft_platform.observability.metrics import MetricsRegistry
+
+                MetricsRegistry.get().audit_dropped_total.labels(table=table).inc()
+            except Exception:
+                pass  # metrics unavailable during early startup
             if self._dropped[table] % 1000 == 1:
                 logger.warning(
                     "Audit queue full, dropping event",

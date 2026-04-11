@@ -287,6 +287,21 @@ class AutonomyMonitor:
         except Exception:
             reasons = []
 
+        # DATA_LOSS (CH + WAL both failed) → HALT, not just reduce-only
+        if "recorder_data_loss" in reasons:
+            if not self._is_on_cooldown("recorder_data_loss", now_ns):
+                self._storm_guard.trigger_halt("recorder_data_loss")
+                decisions.append(
+                    MonitorDecision(
+                        rule_name="recorder_data_loss",
+                        action="trigger_halt",
+                        reason="recorder_data_loss",
+                        scope="platform",
+                        rearm="manual",
+                    )
+                )
+                return decisions
+
         _INFRA_REASON_MAP: dict[str, str] = {
             "rss_unhealthy": "rss_unhealthy",
             "wal_backlog_unhealthy": "persistence_failure",

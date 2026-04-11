@@ -2,6 +2,7 @@ import asyncio
 import collections
 import inspect
 import os
+import tempfile
 from collections.abc import Coroutine
 from typing import Any, Callable, Dict, Optional, Union
 
@@ -96,6 +97,10 @@ class ExecutionRouter:
         # Fill deduplication: prevent double-counting on broker reconnect (bounded FIFO dict)
         self._fill_dedup_max_size: int = int(os.environ.get("HFT_FILL_DEDUP_MAX_SIZE", "10000"))
         self._seen_fill_ids: collections.OrderedDict[str, None] = collections.OrderedDict()
+        self._fill_dedup_persist_path: str = os.environ.get(
+            "HFT_FILL_DEDUP_PERSIST_PATH", ".state/fill_dedup_window.jsonl"
+        )
+        self._load_fill_dedup()
         self._events_since_dlq_retry = 0
         self._recorder_queue: Optional[asyncio.Queue] = recorder_queue
         self._symbol_metadata = symbol_metadata
@@ -103,6 +108,63 @@ class ExecutionRouter:
             PriceCodec(price_scale_provider) if price_scale_provider is not None else None
         )
         self._wal_writer: Optional[WALWriter] = wal_writer
+
+    def _load_fill_dedup(self) -> None:
+        """Load fill dedup window from disk on startup (restart-safe dedup)."""
+        path = self._fill_dedup_persist_path
+        if not os.path.exists(path):
+            return
+        try:
+            import orjson
+
+            loaded = 0
+            with open(path, "rb") as f:
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        key = orjson.loads(raw)
+                        if isinstance(key, str) and key:
+                            self._seen_fill_ids[key] = None
+                            loaded += 1
+                    except Exception:
+                        continue
+            # Enforce max size
+            while len(self._seen_fill_ids) > self._fill_dedup_max_size:
+                self._seen_fill_ids.popitem(last=False)
+            logger.info("fill_dedup_loaded", count=loaded, path=path)
+        except Exception as exc:
+            logger.warning("fill_dedup_load_failed", error=str(exc), path=path)
+
+    def persist_fill_dedup(self) -> None:
+        """Persist fill dedup window to disk atomically (temp+fsync+rename).
+
+        Called during graceful shutdown. Safe to call from thread pool.
+        """
+        path = self._fill_dedup_persist_path
+        # Snapshot under CPython GIL atomicity
+        keys_snapshot = list(self._seen_fill_ids.keys())
+        try:
+            import orjson
+
+            persist_dir = os.path.dirname(path) or "."
+            os.makedirs(persist_dir, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    for key in keys_snapshot:
+                        f.write(orjson.dumps(key) + b"\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.rename(tmp_path, path)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
+            logger.info("fill_dedup_persisted", count=len(keys_snapshot), path=path)
+        except Exception as exc:
+            logger.warning("fill_dedup_persist_failed", error=str(exc), path=path)
 
     async def run(self) -> None:
         self.running = True

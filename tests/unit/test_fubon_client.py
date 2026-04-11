@@ -245,14 +245,14 @@ class TestFubonSessionRuntime:
 # ------------------------------------------------------------------ #
 
 
-class TestLegacyStubImports:
-    """Ensure the old stub modules (account.py, quote.py) are still importable."""
+class TestCanonicalImports:
+    """Verify canonical account_gateway / quote_runtime modules are importable."""
 
-    def test_stub_account_gateway_importable(self) -> None:
+    def test_account_gateway_importable(self) -> None:
         gw = StubAccountGateway(sdk=None)
         assert gw._sdk is None
 
-    def test_stub_quote_runtime_importable(self) -> None:
+    def test_quote_runtime_importable(self) -> None:
         rt = StubQuoteRuntime(sdk=None)
         assert rt._sdk is None
 
