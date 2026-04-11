@@ -87,6 +87,7 @@ class RiskFeedback:
     symbol: str
     reason_code: str
     timestamp_ns: int
+    side: Side | None = None
 
 
 @dataclass(slots=True)

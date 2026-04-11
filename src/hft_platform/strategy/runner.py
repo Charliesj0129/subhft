@@ -106,8 +106,12 @@ def _typed_intent_side(intent: Any) -> int | None:
         return None
 
 
-def _get_symbol_net_qty(position_store: Any, symbol: str) -> int:
-    """Return aggregate net_qty for *symbol* across all accounts/strategies.
+def _get_symbol_net_qty(position_store: Any, symbol: str, strategy_id: str | None = None) -> int:
+    """Return net_qty for *symbol*, optionally filtered to *strategy_id*.
+
+    When *strategy_id* is provided, only that strategy's exposure is counted.
+    This prevents CLOSE_ONLY from allowing a flat strategy to open positions
+    based on another strategy's offsetting exposure.
 
     O(n) over the position map, but only called during CLOSE_ONLY phase
     (not on every tick). Returns 0 if position_store is None or empty.
@@ -120,8 +124,11 @@ def _get_symbol_net_qty(position_store: Any, symbol: str) -> int:
     _total = 0
     for _key, _pos in positions.items():
         # Key format: "account:strategy:symbol"
-        if _key.endswith(f":{symbol}"):
-            _total += _pos.net_qty
+        if not _key.endswith(f":{symbol}"):
+            continue
+        if strategy_id is not None and f":{strategy_id}:" not in _key:
+            continue
+        _total += _pos.net_qty
     return _total
 
 
@@ -135,6 +142,7 @@ class StrategyRunner:
         "registry",
         "strategies",
         "_strat_executors",
+        "_start_cursor",
         "_risk_submit",
         "_risk_submit_typed",
         "_typed_intent_fastpath",
@@ -232,6 +240,7 @@ class StrategyRunner:
         self._feature_tuple_source = getattr(fe, "get_feature_tuple", None) if fe else None
         self._feature_staleness_source = getattr(fe, "last_update_ns", None) if fe else None
         self._consumer_seq: int = -1  # tracks last-processed bus sequence for drain
+        self._start_cursor: int | None = None  # set externally to replay events published before runner started
         self.metrics = MetricsRegistry.get()
         self._staleness_counter = getattr(self.metrics, "feature_staleness_detected_total", None)
         self.latency = LatencyRecorder.get()
@@ -349,20 +358,31 @@ class StrategyRunner:
 
         self.running = False
 
+    def set_start_cursor(self, cursor: int) -> None:
+        """Set the bus cursor to replay from, capturing events published before runner started."""
+        self._start_cursor = cursor
+
     async def run(self):
         self.running = True
-        logger.info("StrategyRunner started")
+        start_cursor = self._start_cursor
+        # Seed _consumer_seq from start_cursor so increment-based tracking
+        # correctly reflects the actual bus position (not the global write cursor).
+        if start_cursor is not None:
+            self._consumer_seq = start_cursor
+        else:
+            self._consumer_seq = self.bus.cursor
+        logger.info("StrategyRunner started", start_cursor=start_cursor, consumer_seq=self._consumer_seq)
         try:
             batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
             if batch_size > 1:
-                async for batch in self.bus.consume_batch(batch_size, consumer_name="strategy_runner"):
+                async for batch in self.bus.consume_batch(batch_size, start_cursor=start_cursor, consumer_name="strategy_runner"):
                     for event in batch:
                         await self.process_event(event)
-                    self._consumer_seq = self.bus.cursor
+                        self._consumer_seq += 1
             else:
-                async for event in self.bus.consume(consumer_name="strategy_runner"):
+                async for event in self.bus.consume(start_cursor=start_cursor, consumer_name="strategy_runner"):
                     await self.process_event(event)
-                    self._consumer_seq = self.bus.cursor
+                    self._consumer_seq += 1
         except asyncio.CancelledError:
             pass
         finally:
@@ -959,6 +979,7 @@ class StrategyRunner:
                     intents,
                     self.track_gate,
                     self.position_store,
+                    strategy_id=strategy.strategy_id,
                 )
 
             duration = time.perf_counter_ns() - start
@@ -1175,7 +1196,7 @@ class StrategyRunner:
             self._queue_full_consecutive = 0
 
     @staticmethod
-    def filter_intents_by_phase(intents: list, track_gate: Any, position_store: Any = None) -> list:
+    def filter_intents_by_phase(intents: list, track_gate: Any, position_store: Any = None, strategy_id: str | None = None) -> list:
         """Filter intents based on session phase from TrackGate.
 
         During CLOSE_ONLY: allow CANCEL, FORCE_FLAT, and position-reducing IOC orders.
@@ -1204,7 +1225,7 @@ class StrategyRunner:
                 elif _intent_type == int(IntentType.NEW) and _typed_intent_tif(_intent) == int(TIF.IOC):
                     # Position-aware check: only allow IOC if it reduces exposure
                     _side = _typed_intent_side(_intent)
-                    _net_qty = _get_symbol_net_qty(position_store, _intent_symbol)
+                    _net_qty = _get_symbol_net_qty(position_store, _intent_symbol, strategy_id)
                     if (_side == _BUY and _net_qty < 0) or (_side == _SELL and _net_qty > 0):
                         _filtered.append(_intent)
                     else:

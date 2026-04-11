@@ -23,13 +23,15 @@ from collections import deque
 from structlog import get_logger
 
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
-from hft_platform.contracts.strategy import Side
+from hft_platform.contracts.strategy import RiskFeedback, Side
 from hft_platform.events import (
     FeatureUpdateEvent,
+    GapEvent,
     LOBStatsEvent,
     TickEvent,
 )
 from hft_platform.strategies.simple_mm import SimpleMarketMaker
+from hft_platform.strategy.base import QUALITY_FLAGS_CORRUPT
 
 logger = get_logger("strategy.r47_maker")
 
@@ -467,6 +469,14 @@ class R47MakerStrategy(SimpleMarketMaker):
         """Cache features + update D1 PE and D2 Queue states."""
         if event.values is None:
             return
+        # Skip corrupted features (GAP, STATE_RESET, OUT_OF_ORDER)
+        if event.quality_flags & QUALITY_FLAGS_CORRUPT:
+            logger.debug(
+                "r47_features_skipped_corrupt",
+                symbol=event.symbol,
+                quality_flags=event.quality_flags,
+            )
+            return
         symbol = event.symbol
         self._feature_cache[symbol] = event.values
 
@@ -553,6 +563,53 @@ class R47MakerStrategy(SimpleMarketMaker):
             status=event.status.name,
             side=event.side.name,
             remaining=remaining,
+        )
+
+    def on_risk_feedback(self, feedback: RiskFeedback) -> None:
+        """Release pending slot on pre-broker risk rejection.
+
+        Without this, a risk-rejected order leaves _pending_buy or _pending_sell
+        elevated, potentially freezing one side of quoting permanently.
+        Uses feedback.side when available for precise decrement; falls back to
+        decrementing both sides (safe: R47 sends qty=1 per side).
+        """
+        sym = feedback.symbol
+        side = getattr(feedback, "side", None)
+        if side == Side.BUY:
+            self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - 1)
+            self._last_bid.pop(sym, None)
+        elif side == Side.SELL:
+            self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - 1)
+            self._last_ask.pop(sym, None)
+        else:
+            # Fallback: no side info — decrement both (conservative)
+            self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - 1)
+            self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - 1)
+            self._last_bid.pop(sym, None)
+            self._last_ask.pop(sym, None)
+        logger.debug(
+            "r47_risk_rejection_pending_released",
+            symbol=sym,
+            reason=feedback.reason_code,
+            side=side.name if side else "both",
+        )
+
+    def on_gap(self, event: GapEvent) -> None:
+        """Reset stale streaming state after bus overflow."""
+        self._feature_cache.clear()
+        self._pe_states.clear()
+        self._queue_states.clear()
+        self._mfg_states.clear()
+        self._suppress_bid = False
+        self._suppress_ask = False
+        self._qi_widen_bid = 0
+        self._qi_widen_ask = 0
+        self._last_bid.clear()
+        self._last_ask.clear()
+        logger.warning(
+            "r47_gap_event_state_reset",
+            missed=event.missed_count,
+            strategy=self.strategy_id,
         )
 
     def seed_local_pos(self, positions: dict[str, int]) -> None:

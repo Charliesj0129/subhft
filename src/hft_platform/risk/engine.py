@@ -428,6 +428,7 @@ class RiskEngine:
                                         symbol=intent.symbol,
                                         reason_code="TTL_EXPIRED",
                                         timestamp_ns=timebase.now_ns(),
+                                        side=getattr(intent, "side", None),
                                     )
                                 )
                             except asyncio.QueueFull:
@@ -475,6 +476,7 @@ class RiskEngine:
                                         symbol=getattr(intent, "symbol", ""),
                                         reason_code="HALT_BLOCKED_POST_APPROVE",
                                         timestamp_ns=timebase.now_ns(),
+                                        side=getattr(intent, "side", None),
                                     )
                                 )
                             except asyncio.QueueFull:
@@ -493,7 +495,8 @@ class RiskEngine:
                             self.metrics.order_queue_full_total.inc()
                             self._order_dlq.append((cmd, time.monotonic_ns()))
                             if len(self._order_dlq) > self._ORDER_DLQ_MAX:
-                                self._order_dlq.popleft()
+                                evicted_cmd, _ = self._order_dlq.popleft()
+                                self._send_dlq_rejection(evicted_cmd, "dlq_overflow_evicted")
                                 self.metrics.risk_dlq_overflow_total.inc()
                             self._oq_full_consecutive += 1
                             if self._oq_full_consecutive >= self._oq_full_halt_threshold:
@@ -513,6 +516,7 @@ class RiskEngine:
                                     symbol=getattr(intent, "symbol", ""),
                                     reason_code=decision.reason_code,
                                     timestamp_ns=timebase.now_ns(),
+                                    side=getattr(intent, "side", None),
                                 )
                             )
                         except asyncio.QueueFull:
@@ -546,6 +550,7 @@ class RiskEngine:
                                 symbol=getattr(intent, "symbol", ""),
                                 reason_code="risk_engine_error",
                                 timestamp_ns=timebase.now_ns(),
+                                side=getattr(intent, "side", None),
                             )
                         )
                     except asyncio.QueueFull:
@@ -582,6 +587,24 @@ class RiskEngine:
                 return False
         return True
 
+    def _send_dlq_rejection(self, cmd: OrderCommand, reason: str) -> None:
+        """Send RiskFeedback for a DLQ entry that will not be retried."""
+        if self._rejection_sink is None:
+            return
+        intent = cmd.intent
+        try:
+            self._rejection_sink.put_nowait(
+                RiskFeedback(
+                    intent_id=getattr(intent, "intent_id", 0),
+                    strategy_id=getattr(intent, "strategy_id", ""),
+                    symbol=getattr(intent, "symbol", ""),
+                    reason_code=reason,
+                    timestamp_ns=timebase.now_ns(),
+                )
+            )
+        except asyncio.QueueFull:
+            self.metrics.rejection_sink_overflow_total.inc()
+
     def _drain_order_dlq(self) -> None:
         """Drain stale-filtered DLQ entries back into order_queue."""
         if not self._order_dlq:
@@ -590,9 +613,11 @@ class RiskEngine:
         # under pre-escalation conditions and must not be replayed to the broker.
         if self.storm_guard.state >= StormGuardState.STORM:
             cleared = len(self._order_dlq)
+            sg_label = "halt" if self.storm_guard.state == StormGuardState.HALT else "storm"
+            for cmd, _ in self._order_dlq:
+                self._send_dlq_rejection(cmd, f"dlq_{sg_label}_cleared")
             self._order_dlq.clear()
             if cleared > 0:
-                sg_label = "halt" if self.storm_guard.state == StormGuardState.HALT else "storm"
                 logger.warning("risk_dlq_cleared_during_escalation", cleared=cleared, sg_state=sg_label)
                 self.metrics.risk_dlq_expired_total.inc(cleared)
             return
@@ -605,6 +630,8 @@ class RiskEngine:
             # Re-check escalated state during drain (TOCTOU defense-in-depth)
             if self.storm_guard.state >= StormGuardState.STORM:
                 cleared = len(self._order_dlq)
+                for c, _ in self._order_dlq:
+                    self._send_dlq_rejection(c, "dlq_storm_cleared")
                 self._order_dlq.clear()
                 logger.warning("risk_dlq_cleared_during_escalation_mid_drain", cleared=cleared)
                 self.metrics.risk_dlq_expired_total.inc(cleared)
@@ -612,16 +639,19 @@ class RiskEngine:
             # Expire stale entries (DLQ TTL)
             if now_ns - enqueued_ns > ttl_ns:
                 self._order_dlq.popleft()
+                self._send_dlq_rejection(cmd, "dlq_ttl_expired")
                 expired += 1
                 continue
             # Expire commands whose execution deadline has passed
             if cmd.deadline_ns > 0 and now_ns > cmd.deadline_ns:
                 self._order_dlq.popleft()
+                self._send_dlq_rejection(cmd, "dlq_deadline_expired")
                 expired += 1
                 continue
             # Re-validate position limit before replaying
             if not self._revalidate_for_dlq(cmd):
                 self._order_dlq.popleft()
+                self._send_dlq_rejection(cmd, "dlq_revalidation_failed")
                 expired += 1
                 continue
             # Try to push back to order_queue
@@ -894,11 +924,16 @@ class RiskEngine:
                 return
 
     def update_unrealized_pnl(self, unrealized_scaled: int) -> None:
-        """Forward unrealized PnL to the DailyLossLimitValidator."""
+        """Forward unrealized PnL to the DailyLossLimitValidator.
+
+        Also re-evaluates daily loss HALT so that the supervisor loop
+        can trigger HALT even when no new intents are arriving.
+        """
         for v in self.validators:
             if isinstance(v, DailyLossLimitValidator):
                 v.update_unrealized(unrealized_scaled)
-                return
+                break
+        self._check_daily_loss_halt()
 
     def _check_daily_loss_halt(self) -> None:
         """Check if DailyLossLimitValidator has triggered a HALT; if so, escalate StormGuard.
