@@ -205,10 +205,22 @@ class SessionRuntime:
                     c._contracts_ready = contracts_ok
                     if contracts_ok:
                         logger.info("Contracts loaded", ready=True)
-                    else:
+                    elif c.fetch_contract:
+                        # This connection was configured to fetch contracts but
+                        # contracts_ready is still False — orders will be blocked.
                         logger.error(
                             "Contracts not available after login — order placement will be blocked",
                             fetch_contract_attempted=login_fetch_contract,
+                            ready=False,
+                        )
+                    else:
+                        # Quote-only connection (fetch_contract=False): contracts are
+                        # intentionally not fetched (e.g. QuoteConnectionPool group_id>0
+                        # skips contracts to save ~27 MB per connection).
+                        # contracts_ready=False is expected here — not an error.
+                        logger.debug(
+                            "Contracts not fetched (quote-only connection)",
+                            fetch_contract_configured=False,
                             ready=False,
                         )
                     if c.activate_ca:
