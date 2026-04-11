@@ -173,7 +173,12 @@ class SessionRuntime:
                         c._record_api_latency("login", start_ns, ok=ok_fb)
                         if ok_fb:
                             login_fetch_contract = False
-                            c.fetch_contract = False
+                            # NOTE: do NOT mutate c.fetch_contract here.
+                            # The local flag `login_fetch_contract` is enough to track
+                            # that this attempt skipped contract fetch.  Mutating the
+                            # persistent c.fetch_contract to False would prevent the
+                            # post-login _ensure_contracts() call at line 196 from
+                            # running, leaving contracts_ready=False permanently.
                             ok = True
                         else:
                             c._last_login_error = str(err_fb) if err_fb is not None else "unknown"

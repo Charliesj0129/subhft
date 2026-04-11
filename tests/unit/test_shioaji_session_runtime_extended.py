@@ -174,3 +174,58 @@ class TestReconnect:
         result = rt.reconnect(reason="manual", force=False)
         assert result is True
         client.reconnect.assert_called_once_with(reason="manual", force=False)
+
+
+class TestFallbackLoginPreservesFetchContract:
+    """Regression: fallback login must NOT permanently set c.fetch_contract=False.
+
+    Bug: session_runtime used to write c.fetch_contract = False when the
+    no-contract fallback succeeded.  This killed the post-login
+    _ensure_contracts() call (guarded by `if not login_fetch_contract and
+    c.fetch_contract`) so contracts_ready stayed False and every order was
+    blocked.
+    """
+
+    def test_fetch_contract_not_mutated_on_fallback(self, monkeypatch):
+        monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+        monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+        monkeypatch.delenv("SHIOAJI_CA_PASSWORD", raising=False)
+        monkeypatch.setenv("HFT_LOGIN_FETCH_CONTRACT_FALLBACK", "1")
+
+        client = make_mock_client(fetch_contract=True)
+        # First attempt (with contracts) fails; fallback (without contracts) succeeds.
+        client._safe_call_with_timeout.side_effect = [
+            (False, None, "timeout", True),   # initial login timed out
+            (True, None, None, False),         # fallback without contracts succeeds
+        ]
+        client.contracts_ready = True
+
+        rt = SessionRuntime(client)
+        result = rt.login_with_retry()
+
+        assert result is True, "login_with_retry should succeed via fallback"
+        # c.fetch_contract must remain True — do NOT mutate it during fallback.
+        assert client.fetch_contract is True, (
+            "c.fetch_contract was permanently set to False by the fallback path — "
+            "_ensure_contracts() will never run and orders will be blocked"
+        )
+
+    def test_ensure_contracts_called_after_fallback(self, monkeypatch):
+        monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+        monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+        monkeypatch.delenv("SHIOAJI_CA_PASSWORD", raising=False)
+        monkeypatch.setenv("HFT_LOGIN_FETCH_CONTRACT_FALLBACK", "1")
+
+        client = make_mock_client(fetch_contract=True)
+        client._safe_call_with_timeout.side_effect = [
+            (False, None, "connect error", False),
+            (True, None, None, False),
+        ]
+        client.contracts_ready = True
+
+        rt = SessionRuntime(client)
+        rt.login_with_retry()
+
+        # After fallback, _ensure_contracts() must have been called to recover
+        # the contracts that were skipped during the fallback login.
+        client._ensure_contracts.assert_called_once()
