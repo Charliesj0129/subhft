@@ -99,13 +99,11 @@ strategies:
       session_end_sec: 20700          # 05:45 UTC = 13:45 TWN
 
   # --- R47 Maker (TMFD6) — Spread-Filtered MM ---
-  # Compromise backtest (12 days, CK-direct with queue model):
-  #   spr4_mid_mp3: +60,844 pts, 91,536 fills, t=3.49, 12/12 winning days
-  #   spr4_back_mp1 (most conservative): +9,912 pts, t=3.21, 12/12 winning
-  # Cost: 手續費 1.3 + 稅 0.7 = 2.0 pts/side = 4.0 pts RT (TMFD6, 1pt=10 NTD)
-  # Edge: half_spread ~2 pts > adverse_selection 1.6 pts → net +0.4 pts/fill
-  # CRITICAL: spread_threshold=4 is the profitability boundary (spr3 = loss)
-  # Export bug fix 2026-04-10: delta encoding, spread=3 (was 1 due to DEPTH_EVENT accumulation)
+  # Compromise backtest (25 days, CK-direct with queue model):
+  #   spr5_back (most conservative): +10,856 pts, 36,217 fills, 69.3% WR
+  #   spr5_mid: +34,051 pts, 55,639 fills, 73.6% WR, +13.6K NTD/day
+  # TMFD6 economics: 1pt=10NTD, RT cost=4.0pts. spread>=5 profitable with QI skew.
+  # 2026-04-10: Optimized for TMFD6 fee structure. QI skew reduces AS by ~20%.
   - id: "R47_MAKER_TMFD6"
     module: "hft_platform.strategies.r47_maker"
     class: "R47MakerStrategy"
@@ -113,15 +111,17 @@ strategies:
     product_type: "FUT"
     symbols: ["TMFD6"]              # 微台: 本金門檻低, 1pt=10NTD
     params:
-      pe_danger_threshold: 0.0     # Disabled for initial deployment (compromise backtest baseline)
+      pe_danger_threshold: 0.0     # Disabled
       pe_window: 100
-      queue_cancel_threshold: 1.0  # Disabled (1.0 = never suppress). 0.7 over-suppresses on thin TMFD6 book.
+      queue_cancel_threshold: 1.0  # Disabled (1.0 = never suppress)
       queue_ema_alpha: 0.05
       mfg_skew_z_threshold: 100.0  # Disabled
       mfg_ema_alpha: 0.01
-      spread_threshold_pts: 4      # CRITICAL: spr>=4 profitable, spr<4 losing. Do NOT lower.
-      toxicity_max: 9999           # Disabled
-      max_pos: 3                   # Backtest-validated: t=3.49, best config
+      spread_threshold_pts: 5      # TMFD6: spr>=5 profitable after 4.0pts RT cost
+      toxicity_max: 9999           # Disabled (negligible on TMFD6)
+      qi_skew_threshold: 0.10     # D4: QI |imbalance| > 0.10 → widen adverse side
+      qi_widen_ticks: 1           # Widen by 1 tick (w=1 optimal for total PnL + Sharpe)
+      max_pos: 1                   # Manually set: max 1 lot (2026-04-11)
 
   # --- Electronic Eye (TXO Options MM + Delta Hedge) — DISABLED ---
   # Phase 3: Automated options market-making with delta-neutral hedging.
