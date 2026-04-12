@@ -13,7 +13,7 @@ import asyncio
 import os
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Protocol, TypeAlias
+from typing import Callable, Deque, Protocol, TypeAlias
 
 from structlog import get_logger
 
@@ -109,6 +109,7 @@ class LocalIntentChannel:
         maxsize: int | None = None,
         ttl_ms: int | None = None,
         dlq_maxsize: int | None = None,
+        on_ttl_expired: "Callable[[IntentEnvelope | TypedIntentEnvelope], None] | None" = None,
     ) -> None:
         _maxsize = maxsize if maxsize is not None else int(os.getenv("HFT_INTENT_CHANNEL_SIZE", "4096"))
         _ttl_ms = ttl_ms if ttl_ms is not None else int(os.getenv("HFT_INTENT_TTL_MS", "500"))
@@ -117,6 +118,7 @@ class LocalIntentChannel:
         self._queue: asyncio.Queue[IntentEnvelope | TypedIntentEnvelope] = asyncio.Queue(maxsize=_maxsize)
         self._timeout_ns: int = _ttl_ms * 1_000_000  # convert to ns; 0 = disabled
         self._dlq: Deque[IntentEnvelope | TypedIntentEnvelope] = deque(maxlen=_dlq_size)
+        self._on_ttl_expired = on_ttl_expired
 
     # ── Hot path ──────────────────────────────────────────────────────────
 
@@ -174,6 +176,11 @@ class LocalIntentChannel:
                         ack_token=envelope.ack_token,
                         age_ms=age_ns / 1_000_000,
                     )
+                    if self._on_ttl_expired is not None:
+                        try:
+                            self._on_ttl_expired(envelope)
+                        except Exception:
+                            logger.exception("on_ttl_expired callback error")
                     continue
             return envelope
 
@@ -190,6 +197,10 @@ class LocalIntentChannel:
 
     def dlq_size(self) -> int:
         return len(self._dlq)
+
+    def set_on_ttl_expired(self, cb: "Callable[[IntentEnvelope | TypedIntentEnvelope], None] | None") -> None:
+        """Set callback invoked when an envelope expires at channel level."""
+        self._on_ttl_expired = cb
 
     def drain_nowait(self) -> list[IntentEnvelope | TypedIntentEnvelope]:
         """Non-blocking drain: remove and return all pending envelopes.
