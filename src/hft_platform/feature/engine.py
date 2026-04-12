@@ -285,6 +285,16 @@ class FeatureEngine:
         if backend == "rust" and _RUST_LOB_FEATURE_KERNEL_V1 is None:
             backend = "python"
         self._kernel_backend = backend if backend in {"python", "rust"} else "python"
+        if self._kernel_backend == "rust" and len(self._feature_set.features) > 16:
+            logger.warning(
+                "rust_feature_backend_v1_gap",
+                schema_features=len(self._feature_set.features),
+                rust_features=16,
+                zero_padded=len(self._feature_set.features) - 16,
+                msg="Rust feature backend only computes 16 v1 features; "
+                    "features 16+ will be zero-padded. "
+                    "Use HFT_FEATURE_ENGINE_BACKEND=python for full v2/v3 support.",
+            )
         n = len(self._feature_set.features)
         self._full_warmup_mask: int = (1 << n) - 1 if n > 0 else 0
         self._warmup_ready_symbols: set[str] = set()

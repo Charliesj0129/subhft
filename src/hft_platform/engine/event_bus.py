@@ -692,7 +692,9 @@ class RingBufferBus:
                     elif kind == 2 and self._bidask_ring is not None:
                         event = self._bidask_ring.get(local_seq)
                     elif kind == 3 and self._lobstats_ring is not None:
-                        event = self._lobstats_ring.get(local_seq)
+                        raw = self._lobstats_ring.get(local_seq)
+                        # Prepend "lobstats" tag so strategy dispatch matches
+                        event = ("lobstats",) + raw if raw is not None else None
                     elif self._use_rust and self._ring is not None:
                         event = self._ring.get(local_seq)
                     else:
@@ -751,22 +753,25 @@ class RingBufferBus:
                 current_cursor = self.cursor
                 if current_cursor - local_seq > self.size:
                     self.metrics.bus_overflow_total.inc()
-                    self._overflow_count += 1
+                    self._overflow_count += 1  # legacy global
+                    _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
+                    self._overflow_count_per_consumer[consumer_name] = _consumer_ov
                     self._record_overflow_rate()
                     lag = current_cursor - local_seq
                     first_missed = local_seq + 1
                     last_missed = current_cursor - self.size
                     logger.error(
                         "CRITICAL: Consumer batch lagged too much, data loss occurred",
+                        consumer=consumer_name,
                         lag=lag,
-                        overflow_count=self._overflow_count,
+                        overflow_count=_consumer_ov,
                         threshold=self._overflow_halt_threshold,
                     )
 
-                    if self._overflow_count >= self._overflow_halt_threshold and self._storm_guard is not None:
-                        halt_msg = f"EventBus batch overflow: {self._overflow_count} overflows, lag={lag}"
+                    if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
+                        halt_msg = f"EventBus batch overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
                         self._storm_guard.trigger_halt(halt_msg)
-                        logger.critical("StormGuard HALT triggered due to EventBus batch overflow")
+                        logger.critical("StormGuard HALT triggered due to EventBus batch overflow", consumer=consumer_name)
 
                     local_seq = current_cursor - self.size
 
@@ -792,7 +797,9 @@ class RingBufferBus:
                     elif kind == 2 and self._bidask_ring is not None:
                         event = self._bidask_ring.get(local_seq)
                     elif kind == 3 and self._lobstats_ring is not None:
-                        event = self._lobstats_ring.get(local_seq)
+                        raw = self._lobstats_ring.get(local_seq)
+                        # Prepend "lobstats" tag so strategy dispatch matches
+                        event = ("lobstats",) + raw if raw is not None else None
                     elif self._use_rust and self._ring is not None:
                         event = self._ring.get(local_seq)
                     else:
@@ -812,9 +819,12 @@ class RingBufferBus:
                 if lag_gauge is not None:
                     lag_gauge.set(self.cursor - local_seq)
 
+                if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
+                    self._overflow_count_per_consumer[consumer_name] = 0
                 if self._overflow_count > 0:
                     self._overflow_count = 0
         finally:
             if my_signal is not None and my_signal in self._consumer_signals:
                 self._consumer_signals.remove(my_signal)
             self._consumer_positions.pop(consumer_name, None)
+            self._overflow_count_per_consumer.pop(consumer_name, None)
