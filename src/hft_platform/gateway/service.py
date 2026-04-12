@@ -103,6 +103,10 @@ class GatewayService:
         self._storm_guard = storm_guard
         self._policy = policy
         self._rejection_sink: asyncio.Queue | None = rejection_sink
+        # Wire channel TTL expiry callback so strategy gets RiskFeedback
+        # even when the envelope is dropped at the channel level (Bug #5b).
+        if hasattr(channel, "set_on_ttl_expired"):
+            channel.set_on_ttl_expired(self._on_channel_ttl_expired)
         self.running = False
         self._dispatched = 0
         self._rejected = 0
@@ -562,6 +566,53 @@ class GatewayService:
     def set_rejection_sink(self, sink: asyncio.Queue | None) -> None:
         """Public setter for rejection feedback queue (bootstrap wiring)."""
         self._rejection_sink = sink
+
+    def _on_channel_ttl_expired(self, envelope: Any) -> None:
+        """Callback from LocalIntentChannel when envelope expires at channel level.
+
+        Extracts intent info from the envelope and sends RiskFeedback so the
+        strategy is notified of the drop (Bug #5b: channel TTL was silent).
+        """
+        intent = getattr(envelope, "intent", None)
+        if intent is None:
+            # TypedIntentEnvelope — extract from payload tuple
+            payload = getattr(envelope, "payload", None)
+            if payload and len(payload) >= 15:
+                self._send_rejection_feedback_fields(
+                    intent_id=int(payload[1]),
+                    strategy_id=str(payload[2]),
+                    symbol=str(payload[3]),
+                    side=int(payload[5]),
+                    reason_code="CHANNEL_TTL_EXPIRED",
+                )
+                return
+        if intent is not None:
+            self._send_rejection_feedback(intent, "CHANNEL_TTL_EXPIRED")
+
+    def _send_rejection_feedback_fields(
+        self, intent_id: int, strategy_id: str, symbol: str, side: int | None, reason_code: str
+    ) -> None:
+        """Send RiskFeedback from raw fields (for typed envelopes without materialized intent)."""
+        if self._rejection_sink is None:
+            return
+        from hft_platform.contracts.strategy import Side as SideEnum
+        try:
+            _side = SideEnum(side) if side is not None else None
+        except (ValueError, TypeError):
+            _side = None
+        try:
+            self._rejection_sink.put_nowait(
+                RiskFeedback(
+                    intent_id=intent_id,
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                    reason_code=reason_code,
+                    timestamp_ns=timebase.now_ns(),
+                    side=_side,
+                )
+            )
+        except asyncio.QueueFull:
+            logger.warning("gateway_rejection_sink_overflow", reason=reason_code)
 
     # ── Policy control ───────────────────────────────────────────────────
 
