@@ -351,3 +351,32 @@ class TestGetStatsTuple:
         bs._rust_state = None
         result = bs.get_stats_tuple()
         assert isinstance(result, tuple)
+
+
+# ── LOBEngine.get_mid_price ─────────────────────────────────────────────
+
+
+class TestLOBEngineGetMidPrice:
+    def test_returns_mid_price_for_known_symbol(self):
+        from hft_platform.feed_adapter.lob_engine import LOBEngine
+
+        engine = LOBEngine()
+        bs = BookState("TXFD6")
+        bs.mid_price_x2 = 400_0000  # bid 195 + ask 205 = 400 (x10000)
+        engine.books["TXFD6"] = bs
+        assert engine.get_mid_price("TXFD6") == 200_0000  # 200 x10000
+
+    def test_returns_none_for_unknown_symbol(self):
+        from hft_platform.feed_adapter.lob_engine import LOBEngine
+
+        engine = LOBEngine()
+        assert engine.get_mid_price("UNKNOWN") is None
+
+    def test_returns_none_when_mid_price_x2_is_zero(self):
+        from hft_platform.feed_adapter.lob_engine import LOBEngine
+
+        engine = LOBEngine()
+        bs = BookState("TXFD6")
+        bs.mid_price_x2 = 0  # empty or one-sided book
+        engine.books["TXFD6"] = bs
+        assert engine.get_mid_price("TXFD6") is None

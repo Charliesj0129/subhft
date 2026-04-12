@@ -211,10 +211,14 @@ class StartupPositionVerifier:
             code = getattr(pos, "code", None) or (pos.get("code") if isinstance(pos, dict) else None)
             qty = getattr(pos, "quantity", None) or (pos.get("quantity", 0) if isinstance(pos, dict) else 0)
             direction = getattr(pos, "direction", "")
-            if str(direction) == "Action.Sell":
+            # Align with runtime reconciliation: both Action.Sell (stocks)
+            # and Short (futures) map to negative qty.
+            if str(direction) in ("Action.Sell", "Short"):
                 qty = -qty
             if code:
-                broker_map[code] = int(qty)
+                # Accumulate (not overwrite) to handle multiple account types
+                # (stock + futopt) returning the same symbol code.
+                broker_map[code] = broker_map.get(code, 0) + int(qty)
         return broker_map
 
     def _build_local_map(self) -> Dict[str, int]:
@@ -390,7 +394,10 @@ class StartupPositionVerifier:
         merged: Dict[str, Dict[str, Any]] = {}
         for symbol, qty in broker_map.items():
             if qty != 0:
-                merged[symbol] = {"net_qty": qty, "avg_price_scaled": 0, "realized_pnl_scaled": 0, "fees_scaled": 0}
+                # avg_price_scaled=0 causes massive fake PnL on first close.
+                # Use a sentinel -1 so downstream can detect "unknown cost basis"
+                # and avoid treating first close as profit from zero.
+                merged[symbol] = {"net_qty": qty, "avg_price_scaled": -1, "realized_pnl_scaled": 0, "fees_scaled": 0}
         loaded = self._write_to_store(merged, account_id)
         startup_recon_status.set(1)
         startup_recon_positions_loaded.set(loaded)

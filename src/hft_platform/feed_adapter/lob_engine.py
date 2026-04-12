@@ -87,6 +87,7 @@ class BookState:
         "last_volume",
         "bid_depth_total",
         "ask_depth_total",
+        "normalizer_seq",
         "_rust_state",
         "_cached_stats",
     )
@@ -111,6 +112,7 @@ class BookState:
         self.last_volume: int = 0
         self.bid_depth_total: int = 0
         self.ask_depth_total: int = 0
+        self.normalizer_seq: int = 0
 
         # _cached_stats retained as a slot placeholder; no longer used at runtime
         # (get_stats() now creates a new LOBStatsEvent per tick to avoid shared-ref corruption).
@@ -319,6 +321,7 @@ class BookState:
                 best_ask=best_ask,
                 bid_depth=int(self.bid_depth_total),
                 ask_depth=int(self.ask_depth_total),
+                normalizer_seq=self.normalizer_seq,
             )
 
     def get_stats_tuple(self) -> tuple:
@@ -506,6 +509,17 @@ class LOBEngine:
 
         self._metrics_pending_total = 0
 
+    def get_mid_price(self, symbol: str) -> int | None:
+        """Return mid-price (scaled x10000) for *symbol*, or None if unavailable.
+
+        Used by MarkToMarketCalculator for unrealized PnL computation.
+        Returns ``mid_price_x2 // 2`` from the symbol's BookState.
+        """
+        book = self.books.get(symbol)
+        if book is None or book.mid_price_x2 == 0:
+            return None
+        return book.mid_price_x2 // 2
+
     def reset_books(self) -> None:
         """Clear all book state. Call on broker reconnect to prevent stale LOB data."""
         self.books.clear()
@@ -653,6 +667,8 @@ class LOBEngine:
             book = self.get_book(event.symbol)
             if book is None:
                 return None
+            # Propagate normalizer seq for downstream ordering (Bug #10 fix)
+            book.normalizer_seq = event.meta.seq
             # Fused bypass: normalizer already computed stats in a single Rust call;
             # skip redundant apply_update + _recompute and directly set book fields.
             if _FUSED_BYPASS and event.fused_stats is not None:

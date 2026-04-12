@@ -278,6 +278,17 @@ class PositionStore:
         rpnl = recovery["realized_pnl_scaled"]
         fees = recovery["fees_scaled"]
 
+        # Sentinel -1 means broker-only recovery with unknown cost basis.
+        # Use the first fill price as a proxy to avoid fake PnL from zero basis.
+        if avg_price < 0:
+            avg_price = fill.price
+            logger.warning(
+                "recovery_unknown_cost_basis_using_fill_price",
+                symbol=fill.symbol,
+                fill_price=fill.price,
+                net_qty=net_qty,
+            )
+
         # Seed Rust tracker with synthetic fill to establish net_qty + avg_price
         if self._rust_tracker is not None:
             side = 0 if net_qty > 0 else 1  # BUY=0, SELL=1
@@ -314,6 +325,21 @@ class PositionStore:
             # Merge recovery position on first fill for this (account, symbol)
             rkey = f"{fill.account_id}:{fill.symbol}"
             recovery = self._recovery_positions.pop(rkey, None)
+            # Fallback: recovery may have been stored with a different account_id
+            # domain (e.g., broker_id "shioaji" vs actual account "F123456").
+            # Search by symbol suffix when exact key misses.
+            if recovery is None and self._recovery_positions:
+                suffix = f":{fill.symbol}"
+                for k in list(self._recovery_positions):
+                    if k.endswith(suffix):
+                        recovery = self._recovery_positions.pop(k)
+                        logger.info(
+                            "recovery_position_matched_by_symbol",
+                            recovery_key=k,
+                            fill_account=fill.account_id,
+                            symbol=fill.symbol,
+                        )
+                        break
             if recovery is not None and key not in self.positions:
                 self._seed_from_recovery(key, fill, recovery)
 

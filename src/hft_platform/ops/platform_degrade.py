@@ -206,7 +206,13 @@ class PlatformDegradeController:
             local_qty = int(local_map.get(symbol, 0))
             reference_positions[symbol] = broker_qty if broker_qty != 0 else local_qty
         self._reference_positions = reference_positions
-        self._reference_close_reservations = {}
+        # Preserve existing close reservations for symbols still present.
+        # Only clear reservations for symbols no longer in reference positions.
+        old_reservations = self._reference_close_reservations
+        self._reference_close_reservations = {
+            sym: qty for sym, qty in old_reservations.items()
+            if sym in reference_positions
+        }
 
     def reference_net_qty(self, symbol: str) -> int | None:
         if symbol not in self._reference_positions:

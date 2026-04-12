@@ -133,6 +133,20 @@ class PositionCheckpointWriter:
                 "fees_scaled": pos.fees_scaled,  # M1: include accumulated fees
             }
 
+        # M4: Also persist pending recovery positions that haven't been merged
+        # into live positions yet (no fills received since restart). Without this,
+        # a restart-without-fills followed by checkpoint would erase recovery data.
+        recovery = getattr(self._store, "_recovery_positions", {})
+        for rkey, rdata in recovery.items():
+            if rkey not in positions_payload:
+                positions_payload[rkey] = {
+                    "symbol": rdata.get("symbol", rkey.split(":")[-1]),
+                    "net_qty": rdata["net_qty"],
+                    "avg_price_scaled": rdata.get("avg_price_scaled", 0),
+                    "realized_pnl_scaled": rdata.get("realized_pnl_scaled", 0),
+                    "fees_scaled": rdata.get("fees_scaled", 0),
+                }
+
         body_obj = {
             "trading_date": self._trading_date_provider(),
             "timestamp_ns": now_ns(),

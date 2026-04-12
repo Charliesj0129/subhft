@@ -375,11 +375,44 @@ class DailyLossLimitValidator(RiskValidator):
     def update_unrealized(self, unrealized_scaled: int) -> None:
         """Update the platform-wide unrealized PnL used in loss calculations.
 
+        Also evaluates whether total (realized + unrealized) exceeds the hard
+        limit, setting ``halt_triggered`` immediately so that the supervisor
+        loop can escalate StormGuard without waiting for a new intent.
+
         Args:
             unrealized_scaled: Total unrealized PnL in scaled int (x10000).
                                Negative = unrealized loss; positive = unrealized gain.
         """
         self._unrealized_pnl = unrealized_scaled
+        if not self.halt_triggered:
+            self._evaluate_halt_from_unrealized()
+
+    def _evaluate_halt_from_unrealized(self) -> None:
+        """Check total (realized + unrealized) against hard limit without an intent.
+
+        Sets ``halt_triggered`` if the combined loss exceeds the hard limit,
+        allowing the supervisor to escalate StormGuard between order evaluations.
+        """
+        self._maybe_reset()
+        total_realized = sum(self._accumulated_loss.values())
+        total_pnl = total_realized + self._unrealized_pnl
+        if total_pnl >= 0:
+            return
+        loss_magnitude = -total_pnl
+        max_daily_loss = (
+            self._hard_limit_threshold_scaled
+            if self._intraday_pnl_enabled
+            else self._default_max_daily_loss
+        )
+        if loss_magnitude >= max_daily_loss:
+            self.halt_triggered = True
+            logger.warning(
+                "DailyLossLimitValidator: hard limit exceeded via unrealized update",
+                total_realized=total_realized,
+                unrealized_pnl=self._unrealized_pnl,
+                total_pnl=total_pnl,
+                max_daily_loss=max_daily_loss,
+            )
 
     def record_pnl(self, strategy_id: str, pnl_delta: int) -> None:
         """Record a realized PnL delta (negative = loss) for a strategy.
@@ -407,7 +440,12 @@ class DailyLossLimitValidator(RiskValidator):
         # strategy A can be blocked by strategy B's unrealized losses. This is an
         # intentionally conservative design — see docstring. Per-strategy unrealized
         # tracking would require a per-strategy feed from ExecutionRouter.
-        accumulated = self._accumulated_loss.get(intent.strategy_id, 0)
+        if self._intraday_pnl_enabled:
+            # Global scope: sum ALL strategies' realized PnL
+            accumulated = sum(self._accumulated_loss.values())
+        else:
+            # Legacy per-strategy scope
+            accumulated = self._accumulated_loss.get(intent.strategy_id, 0)
         total_pnl = accumulated + self._unrealized_pnl
 
         # d. Update peak — always, even when total_pnl >= 0

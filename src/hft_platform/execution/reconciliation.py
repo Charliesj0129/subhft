@@ -155,8 +155,18 @@ class ReconciliationService:
         self.running = True
         logger.info("ReconciliationService started")
 
-        # 1. Startup Sync
-        await self.sync_portfolio()
+        # 1. Startup Sync — protected by same grace/backoff as runtime syncs.
+        # If broker is slow to respond after login, the first query can fail.
+        try:
+            await self.sync_portfolio()
+        except Exception as e:
+            self._consecutive_failures += 1
+            self._update_failure_gauge()
+            logger.error(
+                "Startup reconciliation failed — will retry in periodic loop",
+                error=str(e),
+                consecutive_failures=self._consecutive_failures,
+            )
 
         while self.running:
             await asyncio.sleep(self.check_interval_s)
@@ -231,15 +241,20 @@ class ReconciliationService:
                 if str(direction) in ("Action.Sell", "Short"):
                     qty = -qty
                 if code:
-                    broker_map[code] = int(qty)
+                    # Accumulate (not overwrite) to handle multiple account types
+                    # (stock + futopt) returning the same symbol code.
+                    broker_map[code] = broker_map.get(code, 0) + int(qty)
 
             logger.info("Portfolio Sync: Broker State", positions=broker_map)
 
             # 3. Build local position map {symbol: qty}
             # Also build per-strategy breakdown for drift attribution (M9)
+            # Use snapshot_positions() to get a consistent copy under _fill_lock,
+            # preventing "dictionary changed size during iteration" from concurrent fills.
             local_map: Dict[str, int] = {}
             per_strategy_map: Dict[str, Dict[str, int]] = {}  # strategy_id -> {symbol: qty}
-            for key, pos in self.store.positions.items():
+            snapshot = self.store.snapshot_positions() if hasattr(self.store, "snapshot_positions") else dict(self.store.positions)
+            for key, pos in snapshot.items():
                 symbol = pos.symbol
                 local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
                 strat = pos.strategy_id
