@@ -61,13 +61,29 @@ class TestAuditWriter:
         assert "ts_ns" in item
         assert isinstance(item["ts_ns"], int)
 
-    def test_drop_on_full(self) -> None:
+    def test_overflow_on_queue_full(self) -> None:
         writer = AuditWriter(queue_size=2)
         writer.log_order({"a": 1})
         writer.log_order({"a": 2})
-        writer.log_order({"a": 3})  # Should drop
+        writer.log_order({"a": 3})  # Goes to overflow buffer
         assert writer._queues["audit.orders_log"].qsize() == 2
-        assert writer._dropped["audit.orders_log"] == 1
+        assert len(writer._overflow["audit.orders_log"]) == 1
+        assert writer._dropped["audit.orders_log"] == 0
+
+    def test_drop_after_overflow_exhausted(self) -> None:
+        import os
+        os.environ["HFT_AUDIT_OVERFLOW_SIZE"] = "2"
+        try:
+            writer = AuditWriter(queue_size=1)
+            writer.log_order({"a": 1})  # queue
+            writer.log_order({"a": 2})  # overflow[0]
+            writer.log_order({"a": 3})  # overflow[1]
+            writer.log_order({"a": 4})  # hard drop
+            assert writer._queues["audit.orders_log"].qsize() == 1
+            assert len(writer._overflow["audit.orders_log"]) == 2
+            assert writer._dropped["audit.orders_log"] == 1
+        finally:
+            os.environ.pop("HFT_AUDIT_OVERFLOW_SIZE", None)
 
     # ------------------------------------------------------------------
     # Flush to writer
@@ -150,9 +166,15 @@ class TestAuditWriter:
     # ------------------------------------------------------------------
 
     def test_dropped_counts_property(self) -> None:
-        writer = AuditWriter(queue_size=1)
-        writer.log_order({"a": 1})
-        writer.log_order({"a": 2})  # Dropped
-        counts = writer.dropped_counts
-        assert counts["audit.orders_log"] == 1
-        assert counts["audit.risk_log"] == 0
+        import os
+        os.environ["HFT_AUDIT_OVERFLOW_SIZE"] = "1"
+        try:
+            writer = AuditWriter(queue_size=1)
+            writer.log_order({"a": 1})  # queue
+            writer.log_order({"a": 2})  # overflow
+            writer.log_order({"a": 3})  # hard drop
+            counts = writer.dropped_counts
+            assert counts["audit.orders_log"] == 1
+            assert counts["audit.risk_log"] == 0
+        finally:
+            os.environ.pop("HFT_AUDIT_OVERFLOW_SIZE", None)

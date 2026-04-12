@@ -39,6 +39,17 @@ profiles:
     local_decision_pipeline_latency_us: 250
     measurement_date: "2026-03-01"
 
+  r47_maker_shioaji_p95_v2026-04-09:
+    description: "R47 Maker — Shioaji sim API P95 profile for cross-instrument MM"
+    source: "docs/architecture/latency-baseline-shioaji-sim-vs-system.md"
+    submit_ack_latency_ms: 36.0
+    modify_ack_latency_ms: 43.0
+    cancel_ack_latency_ms: 47.0
+    local_decision_pipeline_latency_us: 250
+    measurement_date: "2026-04-09"
+    strategy: "R47_MAKER_TXFD6"
+    notes: "Latency sensitivity validated: 47us→36ms = -8% PnL degradation (acceptable). Maker strategy is less latency-sensitive than taker."
+
   fubon_estimated_p95_v2026-03-12:
     description: "Fubon TradeAPI conservative P95 estimates — 2026-03-12"
     source: "estimated_conservative"

@@ -280,6 +280,8 @@ class SystemBootstrapper:
         recorder_queue: asyncio.Queue[Any],
         risk_queue: asyncio.Queue[Any],
         order_queue: asyncio.Queue[Any],
+        intent_channel: Any | None = None,
+        api_queue: Any | None = None,
     ) -> PlatformDegradeInputs:
         metrics = None
         try:
@@ -297,6 +299,8 @@ class SystemBootstrapper:
             recorder_queue=recorder_queue,
             risk_queue=risk_queue,
             order_queue=order_queue,
+            intent_channel=intent_channel,
+            api_queue=api_queue,
             metrics=metrics,
         )
         inputs.configure_thresholds(
@@ -909,7 +913,7 @@ class SystemBootstrapper:
             storm_guard=storm_guard,
         )
         # Late-bind risk_engine to router (created after router due to dependency order)
-        exec_service._risk_engine = risk_engine
+        exec_service.set_risk_engine(risk_engine)
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
 
         # CE-M2: GatewayService wiring
@@ -957,25 +961,21 @@ class SystemBootstrapper:
         except Exception as exc:
             logger.warning("phase3_queue_init_failed", error=str(exc))
 
-        if _rejection_queue is not None and hasattr(risk_engine, "_rejection_sink"):
+        if _rejection_queue is not None:
             risk_engine._rejection_sink = _rejection_queue
-
-        if _rejection_queue is not None and hasattr(strategy_runner, "_rejection_sink"):
-            strategy_runner._rejection_sink = _rejection_queue
-
-        if _rejection_queue is not None and hasattr(strategy_runner, "_rejection_queue"):
-            strategy_runner._rejection_queue = _rejection_queue
-
-        if _rejection_queue is not None and hasattr(order_adapter, "set_rejection_sink"):
+            strategy_runner.set_rejection_sink(_rejection_queue)
+            strategy_runner.set_rejection_queue(_rejection_queue)
             order_adapter.set_rejection_sink(_rejection_queue)
+            if _gateway_enabled and gateway_service is not None:
+                gateway_service.set_rejection_sink(_rejection_queue)
 
-        if hasattr(strategy_runner, "_storm_guard"):
-            strategy_runner._storm_guard = storm_guard
+        strategy_runner.set_storm_guard(storm_guard)
 
-        if _publish_queue is not None and hasattr(strategy_runner, "_publish_sink"):
-            strategy_runner._publish_sink = lambda ch, payload: _publish_queue.put_nowait((ch, payload))
+        if _publish_queue is not None:
+            strategy_runner.set_publish_sink(lambda ch, payload: _publish_queue.put_nowait((ch, payload)))
 
         recorder = RecorderService(recorder_queue)
+        _gw_api_queue = getattr(order_adapter, "_api_queue", None) if _gateway_enabled else None
         platform_degrade_inputs = self.build_platform_degrade_inputs(
             md_service=md_service,
             recorder=recorder,
@@ -984,6 +984,8 @@ class SystemBootstrapper:
             recorder_queue=recorder_queue,
             risk_queue=risk_queue,
             order_queue=order_queue,
+            intent_channel=intent_channel if _gateway_enabled else None,
+            api_queue=_gw_api_queue,
         )
 
         # Opt-in: SessionGovernor (disabled by default)
@@ -1149,6 +1151,7 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
             broker_id=broker_id,
+            account_id=getattr(order_client, "get_default_account_id", lambda: broker_id)(),
             md_client=md_client,
             order_client=order_client,
             client=order_client,

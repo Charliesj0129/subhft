@@ -134,6 +134,7 @@ def test_recover_dual_source_match(tmp_path):
         avg_price_scaled=0,
         realized_pnl_scaled=0,
         fees_scaled=0,
+        strategy_id="",
     )
 
 
@@ -162,6 +163,7 @@ def test_recover_minor_discrepancy_auto_corrects(tmp_path):
         avg_price_scaled=0,
         realized_pnl_scaled=0,
         fees_scaled=0,
+        strategy_id="",
     )
 
 
@@ -224,6 +226,7 @@ def test_recover_stale_checkpoint_broker_only(tmp_path):
         avg_price_scaled=-1,
         realized_pnl_scaled=0,
         fees_scaled=0,
+        strategy_id="",
     )
 
 

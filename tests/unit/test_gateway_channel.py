@@ -179,3 +179,67 @@ async def test_channel_submit_typed_and_materialize():
     assert env.intent.trace_id == "trace-1"
     assert env.ack_token == "idem-7"
     ch.task_done()
+
+
+# ── drain_nowait + envelope helpers ──────────────────────────────────────────
+
+
+def test_drain_nowait_returns_all_pending():
+    """drain_nowait must remove and return all envelopes from the channel."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    for i in range(5):
+        ch.submit_nowait(_make_intent(intent_id=i, idempotency_key=f"k{i}"))
+    assert ch.qsize() == 5
+
+    items = ch.drain_nowait()
+    assert len(items) == 5
+    assert ch.qsize() == 0
+
+
+def test_drain_nowait_empty_channel():
+    """drain_nowait on empty channel must return empty list."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    items = ch.drain_nowait()
+    assert items == []
+
+
+def test_envelope_intent_type_untyped():
+    """envelope_intent_type must extract IntentType from IntentEnvelope."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    intent = _make_intent(intent_id=1)
+    ch.submit_nowait(intent)
+    items = ch.drain_nowait()
+    assert len(items) == 1
+    assert ch.envelope_intent_type(items[0]) == IntentType.NEW
+
+
+def test_envelope_strategy_id_untyped():
+    """envelope_strategy_id must extract strategy_id from IntentEnvelope."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    intent = _make_intent(intent_id=1)
+    ch.submit_nowait(intent)
+    items = ch.drain_nowait()
+    assert ch.envelope_strategy_id(items[0]) == "s1"
+
+
+def test_envelope_helpers_typed_frame():
+    """Envelope helpers must work with TypedIntentEnvelope."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    frame = (
+        "typed_intent_v1",
+        99,          # intent_id
+        "strat_x",   # strategy_id
+        "TSE:2330",  # symbol
+        int(IntentType.CANCEL),  # intent_type
+        int(Side.SELL),
+        500_0000,
+        1,
+        int(TIF.LIMIT),
+        "",
+        0, 0, "", "", "k-typed", 0, 0,
+    )
+    ch.submit_typed_nowait(frame)
+    items = ch.drain_nowait()
+    assert len(items) == 1
+    assert ch.envelope_intent_type(items[0]) == IntentType.CANCEL
+    assert ch.envelope_strategy_id(items[0]) == "strat_x"

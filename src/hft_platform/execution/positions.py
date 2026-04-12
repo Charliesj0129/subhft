@@ -268,18 +268,25 @@ class PositionStore:
         avg_price_scaled: int,
         realized_pnl_scaled: int = 0,
         fees_scaled: int = 0,
+        strategy_id: str = "",
     ) -> None:
         """Store a recovery position to be merged on first fill.
 
-        Recovery positions are keyed by ``account:symbol`` and merged into
-        the real ``account:strategy:symbol`` key when the first fill arrives
-        for that symbol.  This avoids the stale ``acc::sym`` key problem.
+        When *strategy_id* is provided the recovery entry is keyed by
+        ``account:strategy:symbol`` so the correct strategy receives its
+        recovered position on first fill.  Without *strategy_id* the key
+        is ``account:symbol`` (legacy behaviour, matched by symbol-suffix
+        fallback).
         """
         if net_qty == 0:
             return
-        rkey = f"{account_id}:{symbol}"
+        if strategy_id:
+            rkey = f"{account_id}:{strategy_id}:{symbol}"
+        else:
+            rkey = f"{account_id}:{symbol}"
         self._recovery_positions[rkey] = {
             "account_id": account_id,
+            "strategy_id": strategy_id,
             "symbol": symbol,
             "net_qty": net_qty,
             "avg_price_scaled": avg_price_scaled,
@@ -289,6 +296,7 @@ class PositionStore:
         logger.info(
             "recovery_position_loaded",
             symbol=symbol,
+            strategy_id=strategy_id or "(none)",
             net_qty=net_qty,
             avg_price_scaled=avg_price_scaled,
         )
@@ -344,9 +352,15 @@ class PositionStore:
 
         # Use lock to ensure atomic check-and-call for tracker selection
         with self._fill_lock:
-            # Merge recovery position on first fill for this (account, symbol)
-            rkey = f"{fill.account_id}:{fill.symbol}"
-            recovery = self._recovery_positions.pop(rkey, None)
+            # Merge recovery position on first fill for this key.
+            # Priority: account:strategy:symbol → account:symbol → suffix search.
+            recovery = self._recovery_positions.pop(
+                f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}", None,
+            )
+            if recovery is None:
+                recovery = self._recovery_positions.pop(
+                    f"{fill.account_id}:{fill.symbol}", None,
+                )
             # Fallback: recovery may have been stored with a different account_id
             # domain (e.g., broker_id "shioaji" vs actual account "F123456").
             # Search by symbol suffix when exact key misses.

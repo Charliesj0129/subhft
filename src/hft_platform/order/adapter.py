@@ -738,8 +738,9 @@ class OrderAdapter:
                 if cmd.created_ns:
                     self._record_queue_latency(cmd)
                 try:
-                    await self._dispatch_to_api(cmd)
-                    self._dedup_commit(intent.idempotency_key, True, "OK", cmd.cmd_id)
+                    ok = await self._dispatch_to_api(cmd)
+                    if ok:
+                        self._dedup_commit(intent.idempotency_key, True, "OK", cmd.cmd_id)
                 except Exception:
                     self._dedup_commit(intent.idempotency_key, False, "dispatch_error", cmd.cmd_id)
                 return
@@ -954,7 +955,7 @@ class OrderAdapter:
             return max(ref_price + scale, int(ref_price * 1.07))
         return max(scale, int(ref_price * 0.93))
 
-    async def _dispatch_to_api(self, cmd: OrderCommand) -> None:
+    async def _dispatch_to_api(self, cmd: OrderCommand) -> bool:
         intent = cmd.intent
         self._emit_trace(
             "order_dispatch_start", intent, {"cmd_id": int(cmd.cmd_id), "intent_type": int(intent.intent_type)}
@@ -1006,7 +1007,7 @@ class OrderAdapter:
                     self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, "no_broker_codec", cmd.cmd_id)
                     await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "no_broker_codec")
-                    return
+                    return False
                 logger.info("Placing Order", symbol=intent.symbol, price=intent.price, qty=intent.qty, side=intent.side)
 
                 # Dynamic Exchange Lookup (prefer config metadata)
@@ -1094,7 +1095,7 @@ class OrderAdapter:
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._pending_order_keys.discard(order_key)
-                    return
+                    return False
 
                 # Live safety: CA must be active when enabled
                 if getattr(self.client, "mode", "") != "simulation" and getattr(self.client, "activate_ca", False):
@@ -1107,7 +1108,7 @@ class OrderAdapter:
                         async with self._live_orders_lock:
                             self.live_orders.pop(order_key, None)
                             self._pending_order_keys.discard(order_key)
-                        return
+                        return False
 
                 trade = await self._call_api(
                     "place_order",
@@ -1135,7 +1136,7 @@ class OrderAdapter:
                     self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, _fail_reason, cmd.cmd_id)
                     await self._add_to_dlq(intent, _dlq_reason, _fail_reason)
-                    return
+                    return False
 
                 self.metrics.order_actions_total.labels(type="new").inc()
                 # Inject timestamp for TTL tracking
@@ -1190,12 +1191,12 @@ class OrderAdapter:
                 if self._broker_codec is None:
                     logger.error("No broker codec configured — cannot dispatch force-flat order", symbol=intent.symbol)
                     self.metrics.order_reject_total.inc()
-                    return
+                    return False
 
                 net_qty = self._platform_net_position_for_symbol(intent.symbol)
                 if net_qty == 0:
                     logger.info("Force-flat no-op: already flat", symbol=intent.symbol, strategy_id=intent.strategy_id)
-                    return
+                    return False
 
                 meta = self.metadata
                 meta_exchange = ""
@@ -1262,7 +1263,7 @@ class OrderAdapter:
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._pending_order_keys.discard(order_key)
-                    return
+                    return False
 
                 trade_ts = timebase.now_s()
                 try:
@@ -1312,7 +1313,7 @@ class OrderAdapter:
                     logger.info("Canceling Order", target=target_key)
                     result = await self._call_api("cancel_order", self.client.cancel_order, target_trade, intent=intent)
                     if result is None or result is _GUARD_TIMEOUT:
-                        return
+                        return False
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
                     self.per_symbol_rate_limiter.record(intent.symbol)
@@ -1364,7 +1365,7 @@ class OrderAdapter:
                         intent=intent,
                     )
                     if result is None or result is _GUARD_TIMEOUT:
-                        return
+                        return False
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
                     self.per_symbol_rate_limiter.record(intent.symbol)
@@ -1414,8 +1415,10 @@ class OrderAdapter:
                 if order_key in self.live_orders and self.live_orders.get(order_key) is _PENDING_SENTINEL:
                     del self.live_orders[order_key]
                     self._pending_order_keys.discard(order_key)
+            return False
         else:
             self._emit_trace("order_dispatch_ok", intent, {"cmd_id": int(cmd.cmd_id)})
+        return True
 
     async def _enqueue_api(self, cmd: OrderCommand) -> bool:
         """Enqueue command to API worker. Returns True on success, False if DLQ'd."""
@@ -1578,10 +1581,11 @@ class OrderAdapter:
                         self._send_dispatch_rejection(item.intent, "dispatch_deadline_expired")
                         continue
                     try:
-                        await self._dispatch_to_api(item)
-                        self._dedup_commit(
-                            item.intent.idempotency_key, True, "dispatched", item.cmd_id
-                        )
+                        ok = await self._dispatch_to_api(item)
+                        if ok:
+                            self._dedup_commit(
+                                item.intent.idempotency_key, True, "dispatched", item.cmd_id
+                            )
                     except Exception:
                         logger.error(
                             "_api_worker: dispatch failed for single order",

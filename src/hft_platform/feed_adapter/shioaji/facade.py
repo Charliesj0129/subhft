@@ -220,6 +220,23 @@ class ShioajiClientFacade:
     def get_notice_stocks(self, timeout: int = 5000) -> Any:
         return self.market_info_gateway.get_notice_stocks(timeout=timeout)
 
+    def get_default_account_id(self) -> str:
+        """Return the canonical account ID used in execution fills.
+
+        Prefers futopt_account (futures trading is the primary use-case).
+        Falls back to stock_account, then empty string if not logged in.
+        """
+        api = self._client.api
+        if api is None:
+            return ""
+        for attr in ("futopt_account", "stock_account"):
+            acct = getattr(api, attr, None)
+            if acct is not None:
+                acct_id = getattr(acct, "account_id", None) or str(acct)
+                if acct_id:
+                    return str(acct_id)
+        return ""
+
     def close(self, logout: bool = False) -> None:
         self._client.close(logout=logout)
 

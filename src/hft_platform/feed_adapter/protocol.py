@@ -80,6 +80,16 @@ class BrokerClientProtocol(Protocol):
         """Return ``True`` if the broker session is alive and usable."""
         ...
 
+    def get_default_account_id(self) -> str:
+        """Return the canonical account ID string used in execution fills.
+
+        Must match the ``account_id`` value that ``ExecutionNormalizer``
+        resolves from fill callbacks, so that recovery keys align with
+        live fill keys in ``PositionStore``.  Returns ``""`` if the
+        broker session is not yet authenticated.
+        """
+        ...
+
     def close(self, logout: bool = False) -> None:
         """Gracefully release broker resources."""
         ...

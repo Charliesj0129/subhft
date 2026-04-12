@@ -378,6 +378,22 @@ class StrategyRunner:
         """Set the bus cursor to replay from, capturing events published before runner started."""
         self._start_cursor = cursor
 
+    def set_rejection_sink(self, sink: asyncio.Queue) -> None:
+        """Set the queue where StrategyRunner writes RiskFeedback on risk_queue overflow."""
+        self._rejection_sink = sink
+
+    def set_rejection_queue(self, queue: asyncio.Queue) -> None:
+        """Set the shared queue for consuming RiskFeedback dispatched to strategies."""
+        self._rejection_queue = queue
+
+    def set_storm_guard(self, storm_guard: Any) -> None:
+        """Set StormGuard reference for triggering HALT on persistent queue-full."""
+        self._storm_guard = storm_guard
+
+    def set_publish_sink(self, sink: Any) -> None:
+        """Set the publish callback for strategy-to-bus publication."""
+        self._publish_sink = sink
+
     async def run(self):
         self.running = True
         start_cursor = self._start_cursor

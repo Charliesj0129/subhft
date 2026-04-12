@@ -224,7 +224,7 @@ class StartupPositionVerifier:
     def _build_local_map(self) -> Dict[str, int]:
         """Build {symbol: qty} map from PositionStore."""
         local_map: Dict[str, int] = {}
-        for _key, pos in self.store.positions.items():
+        for _key, pos in self.store.snapshot_positions().items():
             symbol = pos.symbol
             local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
         return local_map
@@ -305,26 +305,44 @@ class StartupPositionVerifier:
             startup_recon_status.set(3)
             return RecoveryResult(source="empty", halted=True)
 
+    @staticmethod
+    def _parse_composite_key(key: str) -> tuple[str, str, str]:
+        """Parse ``account:strategy:symbol`` or ``account:symbol`` composite key.
+
+        Returns ``(account_id, strategy_id, symbol)``; strategy_id may be empty.
+        """
+        parts = key.split(":")
+        if len(parts) >= 3:
+            return parts[0], parts[1], ":".join(parts[2:])
+        if len(parts) == 2:
+            return parts[0], "", parts[1]
+        return "", "", key
+
     def _recover_dual(
         self,
         ckpt_positions: Dict[str, Dict[str, Any]],
         broker_map: Dict[str, int],
         account_id: str,
     ) -> RecoveryResult:
-        """Cross-validate checkpoint vs broker, apply graduated response."""
+        """Cross-validate checkpoint vs broker, apply graduated response.
+
+        Comparison is at symbol-level (broker reports symbol-level only).
+        Storage preserves per-strategy granularity from checkpoint.
+        """
         all_symbols = set(broker_map.keys())
         for pos_data in ckpt_positions.values():
             sym = pos_data.get("symbol", "")
             if sym:
                 all_symbols.add(sym)
 
-        # Build checkpoint maps keyed by SYMBOL (not composite key)
+        # Build symbol-level qty by ACCUMULATING across strategies
         ckpt_qty_map: Dict[str, int] = {}
-        ckpt_by_symbol: Dict[str, Dict[str, Any]] = {}
+        # Group checkpoint entries by symbol (preserving composite keys)
+        ckpt_entries_by_symbol: Dict[str, list[tuple[str, Dict[str, Any]]]] = {}
         for _key, pos_data in ckpt_positions.items():
-            sym = pos_data.get("symbol", _key)
-            ckpt_qty_map[sym] = pos_data.get("net_qty", 0)
-            ckpt_by_symbol[sym] = pos_data
+            sym = pos_data.get("symbol", _key.split(":")[-1])
+            ckpt_qty_map[sym] = ckpt_qty_map.get(sym, 0) + pos_data.get("net_qty", 0)
+            ckpt_entries_by_symbol.setdefault(sym, []).append((_key, pos_data))
 
         mismatches: list[dict] = []
         has_critical = False
@@ -335,6 +353,8 @@ class StartupPositionVerifier:
             ckpt_qty = ckpt_qty_map.get(symbol, 0)
             broker_qty = broker_map.get(symbol, 0)
             classification = self._classify_discrepancy(symbol, ckpt_qty, broker_qty)
+
+            entries = ckpt_entries_by_symbol.get(symbol, [])
 
             if classification == "critical":
                 has_critical = True
@@ -356,22 +376,13 @@ class StartupPositionVerifier:
                         "action": "corrected",
                     }
                 )
-                ckpt_entry = ckpt_by_symbol.get(symbol, {})
-                merged[symbol] = {
-                    "net_qty": broker_qty,
-                    "avg_price_scaled": ckpt_entry.get("avg_price_scaled", 0),
-                    "realized_pnl_scaled": ckpt_entry.get("realized_pnl_scaled", 0),
-                    "fees_scaled": ckpt_entry.get("fees_scaled", 0),
-                }
+                # Distribute broker correction across per-strategy entries.
+                # For single-strategy symbols, use broker qty directly.
+                # For multi-strategy, scale proportionally (preserving sum = broker_qty).
+                self._distribute_correction(entries, broker_qty, account_id, merged)
             else:
-                ckpt_entry = ckpt_by_symbol.get(symbol, {})
                 if broker_qty != 0:
-                    merged[symbol] = {
-                        "net_qty": broker_qty,
-                        "avg_price_scaled": ckpt_entry.get("avg_price_scaled", 0),
-                        "realized_pnl_scaled": ckpt_entry.get("realized_pnl_scaled", 0),
-                        "fees_scaled": ckpt_entry.get("fees_scaled", 0),
-                    }
+                    self._distribute_correction(entries, broker_qty, account_id, merged)
 
         if has_critical:
             startup_recon_status.set(3)
@@ -389,6 +400,57 @@ class StartupPositionVerifier:
             mismatches=mismatches,
         )
 
+    def _distribute_correction(
+        self,
+        entries: list[tuple[str, Dict[str, Any]]],
+        target_qty: int,
+        account_id: str,
+        merged: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Write checkpoint entries into *merged*, adjusting to match broker qty.
+
+        For single-strategy entries: straightforward replacement.
+        For multi-strategy: assign broker qty to the first entry and zero the rest
+        (conservative approach — avoids inventing strategy-level splits the broker
+        cannot confirm).
+        """
+        if not entries:
+            return
+        if len(entries) == 1:
+            key, data = entries[0]
+            ckpt_acct, ckpt_strat, sym = self._parse_composite_key(key)
+            merged[key] = {
+                "symbol": data.get("symbol", sym),
+                "net_qty": target_qty,
+                "avg_price_scaled": data.get("avg_price_scaled", 0),
+                "realized_pnl_scaled": data.get("realized_pnl_scaled", 0),
+                "fees_scaled": data.get("fees_scaled", 0),
+                "account_id": ckpt_acct or account_id,
+                "strategy_id": ckpt_strat,
+            }
+            return
+        # Multi-strategy: preserve per-strategy split from checkpoint when total
+        # matches. Otherwise assign proportionally (rounded, remainder to first).
+        ckpt_total = sum(d.get("net_qty", 0) for _, d in entries)
+        for i, (key, data) in enumerate(entries):
+            ckpt_acct, ckpt_strat, sym = self._parse_composite_key(key)
+            entry_qty = data.get("net_qty", 0)
+            if ckpt_total == target_qty:
+                adj_qty = entry_qty
+            elif ckpt_total != 0:
+                adj_qty = round(entry_qty * target_qty / ckpt_total)
+            else:
+                adj_qty = target_qty if i == 0 else 0
+            merged[key] = {
+                "symbol": data.get("symbol", sym),
+                "net_qty": adj_qty,
+                "avg_price_scaled": data.get("avg_price_scaled", 0),
+                "realized_pnl_scaled": data.get("realized_pnl_scaled", 0),
+                "fees_scaled": data.get("fees_scaled", 0),
+                "account_id": ckpt_acct or account_id,
+                "strategy_id": ckpt_strat,
+            }
+
     def _recover_broker_only(self, broker_map: Dict[str, int], account_id: str) -> RecoveryResult:
         """Use broker positions only (no valid checkpoint)."""
         merged: Dict[str, Dict[str, Any]] = {}
@@ -397,7 +459,13 @@ class StartupPositionVerifier:
                 # avg_price_scaled=0 causes massive fake PnL on first close.
                 # Use a sentinel -1 so downstream can detect "unknown cost basis"
                 # and avoid treating first close as profit from zero.
-                merged[symbol] = {"net_qty": qty, "avg_price_scaled": -1, "realized_pnl_scaled": 0, "fees_scaled": 0}
+                merged[symbol] = {
+                    "symbol": symbol,
+                    "net_qty": qty,
+                    "avg_price_scaled": -1,
+                    "realized_pnl_scaled": 0,
+                    "fees_scaled": 0,
+                }
         loaded = self._write_to_store(merged, account_id)
         startup_recon_status.set(1)
         startup_recon_positions_loaded.set(loaded)
@@ -408,17 +476,23 @@ class StartupPositionVerifier:
         ckpt_positions: Dict[str, Dict[str, Any]],
         account_id: str,
     ) -> RecoveryResult:
-        """Use checkpoint positions only (broker unavailable)."""
+        """Use checkpoint positions only (broker unavailable).
+
+        Preserves per-strategy granularity from checkpoint composite keys.
+        """
         merged: Dict[str, Dict[str, Any]] = {}
         for _key, pos_data in ckpt_positions.items():
-            sym = pos_data.get("symbol", _key)
+            ckpt_acct, ckpt_strat, sym = self._parse_composite_key(_key)
             qty = pos_data.get("net_qty", 0)
             if qty != 0:
-                merged[sym] = {
+                merged[_key] = {
+                    "symbol": pos_data.get("symbol", sym),
                     "net_qty": qty,
                     "avg_price_scaled": pos_data.get("avg_price_scaled", 0),
                     "realized_pnl_scaled": pos_data.get("realized_pnl_scaled", 0),
                     "fees_scaled": pos_data.get("fees_scaled", 0),
+                    "account_id": ckpt_acct or account_id,
+                    "strategy_id": ckpt_strat,
                 }
         loaded = self._write_to_store(merged, account_id)
         startup_recon_status.set(1)
@@ -444,20 +518,20 @@ class StartupPositionVerifier:
     def _write_to_store(self, positions: Dict[str, Dict[str, Any]], account_id: str) -> int:
         """Write recovered positions into PositionStore via load_recovery.
 
-        Positions are stored as pending recovery entries keyed by
-        ``account:symbol``.  They merge into the correct
-        ``account:strategy:symbol`` key on the first live fill for that
-        symbol, so PnL is calculated against the recovered avg_price.
+        Positions are stored as pending recovery entries.  When the entry
+        includes a ``strategy_id`` the key is ``account:strategy:symbol``
+        so each strategy receives its own recovered position on first fill.
         """
         count = 0
-        for symbol, data in positions.items():
+        for _key, data in positions.items():
             self.store.load_recovery(
-                account_id=account_id,
-                symbol=symbol,
+                account_id=data.get("account_id", account_id),
+                symbol=data.get("symbol", _key.split(":")[-1]),
                 net_qty=data["net_qty"],
                 avg_price_scaled=data.get("avg_price_scaled", 0),
                 realized_pnl_scaled=data.get("realized_pnl_scaled", 0),
                 fees_scaled=data.get("fees_scaled", 0),
+                strategy_id=data.get("strategy_id", ""),
             )
             count += 1
         return count

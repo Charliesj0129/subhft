@@ -41,6 +41,8 @@ class PlatformDegradeInputs:
     recorder_queue: Any
     risk_queue: Any
     order_queue: Any
+    intent_channel: Any | None = None
+    api_queue: Any | None = None
     redis_client: Any | None = None
     redis_healthcheck: Callable[[], bool] | None = None
     metrics: Any | None = None
@@ -92,13 +94,18 @@ class PlatformDegradeInputs:
         if self.reconnect_flap_budget > 0 and self._quote_flap_budget_exceeded():
             reasons.append("feed_reconnect_flapping")
 
-        queue_depth = max(
+        queue_depths = [
             self.raw_queue.qsize(),
             self.raw_exec_queue.qsize(),
             self.recorder_queue.qsize(),
             self.risk_queue.qsize(),
             self.order_queue.qsize(),
-        )
+        ]
+        if self.intent_channel is not None:
+            queue_depths.append(self.intent_channel.qsize())
+        if self.api_queue is not None:
+            queue_depths.append(self.api_queue.qsize())
+        queue_depth = max(queue_depths)
         if queue_depth >= self.queue_depth_threshold:
             reasons.append("queue_depth_exceeded")
 

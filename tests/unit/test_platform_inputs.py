@@ -573,3 +573,42 @@ class TestMetricSampleValue:
 
         result = _metric_sample_value(metric, "my_metric", labels={"env": "prod"})
         assert result == 7.0
+
+
+# ---------------------------------------------------------------------------
+# Gateway queue monitoring (intent_channel + api_queue)
+# ---------------------------------------------------------------------------
+
+
+class TestGatewayQueueMonitoring:
+    def test_intent_channel_backpressure_triggers_degrade(self) -> None:
+        """intent_channel depth exceeding threshold must trigger queue_depth_exceeded."""
+        inp = _make_inputs(queue_size=0)  # all legacy queues at 0
+        intent_ch = _make_queue(6000)
+        inp.intent_channel = intent_ch
+        reasons = inp.reduce_only_reasons()
+        assert "queue_depth_exceeded" in reasons
+
+    def test_api_queue_backpressure_triggers_degrade(self) -> None:
+        """api_queue depth exceeding threshold must trigger queue_depth_exceeded."""
+        inp = _make_inputs(queue_size=0)
+        api_q = _make_queue(6000)
+        inp.api_queue = api_q
+        reasons = inp.reduce_only_reasons()
+        assert "queue_depth_exceeded" in reasons
+
+    def test_none_gateway_queues_are_safe(self) -> None:
+        """When intent_channel/api_queue are None, reduce_only_reasons must not crash."""
+        inp = _make_inputs(queue_size=0)
+        assert inp.intent_channel is None
+        assert inp.api_queue is None
+        reasons = inp.reduce_only_reasons()
+        assert "queue_depth_exceeded" not in reasons
+
+    def test_gateway_queues_below_threshold_no_degrade(self) -> None:
+        """Gateway queues below threshold must not trigger degradation."""
+        inp = _make_inputs(queue_size=0)
+        inp.intent_channel = _make_queue(10)
+        inp.api_queue = _make_queue(5)
+        reasons = inp.reduce_only_reasons()
+        assert "queue_depth_exceeded" not in reasons

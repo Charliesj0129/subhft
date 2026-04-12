@@ -8,6 +8,7 @@ Falls back to structlog if ClickHouse is unavailable.
 from __future__ import annotations
 
 import asyncio
+import collections
 import os
 from typing import Any
 
@@ -20,6 +21,7 @@ logger = get_logger("recorder.audit")
 _DEFAULT_QUEUE_SIZE = 10_000
 _DEFAULT_FLUSH_INTERVAL_MS = 1_000
 _DEFAULT_FLUSH_LIMIT = 500
+_DEFAULT_OVERFLOW_SIZE = 50_000
 
 # Singleton instance
 _audit_writer: AuditWriter | None = None
@@ -39,6 +41,7 @@ class AuditWriter:
 
     __slots__ = (
         "_queues",
+        "_overflow",
         "_flush_limit",
         "_flush_interval_ms",
         "_writer",
@@ -61,8 +64,12 @@ class AuditWriter:
         writer: Any = None,
     ) -> None:
         resolved_size = queue_size or int(os.getenv("HFT_AUDIT_QUEUE_SIZE", str(_DEFAULT_QUEUE_SIZE)))
+        overflow_size = int(os.getenv("HFT_AUDIT_OVERFLOW_SIZE", str(_DEFAULT_OVERFLOW_SIZE)))
         self._queues: dict[str, asyncio.Queue[dict[str, Any]]] = {
             name: asyncio.Queue(maxsize=resolved_size) for name in self._TABLE_NAMES
+        }
+        self._overflow: dict[str, collections.deque[dict[str, Any]]] = {
+            name: collections.deque(maxlen=overflow_size) for name in self._TABLE_NAMES
         }
         self._flush_limit = flush_limit
         self._flush_interval_ms = flush_interval_ms
@@ -130,23 +137,33 @@ class AuditWriter:
     # ------------------------------------------------------------------
 
     def _put(self, table: str, data: dict[str, Any]) -> None:
-        """Non-blocking enqueue with drop-on-full."""
+        """Non-blocking enqueue with overflow buffer before drop."""
         try:
             self._queues[table].put_nowait(data)
         except asyncio.QueueFull:
-            self._dropped[table] = self._dropped.get(table, 0) + 1
-            try:
-                from hft_platform.observability.metrics import MetricsRegistry
-
-                MetricsRegistry.get().audit_dropped_total.labels(table=table).inc()
-            except Exception:
-                pass  # metrics unavailable during early startup
-            if self._dropped[table] % 1000 == 1:
-                logger.warning(
-                    "Audit queue full, dropping event",
-                    table=table,
-                    total_dropped=self._dropped[table],
-                )
+            overflow = self._overflow[table]
+            if len(overflow) < overflow.maxlen:  # type: ignore[arg-type]
+                overflow.append(data)
+                try:
+                    from hft_platform.observability.metrics import MetricsRegistry
+                    MetricsRegistry.get().audit_overflow_total.labels(table=table).inc()
+                except Exception:
+                    pass
+            else:
+                # Overflow also full — hard drop (last resort)
+                self._dropped[table] = self._dropped.get(table, 0) + 1
+                try:
+                    from hft_platform.observability.metrics import MetricsRegistry
+                    MetricsRegistry.get().audit_dropped_total.labels(table=table).inc()
+                except Exception:
+                    pass
+                if self._dropped[table] <= 3 or self._dropped[table] % 100 == 0:
+                    logger.error(
+                        "Audit overflow exhausted, dropping event",
+                        table=table,
+                        total_dropped=self._dropped[table],
+                        overflow_size=len(overflow),
+                    )
 
     async def _flush_loop(self, table_name: str) -> None:
         """Background loop: drain queue and flush in batches."""
@@ -173,6 +190,15 @@ class AuditWriter:
                     await self._flush_batch(table_name, batch)
                     batch = []
 
+                # Drain overflow deque into main queue after flush frees space
+                overflow = self._overflow[table_name]
+                while overflow:
+                    try:
+                        self._queues[table_name].put_nowait(overflow[0])
+                        overflow.popleft()
+                    except asyncio.QueueFull:
+                        break
+
             except asyncio.CancelledError:
                 # Drain remaining before exiting
                 if batch:
@@ -189,7 +215,7 @@ class AuditWriter:
                 batch = []
 
     async def _drain(self, table_name: str) -> None:
-        """Drain remaining items from queue and flush."""
+        """Drain remaining items from queue and overflow, then flush."""
         queue = self._queues[table_name]
         batch: list[dict[str, Any]] = []
         while not queue.empty():
@@ -197,6 +223,10 @@ class AuditWriter:
                 batch.append(queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
+        # Also drain overflow deque
+        overflow = self._overflow[table_name]
+        while overflow:
+            batch.append(overflow.popleft())
         if batch:
             await self._flush_batch(table_name, batch)
 

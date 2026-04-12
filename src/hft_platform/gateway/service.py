@@ -24,7 +24,8 @@ from typing import Any
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType
+from hft_platform.contracts.strategy import IntentType, RiskFeedback
+from hft_platform.core import timebase
 from hft_platform.gateway.channel import (
     IntentEnvelope,
     LocalIntentChannel,
@@ -92,6 +93,7 @@ class GatewayService:
         storm_guard: Any,  # deferred: StormGuard lives in hft_platform.risk — avoids circular import
         policy: GatewayPolicy,
         leader_lease: Any | None = None,
+        rejection_sink: asyncio.Queue | None = None,
     ) -> None:
         self._channel = channel
         self._risk_engine = risk_engine
@@ -100,6 +102,7 @@ class GatewayService:
         self._dedup = dedup_store
         self._storm_guard = storm_guard
         self._policy = policy
+        self._rejection_sink: asyncio.Queue | None = rejection_sink
         self.running = False
         self._dispatched = 0
         self._rejected = 0
@@ -256,6 +259,31 @@ class GatewayService:
             )
             return
 
+        # Step 1b: Per-intent TTL check (mirrors RiskEngine.run() line 409)
+        _ttl_ns = getattr(intent, "ttl_ns", 0)
+        _ts_ns = getattr(intent, "timestamp_ns", 0)
+        if _ttl_ns > 0 and _ts_ns > 0:
+            _age_ns = timebase.now_ns() - _ts_ns
+            if _age_ns > _ttl_ns:
+                logger.warning(
+                    "gateway_intent_ttl_expired",
+                    intent_id=getattr(intent, "intent_id", 0),
+                    strategy_id=getattr(intent, "strategy_id", ""),
+                    symbol=getattr(intent, "symbol", ""),
+                    age_ms=_age_ns / 1_000_000,
+                    ttl_ms=_ttl_ns / 1_000_000,
+                )
+                if key:
+                    if is_typed_view and hasattr(self._dedup, "commit_typed"):
+                        self._dedup.commit_typed(key, False, "TTL_EXPIRED", 0)
+                    else:
+                        self._dedup.commit(key, False, "TTL_EXPIRED", 0)
+                self._rejected += 1
+                self._emit_reject("TTL_EXPIRED")
+                self._send_rejection_feedback(intent, "TTL_EXPIRED")
+                self._record_latency(t0)
+                return
+
         # Step 2: Policy gate (pass strategy_id for halt-exempt awareness)
         sg_state = self._storm_guard.state
         _strategy_id = str(getattr(intent, "strategy_id", ""))
@@ -280,6 +308,7 @@ class GatewayService:
                 {"reason": reason, "stage": "policy", "ack_token": envelope.ack_token},
             )
             logger.debug("Gateway policy rejected", reason=reason, ack_token=envelope.ack_token)
+            self._send_rejection_feedback(intent, reason)
             self._record_latency(t0)
             return
 
@@ -319,6 +348,7 @@ class GatewayService:
                     ack_token=envelope.ack_token,
                     error=str(exc),
                 )
+                self._send_rejection_feedback(intent, "EXPOSURE_SYMBOL_LIMIT")
                 self._record_latency(t0)
                 return
             if not exp_ok:
@@ -338,6 +368,7 @@ class GatewayService:
                     reason=exp_reason,
                     ack_token=envelope.ack_token,
                 )
+                self._send_rejection_feedback(intent, exp_reason)
                 self._record_latency(t0)
                 return
 
@@ -384,6 +415,7 @@ class GatewayService:
                 else:
                     self._exposure.release_exposure(exp_key, intent)
             logger.debug("Gateway standby suppressed broker dispatch (not leader)", ack_token=envelope.ack_token)
+            self._send_rejection_feedback(intent, "NOT_LEADER")
             self._record_latency(t0)
             self._update_channel_depth_metric()
             return
@@ -430,6 +462,7 @@ class GatewayService:
                     {"reason": "ORDER_QUEUE_FULL", "stage": "dispatch", "ack_token": envelope.ack_token},
                 )
                 logger.warning("Order queue full — intent dropped", ack_token=envelope.ack_token)
+                self._send_rejection_feedback(intent, "ORDER_QUEUE_FULL")
                 # Release exposure reserved in step 3 (mirrors the risk-rejection path)
                 if intent_type_value != int(IntentType.CANCEL):
                     if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
@@ -497,9 +530,38 @@ class GatewayService:
                 reason=decision.reason_code,
                 ack_token=envelope.ack_token,
             )
+            self._send_rejection_feedback(intent, decision.reason_code)
 
         self._record_latency(t0)
         self._update_channel_depth_metric()
+
+    # ── Rejection feedback ──────────────────────────────────────────────
+
+    def _send_rejection_feedback(self, intent: Any, reason_code: str) -> None:
+        """Send RiskFeedback to strategy via shared rejection queue.
+
+        Mirrors the pattern in RiskEngine.run() so strategies receive
+        on_risk_feedback() callbacks regardless of gateway vs legacy path.
+        """
+        if self._rejection_sink is None:
+            return
+        try:
+            self._rejection_sink.put_nowait(
+                RiskFeedback(
+                    intent_id=getattr(intent, "intent_id", 0),
+                    strategy_id=getattr(intent, "strategy_id", ""),
+                    symbol=getattr(intent, "symbol", ""),
+                    reason_code=reason_code,
+                    timestamp_ns=timebase.now_ns(),
+                    side=getattr(intent, "side", None),
+                )
+            )
+        except asyncio.QueueFull:
+            logger.warning("gateway_rejection_sink_overflow", reason=reason_code)
+
+    def set_rejection_sink(self, sink: asyncio.Queue | None) -> None:
+        """Public setter for rejection feedback queue (bootstrap wiring)."""
+        self._rejection_sink = sink
 
     # ── Policy control ───────────────────────────────────────────────────
 

@@ -10,6 +10,7 @@ using explicit delegation (no ``__getattr__``).
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 import structlog
@@ -331,6 +332,10 @@ class FubonClientFacade:
 
     def validate_symbols(self) -> list[str]:
         return self._contracts_runtime.validate_symbols()
+
+    def get_default_account_id(self) -> str:
+        """Return the canonical Fubon account ID from environment config."""
+        return os.getenv("HFT_FUBON_ACCOUNT", "")
 
     def get_contract_refresh_status(self) -> dict[str, Any]:
         return self._contracts_runtime.refresh_status()

@@ -88,6 +88,7 @@ class RiskFeedback:
     reason_code: str
     timestamp_ns: int
     side: Side | None = None
+    was_approved: bool = False
 
 
 @dataclass(slots=True)

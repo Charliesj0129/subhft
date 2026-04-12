@@ -124,7 +124,10 @@ class HFTSystem:
         self.execution_gateway = self.registry.execution_gateway
         self.exec_service = self.registry.exec_service
         # D1: Wire overflow buffer to router (buffer lives on system, router drains it)
-        self.exec_service.set_overflow_buf(self._exec_overflow_buf)
+        if hasattr(self.exec_service, "set_overflow_buf"):
+            self.exec_service.set_overflow_buf(self._exec_overflow_buf)
+        else:
+            self.exec_service._overflow_buf = self._exec_overflow_buf
         self.risk_engine = self.registry.risk_engine
         self.recon_service = self.registry.recon_service
         self.strategy_runner = self.registry.strategy_runner
@@ -158,7 +161,10 @@ class HFTSystem:
         self.platform_degrade_controller.evidence_writer = self.evidence_writer
         self.order_adapter.platform_degrade_controller = self.platform_degrade_controller
         self.order_adapter.position_store = self.position_store
-        self.order_adapter.set_storm_guard(self.storm_guard)  # M1: live HALT check
+        if hasattr(self.order_adapter, "set_storm_guard"):
+            self.order_adapter.set_storm_guard(self.storm_guard)  # M1: live HALT check
+        else:
+            self.order_adapter._storm_guard = self.storm_guard
 
         # Post-reconnect: invalidate stale live orders (they are dead at broker side)
         if hasattr(self.md_service, "register_on_reconnect"):

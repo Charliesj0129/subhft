@@ -462,3 +462,152 @@ def test_update_channel_depth_skips_when_metrics_disabled():
 
     mock_metrics.gateway_dlq_size.set.assert_not_called()
     mock_metrics.gateway_exposure_global_notional_scaled.set.assert_not_called()
+
+
+# ── Rejection feedback tests ─────────────────────────────────────────────────
+
+
+def _make_service_with_rejection_sink(channel=None, approve=True, queue_full=False, exposure_store=None):
+    """Create GatewayService with a rejection_sink wired for feedback tests."""
+    if channel is None:
+        channel = LocalIntentChannel(maxsize=64, ttl_ms=0)
+
+    risk_engine = MagicMock()
+    risk_engine.evaluate.return_value = RiskDecision(
+        approved=approve, intent=MagicMock(), reason_code="OK" if approve else "TEST_REJECT"
+    )
+
+    cmd = OrderCommand(cmd_id=1, intent=MagicMock(), deadline_ns=999, storm_guard_state=StormGuardState.NORMAL)
+    risk_engine.create_command.return_value = cmd
+
+    api_queue = asyncio.Queue(maxsize=64)
+    if queue_full:
+        for _ in range(64):
+            api_queue.put_nowait(MagicMock())
+    order_adapter = MagicMock()
+    order_adapter._api_queue = api_queue
+
+    storm_guard = MagicMock()
+    storm_guard.state = StormGuardState.NORMAL
+
+    rejection_sink = asyncio.Queue(maxsize=64)
+
+    svc = GatewayService(
+        channel=channel,
+        risk_engine=risk_engine,
+        order_adapter=order_adapter,
+        exposure_store=exposure_store if exposure_store is not None else ExposureStore(),
+        dedup_store=IdempotencyStore(persist_enabled=False),
+        storm_guard=storm_guard,
+        policy=GatewayPolicy(),
+        rejection_sink=rejection_sink,
+    )
+    return svc, api_queue, rejection_sink
+
+
+@pytest.mark.asyncio
+async def test_risk_rejection_sends_feedback():
+    """Risk rejection must enqueue a RiskFeedback with correct fields."""
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, _, rejection_sink = _make_service_with_rejection_sink(channel=ch, approve=False)
+
+    intent = _make_intent(42, "k-risk-rej")
+    ch.submit_nowait(intent)
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert rejection_sink.qsize() == 1
+    fb = rejection_sink.get_nowait()
+    assert isinstance(fb, RiskFeedback)
+    assert fb.strategy_id == "s1"
+    assert fb.symbol == "TSE:2330"
+    assert fb.reason_code == "TEST_REJECT"
+    assert fb.side == Side.BUY
+
+
+@pytest.mark.asyncio
+async def test_policy_rejection_sends_feedback():
+    """HALT policy rejection must enqueue a RiskFeedback."""
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, _, rejection_sink = _make_service_with_rejection_sink(channel=ch, approve=True)
+    svc._policy.set_halt()
+    svc._storm_guard.state = StormGuardState.HALT
+
+    ch.submit_nowait(_make_intent(43, "k-policy-rej", IntentType.NEW))
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert rejection_sink.qsize() == 1
+    fb = rejection_sink.get_nowait()
+    assert isinstance(fb, RiskFeedback)
+    assert fb.reason_code == "HALT"
+
+
+@pytest.mark.asyncio
+async def test_queue_full_rejection_sends_feedback():
+    """ORDER_QUEUE_FULL rejection must enqueue a RiskFeedback."""
+    from hft_platform.contracts.strategy import RiskFeedback
+
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, _, rejection_sink = _make_service_with_rejection_sink(channel=ch, queue_full=True)
+
+    ch.submit_nowait(_make_intent(44, "k-qfull"))
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert rejection_sink.qsize() == 1
+    fb = rejection_sink.get_nowait()
+    assert isinstance(fb, RiskFeedback)
+    assert fb.reason_code == "ORDER_QUEUE_FULL"
+
+
+@pytest.mark.asyncio
+async def test_approved_dispatch_sends_no_feedback():
+    """Successful dispatch must NOT enqueue any RiskFeedback."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, api_queue, rejection_sink = _make_service_with_rejection_sink(channel=ch, approve=True)
+
+    ch.submit_nowait(_make_intent(45, "k-ok"))
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert api_queue.qsize() == 1
+    assert rejection_sink.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_no_rejection_sink_does_not_raise():
+    """When rejection_sink is None, rejection must not raise."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, _ = _make_service(channel=ch, approve=False)  # no rejection_sink
+    assert svc._rejection_sink is None
+
+    ch.submit_nowait(_make_intent(46, "k-no-sink"))
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert svc._rejected == 1  # rejection counted, no crash

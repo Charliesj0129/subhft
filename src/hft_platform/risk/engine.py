@@ -207,7 +207,7 @@ class RiskEngine:
         self._order_dlq: collections.deque = collections.deque()
         self._ORDER_DLQ_MAX: int = 256
         self._dlq_ttl_ns: int = int(float(os.getenv("HFT_RISK_DLQ_TTL_S", "30")) * 1_000_000_000)
-        self._dlq_drain_interval: int = int(os.getenv("HFT_RISK_DLQ_DRAIN_INTERVAL", "50"))
+        self._dlq_drain_interval: int = int(os.getenv("HFT_RISK_DLQ_DRAIN_INTERVAL", "1"))
         self._dlq_drain_counter: int = 0
         self._rejection_sink = rejection_sink
         # Gradual queue-full degradation: STORM first, HALT after N consecutive failures
@@ -588,8 +588,19 @@ class RiskEngine:
         return True
 
     def _send_dlq_rejection(self, cmd: OrderCommand, reason: str) -> None:
-        """Send RiskFeedback for a DLQ entry that will not be retried."""
+        """Send RiskFeedback for a DLQ entry that will not be retried.
+
+        Sets ``was_approved=True`` so the strategy can distinguish
+        "risk-approved but never dispatched" from "risk-rejected".
+        """
         if self._rejection_sink is None:
+            logger.error(
+                "dlq_rejection_no_sink",
+                strategy_id=getattr(cmd.intent, "strategy_id", ""),
+                symbol=getattr(cmd.intent, "symbol", ""),
+                reason=reason,
+                cmd_id=cmd.cmd_id,
+            )
             return
         intent = cmd.intent
         try:
@@ -601,11 +612,12 @@ class RiskEngine:
                     reason_code=reason,
                     timestamp_ns=timebase.now_ns(),
                     side=getattr(intent, "side", None),
+                    was_approved=True,
                 )
             )
         except asyncio.QueueFull:
             self.metrics.rejection_sink_overflow_total.inc()
-            logger.warning(
+            logger.error(
                 "dlq_rejection_feedback_lost",
                 strategy_id=getattr(intent, "strategy_id", ""),
                 symbol=getattr(intent, "symbol", ""),

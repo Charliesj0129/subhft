@@ -191,6 +191,46 @@ class LocalIntentChannel:
     def dlq_size(self) -> int:
         return len(self._dlq)
 
+    def drain_nowait(self) -> list[IntentEnvelope | TypedIntentEnvelope]:
+        """Non-blocking drain: remove and return all pending envelopes.
+
+        Used by HALT supervisor to clear the channel while preserving
+        safety orders (CANCEL/FORCE_FLAT) and halt-exempt strategies.
+        Caller is responsible for re-submitting items that should be kept.
+        """
+        items: list[IntentEnvelope | TypedIntentEnvelope] = []
+        while not self._queue.empty():
+            try:
+                items.append(self._queue.get_nowait())
+                self._queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+        return items
+
+    @staticmethod
+    def envelope_intent_type(envelope: IntentEnvelope | TypedIntentEnvelope) -> IntentType | None:
+        """Extract IntentType from an envelope (works for both typed and untyped)."""
+        if isinstance(envelope, IntentEnvelope):
+            return getattr(envelope.intent, "intent_type", None)
+        if isinstance(envelope, TypedIntentEnvelope):
+            try:
+                return IntentType(int(envelope.payload[4]))
+            except (IndexError, ValueError):
+                return None
+        return None
+
+    @staticmethod
+    def envelope_strategy_id(envelope: IntentEnvelope | TypedIntentEnvelope) -> str:
+        """Extract strategy_id from an envelope (works for both typed and untyped)."""
+        if isinstance(envelope, IntentEnvelope):
+            return getattr(envelope.intent, "strategy_id", "")
+        if isinstance(envelope, TypedIntentEnvelope):
+            try:
+                return str(envelope.payload[2])
+            except (IndexError, ValueError):
+                return ""
+        return ""
+
     def _materialize_typed_envelope(self, envelope: TypedIntentEnvelope) -> IntentEnvelope:
         intent = typed_frame_to_intent(envelope.payload)
         return IntentEnvelope(intent=intent, enqueued_ns=envelope.enqueued_ns, ack_token=envelope.ack_token)

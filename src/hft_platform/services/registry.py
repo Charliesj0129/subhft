@@ -37,6 +37,7 @@ class ServiceRegistry:
     symbol_metadata: SymbolMetadata
     price_scale_provider: PriceScaleProvider
     broker_id: str
+    account_id: str
     md_client: BrokerClient
     order_client: BrokerClient
     client: BrokerClient

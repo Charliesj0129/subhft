@@ -332,17 +332,23 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
     # Build events
     events: list[tuple] = []
     snapshot_written = False
-    # Track ALL known price levels in the hftbacktest LOB to clear them before
-    # each new snapshot.  Without explicit qty=0 events the HashMap LOB
-    # accumulates phantom levels as the market moves, compressing the spread
-    # towards 1 tick.
-    known_bid_prices: set[float] = set()
-    known_ask_prices: set[float] = set()
+    # Track PREVIOUS snapshot's price levels.  When a level disappears from L5
+    # AND drifts inside the spread (phantom), emit qty=0 to prevent spread
+    # compression.  Only track prev snapshot (not full history) to bound memory.
+    prev_bid_prices: set[float] = set()
+    prev_ask_prices: set[float] = set()
 
     ev_bid_depth = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
     ev_ask_depth = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
     ev_bid_snap = int(DEPTH_SNAPSHOT_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
     ev_ask_snap = int(DEPTH_SNAPSHOT_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
+    ev_trade_buy = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
+    ev_trade_sell = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
+
+    # Track L1 BBO for tick-rule trade direction inference
+    last_best_bid: float = 0.0
+    last_best_ask: float = 0.0
+    last_trade_price: float = 0.0
 
     for row in deduped:
         row_type, ts, bids_price, asks_price, bids_vol, asks_vol, px, vol = row
@@ -382,12 +388,25 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
                         events.append(_build_hbt_event(ev_ask_snap, ts_int, ts_int, ap, aq))
                 snapshot_written = True
             else:
-                # Subsequent updates: clear ALL stale levels, then set new levels.
-                # Stale = any previously known price not in current snapshot.
-                for old_bp in known_bid_prices - cur_bid_prices:
-                    events.append(_build_hbt_event(ev_bid_depth, ts_int, ts_int, old_bp, 0.0))
-                for old_ap in known_ask_prices - cur_ask_prices:
-                    events.append(_build_hbt_event(ev_ask_depth, ts_int, ts_int, old_ap, 0.0))
+                # Subsequent updates: clear phantom levels from PREVIOUS L5 that
+                # drifted inside the current spread, then set new levels.
+                # - Phantom bid: was in prev L5, no longer in cur L5, AND above
+                #   current best bid (it's inside the spread or crossed).
+                # - Phantom ask: was in prev L5, no longer in cur L5, AND below
+                #   current best ask.
+                # Deeper stale levels (L6+) are left alone — we can't tell from L5
+                # whether they still have quantity, and clearing them thins the book
+                # artificially on deep instruments (TXFD6).
+                cur_best_bid = max(cur_bid_prices) if cur_bid_prices else 0
+                cur_best_ask = min(cur_ask_prices) if cur_ask_prices else float("inf")
+
+                for old_bp in prev_bid_prices - cur_bid_prices:
+                    if old_bp > cur_best_bid:
+                        events.append(_build_hbt_event(ev_bid_depth, ts_int, ts_int, old_bp, 0.0))
+                for old_ap in prev_ask_prices - cur_ask_prices:
+                    if old_ap < cur_best_ask:
+                        events.append(_build_hbt_event(ev_ask_depth, ts_int, ts_int, old_ap, 0.0))
+
                 # Set current levels (updates existing + adds new)
                 for bp, bq, ap, aq in cur_levels:
                     if bp > 0:
@@ -395,15 +414,37 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
                     if ap > 0:
                         events.append(_build_hbt_event(ev_ask_depth, ts_int, ts_int, ap, aq))
 
-            known_bid_prices = cur_bid_prices
-            known_ask_prices = cur_ask_prices
+            prev_bid_prices = cur_bid_prices
+            prev_ask_prices = cur_ask_prices
+            # Update L1 BBO for tick-rule inference
+            if cur_levels:
+                bb = max((bp for bp, _, _, _ in cur_levels if bp > 0), default=0.0)
+                ba = min((ap for _, _, ap, _ in cur_levels if ap > 0), default=0.0)
+                if bb > 0:
+                    last_best_bid = bb
+                if ba > 0:
+                    last_best_ask = ba
 
         elif row_type == "Tick" and snapshot_written:
             price_raw = px if px else 0
             vol_f = float(vol or 0)
             if price_raw > 0 and vol_f > 0:
                 price = float(price_raw) / price_scale
-                ev = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT)
+                # Infer trade direction via tick rule:
+                # price >= last_ask → buyer-initiated (BUY)
+                # price <= last_bid → seller-initiated (SELL)
+                # otherwise → compare to last trade price
+                if last_best_ask > 0 and price >= last_best_ask:
+                    ev = ev_trade_buy
+                elif last_best_bid > 0 and price <= last_best_bid:
+                    ev = ev_trade_sell
+                elif last_trade_price > 0 and price > last_trade_price:
+                    ev = ev_trade_buy
+                elif last_trade_price > 0 and price < last_trade_price:
+                    ev = ev_trade_sell
+                else:
+                    ev = ev_trade_buy  # default to buy if no info
+                last_trade_price = price
                 events.append(_build_hbt_event(ev, ts_int, ts_int, price, vol_f))
 
     if not events:
