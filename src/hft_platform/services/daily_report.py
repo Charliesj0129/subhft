@@ -15,6 +15,8 @@ import structlog
 
 logger = structlog.get_logger("services.daily_report")
 
+_PLATFORM_PRICE_SCALE = 10_000
+
 
 class DailyReportService:
     """End-of-day report triggered by SessionGovernor phase transitions.
@@ -88,6 +90,7 @@ class DailyReportService:
         """Generate and send the daily report."""
         date_str = datetime.date.today().isoformat()  # date-label-ok
 
+        pnl_ntd = self._get_realized_pnl_ntd()
         aggregates = self._query_daily_aggregates(date_str)
         position_status = self._get_position_status()
         memory_gb, memory_max_gb = self._get_memory_usage()
@@ -120,24 +123,25 @@ class DailyReportService:
 
             pnl_gen = DailyPnlSection()
             pnl_section = pnl_gen.format_telegram_section(
-                realized_pnl_ntd=aggregates.get("pnl_ntd", 0),
-                unrealized_pnl_ntd=0,  # TODO: wire from position_store
+                realized_pnl_ntd=pnl_ntd,
+                unrealized_pnl_ntd=0,  # TODO: requires mid_prices dict (not available here)
                 trade_count=aggregates.get("buys", 0) + aggregates.get("sells", 0),
                 fill_count=aggregates.get("fills", 0),
             )
+            logger.info("daily_report.pnl_section_stub_fields", unrealized_pnl_ntd=0)
         except Exception:  # noqa: BLE001
             logger.warning("daily_report_pnl_section_failed", exc_info=True)
 
         report_kwargs: dict[str, Any] = {
             "date_str": date_str,
-            "pnl_ntd": aggregates["pnl_ntd"],
+            "pnl_ntd": pnl_ntd,
             "buys": aggregates["buys"],
             "sells": aggregates["sells"],
             "fills": aggregates["fills"],
             "position_status": position_status,
             "reconciliation_status": "OK",
-            "latency_p95_ms": 0.0,  # TODO: wire from Prometheus metrics or LatencyRecorder
-            "reconnect_count": 0,  # TODO: wire from ReconnectOrchestrator counter
+            "latency_p95_ms": 0.0,  # STUB: requires LatencyRecorder injection
+            "reconnect_count": 0,  # STUB: requires ReconnectOrchestrator injection
             "storm_guard_state": storm_guard_state,
             "memory_gb": memory_gb,
             "memory_max_gb": memory_max_gb,
@@ -145,7 +149,7 @@ class DailyReportService:
 
         try:
             await self._notification_dispatcher.notify_daily_report(**report_kwargs)
-            logger.info("daily_report.sent", date_str=date_str, pnl_ntd=aggregates["pnl_ntd"])
+            logger.info("daily_report.sent", date_str=date_str, pnl_ntd=pnl_ntd)
         except Exception as exc:  # noqa: BLE001
             logger.error("daily_report.send_failed", error=str(exc))
 
@@ -163,6 +167,7 @@ class DailyReportService:
             summary = {
                 "date": date_str,
                 "track": track,
+                "pnl_ntd": pnl_ntd,
                 **aggregates,
                 "position_status": position_status,
                 "storm_guard_state": storm_guard_state,
@@ -178,10 +183,18 @@ class DailyReportService:
     # ClickHouse query
     # ------------------------------------------------------------------
 
+    def _get_realized_pnl_ntd(self) -> int:
+        """Get realized PnL in NTD from PositionStore (scaled int / 10000)."""
+        try:
+            total_pnl_scaled = self._position_store.total_pnl
+            return total_pnl_scaled // _PLATFORM_PRICE_SCALE
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("daily_report.pnl_from_position_store_failed", error=str(exc))
+            return 0
+
     def _query_daily_aggregates(self, date_str: str) -> dict[str, int]:
-        """Query hft.fills for daily aggregates. Returns zeroes on failure."""
+        """Query hft.fills for daily fill counts. Returns zeroes on failure."""
         zeroed: dict[str, int] = {
-            "pnl_ntd": 0,
             "buys": 0,
             "sells": 0,
             "fills": 0,
@@ -192,7 +205,6 @@ class DailyReportService:
 
         query = (
             "SELECT "
-            "  sum(price_scaled * qty) AS pnl_scaled, "  # TODO: use realized_pnl; this is notional
             "  countIf(side = 'B') AS buy_count, "
             "  countIf(side = 'S') AS sell_count, "
             "  count(*) AS fill_count, "
@@ -207,11 +219,10 @@ class DailyReportService:
                 return zeroed
             row = rows[0]
             return {
-                "pnl_ntd": int(row[0] or 0),
-                "buys": int(row[1] or 0),
-                "sells": int(row[2] or 0),
-                "fills": int(row[3] or 0),
-                "total_fee_scaled": int(row[4] or 0),
+                "buys": int(row[0] or 0),
+                "sells": int(row[1] or 0),
+                "fills": int(row[2] or 0),
+                "total_fee_scaled": int(row[3] or 0),
             }
         except Exception as exc:  # noqa: BLE001
             logger.warning("daily_report.ch_query_failed", error=str(exc))
@@ -224,8 +235,8 @@ class DailyReportService:
     def _get_position_status(self) -> str:
         """Return 'flat' or 'N open' based on current positions."""
         try:
-            positions = self._position_store.get_all_positions()
-            non_zero = {k: v for k, v in positions.items() if v != 0}
+            positions = self._position_store.snapshot_positions()
+            non_zero = {k: pos for k, pos in positions.items() if pos.net_qty != 0}
             if not non_zero:
                 return "flat"
             return f"{len(non_zero)} open"
@@ -238,12 +249,27 @@ class DailyReportService:
 
     @staticmethod
     def _get_memory_usage() -> tuple[float, float]:
-        """Return (current_gb, max_gb) via resource.getrusage."""
+        """Return (current_gb, max_gb).
+
+        current_gb: VmRSS from /proc/self/status (actual current RSS).
+        max_gb: ru_maxrss from getrusage (peak RSS).
+        """
+        max_gb = 0.0
         try:
             usage = resource.getrusage(resource.RUSAGE_SELF)
             # ru_maxrss is in KB on Linux
             max_gb = usage.ru_maxrss / (1024 * 1024)
-            current_gb = max_gb  # RSS is peak on Linux
-            return (round(current_gb, 2), round(max_gb, 2))
         except Exception:  # noqa: BLE001
-            return (0.0, 0.0)
+            pass
+        current_gb = max_gb  # fallback if /proc read fails
+        try:
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        # Format: "VmRSS:    123456 kB"
+                        kb = int(line.split()[1])
+                        current_gb = kb / (1024 * 1024)
+                        break
+        except Exception:  # noqa: BLE001
+            pass
+        return (round(current_gb, 2), round(max_gb, 2))
