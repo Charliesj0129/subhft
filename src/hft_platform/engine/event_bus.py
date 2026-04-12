@@ -344,7 +344,8 @@ class RingBufferBus:
         self._storm_guard = storm_guard
         # Overflow threshold for triggering HALT (consecutive overflows)
         self._overflow_halt_threshold = int(os.getenv("HFT_BUS_OVERFLOW_HALT_THRESHOLD", "3"))
-        self._overflow_count = 0
+        self._overflow_count = 0  # legacy global (kept for backward compat metrics)
+        self._overflow_count_per_consumer: dict[str, int] = {}  # per-consumer overflow tracking
         # Sliding-window overflow rate tracker (XB-03)
         self._overflow_window_s: float = float(os.getenv("HFT_BUS_OVERFLOW_WINDOW_S", "60.0"))
         self._overflow_rate_threshold: int = int(os.getenv("HFT_BUS_OVERFLOW_RATE_THRESHOLD", "10"))
@@ -648,23 +649,26 @@ class RingBufferBus:
                 if current_cursor - local_seq > self.size:
                     # Lagged too much, skip to latest - size
                     self.metrics.bus_overflow_total.inc()
-                    self._overflow_count += 1
+                    self._overflow_count += 1  # legacy global
+                    _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
+                    self._overflow_count_per_consumer[consumer_name] = _consumer_ov
                     self._record_overflow_rate()
                     lag = current_cursor - local_seq
                     first_missed = local_seq + 1
                     last_missed = current_cursor - self.size
                     logger.error(
                         "CRITICAL: Consumer lagged too much, data loss occurred",
+                        consumer=consumer_name,
                         lag=lag,
-                        overflow_count=self._overflow_count,
+                        overflow_count=_consumer_ov,
                         threshold=self._overflow_halt_threshold,
                     )
 
-                    # Trigger StormGuard HALT on repeated overflows
-                    if self._overflow_count >= self._overflow_halt_threshold and self._storm_guard is not None:
-                        halt_msg = f"EventBus overflow: {self._overflow_count} overflows, lag={lag}"
+                    # Trigger StormGuard HALT on repeated overflows (per-consumer)
+                    if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
+                        halt_msg = f"EventBus overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
                         self._storm_guard.trigger_halt(halt_msg)
-                        logger.critical("StormGuard HALT triggered due to EventBus overflow")
+                        logger.critical("StormGuard HALT triggered due to EventBus overflow", consumer=consumer_name)
 
                     local_seq = current_cursor - self.size
 
@@ -705,14 +709,17 @@ class RingBufferBus:
                 if lag_gauge is not None:
                     lag_gauge.set(self.cursor - local_seq)
 
-                # Successful catch-up with no overflow — reset counter
+                # Successful catch-up with no overflow — reset per-consumer counter
+                if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
+                    self._overflow_count_per_consumer[consumer_name] = 0
                 if self._overflow_count > 0:
-                    self._overflow_count = 0
+                    self._overflow_count = 0  # legacy global
         finally:
             # Unregister per-consumer signal on generator close
             if my_signal is not None and my_signal in self._consumer_signals:
                 self._consumer_signals.remove(my_signal)
             self._consumer_positions.pop(consumer_name, None)
+            self._overflow_count_per_consumer.pop(consumer_name, None)
 
     async def consume_batch(self, batch_size: int, start_cursor: int | None = None, consumer_name: str = "unknown"):
         """Async generator yielding lists of events."""

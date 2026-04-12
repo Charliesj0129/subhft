@@ -377,6 +377,19 @@ class FeatureEngine:
         self._event_cache.pop(symbol, None)
         self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
 
+    def mark_gap(self, symbol: str) -> None:
+        """Mark the next feature update for *symbol* with QUALITY_FLAG_GAP.
+
+        Call when upstream data gaps are detected (e.g., raw_queue drops)
+        so strategies can distinguish missing data from normal silence.
+        """
+        self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
+
+    def mark_gap_all(self) -> None:
+        """Mark all tracked symbols with QUALITY_FLAG_GAP."""
+        for symbol in self._states:
+            self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_GAP
+
     def reset_all(self) -> None:
         for symbol in list(self._states):
             self._quality_flags_next[symbol] = self._quality_flags_next.get(symbol, 0) | QUALITY_FLAG_STATE_RESET
@@ -501,6 +514,23 @@ class FeatureEngine:
                 symbol=symbol,
             )
             return None
+
+        # OOO detection BEFORE computation to prevent kernel state corruption.
+        # Must run before _compute_values/_compute_fused_rust which mutate EMA/OFI accumulators.
+        normalizer_seq = int(getattr(stats_resolved, "normalizer_seq", 0) or 0)
+        is_ooo = False
+        if prev is not None:
+            prev_nseq = getattr(prev, "normalizer_seq", 0) or 0
+            if normalizer_seq > 0 and prev_nseq > 0:
+                is_ooo = normalizer_seq < prev_nseq
+            elif source_ts_ns and source_ts_ns < prev.source_ts_ns:
+                is_ooo = True
+        if is_ooo:
+            qflags = int(self._quality_flags_next.pop(symbol, 0))
+            qflags |= QUALITY_FLAG_OUT_OF_ORDER
+            # Do not compute or overwrite state with stale data — return None to skip
+            return None
+
         warm_count = (prev.warm_count + 1) if prev else 1
 
         # Fused Rust pipeline: compute values + changed_mask + warmup_mask in one call
@@ -527,19 +557,6 @@ class FeatureEngine:
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
             warmup_ready_mask = self._compute_warmup_ready_mask(warm_count, symbol)
         qflags = int(self._quality_flags_next.pop(symbol, 0))
-        # OOO detection: prefer normalizer_seq (monotonic) over source_ts_ns when available
-        normalizer_seq = int(getattr(stats_resolved, "normalizer_seq", 0) or 0)
-        is_ooo = False
-        if prev is not None:
-            prev_nseq = getattr(prev, "normalizer_seq", 0) or 0
-            if normalizer_seq > 0 and prev_nseq > 0:
-                is_ooo = normalizer_seq < prev_nseq
-            elif source_ts_ns and source_ts_ns < prev.source_ts_ns:
-                is_ooo = True
-        if is_ooo:
-            qflags |= QUALITY_FLAG_OUT_OF_ORDER
-            # Do not overwrite state with stale data — return None to skip
-            return None
 
         # Hot-path exception: in-place mutation to avoid per-tick allocation
         if prev is not None:

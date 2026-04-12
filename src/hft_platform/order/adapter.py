@@ -109,6 +109,7 @@ class OrderAdapter:
         "_phantom_order_keys",
         "_phantom_order_max",
         "_audit_writer",
+        "_rejection_sink",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -196,6 +197,8 @@ class OrderAdapter:
 
         # Audit writer for order lifecycle logging (optional, injected post-init)
         self._audit_writer: Any = None
+        # Rejection feedback sink for dispatch failures (optional, injected post-init)
+        self._rejection_sink: asyncio.Queue | None = None
 
         self.load_config()
 
@@ -211,6 +214,32 @@ class OrderAdapter:
     def set_audit_writer(self, writer: Any) -> None:
         """Inject audit writer for order lifecycle logging."""
         self._audit_writer = writer
+
+    def set_rejection_sink(self, sink: asyncio.Queue) -> None:
+        """Inject rejection feedback queue so strategies learn about dispatch failures."""
+        self._rejection_sink = sink
+
+    def _send_dispatch_rejection(self, intent: OrderIntent, reason_code: str) -> None:
+        """Non-blocking rejection feedback for dispatch failures."""
+        if self._rejection_sink is None:
+            return
+        try:
+            from hft_platform.contracts.strategy import RiskFeedback
+
+            self._rejection_sink.put_nowait(
+                RiskFeedback(
+                    intent_id=intent.intent_id if hasattr(intent, "intent_id") else 0,
+                    strategy_id=intent.strategy_id,
+                    symbol=intent.symbol,
+                    reason_code=reason_code,
+                    timestamp_ns=timebase.now_ns(),
+                    side=getattr(intent, "side", None),
+                )
+            )
+        except asyncio.QueueFull:
+            self.metrics.rejection_sink_overflow_total.inc()
+        except Exception:
+            pass  # feedback must never crash order path
 
     def _audit_log_order(self, order_data: dict) -> None:
         """Non-blocking audit log for order lifecycle events. Skips silently if no writer."""
@@ -1492,12 +1521,14 @@ class OrderAdapter:
                             strategy_id=item.intent.strategy_id,
                         ).inc()
                         self.metrics.order_reject_total.inc()
+                        self._dedup_release(item.intent.idempotency_key)
                         await self._add_to_dlq(
                             item.intent,
                             RejectionReason.STORMGUARD_HALT,
                             "STORMGUARD_HALT_SKIP",
                             halt_exempt_blocked=self._is_strategy_halt_exempt(item.intent.strategy_id),
                         )
+                        self._send_dispatch_rejection(item.intent, "dispatch_halt_skip")
                         continue
                     if item.deadline_ns and time.monotonic_ns() > item.deadline_ns:
                         logger.warning(
@@ -1508,6 +1539,12 @@ class OrderAdapter:
                         )
                         self._dedup_release(item.intent.idempotency_key)
                         self.metrics.order_reject_total.inc()
+                        await self._add_to_dlq(
+                            item.intent,
+                            RejectionReason.VALIDATION_ERROR,
+                            "DEADLINE_EXPIRED",
+                        )
+                        self._send_dispatch_rejection(item.intent, "dispatch_deadline_expired")
                         continue
                     try:
                         await self._dispatch_to_api(item)
@@ -1526,6 +1563,7 @@ class OrderAdapter:
                         self.metrics.order_reject_total.inc()
                         self.circuit_breaker.record_failure()
                         self._update_cb_metric()
+                        self._send_dispatch_rejection(item.intent, "dispatch_failed")
                         self.strategy_cb_mgr.record_failure(item.intent.strategy_id)
             except Exception:
                 logger.error("_api_worker: unexpected exception in dispatch loop", exc_info=True)

@@ -267,6 +267,20 @@ class StormGuard:
         Returns:
             Current StormGuardState after potential escalation.
         """
+        # Crossed book (spread < 0) or empty book (mid_price_x2 <= 0) indicates
+        # data corruption or exchange anomaly. Escalate to STORM immediately.
+        if spread_scaled < 0:
+            with self._state_lock:
+                if self.state < StormGuardState.STORM:
+                    self._transition(
+                        StormGuardState.STORM,
+                        f"Crossed book: spread_scaled={spread_scaled}",
+                    )
+            return self.state
+        if mid_price_x2 <= 0:
+            # Empty/invalid book — skip DriftBurst to avoid feeding invalid data
+            return self.state
+
         detector = self._drift_burst_detector
         if detector is None:
             return self.state

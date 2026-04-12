@@ -162,6 +162,43 @@ def test_ooo_event_does_not_overwrite_state():
     assert evt3.ts == 200
 
 
+def test_ooo_event_does_not_corrupt_kernel_state():
+    """OOO tick must not mutate kernel EMA/OFI accumulators (prev_best_bid, spread_ema, etc).
+
+    Regression test for the bug where OOO check ran AFTER _compute_values(),
+    allowing stale data to corrupt rolling state even though output was suppressed.
+    """
+    eng = FeatureEngine()
+    # Warm up with 3 in-order ticks to establish stable EMA state
+    eng.process_lob_stats(_stats(ts=10, bid=1000000, ask=1001000, bq=50, aq=60), local_ts_ns=10)
+    eng.process_lob_stats(_stats(ts=20, bid=1000000, ask=1001000, bq=50, aq=60), local_ts_ns=20)
+    evt_pre = eng.process_lob_stats(_stats(ts=30, bid=1000000, ask=1001000, bq=50, aq=60), local_ts_ns=30)
+    assert evt_pre is not None
+
+    # Snapshot kernel state before OOO
+    ks = eng._lob_kernel_states.get("2330")
+    assert ks is not None
+    spread_ema_before = ks.spread_ema8
+    prev_bid_before = ks.prev_best_bid
+    prev_ask_before = ks.prev_best_ask
+
+    # Inject OOO tick with WILDLY different prices (ts=5, much older)
+    ooo = _stats(ts=5, bid=500000, ask=900000, bq=1, aq=1)
+    evt_ooo = eng.process_lob_stats(ooo, local_ts_ns=5)
+    assert evt_ooo is None  # must be suppressed
+
+    # Kernel state must be UNCHANGED — no EMA/OFI contamination
+    assert ks.spread_ema8 == spread_ema_before, (
+        f"spread_ema8 corrupted: {ks.spread_ema8} != {spread_ema_before}"
+    )
+    assert ks.prev_best_bid == prev_bid_before, (
+        f"prev_best_bid corrupted: {ks.prev_best_bid} != {prev_bid_before}"
+    )
+    assert ks.prev_best_ask == prev_ask_before, (
+        f"prev_best_ask corrupted: {ks.prev_best_ask} != {prev_ask_before}"
+    )
+
+
 def test_normalizer_seq_flows_through_lob_to_feature():
     """normalizer_seq from LOBStatsEvent must be stored in _FeatureState and used for OOO detection."""
     eng = FeatureEngine()

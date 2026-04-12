@@ -600,10 +600,18 @@ class RiskEngine:
                     symbol=getattr(intent, "symbol", ""),
                     reason_code=reason,
                     timestamp_ns=timebase.now_ns(),
+                    side=getattr(intent, "side", None),
                 )
             )
         except asyncio.QueueFull:
             self.metrics.rejection_sink_overflow_total.inc()
+            logger.warning(
+                "dlq_rejection_feedback_lost",
+                strategy_id=getattr(intent, "strategy_id", ""),
+                symbol=getattr(intent, "symbol", ""),
+                reason=reason,
+                cmd_id=cmd.cmd_id,
+            )
 
     def _drain_order_dlq(self) -> None:
         """Drain stale-filtered DLQ entries back into order_queue."""

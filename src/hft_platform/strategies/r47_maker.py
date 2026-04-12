@@ -606,6 +606,11 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._qi_widen_ask = 0
         self._last_bid.clear()
         self._last_ask.clear()
+        # Clear pending order tracking to prevent deadlock: if gap swallowed
+        # the fill/cancel callbacks for outstanding orders, pending counters
+        # would never decrement, blocking all future order placement.
+        self._pending_buy.clear()
+        self._pending_sell.clear()
         logger.warning(
             "r47_gap_event_state_reset",
             missed=event.missed_count,

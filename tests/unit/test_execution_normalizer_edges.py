@@ -102,7 +102,7 @@ def test_normalize_order_fallback_to_seq_no_map(tmp_path, monkeypatch):
 
 def test_normalize_fill_contract_object_and_action_int(tmp_path, monkeypatch):
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
-    norm = ExecutionNormalizer(order_id_map={"O1": "strat:9"})
+    norm = ExecutionNormalizer(order_id_map={"O1": "strat:9"}, default_account_id="test-acct")
 
     raw = RawExecEvent(
         "deal",
@@ -126,7 +126,7 @@ def test_normalize_fill_contract_object_and_action_int(tmp_path, monkeypatch):
 
 def test_normalize_fill_fallback_to_seq_no_map(tmp_path, monkeypatch):
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
-    norm = ExecutionNormalizer(order_id_map={"S1": "strat:1"})
+    norm = ExecutionNormalizer(order_id_map={"S1": "strat:1"}, default_account_id="test-acct")
 
     raw = RawExecEvent(
         "deal",
@@ -164,7 +164,7 @@ def test_normalize_order_uses_exchange_ts_for_broker_ts(tmp_path, monkeypatch):
 
 def test_normalize_fill_ts_seconds_to_ns(tmp_path, monkeypatch):
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
-    norm = ExecutionNormalizer()
+    norm = ExecutionNormalizer(default_account_id="test-acct")
     raw = RawExecEvent(
         "deal",
         {
@@ -195,7 +195,7 @@ def test_normalize_fill_ts_seconds_to_ns(tmp_path, monkeypatch):
 )
 def test_normalize_fill_order_id_map_shapes(tmp_path, monkeypatch, mapping, expected):
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
-    norm = ExecutionNormalizer(order_id_map={"O1": mapping})
+    norm = ExecutionNormalizer(order_id_map={"O1": mapping}, default_account_id="test-acct")
 
     raw = RawExecEvent(
         "deal",
@@ -278,10 +278,10 @@ def test_normalize_fill_with_account_id_uses_it(tmp_path, monkeypatch):
     assert event.account_id == "live-account-99"
 
 
-def test_normalize_fill_missing_account_id_uses_unknown(tmp_path, monkeypatch):
-    """M8: Missing account_id must fall back to 'unknown', not 'sim-account-01'."""
+def test_normalize_fill_missing_account_id_rejects_without_default(tmp_path, monkeypatch):
+    """M8: Missing account_id with no default must reject the fill (return None)."""
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
-    norm = ExecutionNormalizer()
+    norm = ExecutionNormalizer()  # no default_account_id
     raw = RawExecEvent(
         "deal",
         {
@@ -297,23 +297,63 @@ def test_normalize_fill_missing_account_id_uses_unknown(tmp_path, monkeypatch):
         time.time_ns(),
     )
     event = norm.normalize_fill(raw)
+    assert event is None  # rejected, not "unknown"
+
+
+def test_normalize_fill_missing_account_id_uses_default(tmp_path, monkeypatch):
+    """M8: Missing account_id falls back to default_account_id from session."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer(default_account_id="SJ-ACCT-001")
+    raw = RawExecEvent(
+        "deal",
+        {
+            "seqno": "F2b",
+            "ordno": "O2b",
+            "code": "AAA",
+            "action": "Buy",
+            "quantity": 1,
+            "price": 1.00,
+            "ts": 1,
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_fill(raw)
     assert event is not None
-    assert event.account_id == "unknown"
-    assert event.account_id != "sim-account-01"
+    assert event.account_id == "SJ-ACCT-001"
 
 
-def test_normalize_fill_missing_account_id_logs_warning(tmp_path, monkeypatch):
-    """M8: A structlog warning must be emitted when account_id is missing."""
+def test_normalize_fill_extracts_account_from_object(tmp_path, monkeypatch):
+    """M8: Shioaji-style account object should be extracted via .account_id or str()."""
+    monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
+    norm = ExecutionNormalizer()
+
+    class FakeAccount:
+        account_id = "F000123456"
+
+    raw = RawExecEvent(
+        "deal",
+        {
+            "seqno": "F5",
+            "ordno": "O5",
+            "code": "AAA",
+            "action": "Buy",
+            "quantity": 1,
+            "price": 1.00,
+            "ts": 1,
+            "account": FakeAccount(),
+        },
+        time.time_ns(),
+    )
+    event = norm.normalize_fill(raw)
+    assert event is not None
+    assert event.account_id == "F000123456"
+
+
+def test_normalize_fill_missing_account_id_logs_critical(tmp_path, monkeypatch):
+    """M8: A structlog critical must be emitted when all account_id sources exhausted."""
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
 
-    warnings_emitted: list[dict] = []
-
     import structlog
-
-    def capture_processor(logger, method, event_dict):
-        if method == "warning":
-            warnings_emitted.append(dict(event_dict))
-        return event_dict
 
     with structlog.testing.capture_logs() as cap_logs:
         norm = ExecutionNormalizer()
@@ -332,17 +372,17 @@ def test_normalize_fill_missing_account_id_logs_warning(tmp_path, monkeypatch):
         )
         event = norm.normalize_fill(raw)
 
-    assert event is not None
-    warning_events = [e for e in cap_logs if e.get("log_level") == "warning"]
-    assert any("fill_missing_account_id" in str(e.get("event", "")) for e in warning_events), (
-        f"Expected fill_missing_account_id warning, got: {cap_logs}"
+    assert event is None
+    critical_events = [e for e in cap_logs if e.get("log_level") == "critical"]
+    assert any("fill_rejected_missing_account_id" in str(e.get("event", "")) for e in critical_events), (
+        f"Expected fill_rejected_missing_account_id critical, got: {cap_logs}"
     )
 
 
-def test_normalize_fill_none_account_id_uses_unknown(tmp_path, monkeypatch):
-    """M8: Explicit None account_id must fall back to 'unknown' (not crash)."""
+def test_normalize_fill_none_account_id_uses_default(tmp_path, monkeypatch):
+    """M8: Explicit None account_id with default_account_id falls back to default."""
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
-    norm = ExecutionNormalizer()
+    norm = ExecutionNormalizer(default_account_id="FALLBACK")
     raw = RawExecEvent(
         "deal",
         {
@@ -359,4 +399,4 @@ def test_normalize_fill_none_account_id_uses_unknown(tmp_path, monkeypatch):
     )
     event = norm.normalize_fill(raw)
     assert event is not None
-    assert event.account_id == "unknown"
+    assert event.account_id == "FALLBACK"

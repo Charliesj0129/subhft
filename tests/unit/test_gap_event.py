@@ -4,6 +4,7 @@ import asyncio
 
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import GapEvent
+from hft_platform.strategies.r47_maker import R47MakerStrategy
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 
 
@@ -56,6 +57,29 @@ def test_consume_overflow_yields_gap_event() -> None:
     assert ge.first_missed_seq >= 0
     assert ge.last_missed_seq >= ge.first_missed_seq
     assert ge.ts > 0
+
+
+def test_r47_on_gap_clears_pending_counters() -> None:
+    """R47 on_gap must clear _pending_buy/_pending_sell to prevent deadlock.
+
+    If gap swallows fill/cancel callbacks, pending counters would never
+    decrement, blocking all future order placement.
+    """
+    strat = R47MakerStrategy(strategy_id="test-r47", symbols=["TXFD6"])
+    # Simulate pending orders
+    strat._pending_buy["TXFD6"] = 2
+    strat._pending_sell["TXFD6"] = 1
+    strat._last_bid["TXFD6"] = 1000000
+    strat._last_ask["TXFD6"] = 1001000
+
+    gap = GapEvent(missed_count=50, first_missed_seq=10, last_missed_seq=59, ts=123)
+    strat.on_gap(gap)
+
+    assert strat._pending_buy.get("TXFD6", 0) == 0, "pending_buy not cleared"
+    assert strat._pending_sell.get("TXFD6", 0) == 0, "pending_sell not cleared"
+    assert len(strat._last_bid) == 0, "_last_bid not cleared"
+    assert len(strat._last_ask) == 0, "_last_ask not cleared"
+    assert len(strat._feature_cache) == 0, "feature_cache not cleared"
 
 
 def test_consume_overflow_gap_event_metric() -> None:

@@ -1500,6 +1500,14 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                         )
                     except Exception:  # noqa: BLE001
                         pass
+            # Signal FeatureEngine that data gaps occurred so downstream
+            # quality_flags include GAP (strategies can detect missing data).
+            fe = self.feature_engine
+            if fe is not None and self._raw_consecutive_drops == self._raw_drop_degrade_threshold:
+                try:
+                    fe.mark_gap_all()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _set_state(self, new_state: FeedState) -> None:
         if self.state != new_state:
@@ -1581,6 +1589,19 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             if fe is not None and hasattr(fe, "reset_all"):
                 fe.reset_all()
         if ok:
+            # Drain stale pre-reconnect messages from raw_queue to prevent
+            # contaminating the freshly reset LOB/Feature state (DATA-010).
+            _drained_stale = 0
+            while not self.raw_queue.empty():
+                try:
+                    self.raw_queue.get_nowait()
+                    self.raw_queue.task_done()
+                    _drained_stale += 1
+                except asyncio.QueueEmpty:
+                    break
+            if _drained_stale > 0:
+                logger.info("Drained stale raw_queue after reconnect", count=_drained_stale)
+
             self._set_state(FeedState.CONNECTED)
             self.last_event_ts = timebase.now_s()
             self.last_event_mono = time.monotonic()

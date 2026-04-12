@@ -106,6 +106,22 @@ def _typed_intent_side(intent: Any) -> int | None:
         return None
 
 
+def _typed_intent_identity(intent: Any) -> tuple[int, str, str, int | None]:
+    """Extract (intent_id, strategy_id, symbol, side) from typed tuple or OrderIntent."""
+    if isinstance(intent, tuple) and len(intent) >= 4 and intent[0] == "typed_intent_v1":
+        _iid = int(intent[1]) if len(intent) > 1 else 0
+        _sid = str(intent[2]) if len(intent) > 2 else ""
+        _sym = str(intent[3]) if len(intent) > 3 else ""
+        _side = int(intent[5]) if len(intent) > 5 else None
+        return (_iid, _sid, _sym, _side)
+    return (
+        getattr(intent, "intent_id", 0),
+        getattr(intent, "strategy_id", ""),
+        getattr(intent, "symbol", ""),
+        getattr(intent, "side", None),
+    )
+
+
 def _get_symbol_net_qty(position_store: Any, symbol: str, strategy_id: str | None = None) -> int:
     """Return net_qty for *symbol*, optionally filtered to *strategy_id*.
 
@@ -1162,9 +1178,11 @@ class StrategyRunner:
                     except asyncio.QueueFull:
                         _d7_dropped += 1
                         self.metrics.intent_queue_full_total.inc()
+                        _fb_iid, _fb_sid, _fb_sym, _fb_side = _typed_intent_identity(intent)
                         logger.error(
                             "intent_submit_queue_full",
-                            strategy_id=getattr(intent, "strategy_id", "?"),
+                            strategy_id=_fb_sid or "?",
+                            symbol=_fb_sym,
                             submitted=_d7_submitted,
                             dropped=_d7_dropped,
                             batch_size=len(intents),
@@ -1173,11 +1191,12 @@ class StrategyRunner:
                             try:
                                 self._rejection_sink.put_nowait(
                                     RiskFeedback(
-                                        intent_id=getattr(intent, "intent_id", 0),
-                                        strategy_id=getattr(intent, "strategy_id", ""),
-                                        symbol=getattr(intent, "symbol", ""),
+                                        intent_id=_fb_iid,
+                                        strategy_id=_fb_sid,
+                                        symbol=_fb_sym,
                                         reason_code="risk_queue_full",
                                         timestamp_ns=timebase.now_ns(),
+                                        side=_fb_side,
                                     )
                                 )
                             except asyncio.QueueFull:

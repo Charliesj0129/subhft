@@ -31,8 +31,11 @@ class ExecutionNormalizer:
         order_id_map: Optional[Dict[str, str]] = None,
         strategy_id_resolvers: Optional[list[Callable[[RawExecEvent], Optional[str]]]] = None,
         fee_calculator: Any = None,
+        default_account_id: str = "",
     ) -> None:
         self.raw_queue = raw_queue
+        self._default_account_id = default_account_id
+        self._synth_counter: int = 0
         self.metrics = MetricsRegistry.get()
         self.metadata = SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
@@ -215,7 +218,8 @@ class ExecutionNormalizer:
                 # Synthesize a fill_id when broker omits seqno (e.g. reconnect replays).
                 # This enables downstream dedup to catch duplicate fills.
                 _exch_ts = self._normalize_ts_ns(get("ts"))
-                fill_id = f"synth_{sym}_{side.name}_{scale_price}_{qty}_{_exch_ts}"
+                fill_id = f"synth_{sym}_{side.name}_{scale_price}_{qty}_{_exch_ts}_{self._synth_counter}"
+                self._synth_counter += 1
                 self.metrics.synthetic_fill_id_total.inc()
                 logger.info(
                     "synthetic_fill_id_generated",
@@ -224,16 +228,28 @@ class ExecutionNormalizer:
                     side=side.name,
                 )
 
+            # Account ID resolution chain:
+            # 1. Explicit account_id field (Fubon or enriched payloads)
+            # 2. Shioaji Account object (.account_id or str())
+            # 3. default_account_id from broker session
+            # 4. Reject — unknown account poisons PositionStore keys
             raw_account_id = get("account_id")
             if not raw_account_id:
-                # M8: Missing account_id is dangerous in multi-account/live environments.
-                # Log a warning with context instead of silently using a hardcoded fake account.
-                logger.warning(
-                    "fill_missing_account_id",
+                acct_obj = get("account")
+                if acct_obj is not None:
+                    raw_account_id = getattr(acct_obj, "account_id", None) or str(acct_obj)
+            if not raw_account_id:
+                raw_account_id = self._default_account_id
+            if not raw_account_id:
+                logger.critical(
+                    "fill_rejected_missing_account_id",
                     fill_id=fill_id,
                     symbol=sym,
+                    side=side.name,
+                    qty=qty,
                 )
-                raw_account_id = "unknown"
+                self.metrics.execution_events_total.labels(type="fill_rejected_no_account").inc()
+                return None
             account_id = str(raw_account_id)
 
             return FillEvent(

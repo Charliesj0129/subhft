@@ -399,6 +399,21 @@ def test_update_with_lob_high_toxicity_no_burst_escalates_to_storm():
     assert result == StormGuardState.STORM
 
 
+def test_update_with_lob_crossed_book_escalates_to_storm():
+    """Crossed book (spread < 0) must escalate to STORM immediately."""
+    g = _guard_with_detector(toxicity=0.1)  # low toxicity — but crossed book overrides
+    result = g.update_with_lob(mid_price_x2=2000000, spread_scaled=-100)
+    assert result == StormGuardState.STORM
+
+
+def test_update_with_lob_empty_book_skips_detector():
+    """Empty book (mid_price_x2 <= 0) must skip DriftBurst and return current state."""
+    g = _guard_with_detector(toxicity=0.95, burst=True)
+    result = g.update_with_lob(mid_price_x2=0, spread_scaled=0)
+    # Should NOT escalate despite high toxicity detector — empty book skips it
+    assert result == StormGuardState.NORMAL
+
+
 def test_update_with_lob_does_not_de_escalate():
     """update_with_lob is additive-only; it cannot lower the current state."""
     g = _guard_with_detector(toxicity=0.3)
