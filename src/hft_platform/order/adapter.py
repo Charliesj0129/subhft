@@ -515,7 +515,11 @@ class OrderAdapter:
                     error=str(exc),
                 )
         if _api_drained > 0:
-            logger.warning("Drained commands from _api_queue during HALT", count=_api_drained, safety_preserved=len(_api_safety))
+            logger.warning(
+                "Drained commands from _api_queue during HALT",
+                count=_api_drained,
+                safety_preserved=len(_api_safety),
+            )
         async with self._live_orders_lock:
             live_keys = list(self.live_orders.keys())
         for key in live_keys:
