@@ -757,6 +757,9 @@ class HFTSystem:
                 if self.intent_channel is not None:
                     depth = getattr(self.intent_channel, "qsize", lambda: 0)()
                     metrics.queue_depth.labels(queue="gateway_intent").set(depth)
+                _api_q = getattr(self.order_adapter, "_api_queue", None)
+                if _api_q is not None:
+                    metrics.queue_depth.labels(queue="gateway_api").set(_api_q.qsize())
             now_s = timebase.now_s()
             if now_s - self._last_queue_log_s >= self._queue_log_every_s:
                 self._last_queue_log_s = now_s
@@ -772,6 +775,8 @@ class HFTSystem:
                 )
                 if _gateway_intent_depth is not None:
                     _log_kwargs["gateway_intent"] = _gateway_intent_depth
+                if _api_q is not None:
+                    _log_kwargs["gateway_api"] = _api_q.qsize()
                 logger.info("Queues", **_log_kwargs)
 
             self._update_platform_degrade_state()

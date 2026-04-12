@@ -481,16 +481,41 @@ class OrderAdapter:
             except asyncio.QueueEmpty:
                 break
         # Also drain _api_queue (gateway mode dispatches directly to it)
+        # Safety-order filter: preserve CANCEL/FORCE_FLAT + halt-exempt strategies
         _api_drained = 0
+        _api_safety: list = []
         while not self._api_queue.empty():
             try:
-                self._api_queue.get_nowait()
+                cmd = self._api_queue.get_nowait()
                 self._api_queue.task_done()
-                _api_drained += 1
+                _intent = getattr(cmd, "intent", None)
+                _itype = getattr(_intent, "intent_type", None) if _intent else None
+                _sid = getattr(_intent, "strategy_id", None) if _intent else None
+                _is_safety = _itype in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                _is_exempt = bool(_sid) and self._is_strategy_halt_exempt(_sid)
+                if _is_safety or _is_exempt:
+                    _api_safety.append(cmd)
+                else:
+                    _api_drained += 1
             except asyncio.QueueEmpty:
                 break
+        # Dispatch safety commands directly via _dispatch_to_api (bypasses stopped _api_worker)
+        for cmd in _api_safety:
+            try:
+                _task = asyncio.create_task(self._dispatch_to_api(cmd))
+                logger.info(
+                    "halt_drain_api_safety_cmd_dispatched",
+                    cmd_id=getattr(cmd, "cmd_id", "?"),
+                    intent_type=str(getattr(getattr(cmd, "intent", None), "intent_type", "?")),
+                )
+            except Exception as exc:
+                logger.critical(
+                    "halt_drain_api_safety_cmd_dispatch_failed",
+                    cmd_id=getattr(cmd, "cmd_id", "?"),
+                    error=str(exc),
+                )
         if _api_drained > 0:
-            logger.warning("Drained commands from _api_queue during HALT", count=_api_drained)
+            logger.warning("Drained commands from _api_queue during HALT", count=_api_drained, safety_preserved=len(_api_safety))
         async with self._live_orders_lock:
             live_keys = list(self.live_orders.keys())
         for key in live_keys:
