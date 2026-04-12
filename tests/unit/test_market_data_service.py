@@ -118,3 +118,37 @@ class TestMarketDataService(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result)
         self.assertEqual(self.service.state, FeedState.DISCONNECTED)
+
+    async def test_raw_queue_drop_escalates_to_stormguard(self):
+        """Consecutive raw_queue drops must escalate to StormGuard DEGRADE then HALT."""
+        storm_guard = MagicMock()
+        storm_guard.trigger_storm = MagicMock()
+        storm_guard.trigger_halt = MagicMock()
+        self.service._storm_guard = storm_guard
+
+        # Use a full queue (maxsize=1, pre-fill it)
+        small_queue = asyncio.Queue(maxsize=1)
+        small_queue.put_nowait(("dummy", "fill"))
+        self.service.raw_queue = small_queue
+
+        # Drop below degrade threshold — no escalation
+        for _ in range(49):
+            self.service._enqueue_raw("TSE", {"code": "2330"})
+        storm_guard.trigger_storm.assert_not_called()
+        storm_guard.trigger_halt.assert_not_called()
+
+        # 50th drop crosses degrade threshold → trigger_storm called
+        self.service._enqueue_raw("TSE", {"code": "2330"})
+        storm_guard.trigger_storm.assert_called_once()
+        storm_guard.trigger_halt.assert_not_called()
+
+        # Continue dropping to halt threshold (200 total)
+        for _ in range(150):
+            self.service._enqueue_raw("TSE", {"code": "2330"})
+        storm_guard.trigger_halt.assert_called_once()
+
+        # Verify consecutive counter resets on successful enqueue
+        # Drain queue and enqueue successfully
+        small_queue.get_nowait()
+        self.service._enqueue_raw("TSE", {"code": "2330"})
+        self.assertEqual(self.service._raw_consecutive_drops, 0)

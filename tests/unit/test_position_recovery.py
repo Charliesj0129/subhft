@@ -216,11 +216,12 @@ def test_recover_stale_checkpoint_broker_only(tmp_path):
     assert result.positions_loaded == 1
     assert result.halted is False
     # Broker-only recovery uses load_recovery with broker qty
+    # avg_price_scaled=-1 is sentinel for "unknown cost basis"
     store.load_recovery.assert_called_once_with(
         account_id="test",
         symbol="2330",
         net_qty=1000,
-        avg_price_scaled=0,
+        avg_price_scaled=-1,
         realized_pnl_scaled=0,
         fees_scaled=0,
     )

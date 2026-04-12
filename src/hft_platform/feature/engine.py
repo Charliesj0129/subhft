@@ -121,6 +121,7 @@ class _FeatureState:
     values: tuple[int | float, ...]
     warm_count: int
     quality_flags: int = 0
+    normalizer_seq: int = 0
 
 
 _RET_AUTOCOV_WINDOW = 40  # ~5s at 125ms tick cadence
@@ -454,10 +455,42 @@ class FeatureEngine:
         seq = self._seq
         local_ts_ns = int(source_ts_ns if local_ts_ns is None else local_ts_ns)
 
-        # Skip crossed-book events (mid_price_x2=0) to prevent EMA contamination
+        # Crossed/empty book (mid_price_x2=0): re-emit prev values with PARTIAL flag
+        # to keep FeatureEngine state in sync with LOBEngine (both advance), but skip
+        # EMA updates to prevent contamination.
         mid_price_x2 = getattr(stats_resolved, "mid_price_x2", None)
         if mid_price_x2 is not None and mid_price_x2 == 0:
-            return None
+            prev = self._states.get(symbol)
+            if prev is not None:
+                qflags = int(self._quality_flags_next.pop(symbol, 0))
+                qflags |= QUALITY_FLAG_PARTIAL
+                normalizer_seq = int(getattr(stats_resolved, "normalizer_seq", 0) or 0)
+                prev.seq = seq
+                prev.source_ts_ns = source_ts_ns
+                prev.local_ts_ns = local_ts_ns
+                prev.quality_flags = qflags
+                if normalizer_seq > 0:
+                    prev.normalizer_seq = normalizer_seq
+                # Keep prev.values and prev.warm_count unchanged (stale re-emit)
+                self._last_update_ns[symbol] = _now_ns()
+                if not self._emit_events:
+                    return None
+                evt = FeatureUpdateEvent(
+                    symbol=symbol,
+                    ts=source_ts_ns,
+                    local_ts=local_ts_ns,
+                    seq=seq,
+                    feature_set_id=self._feature_set.feature_set_id,
+                    schema_version=int(self._feature_set.schema_version),
+                    changed_mask=0,
+                    warmup_ready_mask=self._compute_warmup_ready_mask(prev.warm_count, symbol),
+                    quality_flags=qflags,
+                    feature_ids=self._feature_ids,
+                    values=prev.values,
+                )
+                self._event_cache[symbol] = evt
+                return evt
+            return None  # No prev state yet — genuinely skip
 
         prev = self._states.get(symbol)
         if prev is None and len(self._states) >= self._max_symbols:
@@ -494,8 +527,19 @@ class FeatureEngine:
             changed_mask = self._compute_changed_mask(prev.values if prev else None, values)
             warmup_ready_mask = self._compute_warmup_ready_mask(warm_count, symbol)
         qflags = int(self._quality_flags_next.pop(symbol, 0))
-        if prev is not None and source_ts_ns and source_ts_ns < prev.source_ts_ns:
+        # OOO detection: prefer normalizer_seq (monotonic) over source_ts_ns when available
+        normalizer_seq = int(getattr(stats_resolved, "normalizer_seq", 0) or 0)
+        is_ooo = False
+        if prev is not None:
+            prev_nseq = getattr(prev, "normalizer_seq", 0) or 0
+            if normalizer_seq > 0 and prev_nseq > 0:
+                is_ooo = normalizer_seq < prev_nseq
+            elif source_ts_ns and source_ts_ns < prev.source_ts_ns:
+                is_ooo = True
+        if is_ooo:
             qflags |= QUALITY_FLAG_OUT_OF_ORDER
+            # Do not overwrite state with stale data — return None to skip
+            return None
 
         # Hot-path exception: in-place mutation to avoid per-tick allocation
         if prev is not None:
@@ -505,6 +549,7 @@ class FeatureEngine:
             prev.values = values
             prev.warm_count = warm_count
             prev.quality_flags = qflags
+            prev.normalizer_seq = normalizer_seq
         else:
             self._states[symbol] = _FeatureState(
                 seq=seq,
@@ -513,6 +558,7 @@ class FeatureEngine:
                 values=values,
                 warm_count=warm_count,
                 quality_flags=qflags,
+                normalizer_seq=normalizer_seq,
             )
 
         self._last_update_ns[symbol] = _now_ns()

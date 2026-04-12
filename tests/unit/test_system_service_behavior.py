@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -93,6 +94,13 @@ def _make_system():
             sys_obj.autonomy_monitor = None
             sys_obj.checkpoint_writer = None
             sys_obj.daily_report_service = None
+            sys_obj._exec_startup_overflow_lost = False
+            sys_obj._exec_overflow_evicted = 0
+            sys_obj._exec_overflow_buf = collections.deque(maxlen=4096)
+            sys_obj._EXEC_OVERFLOW_MAX = 4096
+            sys_obj._exec_overflow_counter = 0
+            sys_obj._recorder_bridge_drops = 0
+            sys_obj._pnl_snapshot_drops = 0
 
             return sys_obj
 

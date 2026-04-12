@@ -728,6 +728,19 @@ class StrategyRunner:
 
             fallback[key] = value.net_qty if hasattr(value, "net_qty") else value
 
+        # Merge pending recovery positions (loaded at startup but not yet merged
+        # into positions via first fill).  These are keyed as "account:symbol" and
+        # lack strategy_id, so they go into the "*" wildcard bucket.  Once a fill
+        # merges them into a real strategy key, they disappear from _recovery_positions.
+        recovery = getattr(self.position_store, "_recovery_positions", None)
+        if recovery:
+            for rkey, rdata in recovery.items():
+                parts = rkey.rsplit(":", 1)
+                sym = parts[-1] if len(parts) >= 2 else rkey
+                net_qty = rdata.get("net_qty", 0) if isinstance(rdata, dict) else 0
+                if net_qty != 0:
+                    fallback[sym] = fallback.get(sym, 0) + net_qty
+
         if fallback:
             positions_by_strategy["*"] = fallback
 

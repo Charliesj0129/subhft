@@ -45,6 +45,7 @@ async def test_reconciliation_metric_zero_when_no_discrepancies() -> None:
     local_pos = MockPosition(symbol="2330", net_qty=5)
     mock_store = MagicMock()
     mock_store.positions = {"acct:strat:2330": local_pos}
+    mock_store.snapshot_positions = MagicMock(return_value={"acct:strat:2330": local_pos})
 
     mock_metrics = MagicMock()
 

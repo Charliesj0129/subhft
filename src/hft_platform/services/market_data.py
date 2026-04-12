@@ -408,6 +408,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         )
         self._raw_queue_high_watermark = float(os.getenv("HFT_RAW_QUEUE_HIGH_WATERMARK", "0.8"))
         self._raw_dropped_count = 0
+        self._raw_consecutive_drops: int = 0
+        self._raw_drop_degrade_threshold: int = int(os.getenv("HFT_RAW_DROP_DEGRADE_THRESHOLD", "50"))
+        self._raw_drop_halt_threshold: int = int(os.getenv("HFT_RAW_DROP_HALT_THRESHOLD", "200"))
         self._recorder_dropped_count = 0
         self._record_pending_puts = 0
         self._record_pending_puts_max = int(os.getenv("HFT_RECORD_PENDING_PUTS_MAX", "100"))
@@ -1467,16 +1470,36 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         """Enqueue raw quote messages with backpressure handling."""
         try:
             self.raw_queue.put_nowait((exchange, msg))
+            self._raw_consecutive_drops = 0
         except asyncio.QueueFull:
             self._raw_dropped_count += 1
+            self._raw_consecutive_drops += 1
             if self.metrics_registry:
                 self.metrics_registry.raw_queue_dropped_total.inc()
             if self._raw_dropped_count % 100 == 1:
                 logger.warning(
                     "raw_queue full, dropping tick",
                     dropped=self._raw_dropped_count,
+                    consecutive_drops=self._raw_consecutive_drops,
                     queue_size=self._raw_queue_size,
                 )
+            # Escalate to StormGuard on sustained drops
+            sg = self._storm_guard
+            if sg is not None:
+                if self._raw_consecutive_drops >= self._raw_drop_halt_threshold:
+                    try:
+                        sg.trigger_halt(
+                            f"raw_queue_sustained_drops: {self._raw_consecutive_drops} consecutive"
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
+                    try:
+                        sg.trigger_storm(
+                            f"raw_queue_drops: {self._raw_consecutive_drops} consecutive"
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
 
     def _set_state(self, new_state: FeedState) -> None:
         if self.state != new_state:

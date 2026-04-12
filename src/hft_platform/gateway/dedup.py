@@ -193,6 +193,21 @@ class IdempotencyStore:
             return
         self.commit(key, approved, reason_code, cmd_id)
 
+    def release(self, key: str) -> None:
+        """Remove a reserved/committed key so the same key can be resubmitted.
+
+        Used when dispatch fails after enqueue — allows strategy retry.
+        """
+        if not key:
+            return
+        self._records.pop(key, None)
+        rs = self._rust_store
+        if rs is not None and hasattr(rs, "release"):
+            try:
+                rs.release(key)
+            except Exception:  # noqa: BLE001
+                pass
+
     def persist(self) -> None:
         """Write current window to disk atomically (temp+fsync+rename).
 

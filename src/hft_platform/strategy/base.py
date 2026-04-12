@@ -10,7 +10,17 @@ from hft_platform.contracts.execution import FillEvent, OrderEvent
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
 from hft_platform.core.timebase import now_ns as _now_ns
 from hft_platform.events import BidAskEvent, FeatureUpdateEvent, GapEvent, LOBStatsEvent, TickEvent
-from hft_platform.feature.engine import _StatsTupleProxy
+from hft_platform.feature.engine import (
+    QUALITY_FLAG_GAP,
+    QUALITY_FLAG_OUT_OF_ORDER,
+    QUALITY_FLAG_STATE_RESET,
+    _StatsTupleProxy,
+)
+
+# Mask of quality flags that indicate corrupted/unreliable feature data.
+# PARTIAL (warmup incomplete) is acceptable — strategies may use partial data.
+# STALE_INPUT is acceptable — features computed from slightly old input.
+QUALITY_FLAGS_CORRUPT = QUALITY_FLAG_GAP | QUALITY_FLAG_STATE_RESET | QUALITY_FLAG_OUT_OF_ORDER
 
 logger = get_logger("strategy")
 
@@ -219,6 +229,15 @@ class BaseStrategy(ABC):
     def on_features(self, event: FeatureUpdateEvent) -> None:
         """Handle shared feature-plane updates (optional)."""
         pass
+
+    @staticmethod
+    def _should_use_features(event: FeatureUpdateEvent) -> bool:
+        """Return True if feature quality_flags indicate usable data.
+
+        Rejects GAP, STATE_RESET, and OUT_OF_ORDER flags.
+        Accepts PARTIAL and STALE_INPUT (safe for conservative use).
+        """
+        return (event.quality_flags & QUALITY_FLAGS_CORRUPT) == 0
 
     def on_fill(self, event: FillEvent) -> None:
         """Handle Fill Reports."""
