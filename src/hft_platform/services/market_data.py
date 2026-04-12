@@ -730,6 +730,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         finally:
             monitor_task.cancel()
             watchdog_task.cancel()
+            # LF-1: Cancel LOBEngine metrics worker to prevent resource leak
+            if hasattr(self.lob, "stop"):
+                self.lob.stop()
 
     def _process_raw(self, raw: Any) -> None:
         """Normalize, update LOB/features, publish, and record a single raw message."""
@@ -1736,9 +1739,16 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
     async def _call_client(self, func, *args):
         if os.getenv("HFT_MD_SYNC_CONNECT") == "1":
-            return func(*args)
+            result = func(*args)
+            # LF-3: If func returns a coroutine (e.g., AsyncMock), await it.
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
         if hasattr(func, "assert_called") or getattr(func, "_mock_name", None):
-            return func(*args)
+            result = func(*args)
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
         return await asyncio.to_thread(func, *args)
 
     # -- public API ----------------------------------------------------------

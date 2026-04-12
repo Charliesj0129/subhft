@@ -481,7 +481,7 @@ class LOBEngine:
         return not isinstance(self.metrics, MetricsRegistry)
 
     def start_metrics_worker(self, loop: asyncio.AbstractEventLoop, interval_ms: int = 5) -> None:
-        if not _METRICS_ASYNC or self._metrics_task is not None:
+        if not _METRICS_ASYNC or not _METRICS_ENABLED or self._metrics_task is not None:
             return
 
         async def _worker():
@@ -497,6 +497,16 @@ class LOBEngine:
                 pass
 
         self._metrics_task = loop.create_task(_worker())
+
+    def stop(self) -> None:
+        """Cancel the background metrics worker task.
+
+        Must be called on shutdown (e.g., from MarketDataService.run() finally block)
+        to prevent resource leaks and post-shutdown state mutation.
+        """
+        task = self._metrics_task
+        if task is not None:
+            task.cancel()
 
     def _flush_metrics(self):
         if not self._is_metrics_enabled():

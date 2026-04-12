@@ -516,7 +516,10 @@ class TestLOBEngineMetrics:
         engine._flush_metrics()  # Should not raise when metrics disabled
         assert engine._metrics_enabled is False
 
-    def test_start_metrics_worker_only_once(self):
+    def test_start_metrics_worker_only_once(self, monkeypatch):
+        import hft_platform.feed_adapter.lob_engine as _lob_mod
+
+        monkeypatch.setattr(_lob_mod, "_METRICS_ENABLED", True)
         engine = LOBEngine()
         loop = asyncio.new_event_loop()
         try:
@@ -528,7 +531,42 @@ class TestLOBEngineMetrics:
         finally:
             if engine._metrics_task:
                 engine._metrics_task.cancel()
+                # LF-2: Run the loop briefly so the CancelledError is processed
+                # and the coroutine is properly awaited, preventing RuntimeWarning.
+                loop.run_until_complete(asyncio.sleep(0))
             loop.close()
+
+    def test_start_metrics_worker_skipped_when_metrics_disabled(self):
+        """LF-4: Metrics worker must not start when _METRICS_ENABLED is False."""
+        engine = LOBEngine()
+        loop = asyncio.new_event_loop()
+        try:
+            engine.start_metrics_worker(loop, interval_ms=5)
+            assert engine._metrics_task is None
+        finally:
+            loop.close()
+
+    def test_stop_cancels_metrics_task(self, monkeypatch):
+        """LF-1: LOBEngine.stop() must cancel the _metrics_task."""
+        import hft_platform.feed_adapter.lob_engine as _lob_mod
+
+        monkeypatch.setattr(_lob_mod, "_METRICS_ENABLED", True)
+        engine = LOBEngine()
+        loop = asyncio.new_event_loop()
+        try:
+            engine.start_metrics_worker(loop, interval_ms=5)
+            assert engine._metrics_task is not None
+            engine.stop()
+            assert engine._metrics_task.cancelling()
+            # Run loop briefly so CancelledError is processed (prevents RuntimeWarning)
+            loop.run_until_complete(asyncio.sleep(0))
+        finally:
+            loop.close()
+
+    def test_stop_is_safe_when_no_metrics_task(self):
+        """LF-1: stop() must be safe when _metrics_task is None."""
+        engine = LOBEngine()
+        engine.stop()  # Must not raise
 
     def test_get_book_caches_last_symbol(self):
         engine = LOBEngine()
