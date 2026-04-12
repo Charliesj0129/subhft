@@ -804,6 +804,17 @@ class SystemBootstrapper:
                     logger.debug("operation_fallback", error=str(exc))
                     feature_profile = None
 
+        # WAL fallback for market data events dropped by full recorder queue
+        _md_wal_writer = None
+        _md_wal_dir = os.getenv("HFT_MD_WAL_DIR", os.getenv("HFT_WAL_DIR", ".wal"))
+        try:
+            from hft_platform.recorder.wal import WALWriter as _WALWriter
+
+            _md_wal_writer = _WALWriter(_md_wal_dir)
+            logger.info("md_wal_fallback_enabled", wal_dir=_md_wal_dir)
+        except Exception as exc:
+            logger.warning("md_wal_fallback_init_failed", error=str(exc))
+
         md_service = MarketDataService(
             bus,
             raw_queue,
@@ -812,6 +823,7 @@ class SystemBootstrapper:
             recorder_queue=recorder_queue,
             feature_engine=feature_engine,
             storm_guard=storm_guard,
+            wal_writer=_md_wal_writer,
         )
         _broker_codec: BrokerOrderCodec
         if broker_id == "fubon":

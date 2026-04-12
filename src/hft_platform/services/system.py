@@ -197,9 +197,11 @@ class HFTSystem:
         self._bootstrap_torn_down = False
         self._task_restart_attempts: Dict[str, int] = {}
         self._task_restart_until_s: Dict[str, float] = {}
+        self._task_started_at: Dict[str, float] = {}  # name → monotonic start time
         self._task_restart_base_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_S", 1.0, min_value=0.1)
         self._task_restart_max_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_MAX_S", 30.0, min_value=0.1)
         self._task_restart_max_attempts = int(os.getenv("HFT_TASK_RESTART_MAX_ATTEMPTS", "10"))
+        self._task_healthy_uptime_s = self._env_float("HFT_TASK_HEALTHY_UPTIME_S", 60.0, min_value=5.0)
         self._queue_log_every_s = self._env_float("HFT_SUPERVISOR_QUEUE_LOG_EVERY_S", 30.0, min_value=1.0)
         self._last_queue_log_s = 0.0
         self._recorder_bridge_drops: int = 0
@@ -377,6 +379,7 @@ class HFTSystem:
             except Exception as _exc:  # noqa: BLE001
                 pass
         self.tasks[name] = asyncio.create_task(coro)
+        self._task_started_at[name] = timebase.now_s()
 
     @staticmethod
     def _env_float(name: str, default: float, min_value: float) -> float:
@@ -408,7 +411,9 @@ class HFTSystem:
     def _sync_drain_recorder(self) -> None:
         """Best-effort synchronous recorder flush when event loop is unavailable.
 
-        Creates a temporary event loop to run the async shutdown flush.
+        Creates a temporary event loop to:
+        1. Drain recorder.queue into batchers (items not yet consumed by run loop).
+        2. Flush batchers and shut down writer.
         This prevents silent data loss of fills/orders during synchronous stop()
         when the main event loop is not running (INFRA-015).
         """
@@ -420,8 +425,13 @@ class HFTSystem:
             tmp_loop = asyncio.new_event_loop()
             try:
                 _timeout = float(os.getenv("HFT_RECORDER_SHUTDOWN_TIMEOUT_S", "60"))
+
+                async def _drain_and_flush() -> None:
+                    await recorder._drain_queue_into_batchers()
+                    await recorder._shutdown_flush()
+
                 tmp_loop.run_until_complete(
-                    asyncio.wait_for(recorder._shutdown_flush(), timeout=_timeout)
+                    asyncio.wait_for(_drain_and_flush(), timeout=_timeout)
                 )
                 logger.info("Synchronous recorder drain complete")
             except Exception as exc:
@@ -506,8 +516,11 @@ class HFTSystem:
 
     def _reset_restart_backoff_if_healthy(self, name: str, task: asyncio.Task[Any] | None) -> None:
         if task and not task.done():
-            self._task_restart_attempts.pop(name, None)
-            self._task_restart_until_s.pop(name, None)
+            started_at = self._task_started_at.get(name)
+            if started_at is not None and (timebase.now_s() - started_at) >= self._task_healthy_uptime_s:
+                self._task_restart_attempts.pop(name, None)
+                self._task_restart_until_s.pop(name, None)
+                self._task_started_at.pop(name, None)
 
     def _try_restart_service(self, name: str, component: str, coro_factory: Any) -> None:
         now_s = timebase.now_s()
@@ -543,6 +556,7 @@ class HFTSystem:
             next_retry_after_s=round(delay_s, 2),
         )
         self._start_service(name, coro_factory())
+        self._task_started_at[name] = timebase.now_s()
 
     def _update_platform_degrade_state(self) -> None:
         controller = getattr(self, "platform_degrade_controller", None)

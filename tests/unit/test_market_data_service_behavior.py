@@ -798,3 +798,80 @@ def test_recorder_direct_drops_prometheus_counter():
 
     m = MetricsRegistry.get()
     assert hasattr(m, "recorder_direct_drops_total")
+
+
+# ---------------------------------------------------------------------------
+# Bug #9: WAL fallback on QueueFull
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_md_wal_fallback_called_on_queue_full(mds_factory):
+    """Bug #9: MarketDataService writes to WAL when recorder queue is full."""
+    svc = mds_factory()
+    svc._record_drop_on_full = True
+    svc.recorder_queue = asyncio.Queue(maxsize=1)
+    svc.recorder_queue.put_nowait({"topic": "dummy", "data": {}})  # fill queue
+
+    mock_wal = MagicMock()
+    fut = asyncio.Future()
+    fut.set_result(None)
+    mock_wal.write = MagicMock(return_value=fut)
+    svc._wal_writer = mock_wal
+    svc._wal_fallback_sample_rate = 1  # write every event (no sampling)
+    svc._wal_fallback_count = 0
+    svc._recorder_dropped_count = 0
+
+    # Simulate a direct event record that triggers QueueFull
+    svc._map_event_to_record = MagicMock(return_value=("ticks", {"price": 100}))
+    event = MagicMock()
+
+    with patch("asyncio.ensure_future") as mock_ef:
+        svc._record_direct_event(event)
+
+    # WAL fallback should have been attempted
+    assert svc._wal_fallback_count == 1
+    assert svc._recorder_dropped_count == 1
+
+
+@pytest.mark.unit
+def test_md_wal_fallback_rate_limited(mds_factory):
+    """WAL fallback respects sampling rate — only writes 1-in-N events."""
+    svc = mds_factory()
+    svc._record_drop_on_full = True
+    svc.recorder_queue = asyncio.Queue(maxsize=1)
+    svc.recorder_queue.put_nowait({"topic": "dummy", "data": {}})  # fill queue
+
+    mock_wal = MagicMock()
+    svc._wal_writer = mock_wal
+    svc._wal_fallback_sample_rate = 5
+    svc._wal_fallback_count = 0
+    svc._recorder_dropped_count = 0
+
+    svc._map_event_to_record = MagicMock(return_value=("ticks", {"price": 100}))
+
+    with patch("asyncio.ensure_future") as mock_ef:
+        for _ in range(10):
+            svc._record_direct_event(MagicMock())
+
+    # With sample_rate=5, 10 events → 2 WAL writes (at count 5 and 10)
+    assert mock_ef.call_count == 2
+
+
+@pytest.mark.unit
+def test_md_wal_fallback_none_wal_writer_is_safe(mds_factory):
+    """No crash when wal_writer is None — events are simply dropped."""
+    svc = mds_factory()
+    svc._record_drop_on_full = True
+    svc.recorder_queue = asyncio.Queue(maxsize=1)
+    svc.recorder_queue.put_nowait({"topic": "dummy", "data": {}})
+
+    svc._wal_writer = None
+    svc._wal_fallback_count = 0
+    svc._recorder_dropped_count = 0
+
+    svc._map_event_to_record = MagicMock(return_value=("ticks", {"price": 100}))
+    svc._record_direct_event(MagicMock())
+
+    # Should not crash, event simply dropped
+    assert svc._recorder_dropped_count == 1

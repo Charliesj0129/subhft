@@ -83,8 +83,10 @@ def _make_system():
             sys_obj._bootstrap_torn_down = False
             sys_obj._task_restart_attempts = {}
             sys_obj._task_restart_until_s = {}
+            sys_obj._task_started_at = {}
             sys_obj._task_restart_base_delay_s = 1.0
             sys_obj._task_restart_max_delay_s = 30.0
+            sys_obj._task_healthy_uptime_s = 60.0
             sys_obj._queue_log_every_s = 30.0
             sys_obj._last_queue_log_s = 0.0
             sys_obj._mtm_calculator = None
@@ -343,14 +345,44 @@ def test_iter_supervised_services_with_gateway():
     assert "risk" not in names
 
 
-def test_reset_restart_backoff_if_healthy_task_running():
+def test_reset_restart_backoff_if_healthy_task_running_with_sufficient_uptime():
+    """Counter resets only after task has been alive >= _task_healthy_uptime_s."""
     sys_obj = _make_system()
     sys_obj._task_restart_attempts["md"] = 3
     sys_obj._task_restart_until_s["md"] = 9999.0
+    # Simulate task started 120s ago (well past default 60s threshold)
+    from hft_platform.core import timebase
+    sys_obj._task_started_at["md"] = timebase.now_s() - 120
     task = MagicMock()
     task.done.return_value = False
     sys_obj._reset_restart_backoff_if_healthy("md", task)
     assert "md" not in sys_obj._task_restart_attempts
+
+
+def test_reset_restart_backoff_if_healthy_task_running_insufficient_uptime():
+    """Counter NOT reset if task uptime < _task_healthy_uptime_s (Bug #8 fix)."""
+    sys_obj = _make_system()
+    sys_obj._task_restart_attempts["md"] = 3
+    sys_obj._task_restart_until_s["md"] = 9999.0
+    # Simulate task started only 5s ago — not enough uptime
+    from hft_platform.core import timebase
+    sys_obj._task_started_at["md"] = timebase.now_s() - 5
+    task = MagicMock()
+    task.done.return_value = False
+    sys_obj._reset_restart_backoff_if_healthy("md", task)
+    # Counter must NOT be cleared
+    assert sys_obj._task_restart_attempts["md"] == 3
+
+
+def test_reset_restart_backoff_no_started_at_no_reset():
+    """If _task_started_at is missing for a service, counter is not reset."""
+    sys_obj = _make_system()
+    sys_obj._task_restart_attempts["md"] = 3
+    task = MagicMock()
+    task.done.return_value = False
+    # No _task_started_at entry → counter preserved
+    sys_obj._reset_restart_backoff_if_healthy("md", task)
+    assert sys_obj._task_restart_attempts["md"] == 3
 
 
 def test_reset_restart_backoff_if_healthy_task_done():
@@ -366,6 +398,69 @@ def test_reset_restart_backoff_none_task():
     sys_obj = _make_system()
     sys_obj._reset_restart_backoff_if_healthy("md", None)  # Should not raise
     assert sys_obj._task_restart_attempts == {}
+
+
+def test_slow_flap_service_counter_survives_short_uptime():
+    """Bug #8: a service that restarts but only runs briefly should NOT
+    have its counter cleared — allowing eventual max_restart_attempts trigger."""
+    sys_obj = _make_system()
+    sys_obj._task_healthy_uptime_s = 60.0
+    from hft_platform.core import timebase
+
+    # Simulate: counter at 5, task restarted 10s ago (insufficient uptime)
+    sys_obj._task_restart_attempts["md"] = 5
+    sys_obj._task_restart_until_s["md"] = 9999.0
+    sys_obj._task_started_at["md"] = timebase.now_s() - 10
+
+    task = MagicMock()
+    task.done.return_value = False
+    sys_obj._reset_restart_backoff_if_healthy("md", task)
+
+    # Counter must be preserved — not cleared
+    assert sys_obj._task_restart_attempts["md"] == 5
+    assert sys_obj._task_restart_until_s["md"] == 9999.0
+
+
+# ---------------------------------------------------------------------------
+# Bug #10: _sync_drain_recorder must drain queue before flush
+# ---------------------------------------------------------------------------
+
+
+def test_sync_drain_recorder_drains_queue_before_flush():
+    """Bug #10: _sync_drain_recorder must drain recorder.queue into batchers
+    before calling _shutdown_flush, so items pending in the queue are not lost."""
+    sys_obj = _make_system()
+
+    # Create a mock recorder with a real asyncio.Queue containing pending items
+    mock_recorder = MagicMock()
+    mock_recorder.running = True
+    mock_recorder.queue = asyncio.Queue()
+    mock_recorder.queue.put_nowait({"topic": "ticks", "data": {"price": 100}})
+    mock_recorder.queue.put_nowait({"topic": "bidask", "data": {"bid": 99}})
+
+    # Track call order to verify drain-before-flush
+    call_order: list[str] = []
+
+    async def mock_drain():
+        call_order.append("drain")
+        # Actually drain the queue to verify it's consumed
+        while not mock_recorder.queue.empty():
+            mock_recorder.queue.get_nowait()
+            mock_recorder.queue.task_done()
+        return 2
+
+    async def mock_flush():
+        call_order.append("flush")
+
+    mock_recorder._drain_queue_into_batchers = mock_drain
+    mock_recorder._shutdown_flush = mock_flush
+    sys_obj.recorder = mock_recorder
+
+    sys_obj._sync_drain_recorder()
+
+    assert call_order == ["drain", "flush"]
+    assert mock_recorder.queue.empty()
+    assert mock_recorder.running is False
 
 
 # ---------------------------------------------------------------------------

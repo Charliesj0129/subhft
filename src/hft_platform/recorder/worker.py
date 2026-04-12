@@ -550,34 +550,7 @@ class RecorderService:
             self.running = False
             flush_task.cancel()
             # Drain remaining queue items before flushing batchers
-            drained = 0
-            while not self.queue.empty():
-                try:
-                    item = self.queue.get_nowait()
-                    try:
-                        topic = item.get("topic") if isinstance(item, dict) else None
-                        data = item.get("data") if isinstance(item, dict) else None
-                        if topic is None:
-                            self.queue.task_done()
-                            continue
-                        if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
-                            rows = [data] if not isinstance(data, list) else data
-                            await self._wal_first_writer.write(topic, rows)
-                            drained += 1
-                        elif topic in self.batchers:
-                            await self.batchers[topic].add(data)
-                            drained += 1
-                    except Exception as exc:  # noqa: BLE001
-                        logger.error(
-                            "recorder_shutdown_drain_item_error",
-                            error=str(exc),
-                            error_type=type(exc).__name__,
-                        )
-                    self.queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
-            if drained:
-                logger.info("recorder_shutdown_drained", items=drained)
+            await self._drain_queue_into_batchers()
             _shutdown_timeout_s = float(os.getenv("HFT_RECORDER_SHUTDOWN_TIMEOUT_S", "60"))
             try:
                 await asyncio.wait_for(self._shutdown_flush(), timeout=_shutdown_timeout_s)
@@ -590,6 +563,42 @@ class RecorderService:
             except asyncio.CancelledError:
                 logger.warning("recorder_shutdown_flush_cancelled")
             logger.info("Recorder stopped")
+
+    async def _drain_queue_into_batchers(self) -> int:
+        """Drain remaining queue items into batchers/WAL.  Returns count drained.
+
+        Safe to call from any event loop — uses only get_nowait() for the queue
+        and async batcher.add() / WAL writer for processing.
+        """
+        drained = 0
+        while not self.queue.empty():
+            try:
+                item = self.queue.get_nowait()
+                try:
+                    topic = item.get("topic") if isinstance(item, dict) else None
+                    data = item.get("data") if isinstance(item, dict) else None
+                    if topic is None:
+                        self.queue.task_done()
+                        continue
+                    if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
+                        rows = [data] if not isinstance(data, list) else data
+                        await self._wal_first_writer.write(topic, rows)
+                        drained += 1
+                    elif topic in self.batchers:
+                        await self.batchers[topic].add(data)
+                        drained += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "recorder_shutdown_drain_item_error",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                self.queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+        if drained:
+            logger.info("recorder_shutdown_drained", items=drained)
+        return drained
 
     async def _shutdown_flush(self) -> None:
         """Flush all batchers and shut down writer. Called during graceful shutdown."""

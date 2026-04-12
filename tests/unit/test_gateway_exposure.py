@@ -541,3 +541,264 @@ def test_global_notional_property_matches_get_global_notional():
     store = ExposureStore(global_max_notional=0)
     store.check_and_update(_key(), _make_intent(price=500_000, qty=5))
     assert store.global_notional == store.get_global_notional()
+
+
+# ── Bug #6: Per-order tracking (exposure held past dispatch) ─────────────
+
+
+def _make_intent_with_key(
+    price: int = 1_000_000,
+    qty: int = 1,
+    intent_type: IntentType = IntentType.NEW,
+    idempotency_key: str = "ord-1",
+    target_order_id: str | None = None,
+) -> OrderIntent:
+    return OrderIntent(
+        intent_id=1,
+        strategy_id="s1",
+        symbol="TSE:2330",
+        intent_type=intent_type,
+        side=Side.BUY,
+        price=price,
+        qty=qty,
+        tif=TIF.LIMIT,
+        idempotency_key=idempotency_key,
+        target_order_id=target_order_id,
+    )
+
+
+def test_per_order_tracking_holds_exposure():
+    """Bug #6: exposure must NOT be released after dispatch — subsequent
+    orders that exceed the cap must be blocked."""
+    store = ExposureStore(global_max_notional=1_000_000)
+    key = _key()
+    intent = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
+    ok1, _ = store.check_and_update(key, intent, order_key="ord-1")
+    assert ok1 is True
+
+    # Second order should be BLOCKED because first is still held
+    intent2 = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-2")
+    ok2, reason2 = store.check_and_update(key, intent2, order_key="ord-2")
+    assert ok2 is False
+    assert reason2 == "GLOBAL_EXPOSURE_LIMIT"
+
+
+def test_release_by_order_frees_capacity():
+    """release_by_order releases the specific order's notional."""
+    store = ExposureStore(global_max_notional=1_000_000)
+    key = _key()
+    intent = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
+    store.check_and_update(key, intent, order_key="ord-1")
+
+    released = store.release_by_order("ord-1")
+    assert released == 1_000_000
+    assert store.get_global_notional() == 0
+
+    # Now capacity is free
+    ok, _ = store.check_and_update(key, intent, order_key="ord-1b")
+    assert ok is True
+
+
+def test_release_by_order_unknown_key_returns_zero():
+    """release_by_order with unknown key is a safe no-op."""
+    store = ExposureStore(global_max_notional=0)
+    assert store.release_by_order("nonexistent") == 0
+
+
+def test_expire_stale_orders_clears_old_reservations():
+    """expire_stale_orders releases orders older than TTL."""
+    store = ExposureStore(global_max_notional=0)
+    key = _key()
+    intent = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="old-ord")
+    store.check_and_update(key, intent, order_key="old-ord")
+
+    # Manually backdate the timestamp
+    import time
+    store._order_ts["old-ord"] = time.monotonic() - 100
+
+    expired = store.expire_stale_orders(max_age_s=30)
+    assert expired == 1
+    assert store.get_global_notional() == 0
+
+
+def test_expire_stale_orders_keeps_fresh():
+    """expire_stale_orders does not release recent orders."""
+    store = ExposureStore(global_max_notional=0)
+    key = _key()
+    intent = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="fresh-ord")
+    store.check_and_update(key, intent, order_key="fresh-ord")
+
+    expired = store.expire_stale_orders(max_age_s=30)
+    assert expired == 0
+    assert store.get_global_notional() == 1_000_000
+
+
+# ── Bug #7: AMEND must check delta exposure ──────────────────────────────
+
+
+def test_amend_increase_blocked_by_global_limit():
+    """Bug #7: AMEND that increases notional must be checked against limits."""
+    store = ExposureStore(global_max_notional=1_500_000)
+    key = _key()
+    # Place original order: 1M notional
+    intent_new = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
+    ok, _ = store.check_and_update(key, intent_new, order_key="ord-1")
+    assert ok is True
+    assert store.get_global_notional() == 1_000_000
+
+    # AMEND to 2M notional — delta +1M exceeds remaining capacity (500K)
+    intent_amend = _make_intent_with_key(
+        price=2_000_000, qty=1,
+        intent_type=IntentType.AMEND,
+        idempotency_key="amend-1",
+        target_order_id="ord-1",
+    )
+    ok2, reason2 = store.check_and_update(key, intent_amend, order_key="amend-1")
+    assert ok2 is False
+    assert reason2 == "GLOBAL_EXPOSURE_LIMIT"
+    # Exposure unchanged
+    assert store.get_global_notional() == 1_000_000
+
+
+def test_amend_increase_blocked_by_strategy_limit():
+    """AMEND that increases notional checked against per-strategy limit."""
+    limits = {"s1": ExposureLimits(max_notional_scaled=1_500_000)}
+    store = ExposureStore(global_max_notional=0, limits=limits)
+    key = _key()
+    intent_new = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
+    store.check_and_update(key, intent_new, order_key="ord-1")
+
+    intent_amend = _make_intent_with_key(
+        price=2_000_000, qty=1,
+        intent_type=IntentType.AMEND,
+        idempotency_key="amend-1",
+        target_order_id="ord-1",
+    )
+    ok, reason = store.check_and_update(key, intent_amend, order_key="amend-1")
+    assert ok is False
+    assert reason == "STRATEGY_EXPOSURE_LIMIT"
+
+
+def test_amend_decrease_always_allowed():
+    """AMEND that decreases notional is always approved (delta <= 0)."""
+    store = ExposureStore(global_max_notional=1_000_000)
+    key = _key()
+    intent_new = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
+    store.check_and_update(key, intent_new, order_key="ord-1")
+
+    # AMEND to 500K — delta is -500K, always allowed
+    intent_amend = _make_intent_with_key(
+        price=500_000, qty=1,
+        intent_type=IntentType.AMEND,
+        idempotency_key="amend-1",
+        target_order_id="ord-1",
+    )
+    ok, _ = store.check_and_update(key, intent_amend, order_key="amend-1")
+    assert ok is True
+    assert store.get_global_notional() == 500_000
+
+
+def test_amend_within_limit_approved_and_updates_tracking():
+    """AMEND within limits is approved and updates the per-order record."""
+    store = ExposureStore(global_max_notional=5_000_000)
+    key = _key()
+    intent_new = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
+    store.check_and_update(key, intent_new, order_key="ord-1")
+
+    intent_amend = _make_intent_with_key(
+        price=2_000_000, qty=1,
+        intent_type=IntentType.AMEND,
+        idempotency_key="amend-1",
+        target_order_id="ord-1",
+    )
+    ok, _ = store.check_and_update(key, intent_amend, order_key="amend-1")
+    assert ok is True
+    assert store.get_global_notional() == 2_000_000
+    # Per-order record updated
+    assert store._order_notionals["ord-1"] == 2_000_000
+
+
+def test_amend_rejection_rollback():
+    """Rejected AMEND delta is rolled back via release_exposure."""
+    store = ExposureStore(global_max_notional=5_000_000)
+    key = _key()
+    intent_new = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
+    store.check_and_update(key, intent_new, order_key="ord-1")
+
+    # Approved AMEND: +1M delta
+    intent_amend = _make_intent_with_key(
+        price=2_000_000, qty=1,
+        intent_type=IntentType.AMEND,
+        idempotency_key="amend-1",
+        target_order_id="ord-1",
+    )
+    ok, _ = store.check_and_update(key, intent_amend, order_key="amend-1")
+    assert ok is True
+    assert store.get_global_notional() == 2_000_000
+
+    # Risk rejects → rollback via release_exposure
+    store.release_exposure(key, intent_amend, order_key="amend-1")
+    assert store.get_global_notional() == 1_000_000
+    assert store._order_notionals["ord-1"] == 1_000_000
+
+
+def test_amend_unknown_target_treats_full_notional_as_delta():
+    """AMEND with unknown target_order_id conservatively treats full notional as delta."""
+    store = ExposureStore(global_max_notional=1_000_000)
+    key = _key()
+    intent_amend = _make_intent_with_key(
+        price=2_000_000, qty=1,
+        intent_type=IntentType.AMEND,
+        idempotency_key="amend-1",
+        target_order_id="unknown-ord",
+    )
+    ok, reason = store.check_and_update(key, intent_amend, order_key="amend-1")
+    assert ok is False
+    assert reason == "GLOBAL_EXPOSURE_LIMIT"
+
+
+def test_amend_typed_path_checks_delta():
+    """Bug #7 typed path: AMEND delta is checked via check_and_update_typed."""
+    store = ExposureStore(global_max_notional=1_500_000)
+    key = _key()
+    # Place via typed path
+    store.check_and_update_typed(
+        key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1, order_key="ord-1",
+    )
+    # AMEND via typed path — delta +1M exceeds remaining 500K
+    ok, reason = store.check_and_update_typed(
+        key,
+        intent_type=int(IntentType.AMEND),
+        price=2_000_000,
+        qty=1,
+        order_key="amend-1",
+        target_order_key="ord-1",
+    )
+    assert ok is False
+    assert reason == "GLOBAL_EXPOSURE_LIMIT"
+
+
+def test_release_exposure_new_uses_per_order():
+    """release_exposure for NEW intent uses per-order tracking when order_key provided."""
+    store = ExposureStore(global_max_notional=0)
+    key = _key()
+    intent = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
+    store.check_and_update(key, intent, order_key="ord-1")
+    assert store.get_global_notional() == 1_000_000
+
+    store.release_exposure(key, intent, order_key="ord-1")
+    assert store.get_global_notional() == 0
+
+
+def test_consecutive_orders_blocked_with_per_order_tracking():
+    """Bug #6 end-to-end: N consecutive NEW orders cannot each bypass cap."""
+    store = ExposureStore(global_max_notional=1_000_000)
+    key = _key()
+    results = []
+    for i in range(5):
+        intent = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key=f"ord-{i}")
+        ok, _ = store.check_and_update(key, intent, order_key=f"ord-{i}")
+        results.append(ok)
+    # Only first should pass; rest blocked
+    assert results == [True, False, False, False, False]
+    assert store.get_global_notional() == 1_000_000

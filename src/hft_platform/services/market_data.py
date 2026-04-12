@@ -204,6 +204,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         recorder_queue: asyncio.Queue | None = None,
         feature_engine: FeatureEngine | None = None,
         storm_guard: Any | None = None,
+        wal_writer: Any | None = None,
     ):
         self.bus = bus
         # Cache bus method refs to avoid per-tick getattr (DEC-10)
@@ -214,6 +215,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self.publish_full_events = publish_full_events
         self.recorder_queue = recorder_queue
         self._storm_guard = storm_guard
+        self._wal_writer = wal_writer
+        self._wal_fallback_count: int = 0
+        self._wal_fallback_sample_rate: int = max(
+            1, int(os.getenv("HFT_MD_WAL_FALLBACK_SAMPLE_RATE", "10"))
+        )
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
@@ -1389,6 +1395,26 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             logger.debug("operation_fallback", error=str(exc))
             pass
 
+    def _md_wal_fallback_write(self, topic: str, payload: Any) -> None:
+        """Rate-limited WAL fallback when recorder queue is full.
+
+        Writes 1-in-N events to WAL to preserve time-series continuity without
+        overwhelming WAL disk during sustained queue pressure.
+        """
+        if self._wal_writer is None:
+            return
+        self._wal_fallback_count += 1
+        if self._wal_fallback_count % self._wal_fallback_sample_rate != 0:
+            return
+        try:
+            asyncio.ensure_future(self._wal_writer.write(topic, [payload]))
+            if self.metrics_registry:
+                _metric = getattr(self.metrics_registry, "recorder_md_wal_fallback_total", None)
+                if _metric is not None:
+                    _metric.inc()
+        except Exception as exc:
+            logger.warning("md_wal_fallback_failed", error=str(exc), topic=topic)
+
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
         if self.recorder_queue is None:
             return
@@ -1439,6 +1465,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 self._recorder_dropped_count += 1
                 if self.metrics_registry:
                     self.metrics_registry.recorder_direct_drops_total.inc()
+                self._md_wal_fallback_write(topic, payload)
                 if self._recorder_dropped_count >= self._record_degrade_threshold and not self._record_degraded:
                     self._record_degraded = True
                     self._record_degraded_since = time.monotonic()

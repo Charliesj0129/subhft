@@ -151,13 +151,16 @@ class TestSupervisionCrashDetection:
         assert system._start_service.call_count == 1
 
     def test_restart_backoff_resets_when_task_healthy(self):
-        """If the task is alive, backoff state is cleared."""
+        """If the task is alive AND has been up >= healthy_uptime_s, backoff is cleared."""
+        from hft_platform.core import timebase
+
         system = _make_system()
-        # Simulate a live task
+        # Simulate a live task with sufficient uptime
         mock_task = MagicMock()
         mock_task.done.return_value = False
         system._task_restart_attempts["md"] = 3
         system._task_restart_until_s["md"] = 999999.0
+        system._task_started_at["md"] = timebase.now_s() - 120  # 120s uptime > 60s threshold
 
         system._reset_restart_backoff_if_healthy("md", mock_task)
 
@@ -192,11 +195,16 @@ class TestSupervisionCrashDetection:
 
         system._start_service = MagicMock(side_effect=_close_coro)
 
-        # _try_restart_service calls now_s() once per invocation.
-        # Call 1: now=0.0, allowed=0.0 → proceeds, sets until=0.0+base
-        # Call 2: now=base+0.1, allowed=base → proceeds, sets until=(base+0.1)+base*2
-        # Call 3: now=base*3+0.2, allowed=base*3+0.1 → proceeds
-        times = iter([0.0, base + 0.1, base * 3 + 0.2])
+        # _try_restart_service calls now_s() twice per invocation:
+        # once for backoff check, once for _task_started_at.
+        # Call 1: now=0.0 (check), 0.0 (started_at) → proceeds, sets until=0.0+base
+        # Call 2: now=base+0.1 (check), base+0.1 (started_at) → proceeds
+        # Call 3: now=base*3+0.2 (check), base*3+0.2 (started_at) → proceeds
+        times = iter([
+            0.0, 0.0,
+            base + 0.1, base + 0.1,
+            base * 3 + 0.2, base * 3 + 0.2,
+        ])
         with patch("hft_platform.services.system.timebase.now_s", side_effect=times):
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
