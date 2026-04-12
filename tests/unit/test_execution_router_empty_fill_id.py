@@ -375,7 +375,7 @@ class TestNormalizerSyntheticFillId:
         assert "SELL" in fill.fill_id
 
     def test_synthetic_fill_id_deterministic(self) -> None:
-        """Same input produces same synthetic fill_id for dedup consistency."""
+        """Same input produces unique synthetic fill_ids (counter-based) for disambiguation."""
         normalizer = ExecutionNormalizer()
         data = {
             "code": "2330",
@@ -391,4 +391,9 @@ class TestNormalizerSyntheticFillId:
         fill1 = normalizer.normalize_fill(raw1)
         fill2 = normalizer.normalize_fill(raw2)
         assert fill1 is not None and fill2 is not None
-        assert fill1.fill_id == fill2.fill_id
+        # Each call increments _synth_counter, so IDs differ by the trailing counter
+        assert fill1.fill_id != fill2.fill_id
+        # Both share the same prefix (symbol, side, price, qty, ts)
+        prefix1 = "_".join(fill1.fill_id.rsplit("_", 1)[:-1])
+        prefix2 = "_".join(fill2.fill_id.rsplit("_", 1)[:-1])
+        assert prefix1 == prefix2

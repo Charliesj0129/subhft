@@ -27,21 +27,42 @@
   - parity 測試與回歸測試可在 CI 穩定通過。
 
 ### 1.2 Shioaji Adapter 後續收斂（P1）
-- 狀態：進行中（code cutover 完成，待 production burn-in）
+- 狀態：進行中（code cutover 完成，burn-in 期間發現訂閱限制問題，已修復）
 - 追蹤文件：`docs/architecture/shioaji-client-resilience-decoupling-plan.md`
+- 進展（2026-04-10）：
+  - 修復 quote connection pool 訂閱限制 + round-robin slot 分配 bug（647c1468）。
+  - 修復 contracts 阻塞 + subscription limit 啟動 bug（cfaf30e8）。
+  - 修復 quote-only 連線誤報 "order blocked" 錯誤（e90ad0c8）。
+  - 修復 strategy id resolution（eb984e50）。
 - 待辦：
   - 完成 production burn-in 觀測窗口（連續交易日穩定性證據）。
   - 收斂殘留 low-risk legacy shim，降低 facade 層長期維護成本。
+  - 監控 quote pool 在高負載 contract refresh 期間的振盪行為。
 - 驗收標準：
-  - 連續觀測期內無 reconnect storm / callback crash signature。
+  - 連續觀測期內無 reconnect storm / callback crash / subscription oscillation。
   - 相關 SLO 與告警在月度審查包內可稽核。
 
 ### 1.3 CE2/CE3 營運化追蹤（P1）
 - 狀態：持續營運
 - 追蹤文件：`docs/architecture/cluster-evolution-backlog.md`
+- 進展（2026-04-12）：
+  - Gateway 模式 4 項盲點修復：rejection feedback、degrade inputs、HALT drain、setter encapsulation（2476a2d3）。
+  - LocalIntentChannel 新增 TTL expired callback（b5b17c6e, 90efe47a）。
 - 待辦：
   - 按季度執行 gateway / wal-first chaos 子集並附掛證據到 reliability review。
   - 針對 backlog/replay 健康度維持月度趨勢審核（非一次性開發項）。
+
+### 1.5 Production-Grade Runtime Audit（P0 — 已完成）
+- 狀態：✅ 完成（2026-04-12）
+- Commit：ae243a08
+- 涵蓋：13 fixes across 7 runtime planes
+  - Control: loop lag/queue depth monitoring 強化
+  - Market Data: sliding window drop rate detector（raw_queue burst backpressure）
+  - Decision: RiskFeedback side field（pending counter leak prevention）
+  - Execution: typed-intent identity、adapter rejection feedback、DLQ logging
+  - Risk: pending exposure、ROD throttle、unrealized PnL gate、futures threshold、recovery position visibility
+  - Gateway: rejection feedback、degrade inputs、HALT drain
+  - Recorder: WAL timestamp parsing 修復
 
 ### 1.4 熱路徑 Rust 化擴編（P0）
 - 狀態：規劃中（已有 `rust_core` 基礎，尚未覆蓋更多 execution hotpath）

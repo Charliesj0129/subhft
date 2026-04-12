@@ -172,13 +172,31 @@ class GatewayService:
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
+    async def _exposure_expiry_loop(self) -> None:
+        """Periodically expire stale per-order exposure reservations."""
+        ttl_s = float(os.getenv("HFT_EXPOSURE_ORDER_TTL_S", "30"))
+        interval_s = max(5.0, ttl_s / 3)
+        while self.running:
+            try:
+                await asyncio.sleep(interval_s)
+                if hasattr(self._exposure, "expire_stale_orders"):
+                    expired = self._exposure.expire_stale_orders(ttl_s)
+                    if expired > 0:
+                        logger.info("exposure_ttl_expired", count=expired, ttl_s=ttl_s)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("exposure_expiry_loop_error", error=str(exc))
+
     async def run(self) -> None:
         self.running = True
         logger.info("GatewayService started")
+        self._exposure_expiry_task: asyncio.Task | None = None
         try:
             if self._leader_lease is not None:
                 await self._leader_lease_tick()
                 self._leader_lease_task = asyncio.create_task(self._leader_lease_loop())
+            self._exposure_expiry_task = asyncio.create_task(self._exposure_expiry_loop())
             while self.running:
                 receive_raw = getattr(self._channel, "receive_raw", None)
                 if callable(receive_raw):
@@ -199,6 +217,14 @@ class GatewayService:
             logger.info("GatewayService stopping")
         finally:
             self.running = False
+            expiry_task = self._exposure_expiry_task
+            self._exposure_expiry_task = None
+            if expiry_task is not None:
+                expiry_task.cancel()
+                try:
+                    await expiry_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             lease_task = self._leader_lease_task
             self._leader_lease_task = None
             if lease_task is not None:

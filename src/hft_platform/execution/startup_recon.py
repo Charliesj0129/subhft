@@ -434,7 +434,7 @@ class StartupPositionVerifier:
         ckpt_total = sum(d.get("net_qty", 0) for _, d in entries)
         # First pass: compute adjusted quantities per entry.
         adj_qtys: list[int] = []
-        for i, (key, data) in enumerate(entries):
+        for i, (_key, data) in enumerate(entries):
             entry_qty = data.get("net_qty", 0)
             if ckpt_total == target_qty:
                 adj_qtys.append(entry_qty)
