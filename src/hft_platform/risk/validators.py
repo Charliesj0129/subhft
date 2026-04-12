@@ -199,6 +199,12 @@ class PositionLimitValidator(RiskValidator):
         if callable(provider):
             return int(provider(symbol, strategy_id) or 0)
 
+        # Prefer net_qty_for_symbol which includes pending recovery positions
+        # (loaded at startup but not yet merged via first fill).
+        nq_fn = getattr(provider, "net_qty_for_symbol", None)
+        if nq_fn is not None:
+            return int(nq_fn(symbol, strategy_id))
+
         positions = getattr(provider, "positions", {})
         net_qty = 0
         for pos in positions.values():

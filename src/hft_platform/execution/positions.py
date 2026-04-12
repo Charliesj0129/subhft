@@ -222,6 +222,28 @@ class PositionStore:
             return 0.0
         return (self._peak_equity_scaled - current) / self._peak_equity_scaled
 
+    def net_qty_for_symbol(self, symbol: str, strategy_id: str | None = None) -> int:
+        """Return aggregate net_qty for *symbol*, including pending recovery positions.
+
+        When *strategy_id* is provided, only that strategy's entries in
+        ``self.positions`` are summed.  Recovery entries (which lack a
+        strategy_id) are always included because they represent a broker-
+        confirmed position that has not yet received its first fill.
+        """
+        total = 0
+        for key, pos in self.positions.items():
+            if getattr(pos, "symbol", None) != symbol:
+                continue
+            if strategy_id is not None and getattr(pos, "strategy_id", None) != strategy_id:
+                continue
+            total += int(getattr(pos, "net_qty", 0) or 0)
+        # Include pending recovery (keyed by account:symbol, no strategy_id)
+        for rkey, rdata in self._recovery_positions.items():
+            rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1]) if isinstance(rdata, dict) else ""
+            if rsym == symbol:
+                total += int(rdata.get("net_qty", 0))
+        return total
+
     def _update_portfolio_aggregates(self, pnl_delta: int = 0) -> None:
         """Update portfolio-level PnL totals and high-watermark.
 
