@@ -814,9 +814,7 @@ def test_md_wal_fallback_called_on_queue_full(mds_factory):
     svc.recorder_queue.put_nowait({"topic": "dummy", "data": {}})  # fill queue
 
     mock_wal = MagicMock()
-    fut = asyncio.Future()
-    fut.set_result(None)
-    mock_wal.write = MagicMock(return_value=fut)
+    mock_wal.write = MagicMock(return_value=MagicMock())
     svc._wal_writer = mock_wal
     svc._wal_fallback_sample_rate = 1  # write every event (no sampling)
     svc._wal_fallback_count = 0
