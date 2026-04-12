@@ -268,25 +268,42 @@ class GatewayService:
                 existing = self._dedup.check_or_reserve(key)
         else:
             existing = None
-        if existing is not None and existing.approved is not None:
+        if existing is not None:
+            if existing.approved is not None:
+                # Committed dedup hit — return cached decision
+                self._dedup_hits += 1
+                self._inc_dedup_hit_metric()
+                self._emit_trace(
+                    "gateway_dedup_hit",
+                    getattr(intent, "trace_id", ""),
+                    {
+                        "ack_token": envelope.ack_token,
+                        "key": key,
+                        "approved": existing.approved,
+                        "reason": getattr(existing, "reason_code", ""),
+                    },
+                )
+                logger.debug(
+                    "Dedup hit — returning cached decision",
+                    key=key,
+                    approved=existing.approved,
+                    reason=existing.reason_code,
+                )
+                return
+            # Bug #7: Reserved but not yet committed (in-flight duplicate).
+            # Reject to prevent race where two envelopes with the same key
+            # both proceed through the pipeline and double-commit.
             self._dedup_hits += 1
             self._inc_dedup_hit_metric()
-            self._emit_trace(
-                "gateway_dedup_hit",
-                getattr(intent, "trace_id", ""),
-                {
-                    "ack_token": envelope.ack_token,
-                    "key": key,
-                    "approved": existing.approved,
-                    "reason": getattr(existing, "reason_code", ""),
-                },
-            )
-            logger.debug(
-                "Dedup hit — returning cached decision",
+            logger.warning(
+                "Dedup in-flight duplicate rejected",
                 key=key,
-                approved=existing.approved,
-                reason=existing.reason_code,
+                ack_token=envelope.ack_token,
             )
+            self._rejected += 1
+            self._emit_reject("DEDUP_IN_FLIGHT")
+            self._send_rejection_feedback(intent, "DEDUP_IN_FLIGHT")
+            self._record_latency(t0)
             return
 
         # Step 1b: Per-intent TTL check (mirrors RiskEngine.run() line 409)
@@ -478,13 +495,25 @@ class GatewayService:
                     cmd = self._risk_engine.create_command(decision.intent)
                 cmd_id_for_commit = int(cmd.cmd_id)
             # Step 6: Dispatch to order adapter (dedup committed AFTER outcome is known)
+            # Bug #6: use put() with short timeout instead of put_nowait() to
+            # tolerate transient _api_queue fullness (gives _api_worker ~10ms to drain).
+            _dispatch_ok = False
             try:
                 if typed_cmd_frame is not None and callable(typed_submit):
                     typed_submit(typed_cmd_frame)
+                    _dispatch_ok = True
                 else:
-                    self._order_adapter._api_queue.put_nowait(cmd)
+                    try:
+                        self._order_adapter._api_queue.put_nowait(cmd)
+                        _dispatch_ok = True
+                    except asyncio.QueueFull:
+                        await asyncio.wait_for(
+                            self._order_adapter._api_queue.put(cmd),
+                            timeout=0.01,
+                        )
+                        _dispatch_ok = True
                 self._dispatched += 1
-            except asyncio.QueueFull:
+            except (asyncio.QueueFull, asyncio.TimeoutError):
                 self._rejected += 1
                 # Commit dedup as rejected — must happen after the failed dispatch attempt
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):

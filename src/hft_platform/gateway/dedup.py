@@ -167,11 +167,27 @@ class IdempotencyStore:
         reason_code: str,
         cmd_id: int,
     ) -> None:
-        """Record final decision for a reserved key."""
+        """Record final decision for a reserved key.
+
+        First-commit-wins: if the record is already committed (approved is not
+        None), the call is a no-op with a warning log.  This prevents race
+        conditions where two in-flight envelopes both try to commit for the
+        same key (Bug #7).
+        """
         if not key:
             return
         if key in self._records:
             rec = self._records[key]
+            if rec.approved is not None:
+                logger.warning(
+                    "dedup_commit_overwrite_blocked",
+                    key=key,
+                    existing_approved=rec.approved,
+                    existing_reason=rec.reason_code,
+                    new_approved=approved,
+                    new_reason=reason_code,
+                )
+                return
             rec.approved = approved
             rec.reason_code = reason_code
             rec.cmd_id = cmd_id
