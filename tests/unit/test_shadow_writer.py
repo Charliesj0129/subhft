@@ -91,52 +91,50 @@ class TestShadowOrderWriterBatching:
 
 
 class TestGetChClient:
-    def test_get_ch_client_raises_when_clickhouse_connect_missing(self):
-        """_get_ch_client raises RuntimeError when clickhouse_connect is not importable."""
+    def test_get_ch_client_raises_when_clickhouse_driver_missing(self):
+        """_get_ch_client raises RuntimeError when clickhouse_driver is not importable."""
         import sys
 
         from hft_platform.order.shadow_writer import _get_ch_client
 
-        with patch.dict(sys.modules, {"clickhouse_connect": None}):
+        with patch.dict(sys.modules, {"clickhouse_driver": None}):
             try:
                 _get_ch_client()
-                # If we got here without error, the import succeeded despite None in sys.modules
-                # This path is acceptable (module may be cached elsewhere).
             except RuntimeError as exc:
-                assert "clickhouse_connect" in str(exc)
+                assert "clickhouse_driver" in str(exc)
             except (ImportError, AttributeError):
                 pass  # Also acceptable
 
     def test_get_ch_client_uses_env_vars(self, monkeypatch):
-        """_get_ch_client passes host/port/user/password from env to get_client."""
+        """_get_ch_client passes host/port/user/password from env to clickhouse_driver.Client."""
         import sys
 
         from hft_platform.order.shadow_writer import _get_ch_client
 
         monkeypatch.setenv("HFT_CLICKHOUSE_HOST", "ch-host")
-        monkeypatch.setenv("HFT_CLICKHOUSE_PORT", "9001")
+        monkeypatch.setenv("HFT_CLICKHOUSE_NATIVE_PORT", "9001")
         monkeypatch.setenv("HFT_CLICKHOUSE_USER", "hft_user")
         monkeypatch.setenv("HFT_CLICKHOUSE_PASSWORD", "s3cret")
 
-        mock_get_client = MagicMock(return_value=MagicMock())
+        mock_client_cls = MagicMock(return_value=MagicMock())
         mock_module = MagicMock()
-        mock_module.get_client = mock_get_client
+        mock_module.Client = mock_client_cls
 
-        original = sys.modules.get("clickhouse_connect")
-        sys.modules["clickhouse_connect"] = mock_module
+        original = sys.modules.get("clickhouse_driver")
+        sys.modules["clickhouse_driver"] = mock_module
         try:
             _get_ch_client()
         finally:
             if original is None:
-                sys.modules.pop("clickhouse_connect", None)
+                sys.modules.pop("clickhouse_driver", None)
             else:
-                sys.modules["clickhouse_connect"] = original
+                sys.modules["clickhouse_driver"] = original
 
-        mock_get_client.assert_called_once()
-        call_kwargs = mock_get_client.call_args[1]
+        mock_client_cls.assert_called_once()
+        call_kwargs = mock_client_cls.call_args[1]
         assert call_kwargs["host"] == "ch-host"
         assert call_kwargs["port"] == 9001
-        assert call_kwargs["username"] == "hft_user"
+        assert call_kwargs["user"] == "hft_user"
         assert call_kwargs["password"] == "s3cret"
 
 

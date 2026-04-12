@@ -8,12 +8,11 @@ Reports day / night / combined results separately.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Literal
-
-import os
 
 import numpy as np
 

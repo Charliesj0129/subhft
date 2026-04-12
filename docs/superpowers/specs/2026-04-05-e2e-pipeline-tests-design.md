@@ -199,7 +199,7 @@ Import from existing `tests/factories/`:
 | Test | Input | Assert |
 |------|-------|--------|
 | `test_batcher_flush_on_threshold` | Add records until batch threshold → `check_flush()` | `DataWriter.insert()` called with correct table and row count |
-| `test_wal_write_and_read_roundtrip` | `WALWriter.write(records)` → `WALReplayer.replay()` | Records read back match originals (idempotent) |
+| `test_wal_write_and_read_roundtrip` | `WALWriter.write(records)` → `WALLoaderService.replay()` | Records read back match originals (idempotent) |
 | `test_wal_fallback_on_writer_failure` | `DataWriter.insert()` raises → recorder fallback | WAL file created in `tmp_path` |
 
 **Integration tests:**

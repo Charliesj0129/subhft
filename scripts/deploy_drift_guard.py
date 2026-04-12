@@ -28,7 +28,7 @@ class CmdResult:
 
 DEFAULT_INCLUDE_PATHS = [
     "docker-compose.yml",
-    "docker-stack.yml",
+    "docker-compose.production.yml",
     "config",
     ".env",
     ".env.example",

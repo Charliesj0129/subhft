@@ -173,14 +173,6 @@ stop: ## Stop services with Docker Compose
 logs: ## Show hft-engine logs (Docker Compose)
 	docker compose logs -f hft-engine
 
-swarm-start: ## Build image and deploy Docker Swarm stack (optional)
-	docker swarm init >/dev/null 2>&1 || true
-	docker build -t $${HFT_IMAGE:-hft-platform:latest} .
-	docker stack deploy -c docker-stack.yml hft
-
-swarm-stop: ## Remove Docker Swarm stack
-	docker stack rm hft
-
 swarm-logs: ## Show hft-engine service logs (Swarm)
 	docker service logs -f hft_hft-engine
 
