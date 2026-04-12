@@ -154,9 +154,11 @@ class BackupManager:
     def _verify_backup(self, backup_name: str) -> None:
         """Verify backup completed successfully."""
         client = self._client()
+        # system.backups.name is the full Disk(...) expression, not just the backup name
+        disk_name = f"Disk('backup_local', '{backup_name}/')"
         rows = client.query(
             "SELECT status, error FROM system.backups WHERE name = {name:String} ORDER BY start_time DESC LIMIT 1",
-            parameters={"name": backup_name},
+            parameters={"name": disk_name},
         ).result_rows
         if not rows:
             raise BackupError(f"No backup entry found in system.backups for '{backup_name}'")
