@@ -419,6 +419,10 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._last_bid: dict[str, int] = {}
         self._last_ask: dict[str, int] = {}
 
+        # DEC2-008: Fill dedup — prevent double-counting from duplicate broker callbacks.
+        self._seen_fill_ids: set[str] = set()
+        self._FILL_DEDUP_MAX = 500
+
         logger.info(
             "R47MakerStrategy initialized",
             pe_danger=pe_danger_threshold,
@@ -529,6 +533,22 @@ class R47MakerStrategy(SimpleMarketMaker):
 
     def on_fill(self, event: FillEvent) -> None:
         """Track position locally to avoid stale StrategyContext cache."""
+        # DEC2-008: Fill dedup to prevent position double-counting.
+        fid = getattr(event, "fill_id", None) or ""
+        if fid and fid in self._seen_fill_ids:
+            logger.warning("r47_duplicate_fill_skipped", fill_id=fid, symbol=event.symbol)
+            return
+        if fid:
+            self._seen_fill_ids.add(fid)
+            if len(self._seen_fill_ids) > self._FILL_DEDUP_MAX:
+                # Evict ~half (set has no ordering, but this bounds memory)
+                evict = len(self._seen_fill_ids) - self._FILL_DEDUP_MAX // 2
+                victims = set()
+                for fid in self._seen_fill_ids:
+                    if len(victims) >= evict:
+                        break
+                    victims.add(fid)
+                self._seen_fill_ids -= victims
         sym = event.symbol
         delta = event.qty if event.side == Side.BUY else -event.qty
         self._local_pos[sym] = self._local_pos.get(sym, 0) + delta
@@ -552,7 +572,9 @@ class R47MakerStrategy(SimpleMarketMaker):
         if event.status not in (OrderStatus.CANCELLED, OrderStatus.FAILED):
             return
         sym = event.symbol
-        remaining = event.remaining_qty if event.remaining_qty > 0 else 1
+        # DEC2-002: remaining_qty=0 means fully filled before cancel arrived.
+        # Decrement by 0 (no-op) — the fill already decremented pending.
+        remaining = max(0, event.remaining_qty)
         if event.side == Side.BUY:
             self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - remaining)
         else:
@@ -573,6 +595,11 @@ class R47MakerStrategy(SimpleMarketMaker):
         Uses feedback.side when available for precise decrement; falls back to
         decrementing both sides (safe: R47 sends qty=1 per side).
         """
+        # DEC2-001: Approved feedback (e.g., DLQ expiry for dispatched orders)
+        # must NOT decrement pending — the order was sent to the broker and
+        # will be accounted for via on_fill/on_order.
+        if getattr(feedback, "was_approved", False):
+            return
         sym = feedback.symbol
         side = getattr(feedback, "side", None)
         if side == Side.BUY:
@@ -727,13 +754,16 @@ class R47MakerStrategy(SimpleMarketMaker):
         pending_sell = self._pending_sell.get(exec_sym, 0)
         bid_moved = bid_price_scaled != self._last_bid.get(exec_sym, -1)
         ask_moved = ask_price_scaled != self._last_ask.get(exec_sym, -1)
+        # DEC2-004: qty is ALWAYS 1. pending_buy/sell increment by 1 to match.
+        # If qty changes, pending tracking MUST be updated to use actual qty.
+        _qty = 1
         if pos + pending_buy < max_pos and not self._suppress_bid and bid_moved:
-            self.buy(exec_sym, bid_price_scaled, 1)
-            self._pending_buy[exec_sym] = pending_buy + 1
+            self.buy(exec_sym, bid_price_scaled, _qty)
+            self._pending_buy[exec_sym] = pending_buy + _qty
             self._last_bid[exec_sym] = bid_price_scaled
         if pos - pending_sell > -max_pos and not self._suppress_ask and ask_moved:
-            self.sell(exec_sym, ask_price_scaled, 1)
-            self._pending_sell[exec_sym] = pending_sell + 1
+            self.sell(exec_sym, ask_price_scaled, _qty)
+            self._pending_sell[exec_sym] = pending_sell + _qty
             self._last_ask[exec_sym] = ask_price_scaled
         self._quotes_sent += 1
 

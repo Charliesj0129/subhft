@@ -1228,6 +1228,25 @@ class StrategyRunner:
                                 )
                             except asyncio.QueueFull:
                                 self.metrics.rejection_sink_overflow_total.inc()
+                                # DEC2-006: Direct callback fallback when sink is full.
+                                # Without this, the strategy permanently leaks pending slots.
+                                try:
+                                    _inline_fb = RiskFeedback(
+                                        intent_id=_fb_iid,
+                                        strategy_id=_fb_sid,
+                                        symbol=_fb_sym,
+                                        reason_code="risk_queue_full_sink_overflow",
+                                        timestamp_ns=timebase.now_ns(),
+                                        side=Side(_fb_side) if _fb_side is not None else None,
+                                    )
+                                    if hasattr(strategy, "on_risk_feedback"):
+                                        strategy.on_risk_feedback(_inline_fb)
+                                except Exception as _fb_exc:
+                                    logger.error(
+                                        "inline_risk_feedback_failed",
+                                        strategy_id=_fb_sid,
+                                        error=str(_fb_exc),
+                                    )
                 if _d7_dropped > 0:
                     # QueueFull is an infrastructure backpressure issue, not a
                     # strategy fault. Do NOT advance the circuit breaker here —

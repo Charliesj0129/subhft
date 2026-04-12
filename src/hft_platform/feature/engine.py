@@ -530,7 +530,10 @@ class FeatureEngine:
             elif source_ts_ns and source_ts_ns < prev.source_ts_ns:
                 is_ooo = True
         if is_ooo:
-            qflags = int(self._quality_flags_next.pop(symbol, 0))
+            # DATA2-006: Do NOT pop quality flags on OOO — let them carry
+            # forward to the next valid event. Popping here discards pending
+            # GAP/RESET flags that strategies need to see.
+            qflags = int(self._quality_flags_next.get(symbol, 0))
             qflags |= QUALITY_FLAG_OUT_OF_ORDER
             # DATA-016: Track OOO drops for observability.
             self._ooo_drop_count += 1

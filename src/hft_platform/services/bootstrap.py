@@ -968,7 +968,9 @@ class SystemBootstrapper:
         _rejection_queue: asyncio.Queue | None = None
         _publish_queue: asyncio.Queue | None = None
         try:
-            _rejection_queue = asyncio.Queue(maxsize=256)
+            _rejection_queue = asyncio.Queue(
+                maxsize=max(1, int(os.getenv("HFT_REJECTION_QUEUE_SIZE", "2048")))
+            )
             _publish_queue = asyncio.Queue(maxsize=64)
         except Exception as exc:
             logger.warning("phase3_queue_init_failed", error=str(exc))
