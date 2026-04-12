@@ -3,15 +3,18 @@
 Architecture (D2):
 - Lock scope: dict lookup + integer arithmetic only (~200 ns).
 - All values are scaled integers (Precision Law).
-- CANCEL intents skip check_and_update; release_exposure reduces notional.
+- CANCEL/FORCE_FLAT intents skip check_and_update.
+- AMEND intents compute delta exposure against the original order's reservation.
 - Symbol cardinality is bounded by _max_symbols (CE2-12); zero-balance eviction
   runs before rejecting new symbols.
+- Per-order tracking enables lifecycle-based release and TTL expiry.
 """
 
 from __future__ import annotations
 
 import os
 import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -91,6 +94,11 @@ class ExposureStore:
         self._global_notional: int = 0
         self._lock = threading.Lock()
         self._limits: dict[str, ExposureLimits] = limits or {}
+        # Per-order tracking: hold reservations until fill/cancel/TTL (Bug #6+#7 fix)
+        self._order_notionals: dict[str, int] = {}  # order_key → reserved notional
+        self._order_ts: dict[str, float] = {}  # order_key → monotonic timestamp
+        self._order_exp_keys: dict[str, tuple[str, str, str]] = {}  # order_key → (acct, strat, sym)
+        self._pending_amend_deltas: dict[str, int] = {}  # target_key → last delta (for rollback)
         # Rust fast-path (HFT_EXPOSURE_RUST=1)
         self._rust_store = self._init_rust_store(_gmax, self._max_symbols, self._limits)
 
@@ -133,20 +141,32 @@ class ExposureStore:
         self,
         key: ExposureKey,
         intent: OrderIntent,
+        *,
+        order_key: str = "",
     ) -> tuple[bool, str]:
-        """Atomic check-and-update.
+        """Atomic check-and-update with per-order tracking.
 
         Returns (approved: bool, reason: str).
-        CANCEL intents always return (True, "OK").
+        CANCEL/FORCE_FLAT intents always return (True, "OK").
+        AMEND intents compute delta exposure against the original reservation.
+
+        Args:
+            order_key: Unique key for per-order tracking (e.g. idempotency_key).
+                If empty, per-order tracking is skipped (backward compat).
 
         Raises:
             ExposureLimitError: if a new symbol entry cannot be admitted even
                 after zero-balance eviction (CE2-12 memory bound).
         """
-        if intent.intent_type in (IntentType.CANCEL, IntentType.AMEND, IntentType.FORCE_FLAT):
+        if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True, "OK"
 
-        # Notional = price * qty  (both already scaled integers)
+        if intent.intent_type == IntentType.AMEND:
+            target_key = intent.target_order_id or order_key
+            new_notional = intent.price * intent.qty
+            return self._check_amend_impl(key, target_key, new_notional)
+
+        # NEW path: notional = price * qty (both already scaled integers)
         notional = intent.price * intent.qty
 
         with self._lock:
@@ -185,6 +205,12 @@ class ExposureStore:
             if key.symbol not in strat_exp:
                 self._symbol_count += 1
             strat_exp[key.symbol] = strat_exp.get(key.symbol, 0) + notional
+
+            # Per-order tracking
+            if order_key:
+                self._order_notionals[order_key] = notional
+                self._order_ts[order_key] = time.monotonic()
+                self._order_exp_keys[order_key] = (key.account, key.strategy_id, key.symbol)
 
         return True, "OK"
 
