@@ -11,18 +11,11 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_DIR"
 
-# Resolve uv path — cron/non-interactive shells lack ~/.local/bin in PATH
-UV="${HOME}/.local/bin/uv"
-if ! command -v uv &>/dev/null && [ -x "$UV" ]; then
-    :
-elif command -v uv &>/dev/null; then
-    UV="uv"
-else
-    echo "ERROR: uv not found at $UV or in PATH" >&2
-    exit 1
-fi
-
-exec "$UV" run python -c "
+# Run inside hft-engine container where clickhouse_driver is installed.
+# Pass through HFT_BACKUP_ENABLED from host env (crontab sets it).
+exec docker compose exec -T \
+    -e HFT_BACKUP_ENABLED="${HFT_BACKUP_ENABLED:-1}" \
+    hft-engine python -c "
 from hft_platform.ops.backup import BackupManager
 import sys
 
