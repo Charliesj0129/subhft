@@ -619,6 +619,15 @@ class RecorderService:
                 )
             raise  # Must re-raise for wait_for to handle
 
+        # Flush WAL-first writer before shutting down the main writer,
+        # otherwise buffered WAL data is silently lost (INFRA-005).
+        if getattr(self, "_wal_first_writer", None) is not None:
+            try:
+                await self._wal_first_writer.flush()
+                logger.info("WAL-first writer flushed during shutdown")
+            except Exception as exc:
+                logger.warning("wal_first_writer_flush_error_shutdown", error=str(exc))
+
         try:
             await self.writer.shutdown()
         except Exception as exc:

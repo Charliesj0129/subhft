@@ -10,21 +10,19 @@ from hft_platform.core import timebase
 
 logger = structlog.get_logger(__name__)
 
-PRICE_SCALE: int = 10_000
+def _coerce_price(raw: Any) -> float:
+    """Coerce a raw price value to float for normalizer consumption.
 
-
-def _scale_price(raw: Any) -> int:
-    """Convert a raw price value to scaled int (x10000).
-
-    Handles float, str, int, and None inputs gracefully.
-    Returns 0 for None or unparseable values.
+    The normalizer applies per-symbol scaling (x10000 or as configured).
+    This function only handles type coercion, NOT scaling.
+    Returns 0.0 for None or unparseable values.
     """
     if raw is None:
-        return 0
+        return 0.0
     try:
-        return int(float(raw) * PRICE_SCALE)
+        return float(raw)
     except (ValueError, TypeError):
-        return 0
+        return 0.0
 
 
 class FubonSnapshotFetcher:
@@ -69,12 +67,14 @@ class FubonSnapshotFetcher:
 
         return {
             "code": symbol,
-            "close": _scale_price(get("close")),
+            "close": _coerce_price(get("close")),
             "volume": int(get("volume", 0) or 0),
-            "bid_price": _scale_price(get("bid_price")),
-            "ask_price": _scale_price(get("ask_price")),
-            "open": _scale_price(get("open")),
-            "high": _scale_price(get("high")),
-            "low": _scale_price(get("low")),
+            "buy_price": _coerce_price(get("bid_price")),
+            "sell_price": _coerce_price(get("ask_price")),
+            "buy_volume": int(get("bid_volume", 0) or 0),
+            "sell_volume": int(get("ask_volume", 0) or 0),
+            "open": _coerce_price(get("open")),
+            "high": _coerce_price(get("high")),
+            "low": _coerce_price(get("low")),
             "ts": timebase.now_ns(),
         }

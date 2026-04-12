@@ -219,6 +219,10 @@ class OrderAdapter:
         """Inject rejection feedback queue so strategies learn about dispatch failures."""
         self._rejection_sink = sink
 
+    def set_storm_guard(self, storm_guard: Any) -> None:
+        """Inject StormGuard reference for live HALT checks (M1 gap closure)."""
+        self._storm_guard = storm_guard
+
     def _send_dispatch_rejection(self, intent: OrderIntent, reason_code: str) -> None:
         """Non-blocking rejection feedback for dispatch failures."""
         if self._rejection_sink is None:
@@ -476,6 +480,17 @@ class OrderAdapter:
                 self.order_queue.task_done()
             except asyncio.QueueEmpty:
                 break
+        # Also drain _api_queue (gateway mode dispatches directly to it)
+        _api_drained = 0
+        while not self._api_queue.empty():
+            try:
+                self._api_queue.get_nowait()
+                self._api_queue.task_done()
+                _api_drained += 1
+            except asyncio.QueueEmpty:
+                break
+        if _api_drained > 0:
+            logger.warning("Drained commands from _api_queue during HALT", count=_api_drained)
         async with self._live_orders_lock:
             live_keys = list(self.live_orders.keys())
         for key in live_keys:
@@ -728,8 +743,9 @@ class OrderAdapter:
                 except Exception:
                     self._dedup_commit(intent.idempotency_key, False, "dispatch_error", cmd.cmd_id)
                 return
-            if await self._enqueue_api(cmd):
-                self._dedup_commit(intent.idempotency_key, True, "enqueued", cmd.cmd_id)
+            await self._enqueue_api(cmd)
+            # Dedup remains in 'reserved' state until _api_worker resolves it
+            # (commit on dispatch success, release on failure/skip).
         except Exception:
             if _dedup_key:
                 self._dedup_commit(_dedup_key, False, "internal_error", 0)
@@ -988,6 +1004,8 @@ class OrderAdapter:
                 if self._broker_codec is None:
                     logger.error("No broker codec configured — cannot dispatch order", symbol=intent.symbol)
                     self.metrics.order_reject_total.inc()
+                    self._dedup_commit(intent.idempotency_key, False, "no_broker_codec", cmd.cmd_id)
+                    await self._add_to_dlq(intent, RejectionReason.VALIDATION_ERROR, "no_broker_codec")
                     return
                 logger.info("Placing Order", symbol=intent.symbol, price=intent.price, qty=intent.qty, side=intent.side)
 
@@ -1108,9 +1126,15 @@ class OrderAdapter:
                     **order_params,
                 )
                 if trade is None or trade is _GUARD_TIMEOUT:
+                    _is_timeout = trade is _GUARD_TIMEOUT
+                    _fail_reason = "api_timeout" if _is_timeout else "api_failure"
+                    _dlq_reason = RejectionReason.API_TIMEOUT if _is_timeout else RejectionReason.CONNECTION_ERROR
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._pending_order_keys.discard(order_key)
+                    self.metrics.order_reject_total.inc()
+                    self._dedup_commit(intent.idempotency_key, False, _fail_reason, cmd.cmd_id)
+                    await self._add_to_dlq(intent, _dlq_reason, _fail_reason)
                     return
 
                 self.metrics.order_actions_total.labels(type="new").inc()
@@ -1132,13 +1156,17 @@ class OrderAdapter:
                         trade["_external_timestamp"] = trade_ts
                     # For objects, we'll rely on live_orders insertion time
 
-                # D2: Replace sentinel with real trade
+                # Register broker IDs BEFORE removing from pending keys so that
+                # fast fill callbacks arriving during this window are still
+                # deferred (DECISION-007 race fix).
+                await self._register_broker_ids(order_key, trade)
+
+                # D2: Replace sentinel with real trade and leave pending state
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = trade
                     self._pending_order_keys.discard(order_key)
 
-                # Populate lookup using Shioaji trade attributes (broker ID -> order_key).
-                await self._register_broker_ids(order_key, trade)
+                # Process any deferred terminal callbacks now that IDs are mapped.
                 await self._drain_deferred_terminals(order_key, trade)
 
                 self.rate_limiter.record()
@@ -1441,12 +1469,15 @@ class OrderAdapter:
         key = self._coalesce_key(cmd)
         if intent.intent_type == IntentType.CANCEL:
             amend_key = ("amend", intent.strategy_id, intent.target_order_id)
-            self._api_pending.pop(amend_key, None)
+            superseded = self._api_pending.pop(amend_key, None)
+            if superseded is not None:
+                self._dedup_release(superseded.intent.idempotency_key)
             self._api_pending[key] = cmd
             return
         if intent.intent_type == IntentType.AMEND:
             cancel_key = ("cancel", intent.strategy_id, intent.target_order_id)
             if cancel_key in self._api_pending:
+                self._dedup_release(intent.idempotency_key)
                 return
         self._api_pending[key] = cmd
 
@@ -1572,6 +1603,9 @@ class OrderAdapter:
                 self._update_cb_metric()
                 if current_cmd is not None:
                     self.strategy_cb_mgr.record_failure(current_cmd.intent.strategy_id)
+                # Release dedup slots for orphaned commands before clearing
+                for orphaned in self._api_pending.values():
+                    self._dedup_release(orphaned.intent.idempotency_key)
                 self._api_pending.clear()
 
     def _update_cb_metric(self) -> None:

@@ -124,7 +124,7 @@ class HFTSystem:
         self.execution_gateway = self.registry.execution_gateway
         self.exec_service = self.registry.exec_service
         # D1: Wire overflow buffer to router (buffer lives on system, router drains it)
-        self.exec_service._overflow_buf = self._exec_overflow_buf
+        self.exec_service.set_overflow_buf(self._exec_overflow_buf)
         self.risk_engine = self.registry.risk_engine
         self.recon_service = self.registry.recon_service
         self.strategy_runner = self.registry.strategy_runner
@@ -158,7 +158,7 @@ class HFTSystem:
         self.platform_degrade_controller.evidence_writer = self.evidence_writer
         self.order_adapter.platform_degrade_controller = self.platform_degrade_controller
         self.order_adapter.position_store = self.position_store
-        self.order_adapter._storm_guard = self.storm_guard  # M1: live HALT check
+        self.order_adapter.set_storm_guard(self.storm_guard)  # M1: live HALT check
 
         # Post-reconnect: invalidate stale live orders (they are dead at broker side)
         if hasattr(self.md_service, "register_on_reconnect"):
@@ -193,6 +193,7 @@ class HFTSystem:
         self._task_restart_until_s: Dict[str, float] = {}
         self._task_restart_base_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_S", 1.0, min_value=0.1)
         self._task_restart_max_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_MAX_S", 30.0, min_value=0.1)
+        self._task_restart_max_attempts = int(os.getenv("HFT_TASK_RESTART_MAX_ATTEMPTS", "10"))
         self._queue_log_every_s = self._env_float("HFT_SUPERVISOR_QUEUE_LOG_EVERY_S", 30.0, min_value=1.0)
         self._last_queue_log_s = 0.0
         self._recorder_bridge_drops: int = 0
@@ -278,7 +279,7 @@ class HFTSystem:
             if os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_verifier:
                 try:
                     recovery = await self.startup_verifier.recover(
-                        account_id=self.registry.broker_id,
+                        account_id=self.registry.account_id or self.registry.broker_id,
                     )
                     if recovery.halted:
                         logger.critical(
@@ -398,6 +399,32 @@ class HFTSystem:
         except Exception as exc:
             logger.error("SIGHUP risk config reload failed", error=str(exc))
 
+    def _sync_drain_recorder(self) -> None:
+        """Best-effort synchronous recorder flush when event loop is unavailable.
+
+        Creates a temporary event loop to run the async shutdown flush.
+        This prevents silent data loss of fills/orders during synchronous stop()
+        when the main event loop is not running (INFRA-015).
+        """
+        recorder = getattr(self, "recorder", None)
+        if recorder is None:
+            return
+        recorder.running = False
+        try:
+            tmp_loop = asyncio.new_event_loop()
+            try:
+                _timeout = float(os.getenv("HFT_RECORDER_SHUTDOWN_TIMEOUT_S", "60"))
+                tmp_loop.run_until_complete(
+                    asyncio.wait_for(recorder._shutdown_flush(), timeout=_timeout)
+                )
+                logger.info("Synchronous recorder drain complete")
+            except Exception as exc:
+                logger.warning("Synchronous recorder drain failed", error=str(exc))
+            finally:
+                tmp_loop.close()
+        except Exception as exc:
+            logger.warning("Synchronous recorder drain setup failed", error=str(exc))
+
     def _teardown_bootstrap(self) -> None:
         if self._bootstrap_torn_down:
             return
@@ -482,6 +509,22 @@ class HFTSystem:
         if now_s < allowed_at:
             return
         attempt = self._task_restart_attempts.get(name, 0) + 1
+
+        # INFRA-018: Prevent infinite crash-loop restart oscillation.
+        if attempt > self._task_restart_max_attempts:
+            logger.critical(
+                "Service exceeded max restart attempts — permanently stopped",
+                task=name,
+                component=component,
+                attempts=attempt - 1,
+                max_attempts=self._task_restart_max_attempts,
+            )
+            # Trigger permanent HALT so trading stops cleanly.
+            sg = getattr(self, "storm_guard", None)
+            if sg is not None:
+                sg.trigger_halt(f"Service {name} crash-loop: {attempt - 1} restarts exceeded max")
+            return
+
         delay_s = min(self._task_restart_base_delay_s * (2 ** (attempt - 1)), self._task_restart_max_delay_s)
         self._task_restart_attempts[name] = attempt
         self._task_restart_until_s[name] = now_s + delay_s
@@ -490,6 +533,7 @@ class HFTSystem:
             task=name,
             component=component,
             attempt=attempt,
+            max_attempts=self._task_restart_max_attempts,
             next_retry_after_s=round(delay_s, 2),
         )
         self._start_service(name, coro_factory())
@@ -532,30 +576,37 @@ class HFTSystem:
             last_tick = now_tick
 
             # A. Update StormGuard with real metrics
-            try:
-                # 1. Get feed gap from market data service
-                feed_gap_s = self._get_max_feed_gap_s(self.md_service)
+            # INFRA-007: Each computation is isolated so StormGuard.update()
+            # always runs even if individual inputs fail.
 
-                # 2. Get drawdown from position store (realized + unrealized)
+            # 1. Get feed gap from market data service
+            feed_gap_s = 0.0
+            try:
+                feed_gap_s = self._get_max_feed_gap_s(self.md_service)
+            except Exception as e:
+                logger.warning("StormGuard feed_gap computation failed", error=str(e))
+
+            # 2. Get drawdown from position store (realized + unrealized)
+            drawdown_pct = 0.0
+            try:
                 drawdown_pct = self._get_drawdown_pct(self.position_store, self.settings)
                 if self._mtm_calculator is not None:
                     try:
                         unrealized = self._mtm_calculator.total_unrealized_pnl()
                         base_capital = self.settings.get("base_capital", 10_000_000)
                         if base_capital > 0 and unrealized < 0:
-                            # unrealized is negative for losses; subtract to INCREASE
-                            # drawdown_pct (positive = more drawdown).
                             drawdown_pct = drawdown_pct - unrealized / base_capital
-                        # Feed unrealized PnL into DailyLossLimitValidator so it can
-                        # gate new orders on floating losses, not just realized losses.
                         self.risk_engine.update_unrealized_pnl(int(unrealized))
                     except Exception:
                         pass
+            except Exception as e:
+                logger.warning("StormGuard drawdown computation failed", error=str(e))
 
-                # 3. Get P99 latency estimate (convert event loop lag to microseconds as proxy)
-                latency_us = int(lag_s * 1_000_000)
+            # 3. Get P99 latency estimate
+            latency_us = int(lag_s * 1_000_000)
 
-                # 3b. Inform StormGuard of session state to suppress feed-gap noise
+            # 3b. Inform StormGuard of session state
+            try:
                 if self.session_governor is not None:
                     from hft_platform.ops.session_governor import SessionPhase
 
@@ -572,22 +623,22 @@ class HFTSystem:
                         phases = gate.track_phases
                         any_open = any(p in _ACTIVE_PHASES for p in phases.values())
                         self.storm_guard.set_session_active(any_open)
+            except Exception as e:
+                logger.warning("StormGuard session state update failed", error=str(e))
 
-                # 4. Update StormGuard state (convert drawdown % to negative bps at boundary)
-                # StormGuard thresholds are negative (e.g., -200 for 2% drawdown).
-                # get_drawdown_pct() returns positive fraction → negate here.
+            # 4. ALWAYS call StormGuard.update() with whatever data we have.
+            try:
                 drawdown_bps = -int(drawdown_pct * 10_000)
                 self.storm_guard.update(
                     drawdown_bps=drawdown_bps,
                     latency_us=latency_us,
                     feed_gap_s=feed_gap_s,
                 )
+            except Exception as e:
+                logger.warning("StormGuard update call failed", error=str(e))
 
-                # 4b. Update StormGuard with LOB-derived drift-burst toxicity.
-                # Feed only the primary symbol to DriftBurstDetector to avoid
-                # cross-symbol contamination (M4 fix). Primary = first subscribed
-                # symbol with an active book. For multi-symbol deployments, consider
-                # per-symbol DriftBurstDetector instances.
+            # 4b. Update StormGuard with LOB-derived drift-burst toxicity.
+            try:
                 if hasattr(self.storm_guard, "update_with_lob"):
                     lob_engine = getattr(self.md_service, "lob", None)
                     if lob_engine is not None:
@@ -599,17 +650,19 @@ class HFTSystem:
                                     imbalance=book.imbalance,
                                     ts=timebase.now_ns(),
                                 )
-                                break  # single detector: primary symbol only
+                                break
+            except Exception as e:
+                logger.warning("StormGuard LOB drift-burst update failed", error=str(e))
 
-                # 5. Update per-symbol feed gap metrics
+            # 5. Update per-symbol feed gap metrics
+            try:
                 feed_gap_metric = getattr(metrics, "feed_gap_by_symbol_seconds", None)
                 if feed_gap_metric is not None:
                     for symbol, gap in self._get_feed_gaps_by_symbol(self.md_service).items():
                         capped = metrics.cap_symbol(symbol) if metrics else symbol
                         feed_gap_metric.labels(symbol=capped).set(gap)
-
             except Exception as e:
-                logger.warning("StormGuard update failed", error=str(e))
+                logger.warning("StormGuard per-symbol metrics failed", error=str(e))
 
             # 6. Update per-connection pool metrics (if QuoteConnectionPool)
             _update_pool_metrics = getattr(self.md_client, "update_metrics", None)
@@ -733,6 +786,11 @@ class HFTSystem:
             # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
                 logger.error("System HALTED by StormGuard - blocking orders")
+                # Defense-in-depth: propagate HALT to gateway policy FIRST so the
+                # gateway rejects new intents while we drain queues below.
+                if self.gateway_service is not None:
+                    self.gateway_service.set_halt()
+                    logger.warning("Gateway policy set to HALT by StormGuard supervisor")
                 # Drain risk queue — preserve safety orders + halt-exempt intents
                 risk_drained = 0
                 _requeue: list = []
@@ -768,6 +826,34 @@ class HFTSystem:
                             logger.warning("halt_drain_metric_inc_failed", error=str(exc))
                 if risk_drained > 0:
                     logger.warning("Drained blocked intents from risk_queue during HALT", count=risk_drained)
+                # Drain intent_channel (gateway mode) — same safety filter
+                if self.intent_channel is not None and hasattr(self.intent_channel, "drain_nowait"):
+                    _ic_drained = 0
+                    _ic_requeue: list = []
+                    _all_envelopes = self.intent_channel.drain_nowait()
+                    for envelope in _all_envelopes:
+                        _itype = self.intent_channel.envelope_intent_type(envelope)
+                        _sid = self.intent_channel.envelope_strategy_id(envelope)
+                        _is_safety = _itype in (IntentType.CANCEL, IntentType.FORCE_FLAT)
+                        _is_exempt = bool(_sid) and self.storm_guard.is_halt_exempt(_sid)
+                        if _is_safety or _is_exempt:
+                            _ic_requeue.append(envelope)
+                        else:
+                            _ic_drained += 1
+                    # Re-inject safety envelopes via the internal queue (envelope already wrapped)
+                    for envelope in _ic_requeue:
+                        try:
+                            self.intent_channel._queue.put_nowait(envelope)
+                        except asyncio.QueueFull:
+                            logger.critical(
+                                "intent_channel_full_safety_intent_lost",
+                                strategy_id=self.intent_channel.envelope_strategy_id(envelope),
+                            )
+                    if _ic_drained > 0:
+                        logger.warning(
+                            "Drained blocked intents from intent_channel during HALT",
+                            count=_ic_drained,
+                        )
                 # Drain order queue — preserve safety commands + halt-exempt
                 drained_count = 0
                 _cmd_requeue: list = []
@@ -807,12 +893,6 @@ class HFTSystem:
                     logger.warning("Drained blocked orders during HALT", count=drained_count)
                 # Signal order adapter to stop processing
                 self._set_service_running(self.order_adapter, False)
-                # Defense-in-depth: propagate HALT to gateway policy so the gateway
-                # rejects new intents independently of the risk engine path.
-                # GatewayPolicy._set_mode() is idempotent, so repeated calls are safe.
-                if self.gateway_service is not None:
-                    self.gateway_service.set_halt()
-                    logger.warning("Gateway policy set to HALT by StormGuard supervisor")
                 # H6: Cancel in-flight orders already dispatched to broker
                 try:
                     asyncio.create_task(self.order_adapter.drain_and_cancel())
@@ -1043,6 +1123,10 @@ class HFTSystem:
         if loop is not None and loop.is_running():
             asyncio.create_task(self.stop_async())
         else:
+            # Synchronous fallback: event loop not running.
+            # Flush recorder data before teardown to prevent silent data loss
+            # (INFRA-015). Use a temporary event loop for async drain.
+            self._sync_drain_recorder()
             for cn in ("md_client", "order_client"):
                 self._close_broker_client(cn)
             self._teardown_bootstrap()

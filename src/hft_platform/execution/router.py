@@ -109,6 +109,14 @@ class ExecutionRouter:
         )
         self._wal_writer: Optional[WALWriter] = wal_writer
 
+    def set_risk_engine(self, risk_engine: object) -> None:
+        """Set or replace the risk engine reference (late-bind from bootstrap)."""
+        self._risk_engine = risk_engine
+
+    def set_overflow_buf(self, buf: collections.deque) -> None:
+        """Set or replace the overflow buffer (late-bind from system supervisor)."""
+        self._overflow_buf = buf
+
     def _load_fill_dedup(self) -> None:
         """Load fill dedup window from disk on startup (restart-safe dedup)."""
         path = self._fill_dedup_persist_path
@@ -361,12 +369,12 @@ class ExecutionRouter:
                             if callable(handler):
                                 result = handler(order_event.strategy_id, order_event.order_id)
                                 if inspect.iscoroutine(result):
-                                    result.close()  # no event loop during drain; discard coroutine
+                                    await result  # DECISION-004: stop() is async, so await is safe
                             elif hasattr(handler, "on_terminal_state"):
                                 method = handler.on_terminal_state
                                 result = method(order_event.strategy_id, order_event.order_id)
                                 if inspect.iscoroutine(result):
-                                    result.close()
+                                    await result
                         drained += 1
                         logger.info(
                             "shutdown_drain_order",

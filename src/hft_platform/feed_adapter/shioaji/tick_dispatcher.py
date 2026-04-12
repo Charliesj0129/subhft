@@ -255,45 +255,54 @@ class TickDispatcher:
 
         def _worker() -> None:
             processed_local = 0
-            while self._running:
-                try:
-                    item = q.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-                if item is None:
-                    continue
-                batch_count = 0
-
-                a, kw = item
-                try:
-                    process_fn(*a, **kw)
-                except Exception as exc:
-                    logger.error("Quote dispatch worker error", error=str(exc))
-                batch_count += 1
-
-                while batch_count < batch_max and self._running:
+            try:
+                while self._running:
                     try:
-                        nxt = q.get_nowait()
+                        item = q.get(timeout=0.5)
                     except queue.Empty:
-                        break
-                    if nxt is None:
                         continue
-                    na, nkw = nxt
+                    if item is None:
+                        continue
+                    batch_count = 0
+
+                    a, kw = item
                     try:
-                        process_fn(*na, **nkw)
+                        process_fn(*a, **kw)
                     except Exception as exc:
                         logger.error("Quote dispatch worker error", error=str(exc))
                     batch_count += 1
 
-                processed_local += batch_count
-                self._processed = processed_local
-                if metrics and (processed_local % metrics_every == 0):
-                    try:
-                        if hasattr(metrics, "shioaji_quote_callback_queue_depth"):
-                            metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
-                    except Exception as exc:
-                        logger.debug("operation_fallback", error=str(exc))
-                        pass
+                    while batch_count < batch_max and self._running:
+                        try:
+                            nxt = q.get_nowait()
+                        except queue.Empty:
+                            break
+                        if nxt is None:
+                            continue
+                        na, nkw = nxt
+                        try:
+                            process_fn(*na, **nkw)
+                        except Exception as exc:
+                            logger.error("Quote dispatch worker error", error=str(exc))
+                        batch_count += 1
+
+                    processed_local += batch_count
+                    self._processed = processed_local
+                    if metrics and (processed_local % metrics_every == 0):
+                        try:
+                            if hasattr(metrics, "shioaji_quote_callback_queue_depth"):
+                                metrics.shioaji_quote_callback_queue_depth.set(q.qsize())
+                        except Exception as exc:
+                            logger.debug("operation_fallback", error=str(exc))
+                            pass
+            except Exception as exc:
+                logger.critical(
+                    "Quote dispatch worker thread died unexpectedly",
+                    error=str(exc),
+                    processed=processed_local,
+                )
+            finally:
+                self._running = False
 
         self._thread = threading.Thread(
             target=_worker,
@@ -318,42 +327,51 @@ class TickDispatcher:
 
         def _worker() -> None:
             processed_local = 0
-            while self._running:
-                # Wait for signal or timeout (avoids busy-spin).
-                ev.wait(timeout=0.5)
-                ev.clear()
-                # Drain in batches until the deque is empty.  This avoids
-                # stalling when more items than batch_max were enqueued
-                # between a single Event.set() / .clear() pair.
+            try:
                 while self._running:
-                    batch_count = 0
-                    while batch_count < batch_max and self._running:
-                        try:
-                            item = dq.popleft()
-                        except IndexError:
-                            break
-                        if item is None:
-                            continue
-                        a, kw = item
-                        try:
-                            process_fn(*a, **kw)
-                        except Exception as exc:
-                            logger.error("Quote dispatch worker error", error=str(exc))
-                        batch_count += 1
+                    # Wait for signal or timeout (avoids busy-spin).
+                    ev.wait(timeout=0.5)
+                    ev.clear()
+                    # Drain in batches until the deque is empty.  This avoids
+                    # stalling when more items than batch_max were enqueued
+                    # between a single Event.set() / .clear() pair.
+                    while self._running:
+                        batch_count = 0
+                        while batch_count < batch_max and self._running:
+                            try:
+                                item = dq.popleft()
+                            except IndexError:
+                                break
+                            if item is None:
+                                continue
+                            a, kw = item
+                            try:
+                                process_fn(*a, **kw)
+                            except Exception as exc:
+                                logger.error("Quote dispatch worker error", error=str(exc))
+                            batch_count += 1
 
-                    processed_local += batch_count
-                    self._processed = processed_local
-                    if metrics and (processed_local % metrics_every == 0):
-                        try:
-                            if hasattr(metrics, "shioaji_quote_callback_queue_depth"):
-                                metrics.shioaji_quote_callback_queue_depth.set(len(dq))
-                        except Exception as exc:
-                            logger.debug("operation_fallback", error=str(exc))
-                            pass
-                    # If this batch was smaller than batch_max, deque is
-                    # empty — break out to the outer ev.wait() loop.
-                    if batch_count < batch_max:
-                        break
+                        processed_local += batch_count
+                        self._processed = processed_local
+                        if metrics and (processed_local % metrics_every == 0):
+                            try:
+                                if hasattr(metrics, "shioaji_quote_callback_queue_depth"):
+                                    metrics.shioaji_quote_callback_queue_depth.set(len(dq))
+                            except Exception as exc:
+                                logger.debug("operation_fallback", error=str(exc))
+                                pass
+                        # If this batch was smaller than batch_max, deque is
+                        # empty — break out to the outer ev.wait() loop.
+                        if batch_count < batch_max:
+                            break
+            except Exception as exc:
+                logger.critical(
+                    "Quote dispatch deque worker thread died unexpectedly",
+                    error=str(exc),
+                    processed=processed_local,
+                )
+            finally:
+                self._running = False
 
         self._thread = threading.Thread(
             target=_worker,

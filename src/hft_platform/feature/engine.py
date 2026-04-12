@@ -241,6 +241,8 @@ class FeatureEngine:
         "_last_update_ns",
         "_full_warmup_mask",
         "_warmup_ready_symbols",
+        "_ooo_drop_count",
+        "_rust_fused_fallback_count",
     )
 
     def __init__(
@@ -286,6 +288,8 @@ class FeatureEngine:
         n = len(self._feature_set.features)
         self._full_warmup_mask: int = (1 << n) - 1 if n > 0 else 0
         self._warmup_ready_symbols: set[str] = set()
+        self._ooo_drop_count: int = 0
+        self._rust_fused_fallback_count: int = 0
         if feature_profile is not None:
             self.apply_profile(feature_profile)
 
@@ -528,7 +532,14 @@ class FeatureEngine:
         if is_ooo:
             qflags = int(self._quality_flags_next.pop(symbol, 0))
             qflags |= QUALITY_FLAG_OUT_OF_ORDER
-            # Do not compute or overwrite state with stale data — return None to skip
+            # DATA-016: Track OOO drops for observability.
+            self._ooo_drop_count += 1
+            if self._ooo_drop_count <= 3 or self._ooo_drop_count % 100 == 0:
+                logger.debug(
+                    "feature_ooo_event_dropped",
+                    symbol=symbol,
+                    total_ooo=self._ooo_drop_count,
+                )
             return None
 
         warm_count = (prev.warm_count + 1) if prev else 1
@@ -1084,6 +1095,15 @@ class FeatureEngine:
                 int(warmup_mask),
             )
         except Exception as _exc:  # noqa: BLE001
+            # DATA-005: Log Rust fallback so parity violations are visible.
+            self._rust_fused_fallback_count += 1
+            if self._rust_fused_fallback_count <= 3 or self._rust_fused_fallback_count % 100 == 0:
+                logger.warning(
+                    "feature_rust_fused_fallback",
+                    symbol=symbol,
+                    error=str(_exc),
+                    total_fallbacks=self._rust_fused_fallback_count,
+                )
             return None
 
     def _extract_l1_qty(

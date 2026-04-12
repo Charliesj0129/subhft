@@ -130,8 +130,11 @@ class BookState:
         """Atomic update (Snapshot style full-replace for Top-N streams)."""
         with self.lock:
             if exch_ts > 0 and exch_ts < self.exch_ts:
-                # Late packet (skip guard when exch_ts=0 means "unavailable")
+                # Late packet — skip stale data
                 return
+            # DATA-007: Preserve valid timestamp when new update has ts=0.
+            if exch_ts == 0 and self.exch_ts > 0:
+                exch_ts = self.exch_ts
 
             if _FORCE_NUMPY and _RUST_ENABLED:
                 if isinstance(bids, np.ndarray):

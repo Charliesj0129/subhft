@@ -16,9 +16,10 @@ Design notes
   consumer runs in an asyncio event loop.  The snapshot dict ensures that by
   the time the event loop dequeues the message the values are still correct —
   the workspace buffer may already have been overwritten by the next callback.
-- **Precision Law**: Canonical callbacks receive x10000 scaled integer prices.
-- **Precision Law**: Float prices are scaled to canonical x10000 integers at
-  this boundary before they leave the adapter.
+- **Precision Law**: Raw float prices are passed through to the normalizer,
+  which applies per-symbol scaling (x10000 or as configured in symbols.yaml).
+  Pre-scaling here would cause double-scaling since the normalizer always
+  scales its input.
 - **Boundary Law**: All Fubon-specific names are translated to canonical keys
   (``code``, ``close``, ``volume``, ``bid_price``, ``ask_price``, etc.) so
   the normalizer can process them without broker awareness.
@@ -38,7 +39,6 @@ logger = get_logger("feed_adapter.fubon.quote_runtime")
 
 # Number of order book levels forwarded from the Fubon L5 feed.
 _BOOK_LEVELS: int = 5
-PRICE_SCALE: int = 10_000
 
 
 class FubonQuoteRuntime:
@@ -174,16 +174,16 @@ class FubonQuoteRuntime:
             price_raw = _get(data, "close", None)
             if price_raw is None:
                 price_raw = _get(data, "price", 0)
-            price_scaled = _scale_price(price_raw)
             volume = int(_get(data, "volume", 0))
             ts_raw = _get(data, "datetime", None)
 
             # Convert timestamp to nanoseconds
             ts_ns = _ts_to_ns(ts_raw)
 
-            # Overwrite pre-allocated buffer (no new dict)
+            # Pass raw float price — the normalizer applies per-symbol scaling.
+            # Pre-scaling here would cause double-scaling (DATA-001).
             buf["code"] = symbol
-            buf["close"] = price_scaled
+            buf["close"] = price_raw
             buf["volume"] = volume
             buf["ts"] = ts_ns
 
@@ -231,9 +231,9 @@ class FubonQuoteRuntime:
             av = buf["ask_volume"]
 
             for i in range(_BOOK_LEVELS):
-                bp[i] = _scale_price(bid_prices_raw[i]) if i < n_bp else 0
+                bp[i] = bid_prices_raw[i] if i < n_bp else 0
                 bv[i] = int(bid_sizes_raw[i]) if i < n_bv else 0
-                ap[i] = _scale_price(ask_prices_raw[i]) if i < n_ap else 0
+                ap[i] = ask_prices_raw[i] if i < n_ap else 0
                 av[i] = int(ask_sizes_raw[i]) if i < n_av else 0
 
             buf["code"] = symbol
@@ -331,8 +331,12 @@ def _ts_to_ns(ts_val: Any) -> int:
     return timebase.coerce_ns(ts_val)
 
 
-def _scale_price(raw: Any) -> int:
-    """Convert a raw Fubon quote price to canonical x10000 scaled int."""
+def _coerce_price(raw: Any) -> float:
+    """Coerce a raw Fubon quote price to float for normalizer consumption.
+
+    The normalizer applies per-symbol scaling (x10000 or as configured).
+    This function only handles type coercion, NOT scaling.
+    """
     if raw is None:
-        return 0
-    return int(float(raw) * PRICE_SCALE)
+        return 0.0
+    return float(raw)

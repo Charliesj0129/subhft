@@ -7,7 +7,7 @@ Tests cover:
 - Watchdog start / stop
 - Snapshot isolation (each callback receives a distinct dict; workspace buffer
   reuse must not corrupt previously received messages across the async boundary)
-- Price scaling (float → int x10000)
+- Raw price passthrough (prices must NOT be pre-scaled; normalizer handles scaling)
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ class TestTradeCallback:
         assert len(received) == 1
         tick = received[0]
         assert tick["code"] == "2330"
-        assert tick["close"] == 5_950_000  # 595.0 * 10000
+        assert tick["close"] == 595.0  # raw float — normalizer handles scaling
         assert tick["volume"] == 3
         assert tick["ts"] == 1_700_000_000_000_000_000
 
@@ -75,7 +75,7 @@ class TestTradeCallback:
         rt._on_fubon_trade(fubon_trade)
 
         assert len(received) == 1
-        assert received[0]["close"] == 1_005_000  # 100.5 * 10000
+        assert received[0]["close"] == 100.5  # raw float — normalizer handles scaling
 
     def test_trade_price_scaling_precision(self) -> None:
         rt = _make_runtime()
@@ -84,7 +84,7 @@ class TestTradeCallback:
 
         fubon_trade = {"symbol": "2330", "close": 0.01, "volume": 1, "datetime": 0}
         rt._on_fubon_trade(fubon_trade)
-        assert received[0]["close"] == 100  # 0.01 * 10000
+        assert received[0]["close"] == 0.01  # raw float — normalizer handles scaling
 
     def test_trade_no_callback_noop(self) -> None:
         """No crash when on_tick is not registered."""
@@ -142,9 +142,9 @@ class TestBookCallback:
         assert len(received) == 1
         book = received[0]
         assert book["code"] == "2330"
-        assert book["bid_price"] == [5_950_000, 5_940_000, 5_930_000, 5_920_000, 5_910_000]
+        assert book["bid_price"] == [595.0, 594.0, 593.0, 592.0, 591.0]  # raw floats
         assert book["bid_volume"] == [10, 20, 30, 40, 50]
-        assert book["ask_price"] == [5_960_000, 5_970_000, 5_980_000, 5_990_000, 6_000_000]
+        assert book["ask_price"] == [596.0, 597.0, 598.0, 599.0, 600.0]  # raw floats
         assert book["ask_volume"] == [5, 15, 25, 35, 45]
         assert book["ts"] == 1_700_000_000_000_000_000
 
@@ -258,11 +258,11 @@ class TestBufferReuse:
         assert len(stored) == 2
         # First snapshot must still reflect the first trade.
         assert stored[0]["code"] == "2330"
-        assert stored[0]["close"] == 1_000_000  # 100.0 * 10000
+        assert stored[0]["close"] == 100.0  # raw float
         assert stored[0]["volume"] == 1
         # Second snapshot must reflect the second trade.
         assert stored[1]["code"] == "2317"
-        assert stored[1]["close"] == 2_000_000  # 200.0 * 10000
+        assert stored[1]["close"] == 200.0  # raw float
         assert stored[1]["volume"] == 2
 
     def test_bidask_snapshot_isolation(self) -> None:
@@ -298,11 +298,11 @@ class TestBufferReuse:
 
         assert len(stored) == 2
         # First snapshot's bid_price list must still contain book1 prices.
-        assert stored[0]["bid_price"][0] == 5_950_000  # 595.0 * 10000
-        assert stored[0]["ask_price"][0] == 5_960_000  # 596.0 * 10000
+        assert stored[0]["bid_price"][0] == 595.0  # raw float
+        assert stored[0]["ask_price"][0] == 596.0  # raw float
         # Second snapshot must contain book2 prices.
-        assert stored[1]["bid_price"][0] == 1_000_000  # 100.0 * 10000
-        assert stored[1]["ask_price"][0] == 1_010_000  # 101.0 * 10000
+        assert stored[1]["bid_price"][0] == 100.0  # raw float
+        assert stored[1]["ask_price"][0] == 101.0  # raw float
 
 
 # ---------------------------------------------------------------------------
@@ -417,24 +417,24 @@ class TestStop:
 # ---------------------------------------------------------------------------
 
 
-class TestPriceScaling:
-    def test_integer_price_scaled(self) -> None:
+class TestPricePassthrough:
+    def test_integer_price_coerced_to_float(self) -> None:
         rt = _make_runtime()
         received: list[dict[str, Any]] = []
         rt.register_quote_callbacks(on_tick=lambda d: received.append(dict(d)), on_bidask=MagicMock())
 
         rt._on_fubon_trade({"symbol": "2330", "close": 100, "volume": 1, "datetime": 0})
-        assert received[0]["close"] == 1_000_000
+        assert received[0]["close"] == 100.0  # coerced to float, not scaled
 
-    def test_small_float_price_scaled(self) -> None:
+    def test_small_float_price_passthrough(self) -> None:
         rt = _make_runtime()
         received: list[dict[str, Any]] = []
         rt.register_quote_callbacks(on_tick=lambda d: received.append(dict(d)), on_bidask=MagicMock())
 
         rt._on_fubon_trade({"symbol": "2330", "close": 0.0001, "volume": 1, "datetime": 0})
-        assert received[0]["close"] == 1  # 0.0001 * 10000
+        assert received[0]["close"] == 0.0001  # raw float passthrough
 
-    def test_book_prices_scaled_correctly(self) -> None:
+    def test_book_prices_passthrough(self) -> None:
         rt = _make_runtime()
         received: list[dict[str, Any]] = []
 
@@ -454,8 +454,8 @@ class TestPriceScaling:
             }
         )
 
-        assert received[0]["bid_price"][0] == 1_005_000  # 100.5 * 10000
-        assert received[0]["ask_price"][4] == 1_010_000  # 101.0 * 10000
+        assert received[0]["bid_price"][0] == 100.5  # raw float passthrough
+        assert received[0]["ask_price"][4] == 101.0  # raw float passthrough
 
 
 # ---------------------------------------------------------------------------
@@ -483,4 +483,4 @@ class TestObjectData:
 
         assert len(received) == 1
         assert received[0]["code"] == "2330"
-        assert received[0]["close"] == 5_950_000
+        assert received[0]["close"] == 595.0  # raw float passthrough
