@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.recorder.wal import WALBatchWriter, WALReplayer, WALWriter
+from hft_platform.recorder.wal import WALBatchWriter, WALWriter
 
 
 def test_wal_write_sync_atomic_creates_file(tmp_path: Path):
@@ -22,84 +22,6 @@ def test_wal_write_sync_atomic_creates_file(tmp_path: Path):
     assert json.loads(lines[0]) == payload[0]
 
 
-@pytest.mark.asyncio
-async def test_wal_replayer_replays_and_deletes(tmp_path: Path):
-    writer = WALWriter(str(tmp_path))
-    fname = tmp_path / "hft.market_data_123.jsonl"
-    payload = [{"symbol": "TEST", "price": 123, "volume": 1}]
-    writer._write_sync(str(fname), payload)
-
-    seen = []
-
-    async def sender(table, data):
-        seen.append((table, data))
-        return True
-
-    replayer = WALReplayer(str(tmp_path), sender)
-    await replayer.replay()
-
-    # R7: WAL filename parsing now uses rsplit("_", 2), so "hft.market_data_123"
-    # splits to ["hft.market", "data", "123"] and table = parts[0] = "hft.market"
-    assert seen == [("hft.market", payload)]
-    assert not fname.exists()
-
-
-@pytest.mark.asyncio
-async def test_wal_replayer_stops_on_failure(tmp_path: Path):
-    writer = WALWriter(str(tmp_path))
-    first = tmp_path / "hft.market_data_1.jsonl"
-    second = tmp_path / "hft.market_data_2.jsonl"
-    writer._write_sync(str(first), [{"symbol": "A"}])
-    writer._write_sync(str(second), [{"symbol": "B"}])
-
-    calls = []
-
-    async def sender(table, data):
-        calls.append((table, data))
-        return False
-
-    replayer = WALReplayer(str(tmp_path), sender)
-    await replayer.replay()
-
-    # R7: WAL filename parsing now uses rsplit("_", 2), table = "hft.market"
-    assert calls == [("hft.market", [{"symbol": "A"}])]
-    assert first.exists()
-    assert second.exists()
-
-
-@pytest.mark.asyncio
-async def test_wal_batch_writer_add_columnar_replays_as_rows(tmp_path: Path):
-    writer = WALBatchWriter(str(tmp_path))
-    try:
-        ok = await writer.add_columnar(
-            "hft.market_data",
-            ["symbol", "price", "volume"],
-            [["TEST", "TEST2"], [123, 124], [1, 2]],
-            2,
-        )
-        assert ok is True
-        await writer.flush()
-    finally:
-        writer.stop()
-
-    seen = []
-
-    async def sender(table, data):
-        seen.append((table, data))
-        return True
-
-    replayer = WALReplayer(str(tmp_path), sender)
-    await replayer.replay()
-
-    assert seen
-    table, rows = seen[0]
-    assert table == "batch"
-    # Batch WAL replayer exposes batch file names; verify rows contain reconstructed records.
-    flat_rows = []
-    for _tbl, payload in seen:
-        flat_rows.extend(payload)
-    assert any(row.get("symbol") == "TEST" for row in flat_rows)
-    assert any(row.get("symbol") == "TEST2" for row in flat_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -226,36 +148,6 @@ async def test_wal_batch_writer_ec3_file_splitting(tmp_path: Path, monkeypatch):
         writer.stop()
 
 
-# ---------------------------------------------------------------------------
-# WALReplayer: corrupt file is skipped without aborting replay
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_wal_replayer_skips_corrupt_file(tmp_path: Path):
-    """A corrupt WAL file should not crash replay; subsequent files may still replay."""
-    # Write a valid WAL file
-    writer = WALWriter(str(tmp_path))
-    valid_fname = tmp_path / "hft.market_data_200.jsonl"
-    writer._write_sync(str(valid_fname), [{"symbol": "GOOD"}])
-
-    # Write a corrupt WAL file that sorts before the valid one
-    corrupt_fname = tmp_path / "hft.market_data_100.jsonl"
-    corrupt_fname.write_text("not valid json!!!\x00\x01\x02\n")
-
-    seen = []
-
-    async def sender(table, data):
-        seen.append((table, data))
-        return True
-
-    replayer = WALReplayer(str(tmp_path), sender)
-    # Must not raise
-    await replayer.replay()
-
-    # At minimum the valid file should have been replayed (corrupt is skipped)
-    symbols_seen = [row.get("symbol") for _, rows in seen for row in rows]
-    assert "GOOD" in symbols_seen
 
 
 # ---------------------------------------------------------------------------

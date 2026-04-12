@@ -5,8 +5,6 @@ import os
 import tempfile
 import threading
 import time
-import warnings
-from glob import glob
 from typing import Any
 
 from structlog import get_logger
@@ -708,71 +706,4 @@ class WALBatchWriter:
                     self._buffer_bytes += flush_bytes
 
 
-class WALReplayer:
-    """DEPRECATED — use ``WALLoaderService`` (``recorder/loader.py``) instead.
-
-    Known bugs that make this class unsafe for production use:
-
-    **C3 — Filename parsing incompatibility**: The table name is extracted via
-    ``fname.rsplit("_", 1)[0]``, which yields ``"batch"`` for files written by
-    ``WALBatchWriter`` (format: ``batch_{ts}.jsonl``).  ``"batch"`` is not a
-    valid ClickHouse table name, so replay silently inserts into the wrong
-    target or errors out.
-
-    **C4 — Missing idempotency guard**: If ``os.remove()`` raises after a
-    successful ClickHouse insert, the same WAL file will be replayed again on
-    the next startup, causing duplicate rows.  ``WALLoaderService`` tracks
-    replayed files and is dedup-aware.
-
-    Migration: replace ``WALReplayer(wal_dir, sender)`` with
-    ``WALLoaderService`` from ``hft_platform.recorder.loader``.
-    """
-
-    def __init__(self, wal_dir: str, sender_func):
-        warnings.warn(
-            "WALReplayer is deprecated and has known bugs (C3: broken filename "
-            "parsing for WALBatchWriter files; C4: no idempotency guard on "
-            "os.remove failure). Use WALLoaderService from "
-            "hft_platform.recorder.loader instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.wal_dir = wal_dir
-        self.sender_func = sender_func  # Async function(table, data) -> bool
-
-    async def replay(self):
-        """Scans directory and attempts to replay files."""
-        files = sorted(glob(f"{self.wal_dir}/*.jsonl"))
-        if not files:
-            return
-
-        logger.info("Found WAL files", count=len(files))
-
-        for fpath in files:
-            # Parse table name from filename: table_timestamp_seq.jsonl or table_timestamp.jsonl
-            fname = os.path.basename(fpath)
-            stem = fname.rsplit(".", 1)[0]  # strip .jsonl
-            parts = stem.rsplit("_", 2)
-            table = parts[0] if len(parts) >= 2 else stem
-
-            try:
-                data = []
-                with open(fpath, "r") as f:
-                    for line in f:
-                        if line.strip():
-                            data.append(_loads(line))
-
-                if data:
-                    success = await self.sender_func(table, data)
-                    if success:
-                        os.remove(fpath)
-                        logger.info("Replayed and deleted WAL", file=fname)
-                    else:
-                        logger.warning("Replay failed, keeping WAL", file=fname)
-                        break  # Stop on first failure to preserve order?
-                else:
-                    # Empty file
-                    os.remove(fpath)
-            except Exception as e:
-                logger.error("Corrupt WAL file", file=fname, error=str(e))
                 # Move to corrupt dir?

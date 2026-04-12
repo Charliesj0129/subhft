@@ -11,6 +11,7 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.infra.ch_client import get_ch_config
 from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 from hft_platform.recorder.wal import WALWriter
 
@@ -54,34 +55,12 @@ class DataWriter:
         self._ch_heartbeat_lock = threading.Lock()
         # Determine protocol based on port (9000=native, 8123=HTTP)
         use_native = ch_port == self.DEFAULT_NATIVE_PORT
-        ch_username = os.getenv("HFT_CLICKHOUSE_USER")
-        if not ch_username and os.getenv("HFT_CLICKHOUSE_USERNAME"):
-            ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME")
-            warnings.warn(
-                "HFT_CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning("Deprecated env var HFT_CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-        if not ch_username and os.getenv("CLICKHOUSE_USER"):
-            ch_username = os.getenv("CLICKHOUSE_USER")
-        # TODO(2026-Q3): remove CLICKHOUSE_USERNAME fallback — deprecated since 2026-03
-        if not ch_username and os.getenv("CLICKHOUSE_USERNAME"):
-            ch_username = os.getenv("CLICKHOUSE_USERNAME")
-            warnings.warn(
-                "CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning("Deprecated env var CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-        if not ch_username:
-            ch_username = "default"
-        ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
+        _cfg = get_ch_config()
         self.ch_params = {
             "host": ch_host,
             "port": ch_port,
-            "username": ch_username,
-            "password": ch_password,
+            "username": _cfg["username"],
+            "password": _cfg["password"],
             "compress": True,  # Enable compression for native protocol
         }
         # Native protocol uses 'interface' parameter

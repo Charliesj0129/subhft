@@ -7,6 +7,7 @@ Processes data day-by-day with memory limits.
 """
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 
@@ -50,7 +51,10 @@ class Stats:
 
 def get_client():
     return clickhouse_connect.get_client(
-        host="localhost", port=8123, username="default", password="changeme"
+        host=os.getenv("HFT_CLICKHOUSE_HOST", "localhost"),
+        port=int(os.getenv("HFT_CLICKHOUSE_PORT", "8123")),
+        username=os.getenv("HFT_CLICKHOUSE_USER", "default"),
+        password=os.getenv("HFT_CLICKHOUSE_PASSWORD", "changeme"),
     )
 
 

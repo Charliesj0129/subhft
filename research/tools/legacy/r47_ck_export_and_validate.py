@@ -401,7 +401,10 @@ def main():
     # Step 1: Export missing days
     print("\n[1] Exporting missing days from ClickHouse...", flush=True)
     client = clickhouse_connect.get_client(
-        host="localhost", port=8123, username="default", password="changeme"
+        host=os.getenv("HFT_CLICKHOUSE_HOST", "localhost"),
+        port=int(os.getenv("HFT_CLICKHOUSE_PORT", "8123")),
+        username=os.getenv("HFT_CLICKHOUSE_USER", "default"),
+        password=os.getenv("HFT_CLICKHOUSE_PASSWORD", "changeme"),
     )
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 

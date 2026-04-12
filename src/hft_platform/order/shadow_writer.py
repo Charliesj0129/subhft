@@ -7,6 +7,8 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.infra.ch_client import get_ch_client as _shared_get_ch_client
+
 logger = get_logger("order.shadow_writer")
 
 _INSERT_SQL = (
@@ -26,17 +28,8 @@ _RECORD_KEYS: tuple[str, ...] = (
 
 
 def _get_ch_client() -> Any:
-    """Return a clickhouse_driver Client connected via env-configured host."""
-    try:
-        from clickhouse_driver import Client
-    except ImportError as exc:
-        raise RuntimeError("clickhouse_driver is not installed") from exc
-
-    host = os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
-    port = int(os.getenv("HFT_CLICKHOUSE_PORT", "9000"))
-    user = os.getenv("HFT_CLICKHOUSE_USER", "default")
-    password = os.getenv("HFT_CLICKHOUSE_PASSWORD", "")
-    return Client(host=host, port=port, user=user, password=password)
+    """Return a clickhouse_connect client connected via env-configured host."""
+    return _shared_get_ch_client()
 
 
 class ShadowOrderWriter:

@@ -338,18 +338,19 @@ class StormGuard:
 
         logger.warning("StormGuard Transition", old=old_state.name, new=new_state.name, reason=reason)
 
-        # Update Metric
+        # Update Metric — log at WARNING if metrics fail during a state
+        # transition so operators know observability is degraded (INFRA-011).
         try:
             self.metrics.stormguard_mode.labels(strategy="system").set(int(new_state))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("stormguard_metric_update_failed", metric="mode", error=str(exc))
 
         # Count transition direction
         direction = "escalation" if int(new_state) > int(old_state) else "de_escalation"
         try:
             self.metrics.stormguard_transitions_total.labels(direction=direction).inc()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("stormguard_metric_update_failed", metric="transitions", error=str(exc))
 
         # Audit guardrail transition
         try:
@@ -364,7 +365,7 @@ class StormGuard:
                 }
             )
         except Exception as exc:
-            logger.debug("audit_guardrail_transition_failed", error=str(exc))
+            logger.warning("audit_guardrail_transition_failed", error=str(exc))
 
         # Signal caller to fire callback OUTSIDE the lock
         # Only fire on *entry* to HALT, not re-entry (prevents infinite recursion)
@@ -499,7 +500,9 @@ class StormGuard:
             consecutive_failures=count,
         )
 
-    _FEATURE_RECOVERY_HOLD_S: float = float(os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5"))  # noqa
+    _FEATURE_RECOVERY_HOLD_S: float = float(
+        os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5")
+    )
 
     def report_feature_recovery(self) -> None:
         """Clear feature-failure flag after FeatureEngine recovers.

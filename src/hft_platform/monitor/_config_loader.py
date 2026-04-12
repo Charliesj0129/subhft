@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-import warnings
 from pathlib import Path
 
 import yaml
 from structlog import get_logger
 
+from hft_platform.infra.ch_client import get_ch_config
 from hft_platform.monitor._types import MonitorConfig, WatchlistSymbol
 
 logger = get_logger("monitor.config")
@@ -52,38 +52,32 @@ def load_watchlist(
     no_data_warn_s = float(monitor_cfg.get("no_data_warn_s", 10.0))
     max_retries = int(monitor_cfg.get("max_retries", 20))
     source = (
-        (os.getenv("HFT_MONITOR_SOURCE") or os.getenv("MONITOR_SOURCE") or str(monitor_cfg.get("source", "clickhouse")))
+        (os.getenv("HFT_MONITOR_SOURCE") or str(monitor_cfg.get("source", "clickhouse")))
         .strip()
         .lower()
     )
     batch_limit_per_symbol = int(
         os.getenv("HFT_MONITOR_BATCH_LIMIT_PER_SYMBOL")
-        or os.getenv("MONITOR_BATCH_LIMIT_PER_SYMBOL")
         or monitor_cfg.get("batch_limit_per_symbol", 200)
     )
     replay_ticks = int(
         os.getenv("HFT_MONITOR_REPLAY_TICKS")
-        or os.getenv("MONITOR_REPLAY_TICKS")
         or monitor_cfg.get("replay_ticks", warmup_ticks)
     )
 
-    ch_host = os.getenv("HFT_CLICKHOUSE_HOST", monitor_cfg.get("ch_host", "localhost"))
-    ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT", str(monitor_cfg.get("ch_port", 8123))))
-    ch_user = os.getenv("HFT_CLICKHOUSE_USER")
-    if not ch_user and os.getenv("HFT_CLICKHOUSE_USERNAME"):
-        ch_user = os.getenv("HFT_CLICKHOUSE_USERNAME")
-        warnings.warn(
-            "HFT_CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        logger.warning("Deprecated env var HFT_CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-    if not ch_user and os.getenv("CLICKHOUSE_USER"):
-        ch_user = os.getenv("CLICKHOUSE_USER")
-    if not ch_user:
-        ch_user = monitor_cfg.get("ch_user", "default")
+    _ch_cfg = get_ch_config()
+    # Allow YAML-level overrides for monitor-specific deployments
+    ch_host = os.getenv("HFT_CLICKHOUSE_HOST", monitor_cfg.get("ch_host", _ch_cfg["host"]))
+    ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT", str(monitor_cfg.get("ch_port", _ch_cfg["port"]))))
+    ch_user = (
+        _ch_cfg["username"]
+        if _ch_cfg["username"] != "default"
+        else monitor_cfg.get("ch_user", _ch_cfg["username"])
+    )
     ch_password = (
-        os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or monitor_cfg.get("ch_password", "")
+        os.getenv("HFT_CLICKHOUSE_PASSWORD")
+        or os.getenv("CLICKHOUSE_PASSWORD")
+        or monitor_cfg.get("ch_password", _ch_cfg["password"])
     )
     redis_host = (
         os.getenv("HFT_MONITOR_REDIS_HOST") or os.getenv("REDIS_HOST") or monitor_cfg.get("redis_host", "localhost")

@@ -62,6 +62,7 @@ claude.json
 
 # Runtime & build artifacts (local only)
 .runtime/
+*.so
 .import_linter_cache/
 .dlq/
 .reports/
@@ -122,6 +123,7 @@ research/data/*
 !research/data/raw/.gitkeep
 research/data/raw/**/*.npy
 research/data/raw/**/*.npz
+research/data/raw/**/*.meta.json
 !research/data/interim/
 !research/data/interim/.gitkeep
 !research/data/processed/
@@ -201,9 +203,11 @@ notebooks/.ipynb_checkpoints
 .claude/worktrees/
 .claude/agents/
 .claude/skills/
+.claude/*.lock
 
 # ArXiv paper storage (local only)
 arxiv_papers/
+${ARXIV_STORAGE_PATH}/
 
 gha-creds-*.json
 certs/

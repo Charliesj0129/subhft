@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
+from hft_platform.infra.ch_client import get_ch_config
+
 if TYPE_CHECKING:
     from hft_platform.notifications.dispatcher import NotificationDispatcher
 
@@ -69,10 +71,12 @@ class BackupManager:
         ch_user: str | None = None,
         ch_password: str | None = None,
     ) -> None:
-        self._ch_host = ch_host or os.getenv("HFT_CLICKHOUSE_HOST", "localhost")
+        _cfg = get_ch_config()
+        self._ch_host = ch_host or _cfg["host"]
+        # Backup uses native port 9000 by default (clickhouse_driver); override if caller or env specifies
         self._ch_port = ch_port or int(os.getenv("HFT_CLICKHOUSE_PORT", "9000"))
-        self._ch_user = ch_user or os.getenv("HFT_CLICKHOUSE_USER", "default")
-        self._ch_password = ch_password if ch_password is not None else os.getenv("HFT_CLICKHOUSE_PASSWORD", "")
+        self._ch_user = ch_user or _cfg["username"]
+        self._ch_password = ch_password if ch_password is not None else _cfg["password"]
         self._retain_days = retain_days if retain_days is not None else int(os.getenv("HFT_BACKUP_RETAIN_DAYS", "30"))
         self._backup_dir = backup_dir
         self._notifier = notifier

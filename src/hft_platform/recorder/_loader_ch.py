@@ -6,14 +6,11 @@ first argument so that the public API surface stays in ``loader.py``.
 
 from __future__ import annotations
 
-import os
 import random
 import time
-import warnings
 from typing import Any
 
-import clickhouse_connect
-
+from hft_platform.infra.ch_client import get_ch_client
 from hft_platform.recorder._loader_common import (
     logger,
     timebase,
@@ -28,34 +25,9 @@ from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 def connect(svc: Any) -> None:
     """Establish a ClickHouse connection and ensure schema exists."""
     try:
-        ch_username = os.getenv("HFT_CLICKHOUSE_USER")
-        if not ch_username and os.getenv("HFT_CLICKHOUSE_USERNAME"):
-            ch_username = os.getenv("HFT_CLICKHOUSE_USERNAME")
-            warnings.warn(
-                "HFT_CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning("Deprecated env var HFT_CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-        if not ch_username and os.getenv("CLICKHOUSE_USER"):
-            ch_username = os.getenv("CLICKHOUSE_USER")
-        # TODO(2026-Q3): remove CLICKHOUSE_USERNAME fallback — deprecated since 2026-03
-        if not ch_username and os.getenv("CLICKHOUSE_USERNAME"):
-            ch_username = os.getenv("CLICKHOUSE_USERNAME")
-            warnings.warn(
-                "CLICKHOUSE_USERNAME is deprecated, use HFT_CLICKHOUSE_USER instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning("Deprecated env var CLICKHOUSE_USERNAME used; migrate to HFT_CLICKHOUSE_USER")
-        if not ch_username:
-            ch_username = "default"
-        ch_password = os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
-        svc.ch_client = clickhouse_connect.get_client(
+        svc.ch_client = get_ch_client(
             host=svc.ch_host,
             port=svc.ch_port,
-            username=ch_username,
-            password=ch_password,
         )
         try:
             apply_schema(svc.ch_client)
