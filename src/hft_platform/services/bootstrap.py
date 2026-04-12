@@ -1120,6 +1120,11 @@ class SystemBootstrapper:
         # Startup config snapshot (non-blocking)
         from hft_platform.ops.config_snapshot import build_snapshot, write_snapshot_to_clickhouse
 
+        # ch_client is only set when HFT_DAILY_REPORT_ENABLED=1; fall back to recorder writer
+        if "ch_client" not in dir():
+            _writer = getattr(recorder, "writer", None) if recorder is not None else None
+            ch_client = getattr(_writer, "ch_client", None) if _writer is not None else None
+
         try:
             _yaml_paths = [
                 "config/base/main.yaml",
@@ -1131,15 +1136,8 @@ class SystemBootstrapper:
                 asyncio.get_event_loop().create_task(write_snapshot_to_clickhouse(ch_client, _snapshot))
             else:
                 logger.info("config_snapshot_fallback", **_snapshot)
-        except Exception as _snap_exc:  # noqa: BLE001
-            import traceback as _tb
-
-            logger.warning(
-                "config_snapshot_build_failed",
-                error=str(_snap_exc),
-                error_type=type(_snap_exc).__name__,
-                traceback=_tb.format_exc(),
-            )
+        except Exception:  # noqa: BLE001
+            logger.warning("config_snapshot_build_failed", exc_info=True)
 
         # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:
