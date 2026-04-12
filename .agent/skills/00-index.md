@@ -1,6 +1,6 @@
 # Skills Index
 
-> **150 skills** from HFT Platform + [everything-claude-code](https://github.com/affaan-m/everything-claude-code) and other community repos
+> **160+ skills** from HFT Platform + [everything-claude-code](https://github.com/affaan-m/everything-claude-code) and other community repos
 > Each skill has a `SKILL.md`. Read it with `view_file` before using.
 
 ## HFT Core
@@ -26,6 +26,16 @@
 | `symbols-sync` | Symbol universe sync: symbols.list -> symbols.yaml |
 | `research-factory` | End-to-end alpha pipeline: paper -> prototype -> backtest -> promote -> live (8 stages) |
 | `research-data-governance` | Dataset governance: metadata sidecars, synthetic LOB, UL6 provenance |
+| `hft-production-audit` | **NEW** Multi-plane runtime safety audit: 7-plane sweep protocol derived from ae243a08 pattern |
+| `hft-hot-path-dev` | **NEW** Constitution-compliant hot-path development: 5 Laws checklist, discipline gates, latency guard |
+| `hft-strategy-lifecycle` | **NEW** Strategy scaffold→shadow→live lifecycle: R47-pattern config-driven enablement, all gates |
+| `hft-test-hft` | **NEW** HFT-specific test patterns: scaled int, monotonic time, fail-closed Rust, state matrices |
+| `hft-release-gate` | **NEW** Release readiness: 7-gate unified checklist (code quality, coverage, architecture, security, pre-market, latency) |
+| `taifex-alpha-kill-criteria` | **NEW** Pre-research feasibility: 50+ killed alpha lessons, structural exhaustion zones, mandatory IC/execution gates |
+| `taifex-market-structure` | **NEW** TAIFEX domain: TMFD6/TXFD6/TXO economics, fee schedule, spread regimes, liquidity patterns, data conventions |
+| `hft-backtest-calibration` | **NEW** Backtest fidelity: CK vs hftbacktest 14x bias, fill models, latency profiles, walk-forward, statistical traps |
+| `hft-strategy-sdk` | **NEW** BaseStrategy full reference: 8 hooks, order API, position tracking, gap resilience, config, tick grid snapping |
+| `hft-mm-design` | **NEW** Market-making design: R47 three-layer pattern, structural properties, V-shape recovery, improvements that KILL |
 
 ## Python & Rust
 

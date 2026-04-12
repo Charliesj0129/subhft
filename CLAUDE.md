@@ -34,7 +34,7 @@
 
 ## 🏛️ Architecture Quick Reference
 
-- **Canonical architecture doc**: `docs/architecture/current-architecture.md` (252 lines, continuously updated)
+- **Canonical architecture doc**: `docs/architecture/current-architecture.md` (354 lines, last updated 2026-04-12)
 - **Feature/Lob/Research unification spec (TODO plan)**: `docs/architecture/feature-engine-lob-research-unification-spec.md`
 - **Latency realism baseline (system vs Shioaji sim API RTT)**: `docs/architecture/latency-baseline-shioaji-sim-vs-system.md`
 - **C4 diagrams**: `.agent/library/c4-model-current.md`
@@ -74,7 +74,7 @@ Mandatory policy:
 | Market Data   | `feed_adapter/shioaji_client.py`, `normalizer.py`, `lob_engine.py`; fused path: `RustNormalizerLobFused` / `RustNormalizerFeatureFusedV1` | Ingest → normalize → LOB state (fused Rust path optional via `HFT_FUSED_NORMALIZER=1`) |
 | Feature       | `feature/engine.py`, `feature/registry.py`, `feature/burst_detector.py`              | 27 LOB-derived features (v3), burst detection, research/live parity |
 | Decision      | `strategy/runner.py`, `risk/engine.py`                                               | Strategy dispatch → risk validation         |
-| Execution     | `order/adapter.py`, `execution/router.py`, `execution/positions.py`, `execution/execution_optimizer.py`, `execution/imbalance_timer.py` | Broker API, fill routing, position tracking, limit/market decision, imbalance-timed entry |
+| Execution     | `order/adapter.py`, `execution/router.py`, `execution/positions.py`, `execution/execution_optimizer.py`, `execution/checkpoint.py`, `execution/startup_recon.py` | Broker API, fill routing, position tracking, limit/market decision, checkpoint, startup recon |
 | Persistence   | `recorder/worker.py`, `recorder/batcher.py`, `recorder/writer.py`, `recorder/wal.py` | ClickHouse + WAL fallback                   |
 | Observability | `observability/metrics.py`, `risk/storm_guard.py`                                    | Prometheus metrics, StormGuard FSM          |
 
@@ -205,6 +205,13 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_STARTUP_RECON_QTY_THRESHOLD`        | `10`  | Stock discrepancy auto-correct threshold    |
 | `HFT_STARTUP_RECON_FUTURES_QTY_THRESHOLD`| `2`   | Futures discrepancy auto-correct threshold  |
 | `HFT_CHECKPOINT_ENABLED`                 | `1`   | Enable periodic position checkpoint writing |
+| `HFT_ORDER_SHADOW_MODE`  | `0`         | `1` = shadow order interception (orders never reach broker) |
+| `HFT_RECONNECT_DAYS`    | `mon,tue,wed,thu,fri` | Weekdays for auto-reconnect              |
+| `HFT_RECONNECT_TZ`      | `Asia/Taipei`| Timezone for reconnect hours             |
+| `HFT_ARCHIVE_RETENTION_DAYS` | `3`    | WAL archive retention days                |
+| `HFT_TELEGRAM_ENABLED`  | `0`         | `1` = enable Telegram notification bot    |
+| `HFT_TELEGRAM_BOT_TOKEN`| —           | Telegram bot token (use secret mgr)       |
+| `HFT_TELEGRAM_CHAT_ID`  | —           | Telegram chat ID for alerts               |
 
 ## 🎨 Coding Style (Strict)
 

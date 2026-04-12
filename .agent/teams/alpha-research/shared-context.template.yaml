@@ -7,6 +7,26 @@ round_id: R__                       # e.g., R32
 target_instrument: ___              # e.g., TMFD6
 research_goal: "___"                # e.g., "Explore TXO IV signals for TMF futures prediction"
 
+# --- Skill References (teammates MUST read their assigned skills) ---
+skills:
+  researcher:
+    - .agent/skills/taifex-alpha-kill-criteria/SKILL.md    # Pre-research kill gate
+    - .agent/skills/taifex-market-structure/SKILL.md       # TAIFEX domain knowledge
+  devils_advocate:
+    - .agent/skills/taifex-alpha-kill-criteria/SKILL.md    # Kill registry + mandatory gates
+    - .agent/skills/hft-backtest-calibration/SKILL.md      # Backtest fidelity + statistical traps
+  executor:
+    - .agent/skills/hft-strategy-sdk/SKILL.md              # BaseStrategy contract + hooks
+    - .agent/skills/hft-backtest-calibration/SKILL.md      # CK vs hftbacktest calibration
+    - .agent/skills/hft-test-hft/SKILL.md                  # HFT-specific test patterns
+    - .agent/skills/taifex-market-structure/SKILL.md       # Cost/data conventions
+  executor_mm_only:
+    - .agent/skills/hft-mm-design/SKILL.md                 # R47 three-layer MM design
+  lead_post_promote:
+    - .agent/skills/hft-strategy-lifecycle/SKILL.md        # Scaffold → shadow → live
+    - .agent/skills/hft-release-gate/SKILL.md              # 7-gate deployment readiness
+    - .agent/skills/hft-production-audit/SKILL.md          # Post-deploy 7-plane sweep
+
 # --- Cost Model (update if fee structure changes) ---
 cost_model:
   rt_cost_ntd: 40                   # Round-trip cost in NTD
@@ -107,4 +127,37 @@ killed_directions:
   - id: "VRR"
     rounds: "R22"
     reason: "vrr never registered, CBS filter killed"
+  - id: "L2-bar-TA"
+    rounds: "R32b"
+    reason: "IC inflated 7x by subsampling bug. True IC=+0.013, not 0.092"
+  - id: "L2-cross-instrument"
+    rounds: "R32a"
+    reason: "MLOFI IC=0.011 < 0.015. CVD 95.7% validated but not tradeable"
+  - id: "LEV-LCOG"
+    rounds: "R34"
+    reason: "LEV=OFI (corr=0.967). R32b IC inflated 7x by subsampling bug"
+  - id: "filtered-bar-TA"
+    rounds: "R35"
+    reason: "Vol-weight useless (73% qty=1). Aggressor IC = bar-boundary artifact"
+  - id: "entropy-GEX-OI"
+    rounds: "R35b"
+    reason: "Entropy inverted; GEX always negative; OI Flow trend-contaminated"
+  - id: "long-horizon-all"
+    rounds: "R35-R46"
+    reason: "12 directions. R44 Night VWAP MR strongest (IC=-0.26) but spread kills execution"
+  - id: "math-decomposition"
+    rounds: "R36"
+    reason: "16 scripts ALL KILLED. PCA/DMD/Kalman/DWT/TDA/bracket/maker/options/tensor"
+  - id: "TXO-skew-IC-statarb"
+    rounds: "R47"
+    reason: "RT cost 4.68 pts > edge. Retail spreads structural blocker"
+  - id: "tensor-oracle"
+    rounds: "R50"
+    reason: "22pt signal < 80pt TXO cost. Infrastructure reusable"
+  - id: "TMFD6-multi-instrument"
+    rounds: "R51-C1b"
+    reason: "Already proven -109K NTD. Multiple instruments does not help"
+  - id: "stale-quote-suppression"
+    rounds: "R51-C3b"
+    reason: "PnL-per-fill WORSE, not better. 0/12 days improved in CK test"
   # Append new kills here each round
