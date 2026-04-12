@@ -83,9 +83,7 @@ class TestDataWriterRetry(unittest.TestCase):
 
         with patch.dict("os.environ", {"HFT_CLICKHOUSE_ENABLED": "1"}):
             writer = DataWriter()
-            with patch.object(writer, "_start_heartbeat_thread"), patch.object(
-                writer, "_init_schema"
-            ):
+            with patch.object(writer, "_start_heartbeat_thread"), patch.object(writer, "_init_schema"):
                 writer.connect()
 
         self.assertTrue(writer.connected)
@@ -111,9 +109,7 @@ class TestDataWriterRetry(unittest.TestCase):
             },
         ):
             writer = DataWriter()
-            with patch.object(writer, "_start_heartbeat_thread"), patch.object(
-                writer, "_init_schema"
-            ):
+            with patch.object(writer, "_start_heartbeat_thread"), patch.object(writer, "_init_schema"):
                 writer.connect()
             # Stop heartbeat thread to prevent additional sleeps
             writer._heartbeat_running = False
