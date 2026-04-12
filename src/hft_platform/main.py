@@ -2,10 +2,10 @@ import asyncio
 import os
 import signal
 
-from prometheus_client import start_http_server
 from structlog import get_logger
 
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.observability.metrics_server import start_resilient_metrics_server
 from hft_platform.services.system import HFTSystem
 
 # Configure structlog globally? HFTSystem does it.
@@ -24,7 +24,7 @@ async def main():
     except ValueError:
         prom_port = 9090
     prom_addr = os.getenv("HFT_PROM_ADDR", "0.0.0.0")  # nosec B104
-    start_http_server(prom_port, addr=prom_addr)
+    start_resilient_metrics_server(prom_port, addr=prom_addr)
     logger.info("Prometheus metrics started", port=prom_port, addr=prom_addr)
 
     # Load settings from file or env?
