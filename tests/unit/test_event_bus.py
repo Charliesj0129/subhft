@@ -244,8 +244,9 @@ def test_consecutive_overflows_trigger_halt(monkeypatch):
     # Each call: publish enough to overflow, consume one event, break.
     # We monkey-patch the reset away to simulate 3 consecutive overflows
     # without a successful full catch-up resetting the counter.
-    # Actually: just set _overflow_count directly to simulate accumulated overflows.
-    bus._overflow_count = 2  # already had 2 overflows
+    # Actually: set per-consumer overflow count to simulate accumulated overflows.
+    # The consume() method uses per-consumer tracking now (not the global _overflow_count).
+    bus._overflow_count_per_consumer["default"] = 2  # already had 2 overflows
 
     # Now cause one more overflow (3rd)
     bus.publish_many_nowait(["e1", "e2", "e3", "e4", "e5"])

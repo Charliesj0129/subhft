@@ -303,6 +303,9 @@ class TestAuditDropMetric:
 
         reset_audit_writer()
         writer = AuditWriter(queue_size=1)  # Tiny queue
+        # Set overflow buffer size to 0 so drops happen immediately after queue full
+        for name in writer._overflow:
+            writer._overflow[name] = collections.deque(maxlen=0)
 
         metrics_mock = MagicMock()
         with patch("hft_platform.observability.metrics.MetricsRegistry") as mock_reg:

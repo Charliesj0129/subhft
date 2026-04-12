@@ -514,9 +514,11 @@ class PositionStore:
             Symbols without a mid_price entry contribute 0.
         """
         total = 0
+        accounted_keys: set[str] = set()
         for key, pos in self.positions.items():
             if pos.net_qty == 0:
                 continue
+            accounted_keys.add(key)
             # Extract symbol from key "{account}:{strategy}:{symbol}"
             symbol = key.rsplit(":", 1)[-1]
             mid = mid_prices.get(symbol)
@@ -524,6 +526,20 @@ class PositionStore:
                 continue
             multiplier = self.metadata.contract_multiplier(symbol)
             total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
+
+        # Include recovery positions not yet merged into self.positions
+        for rkey, rec in self._recovery_positions.items():
+            if rkey in accounted_keys:
+                continue
+            net_qty = rec["net_qty"]
+            if net_qty == 0:
+                continue
+            symbol = rec["symbol"]
+            mid = mid_prices.get(symbol)
+            if mid is None:
+                continue
+            multiplier = self.metadata.contract_multiplier(symbol)
+            total += (mid - rec["avg_price_scaled"]) * net_qty * multiplier
         return total
 
     def snapshot_positions(self) -> dict:

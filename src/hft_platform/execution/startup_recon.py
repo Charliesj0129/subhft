@@ -432,18 +432,26 @@ class StartupPositionVerifier:
         # Multi-strategy: preserve per-strategy split from checkpoint when total
         # matches. Otherwise assign proportionally (rounded, remainder to first).
         ckpt_total = sum(d.get("net_qty", 0) for _, d in entries)
+        # First pass: compute adjusted quantities per entry.
+        adj_qtys: list[int] = []
         for i, (key, data) in enumerate(entries):
-            ckpt_acct, ckpt_strat, sym = self._parse_composite_key(key)
             entry_qty = data.get("net_qty", 0)
             if ckpt_total == target_qty:
-                adj_qty = entry_qty
+                adj_qtys.append(entry_qty)
             elif ckpt_total != 0:
-                adj_qty = round(entry_qty * target_qty / ckpt_total)
+                adj_qtys.append(round(entry_qty * target_qty / ckpt_total))
             else:
-                adj_qty = target_qty if i == 0 else 0
+                adj_qtys.append(target_qty if i == 0 else 0)
+        # Remainder correction: ensure sum equals target_qty exactly.
+        remainder = target_qty - sum(adj_qtys)
+        if remainder != 0:
+            adj_qtys[0] += remainder
+        # Second pass: write into merged dict.
+        for idx, (key, data) in enumerate(entries):
+            ckpt_acct, ckpt_strat, sym = self._parse_composite_key(key)
             merged[key] = {
                 "symbol": data.get("symbol", sym),
-                "net_qty": adj_qty,
+                "net_qty": adj_qtys[idx],
                 "avg_price_scaled": data.get("avg_price_scaled", 0),
                 "realized_pnl_scaled": data.get("realized_pnl_scaled", 0),
                 "fees_scaled": data.get("fees_scaled", 0),

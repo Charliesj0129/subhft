@@ -361,7 +361,13 @@ class ReconciliationService:
         if not previous_signature or not current_signature:
             return False
         overlapping_symbols = set(previous_signature) & set(current_signature)
-        return bool(overlapping_symbols)
+        if not overlapping_symbols:
+            return False
+        # True if ANY overlapping symbol persisted or grew; false only if ALL shrank
+        return any(
+            current_signature[s] >= previous_signature[s]
+            for s in overlapping_symbols
+        )
 
     @staticmethod
     def _is_futures(symbol: str) -> bool:
