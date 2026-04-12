@@ -54,13 +54,21 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 4. Execution plane
 
-- `src/hft_platform/order/adapter.py`: API queue/coalescing, rate limits, circuit breaker, DLQ.
+- `src/hft_platform/order/adapter.py`: API queue/coalescing, rate limits, circuit breaker, DLQ. Typed-intent identity and adapter rejection feedback added (2026-04-12).
 - `src/hft_platform/execution/gateway.py`: execution wrapper and liveness/error metrics.
 - `src/hft_platform/execution/router.py`: normalizes order/deal callbacks, updates position store, republishes events.
 - `src/hft_platform/execution/positions.py`: position accounting (Python + optional Rust tracker).
+- `src/hft_platform/execution/normalizer.py`: execution event field normalization (broker-agnostic).
 - `src/hft_platform/execution/reconciliation.py`: broker/local reconciliation, can trigger HALT.
-- `src/hft_platform/execution/execution_optimizer.py`: limit vs market order decision based on LOB state (Albers et al. 2025 — fill probability from queue depth). Integrated in CascadeBounceStrategy.
-- `src/hft_platform/execution/imbalance_timer.py`: delays order execution until LOB imbalance is favorable (IC=+0.116 at 1s on TXFD6). Configurable threshold/timeout with urgent bypass.
+- `src/hft_platform/execution/startup_recon.py`: startup position recovery and cross-source reconciliation.
+- `src/hft_platform/execution/eod_recon.py`: end-of-day reconciliation checks.
+- `src/hft_platform/execution/checkpoint.py`: periodic position checkpoint serialization.
+- `src/hft_platform/execution/execution_optimizer.py`: limit vs market order decision based on LOB state (Albers et al. 2025 — fill probability from queue depth).
+- `src/hft_platform/execution/regime_classifier.py`: market regime detection for execution adaptation.
+- `src/hft_platform/execution/fill_dlq.py`: dead-letter queue for failed fill processing.
+- `src/hft_platform/execution/slippage_tracker.py`: slippage monitoring and metrics.
+- `src/hft_platform/execution/mtm.py`: mark-to-market calculation.
+- `src/hft_platform/execution/trigger_executor.py`: conditional/triggered order execution.
 
 5. Persistence plane
 
@@ -72,9 +80,11 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 6. Observability and safety plane
 
-- `src/hft_platform/observability/metrics.py` and `src/hft_platform/observability/latency.py`.
+- `src/hft_platform/observability/metrics.py` and `src/hft_platform/observability/latency.py`: production-grade audit (2026-04-12) added 13 metric fixes across 7 runtime planes.
+- `src/hft_platform/observability/health.py`: health endpoint and readiness checks.
+- `src/hft_platform/observability/_system_poller.py`: system-level resource polling.
 - `src/hft_platform/risk/storm_guard.py`: safety state machine.
-- `src/hft_platform/services/system.py::_supervise()`: task supervision, loop lag, HALT enforcement.
+- `src/hft_platform/services/system.py::_supervise()`: task supervision, loop lag, queue depth monitoring, HALT enforcement. 12 P0/P1 blind-spot fixes applied (2026-04-12).
 
 ## 3. Runtime Canonical Flow
 
@@ -181,7 +191,7 @@ Status:
 | `strategy`/`strategies`  | strategy SDK and implementations                                                                                | `src/hft_platform/strategy/*.py`, `src/hft_platform/strategies/*.py`                                                   |
 | `risk`                   | risk checks, fast gate, StormGuard                                                                              | `src/hft_platform/risk/*.py`                                                                                           |
 | `order`                  | broker dispatch and order-path guardrails                                                                       | `src/hft_platform/order/*.py`                                                                                          |
-| `execution`              | execution normalization, routing, reconciliation, position store, execution optimizer, imbalance timer           | `src/hft_platform/execution/*.py` (incl. `execution_optimizer.py`, `imbalance_timer.py`)                               |
+| `execution`              | execution normalization, routing, reconciliation, position store, checkpoint, MTM, startup/EOD recon, regime classifier, slippage tracker, fill DLQ, trigger executor | `src/hft_platform/execution/*.py` (14 modules)                                                                         |
 | `recorder`               | recorder batching, writer, WAL, replay; WAL-first mode (CE-M3)                                                  | `src/hft_platform/recorder/*.py`; `wal_first.py`, `disk_monitor.py`, `mode.py`, `shard_claim.py`, `replay_contract.py` |
 | `gateway`                | order/risk gateway; ExposureStore, IdempotencyStore, GatewayPolicy (CE-M2, enabled via `HFT_GATEWAY_ENABLED=1`) | `src/hft_platform/gateway/` (channel, dedup, exposure, policy, service)                                                |
 | `observability`          | Prometheus and latency spans                                                                                    | `src/hft_platform/observability/*.py`                                                                                  |

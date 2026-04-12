@@ -322,6 +322,8 @@ class GatewayService:
             strategy_id=intent.strategy_id,
             symbol=intent.symbol,
         )
+        _order_key = key  # idempotency_key — used for per-order exposure tracking
+        _target_order_key = getattr(intent, "target_order_id", "") or ""
         if intent_type_value not in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
             try:
                 if is_typed_view and hasattr(self._exposure, "check_and_update_typed"):
@@ -330,9 +332,13 @@ class GatewayService:
                         intent_type=intent_type_value,
                         price=int(intent.price),
                         qty=int(intent.qty),
+                        order_key=_order_key,
+                        target_order_key=_target_order_key,
                     )
                 else:
-                    exp_ok, exp_reason = self._exposure.check_and_update(exp_key, intent)
+                    exp_ok, exp_reason = self._exposure.check_and_update(
+                        exp_key, intent, order_key=_order_key,
+                    )
             except ExposureLimitError as exc:
                 # Symbol-cardinality hard limit reached; reject and commit dedup so
                 # the same key is not retried in a busy-loop (CE2-12).
@@ -475,23 +481,14 @@ class GatewayService:
                             intent_type=intent_type_value,
                             price=int(intent.price),
                             qty=int(intent.qty),
+                            order_key=_order_key,
+                            target_order_key=_target_order_key,
                         )
                     else:
-                        self._exposure.release_exposure(exp_key, intent)
+                        self._exposure.release_exposure(exp_key, intent, order_key=_order_key)
             else:
-                # Step 7: Release exposure after successful dispatch (pre-trade
-                # check served its purpose; gateway does not receive fill events,
-                # so holding exposure post-dispatch is a leak — H1 fix).
-                if intent_type_value != int(IntentType.CANCEL):
-                    if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
-                        self._exposure.release_exposure_typed(
-                            exp_key,
-                            intent_type=intent_type_value,
-                            price=int(intent.price),
-                            qty=int(intent.qty),
-                        )
-                    else:
-                        self._exposure.release_exposure(exp_key, intent)
+                # Exposure is held post-dispatch until fill/cancel/TTL expiry.
+                # Per-order tracking + periodic expire_stale_orders() prevents leaks.
                 # Commit dedup as approved only after successful dispatch
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):
                     self._dedup.commit_typed(key, True, "OK", cmd_id_for_commit)
