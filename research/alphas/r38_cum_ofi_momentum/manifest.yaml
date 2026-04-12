@@ -1,0 +1,45 @@
+# R38: Cumulative OFI Momentum
+alpha_id: r38_cum_ofi_momentum
+version: "0.1"
+status: EXPLORATORY  # NOT promotion-ready
+author: claude-r38
+created: "2026-04-07"
+
+instrument: TXFD6
+data_days: 3  # 2026-03-20, 2026-03-23 (partial), 2026-03-24
+data_source: L2 hftbt.npz
+
+hypothesis: >
+  Cumulative OFI over 15-60min windows captures sustained institutional
+  buying/selling pressure that predicts price continuation at medium-frequency.
+
+signals:
+  cum_ofi_Xs: "Sum of signed trade volume over trailing X-second window"
+  ofi_momentum: "cum_ofi_15m - cum_ofi_60m (short vs long flow divergence)"
+  delta_ofi_Xs: "Change in cum_ofi over 5-minute window (flow acceleration)"
+  detrend_ofi_Xs: "Z-scored cum_ofi within 2x rolling window"
+  norm_ofi_Xs: "cum_ofi / cum_volume"
+  ofi_persistence: "Rolling autocorrelation of 1-min OFI"
+
+findings:
+  overlapping_ic_inflated: true
+  cum_ofi_negative_ic: "Mean-reversion artifact, not alpha"
+  ofi_momentum_positive_ic: "0.10-0.19 overlapping, but redundant with -cum_ofi_3600s (r=-0.82)"
+  non_overlapping_ic_range: "0.05-0.31 but n=20-140 (underpowered)"
+  autocorrelation: "cum_ofi AC(1) = 0.86-0.98 — extremely persistent signals"
+  novelty_vs_1min_ofi: "cum_ofi_300s r=0.44 with 1min OFI. Longer windows less correlated."
+
+verdict: INCONCLUSIVE
+verdict_reason: >
+  Signals show IC but with critical issues:
+  1. Only 3 days (1 partial) - severely underpowered
+  2. Negative IC on cum_ofi is mean-reversion artifact
+  3. ofi_momentum is -cum_ofi_60m (r=-0.82), not genuinely new
+  4. Non-overlapping samples reduce IC and destroy significance
+  5. Need 10+ trading days to assess properly
+
+next_steps:
+  - Collect 10+ days of TXFD6 L2 data
+  - Re-run with non-overlapping sampling only
+  - Test delta_ofi (flow-based, not level-based) as primary signal
+  - Compare directly to FeatureEngine OFI features on same data

@@ -1,0 +1,27 @@
+alpha_id: r37_vwap_reversion
+name: "VWAP Deviation Reversion"
+instrument: TXFD6
+status: KILLED
+hypothesis: "Price deviation from session VWAP predicts mean-reversion at 15min-1hr horizons"
+signal_type: mean_reversion
+horizons: [900, 1800, 3600]
+data_days: 11
+kill_reason: >
+  Per-day IC is consistently negative (-0.33 to -0.59) with 100% sign consistency,
+  confirming that VWAP deviation predicts forward return direction. However, quintile
+  decomposition with non-overlapping samples reveals the signal is NOT tradeable:
+  (1) Only ~18 independent samples per day at 15min horizon — too few for stable quintile edges.
+  (2) The Q1-Q5 spread in pooled non-overlapping data (-18 pts at 900s) is dominated by
+      a single crash day (2026-04-02, Q5=-216 pts). Excluding that day, the spread is marginal.
+  (3) Practical edge estimate of ~7 pts per trade (before cost) with RT cost of 4.7 pts
+      leaves only 2.3 pts net — within noise and below the 2x cost threshold for robustness.
+  (4) With only 2-5 trades per day per side, the strategy generates insufficient volume
+      to amortize fixed costs or achieve statistical confidence in live trading.
+  (5) The high IC magnitude (0.33-0.59) is inflated by overlapping 1-minute samples.
+      With proper non-overlapping spacing, the effective sample size per day is 7-18,
+      making per-day IC estimates unreliable.
+created: "2026-04-07"
+researcher: claude-opus-4-6
+scripts:
+  - research/scripts/r37_vwap_reversion.py
+  - research/scripts/r37_vwap_reversion_v2.py

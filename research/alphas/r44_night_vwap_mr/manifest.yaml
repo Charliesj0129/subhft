@@ -1,0 +1,67 @@
+alpha_id: r44_night_vwap_mr
+name: "Night Session VWAP Mean-Reversion"
+version: "1.0.0"
+owner: charlie
+created: "2026-04-07"
+
+description: |
+  Mean-reversion signal based on VWAP deviation during TAIFEX night session.
+  When price deviates significantly from cumulative session VWAP, fade the move.
+  Key innovation: limit order execution (join queue) avoids spread cost.
+
+paper_refs:
+  - "Cartea, Jaimungal, Penalva (2015) — Algorithmic and High-Frequency Trading, Ch. 10 (VWAP)"
+  - "Avellaneda & Stoikov (2008) — High-frequency trading in a limit order book"
+
+signal:
+  type: mean_reversion
+  feature: vwap_deviation
+  horizon_min: 30
+  ic_mean: -0.264
+  ic_t_stat: -8.17
+  n_nights: 30
+
+execution_model: limit_order
+  # Place limit at best bid (sell) / best ask (buy)
+  # Fill only if price trades through our level
+  # Cost = fee only (~0.15 pts RT), no spread crossing
+
+instrument: TXFD6
+  # TAIFEX Mini-TAIEX Index Futures, night session (15:00-05:00 TWN)
+  # 1 point = 50 NTD (regular), 10 NTD (mini)
+
+data_deps:
+  - research/data/ck_export/TXFB6/
+  - research/data/ck_export/TXFC6/
+  - research/data/ck_export/TXFD6/
+  - research/data/real/golden/TXFD6/
+
+parameters:
+  vwap_threshold: 30.0     # deviation in points to trigger signal
+  exit_timeout_bars: 30    # max bars (minutes) to hold position
+  fill_timeout_bars: 10    # max bars to wait for limit order fill
+  vol_filter: true         # require above-median realized vol
+  vol_pct: 0.50            # percentile threshold for vol filter
+
+latency_profile: shioaji_sim_p95_v2026-03-04
+  # P95: submit=36ms, cancel=47ms
+
+gate_results:
+  gate_a: PASS
+  gate_b: PENDING
+  gate_c: FAIL
+  gate_c_notes: |
+    Scorecard passes 9/11 checks but profitability is dominated by a single
+    outlier night (2026-04-02: 102% of total PnL). Excluding that night,
+    strategy is unprofitable (Sharpe=-0.014). Signal IC is real but execution
+    edge is insufficient on normal nights. HONEST VERDICT: FAIL.
+  gate_d: BLOCKED
+  gate_e: BLOCKED
+
+feature_set_id: null
+  # This alpha uses raw OHLCV bars, not FeatureEngine features
+  # VWAP computed from tick data, not LOB features
+
+complexity_budget:
+  lines: 400
+  external_deps: [numpy, pandas, scipy]
