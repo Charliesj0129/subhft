@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import time
 from unittest.mock import MagicMock
 
@@ -26,7 +27,7 @@ class TestDeferredTerminal:
         a.live_orders = {}
         a._live_orders_lock = asyncio.Lock()
         a._pending_order_keys = set()
-        a._deferred_terminals = []
+        a._deferred_terminals = collections.deque(maxlen=256)
         a._cmd_created_ns_map = {}
         a._cmd_tca_map = {}
         a.order_id_resolver = MagicMock()
@@ -60,7 +61,7 @@ class TestDeferredTerminal:
     @pytest.mark.asyncio
     async def test_drain_resolves_deferred(self, adapter):
         adapter.live_orders["s1:42"] = MagicMock()
-        adapter._deferred_terminals = [("s1", "ABC123", time.monotonic())]
+        adapter._deferred_terminals = collections.deque([("s1", "ABC123", time.monotonic())], maxlen=256)
         adapter.order_id_resolver.resolve_order_key.return_value = "s1:42"
 
         await adapter._drain_deferred_terminals("s1:42", MagicMock())
@@ -71,7 +72,7 @@ class TestDeferredTerminal:
     @pytest.mark.asyncio
     async def test_deferred_terminal_expires_after_30s(self, adapter):
         old_ts = time.monotonic() - 31.0
-        adapter._deferred_terminals = [("s1", "OLD_ORDER", old_ts)]
+        adapter._deferred_terminals = collections.deque([("s1", "OLD_ORDER", old_ts)], maxlen=256)
         adapter.order_id_resolver.resolve_order_key.return_value = "s1:OLD_ORDER"
 
         await adapter._drain_deferred_terminals("s1:99", MagicMock())
@@ -83,7 +84,7 @@ class TestDeferredTerminal:
     async def test_unresolved_deferred_stays_in_queue(self, adapter):
         """If resolved key not in live_orders yet, stay in deferred list."""
         adapter.live_orders = {}
-        adapter._deferred_terminals = [("s1", "XYZ", time.monotonic())]
+        adapter._deferred_terminals = collections.deque([("s1", "XYZ", time.monotonic())], maxlen=256)
         adapter.order_id_resolver.resolve_order_key.return_value = "s1:DIFFERENT_KEY"
 
         await adapter._drain_deferred_terminals("s1:99", MagicMock())

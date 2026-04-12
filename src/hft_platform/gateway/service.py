@@ -523,9 +523,11 @@ class GatewayService:
                         intent_type=intent_type_value,
                         price=int(intent.price),
                         qty=int(intent.qty),
+                        order_key=_order_key,
+                        target_order_key=_target_order_key,
                     )
                 else:
-                    self._exposure.release_exposure(exp_key, intent)
+                    self._exposure.release_exposure(exp_key, intent, order_key=_order_key)
             logger.debug(
                 "Risk rejected intent",
                 reason=decision.reason_code,

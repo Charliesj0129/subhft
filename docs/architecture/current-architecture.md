@@ -93,7 +93,8 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 - `RingBufferBus`
 - bounded queues: `raw_queue`, `raw_exec_queue`, `risk_queue`, `order_queue`, `recorder_queue`
-- services: `MarketDataService`, `StrategyRunner`, `RiskEngine`, `OrderAdapter`, `ExecutionGateway`, `ExecutionRouter`, `ReconciliationService`, `RecorderService`
+- services: `MarketDataService`, `StrategyRunner`, `RiskEngine`, `OrderAdapter`, `ExecutionGateway`, `ExecutionRouter`, `ReconciliationService`, `RecorderService`, `CheckpointWriter`, `StartupVerifier`, `SessionGovernor`, `AutonomyMonitor`, `DailyReportService`
+- optional (gateway mode): `GatewayService`, `LocalIntentChannel`, `PlatformDegradeController`
 
 3. Market data:
 
@@ -201,6 +202,11 @@ Status:
 | `research.combinatorial` | expression language + alpha search engine                                                                       | `research/combinatorial/*.py`                                                                                          |
 | `research.rl`            | RL alpha adapter and lifecycle integration                                                                      | `research/rl/*.py`                                                                                                     |
 | `feature`                | Feature Engine v3 (27 features), registry, rollout, profile, compat, burst detection                            | `src/hft_platform/feature/engine.py`, `registry.py`, `rollout.py`, `profile.py`, `boundary.py`, `compat.py`, `burst_detector.py` |
+| `monitor`                | Signal Monitor TUI: multi-source data (ClickHouse historical + Redis live), panels (health, PnL, detail, greeks), enrichment, alpha dispatch | `src/hft_platform/monitor/` (20 modules)                                                                               |
+| `bot`                    | Telegram notification bot for trading alerts                                                                    | `src/hft_platform/bot/`                                                                                                |
+| `ipc`                    | shared memory IPC and cross-process data exchange                                                               | `src/hft_platform/ipc/`                                                                                                |
+| `diagnostics`            | runtime diagnostics and troubleshooting                                                                         | `src/hft_platform/diagnostics/`                                                                                        |
+| `tca`                    | transaction cost analysis                                                                                       | `src/hft_platform/tca/`                                                                                                |
 | `backtest`               | runtime backtest runner/adapter/reporting with real-equity-first extraction                                     | `src/hft_platform/backtest/*.py`                                                                                       |
 
 ## 6. Rust Boundary (Current)
@@ -290,6 +296,22 @@ Status:
 
 - Current architecture allows equivalent features to be implemented separately in research and strategy/runtime code.
 - Planned mitigation: Feature Plane + shared feature ABI/kernels (see `docs/architecture/feature-engine-lob-research-unification-spec.md`).
+
+6. Production-grade audit (2026-04-12, ae243a08)
+
+- 13 fixes across 7 runtime planes: loop lag/queue depth monitoring, sliding window drop detector, risk feedback side field, gateway rejection/degrade/HALT drain, pending exposure, ROD throttle, unrealized PnL gate, futures threshold, recovery position visibility, DLQ logging.
+- Key semantic changes: `RiskFeedback` gained `side` field (risk/strategy boundary change); `MarketDataService` gained sliding window drop rate detector for burst backpressure.
+
+7. Shioaji quote connection pool instability (2026-04-10)
+
+- Subscription limit + round-robin logic emergency fix and re-commit (647c1468). Oscillation between emergency and steady-state modes during high-load contract refresh operations.
+- Root cause: subscription slot accounting mismatch during auto-trim after contract refresh.
+
+8. R47 TMFD6 maker strategy deployed (2026-04-09/10)
+
+- New spread-filtered market-making strategy for TXFD6 shadow trading (8113ba50, ecb773bd).
+- Config: `R47_MAKER_TMFD6`, `max_pos=1` (lowered from 3 post-deployment).
+- Shadow mode enabled via `HFT_ORDER_SHADOW_MODE=1`.
 
 ## 10. Cluster Evolution (Vector 2 and 3)
 

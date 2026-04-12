@@ -721,56 +721,65 @@ class StrategyRunner:
     def _build_positions_by_strategy(self):
         if not self.position_store:
             return {}
+        positions_by_strategy: dict = {}
+        fallback: dict = {}
+        rust_fast_path = False
         # Unit 9: Use Rust fast-path if available
         rust_tracker = getattr(self.position_store, "_rust_tracker", None)
         if rust_tracker is not None and hasattr(rust_tracker, "get_positions_by_strategy"):
             try:
-                return rust_tracker.get_positions_by_strategy()
+                positions_by_strategy = rust_tracker.get_positions_by_strategy()
+                rust_fast_path = True
             except Exception:
                 pass  # Fallback to Python path
-        if hasattr(self.position_store, "snapshot_positions"):
-            raw = self.position_store.snapshot_positions()
-        else:
-            raw = getattr(self.position_store, "positions", None)
-            if not isinstance(raw, dict):
-                return {}
-            raw = dict(raw)
 
-        positions_by_strategy: dict = {}
-        fallback: dict = {}
+        if not rust_fast_path:
+            if hasattr(self.position_store, "snapshot_positions"):
+                raw = self.position_store.snapshot_positions()
+            else:
+                raw = getattr(self.position_store, "positions", None)
+                if not isinstance(raw, dict):
+                    return {}
+                raw = dict(raw)
 
-        for key, value in raw.items():
-            if hasattr(value, "strategy_id") and hasattr(value, "symbol") and hasattr(value, "net_qty"):
-                positions_by_strategy.setdefault(value.strategy_id, {})[value.symbol] = value.net_qty
-                continue
-
-            # S6: Cache parsed key tuples to avoid split() on every rebuild
-            if isinstance(key, str) and ":" in key:
-                parsed = self._position_key_cache.get(key)
-                if parsed is None:
-                    parts = key.split(":")
-                    if len(parts) >= 3:
-                        parsed = (parts[1], parts[2])
-                        self._position_key_cache[key] = parsed
-                if parsed is not None:
-                    strat_id, symbol = parsed
-                    net_qty = value.net_qty if hasattr(value, "net_qty") else value
-                    positions_by_strategy.setdefault(strat_id, {})[symbol] = net_qty
+            for key, value in raw.items():
+                if hasattr(value, "strategy_id") and hasattr(value, "symbol") and hasattr(value, "net_qty"):
+                    positions_by_strategy.setdefault(value.strategy_id, {})[value.symbol] = value.net_qty
                     continue
 
-            fallback[key] = value.net_qty if hasattr(value, "net_qty") else value
+                # S6: Cache parsed key tuples to avoid split() on every rebuild
+                if isinstance(key, str) and ":" in key:
+                    parsed = self._position_key_cache.get(key)
+                    if parsed is None:
+                        parts = key.split(":")
+                        if len(parts) >= 3:
+                            parsed = (parts[1], parts[2])
+                            self._position_key_cache[key] = parsed
+                    if parsed is not None:
+                        strat_id, symbol = parsed
+                        net_qty = value.net_qty if hasattr(value, "net_qty") else value
+                        positions_by_strategy.setdefault(strat_id, {})[symbol] = net_qty
+                        continue
+
+                fallback[key] = value.net_qty if hasattr(value, "net_qty") else value
 
         # Merge pending recovery positions (loaded at startup but not yet merged
-        # into positions via first fill).  These are keyed as "account:symbol" and
-        # lack strategy_id, so they go into the "*" wildcard bucket.  Once a fill
-        # merges them into a real strategy key, they disappear from _recovery_positions.
+        # into positions via first fill).  Recovery keys use format
+        # "account:strategy:symbol" or "account:symbol".  Route entries with
+        # strategy_id to the correct bucket; others go to "*" wildcard.
         recovery = getattr(self.position_store, "_recovery_positions", None)
         if recovery:
             for rkey, rdata in recovery.items():
-                parts = rkey.rsplit(":", 1)
-                sym = parts[-1] if len(parts) >= 2 else rkey
                 net_qty = rdata.get("net_qty", 0) if isinstance(rdata, dict) else 0
-                if net_qty != 0:
+                if net_qty == 0:
+                    continue
+                parts = rkey.split(":")
+                if len(parts) >= 3:
+                    strat_id, sym = parts[1], parts[2]
+                    bucket = positions_by_strategy.setdefault(strat_id, {})
+                    bucket[sym] = bucket.get(sym, 0) + net_qty
+                else:
+                    sym = parts[-1] if len(parts) >= 2 else rkey
                     fallback[sym] = fallback.get(sym, 0) + net_qty
 
         if fallback:
