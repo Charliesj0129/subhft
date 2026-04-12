@@ -1,6 +1,6 @@
 # HFT Platform Current Architecture Baseline
 
-Date: 2026-03-29
+Date: 2026-04-12
 Scope: As-built implementation under `src/hft_platform`, `research`, `rust_core`, `rust`, `config`, and `docker-compose.yml`.
 Companion target document: `.agent/library/target-architecture.md`.
 Companion C4 diagrams: `.agent/library/c4-model-current.md`.
@@ -40,16 +40,17 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 2. Market data plane
 
 - `src/hft_platform/feed_adapter/shioaji_client.py`: login, contracts, quote callbacks, watchdog, reconnect, API caches.
-- `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping.
+- `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping. Includes sliding window drop rate detector for `raw_queue` burst backpressure (added 2026-04-12).
 - `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events (Python/Rust paths).
 - `src/hft_platform/feed_adapter/lob_engine.py`: per-symbol LOB + stats.
+- `src/hft_platform/feed_adapter/subscription_state.py`: feed subscription state management, round-robin slot assignment, subscription limit enforcement.
 - ✅ Implemented: `FeatureEngine` (Phase 18→v3) with 27 features across 3 schema versions (`lob_shared_v1`:16, `lob_shared_v2`:22, `lob_shared_v3`:27). Default set: `lob_shared_v3`. Enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 - `BurstDetector` (`feature/burst_detector.py`): intensity-based tick arrival rate surge detection (Christensen 2024). Pre-allocated ring buffer, zero heap allocation on hot path.
 
 3. Decision plane
 
-- `src/hft_platform/strategy/runner.py`: consumes bus events, executes strategies, emits `OrderIntent`.
-- `src/hft_platform/risk/engine.py`: validators + StormGuard FSM, emits `OrderCommand`.
+- `src/hft_platform/strategy/runner.py`: consumes bus events, executes strategies, emits `OrderIntent`. Recovery positions visible to strategy before first fill (added 2026-04-12).
+- `src/hft_platform/risk/engine.py`: validators + StormGuard FSM, emits `OrderCommand`. `RiskFeedback` now carries `side` field to prevent pending counter leak after HALT (added 2026-04-12). Includes pending exposure tracking, ROD throttle, unrealized PnL gate, futures threshold fixes.
 
 4. Execution plane
 
