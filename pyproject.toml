@@ -11,7 +11,7 @@ dependencies = [
     "msgspec>=0.20,<1",
     "uvloop>=0.22,<1",
     "hftbacktest>=2.4,<3",
-    "shioaji[speed]==1.2.9",  # PINNED: bump manually after SDK regression test
+    "shioaji[speed]==1.3.3",  # PINNED: bump manually after SDK regression test
     "prometheus_client>=0.23,<0.25",  # PINNED: 0.25.0 causes MutexValue._lock corruption (TypeError on /metrics)
     "psutil>=7.1,<8",
     "PyYAML>=6.0,<7",
