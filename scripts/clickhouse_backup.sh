@@ -11,7 +11,18 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_DIR"
 
-exec uv run python -c "
+# Resolve uv path — cron/non-interactive shells lack ~/.local/bin in PATH
+UV="${HOME}/.local/bin/uv"
+if ! command -v uv &>/dev/null && [ -x "$UV" ]; then
+    :
+elif command -v uv &>/dev/null; then
+    UV="uv"
+else
+    echo "ERROR: uv not found at $UV or in PATH" >&2
+    exit 1
+fi
+
+exec "$UV" run python -c "
 from hft_platform.ops.backup import BackupManager
 import sys
 
