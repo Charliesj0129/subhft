@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import math
 import os
 import time
 from typing import Any, cast
@@ -411,6 +412,12 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._raw_consecutive_drops: int = 0
         self._raw_drop_degrade_threshold: int = int(os.getenv("HFT_RAW_DROP_DEGRADE_THRESHOLD", "50"))
         self._raw_drop_halt_threshold: int = int(os.getenv("HFT_RAW_DROP_HALT_THRESHOLD", "200"))
+        # Sliding window drop rate: exponentially-decaying counter (leaky bucket).
+        # Catches intermittent bursts that reset _raw_consecutive_drops.
+        self._raw_drop_window_count: float = 0.0
+        self._raw_drop_window_last_ns: int = 0
+        self._raw_drop_window_threshold: int = int(os.getenv("HFT_RAW_DROP_WINDOW_THRESHOLD", "60"))
+        self._raw_drop_window_s: float = float(os.getenv("HFT_RAW_DROP_WINDOW_S", "5.0"))
         self._recorder_dropped_count = 0
         self._record_pending_puts = 0
         self._record_pending_puts_max = int(os.getenv("HFT_RECORD_PENDING_PUTS_MAX", "100"))
@@ -1483,6 +1490,17 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     consecutive_drops=self._raw_consecutive_drops,
                     queue_size=self._raw_queue_size,
                 )
+            # Sliding window drop rate (leaky bucket): catches intermittent bursts
+            # that reset _raw_consecutive_drops.  O(1) time/memory, no allocations.
+            now_ns = timebase.now_ns()
+            if self._raw_drop_window_last_ns > 0:
+                dt_s = (now_ns - self._raw_drop_window_last_ns) / 1_000_000_000.0
+                decay = math.exp(-dt_s / self._raw_drop_window_s) if dt_s < self._raw_drop_window_s * 5 else 0.0
+                self._raw_drop_window_count = self._raw_drop_window_count * decay + 1.0
+            else:
+                self._raw_drop_window_count = 1.0
+            self._raw_drop_window_last_ns = now_ns
+
             # Escalate to StormGuard on sustained drops
             sg = self._storm_guard
             if sg is not None:
@@ -1497,6 +1515,13 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     try:
                         sg.trigger_storm(
                             f"raw_queue_drops: {self._raw_consecutive_drops} consecutive"
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif self._raw_drop_window_count >= self._raw_drop_window_threshold:
+                    try:
+                        sg.trigger_storm(
+                            f"raw_queue_drop_window: {self._raw_drop_window_count:.0f} drops in {self._raw_drop_window_s}s window"
                         )
                     except Exception:  # noqa: BLE001
                         pass
