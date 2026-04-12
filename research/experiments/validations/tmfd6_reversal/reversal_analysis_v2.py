@@ -54,7 +54,7 @@ def get_client():
         host=os.getenv("HFT_CLICKHOUSE_HOST", "localhost"),
         port=int(os.getenv("HFT_CLICKHOUSE_PORT", "8123")),
         username=os.getenv("HFT_CLICKHOUSE_USER", "default"),
-        password=os.getenv("HFT_CLICKHOUSE_PASSWORD", "changeme"),
+        password=os.getenv("HFT_CLICKHOUSE_PASSWORD", ""),
     )
 
 

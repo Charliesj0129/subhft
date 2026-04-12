@@ -49,7 +49,7 @@ Notes:
 ## Shadow Deploy Command
 
 ```bash
-# Remote: charl@100.91.176.126:~/subhft
+# Remote: ${REMOTE_USER}@${REMOTE_HOST}:~/subhft
 # Single-node shadow: keep gateway off, enable explicit shadow intercept
 export HFT_ORDER_MODE=sim
 export HFT_ORDER_SHADOW_MODE=1

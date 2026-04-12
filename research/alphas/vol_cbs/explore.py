@@ -9,7 +9,7 @@ Analyzes:
 6. Optimal k for ATR-based threshold
 
 Usage:
-    CLICKHOUSE_PASSWORD=changeme python -m research.alphas.vol_cbs.explore
+    CLICKHOUSE_PASSWORD=<password> python -m research.alphas.vol_cbs.explore
 """
 
 from __future__ import annotations

@@ -311,7 +311,7 @@ def main():
         host=os.getenv("HFT_CLICKHOUSE_HOST", "localhost"),
         port=int(os.getenv("HFT_CLICKHOUSE_PORT", "8123")),
         username=os.getenv("HFT_CLICKHOUSE_USER", "default"),
-        password=os.getenv("HFT_CLICKHOUSE_PASSWORD", "changeme"),
+        password=os.getenv("HFT_CLICKHOUSE_PASSWORD", ""),
     )
     days = get_trading_days(client)
     print(f"Trading days with >10k BidAsk events: {len(days)}")

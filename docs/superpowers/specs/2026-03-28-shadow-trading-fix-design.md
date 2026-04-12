@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-28
 **Status**: Approved (revised after code review)
-**Host**: `THESHOW` (`charl@100.91.176.126:~/subhft`)
+**Host**: `THESHOW` (`${REMOTE_USER}@${REMOTE_HOST}:~/subhft`)
 
 ## Problem
 

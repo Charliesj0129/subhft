@@ -112,7 +112,7 @@ def get_client() -> Any:
         host=os.environ.get("HFT_CLICKHOUSE_HOST", "localhost"),
         port=int(os.environ.get("HFT_CLICKHOUSE_PORT", "8123")),
         username=os.environ.get("HFT_CLICKHOUSE_USER", "default"),
-        password=os.environ.get("CLICKHOUSE_PASSWORD", "changeme"),
+        password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
     )
 
 

@@ -134,8 +134,8 @@ services:
     # Removed default network_mode: ${HFT_NETWORK_MODE:-bridge} to allow proper DNS resolution
     # network_mode: ${HFT_NETWORK_MODE:-}
     ports:
-      - "${HFT_PROM_PORT:-9090}:9090"
-      - "${HFT_HEALTH_PORT:-8080}:8080"
+      - "127.0.0.1:${HFT_PROM_PORT:-9090}:9090"
+      - "127.0.0.1:${HFT_HEALTH_PORT:-8080}:8080"
     volumes:
       - ./.wal:/app/.wal
       - ./data:/app/data
@@ -224,7 +224,7 @@ services:
         max-size: "50m"
         max-file: "5"
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=${REDIS_PASSWORD} redis-cli ping | grep PONG"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -311,7 +311,7 @@ services:
     image: prom/prometheus:v2.51.0
     container_name: prometheus
     ports:
-      - "9091:9090"
+      - "127.0.0.1:9091:9090"
     volumes:
       - ./config/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./config/monitoring/alerts/rules.yaml:/etc/prometheus/alerts/rules.yaml:ro
@@ -342,7 +342,7 @@ services:
     image: prom/alertmanager:v0.27.0
     container_name: alertmanager
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     volumes:
       - ${HFT_ALERTMANAGER_CONFIG:-./config/monitoring/alerts/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
     command:

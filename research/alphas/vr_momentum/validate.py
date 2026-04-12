@@ -7,7 +7,7 @@ Tasks:
 4. CBS orthogonality check
 
 Usage:
-    CLICKHOUSE_PASSWORD=changeme python -m research.alphas.vr_momentum.validate
+    CLICKHOUSE_PASSWORD=<password> python -m research.alphas.vr_momentum.validate
 """
 
 from __future__ import annotations

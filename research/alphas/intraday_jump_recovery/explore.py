@@ -10,7 +10,7 @@ Analyzes:
 5. Forward returns after jumps
 
 Usage:
-    CLICKHOUSE_PASSWORD=changeme python -m research.alphas.intraday_jump_recovery.explore
+    CLICKHOUSE_PASSWORD=<password> python -m research.alphas.intraday_jump_recovery.explore
 """
 
 from __future__ import annotations

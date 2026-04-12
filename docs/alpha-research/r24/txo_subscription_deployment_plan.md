@@ -57,7 +57,7 @@ Standalone script for initial validation. Features:
 Before deploying to the persistent feed collector, validate with the diagnostic script:
 
 ```bash
-# On the trading host (charl@100.91.176.126:~/subhft or local)
+# On the trading host (${REMOTE_USER}@${REMOTE_HOST}:~/subhft or local)
 cd ~/hft_platform  # or ~/subhft
 
 # Set credentials (DO NOT put in command line on shared hosts)
@@ -154,7 +154,7 @@ Expected: 22 option profiles with correct metadata.
 
 ```bash
 # On the remote host
-ssh charl@100.91.176.126
+ssh ${REMOTE_USER}@${REMOTE_HOST}
 
 # Pull latest config
 cd ~/subhft

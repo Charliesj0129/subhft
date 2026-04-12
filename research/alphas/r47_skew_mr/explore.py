@@ -10,7 +10,7 @@ Analyzes:
 5. Strike/expiry cross-section richness
 
 Usage:
-    CLICKHOUSE_PASSWORD=changeme python -m research.alphas.r47_skew_mr.explore
+    CLICKHOUSE_PASSWORD=<password> python -m research.alphas.r47_skew_mr.explore
 """
 
 from __future__ import annotations
