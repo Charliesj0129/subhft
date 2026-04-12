@@ -611,3 +611,83 @@ async def test_no_rejection_sink_does_not_raise():
         await task
 
     assert svc._rejected == 1  # rejection counted, no crash
+
+
+# ── CF-1: Dedup slot release on evaluate() exception ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_evaluate_exception_releases_dedup_slot():
+    """CF-1: When evaluate() throws, the reserved dedup slot must be released
+    so a retry with the same idempotency_key can proceed.
+
+    Before fix: reserved slot remained in approved=None state, blocking retry
+    as DEDUP_IN_FLIGHT until LRU eviction.
+    """
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    svc, api_queue, rejection_sink = _make_service_with_rejection_sink(channel=ch, approve=True)
+
+    # Make evaluate() throw on first call, succeed on second
+    call_count = 0
+    original_return = svc._risk_engine.evaluate.return_value
+
+    def evaluate_side_effect(intent):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("transient risk engine error")
+        return original_return
+
+    svc._risk_engine.evaluate.side_effect = evaluate_side_effect
+
+    # Submit intent that will fail
+    ch.submit_nowait(_make_intent(100, "retry-key"))
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    # After exception, dedup slot should be released (key removed from store)
+    rec = svc._dedup.check_or_reserve("retry-key")
+    assert rec is None, (
+        "Dedup slot should have been released after evaluate() exception, "
+        f"but found record with approved={getattr(rec, 'approved', '?')}"
+    )
+
+    # Retry with same key should succeed (slot was released, so check_or_reserve returns None = new)
+    # The check_or_reserve above already re-reserved it; commit it to prove the slot is usable
+    svc._dedup.commit("retry-key", True, "OK", 999)
+    rec2 = svc._dedup.check_or_reserve("retry-key")
+    assert rec2 is not None
+    assert rec2.approved is True
+
+
+@pytest.mark.asyncio
+async def test_rejection_sink_overflow_increments_metric():
+    """CF-3: When rejection_sink is full, _send_rejection_feedback must
+    increment rejection_sink_overflow_total metric (not just log)."""
+    ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
+    # Create service with a rejection_sink of size 0 to force QueueFull
+    svc, api_queue = _make_service(channel=ch, approve=False)
+    rejection_sink = asyncio.Queue(maxsize=1)
+    # Pre-fill the sink so next put_nowait raises QueueFull
+    rejection_sink.put_nowait(MagicMock())
+    svc.set_rejection_sink(rejection_sink)
+
+    # Inject mock metrics with rejection_sink_overflow_total counter
+    mock_metrics = _make_mock_metrics()
+    mock_metrics.rejection_sink_overflow_total = MagicMock()
+    _inject_metrics(svc, mock_metrics)
+
+    ch.submit_nowait(_make_intent(200, "k-sink-overflow"))
+
+    task = asyncio.create_task(svc.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert svc._rejected == 1
+    mock_metrics.rejection_sink_overflow_total.inc.assert_called()

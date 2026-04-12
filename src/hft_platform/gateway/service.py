@@ -445,6 +445,13 @@ class GatewayService:
                     )
                 else:
                     self._exposure.release_exposure(exp_key, intent)
+            # CF-1: Release dedup slot reserved in step 1 so the same
+            # idempotency_key can be retried after a transient error.
+            if key:
+                if is_typed_view and hasattr(self._dedup, "release_typed"):
+                    self._dedup.release_typed(key)
+                else:
+                    self._dedup.release(key)
             raise
 
         if decision.approved and not self._is_dispatch_leader():
@@ -618,6 +625,12 @@ class GatewayService:
             )
         except asyncio.QueueFull:
             logger.warning("gateway_rejection_sink_overflow", reason=reason_code)
+            try:
+                metrics = self._metrics_or_refresh()
+                if metrics is not None:
+                    metrics.rejection_sink_overflow_total.inc()
+            except Exception:  # noqa: BLE001
+                pass
 
     def set_rejection_sink(self, sink: asyncio.Queue | None) -> None:
         """Public setter for rejection feedback queue (bootstrap wiring)."""
@@ -670,6 +683,12 @@ class GatewayService:
             )
         except asyncio.QueueFull:
             logger.warning("gateway_rejection_sink_overflow", reason=reason_code)
+            try:
+                metrics = self._metrics_or_refresh()
+                if metrics is not None:
+                    metrics.rejection_sink_overflow_total.inc()
+            except Exception:  # noqa: BLE001
+                pass
 
     # ── Policy control ───────────────────────────────────────────────────
 
