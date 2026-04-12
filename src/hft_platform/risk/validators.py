@@ -406,9 +406,7 @@ class DailyLossLimitValidator(RiskValidator):
             return
         loss_magnitude = -total_pnl
         max_daily_loss = (
-            self._hard_limit_threshold_scaled
-            if self._intraday_pnl_enabled
-            else self._default_max_daily_loss
+            self._hard_limit_threshold_scaled if self._intraday_pnl_enabled else self._default_max_daily_loss
         )
         if loss_magnitude >= max_daily_loss:
             self.halt_triggered = True

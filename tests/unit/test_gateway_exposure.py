@@ -614,6 +614,7 @@ def test_expire_stale_orders_clears_old_reservations():
 
     # Manually backdate the timestamp
     import time
+
     store._order_ts["old-ord"] = time.monotonic() - 100
 
     expired = store.expire_stale_orders(max_age_s=30)
@@ -648,7 +649,8 @@ def test_amend_increase_blocked_by_global_limit():
 
     # AMEND to 2M notional — delta +1M exceeds remaining capacity (500K)
     intent_amend = _make_intent_with_key(
-        price=2_000_000, qty=1,
+        price=2_000_000,
+        qty=1,
         intent_type=IntentType.AMEND,
         idempotency_key="amend-1",
         target_order_id="ord-1",
@@ -669,7 +671,8 @@ def test_amend_increase_blocked_by_strategy_limit():
     store.check_and_update(key, intent_new, order_key="ord-1")
 
     intent_amend = _make_intent_with_key(
-        price=2_000_000, qty=1,
+        price=2_000_000,
+        qty=1,
         intent_type=IntentType.AMEND,
         idempotency_key="amend-1",
         target_order_id="ord-1",
@@ -688,7 +691,8 @@ def test_amend_decrease_always_allowed():
 
     # AMEND to 500K — delta is -500K, always allowed
     intent_amend = _make_intent_with_key(
-        price=500_000, qty=1,
+        price=500_000,
+        qty=1,
         intent_type=IntentType.AMEND,
         idempotency_key="amend-1",
         target_order_id="ord-1",
@@ -706,7 +710,8 @@ def test_amend_within_limit_approved_and_updates_tracking():
     store.check_and_update(key, intent_new, order_key="ord-1")
 
     intent_amend = _make_intent_with_key(
-        price=2_000_000, qty=1,
+        price=2_000_000,
+        qty=1,
         intent_type=IntentType.AMEND,
         idempotency_key="amend-1",
         target_order_id="ord-1",
@@ -727,7 +732,8 @@ def test_amend_rejection_rollback():
 
     # Approved AMEND: +1M delta
     intent_amend = _make_intent_with_key(
-        price=2_000_000, qty=1,
+        price=2_000_000,
+        qty=1,
         intent_type=IntentType.AMEND,
         idempotency_key="amend-1",
         target_order_id="ord-1",
@@ -747,7 +753,8 @@ def test_amend_unknown_target_treats_full_notional_as_delta():
     store = ExposureStore(global_max_notional=1_000_000)
     key = _key()
     intent_amend = _make_intent_with_key(
-        price=2_000_000, qty=1,
+        price=2_000_000,
+        qty=1,
         intent_type=IntentType.AMEND,
         idempotency_key="amend-1",
         target_order_id="unknown-ord",
@@ -763,7 +770,11 @@ def test_amend_typed_path_checks_delta():
     key = _key()
     # Place via typed path
     store.check_and_update_typed(
-        key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1, order_key="ord-1",
+        key,
+        intent_type=int(IntentType.NEW),
+        price=1_000_000,
+        qty=1,
+        order_key="ord-1",
     )
     # AMEND via typed path — delta +1M exceeds remaining 500K
     ok, reason = store.check_and_update_typed(

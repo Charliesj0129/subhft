@@ -163,7 +163,7 @@ class ExecutionNormalizer:
             logger.error("Order normalization failed", error=str(e), data=d)
             return None
 
-    def normalize_fill(self, raw: RawExecEvent) -> Optional[FillEvent]:
+    def normalize_fill(self, raw: RawExecEvent) -> Optional[FillEvent]:  # noqa: C901
         self.metrics.execution_events_total.labels(type="fill").inc()
         d, _ = self._unwrap_data(raw)
 

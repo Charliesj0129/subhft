@@ -1,11 +1,9 @@
-import asyncio
 import os
 import shutil
 
 import pytest
 
 from hft_platform.recorder.wal import WALWriter
-from hft_platform.recorder.worker import RecorderService
 
 
 @pytest.mark.asyncio

@@ -51,28 +51,18 @@ def load_watchlist(
     stale_threshold = float(monitor_cfg.get("stale_threshold_s", 6.0))
     no_data_warn_s = float(monitor_cfg.get("no_data_warn_s", 10.0))
     max_retries = int(monitor_cfg.get("max_retries", 20))
-    source = (
-        (os.getenv("HFT_MONITOR_SOURCE") or str(monitor_cfg.get("source", "clickhouse")))
-        .strip()
-        .lower()
-    )
+    source = (os.getenv("HFT_MONITOR_SOURCE") or str(monitor_cfg.get("source", "clickhouse"))).strip().lower()
     batch_limit_per_symbol = int(
-        os.getenv("HFT_MONITOR_BATCH_LIMIT_PER_SYMBOL")
-        or monitor_cfg.get("batch_limit_per_symbol", 200)
+        os.getenv("HFT_MONITOR_BATCH_LIMIT_PER_SYMBOL") or monitor_cfg.get("batch_limit_per_symbol", 200)
     )
-    replay_ticks = int(
-        os.getenv("HFT_MONITOR_REPLAY_TICKS")
-        or monitor_cfg.get("replay_ticks", warmup_ticks)
-    )
+    replay_ticks = int(os.getenv("HFT_MONITOR_REPLAY_TICKS") or monitor_cfg.get("replay_ticks", warmup_ticks))
 
     _ch_cfg = get_ch_config()
     # Allow YAML-level overrides for monitor-specific deployments
     ch_host = os.getenv("HFT_CLICKHOUSE_HOST", monitor_cfg.get("ch_host", _ch_cfg["host"]))
     ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT", str(monitor_cfg.get("ch_port", _ch_cfg["port"]))))
     ch_user = (
-        _ch_cfg["username"]
-        if _ch_cfg["username"] != "default"
-        else monitor_cfg.get("ch_user", _ch_cfg["username"])
+        _ch_cfg["username"] if _ch_cfg["username"] != "default" else monitor_cfg.get("ch_user", _ch_cfg["username"])
     )
     ch_password = (
         os.getenv("HFT_CLICKHOUSE_PASSWORD")

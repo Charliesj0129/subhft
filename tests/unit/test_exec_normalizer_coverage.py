@@ -112,9 +112,7 @@ class TestNormalizeFill:
         fill1 = norm.normalize_fill(raw1)
         fill2 = norm.normalize_fill(raw2)
         assert fill1 is not None and fill2 is not None
-        assert fill1.fill_id != fill2.fill_id, (
-            f"Collision: {fill1.fill_id} == {fill2.fill_id}"
-        )
+        assert fill1.fill_id != fill2.fill_id, f"Collision: {fill1.fill_id} == {fill2.fill_id}"
 
     def test_fill_order_id_from_ordno(self) -> None:
         norm = ExecutionNormalizer(default_account_id="test-acct")

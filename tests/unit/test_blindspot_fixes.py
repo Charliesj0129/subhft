@@ -9,24 +9,22 @@ Covers:
   P0.6 — Short direction maps to negative qty in broker_map
   P1.11 — risk_engine.update_unrealized_pnl called in system 1Hz loop
 """
+
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
 from hft_platform.contracts.strategy import Side
 from hft_platform.execution.reconciliation import PositionDiscrepancy, ReconciliationService
 from hft_platform.strategies.r47_maker import R47MakerStrategy
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _make_fill(symbol: str, side: Side, qty: int = 1, price: int = 200000) -> FillEvent:
     return FillEvent(
@@ -85,6 +83,7 @@ def _make_lob_stats(symbol: str = "TXFD6", mid_x2: int = 400000, spread: int = 1
 # P0.1 — Price-gate throttle: no re-quote on same price
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestPriceGateThrottle:
     def test_same_price_suppressed(self):
         """Sending identical bid/ask twice should not increment quotes_sent orders."""
@@ -132,6 +131,7 @@ class TestPriceGateThrottle:
 # ─────────────────────────────────────────────────────────────────────────────
 # P0.2 — Pending order counting prevents max_pos breach
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestPendingOrderCounting:
     def test_pending_buy_blocks_excess_orders(self):
@@ -200,6 +200,7 @@ class TestPendingOrderCounting:
 # P0.3 — _local_pos lazy-seeded from StrategyContext
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestLocalPosSeed:
     def test_lazy_seed_from_ctx(self):
         """_local_position should seed from ctx.positions on first access."""
@@ -248,6 +249,7 @@ class TestLocalPosSeed:
 # P0.4 — get_positions returns None on failure
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestGetPositionsNoneOnFailure:
     def _make_client(self, api_raises=False, cached=None):
         """Build a minimal ShioajiClient mock for AccountGateway."""
@@ -293,41 +295,32 @@ class TestGetPositionsNoneOnFailure:
 # P0.5 — Futures critical threshold = 1 lot
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestFuturesCriticalThreshold:
     def test_futures_diff_1_is_critical(self):
         """For futures, a 1-lot discrepancy must be critical."""
-        d = PositionDiscrepancy(
-            symbol="TXFD6", local_qty=2, broker_qty=1, diff=1, is_futures=True
-        )
+        d = PositionDiscrepancy(symbol="TXFD6", local_qty=2, broker_qty=1, diff=1, is_futures=True)
         assert d.is_critical
 
     def test_futures_diff_99_is_critical(self):
         """For futures, diff=99 should also be critical (not masked by stock threshold)."""
-        d = PositionDiscrepancy(
-            symbol="TXFD6", local_qty=99, broker_qty=0, diff=99, is_futures=True
-        )
+        d = PositionDiscrepancy(symbol="TXFD6", local_qty=99, broker_qty=0, diff=99, is_futures=True)
         assert d.is_critical
 
     def test_stock_diff_50_is_not_critical(self):
         """For stocks, diff=50 is below threshold — not critical."""
-        d = PositionDiscrepancy(
-            symbol="2330", local_qty=200, broker_qty=150, diff=50, is_futures=False
-        )
+        d = PositionDiscrepancy(symbol="2330", local_qty=200, broker_qty=150, diff=50, is_futures=False)
         assert not d.is_critical
 
     def test_stock_diff_150_is_critical(self):
         """For stocks with qty=200, threshold is max(100, 200//10)=100, so 150 > 100 is critical."""
-        d = PositionDiscrepancy(
-            symbol="2330", local_qty=200, broker_qty=50, diff=150, is_futures=False
-        )
+        d = PositionDiscrepancy(symbol="2330", local_qty=200, broker_qty=50, diff=150, is_futures=False)
         assert d.is_critical
 
     def test_sign_mismatch_always_critical_regardless_of_futures(self):
         """Sign mismatch (long vs short) is always critical."""
         for is_futures in (True, False):
-            d = PositionDiscrepancy(
-                symbol="TXFD6", local_qty=1, broker_qty=-1, diff=2, is_futures=is_futures
-            )
+            d = PositionDiscrepancy(symbol="TXFD6", local_qty=1, broker_qty=-1, diff=2, is_futures=is_futures)
             assert d.is_critical
 
     def test_is_futures_heuristic_detects_txfd6(self):
@@ -345,6 +338,7 @@ class TestFuturesCriticalThreshold:
 # ─────────────────────────────────────────────────────────────────────────────
 # P0.6 — Short direction maps to negative qty
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestShortDirectionMapping:
     def _run_sync_with_position(self, direction_str: str, qty: int) -> dict:

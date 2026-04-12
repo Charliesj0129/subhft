@@ -380,7 +380,9 @@ class GatewayService:
                     )
                 else:
                     exp_ok, exp_reason = self._exposure.check_and_update(
-                        exp_key, intent, order_key=_order_key,
+                        exp_key,
+                        intent,
+                        order_key=_order_key,
                     )
             except ExposureLimitError as exc:
                 # Symbol-cardinality hard limit reached; reject and commit dedup so
@@ -650,6 +652,7 @@ class GatewayService:
         if self._rejection_sink is None:
             return
         from hft_platform.contracts.strategy import Side as SideEnum
+
         try:
             _side = SideEnum(side) if side is not None else None
         except (ValueError, TypeError):

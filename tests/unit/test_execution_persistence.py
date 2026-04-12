@@ -23,6 +23,7 @@ import pytest
 # Issue #1: Fill dedup persist/load
 # ---------------------------------------------------------------------------
 
+
 class TestFillDedupPersistence:
     """Verify _seen_fill_ids survives process restart."""
 
@@ -40,6 +41,7 @@ class TestFillDedupPersistence:
             if pre_seed is not None:
                 # Write a pre-existing file to simulate prior persist
                 import orjson
+
                 os.makedirs(os.path.dirname(persist_path), exist_ok=True)
                 with open(persist_path, "wb") as f:
                     for key in pre_seed:
@@ -109,6 +111,7 @@ class TestFillDedupPersistence:
 # ---------------------------------------------------------------------------
 # Issue #2: Fill DLQ persist/load + overflow metric
 # ---------------------------------------------------------------------------
+
 
 class TestFillDLQPersistence:
     """Verify orphaned fill DLQ survives process restart."""
@@ -187,6 +190,7 @@ class TestFillDLQPersistence:
 # Issue #3: order_id_map persist/load
 # ---------------------------------------------------------------------------
 
+
 class TestOrderIdMapPersistence:
     """Verify order_id_map survives process restart."""
 
@@ -197,6 +201,7 @@ class TestOrderIdMapPersistence:
 
         if pre_seed is not None:
             import orjson
+
             os.makedirs(os.path.dirname(persist_path), exist_ok=True)
             with open(persist_path, "wb") as f:
                 for k, v in pre_seed.items():
@@ -251,6 +256,7 @@ class TestOrderIdMapPersistence:
 # Issue #4: Startup race overflow halt flag
 # ---------------------------------------------------------------------------
 
+
 class TestStartupRaceOverflowHalt:
     """Verify broker-thread overflow triggers deferred HALT."""
 
@@ -295,6 +301,7 @@ class TestStartupRaceOverflowHalt:
 # Issue #5: Audit drop metric
 # ---------------------------------------------------------------------------
 
+
 class TestAuditDropMetric:
     """Verify audit drops are exposed as Prometheus metric."""
 
@@ -322,6 +329,7 @@ class TestAuditDropMetric:
 # ---------------------------------------------------------------------------
 # Issue #6: Recorder DATA_LOSS escalation to HALT
 # ---------------------------------------------------------------------------
+
 
 class TestRecorderDataLossEscalation:
     """Verify DATA_LOSS triggers HALT, not just reduce-only."""
@@ -386,6 +394,7 @@ class TestRecorderDataLossEscalation:
 # ---------------------------------------------------------------------------
 # Issue #7: Deferred terminal overflow metric
 # ---------------------------------------------------------------------------
+
 
 class TestDeferredTerminalOverflowMetric:
     """Verify deferred terminal deque overflow is tracked."""

@@ -210,8 +210,7 @@ class PlatformDegradeController:
         # Only clear reservations for symbols no longer in reference positions.
         old_reservations = self._reference_close_reservations
         self._reference_close_reservations = {
-            sym: qty for sym, qty in old_reservations.items()
-            if sym in reference_positions
+            sym: qty for sym, qty in old_reservations.items() if sym in reference_positions
         }
 
     def reference_net_qty(self, symbol: str) -> int | None:

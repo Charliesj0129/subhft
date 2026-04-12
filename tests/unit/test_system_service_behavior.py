@@ -352,6 +352,7 @@ def test_reset_restart_backoff_if_healthy_task_running_with_sufficient_uptime():
     sys_obj._task_restart_until_s["md"] = 9999.0
     # Simulate task started 120s ago (well past default 60s threshold)
     from hft_platform.core import timebase
+
     sys_obj._task_started_at["md"] = timebase.now_s() - 120
     task = MagicMock()
     task.done.return_value = False
@@ -366,6 +367,7 @@ def test_reset_restart_backoff_if_healthy_task_running_insufficient_uptime():
     sys_obj._task_restart_until_s["md"] = 9999.0
     # Simulate task started only 5s ago — not enough uptime
     from hft_platform.core import timebase
+
     sys_obj._task_started_at["md"] = timebase.now_s() - 5
     task = MagicMock()
     task.done.return_value = False

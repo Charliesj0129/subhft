@@ -217,9 +217,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._storm_guard = storm_guard
         self._wal_writer = wal_writer
         self._wal_fallback_count: int = 0
-        self._wal_fallback_sample_rate: int = max(
-            1, int(os.getenv("HFT_MD_WAL_FALLBACK_SAMPLE_RATE", "10"))
-        )
+        self._wal_fallback_sample_rate: int = max(1, int(os.getenv("HFT_MD_WAL_FALLBACK_SAMPLE_RATE", "10")))
 
         self.lob = LOBEngine()
         feature_enabled = os.getenv("HFT_FEATURE_ENGINE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
@@ -1533,23 +1531,21 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             if sg is not None:
                 if self._raw_consecutive_drops >= self._raw_drop_halt_threshold:
                     try:
-                        sg.trigger_halt(
-                            f"raw_queue_sustained_drops: {self._raw_consecutive_drops} consecutive"
-                        )
+                        sg.trigger_halt(f"raw_queue_sustained_drops: {self._raw_consecutive_drops} consecutive")
                     except Exception:  # noqa: BLE001
                         pass
                 elif self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
                     try:
-                        sg.trigger_storm(
-                            f"raw_queue_drops: {self._raw_consecutive_drops} consecutive"
-                        )
+                        sg.trigger_storm(f"raw_queue_drops: {self._raw_consecutive_drops} consecutive")
                     except Exception:  # noqa: BLE001
                         pass
                 elif self._raw_drop_window_count >= self._raw_drop_window_threshold:
                     try:
-                        sg.trigger_storm(
-                            f"raw_queue_drop_window: {self._raw_drop_window_count:.0f} drops in {self._raw_drop_window_s}s window"
+                        msg = (
+                            f"raw_queue_drop_window: {self._raw_drop_window_count:.0f}"
+                            f" drops in {self._raw_drop_window_s}s window"
                         )
+                        sg.trigger_storm(msg)
                     except Exception:  # noqa: BLE001
                         pass
             # Signal FeatureEngine that data gaps occurred so downstream

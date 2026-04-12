@@ -12,6 +12,7 @@ submit_typed_command_nowait invalid frame.
 from __future__ import annotations
 
 import asyncio
+import os
 import time as _time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -48,9 +49,10 @@ def tmp_config(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _mock_infra():
+def _mock_infra(tmp_path):
     """Patch heavy infra so tests don't need full stack."""
     with (
+        patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(tmp_path / "oid_map.jsonl")}),
         patch("hft_platform.order.adapter.MetricsRegistry") as mm,
         patch("hft_platform.order.adapter.LatencyRecorder") as ml,
         patch("hft_platform.order.adapter.SymbolMetadata"),

@@ -183,12 +183,7 @@ class TestDlqExpirySendsRejectionFeedback:
         from hft_platform.risk.engine import RiskEngine
 
         cfg = tmp_path / "risk.yaml"
-        cfg.write_text(
-            "risk:\n"
-            "  max_order_size: 100\n"
-            "  max_position: 200\n"
-            "  max_notional: 10000000\n"
-        )
+        cfg.write_text("risk:\n  max_order_size: 100\n  max_position: 200\n  max_notional: 10000000\n")
         q_in = asyncio.Queue()
         q_out = asyncio.Queue(maxsize=4096)
         rejection_sink = asyncio.Queue(maxsize=256)

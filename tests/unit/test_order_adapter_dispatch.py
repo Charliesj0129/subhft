@@ -1,6 +1,7 @@
 """Tests for OrderAdapter: _dispatch_to_api, _register_broker_ids, drain_and_cancel, load_config."""
 
 import asyncio
+import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -44,8 +45,9 @@ def tmp_config(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def mock_deps():
+def mock_deps(tmp_path):
     with (
+        patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(tmp_path / "oid_map.jsonl")}),
         patch("hft_platform.order.adapter.MetricsRegistry") as mm,
         patch("hft_platform.order.adapter.LatencyRecorder") as ml,
         patch("hft_platform.order.adapter.SymbolMetadata") as ms,

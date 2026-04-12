@@ -231,7 +231,7 @@ class PositionStore:
         confirmed position that has not yet received its first fill.
         """
         total = 0
-        for key, pos in self.positions.items():
+        for _key, pos in self.positions.items():
             if getattr(pos, "symbol", None) != symbol:
                 continue
             if strategy_id is not None and getattr(pos, "strategy_id", None) != strategy_id:
@@ -355,11 +355,13 @@ class PositionStore:
             # Merge recovery position on first fill for this key.
             # Priority: account:strategy:symbol → account:symbol → suffix search.
             recovery = self._recovery_positions.pop(
-                f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}", None,
+                f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}",
+                None,
             )
             if recovery is None:
                 recovery = self._recovery_positions.pop(
-                    f"{fill.account_id}:{fill.symbol}", None,
+                    f"{fill.account_id}:{fill.symbol}",
+                    None,
                 )
             # Fallback: recovery may have been stored with a different account_id
             # domain (e.g., broker_id "shioaji" vs actual account "F123456").
@@ -528,7 +530,8 @@ class PositionStore:
             total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
 
         # Include recovery positions not yet merged into self.positions
-        for rkey, rec in self._recovery_positions.items():
+        _recovery = getattr(self, "_recovery_positions", None)
+        for rkey, rec in (_recovery or {}).items():
             if rkey in accounted_keys:
                 continue
             net_qty = rec["net_qty"]

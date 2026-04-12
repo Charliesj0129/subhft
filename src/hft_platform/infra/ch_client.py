@@ -147,10 +147,7 @@ def get_ch_client(**kwargs: Any) -> Any:
     try:
         import clickhouse_connect
     except ImportError as exc:
-        raise RuntimeError(
-            "clickhouse_connect is not installed — "
-            "run: pip install clickhouse-connect"
-        ) from exc
+        raise RuntimeError("clickhouse_connect is not installed — run: pip install clickhouse-connect") from exc
 
     cfg = get_ch_config()
     # Caller overrides win; pop database if not supported by the client call

@@ -430,9 +430,7 @@ class HFTSystem:
                     await recorder._drain_queue_into_batchers()
                     await recorder._shutdown_flush()
 
-                tmp_loop.run_until_complete(
-                    asyncio.wait_for(_drain_and_flush(), timeout=_timeout)
-                )
+                tmp_loop.run_until_complete(asyncio.wait_for(_drain_and_flush(), timeout=_timeout))
                 logger.info("Synchronous recorder drain complete")
             except Exception as exc:
                 logger.warning("Synchronous recorder drain failed", error=str(exc))

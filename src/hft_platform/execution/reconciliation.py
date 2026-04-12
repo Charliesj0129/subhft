@@ -218,7 +218,7 @@ class ReconciliationService:
                     )
                     await asyncio.sleep(delay)
 
-    async def sync_portfolio(self) -> None:
+    async def sync_portfolio(self) -> None:  # noqa: C901
         logger.info("Starting Portfolio Sync...")
         t0 = time.monotonic()
         try:
@@ -253,7 +253,11 @@ class ReconciliationService:
             # preventing "dictionary changed size during iteration" from concurrent fills.
             local_map: Dict[str, int] = {}
             per_strategy_map: Dict[str, Dict[str, int]] = {}  # strategy_id -> {symbol: qty}
-            snapshot = self.store.snapshot_positions() if hasattr(self.store, "snapshot_positions") else dict(self.store.positions)
+            snapshot = (
+                self.store.snapshot_positions()
+                if hasattr(self.store, "snapshot_positions")
+                else dict(self.store.positions)
+            )
             for key, pos in snapshot.items():
                 symbol = pos.symbol
                 local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
@@ -364,10 +368,7 @@ class ReconciliationService:
         if not overlapping_symbols:
             return False
         # True if ANY overlapping symbol persisted or grew; false only if ALL shrank
-        return any(
-            current_signature[s] >= previous_signature[s]
-            for s in overlapping_symbols
-        )
+        return any(current_signature[s] >= previous_signature[s] for s in overlapping_symbols)
 
     @staticmethod
     def _is_futures(symbol: str) -> bool:

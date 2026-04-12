@@ -227,8 +227,8 @@ def test_envelope_helpers_typed_frame():
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     frame = (
         "typed_intent_v1",
-        99,          # intent_id
-        "strat_x",   # strategy_id
+        99,  # intent_id
+        "strat_x",  # strategy_id
         "TSE:2330",  # symbol
         int(IntentType.CANCEL),  # intent_type
         int(Side.SELL),
@@ -236,7 +236,13 @@ def test_envelope_helpers_typed_frame():
         1,
         int(TIF.LIMIT),
         "",
-        0, 0, "", "", "k-typed", 0, 0,
+        0,
+        0,
+        "",
+        "",
+        "k-typed",
+        0,
+        0,
     )
     ch.submit_typed_nowait(frame)
     items = ch.drain_nowait()

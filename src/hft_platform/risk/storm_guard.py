@@ -500,9 +500,7 @@ class StormGuard:
             consecutive_failures=count,
         )
 
-    _FEATURE_RECOVERY_HOLD_S: float = float(
-        os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5")
-    )
+    _FEATURE_RECOVERY_HOLD_S: float = float(os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5"))
 
     def report_feature_recovery(self) -> None:
         """Clear feature-failure flag after FeatureEngine recovers.

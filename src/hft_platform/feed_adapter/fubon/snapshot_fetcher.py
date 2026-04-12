@@ -10,6 +10,7 @@ from hft_platform.core import timebase
 
 logger = structlog.get_logger(__name__)
 
+
 def _coerce_price(raw: Any) -> float:
     """Coerce a raw price value to float for normalizer consumption.
 

@@ -4,7 +4,6 @@ import pytest
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData
 from hft_platform.feature.boundary import event_to_typed_frame, typed_frame_to_event
 from hft_platform.feature.engine import (
-    QUALITY_FLAG_OUT_OF_ORDER,
     QUALITY_FLAG_PARTIAL,
     QUALITY_FLAG_STATE_RESET,
     FeatureEngine,
@@ -188,15 +187,9 @@ def test_ooo_event_does_not_corrupt_kernel_state():
     assert evt_ooo is None  # must be suppressed
 
     # Kernel state must be UNCHANGED — no EMA/OFI contamination
-    assert ks.spread_ema8 == spread_ema_before, (
-        f"spread_ema8 corrupted: {ks.spread_ema8} != {spread_ema_before}"
-    )
-    assert ks.prev_best_bid == prev_bid_before, (
-        f"prev_best_bid corrupted: {ks.prev_best_bid} != {prev_bid_before}"
-    )
-    assert ks.prev_best_ask == prev_ask_before, (
-        f"prev_best_ask corrupted: {ks.prev_best_ask} != {prev_ask_before}"
-    )
+    assert ks.spread_ema8 == spread_ema_before, f"spread_ema8 corrupted: {ks.spread_ema8} != {spread_ema_before}"
+    assert ks.prev_best_bid == prev_bid_before, f"prev_best_bid corrupted: {ks.prev_best_bid} != {prev_bid_before}"
+    assert ks.prev_best_ask == prev_ask_before, f"prev_best_ask corrupted: {ks.prev_best_ask} != {prev_ask_before}"
 
 
 def test_normalizer_seq_flows_through_lob_to_feature():
@@ -204,9 +197,13 @@ def test_normalizer_seq_flows_through_lob_to_feature():
     eng = FeatureEngine()
     # First event with normalizer_seq=100
     s1 = LOBStatsEvent(
-        symbol="2330", ts=1000, imbalance=0.0,
-        best_bid=1000000, best_ask=1001000,
-        bid_depth=10, ask_depth=20,
+        symbol="2330",
+        ts=1000,
+        imbalance=0.0,
+        best_bid=1000000,
+        best_ask=1001000,
+        bid_depth=10,
+        ask_depth=20,
         normalizer_seq=100,
     )
     evt1 = eng.process_lob_stats(s1, local_ts_ns=1000)
@@ -216,9 +213,13 @@ def test_normalizer_seq_flows_through_lob_to_feature():
 
     # Second event with higher ts BUT lower normalizer_seq → OOO by seq
     s2 = LOBStatsEvent(
-        symbol="2330", ts=2000, imbalance=0.0,
-        best_bid=1000000, best_ask=1001000,
-        bid_depth=10, ask_depth=20,
+        symbol="2330",
+        ts=2000,
+        imbalance=0.0,
+        best_bid=1000000,
+        best_ask=1001000,
+        bid_depth=10,
+        ask_depth=20,
         normalizer_seq=50,
     )
     evt2 = eng.process_lob_stats(s2, local_ts_ns=2000)
@@ -227,9 +228,13 @@ def test_normalizer_seq_flows_through_lob_to_feature():
 
     # Third event with higher normalizer_seq → accepted
     s3 = LOBStatsEvent(
-        symbol="2330", ts=3000, imbalance=0.0,
-        best_bid=1010000, best_ask=1011000,
-        bid_depth=15, ask_depth=25,
+        symbol="2330",
+        ts=3000,
+        imbalance=0.0,
+        best_bid=1010000,
+        best_ask=1011000,
+        bid_depth=15,
+        ask_depth=25,
         normalizer_seq=200,
     )
     evt3 = eng.process_lob_stats(s3, local_ts_ns=3000)
@@ -248,10 +253,15 @@ def test_crossed_book_emits_partial_flag():
 
     # Second: crossed book (mid_price_x2=0)
     s2 = LOBStatsEvent(
-        symbol="2330", ts=200, imbalance=0.0,
-        best_bid=0, best_ask=0,
-        bid_depth=0, ask_depth=0,
-        mid_price_x2=0, spread_scaled=0,
+        symbol="2330",
+        ts=200,
+        imbalance=0.0,
+        best_bid=0,
+        best_ask=0,
+        bid_depth=0,
+        ask_depth=0,
+        mid_price_x2=0,
+        spread_scaled=0,
     )
     evt2 = eng.process_lob_stats(s2, local_ts_ns=200)
     assert evt2 is not None, "crossed book must emit event (not None) when prev state exists"
@@ -275,10 +285,15 @@ def test_crossed_book_no_prev_returns_none():
     """Crossed book with no previous state must return None."""
     eng = FeatureEngine()
     s = LOBStatsEvent(
-        symbol="NEW", ts=100, imbalance=0.0,
-        best_bid=0, best_ask=0,
-        bid_depth=0, ask_depth=0,
-        mid_price_x2=0, spread_scaled=0,
+        symbol="NEW",
+        ts=100,
+        imbalance=0.0,
+        best_bid=0,
+        best_ask=0,
+        bid_depth=0,
+        ask_depth=0,
+        mid_price_x2=0,
+        spread_scaled=0,
     )
     evt = eng.process_lob_stats(s, local_ts_ns=100)
     assert evt is None

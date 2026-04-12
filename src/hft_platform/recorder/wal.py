@@ -705,5 +705,4 @@ class WALBatchWriter:
                     self._buffer_rows += flush_rows
                     self._buffer_bytes += flush_bytes
 
-
                 # Move to corrupt dir?

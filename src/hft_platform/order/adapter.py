@@ -140,9 +140,7 @@ class OrderAdapter:
         self._mid_price_fn: Callable[[str], int] | None = mid_price_fn
         self._storm_guard: Any = None  # Set post-init to close TOCTOU gap (M1)
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
-        self._order_id_map_persist_path: str = os.getenv(
-            "HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl"
-        )
+        self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
         self._load_order_id_map()
         self._cmd_map_max_size = int(os.getenv("HFT_CMD_MAP_MAX_SIZE", "10000"))
         self.running = False
@@ -492,7 +490,7 @@ class OrderAdapter:
                 _itype = getattr(_intent, "intent_type", None) if _intent else None
                 _sid = getattr(_intent, "strategy_id", None) if _intent else None
                 _is_safety = _itype in (IntentType.CANCEL, IntentType.FORCE_FLAT)
-                _is_exempt = bool(_sid) and self._is_strategy_halt_exempt(_sid)
+                _is_exempt = bool(_sid) and self._is_strategy_halt_exempt(str(_sid))
                 if _is_safety or _is_exempt:
                     _api_safety.append(cmd)
                 else:
@@ -1204,17 +1202,19 @@ class OrderAdapter:
                 self.circuit_breaker.record_success()
                 self._update_cb_metric()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
-                self._audit_log_order({
-                    "event": "dispatched",
-                    "intent_type": "NEW",
-                    "order_key": order_key,
-                    "symbol": intent.symbol,
-                    "side": str(intent.side),
-                    "price": intent.price,
-                    "qty": intent.qty,
-                    "strategy_id": intent.strategy_id,
-                    "cmd_id": int(cmd.cmd_id),
-                })
+                self._audit_log_order(
+                    {
+                        "event": "dispatched",
+                        "intent_type": "NEW",
+                        "order_key": order_key,
+                        "symbol": intent.symbol,
+                        "side": str(intent.side),
+                        "price": intent.price,
+                        "qty": intent.qty,
+                        "strategy_id": intent.strategy_id,
+                        "cmd_id": int(cmd.cmd_id),
+                    }
+                )
 
             elif intent.intent_type == IntentType.FORCE_FLAT:
                 if self._broker_codec is None:
@@ -1316,16 +1316,18 @@ class OrderAdapter:
                 self.circuit_breaker.record_success()
                 self._update_cb_metric()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
-                self._audit_log_order({
-                    "event": "dispatched",
-                    "intent_type": "FORCE_FLAT",
-                    "order_key": order_key,
-                    "symbol": intent.symbol,
-                    "side": str(close_side),
-                    "qty": close_qty,
-                    "strategy_id": intent.strategy_id,
-                    "cmd_id": int(cmd.cmd_id),
-                })
+                self._audit_log_order(
+                    {
+                        "event": "dispatched",
+                        "intent_type": "FORCE_FLAT",
+                        "order_key": order_key,
+                        "symbol": intent.symbol,
+                        "side": str(close_side),
+                        "qty": close_qty,
+                        "strategy_id": intent.strategy_id,
+                        "cmd_id": int(cmd.cmd_id),
+                    }
+                )
 
             elif intent.intent_type == IntentType.CANCEL:
                 async with self._live_orders_lock:
@@ -1346,15 +1348,17 @@ class OrderAdapter:
                     self.metrics.order_actions_total.labels(type="cancel").inc()
                     self.rate_limiter.record()
                     self.per_symbol_rate_limiter.record(intent.symbol)
-                    self._audit_log_order({
-                        "event": "dispatched",
-                        "intent_type": "CANCEL",
-                        "order_key": f"{intent.strategy_id}:{intent.intent_id}",
-                        "target_key": target_key,
-                        "symbol": intent.symbol,
-                        "strategy_id": intent.strategy_id,
-                        "cmd_id": int(cmd.cmd_id),
-                    })
+                    self._audit_log_order(
+                        {
+                            "event": "dispatched",
+                            "intent_type": "CANCEL",
+                            "order_key": f"{intent.strategy_id}:{intent.intent_id}",
+                            "target_key": target_key,
+                            "symbol": intent.symbol,
+                            "strategy_id": intent.strategy_id,
+                            "cmd_id": int(cmd.cmd_id),
+                        }
+                    )
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Cancel target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
@@ -1398,16 +1402,18 @@ class OrderAdapter:
                     self.metrics.order_actions_total.labels(type="amend").inc()
                     self.rate_limiter.record()
                     self.per_symbol_rate_limiter.record(intent.symbol)
-                    self._audit_log_order({
-                        "event": "dispatched",
-                        "intent_type": "AMEND",
-                        "order_key": f"{intent.strategy_id}:{intent.intent_id}",
-                        "target_key": target_key,
-                        "symbol": intent.symbol,
-                        "new_price": intent.price,
-                        "strategy_id": intent.strategy_id,
-                        "cmd_id": int(cmd.cmd_id),
-                    })
+                    self._audit_log_order(
+                        {
+                            "event": "dispatched",
+                            "intent_type": "AMEND",
+                            "order_key": f"{intent.strategy_id}:{intent.intent_id}",
+                            "target_key": target_key,
+                            "symbol": intent.symbol,
+                            "new_price": intent.price,
+                            "strategy_id": intent.strategy_id,
+                            "cmd_id": int(cmd.cmd_id),
+                        }
+                    )
                 elif target_trade is _PENDING_SENTINEL:
                     logger.warning("Amend target still pending", target=target_key)
                     self.metrics.order_reject_total.inc()
@@ -1430,15 +1436,17 @@ class OrderAdapter:
             self._update_cb_metric()
             self.strategy_cb_mgr.record_failure(intent.strategy_id)
             self._emit_trace("order_dispatch_error", intent, {"cmd_id": int(cmd.cmd_id), "error": str(e)})
-            self._audit_log_order({
-                "event": "dispatch_failed",
-                "intent_type": str(intent.intent_type),
-                "order_key": order_key,
-                "symbol": intent.symbol,
-                "strategy_id": intent.strategy_id,
-                "cmd_id": int(cmd.cmd_id),
-                "error": str(e),
-            })
+            self._audit_log_order(
+                {
+                    "event": "dispatch_failed",
+                    "intent_type": str(intent.intent_type),
+                    "order_key": order_key,
+                    "symbol": intent.symbol,
+                    "strategy_id": intent.strategy_id,
+                    "cmd_id": int(cmd.cmd_id),
+                    "error": str(e),
+                }
+            )
             # Clean up sentinel to prevent permanent slot occupation (D2 rollback)
             async with self._live_orders_lock:
                 if order_key in self.live_orders and self.live_orders.get(order_key) is _PENDING_SENTINEL:
@@ -1562,7 +1570,9 @@ class OrderAdapter:
                 self._api_pending.clear()
                 # Prioritize urgent intents (CANCEL, FORCE_FLAT) ahead of NEWs
                 # to ensure risk-reducing orders execute before risk-increasing ones.
-                pending.sort(key=lambda c: 0 if c.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT) else 1)
+                pending.sort(
+                    key=lambda c: 0 if c.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT) else 1
+                )
                 for item in pending:
                     _exempt = item.intent.intent_type in (
                         IntentType.CANCEL,
@@ -1612,9 +1622,7 @@ class OrderAdapter:
                     try:
                         ok = await self._dispatch_to_api(item)
                         if ok:
-                            self._dedup_commit(
-                                item.intent.idempotency_key, True, "dispatched", item.cmd_id
-                            )
+                            self._dedup_commit(item.intent.idempotency_key, True, "dispatched", item.cmd_id)
                     except Exception:
                         logger.error(
                             "_api_worker: dispatch failed for single order",

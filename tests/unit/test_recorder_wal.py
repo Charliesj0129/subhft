@@ -22,8 +22,6 @@ def test_wal_write_sync_atomic_creates_file(tmp_path: Path):
     assert json.loads(lines[0]) == payload[0]
 
 
-
-
 # ---------------------------------------------------------------------------
 # WALWriter disk pressure: raise policy
 # ---------------------------------------------------------------------------
@@ -146,8 +144,6 @@ async def test_wal_batch_writer_ec3_file_splitting(tmp_path: Path, monkeypatch):
         assert len(files) > 1, "EC-3: multiple files must have been written"
     finally:
         writer.stop()
-
-
 
 
 # ---------------------------------------------------------------------------

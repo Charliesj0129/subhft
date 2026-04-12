@@ -407,7 +407,9 @@ class StrategyRunner:
         try:
             batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
             if batch_size > 1:
-                async for batch in self.bus.consume_batch(batch_size, start_cursor=start_cursor, consumer_name="strategy_runner"):
+                async for batch in self.bus.consume_batch(
+                    batch_size, start_cursor=start_cursor, consumer_name="strategy_runner"
+                ):
                     for event in batch:
                         await self.process_event(event)
                         self._consumer_seq += 1
@@ -1221,7 +1223,7 @@ class StrategyRunner:
                                         symbol=_fb_sym,
                                         reason_code="risk_queue_full",
                                         timestamp_ns=timebase.now_ns(),
-                                        side=_fb_side,
+                                        side=Side(_fb_side) if _fb_side is not None else None,
                                     )
                                 )
                             except asyncio.QueueFull:
@@ -1253,7 +1255,9 @@ class StrategyRunner:
             self._queue_full_consecutive = 0
 
     @staticmethod
-    def filter_intents_by_phase(intents: list, track_gate: Any, position_store: Any = None, strategy_id: str | None = None) -> list:
+    def filter_intents_by_phase(
+        intents: list, track_gate: Any, position_store: Any = None, strategy_id: str | None = None
+    ) -> list:
         """Filter intents based on session phase from TrackGate.
 
         During CLOSE_ONLY: allow CANCEL, FORCE_FLAT, and position-reducing IOC orders.

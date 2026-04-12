@@ -279,6 +279,5 @@ class TestSubscribeBasketStateResetBeforeRefresh:
 
         # 2 symbols × 2 quote types (Tick + BidAsk) = 4 subscribe calls
         assert mock_api.quote.subscribe.call_count == 4, (
-            "After resetting subscription state, subscribe_basket should subscribe "
-            "all 2 symbols (4 API calls total)"
+            "After resetting subscription state, subscribe_basket should subscribe all 2 symbols (4 API calls total)"
         )

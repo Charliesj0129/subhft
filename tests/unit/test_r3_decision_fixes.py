@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 # Fix A: typed-intent identity extraction (R3-3)
 # ---------------------------------------------------------------------------
 
+
 class TestTypedIntentIdentity:
     """Verify _typed_intent_identity handles both tuples and OrderIntent objects."""
 
@@ -93,6 +94,7 @@ class TestTypedIntentIdentity:
 # ---------------------------------------------------------------------------
 # Fix B: OrderAdapter dispatch-failure rejection feedback (R3-2)
 # ---------------------------------------------------------------------------
+
 
 class TestOrderAdapterRejectionSink:
     """Verify OrderAdapter sends RiskFeedback on dispatch failures."""
@@ -174,6 +176,7 @@ class TestOrderAdapterRejectionSink:
 # Fix C: RiskEngine DLQ rejection overflow logging (R3-1)
 # ---------------------------------------------------------------------------
 
+
 class TestRiskDLQRejectionOverflowLogging:
     """Verify _send_dlq_rejection logs on sink overflow."""
 
@@ -200,8 +203,8 @@ class TestRiskDLQRejectionOverflowLogging:
             engine._send_dlq_rejection(cmd, "dlq_ttl_expired")
 
         engine.metrics.rejection_sink_overflow_total.inc.assert_called_once()
-        mock_logger.warning.assert_called_once()
-        call_kwargs = mock_logger.warning.call_args
+        mock_logger.error.assert_called_once()
+        call_kwargs = mock_logger.error.call_args
         assert "dlq_rejection_feedback_lost" in call_kwargs[0]
         assert call_kwargs[1]["strategy_id"] == "strat_a"
         assert call_kwargs[1]["reason"] == "dlq_ttl_expired"

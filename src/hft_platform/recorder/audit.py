@@ -146,6 +146,7 @@ class AuditWriter:
                 overflow.append(data)
                 try:
                     from hft_platform.observability.metrics import MetricsRegistry
+
                     MetricsRegistry.get().audit_overflow_total.labels(table=table).inc()
                 except Exception:
                     pass
@@ -154,6 +155,7 @@ class AuditWriter:
                 self._dropped[table] = self._dropped.get(table, 0) + 1
                 try:
                     from hft_platform.observability.metrics import MetricsRegistry
+
                     MetricsRegistry.get().audit_dropped_total.labels(table=table).inc()
                 except Exception:
                     pass

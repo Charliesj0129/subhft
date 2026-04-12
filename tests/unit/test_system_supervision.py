@@ -200,11 +200,16 @@ class TestSupervisionCrashDetection:
         # Call 1: now=0.0 (check), 0.0 (started_at) → proceeds, sets until=0.0+base
         # Call 2: now=base+0.1 (check), base+0.1 (started_at) → proceeds
         # Call 3: now=base*3+0.2 (check), base*3+0.2 (started_at) → proceeds
-        times = iter([
-            0.0, 0.0,
-            base + 0.1, base + 0.1,
-            base * 3 + 0.2, base * 3 + 0.2,
-        ])
+        times = iter(
+            [
+                0.0,
+                0.0,
+                base + 0.1,
+                base + 0.1,
+                base * 3 + 0.2,
+                base * 3 + 0.2,
+            ]
+        )
         with patch("hft_platform.services.system.timebase.now_s", side_effect=times):
             system._try_restart_service("md", "MarketDataService", system.md_service.run)
             system._try_restart_service("md", "MarketDataService", system.md_service.run)

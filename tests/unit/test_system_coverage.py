@@ -87,8 +87,10 @@ def _make_system():
             sys_obj._bootstrap_torn_down = False
             sys_obj._task_restart_attempts = {}
             sys_obj._task_restart_until_s = {}
+            sys_obj._task_started_at = {}
             sys_obj._task_restart_base_delay_s = 1.0
             sys_obj._task_restart_max_delay_s = 30.0
+            sys_obj._task_restart_max_attempts = 10
             sys_obj._queue_log_every_s = 30.0
             sys_obj._last_queue_log_s = 0.0
             sys_obj._mtm_calculator = None

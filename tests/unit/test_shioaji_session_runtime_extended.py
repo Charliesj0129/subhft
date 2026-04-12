@@ -195,8 +195,8 @@ class TestFallbackLoginPreservesFetchContract:
         client = make_mock_client(fetch_contract=True)
         # First attempt (with contracts) fails; fallback (without contracts) succeeds.
         client._safe_call_with_timeout.side_effect = [
-            (False, None, "timeout", True),   # initial login timed out
-            (True, None, None, False),         # fallback without contracts succeeds
+            (False, None, "timeout", True),  # initial login timed out
+            (True, None, None, False),  # fallback without contracts succeeds
         ]
         client.contracts_ready = True
 
@@ -285,11 +285,7 @@ class TestQuoteOnlyConnectionSuppressesBlockedLog:
         with _patch("hft_platform.feed_adapter.shioaji.session_runtime.logger") as mock_log:
             rt.login_with_retry()
 
-        error_events = [
-            (call.args[0] if call.args else "")
-            for call in mock_log.error.call_args_list
-        ]
+        error_events = [(call.args[0] if call.args else "") for call in mock_log.error.call_args_list]
         assert any("order placement will be blocked" in e for e in error_events), (
-            "Order-capable connection (fetch_contract=True) with contracts_ready=False "
-            "must still emit the ERROR log"
+            "Order-capable connection (fetch_contract=True) with contracts_ready=False must still emit the ERROR log"
         )

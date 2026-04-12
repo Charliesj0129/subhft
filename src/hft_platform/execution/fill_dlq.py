@@ -21,7 +21,7 @@ class OrphanedFillDLQ:
     def __init__(self, max_size: int = 1000, persist_path: str | None = None) -> None:
         self._queue: deque[Any] = deque(maxlen=max_size)
         self._max_size = max_size
-        self._persist_path: str = persist_path or os.getenv("HFT_FILL_DLQ_PERSIST_PATH", _DEFAULT_PERSIST_PATH)
+        self._persist_path: str = persist_path or os.getenv("HFT_FILL_DLQ_PERSIST_PATH") or _DEFAULT_PERSIST_PATH
 
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:

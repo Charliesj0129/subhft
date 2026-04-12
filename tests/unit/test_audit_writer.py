@@ -72,6 +72,7 @@ class TestAuditWriter:
 
     def test_drop_after_overflow_exhausted(self) -> None:
         import os
+
         os.environ["HFT_AUDIT_OVERFLOW_SIZE"] = "2"
         try:
             writer = AuditWriter(queue_size=1)
@@ -167,6 +168,7 @@ class TestAuditWriter:
 
     def test_dropped_counts_property(self) -> None:
         import os
+
         os.environ["HFT_AUDIT_OVERFLOW_SIZE"] = "1"
         try:
             writer = AuditWriter(queue_size=1)

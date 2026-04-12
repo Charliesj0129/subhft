@@ -8,10 +8,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _patch_env(tmp_path, monkeypatch):
@@ -54,7 +54,7 @@ def _make_bus_with_events(events):
     async def _consume_batch(batch_size, **kwargs):
         captured_kwargs.update(kwargs)
         for i in range(0, len(events), batch_size):
-            yield events[i:i + batch_size]
+            yield events[i : i + batch_size]
 
     bus.consume = _consume
     bus.consume_batch = _consume_batch
@@ -228,7 +228,6 @@ class TestExecCallbackBuffersWhenNotRunning:
 class TestOrderDispatchAudit:
     def test_set_audit_writer_stores_writer(self):
         """set_audit_writer injects the audit writer."""
-        from hft_platform.order.adapter import OrderAdapter
 
         adapter = self._make_adapter()
         writer = MagicMock()
@@ -237,7 +236,6 @@ class TestOrderDispatchAudit:
 
     def test_audit_log_order_calls_writer(self):
         """_audit_log_order delegates to writer.log_order."""
-        from hft_platform.order.adapter import OrderAdapter
 
         adapter = self._make_adapter()
         writer = MagicMock()
@@ -248,7 +246,6 @@ class TestOrderDispatchAudit:
 
     def test_audit_log_order_skips_when_no_writer(self):
         """When no audit writer, _audit_log_order does nothing."""
-        from hft_platform.order.adapter import OrderAdapter
 
         adapter = self._make_adapter()
         assert adapter._audit_writer is None
@@ -257,7 +254,6 @@ class TestOrderDispatchAudit:
 
     def test_audit_log_order_swallows_exception(self):
         """If audit writer raises, _audit_log_order swallows the exception."""
-        from hft_platform.order.adapter import OrderAdapter
 
         adapter = self._make_adapter()
         writer = MagicMock()
@@ -271,7 +267,6 @@ class TestOrderDispatchAudit:
     async def test_order_dispatch_creates_audit_entry(self):
         """Dispatch a NEW order and verify audit.log_order is called."""
         from hft_platform.contracts.strategy import IntentType, OrderCommand, OrderIntent, Side
-        from hft_platform.order.adapter import OrderAdapter
 
         adapter = self._make_adapter()
         writer = MagicMock()

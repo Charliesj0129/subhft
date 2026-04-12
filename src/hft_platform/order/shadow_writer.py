@@ -32,10 +32,7 @@ def _get_ch_client() -> Any:
     try:
         from clickhouse_driver import Client
     except ImportError as exc:
-        raise RuntimeError(
-            "clickhouse_driver is not installed — "
-            "run: pip install clickhouse-driver"
-        ) from exc
+        raise RuntimeError("clickhouse_driver is not installed — run: pip install clickhouse-driver") from exc
 
     cfg = get_ch_config()
     return Client(
