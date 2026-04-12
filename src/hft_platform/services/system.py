@@ -775,8 +775,9 @@ class HFTSystem:
                 )
                 if _gateway_intent_depth is not None:
                     _log_kwargs["gateway_intent"] = _gateway_intent_depth
-                if _api_q is not None:
-                    _log_kwargs["gateway_api"] = _api_q.qsize()
+                _api_q_log = getattr(self.order_adapter, "_api_queue", None)
+                if _api_q_log is not None:
+                    _log_kwargs["gateway_api"] = _api_q_log.qsize()
                 logger.info("Queues", **_log_kwargs)
 
             self._update_platform_degrade_state()
