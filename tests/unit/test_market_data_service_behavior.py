@@ -873,3 +873,32 @@ def test_md_wal_fallback_none_wal_writer_is_safe(mds_factory):
 
     # Should not crash, event simply dropped
     assert svc._recorder_dropped_count == 1
+
+
+@pytest.mark.unit
+def test_md_wal_fallback_done_callback_logs_error():
+    """CF-5: _on_wal_fallback_done must log errors from WAL write futures
+    instead of silently swallowing them."""
+    from hft_platform.services.market_data import MarketDataService
+
+    mock_future = MagicMock()
+    mock_future.exception.return_value = IOError("disk full")
+
+    with patch("hft_platform.services.market_data.logger") as mock_logger:
+        MarketDataService._on_wal_fallback_done(mock_future)
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args
+        assert "md_wal_fallback_write_error" in str(call_args)
+
+
+@pytest.mark.unit
+def test_md_wal_fallback_done_callback_no_error_is_silent():
+    """CF-5: _on_wal_fallback_done must be silent when future succeeds."""
+    from hft_platform.services.market_data import MarketDataService
+
+    mock_future = MagicMock()
+    mock_future.exception.return_value = None
+
+    with patch("hft_platform.services.market_data.logger") as mock_logger:
+        MarketDataService._on_wal_fallback_done(mock_future)
+        mock_logger.warning.assert_not_called()

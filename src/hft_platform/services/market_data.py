@@ -1405,13 +1405,22 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         if self._wal_fallback_count % self._wal_fallback_sample_rate != 0:
             return
         try:
-            asyncio.ensure_future(self._wal_writer.write(topic, [payload]))
+            fut = asyncio.ensure_future(self._wal_writer.write(topic, [payload]))
+            # CF-5: Track the future so disk errors are logged, not silently swallowed.
+            fut.add_done_callback(self._on_wal_fallback_done)
             if self.metrics_registry:
                 _metric = getattr(self.metrics_registry, "recorder_md_wal_fallback_total", None)
                 if _metric is not None:
                     _metric.inc()
         except Exception as exc:
             logger.warning("md_wal_fallback_failed", error=str(exc), topic=topic)
+
+    @staticmethod
+    def _on_wal_fallback_done(fut: "asyncio.Future[None]") -> None:
+        """CF-5: Log WAL fallback write errors instead of silently swallowing."""
+        exc = fut.exception()
+        if exc is not None:
+            logger.warning("md_wal_fallback_write_error", error=str(exc), exc_type=type(exc).__name__)
 
     def _record_direct_event(self, event: TickEvent | BidAskEvent) -> None:
         if self.recorder_queue is None:

@@ -197,7 +197,8 @@ Compiled extension at `src/hft_platform/rust_core.cpython-*.so`.
 | `HFT_QUOTE_FLAP_THRESHOLD`| `5`         | Quote flap detection: max flaps in window |
 | `HFT_QUOTE_FLAP_WINDOW_S` | `60`        | Quote flap detection window seconds       |
 | `HFT_QUOTE_FLAP_COOLDOWN_S`| `300`      | Quote flap cooldown before re-subscribe   |
-| `HFT_STORMGUARD_FEED_GAP_HALT_S`| `30`  | Feed gap threshold to trigger HALT        |
+| `HFT_STORMGUARD_FEED_GAP_STORM_S`| `1.0` | Feed gap threshold (seconds) to trigger STORM. Feed gap alone cannot trigger HALT. |
+| `HFT_STORMGUARD_FEED_GAP_HALT_S`| `30`  | **Deprecated** alias for `_STORM_S`. Maps to STORM (not HALT). |
 | `HFT_BACKUP_ENABLED`        | `0`                    | `1` = enable automated daily ClickHouse backup |
 | `HFT_BACKUP_RETAIN_DAYS`    | `30`                   | Number of daily backups to retain               |
 | `CH_BACKUP_PATH`            | `./backups/clickhouse`  | Host path for ClickHouse backup volume mount    |
