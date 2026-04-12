@@ -1131,8 +1131,15 @@ class SystemBootstrapper:
                 asyncio.get_event_loop().create_task(write_snapshot_to_clickhouse(ch_client, _snapshot))
             else:
                 logger.info("config_snapshot_fallback", **_snapshot)
-        except Exception:  # noqa: BLE001
-            logger.warning("config_snapshot_build_failed", exc_info=True)
+        except Exception as _snap_exc:  # noqa: BLE001
+            import traceback as _tb
+
+            logger.warning(
+                "config_snapshot_build_failed",
+                error=str(_snap_exc),
+                error_type=type(_snap_exc).__name__,
+                traceback=_tb.format_exc(),
+            )
 
         # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:
