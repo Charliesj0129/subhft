@@ -586,6 +586,15 @@ class HFTSystem:
         _heartbeat_interval_ticks = int(os.getenv("HFT_HEARTBEAT_INTERVAL_S", "30"))
         _heartbeat_tick = 0
 
+        # Periodic gen-0 GC: collect short-lived cyclic refs even when full GC is disabled.
+        # Gen-0 is typically <1ms and safe to run at supervisor frequency.
+        _gc_gen0_interval = max(1, int(os.getenv("HFT_GC_GEN0_INTERVAL_TICKS", "10")))
+        _gc_gen0_tick = 0
+        _gc_gen0_enabled = (
+            os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {"1", "true", "yes", "on"}
+            and os.getenv("HFT_GC_GEN0_PERIODIC", "1").strip().lower() not in {"0", "false", "no", "off"}
+        )
+
         while self.running:
             await asyncio.sleep(interval_s)  # 1Hz Tick
             now_tick = loop.time()
@@ -794,6 +803,22 @@ class HFTSystem:
 
             self._update_platform_degrade_state()
 
+            # Periodic stale symbol eviction for FeatureEngine (rate-limited internally)
+            _fe = getattr(getattr(self, "md_service", None), "feature_engine", None)
+            if _fe is not None:
+                try:
+                    _fe.evict_stale_symbols()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            # Periodic TTL sweep for live_orders (rate-limited internally)
+            _oa = getattr(self, "order_adapter", None)
+            if _oa is not None:
+                try:
+                    await _oa.sweep_stale_live_orders()
+                except Exception:  # noqa: BLE001
+                    pass
+
             now = timebase.now_s()
             t_router = self.tasks.get("exec_router")
             if t_router and not t_router.done():
@@ -931,6 +956,14 @@ class HFTSystem:
                 # During HALT we set order_adapter.running=False (line 712);
                 # without this, the adapter stays stopped after de-escalation.
                 self._set_service_running(self.order_adapter, True)
+
+            # Periodic gen-0 GC: reclaim cyclic refs from framework objects
+            # (structlog, Prometheus, asyncio internals) without full GC pause.
+            if _gc_gen0_enabled:
+                _gc_gen0_tick += 1
+                if _gc_gen0_tick >= _gc_gen0_interval:
+                    _gc_gen0_tick = 0
+                    gc.collect(0)
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""

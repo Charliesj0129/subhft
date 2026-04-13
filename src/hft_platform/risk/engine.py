@@ -204,8 +204,8 @@ class RiskEngine:
             5: "FASTGATE_BAD_QTY_NEG",
         }
         self._trace_sampler = _get_trace_sampler()
-        self._order_dlq: collections.deque = collections.deque()
         self._ORDER_DLQ_MAX: int = 256
+        self._order_dlq: collections.deque = collections.deque(maxlen=self._ORDER_DLQ_MAX)
         self._dlq_ttl_ns: int = int(float(os.getenv("HFT_RISK_DLQ_TTL_S", "30")) * 1_000_000_000)
         self._dlq_drain_interval: int = int(os.getenv("HFT_RISK_DLQ_DRAIN_INTERVAL", "1"))
         self._dlq_drain_counter: int = 0
@@ -493,11 +493,13 @@ class RiskEngine:
                                 symbol=cmd.intent.symbol,
                             )
                             self.metrics.order_queue_full_total.inc()
-                            self._order_dlq.append((cmd, time.monotonic_ns()))
-                            if len(self._order_dlq) > self._ORDER_DLQ_MAX:
+                            # Evict oldest BEFORE append so we can send rejection
+                            # (maxlen auto-evict is silent — we need the callback).
+                            if len(self._order_dlq) >= self._ORDER_DLQ_MAX:
                                 evicted_cmd, _ = self._order_dlq.popleft()
                                 self._send_dlq_rejection(evicted_cmd, "dlq_overflow_evicted")
                                 self.metrics.risk_dlq_overflow_total.inc()
+                            self._order_dlq.append((cmd, time.monotonic_ns()))
                             self._oq_full_consecutive += 1
                             if self._oq_full_consecutive >= self._oq_full_halt_threshold:
                                 self.storm_guard.trigger_halt("order_queue_full_persistent")

@@ -153,6 +153,11 @@ class OrderAdapter:
         self.live_orders: Dict[str, Any] = {}  # Map "strategy_id:intent_id" -> Trade Object or Status dict
         self._live_orders_lock = asyncio.Lock()
         self._pending_order_keys: set[str] = set()
+        # TTL sweep: evict orphaned live_orders entries (missed terminal callbacks)
+        self._live_orders_ttl_s: float = float(os.getenv("HFT_LIVE_ORDERS_TTL_S", "300"))
+        self._live_orders_max_size: int = int(os.getenv("HFT_LIVE_ORDERS_MAX_SIZE", "10000"))
+        self._live_orders_last_sweep_s: float = 0.0
+        self._live_orders_inserted_at: Dict[str, float] = {}  # order_key -> monotonic timestamp
         # Bounded deque: auto-evicts oldest entries when full (OOM protection)
         self._deferred_terminals: collections.deque[tuple[str, str, float]] = collections.deque(maxlen=256)
 
@@ -268,7 +273,60 @@ class OrderAdapter:
                 )
                 self.live_orders.clear()
                 self._pending_order_keys.clear()
+                self._live_orders_inserted_at.clear()
             return count
+
+    async def sweep_stale_live_orders(self) -> int:
+        """Evict live_orders entries older than TTL (missed terminal callbacks).
+
+        Returns the number of evicted entries.  Rate-limited to once per 60s.
+        Called from the supervisor loop.
+        """
+        now_mono = time.monotonic()
+        if now_mono - self._live_orders_last_sweep_s < 60.0:
+            return 0
+        self._live_orders_last_sweep_s = now_mono
+        cutoff = now_mono - self._live_orders_ttl_s
+        evicted = 0
+        async with self._live_orders_lock:
+            stale_keys = [
+                k for k, ts in self._live_orders_inserted_at.items()
+                if ts < cutoff and k not in self._pending_order_keys
+            ]
+            for k in stale_keys:
+                self.live_orders.pop(k, None)
+                self._live_orders_inserted_at.pop(k, None)
+                evicted += 1
+            # Also prune _live_orders_inserted_at for keys no longer in live_orders
+            orphaned = [k for k in self._live_orders_inserted_at if k not in self.live_orders]
+            for k in orphaned:
+                del self._live_orders_inserted_at[k]
+        if evicted > 0:
+            logger.warning(
+                "live_orders_stale_sweep",
+                evicted=evicted,
+                remaining=len(self.live_orders),
+                ttl_s=self._live_orders_ttl_s,
+            )
+        # Hard cap: if still over max size, evict oldest
+        if len(self.live_orders) > self._live_orders_max_size:
+            async with self._live_orders_lock:
+                sorted_keys = sorted(
+                    self._live_orders_inserted_at,
+                    key=lambda k: self._live_orders_inserted_at.get(k, 0),
+                )
+                overflow = len(self.live_orders) - self._live_orders_max_size
+                for k in sorted_keys[:overflow]:
+                    self.live_orders.pop(k, None)
+                    self._live_orders_inserted_at.pop(k, None)
+                    evicted += 1
+                if overflow > 0:
+                    logger.warning(
+                        "live_orders_overflow_evicted",
+                        evicted=overflow,
+                        max_size=self._live_orders_max_size,
+                    )
+        return evicted
 
     async def _run_blocking_call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
         """Run a synchronous broker call off-loop without using the loop's default executor.
@@ -1105,6 +1163,7 @@ class OrderAdapter:
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = _PENDING_SENTINEL
                     self._pending_order_keys.add(order_key)
+                    self._live_orders_inserted_at[order_key] = time.monotonic()
 
                 # Broker-specific price type encoding + validation
                 _intent_pt = getattr(intent, "price_type", "LMT")
@@ -1271,6 +1330,7 @@ class OrderAdapter:
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = _PENDING_SENTINEL
                     self._pending_order_keys.add(order_key)
+                    self._live_orders_inserted_at[order_key] = time.monotonic()
 
                 trade = await self._call_api(
                     "place_order",

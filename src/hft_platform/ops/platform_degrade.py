@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from threading import Lock
 from typing import Any
 
@@ -52,6 +53,11 @@ class PlatformDegradeController:
         self._reference_positions: dict[str, int] = {}
         self._reference_close_reservations: dict[str, int] = {}
         self._active_reasons: set[str] = set()
+        # Rate-limit repeated "reason_added" log (break RSS→log feedback loop)
+        self._reason_last_log_ns: dict[str, int] = {}
+        self._reason_log_interval_ns: int = int(
+            float(os.getenv("HFT_REDUCE_ONLY_LOG_INTERVAL_S", "60")) * 1_000_000_000
+        )
         self._sync_metrics()
 
     @staticmethod
@@ -66,7 +72,16 @@ class PlatformDegradeController:
     def enter_reduce_only(self, *, reason: str) -> AutonomyTransition:
         self._active_reasons.add(reason)
         if self.reduce_only_active and self.last_transition is not None:
-            logger.info("platform_reduce_only_reason_added", reason=reason, active_reasons=sorted(self._active_reasons))
+            # Rate-limit repeated log to break RSS→log→heap feedback loop
+            now_ns = time.monotonic_ns()
+            last_ns = self._reason_last_log_ns.get(reason, 0)
+            if now_ns - last_ns >= self._reason_log_interval_ns:
+                self._reason_last_log_ns[reason] = now_ns
+                logger.info(
+                    "platform_reduce_only_reason_active",
+                    reason=reason,
+                    active_reasons=sorted(self._active_reasons),
+                )
             return self.last_transition
 
         transition = AutonomyTransition.enter_platform_reduce_only(
@@ -111,6 +126,7 @@ class PlatformDegradeController:
         self._reference_positions = {}
         self._reference_close_reservations = {}
         self._active_reasons.clear()
+        self._reason_last_log_ns.clear()
         self._sync_metrics()
         logger.info(
             "platform_reduce_only_exited",

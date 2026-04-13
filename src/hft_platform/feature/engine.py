@@ -243,6 +243,8 @@ class FeatureEngine:
         "_warmup_ready_symbols",
         "_ooo_drop_count",
         "_rust_fused_fallback_count",
+        "_eviction_ttl_ns",
+        "_eviction_last_run_ns",
     )
 
     def __init__(
@@ -300,6 +302,9 @@ class FeatureEngine:
         self._warmup_ready_symbols: set[str] = set()
         self._ooo_drop_count: int = 0
         self._rust_fused_fallback_count: int = 0
+        # Stale symbol eviction (mirrors LOBEngine.evict_stale_symbols)
+        self._eviction_ttl_ns: int = int(float(os.getenv("HFT_FEATURE_EVICTION_TTL_S", "3600")) * 1_000_000_000)
+        self._eviction_last_run_ns: int = 0
         if feature_profile is not None:
             self.apply_profile(feature_profile)
 
@@ -418,6 +423,31 @@ class FeatureEngine:
     def reset_symbols(self, symbols: set[str]) -> None:
         for sym in symbols:
             self.reset_symbol(sym)
+
+    def evict_stale_symbols(self) -> int:
+        """Remove symbols whose last update is older than TTL.
+
+        Returns the number of evicted symbols.  Safe to call from any
+        periodic maintenance loop (e.g. the supervisor 1 Hz tick).
+        """
+        if self._eviction_ttl_ns <= 0:
+            return 0
+        now_ns = _now_ns()
+        # Rate-limit: run at most once per minute
+        if now_ns - self._eviction_last_run_ns < 60_000_000_000:
+            return 0
+        self._eviction_last_run_ns = now_ns
+        cutoff_ns = now_ns - self._eviction_ttl_ns
+        stale = [sym for sym, ts in self._last_update_ns.items() if 0 < ts < cutoff_ns]
+        for sym in stale:
+            self.reset_symbol(sym)
+        if stale:
+            logger.info(
+                "feature_stale_symbols_evicted",
+                count=len(stale),
+                symbols=stale[:5],
+            )
+        return len(stale)
 
     def get_feature(self, symbol: str, feature_id: str) -> int | float | None:
         state = self._states.get(str(symbol))
@@ -659,6 +689,8 @@ class FeatureEngine:
 
         ks = self._lob_kernel_states.get(symbol)
         if ks is None:
+            if len(self._lob_kernel_states) >= self._max_symbols:
+                return None
             ks = _LobKernelState()
             self._lob_kernel_states[symbol] = ks
 
@@ -1011,6 +1043,8 @@ class FeatureEngine:
 
         ks = self._lob_kernel_states.get(symbol)
         if ks is None:
+            if len(self._lob_kernel_states) >= self._max_symbols:
+                return
             ks = _LobKernelState()
             self._lob_kernel_states[symbol] = ks
 
