@@ -71,6 +71,11 @@ def store():
     return s
 
 
+@pytest.fixture(autouse=True)
+def _isolate_fill_dedup(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "fill_dedup.jsonl"))
+
+
 # ===========================================================================
 # 1. Fill -> Normalize -> Position flow
 # ===========================================================================

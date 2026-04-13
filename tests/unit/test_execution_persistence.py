@@ -107,6 +107,51 @@ class TestFillDedupPersistence:
         assert "dup_1" in router2._seen_fill_ids
         assert "dup_2" in router2._seen_fill_ids
 
+    @pytest.mark.asyncio
+    async def test_new_fill_persists_dedup_window_without_graceful_shutdown(self, tmp_path):
+        from hft_platform.contracts.execution import FillEvent
+        from hft_platform.contracts.strategy import Side
+        from hft_platform.core import timebase
+        from hft_platform.execution.normalizer import RawExecEvent
+
+        persist_path = str(tmp_path / "fill_dedup.jsonl")
+        with patch.dict(
+            os.environ,
+            {
+                "HFT_FILL_DEDUP_PERSIST_PATH": persist_path,
+                "HFT_FILL_DEDUP_PERSIST_INTERVAL_S": "0",
+            },
+        ):
+            router, _ = self._make_router(tmp_path)
+
+        fill = FillEvent(
+            fill_id="F_RESTART",
+            order_id="ORD_RESTART",
+            account_id="ACC1",
+            strategy_id="s1",
+            symbol="TXFD6",
+            side=Side.BUY,
+            qty=1,
+            price=200000000,
+            fee=0,
+            tax=0,
+            ingest_ts_ns=timebase.now_ns(),
+            match_ts_ns=timebase.now_ns(),
+        )
+        router.position_store.on_fill.return_value = MagicMock(realized_pnl=0)
+        router.normalizer = MagicMock()
+        router.normalizer.normalize_fill.return_value = fill
+        router.raw_queue.put_nowait(RawExecEvent(topic="deal", data={}, ingest_ts_ns=timebase.now_ns()))
+
+        await router.stop(drain_timeout_s=1.0)
+
+        assert os.path.exists(persist_path)
+
+        with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
+            restarted, _ = self._make_router(tmp_path)
+
+        assert "F_RESTART" in restarted._seen_fill_ids
+
 
 # ---------------------------------------------------------------------------
 # Issue #2: Fill DLQ persist/load + overflow metric
@@ -250,6 +295,28 @@ class TestOrderIdMapPersistence:
         adapter2._order_id_map_persist_path = path
         adapter2._load_order_id_map()
         assert adapter2.order_id_map["x"] == "y"
+
+    @pytest.mark.asyncio
+    async def test_register_broker_ids_persists_without_graceful_shutdown(self, tmp_path):
+        persist_path = str(tmp_path / "oid_map.jsonl")
+        with patch.dict(
+            os.environ,
+            {
+                "HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path,
+                "HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S": "0",
+            },
+        ):
+            adapter, _ = self._make_adapter(tmp_path)
+
+        await adapter._register_broker_ids("R47:101", {"ordno": "ORD_RESTART", "seqno": "SEQ_RESTART"})
+
+        assert os.path.exists(persist_path)
+
+        with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):
+            restarted, _ = self._make_adapter(tmp_path)
+
+        assert restarted.order_id_map["ORD_RESTART"] == "R47:101"
+        assert restarted.order_id_map["SEQ_RESTART"] == "R47:101"
 
 
 # ---------------------------------------------------------------------------

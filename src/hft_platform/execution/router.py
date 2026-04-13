@@ -100,6 +100,10 @@ class ExecutionRouter:
         self._fill_dedup_persist_path: str = os.environ.get(
             "HFT_FILL_DEDUP_PERSIST_PATH", ".state/fill_dedup_window.jsonl"
         )
+        self._fill_dedup_persist_interval_s: float = float(
+            os.environ.get("HFT_FILL_DEDUP_PERSIST_INTERVAL_S", "1.0")
+        )
+        self._fill_dedup_last_persist_s: float = 0.0
         self._load_fill_dedup()
         self._events_since_dlq_retry = 0
         self._recorder_queue: Optional[asyncio.Queue] = recorder_queue
@@ -173,6 +177,21 @@ class ExecutionRouter:
             logger.info("fill_dedup_persisted", count=len(keys_snapshot), path=path)
         except Exception as exc:
             logger.warning("fill_dedup_persist_failed", error=str(exc), path=path)
+
+    def _maybe_persist_fill_dedup(self, *, force: bool = False) -> None:
+        """Throttle fill dedup checkpointing to bound crash-recovery loss."""
+        now_s = timebase.now_ns() / 1_000_000_000
+        if not force and self._fill_dedup_persist_interval_s > 0:
+            if (now_s - self._fill_dedup_last_persist_s) < self._fill_dedup_persist_interval_s:
+                return
+        self.persist_fill_dedup()
+        self._fill_dedup_last_persist_s = now_s
+
+    def _register_fill_dedup_key(self, dedup_key: str) -> None:
+        self._seen_fill_ids[dedup_key] = None
+        if len(self._seen_fill_ids) > self._fill_dedup_max_size:
+            self._seen_fill_ids.popitem(last=False)  # evict oldest
+        self._maybe_persist_fill_dedup()
 
     async def run(self) -> None:
         self.running = True
@@ -251,9 +270,7 @@ class ExecutionRouter:
                                 symbol=fill_event.symbol,
                             )
                             continue
-                        self._seen_fill_ids[_dedup_key] = None
-                        if len(self._seen_fill_ids) > self._fill_dedup_max_size:
-                            self._seen_fill_ids.popitem(last=False)  # evict oldest
+                        self._register_fill_dedup_key(_dedup_key)
                         self.metrics.fills_total.inc()
                         if fill_event.strategy_id == "UNKNOWN":
                             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
@@ -386,7 +403,7 @@ class ExecutionRouter:
                     if fill_event:
                         _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
                         if _dedup_key not in self._seen_fill_ids:
-                            self._seen_fill_ids[_dedup_key] = None
+                            self._register_fill_dedup_key(_dedup_key)
                             # TCA enrichment for shutdown drain fills
                             _drain_order_key = self._order_id_map.get(fill_event.order_id)
                             if _drain_order_key is not None:
@@ -427,6 +444,12 @@ class ExecutionRouter:
                                         notify = getattr(self._risk_engine, "notify_fill_pnl", None)
                                         if callable(notify):
                                             notify(fill_event.strategy_id, pnl_delta_sd)
+                                publish_many_nowait = getattr(self.bus, "publish_many_nowait", None)
+                                if publish_many_nowait:
+                                    publish_many_nowait([delta, fill_event])
+                                else:
+                                    self._publish_nowait(delta)
+                                    self._publish_nowait(fill_event)
                                 logger.info("shutdown_drain_fill", fill_id=fill_event.fill_id, dedup_key=_dedup_key)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("shutdown_drain_error", error=str(exc))
@@ -468,9 +491,7 @@ class ExecutionRouter:
                         symbol=fill.symbol,
                     )
                     continue
-                self._seen_fill_ids[_dedup_key] = None
-                if len(self._seen_fill_ids) > self._fill_dedup_max_size:
-                    self._seen_fill_ids.popitem(last=False)  # evict oldest
+                self._register_fill_dedup_key(_dedup_key)
                 # TCA enrichment for DLQ-resolved fills (M4)
                 _order_key = self._order_id_map.get(fill.order_id)
                 if _order_key is not None:

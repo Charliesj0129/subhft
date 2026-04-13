@@ -73,6 +73,8 @@ class OrderAdapter:
         "order_id_map",
         "_order_id_map_lock",
         "_order_id_map_max_size",
+        "_order_id_map_persist_interval_s",
+        "_order_id_map_last_persist_s",
         "running",
         "metrics",
         "latency",
@@ -141,6 +143,8 @@ class OrderAdapter:
         self._storm_guard: Any = None  # Set post-init to close TOCTOU gap (M1)
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
+        self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
+        self._order_id_map_last_persist_s: float = 0.0
         self._load_order_id_map()
         self._cmd_map_max_size = int(os.getenv("HFT_CMD_MAP_MAX_SIZE", "10000"))
         self.running = False
@@ -527,6 +531,15 @@ class OrderAdapter:
         except Exception as exc:
             logger.warning("order_id_map_persist_failed", error=str(exc), path=path)
 
+    def _maybe_persist_order_id_map(self, *, force: bool = False) -> None:
+        """Throttle order-id checkpointing to bound crash-recovery loss."""
+        now_s = time.monotonic()
+        if not force and self._order_id_map_persist_interval_s > 0:
+            if (now_s - self._order_id_map_last_persist_s) < self._order_id_map_persist_interval_s:
+                return
+        self.persist_order_id_map()
+        self._order_id_map_last_persist_s = now_s
+
     async def drain_and_cancel(self, timeout_s: float = 5.0) -> int:  # precision-ok
         """Drain pending orders and cancel all live orders."""
         cancelled = 0
@@ -679,6 +692,7 @@ class OrderAdapter:
                     if val:
                         ids.add(val)
 
+        changed = False
         async with self._order_id_map_lock:
             # Evict oldest entries if at limit — skip entries whose order_key
             # is still in live_orders to prevent orphaning active fills (M6).
@@ -692,10 +706,17 @@ class OrderAdapter:
                     if mapped_key not in self.live_orders:
                         del self.order_id_map[k]
                         evicted += 1
+                        changed = True
                 logger.info("Evicted stale order IDs", count=evicted, remaining=len(self.order_id_map))
 
             for oid in ids:
-                self.order_id_map[str(oid)] = order_key
+                oid_key = str(oid)
+                if self.order_id_map.get(oid_key) == order_key:
+                    continue
+                self.order_id_map[oid_key] = order_key
+                changed = True
+        if changed:
+            self._maybe_persist_order_id_map()
 
     async def _drain_deferred_terminals(self, order_key: str, trade: Any) -> None:
         """Re-process deferred terminal callbacks now that broker IDs are registered."""
