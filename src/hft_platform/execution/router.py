@@ -193,6 +193,56 @@ class ExecutionRouter:
             self._seen_fill_ids.popitem(last=False)  # evict oldest
         self._maybe_persist_fill_dedup()
 
+    def _backfill_order_id_map(self, raw: RawExecEvent) -> None:
+        """Extract broker IDs from order callback and backfill order_id_map.
+
+        Shioaji's place_order() returns a Trade object with empty ordno/seqno.
+        These fields are only populated in the subsequent order callback.
+        This method extracts ALL broker IDs from the order callback payload,
+        finds the order_key via any already-registered ID (e.g. ``order.id``),
+        and registers the remaining IDs so deal callbacks can resolve strategy_id.
+        """
+        d = raw.data
+        if isinstance(d, dict) and "payload" in d:
+            d = d.get("payload", d)
+        if not isinstance(d, dict):
+            return
+        order_section = d.get("order", {}) if isinstance(d.get("order"), dict) else {}
+        status_section = d.get("status", {}) if isinstance(d.get("status"), dict) else {}
+        # Gather every candidate broker ID from the payload
+        _id_fields = ("id", "seqno", "seq_no", "ordno", "ord_no", "order_id")
+        ids: set[str] = set()
+        for src in (d, order_section, status_section):
+            for key in _id_fields:
+                val = src.get(key) if isinstance(src, dict) else getattr(src, key, None)
+                if val:
+                    ids.add(str(val))
+        ids.discard("")
+        if not ids:
+            return
+        # Find order_key from any already-registered ID
+        order_key = None
+        resolver = self.normalizer.order_id_resolver
+        for candidate in ids:
+            mapped = resolver.order_id_map.get(candidate)
+            if mapped:
+                order_key = resolver.normalize_order_key(mapped)
+                break
+        if not order_key:
+            return
+        # Register all extracted IDs under the same order_key
+        changed = False
+        for broker_id in ids:
+            if broker_id not in resolver.order_id_map:
+                resolver.order_id_map[broker_id] = order_key
+                changed = True
+        if changed:
+            logger.debug(
+                "order_id_map_backfilled",
+                order_key=order_key,
+                new_ids=[i for i in ids if i not in resolver.order_id_map or resolver.order_id_map.get(i) == order_key],
+            )
+
     async def run(self) -> None:
         self.running = True
         logger.info("ExecutionRouter started")
@@ -215,6 +265,7 @@ class ExecutionRouter:
                 self.metrics.execution_router_heartbeat_ts.set(timebase.now_s())
 
                 if raw.topic == "order":
+                    self._backfill_order_id_map(raw)
                     order_event = self.normalizer.normalize_order(raw)
                     if order_event:
                         self._publish_nowait(order_event)
@@ -378,6 +429,7 @@ class ExecutionRouter:
                 break
             try:
                 if raw.topic == "order":
+                    self._backfill_order_id_map(raw)
                     order_event = self.normalizer.normalize_order(raw)
                     if order_event:
                         self._publish_nowait(order_event)
