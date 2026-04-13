@@ -54,23 +54,45 @@ class ExecutionNormalizer:
             return d.get("payload"), d.get("state") or d.get("status")
         return d, None
 
+    @staticmethod
+    def _payload_get(payload: Any, key: str, default: Any = None) -> Any:
+        if payload is None:
+            return default
+        if isinstance(payload, dict):
+            return payload.get(key, default)
+        return getattr(payload, key, default)
+
     def _resolve_from_custom_field(self, raw: RawExecEvent) -> Optional[str]:
         d, _ = self._unwrap_data(raw)
-        if not isinstance(d, dict):
-            return None
-        custom_field = d.get("order", {}).get("custom_field") or d.get("custom_field")
+        order = self._payload_get(d, "order")
+        custom_field = self._payload_get(order, "custom_field") or self._payload_get(d, "custom_field")
         if custom_field:
             return str(custom_field)
         return None
 
     def _resolve_from_order_id_map(self, raw: RawExecEvent) -> Optional[str]:
         d, _ = self._unwrap_data(raw)
-        if not isinstance(d, dict):
-            return None
-        order = d.get("order", {}) if isinstance(d.get("order"), dict) else {}
-        ord_no = str(order.get("ordno") or order.get("ord_no") or d.get("ordno") or d.get("ord_no") or "")
-        seq_no = str(order.get("seqno") or order.get("seq_no") or d.get("seqno") or d.get("seq_no") or "")
-        other_id = str(order.get("id") or d.get("order_id") or d.get("id") or "")
+        order = self._payload_get(d, "order")
+        ord_no = str(
+            self._payload_get(order, "ordno")
+            or self._payload_get(order, "ord_no")
+            or self._payload_get(d, "ordno")
+            or self._payload_get(d, "ord_no")
+            or ""
+        )
+        seq_no = str(
+            self._payload_get(order, "seqno")
+            or self._payload_get(order, "seq_no")
+            or self._payload_get(d, "seqno")
+            or self._payload_get(d, "seq_no")
+            or ""
+        )
+        other_id = str(
+            self._payload_get(order, "id")
+            or self._payload_get(d, "order_id")
+            or self._payload_get(d, "id")
+            or ""
+        )
         resolved = self.order_id_resolver.resolve_strategy_id_from_candidates([ord_no, seq_no, other_id])
         return resolved if resolved != "UNKNOWN" else None
 

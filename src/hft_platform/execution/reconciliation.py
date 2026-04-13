@@ -265,6 +265,20 @@ class ReconciliationService:
                 strat_positions = per_strategy_map.setdefault(strat, {})
                 strat_positions[symbol] = strat_positions.get(symbol, 0) + pos.net_qty
 
+            recovery = getattr(self.store, "_recovery_positions", None)
+            if recovery:
+                for rkey, rdata in recovery.items():
+                    if not isinstance(rdata, dict):
+                        continue
+                    qty = int(rdata.get("net_qty", 0) or 0)
+                    if qty == 0:
+                        continue
+                    symbol = str(rdata.get("symbol") or rkey.rsplit(":", 1)[-1])
+                    local_map[symbol] = local_map.get(symbol, 0) + qty
+                    strat = str(rdata.get("strategy_id") or "*")
+                    strat_positions = per_strategy_map.setdefault(strat, {})
+                    strat_positions[symbol] = strat_positions.get(symbol, 0) + qty
+
             # Log per-strategy breakdown at DEBUG level (M9)
             logger.debug(
                 "Portfolio Sync: Per-strategy position breakdown",

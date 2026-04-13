@@ -41,3 +41,28 @@ async def test_reconciliation_sync_portfolio_logs_remote_positions(tmp_path):
     assert by_symbol["BBB"].diff == 3
     assert by_symbol["BBB"].local_qty == 0
     assert by_symbol["BBB"].broker_qty == -3
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_includes_pending_recovery_positions():
+    client = MagicMock()
+    client.get_positions.return_value = [SimpleNamespace(code="TMFD6", quantity=1, direction="Long")]
+
+    store = PositionStore()
+    store.load_recovery(
+        account_id="acct",
+        symbol="TMFD6",
+        net_qty=1,
+        avg_price_scaled=-1,
+        realized_pnl_scaled=0,
+        fees_scaled=0,
+        strategy_id="",
+    )
+
+    service = ReconciliationService(
+        client, store, {"reconciliation": {"heartbeat_threshold_ms": 1}}, storm_guard=StormGuard()
+    )
+
+    await service.sync_portfolio()
+
+    assert service._last_discrepancies == []
