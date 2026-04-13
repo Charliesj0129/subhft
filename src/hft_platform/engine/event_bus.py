@@ -769,9 +769,13 @@ class RingBufferBus:
                     )
 
                     if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
-                        halt_msg = f"EventBus batch overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
+                        halt_msg = (
+                            f"EventBus batch overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
+                        )
                         self._storm_guard.trigger_halt(halt_msg)
-                        logger.critical("StormGuard HALT triggered due to EventBus batch overflow", consumer=consumer_name)
+                        logger.critical(
+                            "StormGuard HALT triggered due to EventBus batch overflow", consumer=consumer_name
+                        )
 
                     local_seq = current_cursor - self.size
 

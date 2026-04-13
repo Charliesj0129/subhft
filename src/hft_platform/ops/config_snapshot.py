@@ -94,13 +94,15 @@ async def write_snapshot_to_clickhouse(
     try:
         ch_client.insert(
             "hft.config_snapshots",
-            [[
-                snapshot["boot_ts"],
-                snapshot["config_hash"],
-                snapshot["git_sha"],
-                snapshot["env_json"],
-                snapshot["yaml_json"],
-            ]],
+            [
+                [
+                    snapshot["boot_ts"],
+                    snapshot["config_hash"],
+                    snapshot["git_sha"],
+                    snapshot["env_json"],
+                    snapshot["yaml_json"],
+                ]
+            ],
             column_names=["boot_ts", "config_hash", "git_sha", "env_json", "yaml_json"],
         )
         logger.info("config_snapshot_written", config_hash=snapshot["config_hash"])

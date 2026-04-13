@@ -51,9 +51,7 @@ def _make_svc() -> MagicMock:
     return svc
 
 
-def _tick_dict(
-    symbol: str = DEFAULT_SYMBOL, price: int = DEFAULT_PRICE
-) -> dict[str, Any]:
+def _tick_dict(symbol: str = DEFAULT_SYMBOL, price: int = DEFAULT_PRICE) -> dict[str, Any]:
     """Return a minimal tick-like dict with scaled price."""
     return {"code": symbol, "price": price}
 
@@ -217,9 +215,7 @@ class TestSummarizeMd:
         assert _summarize_md(None) == {}
 
     def test_dict_basic(self) -> None:
-        result = _summarize_md(
-            {"code": DEFAULT_SYMBOL, "price": DEFAULT_PRICE, "extra": "x"}
-        )
+        result = _summarize_md({"code": DEFAULT_SYMBOL, "price": DEFAULT_PRICE, "extra": "x"})
         assert "keys" in result
         assert "code" in result["present"]
         assert "price" in result["present"]
@@ -354,9 +350,7 @@ class TestTryFastExtractCallbackPayload:
     def test_kwargs_non_md_skipped(self) -> None:
         """Non-MD kwarg values should be skipped, later kwarg wins."""
         md = _tick_dict()
-        exchange, msg = _try_fast_extract_callback_payload(
-            quote={"foo": 1}, tick=md
-        )
+        exchange, msg = _try_fast_extract_callback_payload(quote={"foo": 1}, tick=md)
         assert msg is md
 
     def test_exchange_from_object_with_name(self) -> None:
@@ -488,9 +482,7 @@ class TestOnShioajiEvent:
     def test_metrics_exception_suppressed(self) -> None:
         svc = _make_svc()
         svc.metrics_registry = MagicMock()
-        svc.metrics_registry.market_data_callback_parse_total.labels.side_effect = (
-            RuntimeError("metric fail")
-        )
+        svc.metrics_registry.market_data_callback_parse_total.labels.side_effect = RuntimeError("metric fail")
         # Should not raise
         on_shioaji_event(svc, "TSE", _tick_dict())
         svc.loop.call_soon_threadsafe.assert_called_once()
@@ -527,9 +519,7 @@ class TestRecordShioajiCrashSignature:
         svc = _make_svc()
         svc.metrics_registry = MagicMock()
         svc.metrics_registry.shioaji_crash_signature_total = MagicMock()
-        _record_shioaji_crash_signature(
-            svc, "connection reset by peer", context="md_callback"
-        )
+        _record_shioaji_crash_signature(svc, "connection reset by peer", context="md_callback")
         svc.metrics_registry.shioaji_crash_signature_total.labels.assert_called_once_with(
             signature="conn_reset", context="md_callback"
         )
@@ -541,9 +531,7 @@ class TestRecordShioajiCrashSignature:
     def test_metric_exception_suppressed(self, mock_detect: MagicMock) -> None:
         svc = _make_svc()
         svc.metrics_registry = MagicMock()
-        svc.metrics_registry.shioaji_crash_signature_total.labels.side_effect = (
-            RuntimeError("oops")
-        )
+        svc.metrics_registry.shioaji_crash_signature_total.labels.side_effect = RuntimeError("oops")
         # Should not raise
         _record_shioaji_crash_signature(svc, "error", context="test")
 

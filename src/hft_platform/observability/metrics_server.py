@@ -38,7 +38,11 @@ def _resilient_metrics_app(
 
     try:
         status, headers, output = _bake_output(
-            REGISTRY, accept_header, accept_encoding, params, False,
+            REGISTRY,
+            accept_header,
+            accept_encoding,
+            params,
+            False,
         )
         start_response(status, headers)
         return [output]
@@ -71,9 +75,7 @@ def _collect_partial(start_response: Any) -> list[bytes]:
         try:
             for metric_family in collector.collect():
                 for sample in metric_family.samples:
-                    labels = ",".join(
-                        f'{k}="{v}"' for k, v in sorted(sample.labels.items())
-                    )
+                    labels = ",".join(f'{k}="{v}"' for k, v in sorted(sample.labels.items()))
                     name = f"{metric_family.name}{sample.name}" if sample.name else metric_family.name
                     if labels:
                         lines.append(f"{name}{{{labels}}} {sample.value}")

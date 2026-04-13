@@ -78,6 +78,24 @@ Mandatory policy:
 | Persistence   | `recorder/worker.py`, `recorder/batcher.py`, `recorder/writer.py`, `recorder/wal.py` | ClickHouse + WAL fallback                   |
 | Observability | `observability/metrics.py`, `risk/storm_guard.py`                                    | Prometheus metrics, StormGuard FSM          |
 
+### Non-Hot-Path Services (Cold Plane)
+
+These modules run outside the tick-processing loop and are not latency-critical. Float arithmetic is permitted.
+
+| Service        | Module                       | Purpose                                                                 |
+| -------------- | ---------------------------- | ----------------------------------------------------------------------- |
+| Notifications  | `notifications/`             | Telegram + webhook alert routing (23+ templates, critical retry)        |
+| Telegram Bot   | `bot/`                       | Interactive commands (`/report`, `/levels`, `/flow`, `/status`, `/stop`) |
+| TCA            | `tca/`                       | Transaction cost analysis (fee calc + 4-component slippage decomposition) |
+| Reports        | `reports/`                   | Daily market analysis pipeline (collect → facts → reason → compose → distribute) |
+| Monitor TUI    | `monitor/`                   | Live signal monitoring (ClickHouse + Redis + SHM hybrid data)           |
+| Ops            | `ops/`                       | SessionGovernor, AutonomyMonitor, BackupManager, PositionFlattener      |
+| Analytics      | `analytics/`                 | ClickHouse query templates for offline analysis                         |
+| Diagnostics    | `diagnostics/`               | Event replay, decision trace sampling for post-mortem                   |
+| Data Quality   | `data_quality/`              | Completeness checks, outlier detection, feed gap profiling              |
+
+Module documentation: `docs/modules/<module>.md` for each service.
+
 ## 📦 Key Data Contracts (Scaled Int Convention)
 
 All price fields are `int` scaled by **x10000** (configurable per symbol in `symbols.yaml`).
