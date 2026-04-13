@@ -379,10 +379,10 @@ class StartupPositionVerifier:
                 # Distribute broker correction across per-strategy entries.
                 # For single-strategy symbols, use broker qty directly.
                 # For multi-strategy, scale proportionally (preserving sum = broker_qty).
-                self._distribute_correction(entries, broker_qty, account_id, merged)
+                self._distribute_correction(entries, broker_qty, account_id, merged, symbol=symbol)
             else:
                 if broker_qty != 0:
-                    self._distribute_correction(entries, broker_qty, account_id, merged)
+                    self._distribute_correction(entries, broker_qty, account_id, merged, symbol=symbol)
 
         if has_critical:
             startup_recon_status.set(3)
@@ -406,6 +406,7 @@ class StartupPositionVerifier:
         target_qty: int,
         account_id: str,
         merged: Dict[str, Dict[str, Any]],
+        symbol: str = "",
     ) -> None:
         """Write checkpoint entries into *merged*, adjusting to match broker qty.
 
@@ -415,6 +416,22 @@ class StartupPositionVerifier:
         cannot confirm).
         """
         if not entries:
+            if target_qty != 0 and symbol:
+                key = f"{account_id}::{symbol}"
+                merged[key] = {
+                    "symbol": symbol,
+                    "net_qty": target_qty,
+                    "avg_price_scaled": 0,
+                    "realized_pnl_scaled": 0,
+                    "fees_scaled": 0,
+                    "account_id": account_id,
+                    "strategy_id": "",
+                }
+                logger.info(
+                    "position_recovery: created entry from broker",
+                    symbol=symbol,
+                    qty=target_qty,
+                )
             return
         if len(entries) == 1:
             key, data = entries[0]
