@@ -312,7 +312,29 @@ class QuoteConnectionPool:
                 else:
                     slot.reconnect_failures += 1
                     slot.state = FacadeState.DISCONNECTED
-                    log.warning("facade_reconnect_failed")
+                    # Extract error detail from underlying client
+                    _client = getattr(slot.facade, "_client", None)
+                    _err = getattr(_client, "_last_reconnect_error", None) or getattr(
+                        _client, "_last_login_error", None
+                    )
+                    log.warning(
+                        "facade_reconnect_failed",
+                        error=str(_err) if _err else "unknown (backoff guard or silent failure)",
+                        consecutive_failures=slot.reconnect_failures,
+                    )
+                    # Alert on sustained failures (first alert at threshold, then every N)
+                    _alert_every = int(os.environ.get("HFT_RECONNECT_ALERT_EVERY", "5"))
+                    if slot.reconnect_failures == _alert_every or (
+                        slot.reconnect_failures > _alert_every and slot.reconnect_failures % _alert_every == 0
+                    ):
+                        _self = self  # noqa: F841 — keep reference for structlog
+                        logger.critical(
+                            "reconnect_sustained_failure_alert",
+                            conn_id=slot.conn_id,
+                            consecutive_failures=slot.reconnect_failures,
+                            last_error=str(_err) if _err else "unknown",
+                            hint="Consider manual restart if this persists",
+                        )
             except Exception as exc:
                 slot.reconnect_failures += 1
                 slot.state = FacadeState.DISCONNECTED

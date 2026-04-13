@@ -37,10 +37,11 @@ class ReconnectOrchestrator:
     ShioajiClient — this is a pure code-movement extraction.
     """
 
-    __slots__ = ("_client",)
+    __slots__ = ("_client", "_consecutive_failures")
 
     def __init__(self, client: "ShioajiClient") -> None:
         self._client = client
+        self._consecutive_failures: int = 0
 
     # ------------------------------------------------------------------ #
     # Reconnect sequence (RESILIENCE-CRITICAL)
@@ -52,7 +53,9 @@ class ReconnectOrchestrator:
         Respects backoff, cooldown, and lock guards. Returns True only when
         the full sequence (login + subscribe) succeeds.
 
-        Extracted verbatim from ShioajiClient.reconnect().
+        After HARD_RECONNECT_THRESHOLD consecutive failures, recreates the
+        sj.Shioaji() instance to recover from stale SDK state (e.g., weekend
+        session expiry).
         """
         c = self._client
         if not c.api:
@@ -66,27 +69,43 @@ class ReconnectOrchestrator:
         try:
             c._last_reconnect_ts = now
             c._last_reconnect_error = None
-            logger.warning("Reconnecting Shioaji", reason=reason, force=force)
-            ok_logout, _, err_logout, _ = c._safe_call_with_timeout(
-                "logout",
-                lambda: c.api.logout(),
-                c._reconnect_timeout_s,
-            )
-            if not ok_logout:
-                logger.warning("Logout failed during reconnect", error=str(err_logout))
 
-            c.logged_in = False
-            c._callbacks_registered = False
-            c._clear_quote_pending()
-            c.subscribed_codes = set()
-            c.subscribed_count = 0
-            c._refresh_quote_routes()
+            # Hard reconnect: recreate API object after repeated failures
+            hard_threshold = int(os.getenv("HFT_HARD_RECONNECT_THRESHOLD", "3"))
+            if self._consecutive_failures >= hard_threshold:
+                logger.warning(
+                    "hard_reconnect_triggered",
+                    reason=reason,
+                    consecutive_failures=self._consecutive_failures,
+                )
+                if c.recreate_api():
+                    self._consecutive_failures = 0
+                else:
+                    c._last_reconnect_error = "recreate_api_failed"
+                    return False
+            else:
+                logger.warning("Reconnecting Shioaji", reason=reason, force=force)
+                ok_logout, _, err_logout, _ = c._safe_call_with_timeout(
+                    "logout",
+                    lambda: c.api.logout(),
+                    c._reconnect_timeout_s,
+                )
+                if not ok_logout:
+                    logger.warning("Logout failed during reconnect", error=str(err_logout))
+
+                c.logged_in = False
+                c._callbacks_registered = False
+                c._clear_quote_pending()
+                c.subscribed_codes = set()
+                c.subscribed_count = 0
+                c._refresh_quote_routes()
 
             login_ok = bool(c.login())
             if not login_ok or not c.logged_in:
                 c._last_reconnect_error = c._last_login_error or "login_failed"
                 if c.metrics:
                     c.metrics.feed_reconnect_total.labels(result="fail").inc()
+                self._consecutive_failures += 1
                 c._reconnect_backoff_s = min(c._reconnect_backoff_s * 2.0, c._reconnect_backoff_max_s)
                 return False
 
@@ -128,11 +147,14 @@ class ReconnectOrchestrator:
                 c.metrics.feed_reconnect_total.labels(result="ok" if ok else "fail").inc()
             if ok:
                 c._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
+                self._consecutive_failures = 0
                 return True
 
+            self._consecutive_failures += 1
             c._reconnect_backoff_s = min(c._reconnect_backoff_s * 2.0, c._reconnect_backoff_max_s)
             return False
         except Exception as exc:
+            self._consecutive_failures += 1
             c._last_reconnect_error = str(exc)
             logger.error("Reconnect failed unexpectedly", reason=reason, error=str(exc))
             if c.metrics:

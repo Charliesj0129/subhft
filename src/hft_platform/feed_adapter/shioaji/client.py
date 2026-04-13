@@ -246,7 +246,7 @@ class ShioajiClient:
         self._callback_register_lock = threading.Lock()
         self._last_reconnect_ts = 0.0
         self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
-        self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "600"))
+        self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "120"))
         self._login_timeout_s = float(os.getenv("HFT_SHIOAJI_LOGIN_TIMEOUT_S", "20"))
         self._reconnect_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_TIMEOUT_S", "45"))
         self._reconnect_subscribe_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_SUBSCRIBE_TIMEOUT_S", "30"))
@@ -682,6 +682,41 @@ class ShioajiClient:
         # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
         self._refresh_quote_routes()
+
+    def recreate_api(self) -> bool:
+        """Destroy and recreate the sj.Shioaji() instance for hard reconnect.
+
+        Call this after repeated reconnect failures where the internal SDK
+        state is likely corrupt (e.g., weekend session expiry). Resets all
+        session-related state but preserves config and symbol lists.
+        """
+        _sj = _sdk()
+        if not _sj:
+            return False
+        old_api = self.api
+        try:
+            if old_api is not None:
+                try:
+                    old_api.logout()
+                except Exception:  # noqa: BLE001
+                    pass
+            is_sim = self.mode == "simulation"
+            self.api = _sj.Shioaji(simulation=is_sim)
+            self.logged_in = False
+            self._callbacks_registered = False
+            self._contracts_ready = False
+            self.ca_active = False
+            self.subscribed_codes = set()
+            self.subscribed_count = 0
+            self._clear_quote_pending()
+            self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
+            self._last_reconnect_error = None
+            self._last_login_error = None
+            logger.warning("shioaji_api_recreated", mode=self.mode)
+            return True
+        except Exception as exc:
+            logger.error("shioaji_api_recreate_failed", error=str(exc))
+            return False
 
     def login(
         self,
