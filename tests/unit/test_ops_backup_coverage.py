@@ -265,6 +265,7 @@ def test_verify_backup_passes_when_path_missing(tmp_path: Path) -> None:
 
     with _patch_client(mgr, client):
         mgr._verify_backup("daily_20260329")  # should not raise
+        assert client.query.called
 
 
 def test_verify_backup_raises_when_empty(tmp_path: Path) -> None:

@@ -567,6 +567,7 @@ class TestLOBEngineMetrics:
         """LF-1: stop() must be safe when _metrics_task is None."""
         engine = LOBEngine()
         engine.stop()  # Must not raise
+        assert engine._metrics_task is None
 
     def test_get_book_caches_last_symbol(self):
         engine = LOBEngine()

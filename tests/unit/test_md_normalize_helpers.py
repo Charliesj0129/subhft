@@ -455,8 +455,8 @@ class TestOnShioajiEvent:
         svc = _make_svc()
         del svc.loop
         md = _tick_dict()
-        # Should not raise
-        on_shioaji_event(svc, "TSE", md)
+        on_shioaji_event(svc, "TSE", md)  # must not raise
+        assert not hasattr(svc, "loop")
 
     def test_fallback_path_single_arg(self) -> None:
         """When fast extract returns None, the fallback iterates args."""
@@ -497,8 +497,8 @@ class TestRecordShioajiCrashSignature:
     def test_no_metrics_registry_noop(self) -> None:
         svc = _make_svc()
         svc.metrics_registry = None
-        # Should not raise
         _record_shioaji_crash_signature(svc, "error text", context="test")
+        assert svc.metrics_registry is None  # unchanged
 
     @patch(
         "hft_platform.services._md_normalize.detect_crash_signature",
@@ -532,10 +532,11 @@ class TestRecordShioajiCrashSignature:
         svc = _make_svc()
         svc.metrics_registry = MagicMock()
         svc.metrics_registry.shioaji_crash_signature_total.labels.side_effect = RuntimeError("oops")
-        # Should not raise
-        _record_shioaji_crash_signature(svc, "error", context="test")
+        _record_shioaji_crash_signature(svc, "error", context="test")  # must not raise
+        assert svc.metrics_registry is not None
 
     def test_no_crash_signature_attr_noop(self) -> None:
         svc = _make_svc()
         svc.metrics_registry = MagicMock(spec=[])  # no attrs at all
-        _record_shioaji_crash_signature(svc, "text", context="test")
+        _record_shioaji_crash_signature(svc, "text", context="test")  # must not raise
+        assert svc.metrics_registry is not None
