@@ -183,9 +183,7 @@ class TCAAnalyzer:
             # market_impact_bps is 0.0 for single-lot trades (negligible impact).
             impact_bps_mean = 0.0
 
-            total_cost_bps_mean = (
-                commission_bps + tax_bps + delay_cost_bps_mean + exec_cost_bps_mean + impact_bps_mean
-            )
+            total_cost_bps_mean = commission_bps + tax_bps + delay_cost_bps_mean + exec_cost_bps_mean + impact_bps_mean
             total_cost_bps_p95 = delay_cost_bps_p95 + exec_cost_bps_p95
 
             reports.append(
