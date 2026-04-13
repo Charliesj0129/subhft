@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import structlog
@@ -9,6 +10,16 @@ import structlog
 from hft_platform.tca.types import TCADailyReport
 
 logger = structlog.get_logger(__name__)
+
+
+def _safe_float(value: object) -> float:
+    """Coerce a ClickHouse aggregate result to float, returning 0.0 for None/NaN/Inf."""
+    if value is None:
+        return 0.0
+    f = float(value)  # type: ignore[arg-type]
+    if math.isnan(f) or math.isinf(f):
+        return 0.0
+    return f
 
 
 def _default_fee_yaml_path() -> str:
@@ -53,7 +64,35 @@ SELECT
     sum(qty)        AS total_qty,
     sum(toInt64(price_scaled) * toInt64(qty)) AS sum_notional_scaled,
     sum(fee_scaled) AS total_fee_scaled,
-    sum(tax_scaled) AS total_tax_scaled
+    sum(tax_scaled) AS total_tax_scaled,
+    -- Per-fill TCA: only fills with decision_price > 0 OR arrival_price > 0
+    -- side_sign: +1 for BUY, -1 for SELL
+    -- delay_cost_bps per fill = (arrival_price - decision_price) * side_sign / price_scaled * 10000
+    -- exec_cost_bps per fill  = (price_scaled - arrival_price)  * side_sign / price_scaled * 10000
+    avgIf(
+        toFloat64(arrival_price - decision_price)
+        * if(side = 'BUY', 1, -1)
+        / toFloat64(price_scaled) * 10000,
+        decision_price > 0 AND arrival_price > 0 AND price_scaled > 0
+    ) AS delay_cost_bps_mean,
+    quantileIf(0.95)(
+        toFloat64(arrival_price - decision_price)
+        * if(side = 'BUY', 1, -1)
+        / toFloat64(price_scaled) * 10000,
+        decision_price > 0 AND arrival_price > 0 AND price_scaled > 0
+    ) AS delay_cost_bps_p95,
+    avgIf(
+        toFloat64(price_scaled - arrival_price)
+        * if(side = 'BUY', 1, -1)
+        / toFloat64(price_scaled) * 10000,
+        decision_price > 0 AND arrival_price > 0 AND price_scaled > 0
+    ) AS exec_cost_bps_mean,
+    quantileIf(0.95)(
+        toFloat64(price_scaled - arrival_price)
+        * if(side = 'BUY', 1, -1)
+        / toFloat64(price_scaled) * 10000,
+        decision_price > 0 AND arrival_price > 0 AND price_scaled > 0
+    ) AS exec_cost_bps_p95
 FROM hft.fills
 WHERE toDate(ts_exchange / 1000000000) = %(date)s
 GROUP BY strategy_id, symbol
@@ -92,7 +131,19 @@ class TCAAnalyzer:
 
         reports: list[TCADailyReport] = []
         for row in rows:
-            strategy_id, symbol, trade_count, total_qty, sum_notional_scaled, total_fee_scaled, total_tax_scaled = row
+            (
+                strategy_id,
+                symbol,
+                trade_count,
+                total_qty,
+                sum_notional_scaled,
+                total_fee_scaled,
+                total_tax_scaled,
+                delay_mean,
+                delay_p95,
+                exec_mean,
+                exec_p95,
+            ) = row
 
             # Resolve point_value for this symbol.
             # SQL gives price_scaled * qty; multiply by point_value to get true NTD notional.
@@ -118,11 +169,24 @@ class TCAAnalyzer:
             if notional_real > 0:
                 commission_bps = (commission_real / notional_real) * 10000.0
                 tax_bps = (tax_real / notional_real) * 10000.0
-                total_cost_bps = commission_bps + tax_bps
             else:
                 commission_bps = 0.0
                 tax_bps = 0.0
-                total_cost_bps = 0.0
+
+            # Coerce TCA aggregates — ClickHouse returns NaN/None when no
+            # qualifying fills exist (all decision_price=0 AND arrival_price=0).
+            delay_cost_bps_mean = _safe_float(delay_mean)
+            delay_cost_bps_p95 = _safe_float(delay_p95)
+            exec_cost_bps_mean = _safe_float(exec_mean)
+            exec_cost_bps_p95 = _safe_float(exec_p95)
+
+            # market_impact_bps is 0.0 for single-lot trades (negligible impact).
+            impact_bps_mean = 0.0
+
+            total_cost_bps_mean = (
+                commission_bps + tax_bps + delay_cost_bps_mean + exec_cost_bps_mean + impact_bps_mean
+            )
+            total_cost_bps_p95 = delay_cost_bps_p95 + exec_cost_bps_p95
 
             reports.append(
                 TCADailyReport(
@@ -134,13 +198,13 @@ class TCAAnalyzer:
                     notional=corrected_notional_scaled,
                     commission_bps_mean=commission_bps,
                     tax_bps_mean=tax_bps,
-                    delay_cost_bps_mean=0.0,
-                    delay_cost_bps_p95=0.0,
-                    exec_cost_bps_mean=0.0,
-                    exec_cost_bps_p95=0.0,
-                    impact_bps_mean=0.0,
-                    total_cost_bps_mean=total_cost_bps,
-                    total_cost_bps_p95=0.0,
+                    delay_cost_bps_mean=delay_cost_bps_mean,
+                    delay_cost_bps_p95=delay_cost_bps_p95,
+                    exec_cost_bps_mean=exec_cost_bps_mean,
+                    exec_cost_bps_p95=exec_cost_bps_p95,
+                    impact_bps_mean=impact_bps_mean,
+                    total_cost_bps_mean=total_cost_bps_mean,
+                    total_cost_bps_p95=total_cost_bps_p95,
                 )
             )
         return reports
