@@ -40,7 +40,7 @@ dev = [
     "mypy>=1.10.0",
     "hypothesis>=6.148.7",
     "bandit[toml]>=1.7.5",
-    "pre-commit>=3.7.0",
+    "pre-commit>=4.5.1",
     "pytest-benchmark>=4.0.0",
     "pyarrow>=23.0.1",
 ]
