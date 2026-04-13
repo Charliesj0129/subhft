@@ -11,7 +11,7 @@ from hft_platform.main import HFTSystem
 async def test_risk_rejection(monkeypatch):
     """Verify that RiskEngine blocks excessive orders."""
     monkeypatch.setenv("HFT_SYMBOLS", "2330")
-    system = HFTSystem({"risk": {"max_order_size": 2}})  # Strict limit
+    system = HFTSystem({"risk": {"max_order_size": 2}, "symbols": ["2330"]})  # Strict limit
 
     # Bypass runner/bus, inject directly into risk queue
     # We want to see if OrderAdapter receives it.
@@ -48,7 +48,7 @@ async def test_risk_rejection(monkeypatch):
 async def test_storm_guard(monkeypatch):
     """Verify Reconciliation triggers Storm Guard on mismatch."""
     monkeypatch.setenv("HFT_SYMBOLS", "2330")
-    system = HFTSystem({})
+    system = HFTSystem({"symbols": ["2330"]})
     # Inject dependencies
     system.reconciler = system.recon_service
 
