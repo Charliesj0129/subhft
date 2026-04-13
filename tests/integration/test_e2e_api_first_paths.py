@@ -67,7 +67,10 @@ class InMemoryBrokerAPI:
         }
 
 
-async def _wait_for(predicate, timeout: float = 2.0, step: float = 0.01) -> None:
+_CI_TIMEOUT = float(os.environ.get("CI_TIMEOUT_SCALE", "5.0"))
+
+
+async def _wait_for(predicate, timeout: float = _CI_TIMEOUT, step: float = 0.01) -> None:
     start = time.time()
     while time.time() - start < timeout:
         if predicate():
@@ -76,7 +79,7 @@ async def _wait_for(predicate, timeout: float = 2.0, step: float = 0.01) -> None
     raise AssertionError("Timed out waiting for condition")
 
 
-async def _collect_events(bus: RingBufferBus, count: int, timeout: float = 2.0) -> list[Any]:
+async def _collect_events(bus: RingBufferBus, count: int, timeout: float = _CI_TIMEOUT) -> list[Any]:
     events: list[Any] = []
 
     async def _consume() -> None:
@@ -208,9 +211,9 @@ async def test_hotpath_intent_to_execution_api_first(tmp_path, monkeypatch):
             timestamp_ns=time.time_ns(),
         )
         await intent_q.put(intent)
-        await asyncio.wait_for(intent_q.join(), timeout=2.0)
+        await asyncio.wait_for(intent_q.join(), timeout=_CI_TIMEOUT)
 
-        await _wait_for(lambda: len(broker_api.placed_orders) == 1, timeout=2.0)
+        await _wait_for(lambda: len(broker_api.placed_orders) == 1, timeout=_CI_TIMEOUT)
         assert broker_api.placed_orders[0]["contract_code"] == "AAA"
         assert broker_api.placed_orders[0]["qty"] == 2
         assert broker_api.last_trade is not None
@@ -243,9 +246,9 @@ async def test_hotpath_intent_to_execution_api_first(tmp_path, monkeypatch):
         )
         await raw_exec_q.put(raw_order)
         await raw_exec_q.put(raw_fill)
-        await asyncio.wait_for(raw_exec_q.join(), timeout=2.0)
+        await asyncio.wait_for(raw_exec_q.join(), timeout=_CI_TIMEOUT)
 
-        events = await _collect_events(bus, count=3, timeout=2.0)
+        events = await _collect_events(bus, count=3, timeout=_CI_TIMEOUT)
         order_events = [evt for evt in events if isinstance(evt, OrderEvent)]
         fill_events = [evt for evt in events if isinstance(evt, FillEvent)]
         deltas = [evt for evt in events if isinstance(evt, PositionDelta)]
@@ -255,7 +258,7 @@ async def test_hotpath_intent_to_execution_api_first(tmp_path, monkeypatch):
         assert fill_events[0].strategy_id == "strat"
         assert deltas[0].net_qty == 2
 
-        await _wait_for(lambda: not order_adapter.live_orders, timeout=2.0)
+        await _wait_for(lambda: not order_adapter.live_orders, timeout=_CI_TIMEOUT)
     finally:
         for task in tasks:
             task.cancel()

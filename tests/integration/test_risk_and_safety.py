@@ -8,8 +8,9 @@ from hft_platform.main import HFTSystem
 
 
 @pytest.mark.asyncio
-async def test_risk_rejection():
+async def test_risk_rejection(monkeypatch):
     """Verify that RiskEngine blocks excessive orders."""
+    monkeypatch.setenv("HFT_SYMBOLS", "2330")
     system = HFTSystem({"risk": {"max_order_size": 2}})  # Strict limit
 
     # Bypass runner/bus, inject directly into risk queue
@@ -44,8 +45,9 @@ async def test_risk_rejection():
 
 
 @pytest.mark.asyncio
-async def test_storm_guard():
+async def test_storm_guard(monkeypatch):
     """Verify Reconciliation triggers Storm Guard on mismatch."""
+    monkeypatch.setenv("HFT_SYMBOLS", "2330")
     system = HFTSystem({})
     # Inject dependencies
     system.reconciler = system.recon_service

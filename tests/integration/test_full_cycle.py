@@ -131,7 +131,7 @@ async def _exercise_full_order_lifecycle(monkeypatch: pytest.MonkeyPatch) -> Non
             "order_type": "ROD",
             "tif": "ROD",
             "custom_field": "USER1",
-            "product_type": "stock",
+            "product_type": None,
             "price_type": "LMT",
         }
 

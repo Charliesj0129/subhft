@@ -13,11 +13,12 @@ from hft_platform.strategy.runner import StrategyRunner
 class MockBus:
     def __init__(self):
         self.queue = asyncio.Queue()
+        self.cursor = -1
 
     async def publish(self, event):
         await self.queue.put(event)
 
-    async def consume(self):
+    async def consume(self, start_cursor=None, consumer_name=None):
         while True:
             yield await self.queue.get()
 
