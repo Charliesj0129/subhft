@@ -4,8 +4,8 @@ Measures every Rust-accelerated stage with realistic data sizes.
 Run: uv run python tests/benchmark/bench_rust_pipeline_full.py
 """
 
-import timeit
 import sys
+import timeit
 from pathlib import Path
 
 import numpy as np

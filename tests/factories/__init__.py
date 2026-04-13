@@ -6,6 +6,7 @@ from tests.factories.components import (
     make_risk_engine,
     make_storm_guard,
 )
+
 from tests.factories.events import (
     make_bidask_event,
     make_fill_event,
