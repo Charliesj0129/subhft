@@ -23,6 +23,7 @@ dependencies = [
     "exchange-calendars>=4.13.1,<5",
     "orjson>=3.10,<4",
     "optuna>=4.7.0,<5",
+    "aiohttp>=3.11,<4",
 ]
 
 [project.scripts]
