@@ -534,6 +534,95 @@ class ExecutionRouter:
             logger.info("shutdown_drain_complete", drained=drained)
         return drained
 
+    async def recover_fill_gaps(
+        self,
+        checkpoint_path: str = ".state/position_checkpoint.json",
+    ) -> dict[str, int]:
+        """Cold-path fill gap recovery at startup.
+
+        Loads persisted DLQ and retries orphaned fills using an enhanced
+        resolver that falls back to checkpoint symbol→strategy mapping when
+        order_id_map is empty (typical after crash).
+
+        Returns ``{resolved, unresolved, skipped_dedup}`` counts.
+        """
+        from hft_platform.execution.checkpoint import PositionCheckpointWriter  # noqa: PLC0415
+        from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq  # noqa: PLC0415
+
+        dlq = get_orphaned_fill_dlq()
+        if dlq.count == 0:
+            logger.info("recover_fill_gaps: DLQ empty, nothing to recover")
+            return {"resolved": 0, "unresolved": 0, "skipped_dedup": 0}
+
+        # Build checkpoint-based symbol→strategy fallback map
+        ckpt_symbol_strategy: dict[str, str] = {}
+        ckpt_data = PositionCheckpointWriter.load_checkpoint(checkpoint_path)
+        if ckpt_data is not None:
+            for key, pos_data in ckpt_data.get("positions", {}).items():
+                parts = key.split(":")
+                if len(parts) >= 3:
+                    strategy_id = parts[1]
+                    symbol = pos_data.get("symbol", parts[-1])
+                    if strategy_id and strategy_id != "*":
+                        ckpt_symbol_strategy[symbol] = strategy_id
+
+        logger.info(
+            "recover_fill_gaps: starting",
+            dlq_count=dlq.count,
+            checkpoint_strategies=len(ckpt_symbol_strategy),
+        )
+
+        def _enhanced_resolve(fill: Any) -> str:
+            # Primary: use normalizer resolver chain (order_id_map + custom_field)
+            from hft_platform.execution.normalizer import RawExecEvent  # noqa: PLC0415
+
+            raw = RawExecEvent(
+                topic="deal",
+                data={"ordno": fill.order_id, "code": fill.symbol, "action": fill.side.name},
+                ingest_ts_ns=fill.ingest_ts_ns,
+            )
+            resolved_id = self.normalizer._resolve_strategy_id(raw)
+            if resolved_id and resolved_id != "UNKNOWN":
+                return resolved_id
+            # Fallback: checkpoint symbol→strategy mapping
+            ckpt_strat = ckpt_symbol_strategy.get(fill.symbol)
+            if ckpt_strat:
+                logger.info(
+                    "recover_fill_gaps: checkpoint fallback",
+                    symbol=fill.symbol,
+                    strategy_id=ckpt_strat,
+                    fill_id=fill.fill_id,
+                )
+                return ckpt_strat
+            return "UNKNOWN"
+
+        resolved, still_orphaned = dlq.retry(_enhanced_resolve)
+
+        skipped_dedup = 0
+        applied = 0
+        for fill in resolved:
+            _dedup_key = fill.fill_id or _synthesize_dedup_key(fill)
+            if _dedup_key in self._seen_fill_ids:
+                skipped_dedup += 1
+                continue
+            self._register_fill_dedup_key(_dedup_key)
+            if hasattr(self.position_store, "on_fill"):
+                self.position_store.on_fill(fill)
+            applied += 1
+
+        logger.info(
+            "recover_fill_gaps: complete",
+            resolved=len(resolved),
+            applied=applied,
+            skipped_dedup=skipped_dedup,
+            unresolved=len(still_orphaned),
+        )
+        return {
+            "resolved": applied,
+            "unresolved": len(still_orphaned),
+            "skipped_dedup": skipped_dedup,
+        }
+
     async def _retry_orphaned_fills(self) -> None:
         from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
