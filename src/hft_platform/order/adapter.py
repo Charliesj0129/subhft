@@ -150,7 +150,7 @@ class OrderAdapter:
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
         self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
-        self._order_id_map_last_persist_s: float = 0.0
+        self._order_id_map_last_persist_s: float = 0.0  # noqa: monotonic timestamp
         self._load_order_id_map()
         self._cmd_map_max_size = int(os.getenv("HFT_CMD_MAP_MAX_SIZE", "10000"))
         self.running = False
@@ -164,9 +164,9 @@ class OrderAdapter:
         self._live_orders_lock = asyncio.Lock()
         self._pending_order_keys: set[str] = set()
         # TTL sweep: evict orphaned live_orders entries (missed terminal callbacks)
-        self._live_orders_ttl_s: float = float(os.getenv("HFT_LIVE_ORDERS_TTL_S", "300"))
+        self._live_orders_ttl_s: float = float(os.getenv("HFT_LIVE_ORDERS_TTL_S", "300"))  # noqa: duration
         self._live_orders_max_size: int = int(os.getenv("HFT_LIVE_ORDERS_MAX_SIZE", "10000"))
-        self._live_orders_last_sweep_s: float = 0.0
+        self._live_orders_last_sweep_s: float = 0.0  # noqa: monotonic timestamp
         self._live_orders_inserted_at: Dict[str, float] = {}  # order_key -> monotonic timestamp
         # Bounded deque: auto-evicts oldest entries when full (OOM protection)
         self._deferred_terminals: collections.deque[tuple[str, str, float]] = collections.deque(maxlen=256)
@@ -212,7 +212,7 @@ class OrderAdapter:
         # resolution in deal callbacks where order_id_map has no seed data (Shioaji futures).
         self._pending_fill_index: dict[str, list[str]] = {}
         self._pending_fill_registered_at: dict[str, float] = {}
-        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "30"))
+        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "30"))  # noqa: duration
         self._pending_fill_lock = threading.Lock()  # protects _pending_fill_index across threads
         self._custom_field_counter: int = 0
 

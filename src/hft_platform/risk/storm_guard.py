@@ -92,8 +92,8 @@ class StormGuard:
         self._feature_failure_storm_ts: float = 0.0
         self._norm_failure_active: bool = False
         self._norm_failure_storm_ts: float = 0.0
-        self._feed_gap_deescalation_ts: float = 0.0
-        self._feed_gap_reescalation_cooldown_s: float = float(
+        self._feed_gap_deescalation_ts: float = 0.0  # noqa: monotonic timestamp
+        self._feed_gap_reescalation_cooldown_s: float = float(  # noqa: duration
             os.getenv("HFT_STORMGUARD_FEED_GAP_REESCALATION_COOLDOWN_S", "120")
         )
         self._latency_deescalation_ts: float = 0.0

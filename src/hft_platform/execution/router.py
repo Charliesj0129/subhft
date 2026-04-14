@@ -101,7 +101,7 @@ class ExecutionRouter:
             "HFT_FILL_DEDUP_PERSIST_PATH", ".state/fill_dedup_window.jsonl"
         )
         self._fill_dedup_persist_interval_s: float = float(os.environ.get("HFT_FILL_DEDUP_PERSIST_INTERVAL_S", "1.0"))
-        self._fill_dedup_last_persist_s: float = 0.0
+        self._fill_dedup_last_persist_s: float = 0.0  # noqa: monotonic timestamp
         self._load_fill_dedup()
         self._events_since_dlq_retry = 0
         self._recorder_queue: Optional[asyncio.Queue] = recorder_queue
