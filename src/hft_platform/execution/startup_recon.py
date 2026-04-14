@@ -7,7 +7,6 @@ at startup, before the trading loop begins.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
@@ -41,6 +40,7 @@ startup_recon_auto_corrected = Gauge(
 
 _BLOCK_ENV = "HFT_STARTUP_RECON_BLOCK"
 _CHECKPOINT_PATH_ENV = "HFT_POSITION_CHECKPOINT_PATH"
+_DEFAULT_CHECKPOINT_PATH = ".state/position_checkpoint.json"
 
 
 @dataclass(slots=True)
@@ -53,26 +53,6 @@ class RecoveryResult:
     halted: bool = False
     mismatches: list[dict] = field(default_factory=list)
 
-
-def _load_checkpoint(path: str) -> Dict[str, int]:
-    """Load position checkpoint from a JSON file.
-
-    Expected format: ``{"SYMBOL": qty, ...}`` where qty is an integer.
-    Returns an empty dict on any failure.
-    """
-    try:
-        with open(path, "r") as fh:
-            data = json.loads(fh.read())
-        if not isinstance(data, dict):
-            logger.warning("startup_recon: checkpoint is not a dict", path=path)
-            return {}
-        return {str(k): int(v) for k, v in data.items()}
-    except FileNotFoundError:
-        logger.warning("startup_recon: checkpoint file not found", path=path)
-        return {}
-    except Exception as exc:
-        logger.error("startup_recon: failed to load checkpoint", path=path, error=str(exc))
-        return {}
 
 
 class StartupPositionVerifier:
@@ -96,7 +76,7 @@ class StartupPositionVerifier:
         else:
             self.blocking = os.environ.get(_BLOCK_ENV, "0") == "1"
 
-        self.checkpoint_path = checkpoint_path or os.environ.get(_CHECKPOINT_PATH_ENV)
+        self.checkpoint_path = checkpoint_path or os.environ.get(_CHECKPOINT_PATH_ENV, _DEFAULT_CHECKPOINT_PATH)
 
         self._qty_threshold = (
             qty_threshold if qty_threshold is not None else int(os.environ.get("HFT_STARTUP_RECON_QTY_THRESHOLD", "10"))
@@ -135,15 +115,24 @@ class StartupPositionVerifier:
 
             # 3. Optionally merge checkpoint data (for symbols not in local store)
             if self.checkpoint_path:
-                checkpoint_map = _load_checkpoint(self.checkpoint_path)
-                if checkpoint_map:
-                    logger.info(
-                        "startup_recon: loaded checkpoint",
-                        symbols=len(checkpoint_map),
-                    )
-                    for sym, qty in checkpoint_map.items():
-                        if sym not in local_map:
-                            local_map[sym] = qty
+                from hft_platform.execution.checkpoint import PositionCheckpointWriter  # noqa: PLC0415
+
+                ckpt_data = PositionCheckpointWriter.load_checkpoint(self.checkpoint_path)
+                if ckpt_data is not None:
+                    ckpt_positions = ckpt_data.get("positions", {})
+                    # Aggregate symbol-level qty from per-strategy checkpoint entries
+                    checkpoint_map: Dict[str, int] = {}
+                    for _key, pos_data in ckpt_positions.items():
+                        sym = pos_data.get("symbol", _key.split(":")[-1])
+                        checkpoint_map[sym] = checkpoint_map.get(sym, 0) + pos_data.get("net_qty", 0)
+                    if checkpoint_map:
+                        logger.info(
+                            "startup_recon: loaded checkpoint",
+                            symbols=len(checkpoint_map),
+                        )
+                        for sym, qty in checkpoint_map.items():
+                            if sym not in local_map:
+                                local_map[sym] = qty
 
             # 4. Compute discrepancies via the same logic as ReconciliationService
             self.discrepancies = ReconciliationService._compute_discrepancies(

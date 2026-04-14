@@ -709,7 +709,10 @@ class SystemBootstrapper:
         md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg, broker_id)
 
         # Position checkpoint writer (periodic serialization)
-        from hft_platform.execution.checkpoint import PositionCheckpointWriter
+        from hft_platform.execution.checkpoint import (
+            DEFAULT_POSITION_CHECKPOINT_PATH,
+            PositionCheckpointWriter,
+        )
 
         checkpoint_writer = PositionCheckpointWriter(store=position_store)
 
@@ -719,7 +722,7 @@ class SystemBootstrapper:
         startup_verifier = StartupPositionVerifier(
             client=order_client,
             position_store=position_store,
-            checkpoint_path=os.getenv("HFT_POSITION_CHECKPOINT_PATH", ".runtime/position_checkpoint.json"),
+            checkpoint_path=os.getenv("HFT_POSITION_CHECKPOINT_PATH", DEFAULT_POSITION_CHECKPOINT_PATH),
         )
 
         # 4. Services

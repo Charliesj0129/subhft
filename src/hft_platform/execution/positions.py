@@ -340,6 +340,18 @@ class PositionStore:
             fees_scaled=fees,
         )
         self.positions[key] = pos
+        # Warn if recovery had no strategy (broker-only) and qty suggests multi-strategy risk
+        recovery_strategy = recovery.get("strategy_id", "")
+        if not recovery_strategy and abs(net_qty) > abs(fill.qty):
+            logger.warning(
+                "recovery_multi_strategy_risk",
+                key=key,
+                recovery_qty=net_qty,
+                fill_qty=fill.qty,
+                fill_strategy=fill.strategy_id,
+                msg="Broker-only recovery assigned all qty to first fill's strategy. "
+                "If multiple strategies trade this symbol, other strategies won't see recovered qty.",
+            )
         logger.info("recovery_position_merged", key=key, net_qty=net_qty, avg_price=avg_price)
 
     def on_fill(self, fill: FillEvent) -> PositionDelta:
@@ -526,6 +538,9 @@ class PositionStore:
             mid = mid_prices.get(symbol)
             if mid is None:
                 continue
+            # Skip positions with unknown cost basis sentinel (-1)
+            if pos.avg_price_scaled < 0:
+                continue
             multiplier = self.metadata.contract_multiplier(symbol)
             total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
 
@@ -537,18 +552,41 @@ class PositionStore:
             net_qty = rec["net_qty"]
             if net_qty == 0:
                 continue
+            avg_price = rec["avg_price_scaled"]
+            # Sentinel -1 means unknown cost basis (broker-only recovery).
+            # Skip MtM for this position to avoid astronomical fake PnL.
+            if avg_price < 0:
+                continue
             symbol = rec["symbol"]
             mid = mid_prices.get(symbol)
             if mid is None:
                 continue
             multiplier = self.metadata.contract_multiplier(symbol)
-            total += (mid - rec["avg_price_scaled"]) * net_qty * multiplier
+            total += (mid - avg_price) * net_qty * multiplier
         return total
 
     def snapshot_positions(self) -> dict:
         """Return a consistent shallow copy of positions under fill lock."""
         with self._fill_lock:
             return dict(self.positions)
+
+    def reset(self) -> int:
+        """Clear all positions, recovery state, and portfolio aggregates.
+
+        Returns the number of positions cleared. For operational reset scenarios
+        where checkpoint + positions need to be zeroed without manual file deletion.
+        """
+        with self._fill_lock:
+            count = len(self.positions)
+            self.positions.clear()
+            self._recovery_positions.clear()
+            self._recovery_rpnl_offsets.clear()
+            self._recovery_fees_offsets.clear()
+            self._peak_equity_scaled = 0
+            self._total_realized_pnl_scaled = 0
+            self._evicted_realized_pnl_scaled = 0
+        logger.warning("position_store_reset", cleared_positions=count)
+        return count
 
     def _evict_flat_positions(self) -> None:
         """Evict positions with net_qty=0 to free memory."""

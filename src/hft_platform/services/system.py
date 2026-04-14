@@ -840,6 +840,13 @@ class HFTSystem:
                 if self.gateway_service is not None:
                     self.gateway_service.set_halt()
                     logger.warning("Gateway policy set to HALT by StormGuard supervisor")
+                # M5: Immediately write position checkpoint on HALT to minimize
+                # state loss if the system crashes while halted.
+                if self.checkpoint_writer is not None:
+                    try:
+                        self.checkpoint_writer.write_checkpoint()
+                    except Exception:
+                        logger.exception("halt_checkpoint_write_failed")
                 # Drain risk queue — preserve safety orders + halt-exempt intents
                 risk_drained = 0
                 _requeue: list = []
@@ -1208,6 +1215,40 @@ class HFTSystem:
         self.tasks.clear()
         self._teardown_bootstrap()
 
+    def _persist_lost_exec_event(self, event) -> None:
+        """Best-effort persist of exec events that would otherwise be lost.
+
+        Appends serialized event to `.state/exec_overflow_dlq.jsonl` so operators
+        can replay them later. Non-blocking (sync write) — acceptable because this
+        is the last-resort path after all queues/buffers are exhausted.
+        """
+        try:
+            import orjson as _json_mod
+
+            def _ser(obj):
+                return _json_mod.dumps(obj)
+        except ImportError:
+            import json as _json_mod  # type: ignore[no-redef]
+
+            def _ser(obj):
+                return _json_mod.dumps(obj, separators=(",", ":")).encode("utf-8")
+
+        try:
+            payload = {
+                "topic": getattr(event, "topic", "unknown"),
+                "data": getattr(event, "data", {}),
+                "ingest_ts_ns": getattr(event, "ingest_ts_ns", 0),
+                "lost_at_ns": timebase.now_ns(),
+            }
+            dlq_path = os.path.join(
+                os.getenv("HFT_STATE_DIR", ".state"), "exec_overflow_dlq.jsonl"
+            )
+            os.makedirs(os.path.dirname(dlq_path), exist_ok=True)
+            with open(dlq_path, "ab") as f:
+                f.write(_ser(payload) + b"\n")
+        except Exception as exc:
+            logger.error("exec_overflow_dlq_write_failed", error=str(exc))
+
     def _safe_enqueue_exec(self, event) -> None:
         """Enqueue exec event with overflow buffer fallback."""
         from hft_platform.observability.metrics import MetricsRegistry
@@ -1220,10 +1261,11 @@ class HFTSystem:
                 self._exec_overflow_evicted += 1
                 MetricsRegistry.get().exec_overflow_evicted_total.inc()
                 logger.critical(
-                    "exec_overflow_buf FULL — fill LOST",
+                    "exec_overflow_buf FULL — fill persisted to DLQ file",
                     evicted_count=self._exec_overflow_evicted,
                     event_topic=getattr(event, "topic", "?"),
                 )
+                self._persist_lost_exec_event(event)
                 self.storm_guard.trigger_halt("exec_overflow_buf_exhausted")
                 return
             self._exec_overflow_buf.append(event)
@@ -1243,23 +1285,76 @@ class HFTSystem:
         loop = getattr(self, "loop", None)
         from hft_platform.execution.normalizer import RawExecEvent
 
-        # For deal callbacks, attempt to resolve strategy_id from pending fill index
-        # before the event enters the normalizer queue.  This bypasses order_id_map
-        # which has no seed data when Shioaji place_order returns empty broker IDs.
+        # For deal callbacks, attempt to resolve strategy_id as early as possible.
+        # Prefer strong correlation (broker IDs/custom_field token in order_id_map),
+        # then fall back to the pending fill index only when necessary.
         if topic == "deal" and hasattr(self, "order_adapter") and self.order_adapter is not None:
             _payload = data.get("payload", data) if isinstance(data, dict) else data
-            _sym = None
-            _action = None
             if isinstance(_payload, dict):
-                _sym = _payload.get("full_code") or _payload.get("code")
+                _get = _payload.get
+                _order = _payload.get("order")
+                _full_code = _payload.get("full_code")
+                _code = _payload.get("code")
                 _action = _payload.get("action")
+                _id_candidates = [
+                    _payload.get("ordno"),
+                    _payload.get("ord_no"),
+                    _payload.get("seqno"),
+                    _payload.get("seq_no"),
+                    _payload.get("order_id"),
+                    _payload.get("id"),
+                    _payload.get("custom_field"),
+                ]
+                if isinstance(_order, dict):
+                    _id_candidates.extend(
+                        [
+                            _order.get("ordno"),
+                            _order.get("ord_no"),
+                            _order.get("seqno"),
+                            _order.get("seq_no"),
+                            _order.get("order_id"),
+                            _order.get("id"),
+                            _order.get("custom_field"),
+                        ]
+                    )
             else:
-                _sym = getattr(_payload, "full_code", None) or getattr(_payload, "code", None)
+                _full_code = getattr(_payload, "full_code", None)
+                _code = getattr(_payload, "code", None)
                 _action = getattr(_payload, "action", None)
-            if _sym and _action:
-                _resolved = self.order_adapter.resolve_strategy_from_deal(str(_sym), str(_action))
-                if _resolved and isinstance(data, dict):
-                    data["_resolved_strategy_id"] = _resolved
+                _order = getattr(_payload, "order", None)
+                _id_candidates = [
+                    getattr(_payload, "ordno", None),
+                    getattr(_payload, "ord_no", None),
+                    getattr(_payload, "seqno", None),
+                    getattr(_payload, "seq_no", None),
+                    getattr(_payload, "order_id", None),
+                    getattr(_payload, "id", None),
+                    getattr(_payload, "custom_field", None),
+                ]
+                if _order is not None:
+                    _id_candidates.extend(
+                        [
+                            getattr(_order, "ordno", None),
+                            getattr(_order, "ord_no", None),
+                            getattr(_order, "seqno", None),
+                            getattr(_order, "seq_no", None),
+                            getattr(_order, "order_id", None),
+                            getattr(_order, "id", None),
+                            getattr(_order, "custom_field", None),
+                        ]
+                    )
+            _resolved = None
+            resolver = getattr(self.order_adapter, "order_id_resolver", None)
+            if resolver is not None:
+                _resolved = resolver.resolve_strategy_id_from_candidates([str(v) for v in _id_candidates if v])
+                if _resolved == "UNKNOWN":
+                    _resolved = None
+            if _resolved is None and _action:
+                _symbols = [str(v) for v in (_full_code, _code) if v]
+                if _symbols:
+                    _resolved = self.order_adapter.resolve_strategy_from_deal_candidates(_symbols, str(_action))
+            if _resolved and isinstance(data, dict):
+                data["_resolved_strategy_id"] = _resolved
 
         event = RawExecEvent(topic, data, timebase.now_ns())
         if not self.running:
@@ -1270,10 +1365,11 @@ class HFTSystem:
             else:
                 self._exec_overflow_evicted += 1
                 logger.critical(
-                    "exec_overflow_buf_full_pre_start",
+                    "exec_overflow_buf_full_pre_start — fill persisted to DLQ file",
                     evicted_count=self._exec_overflow_evicted,
                     event_topic=topic,
                 )
+                self._persist_lost_exec_event(event)
                 self._exec_startup_overflow_lost = True
             return
         if loop is not None:
@@ -1289,10 +1385,11 @@ class HFTSystem:
                 except Exception:
                     pass  # metrics may not be ready during early startup
                 logger.critical(
-                    "exec_overflow_buf FULL in broker thread — fill LOST",
+                    "exec_overflow_buf FULL in broker thread — fill persisted to DLQ file",
                     evicted_count=self._exec_overflow_evicted,
                     event_topic=getattr(event, "topic", "?"),
                 )
+                self._persist_lost_exec_event(event)
                 # Flag for deferred halt — checked when loop becomes available
                 self._exec_startup_overflow_lost = True
                 return

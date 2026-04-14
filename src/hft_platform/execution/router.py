@@ -307,6 +307,12 @@ class ExecutionRouter:
 
                 elif raw.topic == "deal":
                     fill_event = self.normalizer.normalize_fill(raw)
+                    if fill_event is None:
+                        # M3/M4: normalization failed (missing account, parse error, etc.)
+                        # Persist raw event data to exec overflow DLQ for later recovery.
+                        self.metrics.fill_normalization_failed_total.inc()
+                        self._wal_fallback_write("deal_normalization_failed", raw.data)
+                        continue
                     if fill_event:
                         # Fill deduplication: prevent double-counting on broker reconnect.
                         # When fill_id is empty (broker omitted seqno), synthesize a key
@@ -453,6 +459,20 @@ class ExecutionRouter:
                 elif raw.topic == "deal":
                     fill_event = self.normalizer.normalize_fill(raw)
                     if fill_event:
+                        # Same UNKNOWN check as main loop — route to DLQ instead of
+                        # creating ghost positions with strategy_id="UNKNOWN".
+                        if fill_event.strategy_id == "UNKNOWN":
+                            from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq  # noqa: PLC0415
+
+                            dlq = get_orphaned_fill_dlq()
+                            dlq.add(fill_event)
+                            self.metrics.orphaned_fill_total.inc()
+                            logger.warning(
+                                "shutdown_drain_orphaned_fill_to_dlq",
+                                symbol=fill_event.symbol,
+                                order_id=fill_event.order_id,
+                            )
+                            continue
                         _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
                         if _dedup_key not in self._seen_fill_ids:
                             self._register_fill_dedup_key(_dedup_key)
@@ -522,7 +542,17 @@ class ExecutionRouter:
             return
 
         def _resolve(fill: Any) -> str:
-            return self.normalizer.order_id_resolver.resolve_strategy_id(fill.order_id)
+            # Use full resolver chain (order_id_map + custom_field + pending fill index)
+            # instead of just order_id_resolver which only checks order_id_map.
+            from hft_platform.execution.normalizer import RawExecEvent  # noqa: PLC0415
+
+            raw = RawExecEvent(
+                topic="deal",
+                data={"ordno": fill.order_id, "code": fill.symbol, "action": fill.side.name},
+                ingest_ts_ns=fill.ingest_ts_ns,
+            )
+            resolved_id = self.normalizer._resolve_strategy_id(raw)
+            return resolved_id
 
         resolved, still_orphaned = dlq.retry(_resolve)
         if resolved:

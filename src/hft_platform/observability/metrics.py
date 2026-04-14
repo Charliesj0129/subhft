@@ -466,6 +466,10 @@ class MetricsRegistry:
         self.orphaned_fill_total = Counter(_pn("orphaned_fill_total"), "Orphaned fills routed to DLQ")
         self.fills_total = Counter(_pn("fills_total"), "Total successful fills processed")
         self.duplicate_fill_total = Counter(_pn("duplicate_fill_total"), "Duplicate fills skipped by dedup check")
+        self.fill_normalization_failed_total = Counter(
+            _pn("fill_normalization_failed_total"),
+            "Fill events that failed normalization (missing account, parse error)",
+        )
         self.synthetic_fill_id_total = Counter(
             _pn("synthetic_fill_id_total"),
             "Fills with synthesized fill_id (broker omitted seqno)",

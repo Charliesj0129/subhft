@@ -155,6 +155,18 @@ class TestBuildServiceGraph:
         assert registry.intent_channel is None
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_build_wires_startup_verifier_to_durable_checkpoint_default(self) -> None:
+        with (
+            patch("hft_platform.execution.checkpoint.PositionCheckpointWriter") as writer_cls,
+            patch("hft_platform.execution.startup_recon.StartupPositionVerifier") as verifier_cls,
+        ):
+            _build_with_mocks()
+
+        writer_cls.assert_called_once()
+        verifier_cls.assert_called_once()
+        assert verifier_cls.call_args.kwargs["checkpoint_path"] == ".state/position_checkpoint.json"
+
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
     def test_build_sets_runtime_role_in_settings(self) -> None:
         settings: dict = {}
         registry = _build_with_mocks(settings=settings)

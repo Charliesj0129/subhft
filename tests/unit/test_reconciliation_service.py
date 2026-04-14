@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -66,3 +66,35 @@ async def test_reconciliation_includes_pending_recovery_positions():
     await service.sync_portfolio()
 
     assert service._last_discrepancies == []
+
+
+@pytest.mark.asyncio
+async def test_broker_empty_snapshot_is_debounced_before_halt():
+    client = MagicMock()
+    client.get_positions.return_value = []
+
+    store = PositionStore()
+    store.load_recovery(
+        account_id="acct",
+        symbol="TMFD6",
+        net_qty=-1,
+        avg_price_scaled=-1,
+        realized_pnl_scaled=0,
+        fees_scaled=0,
+        strategy_id="",
+    )
+
+    service = ReconciliationService(
+        client,
+        store,
+        {"reconciliation": {"heartbeat_threshold_ms": 1, "broker_zero_debounce_observations": 2}},
+        storm_guard=StormGuard(),
+    )
+
+    with patch.object(service, "_trigger_halt", new_callable=AsyncMock) as halt_mock:
+        await service.sync_portfolio()
+        halt_mock.assert_not_called()
+        assert service._last_discrepancies == []
+
+        await service.sync_portfolio()
+        halt_mock.assert_called_once()

@@ -230,8 +230,11 @@ class TestOnExecOverflowGuard:
         stub._exec_overflow_buf = collections.deque(maxlen=maxlen)
         stub._EXEC_OVERFLOW_MAX = maxlen
         stub._exec_overflow_evicted = 0
+        stub._exec_startup_overflow_lost = False
         stub.running = True
         stub.loop = None  # force broker-thread fallback path
+        # Stub out DLQ persistence (tested separately)
+        stub._persist_lost_exec_event = lambda event: None
         return stub
 
     def test_append_when_below_capacity(self):
@@ -269,7 +272,7 @@ class TestOnExecOverflowGuard:
         mock_logger.critical.assert_called_once()
         log_msg = mock_logger.critical.call_args.args[0]
         assert "FULL" in log_msg
-        assert "broker thread" in log_msg
+        assert "DLQ" in log_msg
 
     def test_eviction_counter_increments_repeatedly(self):
         """Each overflow attempt increments the eviction counter."""
@@ -306,3 +309,30 @@ class TestOnExecOverflowGuard:
 
         topics = [e.topic for e in stub._exec_overflow_buf]
         assert topics == ["first", "second"]
+
+    def test_deal_prefers_order_id_resolution_before_pending_fill_fifo(self):
+        """Strong correlation keys must beat weak symbol/side FIFO fallback."""
+        from hft_platform.core.order_ids import OrderIdResolver
+        from hft_platform.services.system import HFTSystem
+
+        stub = self._make_stub(maxlen=4)
+        stub.order_adapter = MagicMock()
+        stub.order_adapter.order_id_resolver = OrderIdResolver({"00A1B2": "strat_b:2"})
+        stub.order_adapter.resolve_strategy_from_deal_candidates = MagicMock(return_value="strat_a")
+
+        bound = HFTSystem._on_exec.__get__(stub, type(stub))
+
+        bound(
+            "deal",
+            {
+                "payload": {
+                    "code": "TMFD6",
+                    "action": "Buy",
+                    "custom_field": "00A1B2",
+                }
+            },
+        )
+
+        event = stub._exec_overflow_buf[0]
+        assert event.data["_resolved_strategy_id"] == "strat_b"
+        stub.order_adapter.resolve_strategy_from_deal_candidates.assert_not_called()

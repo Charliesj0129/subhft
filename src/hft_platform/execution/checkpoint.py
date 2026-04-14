@@ -2,7 +2,7 @@
 
 Atomic write (temp file + os.rename) with SHA-256 integrity hash.
 Env vars:
-    HFT_POSITION_CHECKPOINT_PATH  — default: .runtime/position_checkpoint.json
+    HFT_POSITION_CHECKPOINT_PATH  — default: .state/position_checkpoint.json
     HFT_CHECKPOINT_INTERVAL_S     — default: 60
 """
 
@@ -46,6 +46,7 @@ except ImportError:
 logger = get_logger("execution.checkpoint")
 
 _TZ_TPE = ZoneInfo("Asia/Taipei")
+DEFAULT_POSITION_CHECKPOINT_PATH = ".state/position_checkpoint.json"
 
 
 def _taifex_trading_date() -> str:
@@ -81,7 +82,7 @@ class PositionCheckpointWriter:
         self._store = store
         self._path = path or os.getenv(
             "HFT_POSITION_CHECKPOINT_PATH",
-            ".runtime/position_checkpoint.json",
+            DEFAULT_POSITION_CHECKPOINT_PATH,
         )
         self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60"))  # type: ignore[arg-type]
         self._trading_date_provider: Callable[[], str] = trading_date_provider or _taifex_trading_date
@@ -125,13 +126,16 @@ class PositionCheckpointWriter:
 
         positions_payload: Dict[str, Any] = {}
         for key, pos in snapshot.items():
-            positions_payload[key] = {
+            entry: Dict[str, Any] = {
                 "symbol": pos.symbol,
                 "net_qty": pos.net_qty,
                 "avg_price_scaled": pos.avg_price_scaled,
                 "realized_pnl_scaled": pos.realized_pnl_scaled,
                 "fees_scaled": pos.fees_scaled,  # M1: include accumulated fees
             }
+            if pos.avg_price_scaled < 0:
+                entry["unknown_basis"] = True
+            positions_payload[key] = entry
 
         # M4: Also persist pending recovery positions that haven't been merged
         # into live positions yet (no fills received since restart). Without this,
@@ -139,12 +143,14 @@ class PositionCheckpointWriter:
         recovery = getattr(self._store, "_recovery_positions", {})
         for rkey, rdata in recovery.items():
             if rkey not in positions_payload:
+                avg_price = rdata.get("avg_price_scaled", 0)
                 positions_payload[rkey] = {
                     "symbol": rdata.get("symbol", rkey.split(":")[-1]),
                     "net_qty": rdata["net_qty"],
-                    "avg_price_scaled": rdata.get("avg_price_scaled", 0),
+                    "avg_price_scaled": avg_price,
                     "realized_pnl_scaled": rdata.get("realized_pnl_scaled", 0),
                     "fees_scaled": rdata.get("fees_scaled", 0),
+                    "unknown_basis": avg_price < 0,  # flag sentinel for downstream awareness
                 }
 
         body_obj = {
@@ -231,6 +237,28 @@ class PositionCheckpointWriter:
 
         data["sha256"] = stored_sha
         return data
+
+    @staticmethod
+    def clear_checkpoint(path: str | None = None) -> bool:
+        """Remove checkpoint file for graceful position reset.
+
+        Returns True if file was deleted, False if it didn't exist.
+        Logs the operation for audit trail.
+        """
+        resolved_path = path or os.getenv(
+            "HFT_POSITION_CHECKPOINT_PATH",
+            DEFAULT_POSITION_CHECKPOINT_PATH,
+        )
+        if os.path.exists(resolved_path):
+            os.unlink(resolved_path)
+            logger.warning(
+                "checkpoint_cleared",
+                path=resolved_path,
+                msg="Position checkpoint deleted via programmatic reset",
+            )
+            return True
+        logger.info("checkpoint_clear_no_file", path=resolved_path)
+        return False
 
 
 def _is_closed(fd: int) -> bool:

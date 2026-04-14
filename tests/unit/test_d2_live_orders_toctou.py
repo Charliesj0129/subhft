@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -30,6 +31,9 @@ class TestDeferredTerminal:
         a._deferred_terminals = collections.deque(maxlen=256)
         a._cmd_created_ns_map = {}
         a._cmd_tca_map = {}
+        a._pending_fill_index = {}
+        a._pending_fill_registered_at = {}
+        a._pending_fill_lock = threading.Lock()
         a.order_id_resolver = MagicMock()
         a.metrics = MagicMock()
         return a

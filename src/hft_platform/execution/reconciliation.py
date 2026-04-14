@@ -110,12 +110,19 @@ class ReconciliationService:
             "backoff_max",
             _DEFAULT_BACKOFF_MAX,
         )
+        self.broker_zero_debounce_observations: int = int(
+            recon_cfg.get(
+                "broker_zero_debounce_observations",
+                os.environ.get("HFT_RECON_BROKER_ZERO_DEBOUNCE_OBSERVATIONS", "2"),
+            )
+        )
 
         self.last_heartbeat: float = timebase.now_s()  # precision-ok
         self.running: bool = False
         self._last_discrepancies: List[PositionDiscrepancy] = []
         self._last_noncritical_drift_signature: dict[str, int] = {}
         self._noncritical_drift_streak: int = 0
+        self._broker_zero_streak: int = 0
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
 
@@ -288,6 +295,28 @@ class ReconciliationService:
 
             logger.info("Portfolio Sync: Local State", positions=local_map)
             self.platform_degrade_controller.update_reference_positions(local_map=local_map, broker_map=broker_map)
+
+            broker_has_positions = any(int(qty) != 0 for qty in broker_map.values())
+            local_has_positions = any(int(qty) != 0 for qty in local_map.values())
+            if local_has_positions and not broker_has_positions:
+                self._broker_zero_streak += 1
+                if self._broker_zero_streak < self.broker_zero_debounce_observations:
+                    self._last_discrepancies = []
+                    self._last_noncritical_drift_signature = {}
+                    self._noncritical_drift_streak = 0
+                    duration = time.monotonic() - t0
+                    self._record_sync_duration(duration)
+                    self._record_sync_result("success")
+                    self._update_last_success_ts()
+                    logger.warning(
+                        "broker_zero_snapshot_debounced",
+                        consecutive_observations=self._broker_zero_streak,
+                        required_observations=self.broker_zero_debounce_observations,
+                        local_positions=local_map,
+                    )
+                    return
+            else:
+                self._broker_zero_streak = 0
 
             # 4. Compute discrepancies
             discrepancies = self._compute_discrepancies(local_map, broker_map)

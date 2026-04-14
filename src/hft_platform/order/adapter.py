@@ -113,6 +113,10 @@ class OrderAdapter:
         "_audit_writer",
         "_rejection_sink",
         "_pending_fill_index",
+        "_pending_fill_registered_at",
+        "_pending_fill_ttl_s",
+        "_pending_fill_lock",
+        "_custom_field_counter",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -206,6 +210,10 @@ class OrderAdapter:
         # Pending fill index: maps "{symbol}:{side}" -> [order_key, ...] for strategy_id
         # resolution in deal callbacks where order_id_map has no seed data (Shioaji futures).
         self._pending_fill_index: dict[str, list[str]] = {}
+        self._pending_fill_registered_at: dict[str, float] = {}
+        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "30"))
+        self._pending_fill_lock = threading.Lock()  # protects _pending_fill_index across threads
+        self._custom_field_counter: int = 0
 
         # Audit writer for order lifecycle logging (optional, injected post-init)
         self._audit_writer: Any = None
@@ -270,15 +278,21 @@ class OrderAdapter:
 
         After a broker reconnect, all pending orders are invalidated at the
         broker side. This clears the local tracking to prevent phantom entries.
+
+        NOTE: pending_fill_index is intentionally preserved — broker may replay
+        fills for orders that were in-flight at disconnect time, and those fills
+        still need strategy_id resolution via the pending fill index.
         """
         async with self._live_orders_lock:
             count = len(self.live_orders)
             if count > 0:
+                # Do NOT call _remove_pending_fill — keep index alive for fill replay
                 logger.warning(
                     "invalidating_live_orders_after_reconnect",
                     count=count,
                     reason=reason,
                     order_keys=list(self.live_orders.keys())[:10],
+                    pending_fill_index_preserved=len(self._pending_fill_index),
                 )
                 self.live_orders.clear()
                 self._pending_order_keys.clear()
@@ -305,6 +319,7 @@ class OrderAdapter:
             for k in stale_keys:
                 self.live_orders.pop(k, None)
                 self._live_orders_inserted_at.pop(k, None)
+                self._remove_pending_fill(k)
                 evicted += 1
             # Also prune _live_orders_inserted_at for keys no longer in live_orders
             orphaned = [k for k in self._live_orders_inserted_at if k not in self.live_orders]
@@ -545,6 +560,47 @@ class OrderAdapter:
         self.persist_order_id_map()
         self._order_id_map_last_persist_s = now_s
 
+    def _next_custom_field_token(self) -> str:
+        """Allocate a 6-char broker-safe token without reusing current map keys."""
+        attempts = 0
+        while attempts <= max(len(self.order_id_map) + 1, 16):
+            token = f"{self._custom_field_counter:06X}"[-6:]
+            self._custom_field_counter += 1
+            if token not in self.order_id_map:
+                return token
+            attempts += 1
+        return f"{time.monotonic_ns() & 0xFFFFFF:06X}"
+
+    @staticmethod
+    def _pending_fill_key(symbol: str, side: Side) -> str:
+        return f"{symbol}:{side.name}"
+
+    async def _register_pending_fill(self, order_key: str, symbol: str, side: Side, custom_field_token: str) -> None:
+        """Register strong and weak early-fill correlation before broker IDs exist."""
+        key = self._pending_fill_key(symbol, side)
+        with self._pending_fill_lock:
+            pending = self._pending_fill_index.setdefault(key, [])
+            if order_key not in pending:
+                pending.append(order_key)
+            self._pending_fill_registered_at[order_key] = time.monotonic()
+        async with self._order_id_map_lock:
+            self.order_id_map[custom_field_token] = order_key
+        self._maybe_persist_order_id_map()
+
+    def _remove_pending_fill(self, order_key: str) -> None:
+        """Drop stale pending-fill fallback state for an order."""
+        with self._pending_fill_lock:
+            self._pending_fill_registered_at.pop(order_key, None)
+            empty_keys: list[str] = []
+            for key, pending in self._pending_fill_index.items():
+                filtered = [item for item in pending if item != order_key]
+                if len(filtered) != len(pending):
+                    pending[:] = filtered
+                if not pending:
+                    empty_keys.append(key)
+            for key in empty_keys:
+                self._pending_fill_index.pop(key, None)
+
     async def drain_and_cancel(self, timeout_s: float = 5.0) -> int:  # precision-ok
         """Drain pending orders and cancel all live orders."""
         cancelled = 0
@@ -614,8 +670,10 @@ class OrderAdapter:
 
     async def on_terminal_state(self, strategy_id: str, order_id: str) -> None:
         """Called when an order reaches a terminal state (Filled, Cancelled, Rejected)."""
+        resolved_order_key = f"{strategy_id}:{order_id}" if order_id is not None else f"{strategy_id}:"
         async with self._live_orders_lock:
             order_key = self.order_id_resolver.resolve_order_key(strategy_id, order_id, self.live_orders)
+            resolved_order_key = order_key
             entry = self.live_orders.get(order_key)
 
             if entry is not None and entry is not _PENDING_SENTINEL:
@@ -626,6 +684,7 @@ class OrderAdapter:
                 self._cmd_created_ns_map.pop(order_key, None)
                 # Clean up TCA price tracking entry
                 self._cmd_tca_map.pop(order_key, None)
+                self._remove_pending_fill(order_key)
                 return
 
             # Check if any order for this strategy is in-flight
@@ -652,10 +711,11 @@ class OrderAdapter:
             if order_key in self.live_orders:
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
+        self._remove_pending_fill(resolved_order_key)
 
         # Also clean up rate limit window if needed? No, rate limit is distinct.
 
-    async def _register_broker_ids(self, order_key: str, trade: Any) -> None:
+    async def _register_broker_ids(self, order_key: str, trade: Any) -> bool:
         """Register broker IDs to order_key mapping with lock protection."""
         ids = set()
         id_keys = ("seq_no", "seqno", "ord_no", "ordno", "order_id", "id")
@@ -708,10 +768,14 @@ class OrderAdapter:
                     if evicted >= evict_target:
                         break
                     mapped_key = self.order_id_map[k]
-                    if mapped_key not in self.live_orders:
-                        del self.order_id_map[k]
-                        evicted += 1
-                        changed = True
+                    # Protect entries linked to live orders or pending fills (recently placed)
+                    if mapped_key in self.live_orders:
+                        continue
+                    if mapped_key in self._pending_fill_registered_at:
+                        continue
+                    del self.order_id_map[k]
+                    evicted += 1
+                    changed = True
                 logger.info("Evicted stale order IDs", count=evicted, remaining=len(self.order_id_map))
 
             for oid in ids:
@@ -722,34 +786,75 @@ class OrderAdapter:
                 changed = True
         if changed:
             self._maybe_persist_order_id_map()
+        return bool(ids)
 
     def resolve_strategy_from_deal(self, symbol: str, action: str) -> str | None:
         """Resolve strategy_id from pending fills index.
 
         Called from broker thread (_on_exec) for deal callbacks where
         order_id_map has no seed data (Shioaji futures: place_order returns
-        empty broker IDs).  Thread-safe under CPython GIL for simple
-        dict get/pop operations.
+        empty broker IDs).
+
+        Thread-safe: uses _pending_fill_lock to protect list mutations
+        against concurrent access from the main asyncio loop.
 
         Returns strategy_id string or None if no pending order matches.
         """
-        side = "BUY" if action.lower() == "buy" else "SELL"
+        action_text = str(action).lower()
+        side = "SELL" if "sell" in action_text or action == -1 else "BUY"
         key = f"{symbol}:{side}"
-        pending = self._pending_fill_index.get(key)
-        if pending:
+        with self._pending_fill_lock:
+            pending = self._pending_fill_index.get(key)
+            now = time.monotonic()
+            while pending:
+                head = pending[0]
+                registered_at = self._pending_fill_registered_at.get(head, now)
+                if (now - registered_at) < self._pending_fill_ttl_s:
+                    break
+                pending.pop(0)
+                self._pending_fill_registered_at.pop(head, None)
+                try:
+                    self.metrics.pending_fill_expired_total.inc()
+                except Exception:
+                    pass  # metric may not exist during tests
+                logger.warning("pending_fill_index_expired", symbol=symbol, action=action, order_key=head)
+            if not pending:
+                return None
+            # FIFO pop: takes the oldest pending order for this symbol+side.
+            # When multiple orders are pending, this is ambiguous — log a warning
+            # since the fill may be attributed to the wrong order.
+            remaining_before_pop = len(pending)
             order_key = pending.pop(0)
+            self._pending_fill_registered_at.pop(order_key, None)
+            if remaining_before_pop > 1:
+                logger.warning(
+                    "pending_fill_fifo_ambiguous",
+                    symbol=symbol,
+                    action=action,
+                    chosen_key=order_key,
+                    remaining_candidates=len(pending),
+                    msg="FIFO fallback with multiple candidates — fill may be misattributed",
+                )
             if not pending:
                 del self._pending_fill_index[key]
-            # order_key is "STRATEGY_ID:intent_id"
-            strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
-            logger.info(
-                "pending_fill_index_resolved",
-                symbol=symbol,
-                action=action,
-                order_key=order_key,
-                strategy_id=strategy_id,
-            )
-            return strategy_id
+        # order_key is "STRATEGY_ID:intent_id"
+        strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
+        logger.info(
+            "pending_fill_index_resolved",
+            symbol=symbol,
+            action=action,
+            order_key=order_key,
+            strategy_id=strategy_id,
+        )
+        return strategy_id
+
+    def resolve_strategy_from_deal_candidates(self, symbols: list[str], action: str) -> str | None:
+        for symbol in symbols:
+            if not symbol:
+                continue
+            resolved = self.resolve_strategy_from_deal(symbol, action)
+            if resolved:
+                return resolved
         return None
 
     async def _drain_deferred_terminals(self, order_key: str, trade: Any) -> None:
@@ -770,6 +875,7 @@ class OrderAdapter:
                 resolved = self.order_id_resolver.resolve_order_key(sid, oid, self.live_orders)
                 if resolved in self.live_orders:
                     del self.live_orders[resolved]
+                    self._remove_pending_fill(resolved)
                     logger.info(
                         "deferred_terminal_cleanup",
                         key=resolved,
@@ -1205,12 +1311,6 @@ class OrderAdapter:
                 # De-scale price (Fixed Point -> Float limit price)
                 price_float = self.price_codec.descale(intent.symbol, intent.price)
 
-                # Shioaji custom_field limit is 6 chars
-                c_field = intent.strategy_id
-                if len(c_field) > 6:
-                    logger.warning("StrategyID too long for custom_field", id=c_field)
-                    c_field = c_field[:6]
-
                 # TIF Mapping via broker codec
                 tif_str = self._broker_codec.encode_tif(intent.tif)
 
@@ -1219,6 +1319,9 @@ class OrderAdapter:
                     self.live_orders[order_key] = _PENDING_SENTINEL
                     self._pending_order_keys.add(order_key)
                     self._live_orders_inserted_at[order_key] = time.monotonic()
+
+                c_field = self._next_custom_field_token()
+                await self._register_pending_fill(order_key, intent.symbol, intent.side, c_field)
 
                 # Broker-specific price type encoding + validation
                 _intent_pt = getattr(intent, "price_type", "LMT")
@@ -1236,6 +1339,7 @@ class OrderAdapter:
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._pending_order_keys.discard(order_key)
+                    self._remove_pending_fill(order_key)
                     return False
 
                 # Live safety: CA must be active when enabled
@@ -1249,6 +1353,7 @@ class OrderAdapter:
                         async with self._live_orders_lock:
                             self.live_orders.pop(order_key, None)
                             self._pending_order_keys.discard(order_key)
+                        self._remove_pending_fill(order_key)
                         return False
 
                 trade = await self._call_api(
@@ -1274,6 +1379,8 @@ class OrderAdapter:
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._pending_order_keys.discard(order_key)
+                    if not _is_timeout:
+                        self._remove_pending_fill(order_key)
                     self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, _fail_reason, cmd.cmd_id)
                     await self._add_to_dlq(intent, _dlq_reason, _fail_reason)
@@ -1301,14 +1408,9 @@ class OrderAdapter:
                 # Register broker IDs BEFORE removing from pending keys so that
                 # fast fill callbacks arriving during this window are still
                 # deferred (DECISION-007 race fix).
-                await self._register_broker_ids(order_key, trade)
-
-                # Populate pending fill index for deal callback strategy_id resolution.
-                # Shioaji futures: place_order returns empty broker IDs, so order_id_map
-                # has no seed data.  This index allows _on_exec to resolve strategy_id
-                # from deal callbacks by matching symbol + side.
-                _fill_key = f"{intent.symbol}:{intent.side.name}"
-                self._pending_fill_index.setdefault(_fill_key, []).append(order_key)
+                has_broker_ids = await self._register_broker_ids(order_key, trade)
+                if has_broker_ids:
+                    self._remove_pending_fill(order_key)
 
                 # D2: Replace sentinel with real trade and leave pending state
                 async with self._live_orders_lock:
@@ -1383,16 +1485,14 @@ class OrderAdapter:
                 price_scaled = self._force_flat_price(intent.symbol, close_side, intent.price)
                 price_float = self.price_codec.descale(intent.symbol, price_scaled)
 
-                c_field = intent.strategy_id
-                if len(c_field) > 6:
-                    logger.warning("StrategyID too long for custom_field", id=c_field)
-                    c_field = ""
-
                 order_key = f"{intent.strategy_id}:{intent.intent_id}"
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = _PENDING_SENTINEL
                     self._pending_order_keys.add(order_key)
                     self._live_orders_inserted_at[order_key] = time.monotonic()
+
+                c_field = self._next_custom_field_token()
+                await self._register_pending_fill(order_key, intent.symbol, close_side, c_field)
 
                 trade = await self._call_api(
                     "place_order",
@@ -1414,6 +1514,8 @@ class OrderAdapter:
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
                         self._pending_order_keys.discard(order_key)
+                    if trade is not _GUARD_TIMEOUT:
+                        self._remove_pending_fill(order_key)
                     return False
 
                 trade_ts = timebase.now_s()
@@ -1430,7 +1532,9 @@ class OrderAdapter:
                     self.live_orders[order_key] = trade
                     self._pending_order_keys.discard(order_key)
 
-                await self._register_broker_ids(order_key, trade)
+                has_broker_ids = await self._register_broker_ids(order_key, trade)
+                if has_broker_ids:
+                    self._remove_pending_fill(order_key)
                 await self._drain_deferred_terminals(order_key, trade)
                 self.metrics.order_actions_total.labels(type="force_flat").inc()
                 self.rate_limiter.record()
@@ -1574,6 +1678,7 @@ class OrderAdapter:
                 if order_key in self.live_orders and self.live_orders.get(order_key) is _PENDING_SENTINEL:
                     del self.live_orders[order_key]
                     self._pending_order_keys.discard(order_key)
+            self._remove_pending_fill(order_key)
             return False
         else:
             self._emit_trace("order_dispatch_ok", intent, {"cmd_id": int(cmd.cmd_id)})

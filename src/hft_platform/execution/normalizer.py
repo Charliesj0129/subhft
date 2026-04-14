@@ -104,7 +104,14 @@ class ExecutionNormalizer:
             or self._payload_get(d, "id")
             or ""
         )
-        resolved = self.order_id_resolver.resolve_strategy_id_from_candidates([ord_no, seq_no, other_id])
+        custom_field = str(
+            self._payload_get(order, "custom_field")
+            or self._payload_get(d, "custom_field")
+            or ""
+        )
+        resolved = self.order_id_resolver.resolve_strategy_id_from_candidates(
+            [ord_no, seq_no, other_id, custom_field]
+        )
         return resolved if resolved != "UNKNOWN" else None
 
     def _resolve_strategy_id(self, raw: RawExecEvent) -> str:

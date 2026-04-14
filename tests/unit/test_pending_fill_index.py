@@ -6,8 +6,11 @@ empty broker IDs).
 """
 
 import asyncio
+import time
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.order.adapter import OrderAdapter
@@ -83,6 +86,24 @@ class TestResolveStrategyFromDeal:
 
         assert result == "r47"
 
+    def test_action_enum_string_buy_resolves_buy_bucket(self, mock_load: Any) -> None:
+        """Shioaji deal callback uses enum-style strings like ``Action.Buy``."""
+        adapter = self._make_adapter(mock_load)
+        adapter._pending_fill_index["TMFD6:BUY"] = ["r47:intent_001"]
+
+        result = adapter.resolve_strategy_from_deal("TMFD6", "Action.Buy")
+
+        assert result == "r47"
+
+    def test_action_enum_string_sell_resolves_sell_bucket(self, mock_load: Any) -> None:
+        """Shioaji deal callback uses enum-style strings like ``Action.Sell``."""
+        adapter = self._make_adapter(mock_load)
+        adapter._pending_fill_index["TMFD6:SELL"] = ["r47:intent_001"]
+
+        result = adapter.resolve_strategy_from_deal("TMFD6", "Action.Sell")
+
+        assert result == "r47"
+
     def test_order_key_without_colon(self, mock_load: Any) -> None:
         """If order_key has no colon, return it as-is as strategy_id."""
         adapter = self._make_adapter(mock_load)
@@ -91,6 +112,19 @@ class TestResolveStrategyFromDeal:
         result = adapter.resolve_strategy_from_deal("TMFD6", "Sell")
 
         assert result == "r47"
+
+    @pytest.mark.asyncio
+    async def test_on_terminal_state_removes_pending_fill_entry(self, mock_load: Any) -> None:
+        adapter = self._make_adapter(mock_load)
+        adapter.live_orders["r47:1"] = MagicMock()
+        adapter.order_id_map["ORD001"] = "r47:1"
+        adapter._pending_fill_index["TMFD6:SELL"] = ["r47:1"]
+        adapter._pending_fill_registered_at["r47:1"] = time.monotonic()
+
+        await adapter.on_terminal_state("r47", "ORD001")
+
+        assert "TMFD6:SELL" not in adapter._pending_fill_index
+        assert "r47:1" not in adapter._pending_fill_registered_at
 
 
 # ---------------------------------------------------------------------------

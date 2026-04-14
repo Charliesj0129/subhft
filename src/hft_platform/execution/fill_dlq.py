@@ -26,17 +26,33 @@ class OrphanedFillDLQ:
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:
             MetricsRegistry.get().fill_dlq_overflow_total.inc()
+            # Persist the about-to-be-evicted fill so it isn't permanently lost.
+            evicted = self._queue[0]
+            self._persist_single(evicted)
             logger.error(
-                "fill_dlq_overflow",
-                symbol=getattr(fill_event, "symbol", ""),
-                order_id=getattr(fill_event, "order_id", ""),
+                "fill_dlq_overflow — evicted fill persisted to disk",
+                evicted_symbol=getattr(evicted, "symbol", ""),
+                evicted_order_id=getattr(evicted, "order_id", ""),
+                new_symbol=getattr(fill_event, "symbol", ""),
                 dlq_size=len(self._queue),
-                msg="Oldest orphaned fill silently evicted — position drift risk",
             )
         self._queue.append(fill_event)
         logger.warning(
             "Orphaned fill added to DLQ", symbol=getattr(fill_event, "symbol", ""), dlq_size=len(self._queue)
         )
+
+    def _persist_single(self, fill_event: Any) -> None:
+        """Append a single fill to the DLQ file (best-effort, no fsync)."""
+        try:
+            import orjson
+
+            row = asdict(fill_event)
+            path = self._persist_path
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "ab") as f:
+                f.write(orjson.dumps(row) + b"\n")
+        except Exception as exc:
+            logger.error("fill_dlq_persist_single_failed", error=str(exc))
 
     @property
     def count(self) -> int:

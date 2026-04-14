@@ -163,6 +163,12 @@ class TestLoadCheckpoint:
 
 
 class TestConfiguration:
+    def test_default_path_uses_state_dir(self, monkeypatch):
+        monkeypatch.delenv("HFT_POSITION_CHECKPOINT_PATH", raising=False)
+        store = _make_store()
+        writer = PositionCheckpointWriter(store)
+        assert writer._path == ".state/position_checkpoint.json"
+
     def test_configurable_path(self, tmp_path):
         custom = str(tmp_path / "custom" / "pos.json")
         store = _make_store()

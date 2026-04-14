@@ -106,6 +106,7 @@ x-hft-common: &hft-common
     - PYTHONDONTWRITEBYTECODE=1
   volumes:
     - ./.wal:/app/.wal
+    - ./.state:/app/.state
     - ./data:/app/data
     - ./config:/app/config
     - ./scripts:/app/scripts
@@ -138,6 +139,7 @@ services:
       - "127.0.0.1:${HFT_HEALTH_PORT:-8080}:8080"
     volumes:
       - ./.wal:/app/.wal
+      - ./.state:/app/.state
       - ./data:/app/data
       - ./config:/app/config
       - ./scripts:/app/scripts
