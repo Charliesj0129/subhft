@@ -1243,6 +1243,24 @@ class HFTSystem:
         loop = getattr(self, "loop", None)
         from hft_platform.execution.normalizer import RawExecEvent
 
+        # For deal callbacks, attempt to resolve strategy_id from pending fill index
+        # before the event enters the normalizer queue.  This bypasses order_id_map
+        # which has no seed data when Shioaji place_order returns empty broker IDs.
+        if topic == "deal" and hasattr(self, "order_adapter") and self.order_adapter is not None:
+            _payload = data.get("payload", data) if isinstance(data, dict) else data
+            _sym = None
+            _action = None
+            if isinstance(_payload, dict):
+                _sym = _payload.get("full_code") or _payload.get("code")
+                _action = _payload.get("action")
+            else:
+                _sym = getattr(_payload, "full_code", None) or getattr(_payload, "code", None)
+                _action = getattr(_payload, "action", None)
+            if _sym and _action:
+                _resolved = self.order_adapter.resolve_strategy_from_deal(str(_sym), str(_action))
+                if _resolved and isinstance(data, dict):
+                    data["_resolved_strategy_id"] = _resolved
+
         event = RawExecEvent(topic, data, timebase.now_ns())
         if not self.running:
             # Buffer for later drain instead of dropping — broker can send callbacks

@@ -112,6 +112,7 @@ class OrderAdapter:
         "_phantom_order_max",
         "_audit_writer",
         "_rejection_sink",
+        "_pending_fill_index",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -201,6 +202,10 @@ class OrderAdapter:
         # R2-03: Bounded dict with TTL eviction (Architecture Governance Rule 12)
         self._phantom_order_keys: dict[str, float] = {}  # key -> monotonic timestamp
         self._phantom_order_max: int = 1000
+
+        # Pending fill index: maps "{symbol}:{side}" -> [order_key, ...] for strategy_id
+        # resolution in deal callbacks where order_id_map has no seed data (Shioaji futures).
+        self._pending_fill_index: dict[str, list[str]] = {}
 
         # Audit writer for order lifecycle logging (optional, injected post-init)
         self._audit_writer: Any = None
@@ -717,6 +722,35 @@ class OrderAdapter:
                 changed = True
         if changed:
             self._maybe_persist_order_id_map()
+
+    def resolve_strategy_from_deal(self, symbol: str, action: str) -> str | None:
+        """Resolve strategy_id from pending fills index.
+
+        Called from broker thread (_on_exec) for deal callbacks where
+        order_id_map has no seed data (Shioaji futures: place_order returns
+        empty broker IDs).  Thread-safe under CPython GIL for simple
+        dict get/pop operations.
+
+        Returns strategy_id string or None if no pending order matches.
+        """
+        side = "BUY" if action.lower() == "buy" else "SELL"
+        key = f"{symbol}:{side}"
+        pending = self._pending_fill_index.get(key)
+        if pending:
+            order_key = pending.pop(0)
+            if not pending:
+                del self._pending_fill_index[key]
+            # order_key is "STRATEGY_ID:intent_id"
+            strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
+            logger.info(
+                "pending_fill_index_resolved",
+                symbol=symbol,
+                action=action,
+                order_key=order_key,
+                strategy_id=strategy_id,
+            )
+            return strategy_id
+        return None
 
     async def _drain_deferred_terminals(self, order_key: str, trade: Any) -> None:
         """Re-process deferred terminal callbacks now that broker IDs are registered."""
@@ -1268,6 +1302,13 @@ class OrderAdapter:
                 # fast fill callbacks arriving during this window are still
                 # deferred (DECISION-007 race fix).
                 await self._register_broker_ids(order_key, trade)
+
+                # Populate pending fill index for deal callback strategy_id resolution.
+                # Shioaji futures: place_order returns empty broker IDs, so order_id_map
+                # has no seed data.  This index allows _on_exec to resolve strategy_id
+                # from deal callbacks by matching symbol + side.
+                _fill_key = f"{intent.symbol}:{intent.side.name}"
+                self._pending_fill_index.setdefault(_fill_key, []).append(order_key)
 
                 # D2: Replace sentinel with real trade and leave pending state
                 async with self._live_orders_lock:

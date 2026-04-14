@@ -43,6 +43,7 @@ class ExecutionNormalizer:
         self.order_id_map = order_id_map if order_id_map is not None else {}
         self.order_id_resolver = OrderIdResolver(self.order_id_map)
         self.strategy_id_resolvers = strategy_id_resolvers or [
+            self._resolve_from_injected,
             self._resolve_from_order_id_map,
             self._resolve_from_custom_field,
         ]
@@ -61,6 +62,16 @@ class ExecutionNormalizer:
         if isinstance(payload, dict):
             return payload.get(key, default)
         return getattr(payload, key, default)
+
+    def _resolve_from_injected(self, raw: RawExecEvent) -> Optional[str]:
+        """Highest-priority resolver: reads strategy_id injected by _on_exec
+        from the pending fill index (bypasses order_id_map entirely)."""
+        d = raw.data
+        if isinstance(d, dict):
+            val = d.get("_resolved_strategy_id")
+            if val:
+                return str(val)
+        return None
 
     def _resolve_from_custom_field(self, raw: RawExecEvent) -> Optional[str]:
         d, _ = self._unwrap_data(raw)
