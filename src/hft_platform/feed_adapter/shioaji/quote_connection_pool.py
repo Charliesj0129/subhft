@@ -27,7 +27,7 @@ from hft_platform.feed_adapter.shioaji.pool_health import (
 try:
     from prometheus_client import Gauge
 except ImportError:
-    Gauge = None
+    Gauge = None  # type: ignore[assignment, misc]
 
 try:
     from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade

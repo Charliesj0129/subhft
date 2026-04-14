@@ -142,7 +142,7 @@ class AuditWriter:
             self._queues[table].put_nowait(data)
         except asyncio.QueueFull:
             overflow = self._overflow[table]
-            if len(overflow) < overflow.maxlen:  # type: ignore[arg-type]
+            if overflow.maxlen is not None and len(overflow) < overflow.maxlen:
                 overflow.append(data)
                 try:
                     from hft_platform.observability.metrics import MetricsRegistry

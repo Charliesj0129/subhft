@@ -270,7 +270,7 @@ class SessionGovernor:
 
     _MAX_FLATTEN_RETRIES: int = 2
 
-    def _on_flatten_task_done(self, task: asyncio.Task) -> None:  # type: ignore[type-arg]
+    def _on_flatten_task_done(self, task: asyncio.Task[None]) -> None:
         """Log errors from fire-and-forget flatten tasks; retry up to _MAX_FLATTEN_RETRIES times."""
         if task.cancelled():
             logger.warning("session_flatten_task_cancelled")

@@ -36,7 +36,7 @@ def load_point_value_config(yaml_path: str) -> tuple[dict[str, int], dict[str, s
     Returns:
         (point_value_map, symbol_to_product) — both dicts, empty on failure.
     """
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     try:
         with open(yaml_path) as f:

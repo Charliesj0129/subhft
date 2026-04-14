@@ -171,7 +171,7 @@ def map_event_to_record(
         latency_us = 0
         if event.broker_ts_ns and event.ingest_ts_ns:
             latency_us = max(0, int((event.ingest_ts_ns - event.broker_ts_ns) / 1000))
-        record: Dict[str, Any] = {
+        order_record: Dict[str, Any] = {
             "order_id": event.order_id,
             "strategy_id": event.strategy_id,
             "symbol": symbol,
@@ -184,7 +184,7 @@ def map_event_to_record(
             "instrument_type": _instrument_fields(symbol, metadata).get("instrument_type", ""),
             "oc_type": "",
         }
-        return ("orders", record)
+        return ("orders", order_record)
 
     if isinstance(event, FillEvent):
         symbol = event.symbol

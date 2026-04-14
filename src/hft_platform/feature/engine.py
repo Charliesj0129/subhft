@@ -84,7 +84,7 @@ class _StatsTupleProxy:
         return self._t[9]
 
 
-def _top_qty(side: object) -> int | None:
+def _top_qty(side: Any) -> int | None:
     """Extract top-of-book quantity from a bid/ask side array.
 
     Module-level function (lifted from ``_extract_l1_qty`` closure) to avoid
@@ -660,7 +660,7 @@ class FeatureEngine:
 
     def _compute_values(
         self, symbol: str, event: object | None, stats: LOBStatsEvent | _StatsTupleProxy
-    ) -> tuple[int, ...]:
+    ) -> tuple[int, ...] | None:
         if self._kernel_backend == "rust":
             return self._compute_values_rust(symbol, event, stats)
 
@@ -782,14 +782,14 @@ class FeatureEngine:
             return v1_tuple
 
         if n_features <= 19:
-            return (*v1_tuple, *v2_base)  # type: ignore[possibly-undefined]
+            return (*v1_tuple, *v2_base)
 
         iss_val = self._compute_iss(ks, int(ofi_l1_raw), mid_price_x2, bid_depth, ask_depth)
-        mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)  # type: ignore[possibly-undefined]
+        mldm_val = self._compute_mldm(ks, event, best_bid, best_ask, _prev_bb_for_mldm, _prev_ba_for_mldm)
         tox_val = self._compute_toxicity(ks)
 
         if n_features <= 22:
-            return (*v1_tuple, *v2_base, iss_val, mldm_val, tox_val)  # type: ignore[possibly-undefined]
+            return (*v1_tuple, *v2_base, iss_val, mldm_val, tox_val)
 
         # --- v3 EMA aggregation features ---
         a5 = self._alpha_5s
@@ -804,7 +804,7 @@ class FeatureEngine:
 
         return (
             *v1_tuple,
-            *v2_base,  # type: ignore[possibly-undefined]
+            *v2_base,
             iss_val,
             mldm_val,
             tox_val,

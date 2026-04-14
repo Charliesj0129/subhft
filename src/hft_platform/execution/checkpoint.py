@@ -259,10 +259,15 @@ class PositionCheckpointWriter:
         Returns True if file was deleted, False if it didn't exist.
         Logs the operation for audit trail.
         """
-        resolved_path = path or os.getenv(
-            "HFT_POSITION_CHECKPOINT_PATH",
-            DEFAULT_POSITION_CHECKPOINT_PATH,
+        resolved_path = (
+            path
+            if path
+            else os.getenv(
+                "HFT_POSITION_CHECKPOINT_PATH",
+                DEFAULT_POSITION_CHECKPOINT_PATH,
+            )
         )
+        assert resolved_path is not None  # always has a default
         if os.path.exists(resolved_path):
             os.unlink(resolved_path)
             logger.warning(
