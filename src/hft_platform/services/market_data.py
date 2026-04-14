@@ -1759,12 +1759,31 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     # would falsely trigger StormGuard STORM if included.
     _FEED_GAP_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
 
-    def get_max_feed_gap_s(self) -> float:
-        """Return the maximum feed gap across *core* (non-option) symbols.
+    # Futures symbol prefixes considered for feed-gap calculation.
+    # During night sessions, only futures trade — stock symbols (numeric codes
+    # like 2330, 2615) have no quotes and would falsely inflate the max gap.
+    # When set, only symbols matching these prefixes are included; everything
+    # else (stocks, options already excluded above) is ignored.
+    _FEED_GAP_FUTURES_PREFIXES: tuple[str, ...] = (
+        "TMF", "TXF", "MXF", "TGF", "XIF", "T5F", "UDF", "GTF", "BTF", "RHF",
+        "SPF", "UNF", "E4F", "NYF", "EXF", "ZEF",
+    )
 
-        Option symbols (prefixed with TXO, MXO, etc.) are excluded because
-        far-OTM contracts may not trade for minutes during night sessions,
-        producing large gaps that would falsely trigger StormGuard STORM.
+    @staticmethod
+    def _is_futures_symbol(symbol: str) -> bool:
+        """Return True if the symbol looks like a TAIFEX futures contract.
+
+        TAIFEX futures codes start with alphabetic prefixes (TMF, TXF, MXF …).
+        TWSE/OTC stock codes are purely numeric (e.g. 2330, 00878).
+        """
+        return len(symbol) > 0 and symbol[0].isalpha()
+
+    def get_max_feed_gap_s(self) -> float:
+        """Return the maximum feed gap across *futures* symbols only.
+
+        Options (TXO, MXO, etc.) and equities (numeric codes) are excluded
+        because they may not trade during night sessions, producing large
+        gaps that would falsely trigger StormGuard or platform reduce-only.
 
         The raw per-symbol gaps are available via :meth:`get_feed_gaps_by_symbol`.
         """
@@ -1782,13 +1801,16 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         for symbol, last_ts in snapshot.items():
             if any(symbol.startswith(p) for p in self._FEED_GAP_EXCLUDE_PREFIXES):
                 continue
+            # Exclude non-futures (stocks): they don't trade during night sessions
+            if not self._is_futures_symbol(symbol):
+                continue
             core_count += 1
             gap = now - last_ts
             if gap > max_gap:
                 max_gap = gap
 
         if core_count == 0:
-            # All symbols are options — fall back to global max
+            # No futures symbols seen — fall back to global max
             return max(now - ts for ts in snapshot.values())
         return max_gap
 

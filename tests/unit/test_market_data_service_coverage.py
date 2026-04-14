@@ -508,11 +508,19 @@ def test_get_max_feed_gap_s_empty():
     assert gap == 0.0
 
 
-def test_get_max_feed_gap_s_core_symbol():
+def test_get_max_feed_gap_s_futures_symbol():
     svc, *_ = _make_service()
-    svc._symbol_last_tick = {"2330": time.monotonic() - 3.0}
+    svc._symbol_last_tick = {"TMFD6": time.monotonic() - 3.0}
     gap = svc.get_max_feed_gap_s()
     assert 2.5 < gap < 5.0
+
+
+def test_get_max_feed_gap_s_excludes_stock_symbols():
+    svc, *_ = _make_service()
+    # Only stock symbols (numeric) — should fall back to global max
+    svc._symbol_last_tick = {"2330": time.monotonic() - 10.0}
+    gap = svc.get_max_feed_gap_s()
+    assert gap > 9.0  # falls back to global max (no futures)
 
 
 def test_get_max_feed_gap_s_excludes_option_symbols():
@@ -523,16 +531,32 @@ def test_get_max_feed_gap_s_excludes_option_symbols():
     assert gap > 9.0  # falls back to option max
 
 
-def test_get_max_feed_gap_s_mixed_excludes_options():
+def test_get_max_feed_gap_s_mixed_excludes_options_and_stocks():
     svc, *_ = _make_service()
-    # Core symbol with 2s gap, option with 60s gap
+    # Futures symbol with 2s gap, stock with 200s gap, option with 60s gap
     svc._symbol_last_tick = {
-        "2330": time.monotonic() - 2.0,
+        "TXFD6": time.monotonic() - 2.0,
+        "2330": time.monotonic() - 200.0,
         "TXO12345": time.monotonic() - 60.0,
         "MXO9999": time.monotonic() - 90.0,
     }
     gap = svc.get_max_feed_gap_s()
-    # Should be ~2s (core only), not 90s
+    # Should be ~2s (futures only), not 200s (stock) or 90s (option)
+    assert gap < 10.0
+
+
+def test_get_max_feed_gap_s_night_session_stocks_excluded():
+    svc, *_ = _make_service()
+    # Night session scenario: futures active (small gap), stocks dormant (huge gap)
+    svc._symbol_last_tick = {
+        "TMFD6": time.monotonic() - 1.0,
+        "TXFD6": time.monotonic() - 2.0,
+        "2615": time.monotonic() - 600.0,
+        "2890": time.monotonic() - 500.0,
+        "2345": time.monotonic() - 400.0,
+    }
+    gap = svc.get_max_feed_gap_s()
+    # Should be ~2s (TXFD6), not 600s (stocks)
     assert gap < 10.0
 
 
