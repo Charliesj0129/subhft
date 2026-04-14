@@ -169,6 +169,7 @@ class TestExecCallbackBuffersWhenNotRunning:
         sys_obj._exec_overflow_evicted = 0
         sys_obj._exec_startup_overflow_lost = False
         sys_obj.storm_guard = MagicMock()
+        sys_obj._persist_lost_exec_event = lambda event: None
         return sys_obj
 
     def test_exec_callback_buffers_when_not_running(self):

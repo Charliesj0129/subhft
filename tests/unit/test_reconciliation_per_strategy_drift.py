@@ -33,7 +33,11 @@ def _make_store_with_positions(entries: list[tuple[str, str, str, int]]) -> Posi
 
 
 def _make_service(client, store) -> ReconciliationService:
-    return ReconciliationService(client, store, {}, storm_guard=StormGuard())
+    # broker_zero_debounce_observations=1 so broker-empty snapshots aren't silently
+    # swallowed on first observation (default=2 would hide the discrepancy).
+    return ReconciliationService(
+        client, store, {"reconciliation": {"broker_zero_debounce_observations": 1}}, storm_guard=StormGuard()
+    )
 
 
 # ---------------------------------------------------------------------------

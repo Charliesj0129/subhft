@@ -150,8 +150,29 @@ async def test_blocking_mode_from_env() -> None:
 @pytest.mark.asyncio
 async def test_checkpoint_loading(tmp_path) -> None:
     """Checkpoint file supplements local positions for symbols not in store."""
+    import hashlib
+
     checkpoint_file = tmp_path / "checkpoint.json"
-    checkpoint_file.write_text(json.dumps({"2454": 300}))
+    # Write checkpoint in the new format expected by PositionCheckpointWriter.load_checkpoint
+    body = {
+        "trading_date": "20260414",
+        "timestamp_ns": 0,
+        "peak_equity_scaled": 0,
+        "total_realized_pnl_scaled": 0,
+        "positions": {
+            "default::2454": {
+                "symbol": "2454",
+                "net_qty": 300,
+                "avg_price_scaled": 100_0000,
+                "realized_pnl_scaled": 0,
+                "fees_scaled": 0,
+            }
+        },
+    }
+    body_bytes = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    sha = hashlib.sha256(body_bytes).hexdigest()
+    body["sha256"] = sha
+    checkpoint_file.write_text(json.dumps(body, separators=(",", ":"), sort_keys=True))
 
     # Broker has 2454=300 but local store is empty — checkpoint fills the gap
     client = FakeBrokerClient([FakeBrokerPosition("2454", 300)])
