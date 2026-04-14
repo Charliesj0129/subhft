@@ -194,3 +194,49 @@ class TestResolveFromInjected:
 
         # OrderIdResolver extracts strategy_id from "strategy_id:intent_id"
         assert result == "other_strat"
+
+
+# ---------------------------------------------------------------------------
+# Pending fill orphan sweep (Issue #1)
+# ---------------------------------------------------------------------------
+
+
+@patch("hft_platform.order.adapter.OrderAdapter.load_config")
+class TestPendingFillOrphanSweep:
+    """Entries in _pending_fill_registered_at that never enter live_orders
+    are swept by sweep_stale_live_orders after TTL expires."""
+
+    def _make_adapter(self, mock_load: Any) -> OrderAdapter:
+        queue = asyncio.Queue()
+        client = MagicMock()
+        adapter = OrderAdapter("config/dummy.yaml", queue, client)
+        return adapter
+
+    @pytest.mark.asyncio
+    async def test_orphan_entries_evicted_after_ttl(self, mock_load: Any) -> None:
+        adapter = self._make_adapter(mock_load)
+        adapter._pending_fill_ttl_s = 0.01  # 10ms TTL for test speed
+        adapter._live_orders_last_sweep_s = 0.0  # bypass rate-limit
+
+        # Register orphan entries (no corresponding live_orders entry)
+        adapter._pending_fill_index["TMFD6:BUY"] = ["orphan:001"]
+        adapter._pending_fill_registered_at["orphan:001"] = time.monotonic() - 1.0  # already expired
+
+        evicted = await adapter.sweep_stale_live_orders()
+
+        assert "orphan:001" not in adapter._pending_fill_registered_at
+        assert "TMFD6:BUY" not in adapter._pending_fill_index
+
+    @pytest.mark.asyncio
+    async def test_non_expired_entries_preserved(self, mock_load: Any) -> None:
+        adapter = self._make_adapter(mock_load)
+        adapter._pending_fill_ttl_s = 60.0  # long TTL
+        adapter._live_orders_last_sweep_s = 0.0
+
+        adapter._pending_fill_index["TMFD6:BUY"] = ["fresh:001"]
+        adapter._pending_fill_registered_at["fresh:001"] = time.monotonic()
+
+        await adapter.sweep_stale_live_orders()
+
+        assert "fresh:001" in adapter._pending_fill_registered_at
+        assert "TMFD6:BUY" in adapter._pending_fill_index

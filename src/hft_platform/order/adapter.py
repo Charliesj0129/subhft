@@ -117,6 +117,7 @@ class OrderAdapter:
         "_pending_fill_ttl_s",
         "_pending_fill_lock",
         "_custom_field_counter",
+        "_background_tasks",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -214,6 +215,9 @@ class OrderAdapter:
         self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "30"))
         self._pending_fill_lock = threading.Lock()  # protects _pending_fill_index across threads
         self._custom_field_counter: int = 0
+
+        # Prevent GC of fire-and-forget tasks (safety orders during HALT drain)
+        self._background_tasks: set[asyncio.Task] = set()
 
         # Audit writer for order lifecycle logging (optional, injected post-init)
         self._audit_writer: Any = None
@@ -350,6 +354,33 @@ class OrderAdapter:
                         evicted=overflow,
                         max_size=self._live_orders_max_size,
                     )
+        # Sweep orphaned pending-fill entries that never entered live_orders.
+        # These arise when place_order fails before the order is registered in live_orders.
+        now_mono = time.monotonic()
+        with self._pending_fill_lock:
+            expired_keys = [
+                k for k, ts in self._pending_fill_registered_at.items()
+                if (now_mono - ts) > self._pending_fill_ttl_s
+            ]
+            for k in expired_keys:
+                self._pending_fill_registered_at.pop(k, None)
+                for pkey, pending in list(self._pending_fill_index.items()):
+                    filtered = [item for item in pending if item != k]
+                    if len(filtered) != len(pending):
+                        pending[:] = filtered
+                    if not pending:
+                        self._pending_fill_index.pop(pkey, None)
+            if expired_keys:
+                logger.warning(
+                    "pending_fill_orphan_sweep",
+                    evicted=len(expired_keys),
+                    remaining_registered=len(self._pending_fill_registered_at),
+                    remaining_index=len(self._pending_fill_index),
+                )
+                try:
+                    self.metrics.pending_fill_expired_total.inc(len(expired_keys))
+                except Exception:
+                    pass
         return evicted
 
     async def _run_blocking_call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -1817,9 +1848,7 @@ class OrderAdapter:
                             strategy_id=item.intent.strategy_id,
                             intent_type=item.intent.intent_type.name,
                         )
-                        self.metrics.order_halt_skip_total.labels(
-                            strategy_id=item.intent.strategy_id,
-                        ).inc()
+                        self.metrics.order_halt_skip_total.inc()
                         self.metrics.order_reject_total.inc()
                         self._dedup_release(item.intent.idempotency_key)
                         await self._add_to_dlq(

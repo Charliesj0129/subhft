@@ -261,6 +261,8 @@ class SystemBootstrapper:
         self.settings = settings if settings is not None else {}
         self._lease_refresh_running: bool = False
         self._lease_refresh_thread: Any | None = None
+        self._lease_refresh_lost: bool = False
+        self._on_lease_lost: Any | None = None  # callback: storm_guard.trigger_halt
         self._last_role: str = "engine"
 
     def _get_runtime_role(self) -> str:
@@ -475,15 +477,22 @@ class SystemBootstrapper:
                         owner = str(_command("GET", key) or "").strip()
                         if owner and owner != owner_id:
                             ttl_remaining = self._read_int_resp(_command("TTL", key), default=-2)
-                            logger.warning(
-                                "session_lease_refresh_skipped_not_owner",
+                            logger.critical(
+                                "session_lease_lost_triggering_halt",
                                 key=key,
                                 owner=owner,
                                 my_id=owner_id,
                                 ttl_remaining_s=ttl_remaining,
                             )
                             self._record_lease_metric("refresh", "lost_owner")
-                            continue
+                            self._lease_refresh_lost = True
+                            cb = self._on_lease_lost
+                            if cb is not None:
+                                try:
+                                    cb(f"SESSION_LEASE_LOST(owner={owner})")
+                                except Exception:
+                                    pass
+                            return  # stop refresh — lease is gone
 
                         if not owner:
                             logger.warning("session_lease_reacquire", key=key, my_id=owner_id)
@@ -690,6 +699,9 @@ class SystemBootstrapper:
             )
 
         storm_guard = StormGuard(drift_burst_detector=drift_burst_detector)
+
+        # Wire session lease loss to StormGuard HALT (fencing guard)
+        self._on_lease_lost = storm_guard.trigger_halt
 
         # Wire StormGuard to EventBus for overflow HALT triggering
         bus.set_storm_guard(storm_guard)

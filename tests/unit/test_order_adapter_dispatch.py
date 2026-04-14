@@ -590,9 +590,8 @@ async def test_api_worker_halt_skip_sends_dlq_and_metric(tmp_config):
     except asyncio.CancelledError:
         pass
 
-    # Dedicated metric incremented
-    metrics_mock.order_halt_skip_total.labels.assert_called_once_with(strategy_id="strat_halt")
-    metrics_mock.order_halt_skip_total.labels.return_value.inc.assert_called_once()
+    # Dedicated metric incremented (no labels — strategy_id removed to avoid cardinality bomb)
+    metrics_mock.order_halt_skip_total.inc.assert_called_once()
     # Backward-compat reject metric also incremented
     metrics_mock.order_reject_total.inc.assert_called_once()
     # DLQ received the entry

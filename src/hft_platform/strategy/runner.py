@@ -386,6 +386,13 @@ class StrategyRunner:
         """Set the shared queue for consuming RiskFeedback dispatched to strategies."""
         self._rejection_queue = queue
 
+    def reset_stale_counter(self) -> None:
+        """Reset stale event skip counter (called after reconnect)."""
+        prev = self._stale_event_skip_total
+        self._stale_event_skip_total = 0
+        if prev > 0:
+            logger.info("stale_event_counter_reset", previous_total=prev)
+
     def set_storm_guard(self, storm_guard: Any) -> None:
         """Set StormGuard reference for triggering HALT on persistent queue-full."""
         self._storm_guard = storm_guard

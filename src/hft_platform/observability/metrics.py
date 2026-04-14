@@ -434,7 +434,6 @@ class MetricsRegistry:
         self.order_halt_skip_total = Counter(
             _pn("order_halt_skip_total"),
             "Orders skipped in _api_worker because StormGuard transitioned to HALT",
-            ["strategy_id"],
         )
         self.order_deadline_expired_total = Counter(
             _pn("order_deadline_expired_total"),

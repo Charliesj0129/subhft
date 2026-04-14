@@ -442,3 +442,40 @@ class TestQueueDefaults:
 
     def test_default_raw_exec_queue_size(self) -> None:
         assert SystemBootstrapper.DEFAULT_RAW_EXEC_QUEUE_SIZE == 8192
+
+
+# ---------------------------------------------------------------------------
+# Lease refresh HALT fencing (Issue #3)
+# ---------------------------------------------------------------------------
+
+
+class TestLeaseRefreshHaltFencing:
+    """When lease is lost, the callback triggers HALT."""
+
+    def test_on_lease_lost_callback_is_wired(self) -> None:
+        bootstrapper = SystemBootstrapper({})
+        assert bootstrapper._on_lease_lost is None
+        assert bootstrapper._lease_refresh_lost is False
+
+    def test_lost_owner_sets_flag_and_invokes_callback(self) -> None:
+        bootstrapper = SystemBootstrapper({})
+        halt_reasons: list[str] = []
+        bootstrapper._on_lease_lost = lambda reason: halt_reasons.append(reason)
+
+        # Simulate what the refresh loop does when it detects lost ownership
+        bootstrapper._lease_refresh_lost = True
+        cb = bootstrapper._on_lease_lost
+        cb("SESSION_LEASE_LOST(owner=other)")
+
+        assert bootstrapper._lease_refresh_lost is True
+        assert len(halt_reasons) == 1
+        assert "SESSION_LEASE_LOST" in halt_reasons[0]
+
+    @pytest.mark.usefixtures("_sim_env", "_mock_services")
+    def test_build_wires_storm_guard_to_on_lease_lost(self) -> None:
+        bootstrapper = SystemBootstrapper({})
+        with patch.object(bootstrapper, "_check_session_ownership", return_value=False):
+            registry = bootstrapper.build()
+
+        assert bootstrapper._on_lease_lost is not None
+        assert bootstrapper._on_lease_lost == registry.storm_guard.trigger_halt

@@ -399,3 +399,32 @@ class TestGracefulReset:
         assert recon._broker_zero_streak == 0
         assert recon._noncritical_drift_streak == 0
         assert sg.state == StormGuardState.NORMAL
+
+
+# ---------------------------------------------------------------------------
+# Stale event counter reset (Issue #12)
+# ---------------------------------------------------------------------------
+
+
+class TestStaleEventCounterReset:
+    """StrategyRunner.reset_stale_counter() resets the counter to 0."""
+
+    def test_reset_clears_counter(self) -> None:
+        from hft_platform.strategy.runner import StrategyRunner
+
+        runner = StrategyRunner.__new__(StrategyRunner)
+        runner._stale_event_skip_total = 42
+
+        runner.reset_stale_counter()
+
+        assert runner._stale_event_skip_total == 0
+
+    def test_reset_from_zero_is_noop(self) -> None:
+        from hft_platform.strategy.runner import StrategyRunner
+
+        runner = StrategyRunner.__new__(StrategyRunner)
+        runner._stale_event_skip_total = 0
+
+        runner.reset_stale_counter()
+
+        assert runner._stale_event_skip_total == 0

@@ -171,6 +171,10 @@ class HFTSystem:
             self.md_service.register_on_reconnect(
                 lambda reason: self.order_adapter.invalidate_live_orders(reason=reason)
             )
+            # Reset stale event counter after reconnect so logs are per-session
+            self.md_service.register_on_reconnect(
+                lambda reason: self.strategy_runner.reset_stale_counter()
+            )
         self.recon_service.platform_degrade_controller = self.platform_degrade_controller
 
         self._halt_log_mono: float = 0.0  # rate-limit HALT log to avoid spam
@@ -675,6 +679,11 @@ class HFTSystem:
             os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {"1", "true", "yes", "on"}
             and os.getenv("HFT_GC_GEN0_PERIODIC", "1").strip().lower() not in {"0", "false", "no", "off"}
         )
+        # Periodic gen-2 GC: reclaim long-lived cyclic refs (structlog, asyncio internals).
+        # Runs at low frequency to avoid latency impact. Typically <10ms.
+        _gc_gen2_interval = max(60, int(os.getenv("HFT_GC_GEN2_INTERVAL_TICKS", "300")))
+        _gc_gen2_tick = 0
+        _gc_gen2_enabled = _gc_gen0_enabled  # same gate as gen-0
 
         while self.running:
             await asyncio.sleep(interval_s)  # 1Hz Tick
@@ -830,11 +839,19 @@ class HFTSystem:
                     if self.running:
                         self._try_restart_service(name, component, coro_factory)
                     continue
+                # Detect immediate failures: task died within 2s of creation.
+                # Apply extra backoff penalty to avoid rapid retry budget burn.
+                _started = self._task_started_at.get(name)
+                _immediate_fail = _started is not None and (timebase.now_s() - _started) < 2.0
+                if _immediate_fail:
+                    cur = self._task_restart_attempts.get(name, 0)
+                    self._task_restart_attempts[name] = cur + 1  # extra penalty
                 logger.critical(
                     "Critical service task stopped",
                     task=name,
                     component=component,
                     error=str(exc) if exc else "task_exited_without_exception",
+                    immediate_fail=_immediate_fail,
                 )
                 self.storm_guard.trigger_halt(f"Critical Component Crash: {component}")
                 if self.running:
@@ -1057,6 +1074,21 @@ class HFTSystem:
                 if _gc_gen0_tick >= _gc_gen0_interval:
                     _gc_gen0_tick = 0
                     gc.collect(0)
+            # Periodic gen-2 GC: reclaim long-lived cyclic refs that gen-0 cannot reach.
+            # Without this, 24/7 operation with gc.disable() leaks gen-1/gen-2 objects.
+            if _gc_gen2_enabled:
+                _gc_gen2_tick += 1
+                if _gc_gen2_tick >= _gc_gen2_interval:
+                    _gc_gen2_tick = 0
+                    _gc2_start = loop.time()
+                    _gc2_collected = gc.collect(2)
+                    _gc2_ms = (loop.time() - _gc2_start) * 1000.0
+                    if _gc2_ms > 5.0 or _gc2_collected > 100:
+                        logger.info(
+                            "gc_gen2_periodic",
+                            collected=_gc2_collected,
+                            duration_ms=round(_gc2_ms, 2),
+                        )
 
     async def stop_async(self):
         """Async stop with proper task cleanup."""
