@@ -16,25 +16,29 @@ _DEFAULT_PERSIST_PATH = ".state/fill_dlq.jsonl"
 
 
 class OrphanedFillDLQ:
-    __slots__ = ("_queue", "_max_size", "_persist_path")
+    __slots__ = ("_queue", "_max_size", "_persist_path", "_overflow_evicted")
 
     def __init__(self, max_size: int = 1000, persist_path: str | None = None) -> None:
         self._queue: deque[Any] = deque(maxlen=max_size)
         self._max_size = max_size
         self._persist_path: str = persist_path or os.getenv("HFT_FILL_DLQ_PERSIST_PATH") or _DEFAULT_PERSIST_PATH
+        self._overflow_evicted: list[Any] = []
 
     def add(self, fill_event: Any) -> None:
         if len(self._queue) == self._max_size:
             MetricsRegistry.get().fill_dlq_overflow_total.inc()
-            # Persist the about-to-be-evicted fill so it isn't permanently lost.
+            # Retain evicted fill in memory so persist() includes it.
             evicted = self._queue[0]
+            self._overflow_evicted.append(evicted)
+            # Also append to disk as immediate safety net in case of crash.
             self._persist_single(evicted)
             logger.error(
-                "fill_dlq_overflow — evicted fill persisted to disk",
+                "fill_dlq_overflow — evicted fill retained for persist",
                 evicted_symbol=getattr(evicted, "symbol", ""),
                 evicted_order_id=getattr(evicted, "order_id", ""),
                 new_symbol=getattr(fill_event, "symbol", ""),
                 dlq_size=len(self._queue),
+                overflow_evicted=len(self._overflow_evicted),
             )
         self._queue.append(fill_event)
         logger.warning(
@@ -91,9 +95,10 @@ class OrphanedFillDLQ:
         """Persist DLQ to disk atomically (temp+fsync+rename).
 
         Called during graceful shutdown so orphaned fills survive restart.
+        Includes overflow-evicted fills that were too old for the in-memory deque.
         """
         path = self._persist_path
-        snapshot = list(self._queue)
+        snapshot = list(self._overflow_evicted) + list(self._queue)
         if not snapshot:
             # Remove stale file if queue is empty
             if os.path.exists(path):

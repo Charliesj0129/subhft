@@ -679,3 +679,61 @@ def test_feature_failure_does_not_override_halt(guard):
     halt_drawdown = guard.thresholds.halt_drawdown_bps - 1
     state, _ = guard._evaluate_target_state(halt_drawdown, 0, 0.0)
     assert state == StormGuardState.HALT
+
+
+# ── Feed gap re-escalation cooldown ──────────────────────────────────────────
+
+
+def test_feed_gap_reescalation_suppressed_after_deescalation(guard):
+    """After de-escalating from a feed-gap STORM, re-escalation via feed gap
+    should be suppressed for a cooldown period to prevent flapping.
+
+    Production observation: 75 STORM transitions in 6 hours from feed_gap
+    oscillating around the threshold.
+    """
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._feed_gap_reescalation_cooldown_s = 120.0
+
+    # Enter STORM via feed gap
+    state = guard.update(feed_gap_s=2.0)
+    assert state == StormGuardState.STORM
+
+    # De-escalate
+    state = guard.update(feed_gap_s=0.0)
+    assert state == StormGuardState.NORMAL
+
+    # Immediately re-trigger feed gap — should be suppressed
+    state = guard.update(feed_gap_s=2.0)
+    assert state == StormGuardState.NORMAL  # suppressed, NOT STORM
+
+
+def test_feed_gap_reescalation_allowed_after_cooldown(guard):
+    """Feed gap re-escalation is allowed once the cooldown period expires."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._feed_gap_reescalation_cooldown_s = 0.0  # no cooldown
+
+    # Enter STORM, de-escalate, re-trigger
+    guard.update(feed_gap_s=2.0)
+    guard.update(feed_gap_s=0.0)
+    assert guard.state == StormGuardState.NORMAL
+
+    state = guard.update(feed_gap_s=2.0)
+    assert state == StormGuardState.STORM  # allowed, cooldown is 0
+
+
+def test_non_feed_gap_escalation_not_suppressed(guard):
+    """Latency/drawdown STORM is never suppressed by feed gap cooldown."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._feed_gap_reescalation_cooldown_s = 9999.0
+
+    # Enter STORM via feed gap, de-escalate
+    guard.update(feed_gap_s=2.0)
+    guard.update(feed_gap_s=0.0)
+    assert guard.state == StormGuardState.NORMAL
+
+    # Latency-triggered STORM should NOT be suppressed
+    state = guard.update(latency_us=25000)
+    assert state == StormGuardState.STORM

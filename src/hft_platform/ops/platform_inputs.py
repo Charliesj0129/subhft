@@ -89,7 +89,12 @@ class PlatformDegradeInputs:
 
         pending_since = getattr(self.md_service, "_pending_reconnect_since", None)
         if pending_since is not None and timebase.now_s() - float(pending_since) >= self.reconnect_pending_threshold_s:
-            reasons.append("feed_reconnect_pending")
+            # Suppress during expected session gaps (e.g. 13:35-14:55 day→night
+            # transition).  The reconnect is "pending" precisely because we are
+            # outside the reconnect window — that is normal, not anomalous.
+            within_fn = getattr(self.md_service, "within_reconnect_window", None)
+            if within_fn is None or within_fn():
+                reasons.append("feed_reconnect_pending")
 
         if self.reconnect_flap_budget > 0 and self._quote_flap_budget_exceeded():
             reasons.append("feed_reconnect_flapping")

@@ -267,3 +267,72 @@ async def test_sell_direction_negates_qty() -> None:
 
     assert result == []
     assert verifier.status == 1
+
+
+# ---------------------------------------------------------------------------
+# Strategy attribution recovery tests (G2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_broker_only_recovery_uses_wildcard_strategy_id() -> None:
+    """Broker-only recovery must use '*' wildcard as strategy_id, not empty string.
+
+    Empty strategy_id silently breaks all strategy-level PnL reporting and
+    canary evaluation. The '*' wildcard is the established convention
+    (see StrategyRunner positions_by_strategy.get('*') fallback).
+    """
+    client = FakeBrokerClient([FakeBrokerPosition("TXFD6", 2)])
+    store = PositionStore()
+    verifier = StartupPositionVerifier(client, store, checkpoint_path="/nonexistent")
+
+    result = await verifier.recover(trading_date="20260414", account_id="ACC1")
+
+    assert result.source == "broker_only"
+    assert result.positions_loaded == 1
+
+    # Check that the recovered position has strategy_id="*"
+    recovery = store._recovery_positions
+    assert len(recovery) == 1
+    key, data = next(iter(recovery.items()))
+    assert data["strategy_id"] == "*", f"Expected '*' wildcard, got '{data.get('strategy_id')}'"
+    assert "ACC1" in key
+    assert "*" in key  # key should be account:*:symbol
+
+
+@pytest.mark.asyncio
+async def test_dual_recovery_broker_only_symbol_uses_wildcard() -> None:
+    """In dual mode, a symbol found only in broker (not in checkpoint) gets '*'."""
+    # Checkpoint has TXFD6 for strat_a
+    ckpt = {
+        "ACC1:strat_a:TXFD6": {
+            "symbol": "TXFD6",
+            "net_qty": 1,
+            "avg_price_scaled": 10000000,
+        },
+    }
+    # Broker has TXFD6 (1 lot) + MXFJ6 (1 lot, not in checkpoint)
+    client = FakeBrokerClient([
+        FakeBrokerPosition("TXFD6", 1),
+        FakeBrokerPosition("MXFJ6", 1),
+    ])
+    store = PositionStore()
+    verifier = StartupPositionVerifier(client, store, checkpoint_path="/nonexistent")
+
+    # Manually inject checkpoint data (bypass file loading)
+    from hft_platform.execution.checkpoint import PositionCheckpointWriter
+
+    with patch.object(PositionCheckpointWriter, "load_checkpoint", return_value={
+        "trading_date": "20260414",
+        "positions": ckpt,
+    }):
+        verifier.checkpoint_path = "/fake"
+        result = await verifier.recover(trading_date="20260414", account_id="ACC1")
+
+    assert result.source == "dual"
+    recovery = store._recovery_positions
+    # MXFJ6 should have strategy_id="*"
+    mxfj_entries = {k: v for k, v in recovery.items() if "MXFJ6" in k}
+    assert len(mxfj_entries) == 1
+    mxfj_data = next(iter(mxfj_entries.values()))
+    assert mxfj_data["strategy_id"] == "*"

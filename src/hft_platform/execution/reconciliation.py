@@ -125,6 +125,10 @@ class ReconciliationService:
         self._broker_zero_streak: int = 0
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
+        self._critical_drift_streak: int = 0
+        self._critical_drift_debounce: int = int(
+            os.environ.get("HFT_RECON_CRITICAL_DEBOUNCE_OBSERVATIONS", "3")
+        )
 
     @property
     def drift_streak(self) -> int:
@@ -181,9 +185,11 @@ class ReconciliationService:
             # 2. Runtime Check - periodic reconciliation
             try:
                 await self.sync_portfolio()
-                # Reset on success (WU-04)
+                # Reset failure counter on success (WU-04).
+                # Note: _halt_triggered is reset only when no discrepancies
+                # are found (inside sync_portfolio), not here — resetting
+                # unconditionally caused re-triggers every 5s.
                 self._consecutive_failures = 0
-                self._halt_triggered = False
                 self._update_failure_gauge()
             except Exception as e:
                 self._consecutive_failures += 1
@@ -286,8 +292,8 @@ class ReconciliationService:
                     strat_positions = per_strategy_map.setdefault(strat, {})
                     strat_positions[symbol] = strat_positions.get(symbol, 0) + qty
 
-            # Log per-strategy breakdown at DEBUG level (M9)
-            logger.debug(
+            # Log per-strategy breakdown at INFO level (M9)
+            logger.info(
                 "Portfolio Sync: Per-strategy position breakdown",
                 strategies=list(per_strategy_map.keys()),
                 per_strategy=per_strategy_map,
@@ -372,8 +378,27 @@ class ReconciliationService:
                 if critical:
                     self._last_noncritical_drift_signature = {}
                     self._noncritical_drift_streak = 0
-                    await self._trigger_halt(critical)
+                    self._critical_drift_streak += 1
+                    if self._halt_triggered:
+                        # Already in HALT — do not re-trigger (prevents
+                        # resetting StormGuard's de-escalation counters).
+                        logger.warning(
+                            "critical_drift_persists_during_halt",
+                            streak=self._critical_drift_streak,
+                            symbols=[d.symbol for d in critical],
+                        )
+                    elif self._critical_drift_streak >= self._critical_drift_debounce:
+                        self._halt_triggered = True
+                        await self._trigger_halt(critical)
+                    else:
+                        logger.warning(
+                            "critical_drift_debounce",
+                            streak=self._critical_drift_streak,
+                            required=self._critical_drift_debounce,
+                            symbols=[d.symbol for d in critical],
+                        )
                 else:
+                    self._critical_drift_streak = 0
                     signature = self._noncritical_drift_signature_for(discrepancies)
                     persists_or_grows = self._noncritical_drift_persists_or_grows(signature)
                     self._noncritical_drift_streak = self._noncritical_drift_streak + 1 if persists_or_grows else 1
@@ -388,6 +413,8 @@ class ReconciliationService:
             else:
                 self._last_noncritical_drift_signature = {}
                 self._noncritical_drift_streak = 0
+                self._critical_drift_streak = 0
+                self._halt_triggered = False
                 logger.info("Portfolio Sync Complete - No discrepancies", count=len(broker_map))
 
         except Exception as e:

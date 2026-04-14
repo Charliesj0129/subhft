@@ -55,6 +55,8 @@ class StormGuard:
         "_feature_failure_storm_ts",
         "_norm_failure_active",
         "_norm_failure_storm_ts",
+        "_feed_gap_deescalation_ts",
+        "_feed_gap_reescalation_cooldown_s",
     )
 
     def __init__(
@@ -88,6 +90,10 @@ class StormGuard:
         self._feature_failure_storm_ts: float = 0.0
         self._norm_failure_active: bool = False
         self._norm_failure_storm_ts: float = 0.0
+        self._feed_gap_deescalation_ts: float = 0.0
+        self._feed_gap_reescalation_cooldown_s: float = float(
+            os.getenv("HFT_STORMGUARD_FEED_GAP_REESCALATION_COOLDOWN_S", "120")
+        )
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -199,13 +205,23 @@ class StormGuard:
         with self._state_lock:
             now = time.monotonic()
             if new_state > self.state:
-                # Escalation: always instant (safety-first)
-                self._de_escalate_count = 0
-                if new_state >= StormGuardState.STORM and self.state < StormGuardState.STORM:
-                    self._storm_entry_ts = now
-                if new_state == StormGuardState.HALT:
-                    self._halt_entry_ts = now
-                _, fire_callback = self._transition(new_state, reason)
+                # Feed-gap re-escalation suppression: after de-escalating from
+                # a STORM, suppress feed-gap re-triggers for a cooldown period
+                # to prevent flapping (observed: 75 transitions/6hr in production).
+                if (
+                    reason.startswith("Feed Gap")
+                    and self._feed_gap_deescalation_ts > 0
+                    and (now - self._feed_gap_deescalation_ts) < self._feed_gap_reescalation_cooldown_s
+                ):
+                    pass  # suppress — stay at current state
+                else:
+                    # Escalation: always instant (safety-first)
+                    self._de_escalate_count = 0
+                    if new_state >= StormGuardState.STORM and self.state < StormGuardState.STORM:
+                        self._storm_entry_ts = now
+                    if new_state == StormGuardState.HALT:
+                        self._halt_entry_ts = now
+                    _, fire_callback = self._transition(new_state, reason)
             elif new_state < self.state:
                 # De-escalation from any elevated state requires cooldown + N consecutive clears
                 if self.state == StormGuardState.HALT:
@@ -220,6 +236,9 @@ class StormGuard:
                     if self._de_escalate_count >= self._de_escalate_threshold:
                         old_for_log = self.state
                         self._de_escalate_count = 0
+                        # Record de-escalation from STORM for feed-gap re-escalation cooldown
+                        if old_for_log >= StormGuardState.STORM:
+                            self._feed_gap_deescalation_ts = now
                         # Reset storm entry timestamp so next STORM gets fresh cooldown
                         self._storm_entry_ts = 0.0
                         _, fire_callback = self._transition(new_state, "Recovery")

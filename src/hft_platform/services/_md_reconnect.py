@@ -20,6 +20,10 @@ from ._md_ingestion import FeedState
 
 logger = get_logger("service.market_data")
 
+# Option symbol prefixes excluded from the per-symbol gap watchdog.
+# Must stay in sync with MarketDataService._FEED_GAP_EXCLUDE_PREFIXES.
+_WATCHDOG_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
+
 
 class MarketDataReconnectMixin:
     """Reconnection / rollover / watchdog methods for ``MarketDataService``."""
@@ -310,6 +314,10 @@ class MarketDataReconnectMixin:
                 threshold = max(threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
 
             for symbol, last_ts in active_snapshot.items():
+                # Skip options — illiquid TXO/MXO contracts naturally gap
+                # minutes between ticks and should not trigger resubscribe.
+                if any(symbol.startswith(p) for p in _WATCHDOG_EXCLUDE_PREFIXES):
+                    continue
                 gap = now - last_ts
                 if gap > threshold:
                     stale_symbols.append((symbol, gap))

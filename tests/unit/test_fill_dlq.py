@@ -1,7 +1,11 @@
 """Tests for orphaned fill DLQ (WU-03)."""
 
+import os
+
 from unittest.mock import MagicMock
 
+from hft_platform.contracts.execution import FillEvent
+from hft_platform.contracts.strategy import Side
 from hft_platform.execution.fill_dlq import OrphanedFillDLQ
 
 
@@ -95,3 +99,73 @@ class TestOrphanedFillDLQ:
 
         assert resolved == []
         assert still_orphaned == []
+
+
+def _make_fill(symbol: str, order_id: str = "ORD1") -> FillEvent:
+    return FillEvent(
+        fill_id=f"fill_{order_id}",
+        account_id="ACC1",
+        order_id=order_id,
+        strategy_id="test",
+        symbol=symbol,
+        side=Side.BUY,
+        qty=1,
+        price=1000000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=0,
+        match_ts_ns=0,
+    )
+
+
+class TestOverflowEvictionPersistence:
+    """Evicted fills must survive persist→load round-trip.
+
+    Production scenario: DLQ hits 1000 entries, oldest fills evicted.
+    On graceful shutdown, persist() must include evicted fills, not overwrite them.
+    """
+
+    def test_evicted_fills_survive_persist_load_cycle(self, tmp_path):
+        persist_path = str(tmp_path / "dlq.jsonl")
+        overflow_path = str(tmp_path / "dlq_overflow.jsonl")
+        dlq = OrphanedFillDLQ(max_size=2, persist_path=persist_path)
+
+        # Add 3 fills → first one is evicted
+        dlq.add(_make_fill("EVICTED", "E1"))
+        dlq.add(_make_fill("KEPT1", "K1"))
+        dlq.add(_make_fill("KEPT2", "K2"))
+        assert dlq.count == 2
+
+        # Graceful shutdown
+        dlq.persist()
+
+        # Reload into new DLQ (larger so it can hold all)
+        dlq2 = OrphanedFillDLQ(max_size=100, persist_path=persist_path)
+        dlq2.load()
+
+        # The evicted fill MUST be recovered
+        all_fills = dlq2.drain()
+        symbols = {f.symbol for f in all_fills}
+        assert "EVICTED" in symbols, "Evicted fill was permanently lost"
+        assert "KEPT1" in symbols
+        assert "KEPT2" in symbols
+
+    def test_multiple_evictions_all_recovered(self, tmp_path):
+        persist_path = str(tmp_path / "dlq.jsonl")
+        dlq = OrphanedFillDLQ(max_size=2, persist_path=persist_path)
+
+        # Add 5 fills → 3 evicted, only last 2 in memory
+        for i in range(5):
+            dlq.add(_make_fill(f"SYM{i}", f"ORD{i}"))
+        assert dlq.count == 2
+
+        dlq.persist()
+
+        dlq2 = OrphanedFillDLQ(max_size=100, persist_path=persist_path)
+        dlq2.load()
+
+        all_fills = dlq2.drain()
+        symbols = {f.symbol for f in all_fills}
+        # All 5 should be recoverable (3 evicted + 2 in-memory)
+        for i in range(5):
+            assert f"SYM{i}" in symbols, f"SYM{i} lost"

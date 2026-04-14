@@ -91,6 +91,9 @@ async def test_broker_empty_snapshot_is_debounced_before_halt():
         storm_guard=StormGuard(),
     )
 
+    # Override critical debounce to 1 to test broker-zero debounce in isolation
+    service._critical_drift_debounce = 1
+
     with patch.object(service, "_trigger_halt", new_callable=AsyncMock) as halt_mock:
         await service.sync_portfolio()
         halt_mock.assert_not_called()
@@ -98,3 +101,80 @@ async def test_broker_empty_snapshot_is_debounced_before_halt():
 
         await service.sync_portfolio()
         halt_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_critical_discrepancy_debounce_prevents_immediate_halt():
+    """Critical futures discrepancy requires multiple consecutive observations before HALT."""
+    client = MagicMock()
+    client.get_positions.return_value = []
+
+    store = PositionStore()
+    store.load_recovery(
+        account_id="acct",
+        symbol="TXFD6",
+        net_qty=-1,
+        avg_price_scaled=-1,
+        realized_pnl_scaled=0,
+        fees_scaled=0,
+        strategy_id="",
+    )
+
+    service = ReconciliationService(
+        client,
+        store,
+        {"reconciliation": {"broker_zero_debounce_observations": 1}},
+        storm_guard=StormGuard(),
+    )
+    service._critical_drift_debounce = 3
+
+    with patch.object(service, "_trigger_halt", new_callable=AsyncMock) as halt_mock:
+        # Observation 1: debounce — no HALT
+        await service.sync_portfolio()
+        halt_mock.assert_not_called()
+        assert service._critical_drift_streak == 1
+
+        # Observation 2: still debouncing
+        await service.sync_portfolio()
+        halt_mock.assert_not_called()
+        assert service._critical_drift_streak == 2
+
+        # Observation 3: debounce met — HALT triggered
+        await service.sync_portfolio()
+        halt_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_halt_not_retriggered_while_already_halted():
+    """Once HALT is triggered, recon must not re-trigger to avoid resetting de-escalation."""
+    client = MagicMock()
+    client.get_positions.return_value = []
+
+    store = PositionStore()
+    store.load_recovery(
+        account_id="acct",
+        symbol="TXFD6",
+        net_qty=-1,
+        avg_price_scaled=-1,
+        realized_pnl_scaled=0,
+        fees_scaled=0,
+        strategy_id="",
+    )
+
+    service = ReconciliationService(
+        client,
+        store,
+        {"reconciliation": {"broker_zero_debounce_observations": 1}},
+        storm_guard=StormGuard(),
+    )
+    service._critical_drift_debounce = 1
+
+    with patch.object(service, "_trigger_halt", new_callable=AsyncMock) as halt_mock:
+        # First sync: triggers HALT
+        await service.sync_portfolio()
+        assert halt_mock.call_count == 1
+
+        # Second sync: discrepancy persists but _halt_triggered=True — no re-trigger
+        await service.sync_portfolio()
+        assert halt_mock.call_count == 1  # still 1, NOT 2
+        assert service._critical_drift_streak == 2

@@ -129,7 +129,7 @@ class QuoteConnectionPool:
         self._slots: list[FacadeSlot] = []
         self._lob: Any = None
         self._feature_engine: Any = None
-        self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "3"))
+        self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "10"))
         self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
         self._user_callback: Callable[..., Any] | None = None
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))

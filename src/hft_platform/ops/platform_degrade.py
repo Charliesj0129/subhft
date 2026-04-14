@@ -21,7 +21,10 @@ _AUTONOMY_MODE_VALUES = {
 _AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset(
     {
         "feed_reconnect_unhealthy",
+        "feed_reconnect_pending",
         "feed_gap_exceeded",
+        "feed_reconnect_flapping",
+        "reconciliation_drift",
         "rss_unhealthy",
     }
 )

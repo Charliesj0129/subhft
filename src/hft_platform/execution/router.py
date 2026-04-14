@@ -93,7 +93,7 @@ class ExecutionRouter:
         self._cmd_tca_map: Dict[str, tuple[int, int]] = cmd_tca_map if cmd_tca_map is not None else {}
         self.running = False
         self.metrics = MetricsRegistry.get()
-        self._dlq_retry_interval = 100  # Retry DLQ every 100 events processed
+        self._dlq_retry_interval = int(os.getenv("HFT_DLQ_RETRY_INTERVAL", "100"))  # Retry DLQ every N events processed
         # Fill deduplication: prevent double-counting on broker reconnect (bounded FIFO dict)
         self._fill_dedup_max_size: int = int(os.environ.get("HFT_FILL_DEDUP_MAX_SIZE", "10000"))
         self._seen_fill_ids: collections.OrderedDict[str, None] = collections.OrderedDict()

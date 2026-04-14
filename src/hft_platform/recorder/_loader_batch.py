@@ -144,7 +144,7 @@ def format_market_data(
         has_bids = bool(bids_price)
         has_asks = bool(asks_price)
         if row_type != "tick" and has_bids != has_asks:
-            logger.warning(
+            logger.debug(
                 "Missing orderbook side in WAL row",
                 symbol=r.get("symbol"),
                 has_bids=has_bids,

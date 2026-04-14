@@ -45,6 +45,7 @@ class TelegramSender:
         "_rate_limit_s",
         "_last_send_ts",
         "_session",
+        "_aiohttp_warned",
     )
 
     def __init__(
@@ -62,6 +63,15 @@ class TelegramSender:
         self._rate_limit_s: float = rate_limit_seconds
         self._last_send_ts: float = 0.0
         self._session: _AiohttpClientSession | None = None
+        self._aiohttp_warned: bool = False
+
+        if self._enabled and aiohttp is None:
+            logger.error(
+                "telegram.aiohttp_missing_at_startup",
+                hint="HFT_TELEGRAM_ENABLED=1 but aiohttp is not installed. "
+                "Install with: pip install aiohttp",
+            )
+            self._enabled = False
 
     _MAX_MESSAGE_LEN: int = 4096
 
@@ -119,7 +129,9 @@ class TelegramSender:
             return False
 
         if aiohttp is None:  # pragma: no cover
-            logger.warning("telegram.aiohttp_unavailable")
+            if not self._aiohttp_warned:
+                self._aiohttp_warned = True
+                logger.warning("telegram.aiohttp_unavailable")
             return False
 
         max_attempts = self._MAX_CRITICAL_RETRIES + 1 if critical else 1

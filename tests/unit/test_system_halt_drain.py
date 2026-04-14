@@ -336,3 +336,66 @@ class TestOnExecOverflowGuard:
         event = stub._exec_overflow_buf[0]
         assert event.data["_resolved_strategy_id"] == "strat_b"
         stub.order_adapter.resolve_strategy_from_deal_candidates.assert_not_called()
+
+
+class TestGracefulReset:
+    """graceful_reset() clears checkpoint, recovery, DLQ, HALT, REDUCE_ONLY."""
+
+    @pytest.mark.asyncio
+    async def test_graceful_reset_clears_all_components(self):
+        """Graceful reset should clear checkpoint, recovery, DLQ, and state."""
+        import tempfile
+        import os
+
+        from hft_platform.execution.positions import PositionStore
+        from hft_platform.ops.platform_degrade import PlatformDegradeController
+        from hft_platform.risk.storm_guard import StormGuard
+
+        with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+            sg = StormGuard()
+        sg.trigger_halt("test_halt")
+        assert sg.state == StormGuardState.HALT
+
+        pdc = PlatformDegradeController()
+        pdc.enter_reduce_only(reason="test_reason")
+        assert pdc.reduce_only_active is True
+
+        store = PositionStore()
+        store._recovery_positions = {"k1": {"net_qty": 5, "symbol": "TX"}}
+
+        recon = MagicMock()
+        recon._halt_triggered = True
+        recon._consecutive_failures = 5
+        recon._broker_zero_streak = 3
+        recon._noncritical_drift_streak = 4
+
+        # Create a temporary checkpoint file
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b'{"test": true}')
+            ckpt_path = f.name
+
+        ckpt_writer = MagicMock()
+        ckpt_writer._path = ckpt_path
+
+        # Build minimal system stub
+        system = MagicMock()
+        system.checkpoint_writer = ckpt_writer
+        system.position_store = store
+        system.storm_guard = sg
+        system.platform_degrade_controller = pdc
+        system.recon_service = recon
+
+        # Call the actual method
+        from hft_platform.services.system import HFTSystem
+        results = await HFTSystem.graceful_reset(system, reason="test_reset")
+
+        # Verify all components reset
+        assert "deleted" in results["checkpoint"]
+        assert not os.path.exists(ckpt_path)
+        assert store._recovery_positions == {}
+        assert pdc.reduce_only_active is False
+        assert recon._halt_triggered is False
+        assert recon._consecutive_failures == 0
+        assert recon._broker_zero_streak == 0
+        assert recon._noncritical_drift_streak == 0
+        assert sg.state == StormGuardState.NORMAL

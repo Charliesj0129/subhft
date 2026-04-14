@@ -13,6 +13,7 @@ Complies with HFT Laws:
 import asyncio
 import json
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -193,10 +194,26 @@ class DeadLetterQueue:
                 for entry in entries:
                     f.write(json.dumps(entry.to_dict()) + "\n")
             logger.info("DLQ flushed to disk", file=str(filename), count=len(entries))
+            self._cleanup_old_files()
             return len(entries)
         except Exception as e:
             logger.error("DLQ flush failed", error=str(e))
             return 0
+
+    def _cleanup_old_files(self) -> None:
+        """Delete DLQ files older than HFT_DLQ_RETAIN_DAYS (default: 7)."""
+        retain_days = int(os.getenv("HFT_DLQ_RETAIN_DAYS", "7"))
+        cutoff = time.time() - retain_days * 86400
+        deleted = 0
+        for fpath in self.dlq_dir.glob("dlq_*.jsonl"):
+            try:
+                if os.path.getmtime(fpath) < cutoff:
+                    fpath.unlink()
+                    deleted += 1
+            except Exception as e:
+                logger.warning("DLQ cleanup failed for file", file=str(fpath), error=str(e))
+        if deleted:
+            logger.info("DLQ old files removed", count=deleted, retain_days=retain_days)
 
     async def get_stats(self) -> Dict[str, int]:
         """Get queue statistics."""

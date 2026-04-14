@@ -173,6 +173,8 @@ class HFTSystem:
             )
         self.recon_service.platform_degrade_controller = self.platform_degrade_controller
 
+        self._halt_log_mono: float = 0.0  # rate-limit HALT log to avoid spam
+        self._halt_checkpoint_written: bool = False  # write checkpoint once on HALT entry
         self._mtm_calculator = None
         try:
             from hft_platform.execution.mtm import MarkToMarketCalculator
@@ -520,6 +522,85 @@ class HFTSystem:
                 self._task_restart_until_s.pop(name, None)
                 self._task_started_at.pop(name, None)
 
+    async def graceful_reset(self, *, reason: str = "operator_manual") -> dict[str, str]:
+        """Reset recovery state without full system restart.
+
+        Clears checkpoint, pending recovery positions, DLQ, HALT residue, and
+        REDUCE_ONLY state. The system stays running but starts from a clean
+        slate for recovery-related state.
+
+        Returns a dict of {component: status} for operator visibility.
+        """
+        results: dict[str, str] = {}
+
+        # 1. Clear checkpoint file
+        if self.checkpoint_writer is not None:
+            path = getattr(self.checkpoint_writer, "_path", None)
+            if path and os.path.exists(path):
+                os.unlink(path)
+                results["checkpoint"] = f"deleted: {path}"
+                logger.info("graceful_reset: checkpoint cleared", path=path)
+            else:
+                results["checkpoint"] = "no file"
+        else:
+            results["checkpoint"] = "no writer"
+
+        # 2. Clear pending recovery positions in PositionStore
+        recovery = getattr(self.position_store, "_recovery_positions", None)
+        if recovery is not None:
+            count = len(recovery)
+            recovery.clear()
+            results["recovery_positions"] = f"cleared {count} entries"
+            logger.info("graceful_reset: recovery positions cleared", count=count)
+        else:
+            results["recovery_positions"] = "no recovery state"
+
+        # 3. Clear DLQ state
+        try:
+            from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
+            dlq = get_orphaned_fill_dlq()
+            dlq_count = dlq.count
+            dlq.drain()
+            results["fill_dlq"] = f"drained {dlq_count} entries"
+            logger.info("graceful_reset: fill DLQ drained", count=dlq_count)
+        except Exception as exc:
+            results["fill_dlq"] = f"error: {exc}"
+
+        # 4. Reset StormGuard to NORMAL (if in HALT from reconciliation)
+        if self.storm_guard.state >= StormGuardState.STORM:
+            old_state = self.storm_guard.state.name
+            self.storm_guard._halt_entry_ts = 0.0
+            self.storm_guard._storm_entry_ts = 0.0
+            self.storm_guard._de_escalate_count = self.storm_guard._de_escalate_threshold
+            # Force de-escalation on next update cycle
+            self.storm_guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+            results["storm_guard"] = f"reset from {old_state} to {self.storm_guard.state.name}"
+            logger.info("graceful_reset: storm_guard reset", old=old_state, new=self.storm_guard.state.name)
+        else:
+            results["storm_guard"] = "already NORMAL"
+
+        # 5. Exit REDUCE_ONLY if active
+        if self.platform_degrade_controller.reduce_only_active:
+            self.platform_degrade_controller.exit_reduce_only(reason=reason)
+            results["reduce_only"] = "exited"
+            logger.info("graceful_reset: REDUCE_ONLY exited", reason=reason)
+        else:
+            results["reduce_only"] = "not active"
+
+        # 6. Reset reconciliation state
+        if self.recon_service is not None:
+            self.recon_service._halt_triggered = False
+            self.recon_service._consecutive_failures = 0
+            self.recon_service._broker_zero_streak = 0
+            self.recon_service._noncritical_drift_streak = 0
+            results["reconciliation"] = "state reset"
+            logger.info("graceful_reset: reconciliation state reset")
+        else:
+            results["reconciliation"] = "no service"
+
+        logger.warning("graceful_reset_completed", reason=reason, results=results)
+        return results
+
     def _try_restart_service(self, name: str, component: str, coro_factory: Any) -> None:
         now_s = timebase.now_s()
         allowed_at = self._task_restart_until_s.get(name, 0.0)
@@ -834,15 +915,18 @@ class HFTSystem:
 
             # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
-                logger.error("System HALTED by StormGuard - blocking orders")
+                _now_mono = time.monotonic()
+                _halt_log_interval_s = 60.0
+                if _now_mono - self._halt_log_mono >= _halt_log_interval_s:
+                    self._halt_log_mono = _now_mono
+                    logger.error("System HALTED by StormGuard - blocking orders")
                 # Defense-in-depth: propagate HALT to gateway policy FIRST so the
                 # gateway rejects new intents while we drain queues below.
                 if self.gateway_service is not None:
                     self.gateway_service.set_halt()
-                    logger.warning("Gateway policy set to HALT by StormGuard supervisor")
-                # M5: Immediately write position checkpoint on HALT to minimize
-                # state loss if the system crashes while halted.
-                if self.checkpoint_writer is not None:
+                # M5: Write position checkpoint once on HALT entry, not every tick.
+                if self.checkpoint_writer is not None and not self._halt_checkpoint_written:
+                    self._halt_checkpoint_written = True
                     try:
                         self.checkpoint_writer.write_checkpoint()
                     except Exception:
@@ -963,6 +1047,8 @@ class HFTSystem:
                 # During HALT we set order_adapter.running=False (line 712);
                 # without this, the adapter stays stopped after de-escalation.
                 self._set_service_running(self.order_adapter, True)
+                # Reset HALT log/checkpoint rate-limiting for next HALT episode.
+                self._halt_checkpoint_written = False
 
             # Periodic gen-0 GC: reclaim cyclic refs from framework objects
             # (structlog, Prometheus, asyncio internals) without full GC pause.

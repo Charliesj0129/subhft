@@ -395,6 +395,30 @@ class TestReduceOnlyReasons:
             reasons = inp.reduce_only_reasons()
         assert "feed_reconnect_pending" not in reasons
 
+    def test_pending_reconnect_suppressed_outside_reconnect_window(self) -> None:
+        """Session gap (e.g. 13:35-14:55) is expected; must not trigger reduce-only."""
+        now = self._now()
+        inp = _make_inputs(
+            pending_since=now - 120.0,  # 120s > 60s threshold
+            within_window=False,        # outside reconnect window
+        )
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = now
+            reasons = inp.reduce_only_reasons()
+        assert "feed_reconnect_pending" not in reasons
+
+    def test_pending_reconnect_fires_inside_reconnect_window(self) -> None:
+        """When inside reconnect window and pending > threshold, must fire."""
+        now = self._now()
+        inp = _make_inputs(
+            pending_since=now - 120.0,  # 120s > 60s threshold
+            within_window=True,         # inside reconnect window
+        )
+        with patch("hft_platform.ops.platform_inputs.timebase") as tb:
+            tb.now_s.return_value = now
+            reasons = inp.reduce_only_reasons()
+        assert "feed_reconnect_pending" in reasons
+
     def test_flap_triggers_reason(self) -> None:
         inp = _make_inputs(
             quote_flap_events=list(range(10)),

@@ -406,7 +406,7 @@ class StartupPositionVerifier:
         """
         if not entries:
             if target_qty != 0 and symbol:
-                key = f"{account_id}::{symbol}"
+                key = f"{account_id}:*:{symbol}"
                 merged[key] = {
                     "symbol": symbol,
                     "net_qty": target_qty,
@@ -414,7 +414,7 @@ class StartupPositionVerifier:
                     "realized_pnl_scaled": 0,
                     "fees_scaled": 0,
                     "account_id": account_id,
-                    "strategy_id": "",
+                    "strategy_id": "*",
                 }
                 logger.info(
                     "position_recovery: created entry from broker",
@@ -466,19 +466,28 @@ class StartupPositionVerifier:
             }
 
     def _recover_broker_only(self, broker_map: Dict[str, int], account_id: str) -> RecoveryResult:
-        """Use broker positions only (no valid checkpoint)."""
+        """Use broker positions only (no valid checkpoint).
+
+        Broker APIs report symbol-level totals without per-strategy attribution.
+        Uses ``strategy_id="*"`` (wildcard) to explicitly mark unknown ownership.
+        StrategyRunner dispatches ``"*"`` positions to matching strategies on first
+        fill via the wildcard lookup in ``positions_by_strategy.get("*")``.
+        """
         merged: Dict[str, Dict[str, Any]] = {}
         for symbol, qty in broker_map.items():
             if qty != 0:
                 # avg_price_scaled=0 causes massive fake PnL on first close.
                 # Use a sentinel -1 so downstream can detect "unknown cost basis"
                 # and avoid treating first close as profit from zero.
-                merged[symbol] = {
+                key = f"{account_id}:*:{symbol}"
+                merged[key] = {
                     "symbol": symbol,
                     "net_qty": qty,
                     "avg_price_scaled": -1,
                     "realized_pnl_scaled": 0,
                     "fees_scaled": 0,
+                    "account_id": account_id,
+                    "strategy_id": "*",
                 }
         loaded = self._write_to_store(merged, account_id)
         startup_recon_status.set(1)
