@@ -1500,7 +1500,19 @@ class HFTSystem:
                 self._exec_startup_overflow_lost = True
             return
         if loop is not None:
-            loop.call_soon_threadsafe(self._safe_enqueue_exec, event)
+            try:
+                loop.call_soon_threadsafe(self._safe_enqueue_exec, event)
+            except RuntimeError:
+                # Loop is closing/closed — fall through to overflow buffer
+                if len(self._exec_overflow_buf) < self._EXEC_OVERFLOW_MAX:
+                    self._exec_overflow_buf.append(event)
+                else:
+                    self._exec_overflow_evicted += 1
+                    self._persist_lost_exec_event(event)
+                    logger.critical(
+                        "exec_overflow_buf FULL during loop shutdown — fill persisted to DLQ",
+                        evicted_count=self._exec_overflow_evicted,
+                    )
         else:
             # I-H4: loop not yet assigned (startup race) — buffer so events aren't dropped
             if len(self._exec_overflow_buf) >= self._EXEC_OVERFLOW_MAX:

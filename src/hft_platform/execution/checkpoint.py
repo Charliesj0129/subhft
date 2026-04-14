@@ -9,6 +9,7 @@ Env vars:
 from __future__ import annotations
 
 import asyncio
+import glob as glob_mod
 import hashlib
 import os
 import tempfile
@@ -206,8 +207,20 @@ class PositionCheckpointWriter:
     def load_checkpoint(path: str) -> Optional[Dict[str, Any]]:
         """Load and verify a checkpoint file.
 
+        Also cleans up stale ``.ckpt_*.tmp`` files left by hard crashes
+        (SIGKILL / power loss between fsync and rename).
+
         Returns the parsed dict if valid, or ``None`` on missing / corrupt file.
         """
+        # Clean stale tmp files from previous crashed writes
+        parent = os.path.dirname(path) or "."
+        for tmp in glob_mod.glob(os.path.join(parent, ".ckpt_*.tmp")):
+            try:
+                os.unlink(tmp)
+                logger.info("checkpoint_stale_tmp_cleaned", path=tmp)
+            except OSError:
+                pass
+
         if not os.path.exists(path):
             return None
 

@@ -460,6 +460,16 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         self._init_shm_publisher()
         self._init_redis_publisher()
 
+        # Prevent GC of fire-and-forget asyncio tasks
+        self._background_tasks: set[asyncio.Task] = set()
+
+    def _anchor_task(self, coro: Any) -> asyncio.Task:
+        """Create an asyncio task and anchor it to prevent GC before completion."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
     def _init_shm_publisher(self) -> None:
         """Initialise optional SHM publisher for monitor snapshots."""
         try:
@@ -894,7 +904,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         if self._symbol_tick_inline:
             self._symbol_last_tick[symbol] = time.monotonic()
         else:
-            asyncio.create_task(self._update_symbol_tick(symbol))
+            self._anchor_task(self._update_symbol_tick(symbol))
 
     @staticmethod
     def _build_trace_id(event: TickEvent | BidAskEvent) -> str:
@@ -1097,7 +1107,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         if fn is not None:
             fn(event)
             return
-        asyncio.create_task(self._publish(event))
+        self._anchor_task(self._publish(event))
 
     def _publish_many_nowait(self, events: list[Any] | tuple[Any, ...]) -> None:
         fn = self._bus_publish_many_nowait
@@ -1497,7 +1507,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                     self.metrics_registry.recorder_direct_drops_total.inc()
                 return
             self._record_pending_puts += 1
-            asyncio.create_task(self._record_put_with_tracking(topic, payload))
+            self._anchor_task(self._record_put_with_tracking(topic, payload))
 
     async def _record_put_with_tracking(self, topic: str, payload: Any) -> None:
         """Await recorder queue put with pending counter tracking."""

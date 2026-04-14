@@ -607,14 +607,20 @@ class OrderAdapter:
         return f"{symbol}:{side.name}"
 
     async def _register_pending_fill(self, order_key: str, symbol: str, side: Side, custom_field_token: str) -> None:
-        """Register strong and weak early-fill correlation before broker IDs exist."""
+        """Register strong and weak early-fill correlation before broker IDs exist.
+
+        Uses threading.Lock (not asyncio.Lock) because resolve_strategy_from_deal()
+        is called from the broker callback thread. The critical section is sub-μs
+        (dict/list ops only). Both pending_fill_index AND order_id_map are updated
+        atomically under the same lock to eliminate the window where a fill could
+        arrive between the two registrations.
+        """
         key = self._pending_fill_key(symbol, side)
         with self._pending_fill_lock:
             pending = self._pending_fill_index.setdefault(key, [])
             if order_key not in pending:
                 pending.append(order_key)
             self._pending_fill_registered_at[order_key] = time.monotonic()
-        async with self._order_id_map_lock:
             self.order_id_map[custom_field_token] = order_key
         self._maybe_persist_order_id_map()
 
@@ -724,12 +730,21 @@ class OrderAdapter:
             has_pending = any(k.startswith(f"{strategy_id}:") for k in self._pending_order_keys)
             if has_pending:
                 if len(self._deferred_terminals) == self._deferred_terminals.maxlen:
+                    # Evicted entry's order will linger in live_orders until TTL sweep.
+                    # Proactively clean it up to avoid blocking new orders for that strategy.
+                    evicted = self._deferred_terminals[0]  # will be popped by append
+                    evicted_key = f"{evicted[0]}:{evicted[1]}"
+                    self.live_orders.pop(evicted_key, None)
+                    self._live_orders_inserted_at.pop(evicted_key, None)
+                    self._cmd_created_ns_map.pop(evicted_key, None)
+                    self._cmd_tca_map.pop(evicted_key, None)
                     self.metrics.deferred_terminal_overflow_total.inc()
                     logger.error(
                         "deferred_terminal_overflow",
                         strategy_id=strategy_id,
                         broker_order_id=order_id,
-                        msg="Oldest deferred terminal silently evicted — stale live_orders risk",
+                        evicted_key=evicted_key,
+                        msg="Oldest deferred terminal evicted — live_orders entry cleaned up",
                     )
                 self._deferred_terminals.append((strategy_id, order_id, time.monotonic()))
                 self.metrics.terminal_before_registration_total.inc()
