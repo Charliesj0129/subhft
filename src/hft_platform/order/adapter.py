@@ -664,6 +664,8 @@ class OrderAdapter:
         for cmd in _api_safety:
             try:
                 _task = asyncio.create_task(self._dispatch_to_api(cmd))
+                self._background_tasks.add(_task)
+                _task.add_done_callback(self._background_tasks.discard)
                 logger.info(
                     "halt_drain_api_safety_cmd_dispatched",
                     cmd_id=getattr(cmd, "cmd_id", "?"),

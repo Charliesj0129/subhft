@@ -1035,6 +1035,11 @@ class HFTSystem:
                     try:
                         _task = asyncio.create_task(self.order_adapter.execute(cmd))
                         _task.add_done_callback(_log_safety_dispatch_error)
+                        # Anchor task to prevent GC before completion
+                        _bg = getattr(self.order_adapter, "_background_tasks", None)
+                        if _bg is not None:
+                            _bg.add(_task)
+                            _task.add_done_callback(_bg.discard)
                         logger.info(
                             "halt_drain_safety_cmd_dispatched",
                             cmd_id=getattr(cmd, "cmd_id", "?"),
@@ -1052,7 +1057,11 @@ class HFTSystem:
                 self._set_service_running(self.order_adapter, False)
                 # H6: Cancel in-flight orders already dispatched to broker
                 try:
-                    asyncio.create_task(self.order_adapter.drain_and_cancel())
+                    _drain_task = asyncio.create_task(self.order_adapter.drain_and_cancel())
+                    _bg = getattr(self.order_adapter, "_background_tasks", None)
+                    if _bg is not None:
+                        _bg.add(_drain_task)
+                        _drain_task.add_done_callback(_bg.discard)
                 except Exception as exc:
                     logger.warning("In-flight order cancellation failed during HALT", error=str(exc))
             else:

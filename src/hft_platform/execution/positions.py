@@ -1,3 +1,4 @@
+import dataclasses
 import importlib
 import os
 import threading
@@ -566,9 +567,17 @@ class PositionStore:
         return total
 
     def snapshot_positions(self) -> dict:
-        """Return a consistent shallow copy of positions under fill lock."""
+        """Return a consistent deep copy of positions under fill lock.
+
+        Position objects are mutable dataclasses mutated in-place by on_fill().
+        A shallow copy would share Position references, allowing a concurrent
+        fill (from broker thread) to mutate fields while the caller (e.g.
+        checkpoint writer) reads them — producing torn/inconsistent state.
+        dataclasses.replace() copies all fields (all ints/strings, no nested
+        mutables) so the snapshot is fully isolated.
+        """
         with self._fill_lock:
-            return dict(self.positions)
+            return {k: dataclasses.replace(v) for k, v in self.positions.items()}
 
     def reset(self) -> int:
         """Clear all positions, recovery state, and portfolio aggregates.
