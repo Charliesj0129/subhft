@@ -6,9 +6,11 @@ Verifies that:
 """
 
 from __future__ import annotations
+from unittest.mock import MagicMock
 
 import pytest
 
+from hft_platform.notifications import telegram as _tg_mod
 from hft_platform.notifications.telegram import TelegramSender
 
 
@@ -16,6 +18,8 @@ class TestTelegramSenderEnabled:
     def test_enabled_true_with_env_vars_activates_sender(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token-123")
         monkeypatch.setenv("HFT_TELEGRAM_CHAT_ID", "99999")
+        # Ensure aiohttp presence check passes (may be None in test env)
+        monkeypatch.setattr(_tg_mod, "aiohttp", MagicMock())
 
         sender = TelegramSender(enabled=True)
 
@@ -45,7 +49,8 @@ class TestTelegramSenderEnabled:
 
         assert sender._enabled is False
 
-    def test_explicit_credentials_with_enabled_true_activates_sender(self) -> None:
+    def test_explicit_credentials_with_enabled_true_activates_sender(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_tg_mod, "aiohttp", MagicMock())
         sender = TelegramSender(
             bot_token="explicit-token",
             chat_id="12345",

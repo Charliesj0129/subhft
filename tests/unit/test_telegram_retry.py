@@ -19,7 +19,7 @@ def _build_aiohttp_stub() -> types.ModuleType:
 
     class _FakeClientTimeout:
         def __init__(self, *args, **kwargs):
-            pass
+            self.total = kwargs.get("total")
 
     class _FakeClientSession:
         def __init__(self, *args, **kwargs):
