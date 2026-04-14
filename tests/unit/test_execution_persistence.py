@@ -310,6 +310,9 @@ class TestOrderIdMapPersistence:
 
         await adapter._register_broker_ids("R47:101", {"ordno": "ORD_RESTART", "seqno": "SEQ_RESTART"})
 
+        # _maybe_persist_order_id_map uses run_in_executor (fire-and-forget).
+        # Give the executor a chance to flush before asserting file existence.
+        await asyncio.sleep(0.05)
         assert os.path.exists(persist_path)
 
         with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):

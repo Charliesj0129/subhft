@@ -267,6 +267,22 @@ class MarketDataReconnectMixin:
         except Exception:
             return False
 
+    # -- watchdog helpers ------------------------------------------------------
+
+    def _find_stale_symbols(self: Any, active_snapshot: dict[str, float], now: float) -> list[tuple[str, float]]:
+        """Return (symbol, gap) pairs exceeding the gap threshold."""
+        threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
+        if self._is_market_open_grace_period():
+            threshold = max(threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
+        stale: list[tuple[str, float]] = []
+        for symbol, last_ts in active_snapshot.items():
+            if any(symbol.startswith(p) for p in _WATCHDOG_EXCLUDE_PREFIXES):
+                continue
+            gap = now - last_ts
+            if gap > threshold:
+                stale.append((symbol, gap))
+        return stale
+
     # -- watchdog loop -------------------------------------------------------
 
     async def _watchdog_loop(self: Any) -> None:
@@ -307,20 +323,7 @@ class MarketDataReconnectMixin:
             if len(active_snapshot) < min_active:
                 self._symbol_gap_consecutive_hits = 0
                 continue
-            stale_symbols: list[tuple[str, float]] = []
-
-            threshold = getattr(self, "_symbol_gap_threshold_s", 6.0)
-            if self._is_market_open_grace_period():
-                threshold = max(threshold, getattr(self, "_market_open_grace_gap_threshold_s", 30.0))
-
-            for symbol, last_ts in active_snapshot.items():
-                # Skip options — illiquid TXO/MXO contracts naturally gap
-                # minutes between ticks and should not trigger resubscribe.
-                if any(symbol.startswith(p) for p in _WATCHDOG_EXCLUDE_PREFIXES):
-                    continue
-                gap = now - last_ts
-                if gap > threshold:
-                    stale_symbols.append((symbol, gap))
+            stale_symbols = self._find_stale_symbols(active_snapshot, now)
 
             if stale_symbols:
                 self._symbol_gap_consecutive_hits += 1
@@ -348,7 +351,7 @@ class MarketDataReconnectMixin:
                 if (
                     len(stale_symbols) >= min_stale
                     and stale_ratio >= ratio_threshold
-                    and max_stale_gap >= max(severe_gap, threshold)
+                    and max_stale_gap >= max(severe_gap, getattr(self, "_symbol_gap_threshold_s", 6.0))
                     and hits >= consec_cycles
                     and (timebase.now_s() - getattr(self, "_last_symbol_gap_resubscribe_ts", 0.0)) >= cooldown
                 ):

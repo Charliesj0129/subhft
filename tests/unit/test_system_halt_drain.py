@@ -344,8 +344,8 @@ class TestGracefulReset:
     @pytest.mark.asyncio
     async def test_graceful_reset_clears_all_components(self):
         """Graceful reset should clear checkpoint, recovery, DLQ, and state."""
-        import tempfile
         import os
+        import tempfile
 
         from hft_platform.execution.positions import PositionStore
         from hft_platform.ops.platform_degrade import PlatformDegradeController
@@ -387,6 +387,7 @@ class TestGracefulReset:
 
         # Call the actual method
         from hft_platform.services.system import HFTSystem
+
         results = await HFTSystem.graceful_reset(system, reason="test_reset")
 
         # Verify all components reset

@@ -400,7 +400,7 @@ class TestReduceOnlyReasons:
         now = self._now()
         inp = _make_inputs(
             pending_since=now - 120.0,  # 120s > 60s threshold
-            within_window=False,        # outside reconnect window
+            within_window=False,  # outside reconnect window
         )
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
@@ -412,7 +412,7 @@ class TestReduceOnlyReasons:
         now = self._now()
         inp = _make_inputs(
             pending_since=now - 120.0,  # 120s > 60s threshold
-            within_window=True,         # inside reconnect window
+            within_window=True,  # inside reconnect window
         )
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now

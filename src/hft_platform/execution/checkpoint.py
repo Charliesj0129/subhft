@@ -101,13 +101,14 @@ class PositionCheckpointWriter:
             path=self._path,
             interval_s=self._interval_s,
         )
+        loop = asyncio.get_running_loop()
         try:
             while self.running:
                 await asyncio.sleep(self._interval_s)
                 if not self.running:
                     break
                 try:
-                    self.write_checkpoint()
+                    await loop.run_in_executor(None, self.write_checkpoint)
                 except Exception:
                     logger.exception("checkpoint_write_failed")
         finally:

@@ -9,14 +9,13 @@ Covers:
 
 import asyncio
 import collections
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import Side
-from hft_platform.execution.fill_dlq import OrphanedFillDLQ, _dlq, get_orphaned_fill_dlq
+from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.router import ExecutionRouter
 
@@ -143,6 +142,7 @@ class TestRecoverFillGaps:
     async def test_dedup_skips_already_processed_fills(self, tmp_path):
         """Fills whose fill_id is already in dedup window are skipped."""
         import hashlib
+
         import orjson
 
         ckpt_data = {

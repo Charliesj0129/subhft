@@ -141,6 +141,7 @@ def _make_router(
     # Prevent cross-test pollution from persisted dedup window files.
     _dedup_path = ".state/fill_dedup_window.jsonl"
     import pathlib
+
     pathlib.Path(_dedup_path).unlink(missing_ok=True)
     with patch.dict("os.environ", {"HFT_FILL_DEDUP_MAX_SIZE": str(dedup_max_size)}):
         router = ExecutionRouter(

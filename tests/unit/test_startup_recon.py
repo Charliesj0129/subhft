@@ -312,20 +312,26 @@ async def test_dual_recovery_broker_only_symbol_uses_wildcard() -> None:
         },
     }
     # Broker has TXFD6 (1 lot) + MXFJ6 (1 lot, not in checkpoint)
-    client = FakeBrokerClient([
-        FakeBrokerPosition("TXFD6", 1),
-        FakeBrokerPosition("MXFJ6", 1),
-    ])
+    client = FakeBrokerClient(
+        [
+            FakeBrokerPosition("TXFD6", 1),
+            FakeBrokerPosition("MXFJ6", 1),
+        ]
+    )
     store = PositionStore()
     verifier = StartupPositionVerifier(client, store, checkpoint_path="/nonexistent")
 
     # Manually inject checkpoint data (bypass file loading)
     from hft_platform.execution.checkpoint import PositionCheckpointWriter
 
-    with patch.object(PositionCheckpointWriter, "load_checkpoint", return_value={
-        "trading_date": "20260414",
-        "positions": ckpt,
-    }):
+    with patch.object(
+        PositionCheckpointWriter,
+        "load_checkpoint",
+        return_value={
+            "trading_date": "20260414",
+            "positions": ckpt,
+        },
+    ):
         verifier.checkpoint_path = "/fake"
         result = await verifier.recover(trading_date="20260414", account_id="ACC1")
 

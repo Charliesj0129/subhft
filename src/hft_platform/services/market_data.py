@@ -1775,8 +1775,22 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     # When set, only symbols matching these prefixes are included; everything
     # else (stocks, options already excluded above) is ignored.
     _FEED_GAP_FUTURES_PREFIXES: tuple[str, ...] = (
-        "TMF", "TXF", "MXF", "TGF", "XIF", "T5F", "UDF", "GTF", "BTF", "RHF",
-        "SPF", "UNF", "E4F", "NYF", "EXF", "ZEF",
+        "TMF",
+        "TXF",
+        "MXF",
+        "TGF",
+        "XIF",
+        "T5F",
+        "UDF",
+        "GTF",
+        "BTF",
+        "RHF",
+        "SPF",
+        "UNF",
+        "E4F",
+        "NYF",
+        "EXF",
+        "ZEF",
     )
 
     @staticmethod

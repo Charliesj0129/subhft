@@ -317,7 +317,8 @@ class OrderAdapter:
         evicted = 0
         async with self._live_orders_lock:
             stale_keys = [
-                k for k, ts in self._live_orders_inserted_at.items()
+                k
+                for k, ts in self._live_orders_inserted_at.items()
                 if ts < cutoff and k not in self._pending_order_keys
             ]
             for k in stale_keys:
@@ -359,8 +360,7 @@ class OrderAdapter:
         now_mono = time.monotonic()
         with self._pending_fill_lock:
             expired_keys = [
-                k for k, ts in self._pending_fill_registered_at.items()
-                if (now_mono - ts) > self._pending_fill_ttl_s
+                k for k, ts in self._pending_fill_registered_at.items() if (now_mono - ts) > self._pending_fill_ttl_s
             ]
             for k in expired_keys:
                 self._pending_fill_registered_at.pop(k, None)
@@ -583,13 +583,22 @@ class OrderAdapter:
             logger.warning("order_id_map_persist_failed", error=str(exc), path=path)
 
     def _maybe_persist_order_id_map(self, *, force: bool = False) -> None:
-        """Throttle order-id checkpointing to bound crash-recovery loss."""
+        """Throttle order-id checkpointing to bound crash-recovery loss.
+
+        Offloads the synchronous fsync to the default thread pool executor
+        to avoid blocking the event loop (Constitution Law 3).
+        """
         now_s = time.monotonic()
         if not force and self._order_id_map_persist_interval_s > 0:
             if (now_s - self._order_id_map_last_persist_s) < self._order_id_map_persist_interval_s:
                 return
-        self.persist_order_id_map()
         self._order_id_map_last_persist_s = now_s
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, self.persist_order_id_map)
+        except RuntimeError:
+            # No running loop (shutdown or non-async context) — persist inline
+            self.persist_order_id_map()
 
     def _next_custom_field_token(self) -> str:
         """Allocate a 6-char broker-safe token without reusing current map keys."""

@@ -126,9 +126,7 @@ class ReconciliationService:
         self._consecutive_failures: int = 0
         self._halt_triggered: bool = False
         self._critical_drift_streak: int = 0
-        self._critical_drift_debounce: int = int(
-            os.environ.get("HFT_RECON_CRITICAL_DEBOUNCE_OBSERVATIONS", "3")
-        )
+        self._critical_drift_debounce: int = int(os.environ.get("HFT_RECON_CRITICAL_DEBOUNCE_OBSERVATIONS", "3"))
 
     @property
     def drift_streak(self) -> int:

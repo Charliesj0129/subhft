@@ -54,7 +54,6 @@ class RecoveryResult:
     mismatches: list[dict] = field(default_factory=list)
 
 
-
 class StartupPositionVerifier:
     """One-shot verifier that compares broker vs local positions at startup."""
 

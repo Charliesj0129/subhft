@@ -724,16 +724,68 @@ def test_feed_gap_reescalation_allowed_after_cooldown(guard):
 
 
 def test_non_feed_gap_escalation_not_suppressed(guard):
-    """Latency/drawdown STORM is never suppressed by feed gap cooldown."""
+    """Latency STORM is suppressed by its own cooldown, not feed gap's."""
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 1
     guard._feed_gap_reescalation_cooldown_s = 9999.0
+    guard._latency_reescalation_cooldown_s = 0.0  # disable latency cooldown
 
     # Enter STORM via feed gap, de-escalate
     guard.update(feed_gap_s=2.0)
     guard.update(feed_gap_s=0.0)
     assert guard.state == StormGuardState.NORMAL
 
-    # Latency-triggered STORM should NOT be suppressed
+    # Latency-triggered STORM should NOT be suppressed (latency cooldown is 0)
     state = guard.update(latency_us=25000)
+    assert state == StormGuardState.STORM
+
+
+def test_latency_reescalation_suppressed_by_own_cooldown(guard):
+    """After de-escalation from latency STORM, re-escalation is suppressed."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._latency_reescalation_cooldown_s = 9999.0  # long cooldown
+
+    # Enter STORM via latency, de-escalate
+    guard.update(latency_us=25000)
+    assert guard.state == StormGuardState.STORM
+    guard.update(latency_us=0)
+    assert guard.state == StormGuardState.NORMAL
+
+    # Re-escalation should be suppressed during cooldown
+    state = guard.update(latency_us=25000)
+    assert state == StormGuardState.NORMAL  # suppressed
+
+
+def test_latency_reescalation_allowed_after_cooldown_expires(guard):
+    """After latency cooldown expires, re-escalation is allowed."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._latency_reescalation_cooldown_s = 0.0  # instant expiry
+
+    # Enter STORM via latency, de-escalate
+    guard.update(latency_us=25000)
+    assert guard.state == StormGuardState.STORM
+    guard.update(latency_us=0)
+    assert guard.state == StormGuardState.NORMAL
+
+    # Re-escalation should proceed (cooldown = 0)
+    state = guard.update(latency_us=25000)
+    assert state == StormGuardState.STORM
+
+
+def test_drawdown_escalation_not_suppressed_by_latency_cooldown(guard):
+    """Drawdown STORM is never suppressed by latency cooldown."""
+    guard._storm_cooldown_s = 0.0
+    guard._de_escalate_threshold = 1
+    guard._latency_reescalation_cooldown_s = 9999.0
+    guard._feed_gap_reescalation_cooldown_s = 9999.0
+
+    # Enter STORM via latency, de-escalate
+    guard.update(latency_us=25000)
+    guard.update(latency_us=0)
+    assert guard.state == StormGuardState.NORMAL
+
+    # Drawdown-triggered STORM should NOT be suppressed
+    state = guard.update(drawdown_bps=-150)
     assert state == StormGuardState.STORM

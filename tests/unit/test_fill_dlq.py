@@ -1,7 +1,5 @@
 """Tests for orphaned fill DLQ (WU-03)."""
 
-import os
-
 from unittest.mock import MagicMock
 
 from hft_platform.contracts.execution import FillEvent

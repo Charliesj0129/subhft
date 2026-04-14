@@ -2,6 +2,7 @@ import asyncio
 import collections
 import gc
 import os
+import time
 from typing import Any, Dict, Optional
 
 from structlog import get_logger
@@ -172,9 +173,7 @@ class HFTSystem:
                 lambda reason: self.order_adapter.invalidate_live_orders(reason=reason)
             )
             # Reset stale event counter after reconnect so logs are per-session
-            self.md_service.register_on_reconnect(
-                lambda reason: self.strategy_runner.reset_stale_counter()
-            )
+            self.md_service.register_on_reconnect(lambda reason: self.strategy_runner.reset_stale_counter())
         self.recon_service.platform_degrade_controller = self.platform_degrade_controller
 
         self._halt_log_mono: float = 0.0  # rate-limit HALT log to avoid spam
@@ -562,6 +561,7 @@ class HFTSystem:
         # 3. Clear DLQ state
         try:
             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
+
             dlq = get_orphaned_fill_dlq()
             dlq_count = dlq.count
             dlq.drain()
@@ -675,10 +675,12 @@ class HFTSystem:
         # Gen-0 is typically <1ms and safe to run at supervisor frequency.
         _gc_gen0_interval = max(1, int(os.getenv("HFT_GC_GEN0_INTERVAL_TICKS", "10")))
         _gc_gen0_tick = 0
-        _gc_gen0_enabled = (
-            os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {"1", "true", "yes", "on"}
-            and os.getenv("HFT_GC_GEN0_PERIODIC", "1").strip().lower() not in {"0", "false", "no", "off"}
-        )
+        _gc_gen0_enabled = os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        } and os.getenv("HFT_GC_GEN0_PERIODIC", "1").strip().lower() not in {"0", "false", "no", "off"}
         # Periodic gen-2 GC: reclaim long-lived cyclic refs (structlog, asyncio internals).
         # Runs at low frequency to avoid latency impact. Typically <10ms.
         _gc_gen2_interval = max(60, int(os.getenv("HFT_GC_GEN2_INTERVAL_TICKS", "300")))
@@ -1367,9 +1369,7 @@ class HFTSystem:
                 "ingest_ts_ns": getattr(event, "ingest_ts_ns", 0),
                 "lost_at_ns": timebase.now_ns(),
             }
-            dlq_path = os.path.join(
-                os.getenv("HFT_STATE_DIR", ".state"), "exec_overflow_dlq.jsonl"
-            )
+            dlq_path = os.path.join(os.getenv("HFT_STATE_DIR", ".state"), "exec_overflow_dlq.jsonl")
             os.makedirs(os.path.dirname(dlq_path), exist_ok=True)
             with open(dlq_path, "ab") as f:
                 f.write(_ser(payload) + b"\n")

@@ -68,8 +68,7 @@ class TelegramSender:
         if self._enabled and aiohttp is None:
             logger.error(
                 "telegram.aiohttp_missing_at_startup",
-                hint="HFT_TELEGRAM_ENABLED=1 but aiohttp is not installed. "
-                "Install with: pip install aiohttp",
+                hint="HFT_TELEGRAM_ENABLED=1 but aiohttp is not installed. Install with: pip install aiohttp",
             )
             self._enabled = False
 

@@ -463,8 +463,10 @@ def test_bidask_both_empty_no_orderbook_warning(tmp_path):
     assert not any("Missing orderbook side" in w.get("event", "") for w in warnings)
 
 
-def test_bidask_one_side_empty_warns(tmp_path):
-    """BidAsk rows with exactly ONE side empty must still warn (genuine gap)."""
+def test_bidask_one_side_empty_logs_debug(tmp_path):
+    """BidAsk rows with ONE side empty log at debug level (expected for deep OTM options)."""
+    import hft_platform.recorder.loader as loader_mod
+
     wal_dir = tmp_path / "wal"
     archive_dir = tmp_path / "archive"
     wal_dir.mkdir()
@@ -489,8 +491,20 @@ def test_bidask_one_side_empty_warns(tmp_path):
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
     loader.ch_client = MagicMock()
 
-    warnings = _run_and_capture_warnings(loader)
-    assert any("Missing orderbook side" in w.get("event", "") for w in warnings)
+    captured = []
+    original_debug = loader_mod.logger.debug
+
+    def capturing_debug(event, **kw):
+        captured.append({"event": event, **kw})
+        return original_debug(event, **kw)
+
+    loader_mod.logger.debug = capturing_debug
+    try:
+        loader.process_files()
+    finally:
+        loader_mod.logger.debug = original_debug
+
+    assert any("Missing orderbook side" in d.get("event", "") for d in captured)
 
 
 # Backoff computation bounds

@@ -57,6 +57,8 @@ class StormGuard:
         "_norm_failure_storm_ts",
         "_feed_gap_deescalation_ts",
         "_feed_gap_reescalation_cooldown_s",
+        "_latency_deescalation_ts",
+        "_latency_reescalation_cooldown_s",
     )
 
     def __init__(
@@ -93,6 +95,10 @@ class StormGuard:
         self._feed_gap_deescalation_ts: float = 0.0
         self._feed_gap_reescalation_cooldown_s: float = float(
             os.getenv("HFT_STORMGUARD_FEED_GAP_REESCALATION_COOLDOWN_S", "120")
+        )
+        self._latency_deescalation_ts: float = 0.0
+        self._latency_reescalation_cooldown_s: float = float(
+            os.getenv("HFT_STORMGUARD_LATENCY_REESCALATION_COOLDOWN_S", "120")
         )
 
     def reload_thresholds(self, config: dict) -> None:
@@ -205,14 +211,23 @@ class StormGuard:
         with self._state_lock:
             now = time.monotonic()
             if new_state > self.state:
-                # Feed-gap re-escalation suppression: after de-escalating from
-                # a STORM, suppress feed-gap re-triggers for a cooldown period
-                # to prevent flapping (observed: 75 transitions/6hr in production).
+                # Re-escalation suppression: after de-escalating from STORM,
+                # suppress re-triggers for a cooldown period to prevent flapping
+                # (observed: 75 transitions/6hr in production for feed gap).
+                _suppress = False
                 if (
                     reason.startswith("Feed Gap")
                     and self._feed_gap_deescalation_ts > 0
                     and (now - self._feed_gap_deescalation_ts) < self._feed_gap_reescalation_cooldown_s
                 ):
+                    _suppress = True
+                elif (
+                    reason.startswith("Latency")
+                    and self._latency_deescalation_ts > 0
+                    and (now - self._latency_deescalation_ts) < self._latency_reescalation_cooldown_s
+                ):
+                    _suppress = True
+                if _suppress:
                     pass  # suppress — stay at current state
                 else:
                     # Escalation: always instant (safety-first)
@@ -236,9 +251,10 @@ class StormGuard:
                     if self._de_escalate_count >= self._de_escalate_threshold:
                         old_for_log = self.state
                         self._de_escalate_count = 0
-                        # Record de-escalation from STORM for feed-gap re-escalation cooldown
+                        # Record de-escalation from STORM for re-escalation cooldown
                         if old_for_log >= StormGuardState.STORM:
                             self._feed_gap_deescalation_ts = now
+                            self._latency_deescalation_ts = now
                         # Reset storm entry timestamp so next STORM gets fresh cooldown
                         self._storm_entry_ts = 0.0
                         _, fire_callback = self._transition(new_state, "Recovery")

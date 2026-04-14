@@ -33,6 +33,13 @@ def _build_aiohttp_stub() -> types.ModuleType:
 if "aiohttp" not in sys.modules:
     sys.modules["aiohttp"] = _build_aiohttp_stub()
 
+# Ensure the telegram module's own aiohttp binding is set (may be None if
+# an earlier test imported telegram before the stub was installed).
+import hft_platform.notifications.telegram as _tg_mod_retry  # noqa: E402
+
+if _tg_mod_retry.aiohttp is None:
+    _tg_mod_retry.aiohttp = sys.modules["aiohttp"]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -48,6 +48,13 @@ else:
 
     _existing.ClientTimeout = _FakeClientTimeout  # type: ignore[attr-defined]
 
+# Ensure the telegram module's own aiohttp binding is set (may be None if
+# an earlier test imported telegram before the stub was installed).
+import hft_platform.notifications.telegram as _tg_mod_fixes  # noqa: E402
+
+if _tg_mod_fixes.aiohttp is None:
+    _tg_mod_fixes.aiohttp = sys.modules["aiohttp"]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

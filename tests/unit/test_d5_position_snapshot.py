@@ -27,10 +27,7 @@ def test_snapshot_holds_lock_during_copy():
     from hft_platform.execution.positions import Position, PositionStore
 
     ps = PositionStore.__new__(PositionStore)
-    ps.positions = {
-        f"k{i}": Position(account_id="A", strategy_id="S", symbol=f"k{i}", net_qty=i)
-        for i in range(100)
-    }
+    ps.positions = {f"k{i}": Position(account_id="A", strategy_id="S", symbol=f"k{i}", net_qty=i) for i in range(100)}
 
     real_lock = threading.Lock()
     acquired_calls: list[bool] = []
@@ -63,10 +60,7 @@ def test_snapshot_returns_consistent_view():
 
     ps = PositionStore.__new__(PositionStore)
     ps._fill_lock = threading.Lock()
-    ps.positions = {
-        f"k{i}": Position(account_id="A", strategy_id="S", symbol=f"k{i}", net_qty=0)
-        for i in range(50)
-    }
+    ps.positions = {f"k{i}": Position(account_id="A", strategy_id="S", symbol=f"k{i}", net_qty=0) for i in range(50)}
 
     errors: list[str] = []
     stop = threading.Event()
