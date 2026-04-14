@@ -92,12 +92,15 @@ def _make_deal_raw(
 
 
 @pytest.fixture(autouse=True)
-def _patch_metrics(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+def _patch_metrics(monkeypatch: pytest.MonkeyPatch, tmp_path) -> MagicMock:
     stub = _stub_metrics()
     monkeypatch.setattr(
         "hft_platform.observability.metrics.MetricsRegistry.get",
         staticmethod(lambda: stub),
     )
+    # Isolate dedup window from cross-test state pollution: point persist path
+    # to a fresh temp directory so the router starts with an empty dedup set.
+    monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "dedup.jsonl"))
     return stub
 
 
