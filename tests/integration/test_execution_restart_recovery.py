@@ -82,6 +82,8 @@ async def test_restart_restores_order_id_routing_for_fill_resolution(tmp_path):
 
     adapter1 = _make_adapter(tmp_path, persist_path)
     await adapter1._register_broker_ids("R47:101", {"ordno": "ORD_RESTART", "seqno": "SEQ_RESTART"})
+    # Ensure persist completes synchronously before second adapter loads
+    adapter1.persist_order_id_map()
 
     adapter2 = _make_adapter(tmp_path, persist_path)
     router2, _ = _make_router(str(tmp_path / "fill_dedup.jsonl"), adapter2.order_id_map)
