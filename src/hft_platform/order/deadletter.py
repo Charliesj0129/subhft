@@ -13,7 +13,6 @@ Complies with HFT Laws:
 import asyncio
 import json
 import os
-import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -203,7 +202,7 @@ class DeadLetterQueue:
     def _cleanup_old_files(self) -> None:
         """Delete DLQ files older than HFT_DLQ_RETAIN_DAYS (default: 7)."""
         retain_days = int(os.getenv("HFT_DLQ_RETAIN_DAYS", "7"))
-        cutoff = time.time() - retain_days * 86400
+        cutoff = timebase.now_s() - retain_days * 86400
         deleted = 0
         for fpath in self.dlq_dir.glob("dlq_*.jsonl"):
             try:
