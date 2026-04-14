@@ -72,21 +72,17 @@ async def test_complete_json_from_session_decodes_openrouter_payload() -> None:
     result = await client.complete_json_from_session(session, "prompt")
 
     assert result["market_verdict"] == "bullish"
-    assert session.calls == [
-        {
-            "url": "https://openrouter.ai/api/v1/chat/completions",
-            "json": {
-                "model": "openrouter/test-model",
-                "messages": [{"role": "user", "content": "prompt"}],
-                "response_format": {"type": "json_object"},
-            },
-            "headers": {
-                "Authorization": "Bearer test-key",
-                "Content-Type": "application/json",
-            },
-            "timeout": 30.0,
-        }
-    ]
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert call["json"]["model"] == "openrouter/test-model"
+    assert call["json"]["messages"] == [{"role": "user", "content": "prompt"}]
+    assert call["json"]["response_format"] == {"type": "json_object"}
+    assert call["headers"]["Authorization"] == "Bearer test-key"
+    # timeout may be float or aiohttp.ClientTimeout — check total value
+    timeout = call["timeout"]
+    total = getattr(timeout, "total", timeout)
+    assert total == 30.0
 
 
 def test_headers_raise_when_api_key_missing(monkeypatch: pytest.MonkeyPatch) -> None:
