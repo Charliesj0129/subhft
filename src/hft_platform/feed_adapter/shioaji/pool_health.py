@@ -63,6 +63,7 @@ def check_facade_health(
     degraded_threshold_s: float = 3.0,
     reconnect_trigger_s: float = 10.0,
     schedule_fn: Callable[[str], None],
+    suppress_reconnect: bool = False,
 ) -> None:
     """Evaluate each slot's health and drive FSM transitions.
 
@@ -73,10 +74,12 @@ def check_facade_health(
     DEGRADED:
         gap < degraded_threshold_s → CONNECTED (feed recovered)
         gap > degraded_threshold_s AND degraded_since > reconnect_trigger_s
-            → calls schedule_fn(conn_id)
+            → calls schedule_fn(conn_id)  (skipped when suppress_reconnect=True)
     DISCONNECTED:
         time since last_reconnect_mono > backoff_s() → calls schedule_fn(conn_id)
+            (skipped when suppress_reconnect=True)
         last_reconnect_mono == 0.0 (never reconnected) → calls schedule_fn(conn_id)
+            (skipped when suppress_reconnect=True)
     RECOVERING:
         Not touched — a reconnect coroutine is already running.
 
@@ -91,6 +94,10 @@ def check_facade_health(
     schedule_fn:
         Callable that accepts a ``conn_id`` (str) and schedules a reconnect
         coroutine for that connection.  Must be non-blocking.
+    suppress_reconnect:
+        When True, state transitions (CONNECTED→DEGRADED, DEGRADED→CONNECTED)
+        still occur for observability, but ``schedule_fn`` is never called.
+        Use outside trading hours to prevent futile reconnect attempts.
     """
     now = time.monotonic()
 
@@ -126,14 +133,23 @@ def check_facade_health(
                 if degraded_since is not None:
                     degraded_duration = now - degraded_since
                     if degraded_duration > reconnect_trigger_s:
-                        log.warning(
-                            "facade_reconnect_triggered",
-                            conn_id=slot.conn_id,
-                            degraded_duration_s=round(degraded_duration, 3),
-                        )
-                        schedule_fn(slot.conn_id)
+                        if suppress_reconnect:
+                            log.info(
+                                "facade_reconnect_suppressed",
+                                conn_id=slot.conn_id,
+                                degraded_duration_s=round(degraded_duration, 3),
+                            )
+                        else:
+                            log.warning(
+                                "facade_reconnect_triggered",
+                                conn_id=slot.conn_id,
+                                degraded_duration_s=round(degraded_duration, 3),
+                            )
+                            schedule_fn(slot.conn_id)
 
         elif state is FacadeState.DISCONNECTED:
+            if suppress_reconnect:
+                continue
             last_reconnect = slot.last_reconnect_mono
             if last_reconnect == 0.0:
                 # Never attempted a reconnect yet — trigger immediately.

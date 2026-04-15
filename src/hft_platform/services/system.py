@@ -862,9 +862,15 @@ class HFTSystem:
             # Update Metrics — offload blocking psutil calls off the event loop
             await loop.run_in_executor(None, metrics.update_system_metrics)
             # Per-facade health check (QuoteConnectionPool isolation)
+            # Gate on reconnect window — outside trading hours, facade feed gaps
+            # are expected and reconnect attempts will always fail, causing a
+            # DEGRADED→DISCONNECTED→reconnect loop that ultimately triggers
+            # auto-recovery exit and Docker restart cycling.
             client = getattr(self.md_service, "client", None)
             if client is not None and hasattr(client, "check_facade_health"):
-                client.check_facade_health()
+                within_fn = getattr(self.md_service, "within_reconnect_window", None)
+                if within_fn is None or within_fn():
+                    client.check_facade_health()
             if metrics:
                 exec_task = self.tasks.get("exec_router")
                 gateway_task = self.tasks.get("exec_gateway")
