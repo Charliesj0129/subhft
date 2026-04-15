@@ -8,6 +8,7 @@ existing actuators.  Never evaluates P&L directly.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,6 +67,8 @@ class AutonomyMonitor:
         "_halt_max_retries",
         "_halt_next_retry_ns",
         "_last_heartbeat_ns",
+        "_fault_callback",
+        "_healing_enabled",
     )
 
     def __init__(
@@ -82,6 +85,7 @@ class AutonomyMonitor:
         margin_monitor: MarginMonitor | None = None,
         interval_s: float = 5.0,
         heartbeat_interval_s: float = 1800.0,
+        fault_callback: Any | None = None,
     ) -> None:
         self._storm_guard = storm_guard
         self._platform_degrade = platform_degrade
@@ -95,6 +99,8 @@ class AutonomyMonitor:
         self._margin_monitor = margin_monitor
         self._interval_s = interval_s
         self._heartbeat_interval_s = heartbeat_interval_s
+        self._fault_callback = fault_callback
+        self._healing_enabled: bool = os.getenv("HFT_HEALING_ENABLED", "0") in ("1", "true", "yes")
         self._running: bool = False
         self._task: asyncio.Task[None] | None = None
 
@@ -224,15 +230,28 @@ class AutonomyMonitor:
 
             elapsed_ns = now_ns - self._broker_disconnect_since_ns
             if elapsed_ns > 300_000_000_000 and not self._is_on_cooldown("broker_disconnect", now_ns):
-                decisions.append(
-                    MonitorDecision(
-                        rule_name="broker_disconnect",
-                        action="enter_reduce_only",
-                        reason="broker_unavailable",
-                        scope="platform",
-                        rearm="auto",
+                if self._healing_enabled and self._fault_callback is not None:
+                    from hft_platform.healing.fault import FaultCategory, FaultEvent, FaultSeverity  # noqa: PLC0415
+                    fault = FaultEvent(
+                        fault_id=f"broker-disc-{now_ns}",
+                        category=FaultCategory.BROKER,
+                        severity=FaultSeverity.IMPAIRED,
+                        source="autonomy_monitor",
+                        description="broker disconnect > 5min",
+                        ts_ns=now_ns,
+                        context={"elapsed_ns": elapsed_ns},
                     )
-                )
+                    self._fault_callback(fault)
+                else:
+                    decisions.append(
+                        MonitorDecision(
+                            rule_name="broker_disconnect",
+                            action="enter_reduce_only",
+                            reason="broker_unavailable",
+                            scope="platform",
+                            rearm="auto",
+                        )
+                    )
         else:
             self._broker_was_connected = True
             self._broker_disconnect_since_ns = 0
