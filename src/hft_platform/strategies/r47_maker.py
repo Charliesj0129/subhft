@@ -423,6 +423,13 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._seen_fill_ids: set[str] = set()
         self._FILL_DEDUP_MAX = 500
 
+        # F2: Active order tracking — maps symbol to broker order_id.
+        # Used to cancel stale ROD orders before requoting at a new price.
+        # Without this, ROD orders stack at the exchange and fill on any
+        # price touch (76-order burst incident 2026-04-15 RC-3).
+        self._active_buy_oid: dict[str, str] = {}
+        self._active_sell_oid: dict[str, str] = {}
+
         logger.info(
             "R47MakerStrategy initialized",
             pe_danger=pe_danger_threshold,
@@ -555,8 +562,11 @@ class R47MakerStrategy(SimpleMarketMaker):
         # Each fill consumes one pending slot
         if event.side == Side.BUY:
             self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - event.qty)
+            # F2: fill consumed the resting order — clear active tracking
+            self._active_buy_oid.pop(sym, None)
         else:
             self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - event.qty)
+            self._active_sell_oid.pop(sym, None)
         logger.info(
             "r47_fill",
             symbol=sym,
@@ -568,10 +578,24 @@ class R47MakerStrategy(SimpleMarketMaker):
         )
 
     def on_order(self, event: OrderEvent) -> None:
-        """Release pending slot when an order is cancelled or rejected."""
+        """Track order IDs for cancel-before-requote and release pending on terminal."""
+        sym = event.symbol
+        # F2: Capture broker order_id on SUBMITTED for cancel-before-requote.
+        if event.status == OrderStatus.SUBMITTED:
+            if event.side == Side.BUY:
+                self._active_buy_oid[sym] = event.order_id
+            else:
+                self._active_sell_oid[sym] = event.order_id
+            return
         if event.status not in (OrderStatus.CANCELLED, OrderStatus.FAILED):
             return
-        sym = event.symbol
+        # Clear active order tracking on terminal state
+        if event.side == Side.BUY:
+            if self._active_buy_oid.get(sym) == event.order_id:
+                del self._active_buy_oid[sym]
+        else:
+            if self._active_sell_oid.get(sym) == event.order_id:
+                del self._active_sell_oid[sym]
         # DEC2-002: remaining_qty=0 means fully filled before cancel arrived.
         # Decrement by 0 (no-op) — the fill already decremented pending.
         remaining = max(0, event.remaining_qty)
@@ -633,6 +657,10 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._qi_widen_ask = 0
         self._last_bid.clear()
         self._last_ask.clear()
+        # F2: Clear active order IDs — after gap, SUBMITTED callbacks may have
+        # been lost, so stale IDs would cause cancel requests for unknown orders.
+        self._active_buy_oid.clear()
+        self._active_sell_oid.clear()
         # NOTE: Do NOT clear _pending_buy/_pending_sell here.
         # Clearing pending resets max_pos protection, allowing the strategy
         # to send unbounded orders (76-order burst incident 2026-04-15 RC-1).
@@ -765,6 +793,16 @@ class R47MakerStrategy(SimpleMarketMaker):
         # pos already comes from _local_position(exec_sym) which uses _local_pos.
         can_buy = pos + pending_buy < max_pos and pos < max_pos
         can_sell = pos - pending_sell > -max_pos and pos > -max_pos
+
+        # F2: Cancel stale ROD before requoting at new price to prevent stacking.
+        if bid_moved:
+            old_buy_oid = self._active_buy_oid.get(exec_sym)
+            if old_buy_oid:
+                self.cancel(exec_sym, old_buy_oid)
+        if ask_moved:
+            old_sell_oid = self._active_sell_oid.get(exec_sym)
+            if old_sell_oid:
+                self.cancel(exec_sym, old_sell_oid)
 
         if can_buy and not self._suppress_bid and bid_moved:
             self.buy(exec_sym, bid_price_scaled, _qty)

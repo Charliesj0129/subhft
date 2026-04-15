@@ -151,8 +151,10 @@ def test_policy_startup_holdoff_expires(monkeypatch):
     assert reason == "OK"
 
 
-def test_policy_startup_holdoff_disabled_by_default():
-    """Holdoff is disabled (0) by default — no blocking on fresh GatewayPolicy."""
+def test_policy_startup_holdoff_enabled_by_default(monkeypatch):
+    """Holdoff is 60s by default — blocks NEW on fresh GatewayPolicy."""
+    monkeypatch.delenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", raising=False)
     policy = GatewayPolicy()
     ok, reason = policy.gate(_make_intent(IntentType.NEW), StormGuardState.NORMAL)
-    assert ok is True
+    assert ok is False
+    assert reason == "STARTUP_HOLDOFF"

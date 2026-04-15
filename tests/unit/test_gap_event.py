@@ -2,6 +2,8 @@
 
 import asyncio
 
+from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
+from hft_platform.contracts.strategy import Side
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import GapEvent
 from hft_platform.strategies.r47_maker import R47MakerStrategy
@@ -182,8 +184,6 @@ def test_r47_risk_feedback_preserves_last_price() -> None:
     Clearing price gate on rejection creates a reject→resend amplification
     loop (76-order burst incident 2026-04-15 RC-2).
     """
-    from hft_platform.contracts.strategy import Side
-
     strat = R47MakerStrategy(
         strategy_id="test-r47", symbols=["TMFD6"], max_pos=1,
     )
@@ -207,6 +207,51 @@ def test_r47_risk_feedback_preserves_last_price() -> None:
     )
     # last_ask untouched (rejection was BUY side)
     assert strat._last_ask.get("TMFD6") == 367280000
+
+
+def test_r47_cancel_before_requote_on_order_tracking() -> None:
+    """F2: on_order(SUBMITTED) captures order_id for cancel-before-requote.
+
+    When R47 receives a SUBMITTED OrderEvent, it stores the broker order_id
+    so that stale ROD orders can be canceled when the quote price moves.
+    """
+    strat = R47MakerStrategy(
+        strategy_id="test-r47", symbols=["TMFD6"], max_pos=1,
+    )
+    # Simulate SUBMITTED event with broker order_id
+    submitted = OrderEvent(
+        order_id="BROKER-001",
+        strategy_id="test-r47",
+        symbol="TMFD6",
+        status=OrderStatus.SUBMITTED,
+        submitted_qty=1,
+        filled_qty=0,
+        remaining_qty=1,
+        price=367250000,
+        side=Side.BUY,
+        ingest_ts_ns=0,
+        broker_ts_ns=0,
+    )
+    strat.on_order(submitted)
+    assert strat._active_buy_oid.get("TMFD6") == "BROKER-001"
+
+    # Fill clears active tracking
+    fill = FillEvent(
+        fill_id="F001",
+        account_id="A001",
+        order_id="BROKER-001",
+        strategy_id="test-r47",
+        symbol="TMFD6",
+        side=Side.BUY,
+        qty=1,
+        price=367250000,
+        fee=0,
+        tax=0,
+        ingest_ts_ns=0,
+        match_ts_ns=0,
+    )
+    strat.on_fill(fill)
+    assert "TMFD6" not in strat._active_buy_oid
 
 
 def test_consume_no_gap_event_without_overflow() -> None:

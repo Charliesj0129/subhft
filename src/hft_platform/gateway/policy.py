@@ -57,7 +57,7 @@ class GatewayPolicy:
             "off",
         }
         self._storm_guard = storm_guard
-        holdoff_s = float(os.getenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", "0"))
+        holdoff_s = float(os.getenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", "60"))
         self._startup_holdoff_until: float = time.monotonic() + holdoff_s if holdoff_s > 0 else 0.0
 
     # ── Public ────────────────────────────────────────────────────────────
