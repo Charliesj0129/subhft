@@ -1032,6 +1032,13 @@ class SystemBootstrapper:
 
         md_service._post_connect_hooks.append(_preflight_symbol_consistency)
 
+        # Propagate alias map to OrderAdapter for reverse resolution (TMFE6 → TMFR1)
+        def _propagate_alias_to_order_adapter() -> None:
+            alias_map = getattr(md_client, "alias_to_actual", None)
+            if alias_map:
+                order_adapter.set_alias_map(alias_map)
+        md_service._post_connect_hooks.append(_propagate_alias_to_order_adapter)
+
         if _publish_queue is not None:
             strategy_runner.set_publish_sink(lambda ch, payload: _publish_queue.put_nowait((ch, payload)))
 

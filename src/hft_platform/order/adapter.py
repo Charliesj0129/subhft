@@ -158,6 +158,7 @@ class OrderAdapter:
         self.latency = LatencyRecorder.get()
         self._metadata: SymbolMetadata = SymbolMetadata()
         self.price_codec: PriceCodec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
+        self._actual_to_config: dict[str, str] = {}  # reverse alias: TMFE6 → TMFR1
 
         # State - Protected by _live_orders_lock for concurrent access
         self.live_orders: Dict[str, Any] = {}  # Map "strategy_id:intent_id" -> Trade Object or Status dict
@@ -246,6 +247,15 @@ class OrderAdapter:
     def set_storm_guard(self, storm_guard: Any) -> None:
         """Inject StormGuard reference for live HALT checks (M1 gap closure)."""
         self._storm_guard = storm_guard
+
+    def set_alias_map(self, alias_map: dict[str, str]) -> None:
+        """Set config→actual alias map and build reverse (actual→config).
+
+        Called from bootstrap post-connect hook so the order adapter can
+        translate resolved month codes (e.g. TMFE6) back to config codes
+        (e.g. TMFR1) that the broker SDK recognises for contract lookup.
+        """
+        self._actual_to_config = {actual: config for config, actual in alias_map.items()}
 
     def _send_dispatch_rejection(self, intent: OrderIntent, reason_code: str) -> None:
         """Non-blocking rejection feedback for dispatch failures."""
@@ -1476,10 +1486,14 @@ class OrderAdapter:
                         self._remove_pending_fill(order_key)
                         return False
 
+                # Resolve actual month code back to config code for broker
+                # contract lookup (e.g. TMFE6 → TMFR1). Shioaji SDK indexes
+                # continuous contracts by R1/R2 code, not the resolved month.
+                order_contract_code = self._actual_to_config.get(intent.symbol, intent.symbol)
                 trade = await self._call_api(
                     "place_order",
                     self.client.place_order,
-                    contract_code=intent.symbol,
+                    contract_code=order_contract_code,
                     exchange=exchange,
                     action=action_str,
                     price=price_float,
