@@ -212,7 +212,7 @@ class OrderAdapter:
         # resolution in deal callbacks where order_id_map has no seed data (Shioaji futures).
         self._pending_fill_index: dict[str, list[str]] = {}
         self._pending_fill_registered_at: dict[str, float] = {}
-        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "30"))  # noqa: duration
+        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "7200"))  # noqa: duration
         self._pending_fill_lock = threading.Lock()  # protects _pending_fill_index across threads
         self._custom_field_counter: int = 0
 
@@ -424,6 +424,69 @@ class OrderAdapter:
     def clear_phantom_candidate(self, key: str) -> None:
         """Remove a phantom order key after reconciliation confirms resolution."""
         self._phantom_order_keys.pop(key, None)
+
+    def resolve_phantom_fill(self, fill_event: Any) -> str | None:
+        """Attempt to resolve an orphaned fill against phantom order candidates.
+
+        Phantom orders are dispatch-failed orders that may have actually reached
+        the broker. This method checks if any phantom candidate matches the fill
+        by symbol and side, returning the strategy_id if found.
+
+        Thread-safe: reads from _phantom_order_keys (dict, GIL-atomic reads).
+        Called from ExecutionRouter on the event loop.
+
+        Returns strategy_id or None.
+        """
+        if not self._phantom_order_keys:
+            return None
+        symbol = getattr(fill_event, "symbol", "")
+        side = getattr(fill_event, "side", None)
+        if not symbol:
+            return None
+        # Check pending_fill_index first — it has symbol+side specificity
+        side_name = "SELL" if side is not None and int(side) == 1 else "BUY"
+        pf_key = f"{symbol}:{side_name}"
+        with self._pending_fill_lock:
+            pending = self._pending_fill_index.get(pf_key)
+            if pending:
+                # Found a pending fill entry — pop FIFO and resolve
+                order_key = pending.pop(0)
+                self._pending_fill_registered_at.pop(order_key, None)
+                if not pending:
+                    del self._pending_fill_index[pf_key]
+                strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
+                # Clear phantom candidate if it matches
+                self._phantom_order_keys.pop(order_key, None)
+                logger.warning(
+                    "phantom_fill_resolved_via_pending_index",
+                    symbol=symbol,
+                    side=side_name,
+                    order_key=order_key,
+                    strategy_id=strategy_id,
+                )
+                return strategy_id
+        # Fallback: match phantom key with verified symbol match.
+        now_mono = time.monotonic()
+        for pkey, entry in list(self._phantom_order_keys.items()):
+            # entry is (monotonic_ts, symbol_str)
+            p_ts, p_symbol = entry if isinstance(entry, tuple) else (entry, "")
+            # Skip entries older than 2 hours (stale phantoms)
+            if (now_mono - p_ts) > 7200.0:
+                continue
+            # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
+            if p_symbol and p_symbol != symbol:
+                continue
+            strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
+            self._phantom_order_keys.pop(pkey, None)
+            logger.warning(
+                "phantom_fill_resolved_via_phantom_keys",
+                symbol=symbol,
+                side=side_name,
+                phantom_key=pkey,
+                strategy_id=strategy_id,
+            )
+            return strategy_id
+        return None
 
     def load_config(self) -> None:
         with open(self.config_path, "r") as f:
@@ -1919,6 +1982,35 @@ class OrderAdapter:
                         self._update_cb_metric()
                         self._send_dispatch_rejection(item.intent, "dispatch_failed")
                         self.strategy_cb_mgr.record_failure(item.intent.strategy_id)
+                        # D-03: Exception may occur AFTER broker received the order
+                        # (e.g., during ID registration post-place_order). Mark as
+                        # phantom so fills arriving later can be reconciled.
+                        _intent = item.intent
+                        if _intent.intent_type in (IntentType.NEW, IntentType.FORCE_FLAT):
+                            _phantom_key = f"{_intent.strategy_id}:{_intent.intent_id}"
+                            self._phantom_order_keys[_phantom_key] = (time.monotonic(), _intent.symbol)
+                            if len(self._phantom_order_keys) > self._phantom_order_max:
+                                _cutoff = time.monotonic() - 3600.0
+                                _stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= _cutoff]
+                                for _sk in _stale:
+                                    del self._phantom_order_keys[_sk]
+                            logger.warning(
+                                "phantom_order_candidate_dispatch_failed",
+                                strategy_id=_intent.strategy_id,
+                                symbol=_intent.symbol,
+                                order_key=_phantom_key,
+                                cmd_id=item.cmd_id,
+                            )
+                            self.metrics.phantom_order_candidates_total.inc()
+                        # Clean up live_orders sentinel to prevent permanent slot occupation
+                        _order_key = f"{_intent.strategy_id}:{_intent.intent_id}"
+                        async with self._live_orders_lock:
+                            if self.live_orders.get(_order_key) is _PENDING_SENTINEL:
+                                del self.live_orders[_order_key]
+                                self._pending_order_keys.discard(_order_key)
+                        # NOTE: Do NOT remove pending_fill for phantom candidates —
+                        # the order may have reached the broker, and fills arriving
+                        # later need the pending_fill_index for strategy_id resolution.
             except Exception:
                 logger.error("_api_worker: unexpected exception in dispatch loop", exc_info=True)
                 self.metrics.order_reject_total.inc()
@@ -2064,13 +2156,13 @@ class OrderAdapter:
                         # R2-02: Use 2-part order_key format for reconciliation parity
                         if intent is not None:
                             phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
-                            self._phantom_order_keys[phantom_key] = time.monotonic()
+                            self._phantom_order_keys[phantom_key] = (time.monotonic(), intent.symbol)
                             # R2-03: Evict entries older than 1 hour when over capacity
                             if len(self._phantom_order_keys) > self._phantom_order_max:
                                 cutoff = time.monotonic() - 3600.0
-                                self._phantom_order_keys = {
-                                    k: v for k, v in self._phantom_order_keys.items() if v > cutoff
-                                }
+                                _stale = [k for k, v in self._phantom_order_keys.items() if v[0] <= cutoff]
+                                for _sk in _stale:
+                                    del self._phantom_order_keys[_sk]
                             logger.warning(
                                 "phantom_order_candidate",
                                 strategy_id=intent.strategy_id,

@@ -127,6 +127,23 @@ class ReconciliationService:
         self._halt_triggered: bool = False
         self._critical_drift_streak: int = 0
         self._critical_drift_debounce: int = int(os.environ.get("HFT_RECON_CRITICAL_DEBOUNCE_OBSERVATIONS", "3"))
+        # Auto-correct: after N consecutive observations of the SAME persistent
+        # critical drift, adopt broker state to break the drift loop.
+        # Default 5 = ~25s at 5s interval (conservative: gives time for fills).
+        self._auto_correct_after: int = int(
+            os.environ.get("HFT_RECON_AUTO_CORRECT_AFTER", "5")
+        )
+        self._auto_correct_enabled: bool = (
+            os.environ.get("HFT_RECON_AUTO_CORRECT_ENABLED", "1") == "1"
+        )
+        # Futures auto-correct threshold: only auto-correct if abs(diff) <= this
+        self._auto_correct_futures_max_qty: int = int(
+            os.environ.get("HFT_RECON_AUTO_CORRECT_FUTURES_MAX_QTY", "2")
+        )
+        # Stock auto-correct threshold
+        self._auto_correct_stock_max_qty: int = int(
+            os.environ.get("HFT_RECON_AUTO_CORRECT_STOCK_MAX_QTY", "10")
+        )
 
     @property
     def drift_streak(self) -> int:
@@ -385,6 +402,15 @@ class ReconciliationService:
                             streak=self._critical_drift_streak,
                             symbols=[d.symbol for d in critical],
                         )
+                        # Auto-correct: after sufficient consecutive observations
+                        # of the same persistent drift, adopt broker state.
+                        if (
+                            self._auto_correct_enabled
+                            and self._critical_drift_streak >= self._auto_correct_after
+                        ):
+                            correctable = self._filter_auto_correctable(critical)
+                            if correctable:
+                                await self._auto_correct_drift(correctable, broker_map)
                     elif self._critical_drift_streak >= self._critical_drift_debounce:
                         self._halt_triggered = True
                         await self._trigger_halt(critical)
@@ -412,6 +438,10 @@ class ReconciliationService:
                 self._last_noncritical_drift_signature = {}
                 self._noncritical_drift_streak = 0
                 self._critical_drift_streak = 0
+                if self._halt_triggered:
+                    # Drift resolved — release reconciliation hold so
+                    # StormGuard can de-escalate from HALT.
+                    self.storm_guard.set_reconciliation_hold(False)
                 self._halt_triggered = False
                 logger.info("Portfolio Sync Complete - No discrepancies", count=len(broker_map))
 
@@ -472,6 +502,74 @@ class ReconciliationService:
 
         return discrepancies
 
+    def _filter_auto_correctable(
+        self, discrepancies: List[PositionDiscrepancy]
+    ) -> List[PositionDiscrepancy]:
+        """Filter discrepancies eligible for auto-correction.
+
+        Only discrepancies where local=0 and broker has a small position are
+        auto-correctable (phantom order scenario). Large or sign-mismatch
+        discrepancies require manual intervention.
+        """
+        result: List[PositionDiscrepancy] = []
+        for d in discrepancies:
+            # Only auto-correct when local is 0 (orphaned phantom fill)
+            if d.local_qty != 0:
+                continue
+            max_qty = (
+                self._auto_correct_futures_max_qty
+                if d.is_futures
+                else self._auto_correct_stock_max_qty
+            )
+            if abs(d.broker_qty) <= max_qty:
+                result.append(d)
+        return result
+
+    async def _auto_correct_drift(
+        self,
+        correctable: List[PositionDiscrepancy],
+        broker_map: Dict[str, int],
+    ) -> None:
+        """Adopt broker positions for auto-correctable drift.
+
+        Loads broker qty into PositionStore via load_recovery, then clears
+        the drift state so StormGuard can de-escalate.
+        """
+        for d in correctable:
+            logger.critical(
+                "auto_correct_drift: adopting broker position",
+                symbol=d.symbol,
+                local_qty=d.local_qty,
+                broker_qty=d.broker_qty,
+                streak=self._critical_drift_streak,
+            )
+            # Use load_recovery to inject broker position into PositionStore
+            # with strategy_id="*" (unknown ownership — matches startup_recon pattern).
+            self.store.load_recovery(
+                account_id="default",
+                symbol=d.symbol,
+                net_qty=d.broker_qty,
+                avg_price_scaled=-1,  # sentinel: unknown cost basis
+                realized_pnl_scaled=0,
+                fees_scaled=0,
+                strategy_id="*",
+            )
+            try:
+                self._metrics().reconciliation_auto_corrected_total.labels(
+                    symbol=d.symbol
+                ).inc()
+            except Exception:
+                pass
+
+        # Reset drift state — next sync will verify correction took effect
+        self._critical_drift_streak = 0
+        self._halt_triggered = False
+        self.storm_guard.set_reconciliation_hold(False)
+        logger.warning(
+            "auto_correct_drift: complete, reconciliation hold released",
+            corrected_symbols=[d.symbol for d in correctable],
+        )
+
     async def _trigger_halt(self, critical_discrepancies: List[PositionDiscrepancy]) -> None:
         """Trigger StormGuard HALT due to reconciliation mismatch."""
         symbols = [d.symbol for d in critical_discrepancies]
@@ -483,4 +581,7 @@ class ReconciliationService:
             symbols=symbols,
         )
 
+        # Set reconciliation hold BEFORE triggering HALT so that the
+        # HALT cannot auto-recover via StormGuard.update() while drift persists.
+        self.storm_guard.set_reconciliation_hold(True)
         self.storm_guard.trigger_halt(reason)

@@ -59,6 +59,7 @@ class StormGuard:
         "_feed_gap_reescalation_cooldown_s",
         "_latency_deescalation_ts",
         "_latency_reescalation_cooldown_s",
+        "_reconciliation_hold",
     )
 
     def __init__(
@@ -100,6 +101,9 @@ class StormGuard:
         self._latency_reescalation_cooldown_s: float = float(
             os.getenv("HFT_STORMGUARD_LATENCY_REESCALATION_COOLDOWN_S", "120")
         )
+        # Reconciliation hold: when True, HALT de-escalation is blocked until
+        # ReconciliationService confirms drift is resolved.
+        self._reconciliation_hold: bool = False
 
     def reload_thresholds(self, config: dict) -> None:
         """Update thresholds from new config."""
@@ -238,6 +242,18 @@ class StormGuard:
                         self._halt_entry_ts = now
                     _, fire_callback = self._transition(new_state, reason)
             elif new_state < self.state:
+                # Reconciliation hold: block de-escalation from HALT while
+                # position drift is unresolved (prevents auto-recovery that
+                # leaves the system trading with stale positions).
+                if self.state == StormGuardState.HALT and self._reconciliation_hold:
+                    self._de_escalate_count = 0
+                    logger.warning(
+                        "stormguard_deescalation_blocked_reconciliation_hold",
+                        current_state=self.state.name,
+                        target_state=new_state.name,
+                    )
+                    current_state = self.state
+                    return current_state
                 # De-escalation from any elevated state requires cooldown + N consecutive clears
                 if self.state == StormGuardState.HALT:
                     cooldown_ok = (now - self._halt_entry_ts) >= self._halt_cooldown_s
@@ -651,3 +667,25 @@ class StormGuard:
 
     def is_safe(self) -> bool:
         return self.state < StormGuardState.HALT
+
+    def set_reconciliation_hold(self, hold: bool) -> None:
+        """Set or clear reconciliation hold on HALT de-escalation.
+
+        When ``hold=True``, HALT will not auto-recover via ``update()`` until
+        ReconciliationService confirms drift is resolved (calls with ``hold=False``).
+        Thread-safe.
+        """
+        with self._state_lock:
+            old = self._reconciliation_hold
+            self._reconciliation_hold = hold
+        if old != hold:
+            logger.warning(
+                "stormguard_reconciliation_hold_changed",
+                hold=hold,
+                current_state=self.state.name,
+            )
+
+    @property
+    def reconciliation_hold(self) -> bool:
+        """Whether reconciliation hold is active (read-only)."""
+        return self._reconciliation_hold

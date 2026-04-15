@@ -227,6 +227,7 @@ class MetricsRegistry:
                 _pn("reconciliation_discrepancy_total"),
                 _pn("reconciliation_consecutive_failures"),
                 _pn("reconciliation_last_success_ts"),
+                _pn("reconciliation_auto_corrected_total"),
                 _pn("position_drift_qty"),
                 _pn("portfolio_drawdown_pct"),
                 _pn("portfolio_trade_count"),
@@ -463,6 +464,10 @@ class MetricsRegistry:
         self.execution_router_errors_total = Counter(_pn("execution_router_errors_total"), "Execution router errors")
         self.execution_gateway_errors_total = Counter(_pn("execution_gateway_errors_total"), "Execution gateway errors")
         self.orphaned_fill_total = Counter(_pn("orphaned_fill_total"), "Orphaned fills routed to DLQ")
+        self.phantom_fill_reconciled_total = Counter(
+            _pn("phantom_fill_reconciled_total"),
+            "Orphaned fills auto-reconciled via phantom order matching",
+        )
         self.fills_total = Counter(_pn("fills_total"), "Total successful fills processed")
         self.duplicate_fill_total = Counter(_pn("duplicate_fill_total"), "Duplicate fills skipped by dedup check")
         self.fill_normalization_failed_total = Counter(
@@ -644,6 +649,11 @@ class MetricsRegistry:
         self.reconciliation_last_success_ts = Gauge(
             _pn("reconciliation_last_success_ts"),
             "Unix epoch seconds of last successful reconciliation",
+        )
+        self.reconciliation_auto_corrected_total = Counter(
+            _pn("reconciliation_auto_corrected_total"),
+            "Positions auto-corrected by adopting broker state",
+            ["symbol"],
         )
         # Recorder batch insert retry count
         self.recorder_insert_retry_total = Counter(

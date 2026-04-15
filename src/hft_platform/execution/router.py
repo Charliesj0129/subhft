@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import dataclasses
 import inspect
 import os
 import tempfile
@@ -110,10 +111,22 @@ class ExecutionRouter:
             PriceCodec(price_scale_provider) if price_scale_provider is not None else None
         )
         self._wal_writer: Optional[WALWriter] = wal_writer
+        # Phantom order resolver: injected from OrderAdapter post-init.
+        # Returns strategy_id for fills matching phantom order candidates.
+        self._phantom_resolver: Optional[Callable[[Any], Optional[str]]] = None
 
     def set_risk_engine(self, risk_engine: object) -> None:
         """Set or replace the risk engine reference (late-bind from bootstrap)."""
         self._risk_engine = risk_engine
+
+    def set_phantom_resolver(self, resolver: Callable[[Any], Optional[str]]) -> None:
+        """Inject phantom order resolver for orphaned fill auto-reconciliation.
+
+        The resolver takes a FillEvent and returns a strategy_id if the fill
+        matches a known phantom order candidate (dispatch failed but order may
+        have reached broker). Returns None if no match.
+        """
+        self._phantom_resolver = resolver
 
     def set_overflow_buf(self, buf: collections.deque) -> None:
         """Set or replace the overflow buffer (late-bind from system supervisor)."""
@@ -328,17 +341,44 @@ class ExecutionRouter:
                         self._register_fill_dedup_key(_dedup_key)
                         self.metrics.fills_total.inc()
                         if fill_event.strategy_id == "UNKNOWN":
-                            from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
+                            # Attempt phantom order reconciliation before DLQ.
+                            # Phantom orders are dispatch-failed orders that may have
+                            # actually reached the broker (e.g., timeout after send).
+                            _phantom_resolved = False
+                            if self._phantom_resolver is not None:
+                                try:
+                                    _phantom_strat = self._phantom_resolver(fill_event)
+                                    if _phantom_strat and _phantom_strat != "UNKNOWN":
+                                        fill_event = dataclasses.replace(fill_event, strategy_id=_phantom_strat)
+                                        _phantom_resolved = True
+                                        self.metrics.orphaned_fill_total.inc()
+                                        _phantom_metric = getattr(self.metrics, "phantom_fill_reconciled_total", None)
+                                        if _phantom_metric is not None:
+                                            _phantom_metric.inc()
+                                        logger.warning(
+                                            "orphaned_fill_phantom_reconciled",
+                                            symbol=fill_event.symbol,
+                                            order_id=fill_event.order_id,
+                                            resolved_strategy=_phantom_strat,
+                                        )
+                                except Exception as _phantom_exc:  # noqa: BLE001
+                                    logger.warning(
+                                        "phantom_resolver_error",
+                                        error=str(_phantom_exc),
+                                        symbol=fill_event.symbol,
+                                    )
+                            if not _phantom_resolved:
+                                from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
-                            dlq = get_orphaned_fill_dlq()
-                            dlq.add(fill_event)
-                            self.metrics.orphaned_fill_total.inc()
-                            logger.warning(
-                                "Orphaned fill routed to DLQ",
-                                symbol=fill_event.symbol,
-                                order_id=fill_event.order_id,
-                            )
-                            continue
+                                dlq = get_orphaned_fill_dlq()
+                                dlq.add(fill_event)
+                                self.metrics.orphaned_fill_total.inc()
+                                logger.warning(
+                                    "Orphaned fill routed to DLQ",
+                                    symbol=fill_event.symbol,
+                                    order_id=fill_event.order_id,
+                                )
+                                continue
 
                         # Observe e2e order-to-fill latency (SLO-2)
                         _order_key = self._order_id_map.get(fill_event.order_id)
@@ -460,17 +500,34 @@ class ExecutionRouter:
                         # Same UNKNOWN check as main loop — route to DLQ instead of
                         # creating ghost positions with strategy_id="UNKNOWN".
                         if fill_event.strategy_id == "UNKNOWN":
-                            from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq  # noqa: PLC0415
+                            # Attempt phantom resolution before DLQ (same as main loop)
+                            _sd_phantom_resolved = False
+                            if self._phantom_resolver is not None:
+                                try:
+                                    _sd_strat = self._phantom_resolver(fill_event)
+                                    if _sd_strat and _sd_strat != "UNKNOWN":
+                                        fill_event = dataclasses.replace(fill_event, strategy_id=_sd_strat)
+                                        _sd_phantom_resolved = True
+                                        logger.warning(
+                                            "shutdown_drain_phantom_reconciled",
+                                            symbol=fill_event.symbol,
+                                            order_id=fill_event.order_id,
+                                            resolved_strategy=_sd_strat,
+                                        )
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            if not _sd_phantom_resolved:
+                                from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq  # noqa: PLC0415
 
-                            dlq = get_orphaned_fill_dlq()
-                            dlq.add(fill_event)
-                            self.metrics.orphaned_fill_total.inc()
-                            logger.warning(
-                                "shutdown_drain_orphaned_fill_to_dlq",
-                                symbol=fill_event.symbol,
-                                order_id=fill_event.order_id,
-                            )
-                            continue
+                                dlq = get_orphaned_fill_dlq()
+                                dlq.add(fill_event)
+                                self.metrics.orphaned_fill_total.inc()
+                                logger.warning(
+                                    "shutdown_drain_orphaned_fill_to_dlq",
+                                    symbol=fill_event.symbol,
+                                    order_id=fill_event.order_id,
+                                )
+                                continue
                         _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
                         if _dedup_key not in self._seen_fill_ids:
                             self._register_fill_dedup_key(_dedup_key)

@@ -941,6 +941,10 @@ class SystemBootstrapper:
         )
         # Late-bind risk_engine to router (created after router due to dependency order)
         exec_service.set_risk_engine(risk_engine)
+        # Late-bind phantom resolver for orphaned fill auto-reconciliation.
+        # When a fill arrives with UNKNOWN strategy_id, the router checks phantom
+        # order candidates (dispatch-failed orders that may have reached broker).
+        exec_service.set_phantom_resolver(order_adapter.resolve_phantom_fill)
         recon_service = ReconciliationService(order_client, position_store, self.settings, storm_guard)
 
         # CE-M2: GatewayService wiring

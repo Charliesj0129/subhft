@@ -170,8 +170,8 @@ def test_get_phantom_candidates_returns_frozenset(tmp_config):
     import time
 
     now = time.monotonic()
-    adapter._phantom_order_keys["s1:1"] = now
-    adapter._phantom_order_keys["s2:2"] = now
+    adapter._phantom_order_keys["s1:1"] = (now, "TXFD6")
+    adapter._phantom_order_keys["s2:2"] = (now, "TXFD6")
 
     result = adapter.get_phantom_candidates()
 
@@ -187,8 +187,8 @@ def test_clear_phantom_candidate_removes_key(tmp_config):
     import time
 
     now = time.monotonic()
-    adapter._phantom_order_keys["s1:1"] = now
-    adapter._phantom_order_keys["s2:2"] = now
+    adapter._phantom_order_keys["s1:1"] = (now, "TXFD6")
+    adapter._phantom_order_keys["s2:2"] = (now, "TXFD6")
 
     adapter.clear_phantom_candidate("s1:1")
 
@@ -201,7 +201,7 @@ def test_clear_phantom_candidate_missing_key_noop(tmp_config):
     adapter = _make_adapter(tmp_config)
     import time
 
-    adapter._phantom_order_keys["s1:1"] = time.monotonic()
+    adapter._phantom_order_keys["s1:1"] = (time.monotonic(), "TXFD6")
 
     adapter.clear_phantom_candidate("nonexistent:key:0")
 
@@ -214,7 +214,7 @@ def test_phantom_key_format_is_two_part(tmp_config):
     adapter = _make_adapter(tmp_config)
     import time
 
-    adapter._phantom_order_keys["s1:42"] = time.monotonic()
+    adapter._phantom_order_keys["s1:42"] = (time.monotonic(), "TXFD6")
 
     candidates = adapter.get_phantom_candidates()
     for key in candidates:
@@ -267,7 +267,7 @@ async def test_phantom_set_eviction_at_max_size(tmp_config):
 
     old_ts = time.monotonic() - 7200.0  # 2 hours ago
     for i in range(6):
-        adapter._phantom_order_keys[f"old_strat:{i}"] = old_ts
+        adapter._phantom_order_keys[f"old_strat:{i}"] = (old_ts, "TXFD6")
 
     assert len(adapter._phantom_order_keys) == 6
 
