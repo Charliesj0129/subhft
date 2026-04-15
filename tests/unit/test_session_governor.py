@@ -87,7 +87,7 @@ class TestTrackGate:
         gate = TrackGate()
         gate.register_symbol("2330", "stock")
         snap = gate.symbol_to_track
-        assert snap["2330"] == "stock"
+        assert snap["2330"] == ["stock"]
 
 
 class TestSessionGovernorConfigLoading:
