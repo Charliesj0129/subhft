@@ -1,87 +1,109 @@
-# Why Custom Maker Backtest Engine (Not hftbacktest)
+# Why Custom Maker Backtest Engine (Alongside hftbacktest)
 
 **Date**: 2026-04-15
 **Context**: R47 calibration crisis — same strategy produced -27K to +61K PnL depending on method.
 
 ## The Problem
 
-The `hftbacktest` library (v2.4) is used for our taker strategies via `HftNativeRunner`. It works well for threshold-crossing alpha strategies that enter/exit on market orders. But for **maker strategies** (passive limit orders), its fill model is fundamentally broken for TAIFEX micro-futures.
+The `hftbacktest` library (v2.4) provides sophisticated queue position simulation based on Guéant-Lehalle-Fernandez-Tapia (GLT) market-making models, including `PowerProbQueueModel` for estimating fill probability at different queue positions. This is a **capable and well-designed** system.
 
-## Why hftbacktest PowerProbQueueModel Fails for TAIFEX Maker
+However, when we applied it to TAIFEX micro-futures maker strategies with **default parameters**, the results were 14x too pessimistic. The root cause was **our failure to calibrate**, not a flaw in hftbacktest itself.
 
-### 1. 14x Pessimistic Bias (Measured)
+## What Went Wrong (Our Mistakes)
 
-R47 calibration (2026-04-10) showed:
-- hftbacktest PowerProbQueueModel(3.0): **-27,366 pts** (D2 gate kills 94.7% of quotes)
-- CK-direct half-queue (qf=0.5): **+4,504 pts**
-- Ratio: **~14x too pessimistic**
+### 1. Uncalibrated Default Parameters
 
-Root cause: PowerProbQueueModel was designed for US equity markets with deep, liquid order books. TAIFEX micro-futures (TMFD6/TXFD6) have:
-- Spread typically 1-5 ticks (not 10-50 as in US equities)
-- Queue depth 5-50 contracts (not 500-5000)
-- Tick size = 1 point (discrete, not sub-penny)
+`PowerProbQueueModel(3.0)` uses a probability exponent of 3.0 — a default suitable for deeper US equity order books. We never calibrated this for TAIFEX:
+- TAIFEX queue depth: 5-50 contracts (shallow)
+- US equity queue depth: 500-5000 (deep)
+- The 3.0 exponent decays fill probability too aggressively for shallow queues
 
-The model's queue survival probability decays too aggressively for shallow queues.
+**Result**: D2 gate suppressed 94.7% of quoting opportunities → PnL = -27,366 pts
 
-### 2. D2 Gate Over-Suppression
+With proper calibration (lower exponent for shallow books), the model might produce reasonable results. **This calibration work was never done.**
 
-The PowerProbQueueModel's depletion probability (D2 gate in R47) triggers suppression at P(depl) > 0.7. On TAIFEX with shallow queues, this fires on **94.7%** of quoting opportunities — effectively disabling the strategy.
+### 2. Data Export Bug (Our Code, Not hftbacktest)
 
-In production, our R47 strategy runs with D2 disabled (`queue_cancel_threshold=1.0`) because the signal is too noisy on TAIFEX book depth. The hftbacktest model doesn't know this.
+Our export script (`ch_batch_export.py`) had a `DEPTH_EVENT` accumulation bug — L2-L5 levels accumulated instead of replacing, producing 17 levels instead of 5 and collapsing spread from 4→1 pt. This was a bug in **our data pipeline**, not in hftbacktest's format.
 
-### 3. No TAIFEX-Specific Calibration
+After fixing the export, hftbacktest results improved but the queue model parameters still needed calibration.
 
-hftbacktest's fill models assume:
-- Continuous price process (not discrete tick grid)
-- Deep liquidity (queue position doesn't matter much)
-- US-style maker rebates (negative fees)
+### 3. Expedient Choice Over Proper Calibration
 
-TAIFEX reality:
-- Discrete 1-tick spread (price moves in jumps)
-- Shallow queues (queue position is everything)
-- No maker rebates (retail pays both sides)
-- 4.0 pts RT cost on TMFD6 (40% of typical spread)
+Under time pressure during R47 validation (2026-04-10), we chose to build CK-direct backtest instead of calibrating hftbacktest's queue model. This was a pragmatic decision, not a principled one.
 
-### 4. Export Data Format Mismatch
+## Why We Built MakerEngine Anyway
 
-The hftbacktest `.npz` format requires specific event types (DEPTH_EVENT, TRADE_EVENT). R47's 2026-04-09 data regeneration exposed a critical bug: `DEPTH_EVENT` for L2-L5 caused level accumulation (17 levels instead of 5), collapsing spread from 4 to 1 pt. This invalidated ALL prior hftbacktest results.
+Even acknowledging our calibration failure, there are legitimate reasons for the CK-direct approach:
 
-Our CK-direct approach reads directly from ClickHouse using the native tick/bidask format, avoiding this translation layer entirely.
-
-## What We Built Instead
-
-### MakerEngine (CK-Direct Queue Depletion)
+### 1. Direct Data Path (No Translation Layer)
 
 ```
-ClickHouse (tick + bidask) → MakerEngine → QueueDepletionFill(qf) → FIFO PnL → BacktestResult
+hftbacktest path:  ClickHouse → export script → .npz → hftbacktest → result
+CK-direct path:   ClickHouse → MakerEngine → result
 ```
 
-Key design decisions:
-1. **Queue fraction parameter (qf)**: Configurable assumption about queue entry position. Default 0.5 = mid-queue. No probability model — just a deterministic assumption that's transparent and comparable.
-2. **Direct ClickHouse data**: No format conversion. Reads the same data that the live system records. No translation bugs.
-3. **Strategy-agnostic**: Engine handles fill simulation. Strategy logic injected via `MakerStrategy` protocol. Not hardcoded to R47.
-4. **Full provenance**: Every result includes method, fill model, instrument, data period in `backtest_report.json`.
+Fewer steps = fewer translation bugs. The export bug proved this matters.
 
-### When to Use Each Engine
+### 2. Transparent vs. Model-Based Assumptions
 
-| Scenario | Engine | Why |
-|----------|--------|-----|
-| Taker strategy (IC→threshold→market order) | TakerEngine (hftbacktest) | Fill model works for aggressive execution |
-| Maker strategy (passive limit orders) | MakerEngine (CK-direct) | Queue depletion model calibrated to TAIFEX |
-| Historical comparison | Check `backtest_report.json` `fill_model` field | Don't compare results across methods |
+| Aspect | QueueDepletionFill(qf=0.5) | PowerProbQueueModel(3.0) |
+|--------|---------------------------|-------------------------|
+| Assumption | "You enter at 50% of queue" | "Fill probability decays as p^3.0 with queue position" |
+| Parameters | 1 (qf) | 1 (exponent) + internal model |
+| Interpretability | Immediate — anyone knows what qf=0.5 means | Requires understanding GLT model |
+| Calibration needed | qf is directly measurable from live fills | Exponent requires fitting to fill data |
+| Sensitivity | Linear in qf | Non-linear, sensitive near boundaries |
 
-## The hftbacktest Dependency Stays
+For our current stage (single maker strategy, limited live fill data), the simpler model is easier to reason about and validate.
 
-We keep `hftbacktest>=2.4,<3` because:
-- `HftNativeRunner` + `HftBacktestAdapter` are the standardized taker engine
-- Queue model analysis tools use it for comparison/research
-- Synthetic data generation scripts depend on it
+### 3. Integration with Standardized Pipeline
 
-We just don't use it for maker strategy validation anymore.
+MakerEngine was designed as part of the `make research` pipeline:
+- Auto-selected via `manifest.yaml` `strategy_type: maker`
+- Results persisted to `ResultStore` with full provenance
+- Gate C maker thresholds from `gate_thresholds.yaml`
 
-## Lessons from R47 Calibration Crisis
+Integrating hftbacktest's queue model into the same pipeline would require the same `BacktestEngine` Protocol wrapper — the calibration work is the bottleneck, not the integration.
 
-1. **One strategy, six PnL numbers**: -27,366 / -1,908 / +4,504 / +9,912 / +14,755 / +29,747 — all from different methods on the same strategy
-2. **Fill model is the biggest single source of backtest bias** — bigger than cost model, latency model, or data quality
-3. **Transparent assumptions > sophisticated models**: qf=0.5 is crude but everyone knows what it means. PowerProbQueueModel(3.0) is a black box that was 14x wrong.
-4. **Standardization prevents drift**: `make research` is the sole entry point. Results include method provenance. Future conversations can trace any PnL claim to a specific `run_id`.
+## Future: Calibrate hftbacktest for TAIFEX
+
+The right long-term approach is **both**:
+
+1. **Calibrate PowerProbQueueModel** for TAIFEX using actual fill data from R47 live/shadow sessions
+2. **Cross-validate** CK-direct (qf) vs calibrated hftbacktest on the same data
+3. **Use the calibrated model** if it's more accurate (it likely will be — GLT is well-founded theory)
+
+Required data for calibration:
+- 30+ days of R47 live/shadow fills with queue position at order placement
+- Match rate by queue depth bucket
+- Adverse selection rate by queue position
+
+This is blocked on accumulating clean live fill data (orphan fill bug fixed 2026-04-15).
+
+## Current Architecture
+
+```
+manifest.yaml: strategy_type = ?
+  ├── "taker" → TakerEngine → HftNativeRunner → PowerProbQueueModel (hftbacktest)
+  └── "maker" → MakerEngine → QueueDepletionFill(qf) → CK-direct
+```
+
+Both paths produce `BacktestResult` with full provenance → `ResultStore` → `backtest_report.json`.
+
+## Honest Assessment
+
+| Claim | Truth |
+|-------|-------|
+| "hftbacktest is broken for maker" | **Wrong.** We didn't calibrate it. |
+| "hftbacktest lacks queue modeling" | **Wrong.** PowerProbQueueModel is GLT-based queue simulation. |
+| "CK-direct is better" | **Unproven.** It's simpler and worked for our immediate need. |
+| "14x bias is inherent" | **Likely calibration issue.** Lower exponent may fix it. |
+| "Export bug is hftbacktest's fault" | **Wrong.** Our export script had the bug. |
+
+## Lessons
+
+1. **Calibrate before blaming the tool** — PowerProbQueueModel(3.0) might work fine with exponent=1.5 or 2.0 for TAIFEX
+2. **Simpler isn't always better** — qf=0.5 is transparent but loses queue dynamics that GLT captures
+3. **Both approaches should coexist** — cross-validate CK-direct vs calibrated hftbacktest once we have live fill data
+4. **Document assumptions honestly** — this doc replaces an earlier version that unfairly blamed hftbacktest
