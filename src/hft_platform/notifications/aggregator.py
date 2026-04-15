@@ -1,7 +1,7 @@
 """Alert deduplication and time-window aggregation."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from hft_platform.notifications.alert import Alert, AlertSeverity
 
