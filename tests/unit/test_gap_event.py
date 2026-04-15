@@ -157,6 +157,58 @@ def test_consume_batch_overflow_yields_gap_event() -> None:
     assert len(gap_events) >= 1, "Expected at least one GapEvent in batch on overflow"
 
 
+def test_r47_local_pos_hard_cap_blocks_order_after_gap() -> None:
+    """F1: _local_pos hard cap prevents orders even when pending is zero.
+
+    Regression test for 76-order burst (2026-04-15). Even if on_gap
+    somehow cleared pending counters (old behavior) or pending drifted to 0,
+    _local_pos at max_pos must block further orders.
+    """
+    strat = R47MakerStrategy(
+        strategy_id="test-r47", symbols=["TMFD6"], max_pos=1,
+    )
+    # Simulate: position is already at max
+    strat._local_pos["TMFD6"] = 1
+    strat._pending_buy["TMFD6"] = 0  # pending reset (e.g. by bug)
+
+    # pos=1, max_pos=1 → pos < max_pos is False → can_buy must be False
+    pos = strat._local_pos["TMFD6"]
+    assert pos >= strat._max_pos, "hard cap must block when pos >= max_pos"
+
+
+def test_r47_risk_feedback_preserves_last_price() -> None:
+    """F3: on_risk_feedback must NOT clear _last_bid/_last_ask.
+
+    Clearing price gate on rejection creates a reject→resend amplification
+    loop (76-order burst incident 2026-04-15 RC-2).
+    """
+    from hft_platform.contracts.strategy import Side
+
+    strat = R47MakerStrategy(
+        strategy_id="test-r47", symbols=["TMFD6"], max_pos=1,
+    )
+    strat._pending_buy["TMFD6"] = 1
+    strat._last_bid["TMFD6"] = 367250000
+    strat._last_ask["TMFD6"] = 367280000
+
+    class _MockFeedback:
+        symbol = "TMFD6"
+        side = Side.BUY
+        reason_code = "DEGRADE"
+        was_approved = False
+
+    strat.on_risk_feedback(_MockFeedback())
+
+    # Pending should be decremented
+    assert strat._pending_buy["TMFD6"] == 0
+    # But last_bid must NOT be cleared — price gate must stay armed
+    assert strat._last_bid.get("TMFD6") == 367250000, (
+        "_last_bid must not be cleared by risk rejection"
+    )
+    # last_ask untouched (rejection was BUY side)
+    assert strat._last_ask.get("TMFD6") == 367280000
+
+
 def test_consume_no_gap_event_without_overflow() -> None:
     """When no overflow occurs, no GapEvent should be yielded."""
     bus = RingBufferBus(size=64)

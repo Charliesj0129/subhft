@@ -602,18 +602,18 @@ class R47MakerStrategy(SimpleMarketMaker):
             return
         sym = feedback.symbol
         side = getattr(feedback, "side", None)
+        # F3: Do NOT clear _last_bid/_last_ask on rejection.
+        # Clearing price gate + decrementing pending re-arms both gates
+        # simultaneously, creating a reject→resend amplification loop
+        # (76-order burst incident 2026-04-15 RC-2).
         if side == Side.BUY:
             self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - 1)
-            self._last_bid.pop(sym, None)
         elif side == Side.SELL:
             self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - 1)
-            self._last_ask.pop(sym, None)
         else:
             # Fallback: no side info — decrement both (conservative)
             self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - 1)
             self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - 1)
-            self._last_bid.pop(sym, None)
-            self._last_ask.pop(sym, None)
         logger.debug(
             "r47_risk_rejection_pending_released",
             symbol=sym,
@@ -758,15 +758,24 @@ class R47MakerStrategy(SimpleMarketMaker):
         # DEC2-004: qty is ALWAYS 1. pending_buy/sell increment by 1 to match.
         # If qty changes, pending tracking MUST be updated to use actual qty.
         _qty = 1
-        if pos + pending_buy < max_pos and not self._suppress_bid and bid_moved:
+
+        # F1: Hard position cap — _local_pos survives on_gap and cannot be
+        # reset by bus overflow or risk rejection. This is the last defense
+        # against order stacking (76-order burst incident 2026-04-15).
+        # pos already comes from _local_position(exec_sym) which uses _local_pos.
+        can_buy = pos + pending_buy < max_pos and pos < max_pos
+        can_sell = pos - pending_sell > -max_pos and pos > -max_pos
+
+        if can_buy and not self._suppress_bid and bid_moved:
             self.buy(exec_sym, bid_price_scaled, _qty)
             self._pending_buy[exec_sym] = pending_buy + _qty
             self._last_bid[exec_sym] = bid_price_scaled
-        if pos - pending_sell > -max_pos and not self._suppress_ask and ask_moved:
+            self._quotes_sent += 1
+        if can_sell and not self._suppress_ask and ask_moved:
             self.sell(exec_sym, ask_price_scaled, _qty)
             self._pending_sell[exec_sym] = pending_sell + _qty
             self._last_ask[exec_sym] = ask_price_scaled
-        self._quotes_sent += 1
+            self._quotes_sent += 1
 
         if self._stats_count % _LOG_INTERVAL == 1:
             self._log_stats(symbol, pe, mfg, event.spread_scaled, pos)
