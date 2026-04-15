@@ -633,11 +633,12 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._qi_widen_ask = 0
         self._last_bid.clear()
         self._last_ask.clear()
-        # Clear pending order tracking to prevent deadlock: if gap swallowed
-        # the fill/cancel callbacks for outstanding orders, pending counters
-        # would never decrement, blocking all future order placement.
-        self._pending_buy.clear()
-        self._pending_sell.clear()
+        # NOTE: Do NOT clear _pending_buy/_pending_sell here.
+        # Clearing pending resets max_pos protection, allowing the strategy
+        # to send unbounded orders (76-order burst incident 2026-04-15 RC-1).
+        # If gap swallowed fill/cancel callbacks, stale pending counters
+        # block further quoting — this is the SAFE failure mode (liveness
+        # issue, not safety issue). Strategy restart recovers from this.
         logger.warning(
             "r47_gap_event_state_reset",
             missed=event.missed_count,

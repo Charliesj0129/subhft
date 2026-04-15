@@ -12,6 +12,7 @@ Mode is readable as a Prometheus gauge (gateway_policy_mode).
 from __future__ import annotations
 
 import os
+import time
 from enum import Enum
 from typing import Any
 
@@ -41,8 +42,9 @@ class GatewayPolicy:
     """Stateful FSM gating intents based on system risk state.
 
     Env vars:
-        HFT_GATEWAY_HALT_CANCEL:      allow CANCEL in HALT (default 1)
-        HFT_GATEWAY_DEGRADE_ON_STORM: auto-degrade on StormGuard STORM (default 1)
+        HFT_GATEWAY_HALT_CANCEL:         allow CANCEL in HALT (default 1)
+        HFT_GATEWAY_DEGRADE_ON_STORM:    auto-degrade on StormGuard STORM (default 1)
+        HFT_GATEWAY_STARTUP_HOLDOFF_S:   block NEW/AMEND for N seconds after init (default 60)
     """
 
     def __init__(self, storm_guard: Any | None = None) -> None:
@@ -55,6 +57,8 @@ class GatewayPolicy:
             "off",
         }
         self._storm_guard = storm_guard
+        holdoff_s = float(os.getenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", "0"))
+        self._startup_holdoff_until: float = time.monotonic() + holdoff_s if holdoff_s > 0 else 0.0
 
     # ── Public ────────────────────────────────────────────────────────────
 
@@ -88,6 +92,11 @@ class GatewayPolicy:
 
         Side-effect: auto-transitions to DEGRADE on STORM if configured.
         """
+        # Startup holdoff: block NEW/AMEND during initial STORM→NORMAL transient
+        if self._startup_holdoff_until > 0 and intent_type not in _SAFETY_INTENT_TYPES:
+            if time.monotonic() < self._startup_holdoff_until:
+                return False, "STARTUP_HOLDOFF"
+
         # Auto-degrade on storm
         if self._degrade_on_storm and sg_state >= StormGuardState.STORM and self._mode == GatewayPolicyMode.NORMAL:
             self._set_mode(GatewayPolicyMode.DEGRADE)

@@ -35,7 +35,7 @@ strategies:
     max_position_lots: 5             # Max 5 lots inventory (trades TMFD6 = 10 NTD/pt)
     max_order_qty: 1                 # 1 lot per quote side
   R47_MAKER_TMFD6:
-    max_position_lots: 5             # Max 5 lots (strategy max_pos=3, headroom for slippage)
+    max_position_lots: 1             # Hard cap = strategy max_pos (RC-1 incident 2026-04-15)
     max_order_qty: 1                 # 1 lot per quote side
 
 intraday_pnl:
