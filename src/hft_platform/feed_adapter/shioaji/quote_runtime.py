@@ -511,6 +511,12 @@ class QuoteRuntime:
         delay = c._quote_force_relogin_s
         if delay <= 0:
             return
+        # Use _reconnect_lock (not bool flag) to prevent concurrent relogin.
+        # Bool check-then-set is not atomic — two threads can both read False
+        # and enter login simultaneously, crashing Shioaji SDK (2026-04-15).
+        if not c._reconnect_lock.acquire(blocking=False):
+            return
+        c._reconnect_lock.release()  # release immediately; re-acquire inside thread
         if c._pending_quote_relogining:
             return
         c._pending_quote_relogining = True
@@ -550,6 +556,10 @@ class QuoteRuntime:
 
     def start_forced_relogin(self, reason: str) -> None:
         c = self._client
+        # Use _reconnect_lock to prevent concurrent relogin (same fix as above).
+        if not c._reconnect_lock.acquire(blocking=False):
+            return
+        c._reconnect_lock.release()
         if c._pending_quote_relogining:
             return
         if not c._allow_quote_recovery(reason):
